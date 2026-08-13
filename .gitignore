@@ -4,3 +4,10 @@
 
 # superpowers worktrees
 .worktrees/
+
+# scratch / user-data redirects
+.superpowers/
+.xdgdata/
+.xdgcache/
+.xdgconfig/
+.gpu_probe.gd
