@@ -97,7 +97,7 @@ void main() {
 	ivec3 map = ivec3(floor(ro / BRICK_SIZE));
 	vec3 delta = abs(vec3(BRICK_SIZE) / rd);
 	ivec3 st = ivec3(sign(rd));
-	vec3 side = (vec3(st) * (vec3(map) * BRICK_SIZE - ro)
+	vec3 side = (vec3(map) * BRICK_SIZE - ro
 	             + (vec3(st) * 0.5 + 0.5) * BRICK_SIZE) / rd;
 	float t_prev = 0.0; // entry t of the current cell (last boundary crossed)
 
