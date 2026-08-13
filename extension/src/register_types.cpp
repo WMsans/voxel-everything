@@ -3,6 +3,10 @@
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/defs.hpp>
 #include "voxel_world.h"
+// GpuWorld must be complete here: GCC instantiates VoxelWorld's destructor when
+// instantiating ClassDB::_create_instance_func<T> (new T), which requires complete
+// types for all unique_ptr members at the registration site.
+#include "render/gpu_world.h"
 
 using namespace godot;
 
