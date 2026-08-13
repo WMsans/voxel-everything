@@ -65,10 +65,14 @@ vec3 calc_normal(vec3 p) {
 		world_sdf(p + vec3(0, 0, e)) - world_sdf(p - vec3(0, 0, e))));
 }
 
-uint material_at(vec3 p) {
-	ivec3 brick = ivec3(floor(p / BRICK_SIZE));
-	int slot = slot_at(brick);
-	if (slot < 0) return 0u;
+// Material of the surface crossing found inside brick `brick` (atlas slot `slot`).
+// The secant refinement converges the hit point to the SDF zero crossing, which can sit
+// within ~0.01 m of a brick face; the final p may then round into a NEIGHBORING brick.
+// The generation pad activates near-surface air bricks that contain no solid voxels and
+// therefore have EMPTY palettes (palette[0] == 0), and neighboring bricks may be inactive
+// entirely. Anchoring the lookup to the hit brick with local coords clamped into its own
+// [0,15] range resolves the surface voxel's material instead of the neighbor's void.
+uint material_at(vec3 p, ivec3 brick, int slot) {
 	vec3 local = clamp((p - vec3(brick) * BRICK_SIZE) / VOXEL_SIZE, vec3(0.0), vec3(15.0));
 	ivec3 base = ivec3(slot % ATLAS_BRICKS.x,
 	                   (slot / ATLAS_BRICKS.x) % ATLAS_BRICKS.y,
@@ -119,17 +123,22 @@ void main() {
 		int slot = slot_at(map);
 		if (slot >= 0) {
 			float t = t_prev;
+			// Air margin bricks (activated by the generation pad) hold no solid voxels and
+			// therefore an EMPTY palette (ids[slot*4] == 0); their interpolated field can
+			// still dip below the 0.002 hit threshold near a brick face. Such a crossing is
+			// not a renderable surface — skip it so the ray reaches the real surface.
+			const bool has_material = uint(palette_buf.ids[slot * 4]) != 0u;
 			for (int j = 0; j < 64; j++) {
 				vec3 p = ro + rd * t;
 				float d = world_sdf(p);
-				if (d < 0.002) {
+				if (d < 0.002 && has_material) {
 					for (int k = 0; k < 4; k++) { // secant refinement
 						float dk = world_sdf(p);
 						t += dk * 0.5;
 						p = ro + rd * t;
 					}
 					vec3 n = calc_normal(p);
-					vec3 alb = material_albedo(material_at(p));
+					vec3 alb = material_albedo(material_at(p, map, slot));
 					vec3 sun = normalize(vec3(0.6, 0.8, 0.3));
 					float lam = max(dot(n, sun), 0.0);
 					color = alb * (0.25 + 0.75 * lam);
