@@ -26,7 +26,14 @@ func test_ray_down_from_non_boundary_origin_hits_terrain() -> void:
 	# Origin NOT on a brick boundary (8.25, 12.3, 7.9 are not multiples of 0.8):
 	# the negative-direction DDA must still reach terrain (~3.1m here).
 	var c: Color = w.debug_raymarch_pixel(Vector3(8.25, 12.3, 7.9), Vector3(0, -1, 0))
-	assert_bool(c.b <= c.g or c.r > 0.1).is_true()
+	# Discriminates hit from miss. (a) r < 0.52: any terrain albedo (grass 0.36,
+	# rock 0.45, dirt 0.50) times (0.25 + 0.75*lam), lam <= 1, gives r <= 0.50.
+	# (b) b > g: all hits currently shade the error-magenta albedo (the palette
+	# storage buffer is uploaded as uint16 but read as uint in the shader, a
+	# pre-existing bug), which has g = 0. The miss color sky-down (0.55, 0.45,
+	# 0.35) fails both: its r is 0.5498 after the rgba16f half-float round-trip
+	# (so r < 0.55 would NOT discriminate) and its b <= g.
+	assert_bool(c.b > c.g or c.r < 0.52).is_true()
 
 func test_ray_diagonal_down_from_non_boundary_origin_hits_terrain() -> void:
 	var w := make_world()

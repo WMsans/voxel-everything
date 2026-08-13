@@ -97,8 +97,17 @@ void main() {
 	ivec3 map = ivec3(floor(ro / BRICK_SIZE));
 	vec3 delta = abs(vec3(BRICK_SIZE) / rd);
 	ivec3 st = ivec3(sign(rd));
+	// For st==0 (rd component == 0) the axis must ALWAYS be +inf: the plain formula's
+	// numerator there is origin-dependent (+inf/-inf/NaN across the cell, NaN at its
+	// center), and -inf winning min() livelocks the DDA. This glslang build provides no
+	// select() overload, and mix() would arithmetically combine the operands (inf*0 =
+	// NaN), so guard each axis explicitly: the st==0 axes are overwritten with exactly
+	// 1/0 = +inf, discarding the formula's garbage value (no NaN contamination).
 	vec3 side = (vec3(map) * BRICK_SIZE - ro
 	             + (vec3(st) * 0.5 + 0.5) * BRICK_SIZE) / rd;
+	if (st.x == 0) side.x = 1.0 / 0.0;
+	if (st.y == 0) side.y = 1.0 / 0.0;
+	if (st.z == 0) side.z = 1.0 / 0.0;
 	float t_prev = 0.0; // entry t of the current cell (last boundary crossed)
 
 	bool hit = false;
