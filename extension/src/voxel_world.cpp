@@ -33,16 +33,26 @@ VoxelWorld::~VoxelWorld() {}
 void VoxelWorld::_exit_tree() {
 	// Delete the raymarch/composite passes while the device is still valid: their
 	// destructors free RIDs on rd(), so they must run before GpuWorld teardown and
-	// device destruction.
-	if (raymarch_pass_) {
-		delete raymarch_pass_;
-		raymarch_pass_ = nullptr;
-	}
+	// device destruction. The COMPOSITE pass must go first: its cached uniform set
+	// references the raymarch color/hitpos textures, and freeing those textures
+	// cascades to referencing uniform sets — tearing down raymarch first would leave
+	// the composite's uset_ cascade-freed, and its teardown would then hit an
+	// "Attempted to free invalid ID" error.
 	if (composite_pass_) {
 		delete composite_pass_;
 		composite_pass_ = nullptr;
 	}
+	if (raymarch_pass_) {
+		delete raymarch_pass_;
+		raymarch_pass_ = nullptr;
+	}
 	if (gpu_) gpu_->teardown();
+	// Full reset: keep the node reusable across remove_child/add_child cycles.
+	// Without this, ensure_initialized() early-returns on the stale flag and the
+	// compositor path runs with a torn-down GpuWorld (freed RIDs) -> black terrain.
+	gpu_.reset();
+	world_.reset();
+	initialized_ = false;
 	if (local_rd_) {
 		// Brief used local_rd_->free(); godot-cpp master has no no-arg free() on
 		// RenderingDevice (only the macro's static free), so free via memdelete.

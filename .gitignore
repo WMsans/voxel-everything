@@ -16,3 +16,5 @@ extension/bin/
 extension/build/
 .sconsign.dblite
 *.os
+*.o
+reports/

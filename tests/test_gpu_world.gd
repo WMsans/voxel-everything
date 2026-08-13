@@ -26,3 +26,17 @@ func test_gpu_readback_returns_data() -> void:
 	assert_int(slice0.size()).is_equal(512 * 256 * 512) # R8: 1 byte per texel, full 3D volume
 	var ind0: PackedByteArray = rd.texture_get_data(w.debug_indirection_tex(), 0)
 	assert_int(ind0.size()).is_equal(20 * 12 * 20 * 4) # R32_SINT: 4 bytes per texel, full volume
+
+func test_reinit_after_remove_and_readd() -> void:
+	# Regression: _exit_tree() used to leave initialized_/gpu_/world_ stale, so a
+	# remove_child/add_child cycle made ensure_initialized() early-return with a
+	# torn-down GpuWorld (freed RIDs) -> silently dead compositor path.
+	var w := make_world()
+	w.ensure_initialized()
+	assert_bool(w.is_initialized()).is_true()
+	var parent := w.get_parent()
+	parent.remove_child(w)
+	parent.add_child(w)
+	w.ensure_initialized()
+	assert_bool(w.is_initialized()).is_true()
+	assert_bool(w.debug_indirection_tex().is_valid()).is_true()
