@@ -23,6 +23,9 @@ private:
 	RID shader_;
 	RID pipeline_;
 	RID sampler_linear_, sampler_nearest_;
+	// Uniform set is cached (like RaymarchPass::uset_) and rebuilt only when the
+	// bound source textures change; keys remember which RIDs the set references.
+	RID uset_, uset_src_color_, uset_src_hitpos_;
 	int64_t fb_format_ = 0;
 	RID framebuffer_, fb_color_, fb_depth_;
 };

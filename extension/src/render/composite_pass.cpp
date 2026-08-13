@@ -62,14 +62,17 @@ void CompositePass::initialize(RenderingDevice *rd) {
 void CompositePass::teardown() {
 	if (!rd_) return;
 	// Free order matters on Godot 4.7.1's RenderingDevice (empirically established in
-	// Task 10): freeing a shader cascades to its pipelines, so the pipeline must be
-	// freed BEFORE the shader or free_rid hits an already-cascade-freed ID. The brief
-	// freed shader before pipeline; the task's ordering (pipeline -> shader -> targets)
-	// is the correct one on this engine.
-	for (RID *r : {&pipeline_, &shader_, &sampler_linear_, &sampler_nearest_, &framebuffer_}) {
+	// Task 10): freeing a shader cascades to its pipelines, and a uniform set references
+	// the shader, so the uniform set must be freed BEFORE the pipeline/shader or
+	// free_rid hits an already-cascade-freed ID. The brief freed shader before pipeline;
+	// the task's ordering (uset -> pipeline -> shader -> targets) is the correct one on
+	// this engine.
+	for (RID *r : {&uset_, &pipeline_, &shader_, &sampler_linear_, &sampler_nearest_, &framebuffer_}) {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
+	uset_src_color_ = RID();
+	uset_src_hitpos_ = RID();
 	rd_ = nullptr;
 }
 
@@ -147,8 +150,20 @@ void CompositePass::draw(RenderingDevice *rd, RID dst_color, RID dst_depth,
 	u1->set_binding(1);
 	u1->add_id(sampler_nearest_);
 	u1->add_id(src_hitpos);
-	const RID uset = rd->uniform_set_create(Array::make(u0, u1), shader_, 0);
-	if (!uset.is_valid()) return;
+	// Cache the uniform set (RD API contract: free uniform-set RIDs when done — creating
+	// one per draw leaks a RID every frame). Rebuild only when the bound source textures
+	// change; free the old set before recreating (it references the shader, not the
+	// textures, so it is cascade-safe to free here).
+	if (uset_.is_valid() && src_color == uset_src_color_ && src_hitpos == uset_src_hitpos_) {
+		// Reuse cached set.
+	} else {
+		if (uset_.is_valid()) rd->free_rid(uset_);
+		uset_ = RID();
+		uset_ = rd->uniform_set_create(Array::make(u0, u1), shader_, 0);
+		uset_src_color_ = src_color;
+		uset_src_hitpos_ = src_hitpos;
+	}
+	if (!uset_.is_valid()) return;
 
 	PackedByteArray pc;
 	pc.resize(64);
@@ -166,7 +181,7 @@ void CompositePass::draw(RenderingDevice *rd, RID dst_color, RID dst_depth,
 	// clear: the scene color/depth contents matter).
 	const int64_t dl = rd->draw_list_begin(framebuffer_, RenderingDevice::DRAW_DEFAULT_ALL);
 	rd->draw_list_bind_render_pipeline(dl, pipeline_);
-	rd->draw_list_bind_uniform_set(dl, uset, 0);
+	rd->draw_list_bind_uniform_set(dl, uset_, 0);
 	rd->draw_list_set_push_constant(dl, pc, pc.size());
 	rd->draw_list_draw(dl, false, 1, 3);
 	rd->draw_list_end();
