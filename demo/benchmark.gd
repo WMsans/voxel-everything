@@ -14,11 +14,11 @@ func _ready() -> void:
 		cam.transform = Transform3D(Basis.looking_at(Vector3(6, -10, 6).normalized()), Vector3(24, 12, 24))
 		cam.set_script(null) # freeze: no fly-camera movement
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if not _active:
 		return
 	_frames += 1
-	_accum_ms += 1000.0 / maxf(float(Engine.get_frames_per_second()), 0.001)
+	_accum_ms += delta * 1000.0
 	if _frames >= FRAMES:
 		var avg := _accum_ms / FRAMES
 		print("BENCH frame_avg_ms=%.2f fps=%.1f" % [avg, 1000.0 / avg])
