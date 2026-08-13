@@ -50,3 +50,16 @@ TEST_CASE("missing file reports error") {
 	CHECK(out.empty());
 	CHECK_FALSE(err.empty());
 }
+
+TEST_CASE("malformed include (missing closing quote) reports error") {
+	// Regression: expand() used to run line.substr(pos+key.size(), end-pos-key.size())
+	// with end == npos, which either threw std::out_of_range (process abort, violating
+	// the fail-soft policy) or misreported the include as "cannot open". It must report
+	// a clean "malformed include" error instead.
+	auto dir = std::filesystem::temp_directory_path() / "ve_sl4";
+	auto p = write_file(dir, "broken.glsl", "#include \"broken\n");
+	std::string err;
+	auto out = ve::load_shader_source(p.string(), dir.string(), &err);
+	CHECK(out.empty());
+	CHECK(err.find("malformed") != std::string::npos);
+}

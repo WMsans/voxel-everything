@@ -23,6 +23,12 @@ static bool expand(const std::string &path, const std::string &include_dir,
 		const auto pos = line.find(key);
 		if (pos != std::string::npos) {
 			const auto end = line.find('"', pos + key.size());
+			if (end == std::string::npos) {
+				// Fail-soft: never let a malformed directive escape as an exception
+				// (std::out_of_range from substr) or as a misleading "cannot open".
+				if (error) *error = "malformed include in " + path;
+				return false;
+			}
 			const std::string name = line.substr(pos + key.size(), end - pos - key.size());
 			if (!expand(include_dir + "/" + name, include_dir, stack, out, error)) return false;
 		} else {
