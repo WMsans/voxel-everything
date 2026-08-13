@@ -1,5 +1,6 @@
 #[compute]
 #version 460
+#extension GL_EXT_shader_16bit_storage : require
 
 #include "common.glsl"
 
@@ -10,7 +11,7 @@ layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D out_hitpos;
 layout(set = 0, binding = 2) uniform sampler3D sdf_atlas;    // R8 unorm, nearest
 layout(set = 0, binding = 3) uniform usampler3D mat_atlas;   // R8 uint, nearest
 layout(set = 0, binding = 4) uniform isampler3D indirection; // R32 sint, world dims, nearest
-layout(set = 0, binding = 5, std430) readonly buffer Palette { uint ids[]; } palette_buf;
+layout(set = 0, binding = 5, std430) readonly buffer Palette { uint16_t ids[]; } palette_buf;
 
 layout(push_constant, std430) uniform Push {
 	vec4 cam_pos;
@@ -73,7 +74,7 @@ uint material_at(vec3 p) {
 	                   (slot / ATLAS_BRICKS.x) % ATLAS_BRICKS.y,
 	                   slot / (ATLAS_BRICKS.x * ATLAS_BRICKS.y)) * BRICK_VOXELS;
 	uint idx = texelFetch(mat_atlas, base + ivec3(local), 0).r;
-	return palette_buf.ids[slot * 4 + idx];
+	return uint(palette_buf.ids[slot * 4 + idx]);
 }
 
 void main() {
