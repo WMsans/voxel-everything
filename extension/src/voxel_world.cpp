@@ -2,6 +2,7 @@
 #include "render/gpu_world.h"
 #include "render/camera_params.h"
 #include "render/raymarch_pass.h"
+#include "render/composite_pass.h"
 #include "generator/generator.h"
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/core/memory.hpp>
@@ -30,11 +31,16 @@ void VoxelWorld::_ready() {}
 VoxelWorld::~VoxelWorld() {}
 
 void VoxelWorld::_exit_tree() {
-	// Delete the raymarch pass while the device is still valid: ~RaymarchPass() frees
-	// its RIDs on rd(), so it must run before GpuWorld teardown and device destruction.
+	// Delete the raymarch/composite passes while the device is still valid: their
+	// destructors free RIDs on rd(), so they must run before GpuWorld teardown and
+	// device destruction.
 	if (raymarch_pass_) {
 		delete raymarch_pass_;
 		raymarch_pass_ = nullptr;
+	}
+	if (composite_pass_) {
+		delete composite_pass_;
+		composite_pass_ = nullptr;
 	}
 	if (gpu_) gpu_->teardown();
 	if (local_rd_) {
@@ -72,6 +78,11 @@ void VoxelWorld::ensure_initialized() {
 	}
 	raymarch_pass_ = new RaymarchPass();
 	raymarch_pass_->initialize(device);
+	// Deviation from brief (documented): composite_pass_ is a raw pointer (incomplete-type
+	// rule established in Task 9), so `new` here and `delete` in _exit_tree(), matching
+	// raymarch_pass_ and the brief's make_unique intent.
+	composite_pass_ = new CompositePass();
+	composite_pass_->initialize(device);
 	initialized_ = true;
 }
 
