@@ -28,6 +28,9 @@ TEST_CASE("voxel_index is a bijection over 4096 cells") {
 				seen.insert(idx);
 			}
 	CHECK(seen.size() == ve::kBrickVoxelCount);
+	// Pin the exact layout (x + y*16 + z*256) so a silent axis swap fails the suite.
+	CHECK(ve::voxel_index(1, 0, 0) == 1);
+	CHECK(ve::voxel_index(0, 1, 0) == 16);
 }
 
 TEST_CASE("2-bit material index roundtrip") {

@@ -2667,3 +2667,12 @@ git commit -m "feat(demo): fly camera, HUD, benchmark"
 - `./addons/gdUnit4/runtest.sh --godot_binary /usr/bin/godot -a res://tests` — gdUnit suite green (boot, GPU smoke, GpuWorld, raymarch pixel)
 - `godot --path . demo/main.tscn` — flyable raymarched terrain, correct occlusion vs TestCube, no validation errors
 - `godot --path . demo/main.tscn -- --benchmark` — prints BENCH line under 16.6ms
+
+## Errata (recorded during M1 implementation — corrections to the task text)
+
+1. Task 10: `ve::CameraParams` is 96 bytes, not 128 (the members as specified sum to 96; the shader push-constant block is 96 bytes; static_assert == 96).
+2. Task 11: Godot 4.7.1 Forward+ uses a reverse-Z depth buffer — the composite must write `gl_FragDepth = clip.z / clip.w` (no 0.5+0.5 remap), sky pixels depth 0.0, with depth compare GREATER_OR_EQUAL. The plan's remap/ALWAYS recipe produces black frames.
+3. Task 11: camera tan-half-fov must be extracted from the projection matrix diagonals (`|1/c00|`, `|1/c11|`), not `proj.get_fov()` (which is horizontal fov and sign-affected).
+4. Task 10: the DDA `side` initialization formula had a sign error for `st == -1` and needed a `st == 0` guard; the corrected form is in `shaders/raymarch.comp.glsl`.
+5. Task 12: benchmark must measure per-frame time from `_process(delta)`; `1000 / Engine.get_frames_per_second()` ramps at startup and produces a meaningless number.
+6. Additional M1 deviations: godot-cpp pinned to master (no 4.7 branch upstream); `#[compute]` stripped in C++ after load; palette buffer read as uint16 via GL_EXT_shader_16bit_storage; magenta-surface fix (anchor material lookup to hit brick + palette[0] != 0 gate); demo camera retargeted to (8,14,8); background_mode 4 (Keep).

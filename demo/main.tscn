@@ -1,4 +1,4 @@
-[gd_scene load_steps=8 format=3 uid="uid://ve_main_scene"]
+[gd_scene load_steps=8 format=3 uid="uid://dx2akrpw2s62k"]
 
 [ext_resource type="Script" path="res://demo/fly_camera.gd" id="1"]
 [ext_resource type="Script" path="res://demo/hud.gd" id="2"]

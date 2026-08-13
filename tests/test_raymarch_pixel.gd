@@ -42,4 +42,8 @@ func test_ray_diagonal_down_from_non_boundary_origin_hits_terrain() -> void:
 	var w := make_world()
 	# Diagonal negative-direction DDA from a non-boundary origin.
 	var c: Color = w.debug_raymarch_pixel(Vector3(7.3, 11.2, 9.1), Vector3(0, -0.9, -0.2))
-	assert_bool(c.b <= c.g or c.r > 0.1).is_true()
+	# Measured hit color (grass albedo, rgba16f round-trip): (0.3066, 0.4685, 0.1874).
+	# Sky miss for the SAME direction (measured from a high origin): (0.5464, 0.45, 0.3557)
+	# — r >= 0.52 makes (b > g or r < 0.52) false, so a sky miss is rejected.
+	# Error-magenta (r≈b>0.7, g=0): g = 0 fails the g > 0.05 gate.
+	assert_bool((c.b > c.g or c.r < 0.52) and c.g > 0.05).is_true()
