@@ -11,3 +11,8 @@
 .xdgcache/
 .xdgconfig/
 .gpu_probe.gd
+
+extension/bin/
+extension/build/
+.sconsign.dblite
+*.os
