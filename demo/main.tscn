@@ -21,21 +21,22 @@ size = Vector3(2, 2, 2)
 [node name="Main" type="Node3D"]
 
 [node name="VoxelWorld" type="VoxelWorld" parent="."]
-world_size_bricks = Vector3i(60, 20, 60)
+world_origin_bricks = Vector3i(0, -64, 0)
+world_size_regions = Vector3i(64, 8, 64)
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource(3)
 compositor = SubResource(2)
 
 [node name="Camera3D" type="Camera3D" parent="."]
-transform = Transform3D(-0.58819, 0.30318, -0.74977, 0, 0.92710, 0.37489, 0.80872, 0.22051, -0.54530, 8, 14, 8)
+transform = Transform3D(-0.58819, 0.30318, -0.74977, 0, 0.92710, 0.37489, 0.80872, 0.22051, -0.54530, 8, 65.2, 8)
 script = ExtResource(1)
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
 transform = Transform3D(0.6, -0.48, 0.64, 0, 0.8, 0.6, -0.8, -0.36, 0.48, 0, 20, 0)
 
 [node name="TestCube" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 24, 6, 24)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 24, 57.2, 24)
 mesh = SubResource(4)
 
 [node name="HUD" type="CanvasLayer" parent="."]

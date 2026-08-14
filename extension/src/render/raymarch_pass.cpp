@@ -1,5 +1,5 @@
 #include "render/raymarch_pass.h"
-#include "render/gpu_world.h"
+#include "render/gpu_atlas.h"
 #include "render/shader_loader.h"
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rd_sampler_state.hpp>
@@ -46,6 +46,13 @@ void RaymarchPass::initialize(RenderingDevice *rd) {
 	ss->set_min_filter(RenderingDevice::SAMPLER_FILTER_NEAREST);
 	ss->set_mag_filter(RenderingDevice::SAMPLER_FILTER_NEAREST);
 	sampler_ = rd->sampler_create(ss);
+
+	{
+		PackedByteArray zero;
+		zero.resize(32);
+		zero.fill(0);
+		edits_ubo_ = rd->uniform_buffer_create(32, zero);
+	}
 }
 
 void RaymarchPass::teardown() {
@@ -53,7 +60,7 @@ void RaymarchPass::teardown() {
 	// Free order matters on Godot 4.7.1's RenderingDevice: freeing a texture (or shader)
 	// cascades to referencing uniform sets, and freeing a shader also tears down its
 	// pipelines — so uset_ first, then pipeline_ before shader_, then the targets.
-	for (RID *r : {&uset_, &pipeline_, &shader_, &color_, &hitpos_, &sampler_}) {
+	for (RID *r : {&uset_, &pipeline_, &shader_, &color_, &hitpos_, &sampler_, &edits_ubo_}) {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
@@ -74,7 +81,7 @@ RID RaymarchPass::make_target(RenderingDevice *rd, RenderingDevice::DataFormat f
 	return rd->texture_create(f, v, {});
 }
 
-void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuWorld &world, int w, int h) {
+void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas, int w, int h) {
 	// Old uniform set references the old color/hitpos textures: free it before them.
 	if (uset_.is_valid()) rd->free_rid(uset_);
 	uset_ = RID();
@@ -85,30 +92,53 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuWorld &world, i
 	width_ = w;
 	height_ = h;
 
-	Ref<RDUniform> u[6];
-	for (int i = 0; i < 6; i++) u[i].instantiate();
+	Ref<RDUniform> u[10];
+	for (int i = 0; i < 10; i++) u[i].instantiate();
 	u[0]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
 	u[0]->set_binding(0); u[0]->add_id(color_);
 	u[1]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
 	u[1]->set_binding(1); u[1]->add_id(hitpos_);
 	u[2]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-	u[2]->set_binding(2); u[2]->add_id(sampler_); u[2]->add_id(world.sdf_atlas());
+	u[2]->set_binding(2); u[2]->add_id(sampler_); u[2]->add_id(atlas.sdf_atlas());
 	u[3]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-	u[3]->set_binding(3); u[3]->add_id(sampler_); u[3]->add_id(world.mat_atlas());
-	u[4]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-	u[4]->set_binding(4); u[4]->add_id(sampler_); u[4]->add_id(world.indirection_tex());
-	u[5]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	u[5]->set_binding(5); u[5]->add_id(world.palette_buffer());
-	uset_ = rd->uniform_set_create(Array::make(u[0], u[1], u[2], u[3], u[4], u[5]), shader_, 0);
+	u[3]->set_binding(3); u[3]->add_id(sampler_); u[3]->add_id(atlas.mat_atlas());
+	for (int i = 4; i <= 8; i++) { // palette, region_map, region_tables, op_pool, op_counts
+		u[i]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
+		u[i]->set_binding(i);
+	}
+	u[4]->add_id(atlas.palette());
+	u[5]->add_id(atlas.region_map());
+	u[6]->add_id(atlas.region_tables());
+	u[7]->add_id(atlas.op_pool());
+	u[8]->add_id(atlas.op_counts());
+	u[9]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
+	u[9]->set_binding(9); u[9]->add_id(edits_ubo_);
+	uset_ = rd->uniform_set_create(
+			Array::make(u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], u[9]), shader_, 0);
 }
 
-bool RaymarchPass::render(RenderingDevice *rd, const GpuWorld &world, const ve::CameraParams &cam,
-		int width, int height) {
+bool RaymarchPass::render(RenderingDevice *rd, const GpuAtlas &atlas, const ve::CameraParams &cam,
+		int width, int height, const float edit_state[6]) {
 	if (!shader_.is_valid()) return false;
 	if (width != width_ || height != height_ || !uset_.is_valid()) {
-		rebuild_targets(rd, world, width, height);
+		rebuild_targets(rd, atlas, width, height);
 	}
-	if (!uset_.is_valid() || !color_.is_valid()) return false;
+	if (!uset_.is_valid() || !color_.is_valid() || !edits_ubo_.is_valid()) return false;
+
+	// Recorded before the compute list: buffer_update errors while a list is open, and the
+	// deferred update still lands before the dispatch at submit.
+	{
+		PackedByteArray eb;
+		eb.resize(32);
+		float *f = reinterpret_cast<float *>(eb.ptrw());
+		for (int i = 0; i < 3; i++) f[i] = edit_state[i];
+		f[3] = 0.0f;
+		f[4] = edit_state[3]; // radius
+		f[5] = edit_state[4]; // type
+		f[6] = edit_state[5]; // material
+		f[7] = edit_state[3] > 0.0f ? 1.0f : 0.0f;
+		rd->buffer_update(edits_ubo_, 0, 32, eb);
+	}
 
 	PackedByteArray pc;
 	pc.resize(sizeof(ve::CameraParams));

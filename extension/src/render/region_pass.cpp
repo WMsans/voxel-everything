@@ -147,7 +147,17 @@ void RegionPass::release_region(RenderingDevice *rd, int64_t list, int region_sl
 
 void RegionPass::write_dispatch_args(RenderingDevice *rd, int64_t list) {
 	if (!args_pipeline_.is_valid()) return;
+	// Godot's compute_list_add_barrier() restarts the list and REPLAYS the last set push
+	// constant against the last bound pipeline. The streamer barriers right after this
+	// call, so this pipeline declares a 16-byte push constant (dispatch_args.comp.glsl)
+	// and we set it here — otherwise the barrier's replay would push whatever the
+	// previous dispatch set (the mark pass's 64 bytes) into a mismatched pipeline and
+	// Godot errors. The shader ignores the value.
+	PackedByteArray pc;
+	pc.resize(16);
+	pc.fill(0);
 	rd->compute_list_bind_compute_pipeline(list, args_pipeline_);
 	rd->compute_list_bind_uniform_set(list, args_uset_, 0);
+	rd->compute_list_set_push_constant(list, pc, pc.size());
 	rd->compute_list_dispatch(list, 1, 1, 1);
 }

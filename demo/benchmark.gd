@@ -11,7 +11,7 @@ func _ready() -> void:
 	if "--benchmark" in OS.get_cmdline_user_args():
 		_active = true
 		var cam: Camera3D = get_parent().get_node("Camera3D")
-		cam.transform = Transform3D(Basis.looking_at(Vector3(6, -10, 6).normalized()), Vector3(24, 12, 24))
+		cam.transform = Transform3D(Basis.looking_at(Vector3(6, -10, 6).normalized()), Vector3(24, 63.2, 24))
 		cam.set_script(null) # freeze: no fly-camera movement
 
 func _process(delta: float) -> void:

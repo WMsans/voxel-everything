@@ -1,39 +1,60 @@
 #[compute]
 #version 460
-#extension GL_EXT_shader_16bit_storage : require
 
 #include "common.glsl"
+#include "brick_layout.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, rgba16f) writeonly uniform image2D out_color;
 layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D out_hitpos;
-layout(set = 0, binding = 2) uniform sampler3D sdf_atlas;    // R8 unorm, nearest
-layout(set = 0, binding = 3) uniform usampler3D mat_atlas;   // R8 uint, nearest
-layout(set = 0, binding = 4) uniform isampler3D indirection; // R32 sint, world dims, nearest
-layout(set = 0, binding = 5, std430) readonly buffer Palette { uint16_t ids[]; } palette_buf;
+layout(set = 0, binding = 2) uniform sampler3D sdf_atlas;   // R8 unorm, nearest
+layout(set = 0, binding = 3) uniform usampler3D mat_atlas;  // R8 uint, nearest
+layout(set = 0, binding = 4, std430) readonly buffer Palette { uint ids[]; } palette_buf;
+layout(set = 0, binding = 5, std430) readonly buffer RegionMap { int slot[]; } region_map;
+layout(set = 0, binding = 6, std430) readonly buffer RegionTables { int slot[]; } region_tables;
+layout(set = 0, binding = 7, std430) readonly buffer OpPool { uvec4 v[]; } op_pool;
+layout(set = 0, binding = 8, std430) readonly buffer OpCounts { int n[]; } op_counts;
+// The pending-edit visualizer: tint the atlas content an edit WILL change, so the player
+// gets one frame of feedback before the regenerated bricks land (spec §5 latency).
+layout(set = 0, binding = 9) uniform Edits { vec4 center; vec4 params; } edits;
 
 layout(push_constant, std430) uniform Push {
 	vec4 cam_pos;
 	vec4 cam_right;
 	vec4 cam_up;
 	vec4 cam_fwd;
-	vec4 params;  // tan_half_fov_x, tan_half_fov_y, max_dist, unused
-	ivec4 dims;   // world dims in bricks
+	vec4 params;          // tan_half_fov_x, tan_half_fov_y, max_dist, unused
+	ivec4 dims;           // world size in REGIONS
+	ivec4 region_origin;  // world origin in REGIONS
+	ivec4 atlas_bricks;   // atlas grid
 } pc;
 
-// Manual trilinear inside one brick. Never filter across the atlas: adjacent atlas slots
-// hold unrelated bricks. The brick's own one-voxel apron (lattice plane 16, see
-// BRICK_SDF_STRIDE) supplies the far corner of the last cell, so the whole [0,16) extent
-// reconstructs correctly from this slot alone.
+// Region-table slot for the region holding a GLOBAL brick coord; -1 outside the world or
+// not resident. `>> 5` is an arithmetic shift: floor(b / 32), correct for negatives.
+int region_slot_of(ivec3 brick) {
+	ivec3 r = brick >> 5;
+	ivec3 l = r - pc.region_origin.xyz;
+	if (any(lessThan(l, ivec3(0))) || any(greaterThanEqual(l, pc.dims.xyz))) return -1;
+	return region_map.slot[l.x + l.y * pc.dims.x + l.z * pc.dims.x * pc.dims.y];
+}
+
+// Atlas slot of a global brick; -1 when absent. `& 31` is the floor-mod for negatives.
+int slot_at(ivec3 brick) {
+	int rs = region_slot_of(brick);
+	if (rs < 0) return -1;
+	int bi = (brick.x & 31) + (brick.y & 31) * REGION_BRICKS +
+			(brick.z & 31) * REGION_BRICKS * REGION_BRICKS;
+	return region_tables.slot[rs * REGION_BRICK_COUNT + bi];
+}
+
+// Manual trilinear inside one brick (unchanged from M1 except the runtime atlas base).
 float brick_sdf(int slot, vec3 local) { // local in voxel units [0, 16]
 	vec3 p = clamp(local, vec3(0.0), vec3(BRICK_SDF_MAX));
 	ivec3 i0 = ivec3(floor(p));
 	vec3 f = p - vec3(i0);
 	ivec3 i1 = min(i0 + 1, ivec3(BRICK_VOXELS));
-	ivec3 base = ivec3(slot % ATLAS_BRICKS.x,
-	                   (slot / ATLAS_BRICKS.x) % ATLAS_BRICKS.y,
-	                   slot / (ATLAS_BRICKS.x * ATLAS_BRICKS.y)) * BRICK_SDF_STRIDE;
+	ivec3 base = atlas_base(slot, pc.atlas_bricks.xyz, BRICK_SDF_STRIDE);
 	float c000 = texelFetch(sdf_atlas, base + ivec3(i0.x, i0.y, i0.z), 0).r;
 	float c100 = texelFetch(sdf_atlas, base + ivec3(i1.x, i0.y, i0.z), 0).r;
 	float c010 = texelFetch(sdf_atlas, base + ivec3(i0.x, i1.y, i0.z), 0).r;
@@ -47,24 +68,16 @@ float brick_sdf(int slot, vec3 local) { // local in voxel units [0, 16]
 	return decode_sdf(v);
 }
 
-int slot_at(ivec3 brick) {
-	if (any(lessThan(brick, ivec3(0))) || any(greaterThanEqual(brick, pc.dims.xyz))) return -1;
-	return texelFetch(indirection, brick, 0).r;
-}
-
 float world_sdf(vec3 p) {
 	ivec3 brick = ivec3(floor(p / BRICK_SIZE));
 	int slot = slot_at(brick);
-	if (slot < 0) return SDF_RANGE; // empty: caller stays within its brick interval
+	if (slot < 0) return SDF_RANGE;
 	vec3 local = (p - vec3(brick) * BRICK_SIZE) / VOXEL_SIZE;
 	return brick_sdf(slot, local);
 }
 
-// Field sample for gradient taps around a hit. The apron makes the reconstruction
-// continuous across brick faces, so a tap that lands in the neighbouring brick agrees with
-// this one. But a tap can also land in a brick with NO atlas slot (the activation probe is
-// conservative, not exact): world_sdf would answer SDF_RANGE there and blow the normal out.
-// Fall back to the anchor brick, whose apron covers the shared face exactly.
+// Gradient taps can land in a brick with NO atlas slot; fall back to the anchor brick,
+// whose apron covers the shared face exactly (M1 fix, semantics unchanged).
 float sdf_near(vec3 p, ivec3 anchor, int anchor_slot) {
 	ivec3 brick = ivec3(floor(p / BRICK_SIZE));
 	int slot = all(equal(brick, anchor)) ? anchor_slot : slot_at(brick);
@@ -80,20 +93,13 @@ vec3 calc_normal(vec3 p, ivec3 anchor, int anchor_slot) {
 		sdf_near(p + vec3(0, 0, e), anchor, anchor_slot) - sdf_near(p - vec3(0, 0, e), anchor, anchor_slot)));
 }
 
-// Material of the surface crossing found inside brick `brick` (atlas slot `slot`).
-// The secant refinement converges the hit point to the SDF zero crossing, which can sit
-// within ~0.01 m of a brick face; the final p may then round into a NEIGHBORING brick.
-// The generation pad activates near-surface air bricks that contain no solid voxels and
-// therefore have EMPTY palettes (palette[0] == 0), and neighboring bricks may be inactive
-// entirely. Anchoring the lookup to the hit brick with local coords clamped into its own
-// [0,15] range resolves the surface voxel's material instead of the neighbor's void.
+// Material of the surface crossing inside `brick`, anchored so a hit point that rounds
+// into a neighbouring (possibly absent or empty-palette) brick cannot resolve magenta.
 uint material_at(vec3 p, ivec3 brick, int slot) {
 	vec3 local = clamp((p - vec3(brick) * BRICK_SIZE) / VOXEL_SIZE, vec3(0.0), vec3(15.0));
-	ivec3 base = ivec3(slot % ATLAS_BRICKS.x,
-	                   (slot / ATLAS_BRICKS.x) % ATLAS_BRICKS.y,
-	                   slot / (ATLAS_BRICKS.x * ATLAS_BRICKS.y)) * BRICK_VOXELS;
+	ivec3 base = atlas_base(slot, pc.atlas_bricks.xyz, BRICK_VOXELS);
 	uint idx = texelFetch(mat_atlas, base + ivec3(local), 0).r;
-	return uint(palette_buf.ids[slot * 4 + idx]);
+	return palette_buf.ids[slot * 4 + idx];
 }
 
 void main() {
@@ -101,7 +107,6 @@ void main() {
 	ivec2 size = imageSize(out_color);
 	if (px.x >= size.x || px.y >= size.y) return;
 	vec2 uv = (vec2(px) + 0.5) / vec2(size);
-	// image row 0 = screen top = +up direction
 	vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
 
 	vec3 ro = pc.cam_pos.xyz;
@@ -113,37 +118,33 @@ void main() {
 	vec3 color = sky_color(rd);
 	vec4 hitpos = vec4(0.0);
 
-	// Brick-grid DDA. side[d] = ray t at the next boundary along axis d.
+	// Brick-grid DDA over the GLOBAL brick lattice (negative coords supported). side[d] =
+	// ray t at the next boundary along axis d; the st==0 guards keep NaNs out (M1 errata 4).
 	ivec3 map = ivec3(floor(ro / BRICK_SIZE));
 	vec3 delta = abs(vec3(BRICK_SIZE) / rd);
 	ivec3 st = ivec3(sign(rd));
-	// For st==0 (rd component == 0) the axis must ALWAYS be +inf: the plain formula's
-	// numerator there is origin-dependent (+inf/-inf/NaN across the cell, NaN at its
-	// center), and -inf winning min() livelocks the DDA. This glslang build provides no
-	// select() overload, and mix() would arithmetically combine the operands (inf*0 =
-	// NaN), so guard each axis explicitly: the st==0 axes are overwritten with exactly
-	// 1/0 = +inf, discarding the formula's garbage value (no NaN contamination).
 	vec3 side = (vec3(map) * BRICK_SIZE - ro
 	             + (vec3(st) * 0.5 + 0.5) * BRICK_SIZE) / rd;
 	if (st.x == 0) side.x = 1.0 / 0.0;
 	if (st.y == 0) side.y = 1.0 / 0.0;
 	if (st.z == 0) side.z = 1.0 / 0.0;
-	float t_prev = 0.0; // entry t of the current cell (last boundary crossed)
+	float t_prev = 0.0;
 
 	bool hit = false;
-	for (int i = 0; i < 512; i++) {
+	vec3 hp = vec3(0.0);
+	for (int i = 0; i < 1024; i++) {
 		float t_exit = min(side.x, min(side.y, side.z));
 		if (t_exit > max_dist) break;
 
 		int slot = slot_at(map);
 		if (slot >= 0) {
+			// Air-margin bricks (activated by the probe pad) hold no solid voxels and an
+			// EMPTY palette; their interpolated field can still dip below the hit threshold
+			// near a brick face. That is not a renderable surface — skip it (M1 fix).
+			bool has_material = palette_buf.ids[slot * 4] != 0u;
 			float t = t_prev;
-			// Air margin bricks (activated by the generation pad) hold no solid voxels and
-			// therefore an EMPTY palette (ids[slot*4] == 0); their interpolated field can
-			// still dip below the 0.002 hit threshold near a brick face. Such a crossing is
-			// not a renderable surface — skip it so the ray reaches the real surface.
-			const bool has_material = uint(palette_buf.ids[slot * 4]) != 0u;
 			for (int j = 0; j < 64; j++) {
+				if (t > t_exit) break;
 				vec3 p = ro + rd * t;
 				float d = world_sdf(p);
 				if (d < 0.002 && has_material) {
@@ -157,12 +158,12 @@ void main() {
 					vec3 sun = normalize(vec3(0.6, 0.8, 0.3));
 					float lam = max(dot(n, sun), 0.0);
 					color = alb * (0.25 + 0.75 * lam);
+					hp = p;
 					hitpos = vec4(p, 1.0);
 					hit = true;
 					break;
 				}
 				t += max(d * 0.9, 0.005);
-				if (t > t_exit) break;
 			}
 			if (hit) break;
 		}
@@ -170,6 +171,17 @@ void main() {
 		if (side.x < side.y && side.x < side.z) { t_prev = side.x; side.x += delta.x; map.x += st.x; }
 		else if (side.y < side.z)               { t_prev = side.y; side.y += delta.y; map.y += st.y; }
 		else                                    { t_prev = side.z; side.z += delta.z; map.z += st.z; }
+	}
+
+	// Pending-edit visualizer: the hit inside the edit sphere is tinted towards the tool's
+	// colour. It reads the OLD atlas content by design — this is the preview, and the
+	// regenerated bricks replace it next frame.
+	if (hit && edits.params.x > 0.0 && length(hp - edits.center.xyz) < edits.params.x) {
+		uint t = uint(edits.params.y);
+		vec3 tint = t == 0u ? vec3(1.0, 0.55, 0.1)      // subtract: warning orange
+		          : t == 1u ? material_albedo(4u)        // add: the fill grey
+		          : material_albedo(uint(edits.params.z)); // paint: the target colour
+		color = mix(color, tint, 0.45);
 	}
 
 	imageStore(out_color, px, vec4(color, 1.0));

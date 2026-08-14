@@ -1,15 +1,16 @@
 #include "voxel_world.h"
 #include "render/gpu_atlas.h"
-#include "render/gpu_world.h"
 #include "render/camera_params.h"
 #include "render/raymarch_pass.h"
 #include "render/composite_pass.h"
 #include "render/region_pass.h"
 #include "render/brick_gen_pass.h"
+#include "render/world_streamer.h"
 #include "render/shader_loader.h"
 #include "generator/generator.h"
 #include "world/brick_eval.h"
 #include "world/brick_mip.h"
+#include "world/raycast.h"
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/core/memory.hpp>
@@ -22,8 +23,6 @@ using namespace godot;
 void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_use_local_device", "v"), &VoxelWorld::set_use_local_device);
 	ClassDB::bind_method(D_METHOD("get_use_local_device"), &VoxelWorld::get_use_local_device);
-	ClassDB::bind_method(D_METHOD("set_world_size_bricks", "v"), &VoxelWorld::set_world_size_bricks);
-	ClassDB::bind_method(D_METHOD("get_world_size_bricks"), &VoxelWorld::get_world_size_bricks);
 	ClassDB::bind_method(D_METHOD("set_atlas_bricks", "v"), &VoxelWorld::set_atlas_bricks);
 	ClassDB::bind_method(D_METHOD("get_atlas_bricks"), &VoxelWorld::get_atlas_bricks);
 	ClassDB::bind_method(D_METHOD("set_max_region_slots", "v"), &VoxelWorld::set_max_region_slots);
@@ -39,7 +38,6 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_pixel", "origin", "dir"), &VoxelWorld::debug_raymarch_pixel);
-	ClassDB::bind_method(D_METHOD("debug_indirection_tex"), &VoxelWorld::debug_indirection_tex);
 	ClassDB::bind_method(D_METHOD("debug_sdf_atlas"), &VoxelWorld::debug_sdf_atlas);
 	ClassDB::bind_method(D_METHOD("debug_local_rd"), &VoxelWorld::debug_local_rd);
 	ClassDB::bind_method(D_METHOD("debug_load_shader", "res_path"), &VoxelWorld::debug_load_shader);
@@ -65,8 +63,13 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_frame_counters"), &VoxelWorld::debug_frame_counters);
 	ClassDB::bind_method(D_METHOD("debug_op_pool"), &VoxelWorld::debug_op_pool);
 	ClassDB::bind_method(D_METHOD("debug_op_counts"), &VoxelWorld::debug_op_counts);
+	ClassDB::bind_method(D_METHOD("debug_stream_frame", "cam"), &VoxelWorld::debug_stream_frame);
+	ClassDB::bind_method(D_METHOD("debug_stream_stats"), &VoxelWorld::debug_stream_stats);
+	ClassDB::bind_method(D_METHOD("debug_slot_of_region", "region"), &VoxelWorld::debug_slot_of_region);
+	ClassDB::bind_method(D_METHOD("debug_region_map_entry", "region"), &VoxelWorld::debug_region_map_entry);
+	ClassDB::bind_method(D_METHOD("debug_region_map_consistent"), &VoxelWorld::debug_region_map_consistent);
+	ClassDB::bind_method(D_METHOD("debug_raycast", "origin", "dir"), &VoxelWorld::debug_raycast);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "use_local_device"), "set_use_local_device", "get_use_local_device");
-	ADD_PROPERTY(PropertyInfo(Variant::VECTOR3I, "world_size_bricks"), "set_world_size_bricks", "get_world_size_bricks");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR3I, "atlas_bricks"), "set_atlas_bricks", "get_atlas_bricks");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_region_slots"), "set_max_region_slots", "get_max_region_slots");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_brick_jobs"), "set_max_brick_jobs", "get_max_brick_jobs");
@@ -79,62 +82,37 @@ void VoxelWorld::_ready() {}
 
 VoxelWorld::~VoxelWorld() {}
 
-void VoxelWorld::_exit_tree() {
-	// Delete the generation/region passes before the atlas: they hold uniform sets
-	// referencing the atlas buffers, and freeing those buffers cascades to referencing sets.
-	if (gen_pass_) {
-		delete gen_pass_;
-		gen_pass_ = nullptr;
-	}
-	if (region_pass_) {
-		delete region_pass_;
-		region_pass_ = nullptr;
-	}
-	// Delete the atlas before the GpuWorld teardown: its destructor frees every RID it
-	// owns on rd(), and the device is still valid at this point.
-	if (atlas_) {
-		delete atlas_;
-		atlas_ = nullptr;
-	}
-	// Delete the raymarch/composite passes while the device is still valid: their
-	// destructors free RIDs on rd(), so they must run before GpuWorld teardown and
-	// device destruction. The COMPOSITE pass must go first: its cached uniform set
-	// references the raymarch color/hitpos textures, and freeing those textures
-	// cascades to referencing uniform sets — tearing down raymarch first would leave
-	// the composite's uset_ cascade-freed, and its teardown would then hit an
-	// "Attempted to free invalid ID" error.
-	if (composite_pass_) {
-		delete composite_pass_;
-		composite_pass_ = nullptr;
-	}
-	if (raymarch_pass_) {
-		delete raymarch_pass_;
-		raymarch_pass_ = nullptr;
-	}
-	if (gpu_) gpu_->teardown();
-	// Full reset: keep the node reusable across remove_child/add_child cycles.
-	// Without this, ensure_initialized() early-returns on the stale flag and the
-	// compositor path runs with a torn-down GpuWorld (freed RIDs) -> black terrain.
-	gpu_.reset();
-	world_.reset();
+void VoxelWorld::teardown_gpu() {
+	// Passes before the atlas: their uniform sets reference atlas RIDs, and freeing a
+	// texture cascades to referencing sets (M1's documented order).
+	if (composite_pass_) { delete composite_pass_; composite_pass_ = nullptr; }
+	if (raymarch_pass_) { delete raymarch_pass_; raymarch_pass_ = nullptr; }
+	if (gen_pass_) { delete gen_pass_; gen_pass_ = nullptr; }
+	if (region_pass_) { delete region_pass_; region_pass_ = nullptr; }
+	if (streamer_) { delete streamer_; streamer_ = nullptr; }
+	if (residency_) { residency_->clear(); } // slot assignments are meaningless pre-atlas
+	if (atlas_) { delete atlas_; atlas_ = nullptr; }
 	initialized_ = false;
+}
+
+void VoxelWorld::_exit_tree() {
+	teardown_gpu();
+	if (residency_) { delete residency_; residency_ = nullptr; }
+	if (edit_log_) { delete edit_log_; edit_log_ = nullptr; }
+	pending_edits_.clear();
+	overflow_seen_ = 0;
 	if (local_rd_) {
-		// Brief used local_rd_->free(); godot-cpp master has no no-arg free() on
-		// RenderingDevice (only the macro's static free), so free via memdelete.
 		memdelete(local_rd_);
 		local_rd_ = nullptr;
 	}
-}
-
-RenderingDevice *VoxelWorld::rd() const {
-	return use_local_device_ ? local_rd_ : main_rd_;
+	main_rd_ = nullptr;
 }
 
 void VoxelWorld::ensure_initialized() {
 	if (initialized_) return;
 	if (use_local_device_ && !local_rd_) {
 		local_rd_ = RenderingServer::get_singleton()->create_local_rendering_device();
-	} else if (!use_local_device_) {
+	} else if (!use_local_device_ && !main_rd_) {
 		main_rd_ = RenderingServer::get_singleton()->get_rendering_device();
 	}
 	RenderingDevice *device = rd();
@@ -142,30 +120,57 @@ void VoxelWorld::ensure_initialized() {
 		UtilityFunctions::printerr("VoxelWorld: no RenderingDevice");
 		return;
 	}
-	world_ = std::make_unique<ve::WorldData>(world_size_bricks_.x, world_size_bricks_.y, world_size_bricks_.z);
-	ve::AnalyticGenerator gen;
-	world_->generate(gen);
-	UtilityFunctions::print("VoxelWorld: generated ", world_->active_brick_count(), " bricks");
-	gpu_ = std::make_unique<GpuWorld>();
-	if (!gpu_->initialize(device, *world_)) {
-		gpu_.reset();
-		return;
+	atlas_ = new GpuAtlas();
+	GpuAtlasConfig cfg;
+	cfg.atlas_bricks = {atlas_bricks_.x, atlas_bricks_.y, atlas_bricks_.z};
+	cfg.max_region_slots = max_region_slots_;
+	cfg.max_brick_jobs = max_brick_jobs_;
+	cfg.bounds = world_bounds();
+	if (!atlas_->initialize(device, cfg)) { delete atlas_; atlas_ = nullptr; return; }
+	region_pass_ = new RegionPass();
+	if (!region_pass_->initialize(device, *atlas_)) { teardown_gpu(); return; }
+	gen_pass_ = new BrickGenPass();
+	if (!gen_pass_->initialize(device, *atlas_)) { teardown_gpu(); return; }
+	if (!edit_log_) edit_log_ = new ve::EditLog(world_bounds());
+	if (!residency_) {
+		ve::ResidencyConfig rcfg;
+		rcfg.bounds = world_bounds();
+		rcfg.radius_m = residency_radius_m_;
+		rcfg.max_region_slots = max_region_slots_;
+		residency_ = new ve::RegionResidency(rcfg);
 	}
+	streamer_ = new WorldStreamer();
+	streamer_->initialize(residency_, edit_log_, &edit_mutex_, &pending_edits_, atlas_,
+			region_pass_, gen_pass_);
 	raymarch_pass_ = new RaymarchPass();
 	raymarch_pass_->initialize(device);
-	// Deviation from brief (documented): composite_pass_ is a raw pointer (incomplete-type
-	// rule established in Task 9), so `new` here and `delete` in _exit_tree(), matching
-	// raymarch_pass_ and the brief's make_unique intent.
 	composite_pass_ = new CompositePass();
 	composite_pass_->initialize(device);
 	initialized_ = true;
 }
 
-RID VoxelWorld::debug_indirection_tex() const { return gpu_ ? gpu_->indirection_tex() : RID(); }
-// The M2 atlas shadows the M1 GpuWorld atlas once initialized; the M1 fallback keeps the
-// GpuWorld suite (which never initializes atlas_) reading the M1 texture.
-RID VoxelWorld::debug_sdf_atlas() const {
-	return atlas_ ? atlas_->sdf_atlas() : (gpu_ ? gpu_->sdf_atlas() : RID());
+ve::EditLog::AppendResult VoxelWorld::append_edit(const ve::EditOp &op) {
+	std::lock_guard<std::mutex> lock(edit_mutex_);
+	if (!edit_log_) return {};
+	ve::EditLog::AppendResult r = edit_log_->append(op);
+	if (!r.rejected.empty()) {
+		UtilityFunctions::printerr("VoxelWorld: region op list full, op rejected (",
+				r.rejected[0].x, ", ", r.rejected[0].y, ", ", r.rejected[0].z,
+				") — spec §8 fail-soft");
+	}
+	pending_edits_.push_back({op, r});
+	return r;
+}
+
+RenderingDevice *VoxelWorld::rd() const {
+	return use_local_device_ ? local_rd_ : main_rd_;
+}
+
+ve::WorldBounds VoxelWorld::world_bounds() const {
+	ve::WorldBounds b;
+	b.origin_bricks = {world_origin_bricks_.x, world_origin_bricks_.y, world_origin_bricks_.z};
+	b.size_regions = {world_size_regions_.x, world_size_regions_.y, world_size_regions_.z};
+	return b;
 }
 
 // Half-precision to single-precision (normal + subnormal paths).
@@ -183,15 +188,18 @@ static float half_to_float(uint16_t v) {
 Color VoxelWorld::debug_raymarch_pixel(Vector3 origin, Vector3 dir) {
 	ensure_initialized();
 	RenderingDevice *device = rd();
-	// Deviation 3: initialized_ is not reset on _exit_tree, so after remove/re-add rd()
-	// can be stale/null; guard everything (gpu_ additionally null-checked).
-	if (!initialized_ || !device || !gpu_ || !raymarch_pass_) return Color(1, 0, 1);
+	if (!initialized_ || !device || !atlas_ || !raymarch_pass_) return Color(1, 0, 1);
 	ve::CameraParams cam = ve::CameraParams::looking_at(
 			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
-	cam.dims[0] = world_size_bricks_.x;
-	cam.dims[1] = world_size_bricks_.y;
-	cam.dims[2] = world_size_bricks_.z;
-	if (!raymarch_pass_->render(device, *gpu_, cam, 1, 1)) return Color(1, 0, 1);
+	const ve::WorldBounds wb = world_bounds();
+	const ve::IVec3 ro = wb.origin_regions();
+	cam.dims[0] = world_size_regions_.x; cam.dims[1] = world_size_regions_.y;
+	cam.dims[2] = world_size_regions_.z;
+	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
+	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
+	cam.atlas_bricks[2] = atlas_bricks_.z;
+	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
+	if (!raymarch_pass_->render(device, *atlas_, cam, 1, 1, kNoEdit)) return Color(1, 0, 1);
 	device->submit();
 	device->sync();
 	const PackedByteArray data = device->texture_get_data(raymarch_pass_->color_texture(), 0);
@@ -228,52 +236,13 @@ Vector2 VoxelWorld::debug_eval_field(Vector3 p, const PackedByteArray &ops, int 
 	return Vector2(s.sdf, static_cast<float>(s.material));
 }
 
-ve::WorldBounds VoxelWorld::world_bounds() const {
-	ve::WorldBounds b;
-	b.origin_bricks = {world_origin_bricks_.x, world_origin_bricks_.y, world_origin_bricks_.z};
-	b.size_regions = {world_size_regions_.x, world_size_regions_.y, world_size_regions_.z};
-	return b;
-}
-
 bool VoxelWorld::debug_init_atlas() {
-	if (use_local_device_ && !local_rd_)
-		local_rd_ = RenderingServer::get_singleton()->create_local_rendering_device();
-	else if (!use_local_device_ && !main_rd_)
-		main_rd_ = RenderingServer::get_singleton()->get_rendering_device();
-	RenderingDevice *device = rd();
-	if (!device) {
-		UtilityFunctions::printerr("VoxelWorld: no RenderingDevice");
-		return false;
-	}
-	if (!atlas_) atlas_ = new GpuAtlas();
-	GpuAtlasConfig cfg;
-	cfg.atlas_bricks = {atlas_bricks_.x, atlas_bricks_.y, atlas_bricks_.z};
-	cfg.max_region_slots = max_region_slots_;
-	cfg.max_brick_jobs = max_brick_jobs_;
-	cfg.bounds = world_bounds();
-	if (!atlas_->initialize(device, cfg)) return false;
-	if (!region_pass_) region_pass_ = new RegionPass();
-	if (!region_pass_->initialize(device, *atlas_)) {
-		delete region_pass_;
-		region_pass_ = nullptr;
-		return false;
-	}
-	if (!gen_pass_) gen_pass_ = new BrickGenPass();
-	if (!gen_pass_->initialize(device, *atlas_)) {
-		delete gen_pass_;
-		gen_pass_ = nullptr;
-		return false;
-	}
-	return true;
+	ensure_initialized();
+	return atlas_ && atlas_->is_valid();
 }
 
 void VoxelWorld::debug_teardown_atlas() {
-	// The passes' uniform sets reference the atlas buffers: tear them down first, or
-	// freeing the buffers leaves stale sets that error ("free invalid ID") on the next
-	// debug_init_atlas() -> Pass::initialize() -> teardown().
-	if (gen_pass_) gen_pass_->teardown();
-	if (region_pass_) region_pass_->teardown();
-	if (atlas_) atlas_->teardown();
+	teardown_gpu();
 }
 
 Dictionary VoxelWorld::debug_atlas_stats() {
@@ -485,6 +454,7 @@ int VoxelWorld::debug_region_table_slot(int region_slot, Vector3i brick) {
 	return b.size() >= 4 ? *reinterpret_cast<const int32_t *>(b.ptr()) : -1;
 }
 
+RID VoxelWorld::debug_sdf_atlas() const { return atlas_ ? atlas_->sdf_atlas() : RID(); }
 RID VoxelWorld::debug_mat_atlas() const { return atlas_ ? atlas_->mat_atlas() : RID(); }
 RID VoxelWorld::debug_mip_atlas(int level) const { return atlas_ ? atlas_->mip_atlas(level) : RID(); }
 RID VoxelWorld::debug_region_map() const { return atlas_ ? atlas_->region_map() : RID(); }
@@ -493,3 +463,76 @@ RID VoxelWorld::debug_free_list() const { return atlas_ ? atlas_->free_list() : 
 RID VoxelWorld::debug_frame_counters() const { return atlas_ ? atlas_->frame_counters() : RID(); }
 RID VoxelWorld::debug_op_pool() const { return atlas_ ? atlas_->op_pool() : RID(); }
 RID VoxelWorld::debug_op_counts() const { return atlas_ ? atlas_->op_counts() : RID(); }
+
+int VoxelWorld::debug_stream_frame(Vector3 cam) {
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !streamer_) return 0;
+	const int actions = streamer_->run_frame(device, cam.x, cam.y, cam.z);
+	device->submit();
+	device->sync();
+	overflow_seen_ |= static_cast<int>(atlas_->read_overflow(device));
+	return actions;
+}
+
+Dictionary VoxelWorld::debug_stream_stats() {
+	Dictionary d;
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_ || !residency_ || !streamer_) return d;
+	d["resident_regions"] = residency_->resident_count();
+	d["frame_edits"] = streamer_->last_frame_edits();
+	d["overflow"] = static_cast<int>(atlas_->read_overflow(device));
+	d["overflow_ever"] = overflow_seen_;
+	return d;
+}
+
+int VoxelWorld::debug_slot_of_region(Vector3i region) const {
+	if (!residency_) return -1;
+	return residency_->slot_of({region.x, region.y, region.z});
+}
+
+int VoxelWorld::debug_region_map_entry(Vector3i region) {
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_) return -1;
+	const int idx = world_bounds().region_index({region.x, region.y, region.z});
+	if (idx < 0) return -1;
+	const PackedByteArray b = device->buffer_get_data(atlas_->region_map(), idx * 4, 4);
+	return b.size() >= 4 ? *reinterpret_cast<const int32_t *>(b.ptr()) : -1;
+}
+
+bool VoxelWorld::debug_region_map_consistent() {
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_ || !residency_) return false;
+	const ve::WorldBounds wb = world_bounds();
+	const PackedByteArray b = device->buffer_get_data(atlas_->region_map());
+	const int32_t *map = reinterpret_cast<const int32_t *>(b.ptr());
+	const ve::IVec3 o = wb.origin_regions();
+	const ve::IVec3 sz = wb.size_regions;
+	for (int z = 0; z < sz.z; z++)
+		for (int y = 0; y < sz.y; y++)
+			for (int x = 0; x < sz.x; x++) {
+				const ve::IVec3 r{o.x + x, o.y + y, o.z + z};
+				const int gpu_slot = map[x + y * sz.x + z * sz.x * sz.y];
+				const int cpu_slot = residency_->slot_of(r);
+				if (gpu_slot != cpu_slot) return false;
+				if (gpu_slot >= 0 && !(residency_->region_of_slot(gpu_slot) == r)) return false;
+			}
+	return true;
+}
+
+Dictionary VoxelWorld::debug_raycast(Vector3 origin, Vector3 dir) {
+	Dictionary d;
+	d["hit"] = false;
+	if (!edit_log_) return d;
+	std::lock_guard<std::mutex> lock(edit_mutex_);
+	ve::AnalyticGenerator gen;
+	const float o[3] = {origin.x, origin.y, origin.z};
+	const float f[3] = {dir.x, dir.y, dir.z};
+	const ve::RayHit h = ve::raycast(gen, *edit_log_, o, f, 200.0f);
+	if (!h.hit) return d;
+	d["hit"] = true;
+	d["pos"] = Vector3(h.pos[0], h.pos[1], h.pos[2]);
+	d["normal"] = Vector3(h.normal[0], h.normal[1], h.normal[2]);
+	d["distance"] = h.distance;
+	return d;
+}

@@ -1,11 +1,27 @@
 extends GdUnitTestSuite
 
+# M2: the world is GPU-generated and streamed around a camera. The radius must cover the
+# FARTHEST ray's hit point (the magenta regression rays land ~40 m out), which the sizing
+# rule of thumb (see test_streaming.gd) puts at ~25k bricks in the worst case.
+const ATLAS := Vector3i(48, 24, 32)   # 36864 slots (~380 MB on the test device)
+const REGION_SLOTS := 64              # a 45 m ball intersects ~47 regions; leave headroom
+const CAM := Vector3(20, 12, 20)      # just above the local surface (hills max ~10 m)
+
 func make_world() -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
-	w.world_size_bricks = Vector3i(20, 12, 20)
+	w.atlas_bricks = ATLAS
+	w.max_region_slots = REGION_SLOTS
+	w.world_origin_bricks = Vector3i(0, -64, 0)
+	w.world_size_regions = Vector3i(4, 5, 4)
+	w.residency_radius_m = 45.0
 	add_child(w)
 	w.ensure_initialized()
+	# Settle AT CAM: this suite's rays (x,z in [5, 13], hits y ~ 1-7 m) all land within
+	# 45 m of it, so settling anywhere else could leave their hit regions non-resident.
+	for i in range(90):
+		if w.debug_stream_frame(CAM) == 0:
+			break
 	return w
 
 func test_ray_down_from_sky_hits_terrain() -> void:

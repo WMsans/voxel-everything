@@ -9,12 +9,6 @@ const int REGION_BRICKS = 32;
 const float REGION_SIZE = 25.6;       // 32 * 0.8
 const int REGION_BRICK_COUNT = 32768; // 32^3
 
-// Atlas slot-grid dims, consumed only by the M1 raymarcher (shaders/raymarch.comp.glsl)
-// to address the 3D SDF/material atlas. The Task-7 generation shaders take atlas dims as
-// parameters/arguments and never reference this constant. Task 12's raymarch rewrite
-// replaces it with runtime dims, at which point it disappears.
-const ivec3 ATLAS_BRICKS = ivec3(32, 16, 32);
-
 // The SDF atlas stores a 17^3 LATTICE per brick: sample n sits at local coordinate n, and
 // the extra plane at 16 is a one-voxel apron so trilinear reconstruction covers the brick's
 // whole [0,16) extent. Without it the last slab clamps to a constant, the gradient collapses,

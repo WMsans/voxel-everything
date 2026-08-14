@@ -1,8 +1,9 @@
 #include "raymarch_compositor.h"
 #include "voxel_world.h"
 #include "render/composite_pass.h"
-#include "render/gpu_world.h"
+#include "render/gpu_atlas.h"
 #include "render/raymarch_pass.h"
+#include "render/world_streamer.h"
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/render_scene_buffers_rd.hpp>
 #include <godot_cpp/classes/render_scene_data.hpp>
@@ -67,18 +68,38 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	cp.cam_up[0] = up.x; cp.cam_up[1] = up.y; cp.cam_up[2] = up.z;
 	cp.cam_fwd[0] = fwd.x; cp.cam_fwd[1] = fwd.y; cp.cam_fwd[2] = fwd.z;
 	cp.params[0] = tan_x; cp.params[1] = tan_y; cp.params[2] = 200.0f;
-	const Vector3i wd = world->get_world_size_bricks();
-	cp.dims[0] = wd.x; cp.dims[1] = wd.y; cp.dims[2] = wd.z;
+	const Vector3i sr = world->get_world_size_regions();
+	cp.dims[0] = sr.x; cp.dims[1] = sr.y; cp.dims[2] = sr.z;
+	const Vector3i ob = world->get_world_origin_bricks();
+	cp.region_origin[0] = ob.x / 32; cp.region_origin[1] = ob.y / 32;
+	cp.region_origin[2] = ob.z / 32;
+	const Vector3i ab = world->get_atlas_bricks();
+	cp.atlas_bricks[0] = ab.x; cp.atlas_bricks[1] = ab.y; cp.atlas_bricks[2] = ab.z;
+
+	// One streaming pass per frame, before the march: the new bricks land in the same
+	// submit, so there is no torn frame where the map points at ungenerated slots.
+	WorldStreamer *st = world->streamer();
+	if (st) st->run_frame(rd, cam.origin.x, cam.origin.y, cam.origin.z);
 
 	RaymarchPass *rmp = world->raymarch_pass();
-	GpuWorld *gw = world->gpu_world();
+	GpuAtlas *atlas = world->atlas();
 	CompositePass *cmp = world->composite_pass();
-	if (!rmp || !gw || !cmp) return;
+	if (!rmp || !atlas || !cmp) return;
+
+	float edit_state[6] = {0, 0, 0, 0, 0, 0};
+	if (st && st->last_edit_radius() > 0.0f) {
+		edit_state[0] = st->last_edit_center()[0];
+		edit_state[1] = st->last_edit_center()[1];
+		edit_state[2] = st->last_edit_center()[2];
+		edit_state[3] = st->last_edit_radius();
+		edit_state[4] = static_cast<float>(st->last_edit_type());
+		edit_state[5] = static_cast<float>(st->last_edit_material());
+	}
 
 	const int rw = static_cast<int>(size.x * 0.66f);
 	const int rh = static_cast<int>(size.y * 0.66f);
 	if (rw <= 0 || rh <= 0) return;
-	if (!rmp->render(rd, *gw, cp, rw, rh)) return;
+	if (!rmp->render(rd, *atlas, cp, rw, rh, edit_state)) return;
 
 	const Projection view(cam.affine_inverse());
 	const Projection view_proj = proj * view;

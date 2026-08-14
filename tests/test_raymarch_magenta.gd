@@ -10,6 +10,11 @@ extends GdUnitTestSuite
 # world 60x20x60): each previously produced a magenta core in the full-frame raymarch.
 # The full-frame hit points were: (43.216,7.201,24.034), (39.995,7.203,24.473),
 # (39.863,7.202,24.672), (15.016,0.805,12.001), (29.578,0.805,20.344).
+#
+# M2 keeps those world-space hit points: the field is sampled at GLOBAL coordinates
+# (see test_streaming.gd's deviation note), so the surface still sits at y = hills and
+# the same rays hit the same places. (The brief's "+51.2 in y" assumed a field offset
+# that the committed baseline never implemented.)
 
 const DEMO_ORIGIN := Vector3(8, 14, 8)
 const MAGENTA_RAYS := [
@@ -20,12 +25,28 @@ const MAGENTA_RAYS := [
 	Vector3(0.76669, -0.46885, 0.43859),
 ]
 
+# M2: the world is GPU-generated and streamed around a camera. The radius must cover the
+# FARTHEST ray's hit point (the magenta regression rays land ~40 m out), which the sizing
+# rule of thumb (see test_streaming.gd) puts at ~25k bricks in the worst case.
+const ATLAS := Vector3i(48, 24, 32)   # 36864 slots (~380 MB on the test device)
+const REGION_SLOTS := 64              # a 45 m ball intersects ~47 regions; leave headroom
+
 func make_world() -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
-	w.world_size_bricks = Vector3i(60, 20, 60)
+	w.atlas_bricks = ATLAS
+	w.max_region_slots = REGION_SLOTS
+	w.world_origin_bricks = Vector3i(0, -64, 0)
+	w.world_size_regions = Vector3i(4, 5, 4)
+	w.residency_radius_m = 45.0
 	add_child(w)
 	w.ensure_initialized()
+	# Settle at THIS suite's DEMO_ORIGIN, not the pixel suite's CAM: the regression rays
+	# land ~40 m from DEMO_ORIGIN, and settling anywhere else would leave those hit
+	# regions non-resident.
+	for i in range(90):
+		if w.debug_stream_frame(DEMO_ORIGIN) == 0:
+			break
 	return w
 
 # Rejects error-magenta (g == 0) and a sky miss (sky-down r == 0.5498 after the rgba16f

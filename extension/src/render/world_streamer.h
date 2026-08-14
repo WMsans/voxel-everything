@@ -1,0 +1,50 @@
+#pragma once
+#include <godot_cpp/classes/rendering_device.hpp>
+#include <mutex>
+#include <vector>
+#include "generator/generator.h"
+#include "render/gpu_atlas.h"
+#include "render/brick_gen_pass.h"
+#include "render/region_pass.h"
+#include "world/edit_log.h"
+#include "world/residency.h"
+
+namespace godot {
+
+struct PendingEdit; // defined in voxel_world.h; here only the pointer type is needed
+
+// Drives one frame of world maintenance on the render thread: residency loads/evictions,
+// edit fan-out, one compute list holding every mark + the indirect generation dispatch.
+// Owns nothing; every pointer is borrowed from VoxelWorld.
+class WorldStreamer {
+public:
+	void initialize(ve::RegionResidency *residency, ve::EditLog *edit_log,
+			std::mutex *edit_mutex, std::vector<PendingEdit> *pending, GpuAtlas *atlas,
+			RegionPass *region_pass, BrickGenPass *brick_gen);
+
+	// Returns the number of actions taken (loads + evicts + edit-mark jobs). Records ONE
+	// compute list; the caller submits. buffer_update calls happen before the list opens.
+	int run_frame(RenderingDevice *rd, float cx, float cy, float cz);
+
+	int last_frame_edits() const { return frame_edits_; }
+	const float *last_edit_center() const { return last_edit_center_; }
+	float last_edit_radius() const { return last_edit_radius_; }
+	int last_edit_type() const { return last_edit_type_; }
+	int last_edit_material() const { return last_edit_material_; }
+
+private:
+	ve::RegionResidency *residency_ = nullptr;
+	ve::EditLog *edit_log_ = nullptr;
+	std::mutex *edit_mutex_ = nullptr;
+	std::vector<PendingEdit> *pending_ = nullptr;
+	GpuAtlas *atlas_ = nullptr;
+	RegionPass *region_pass_ = nullptr;
+	BrickGenPass *brick_gen_ = nullptr;
+	int frame_edits_ = 0;
+	float last_edit_center_[3] = {0.0f, 0.0f, 0.0f};
+	float last_edit_radius_ = 0.0f;
+	int last_edit_type_ = 0;
+	int last_edit_material_ = 0;
+};
+
+} // namespace godot
