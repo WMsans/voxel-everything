@@ -1,0 +1,49 @@
+[gd_scene load_steps=8 format=3 uid="uid://dx2akrpw2s62k"]
+
+[ext_resource type="Script" path="res://demo/fly_camera.gd" id="1"]
+[ext_resource type="Script" path="res://demo/hud.gd" id="2"]
+[ext_resource type="Script" path="res://demo/benchmark.gd" id="3"]
+
+[sub_resource type="RaymarchCompositor" id="1"]
+world_path = NodePath("/root/Main/VoxelWorld")
+
+[sub_resource type="Compositor" id="2"]
+compositor_effects = [SubResource(1)]
+
+[sub_resource type="Environment" id="3"]
+background_mode = 4
+ambient_light_source = 3
+ambient_light_energy = 0.4
+
+[sub_resource type="BoxMesh" id="4"]
+size = Vector3(2, 2, 2)
+
+[node name="Main" type="Node3D"]
+
+[node name="VoxelWorld" type="VoxelWorld" parent="."]
+world_size_bricks = Vector3i(60, 20, 60)
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource(3)
+compositor = SubResource(2)
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(-0.58819, 0.30318, -0.74977, 0, 0.92710, 0.37489, 0.80872, 0.22051, -0.54530, 8, 14, 8)
+script = ExtResource(1)
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.6, -0.48, 0.64, 0, 0.8, 0.6, -0.8, -0.36, 0.48, 0, 20, 0)
+
+[node name="TestCube" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 24, 6, 24)
+mesh = SubResource(4)
+
+[node name="HUD" type="CanvasLayer" parent="."]
+
+[node name="Label" type="Label" parent="HUD"]
+offset_left = 10.0
+offset_top = 10.0
+script = ExtResource(2)
+
+[node name="Benchmark" type="Node" parent="."]
+script = ExtResource(3)

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dukh6blasniwf"
+path="res://.godot/imported/raymarch.comp.glsl-63ca9ccc5bbcf06e4ae29fa3f64aa58c.res"
+
+[deps]
+
+source_file="res://shaders/raymarch.comp.glsl"
+dest_files=["res://.godot/imported/raymarch.comp.glsl-63ca9ccc5bbcf06e4ae29fa3f64aa58c.res"]
+
+[params]
+
