@@ -9,7 +9,7 @@ static ve::WorldBounds bounds() { return ve::WorldBounds{{0, -64, 0}, {64, 8, 64
 TEST_CASE("a ray straight down from the sky lands on the surface") {
 	ve::AnalyticGenerator gen;
 	ve::EditLog log(bounds());
-	const float o[3] = {100.0f, 40.0f, 100.0f};
+	const float o[3] = {100.0f, 91.2f, 100.0f}; // 91.2 = 40 + kSurfaceY: well above the surface
 	const float d[3] = {0.0f, -1.0f, 0.0f};
 	const ve::RayHit h = ve::raycast(gen, log, o, d, 200.0f);
 	REQUIRE(h.hit);
@@ -19,13 +19,13 @@ TEST_CASE("a ray straight down from the sky lands on the surface") {
 	CHECK(std::fabs(ve::eval_field(gen, nullptr, 0, h.pos[0], h.pos[1], h.pos[2]).sdf) < 0.02f);
 	// The surface faces up, so the normal has a strong +y component.
 	CHECK(h.normal[1] > 0.5f);
-	CHECK(h.distance == doctest::Approx(40.0f - h.pos[1]).epsilon(0.01));
+	CHECK(h.distance == doctest::Approx(91.2f - h.pos[1]).epsilon(0.01));
 }
 
 TEST_CASE("a ray into the sky misses") {
 	ve::AnalyticGenerator gen;
 	ve::EditLog log(bounds());
-	const float o[3] = {100.0f, 40.0f, 100.0f};
+	const float o[3] = {100.0f, 91.2f, 100.0f}; // 91.2 = 40 + kSurfaceY: well above the surface
 	const float d[3] = {0.0f, 1.0f, 0.0f};
 	CHECK_FALSE(ve::raycast(gen, log, o, d, 200.0f).hit);
 }
@@ -33,7 +33,7 @@ TEST_CASE("a ray into the sky misses") {
 TEST_CASE("max_dist bounds the trace") {
 	ve::AnalyticGenerator gen;
 	ve::EditLog log(bounds());
-	const float o[3] = {100.0f, 40.0f, 100.0f};
+	const float o[3] = {100.0f, 91.2f, 100.0f}; // 91.2 = 40 + kSurfaceY: well above the surface
 	const float d[3] = {0.0f, -1.0f, 0.0f};
 	CHECK_FALSE(ve::raycast(gen, log, o, d, 5.0f).hit);
 	CHECK(ve::raycast(gen, log, o, d, 100.0f).hit);
@@ -42,7 +42,7 @@ TEST_CASE("max_dist bounds the trace") {
 TEST_CASE("the trace sees edits: a crater moves the hit point down") {
 	ve::AnalyticGenerator gen;
 	ve::EditLog log(bounds());
-	const float o[3] = {100.0f, 40.0f, 100.0f};
+	const float o[3] = {100.0f, 91.2f, 100.0f}; // 91.2 = 40 + kSurfaceY: well above the surface
 	const float d[3] = {0.0f, -1.0f, 0.0f};
 	const ve::RayHit before = ve::raycast(gen, log, o, d, 200.0f);
 	REQUIRE(before.hit);
@@ -71,7 +71,7 @@ TEST_CASE("a ray that starts inside solid reports a hit at its origin") {
 TEST_CASE("the direction is normalised for the caller") {
 	ve::AnalyticGenerator gen;
 	ve::EditLog log(bounds());
-	const float o[3] = {100.0f, 40.0f, 100.0f};
+	const float o[3] = {100.0f, 91.2f, 100.0f}; // 91.2 = 40 + kSurfaceY: well above the surface
 	const float unit[3] = {0.0f, -1.0f, 0.0f};
 	const float scaled[3] = {0.0f, -7.5f, 0.0f};
 	const ve::RayHit a = ve::raycast(gen, log, o, unit, 200.0f);

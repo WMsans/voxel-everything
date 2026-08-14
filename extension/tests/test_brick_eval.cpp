@@ -42,12 +42,13 @@ TEST_CASE("eval_field is the generator with the ops applied in order") {
 
 TEST_CASE("brick_has_surface accepts surface bricks and rejects sky and deep rock") {
 	ve::AnalyticGenerator gen;
-	// hills() stays inside +-10 m, so a brick at y = +40 m is sky and y = -40 m is rock.
-	CHECK_FALSE(ve::brick_has_surface(gen, nullptr, 0, {10, 50, 10}));
+	// hills() stays inside +-10 m, so a brick at y = +72 m is sky and y = -40 m is rock
+	// (the surface sits at 51.2 + hills in [41.2, 61.2] m).
+	CHECK_FALSE(ve::brick_has_surface(gen, nullptr, 0, {10, 90, 10}));
 	CHECK_FALSE(ve::brick_has_surface(gen, nullptr, 0, {10, -50, 10}));
 	// Find the surface brick in this column and check it is accepted.
 	int found = 0;
-	for (int by = -20; by <= 20; by++)
+	for (int by = 44; by <= 84; by++)
 		if (ve::brick_has_surface(gen, nullptr, 0, {10, by, 10})) found++;
 	CHECK(found > 0);
 }
@@ -74,7 +75,7 @@ TEST_CASE("eval_brick produces a signed lattice, a dominant-first palette and mi
 	// grazes the surface (terrain dips to ~2.54 m at this brick's far corner), so require
 	// the evaluated lattice itself to cross zero.
 	ve::IVec3 brick{10, 0, 10};
-	for (int by = -20; by <= 20; by++) {
+	for (int by = 44; by <= 84; by++) {
 		if (!ve::brick_has_surface(gen, nullptr, 0, {10, by, 10})) continue;
 		ve::BrickEval probe{};
 		ve::eval_brick(gen, nullptr, 0, {10, by, 10}, &probe);
@@ -140,13 +141,13 @@ TEST_CASE("eval_brick is deterministic and edit ops change its bytes") {
 }
 
 TEST_CASE("WorldData still agrees with eval_brick after the refactor") {
-	ve::WorldData w(20, 12, 20);
+	ve::WorldData w(20, 90, 20);
 	ve::AnalyticGenerator gen;
 	w.generate(gen);
 	REQUIRE(w.active_brick_count() > 0);
 	int checked = 0;
 	for (int bz = 0; bz < 20 && checked < 8; bz++)
-		for (int by = 0; by < 12 && checked < 8; by++)
+		for (int by = 0; by < 90 && checked < 8; by++)
 			for (int bx = 0; bx < 20 && checked < 8; bx++) {
 				const int slot = w.brick_slot(bx, by, bz);
 				if (slot < 0) continue;

@@ -52,8 +52,9 @@ struct ShaderField {
 };
 
 // Surface height of the analytic terrain at (x, z), bisected on the generator itself.
+// The y span must reach the surface at 51.2 + hills (max 61.2 m).
 float surface_y(const ve::Generator &gen, float x, float z) {
-	float lo = 0.0f, hi = 16.0f;
+	float lo = 0.0f, hi = ve::kSurfaceY + 16.0f;
 	for (int i = 0; i < 40; i++) {
 		const float mid = 0.5f * (lo + hi);
 		(gen.sample(x, mid, z).sdf < 0.0f ? lo : hi) = mid;
@@ -64,7 +65,7 @@ float surface_y(const ve::Generator &gen, float x, float z) {
 } // namespace
 
 TEST_CASE("reconstructed gradient stays unit-length across every slab of a brick") {
-	ve::WorldData w(64, 24, 64);
+	ve::WorldData w(64, 90, 64);
 	ve::AnalyticGenerator gen;
 	w.generate(gen);
 	const ShaderField field{w};
@@ -108,7 +109,7 @@ TEST_CASE("reconstructed gradient stays unit-length across every slab of a brick
 }
 
 TEST_CASE("field is continuous across a brick face") {
-	ve::WorldData w(64, 24, 64);
+	ve::WorldData w(64, 90, 64);
 	ve::AnalyticGenerator gen;
 	w.generate(gen);
 	const ShaderField field{w};
@@ -137,7 +138,7 @@ TEST_CASE("field is continuous across a brick face") {
 }
 
 TEST_CASE("brick apron holds the neighbour's origin sample") {
-	ve::WorldData w(64, 24, 64);
+	ve::WorldData w(64, 90, 64);
 	ve::AnalyticGenerator gen;
 	w.generate(gen);
 	const float x = 8.0f, z = 8.0f;

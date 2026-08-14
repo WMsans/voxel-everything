@@ -11,12 +11,12 @@ extends GdUnitTestSuite
 # The full-frame hit points were: (43.216,7.201,24.034), (39.995,7.203,24.473),
 # (39.863,7.202,24.672), (15.016,0.805,12.001), (29.578,0.805,20.344).
 #
-# M2 keeps those world-space hit points: the field is sampled at GLOBAL coordinates
-# (see test_streaming.gd's deviation note), so the surface still sits at y = hills and
-# the same rays hit the same places. (The brief's "+51.2 in y" assumed a field offset
-# that the committed baseline never implemented.)
+# M2 keeps those world-space hit points relative to the camera: Errata 9 adds the +51.2
+# surface offset to the generator field, so the terrain is the same shape translated
+# +51.2 m in y; the camera here is likewise (8, 14+51.2, 8), and the same rays hit the
+# same (x, z) columns at y = old_hit_y + 51.2.
 
-const DEMO_ORIGIN := Vector3(8, 14, 8)
+const DEMO_ORIGIN := Vector3(8, 66.4, 8)
 const MAGENTA_RAYS := [
 	Vector3(0.89638, -0.17306, 0.40811),
 	Vector3(0.87364, -0.18558, 0.44979),

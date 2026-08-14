@@ -3,6 +3,13 @@
 
 namespace ve {
 
+// The default world origin (0, -64, 0) puts the terrain surface here: kSurfaceY =
+// -origin_bricks.y * kBrickSize = 64 * 0.8 = 51.2 m. The generator field carries this
+// offset explicitly ("sdf = (y - kSurfaceY) - hills"), so the surface sits at
+// y = 51.2 + hills(x, z) in [-10, 10] -> [41.2, 61.2] m. shaders/field.glsl mirrors this
+// as SURFACE_Y; the field-diff test guards that the two agree.
+inline constexpr float kSurfaceY = 51.2f;
+
 struct Sample {
 	float sdf;         // meters, negative = solid
 	uint16_t material; // 0 = air, 1 = grass, 2 = rock, 3 = dirt

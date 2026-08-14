@@ -3,9 +3,10 @@ extends GdUnitTestSuite
 const ATLAS := Vector3i(16, 8, 16)   # 2048 slots — enough for one surface region
 const REGION_SLOTS := 4
 const REGIONS := Vector3i(4, 2, 4)
-# Region (0, 0, 0) spans bricks x,z in [0, 32) and y in [0, 32) -> world y [0, 25.6) m.
-# hills() peaks near +10 m, so this region holds the surface over part of its footprint.
-const REGION := Vector3i(0, 0, 0)
+# Region (0, 2, 0) spans bricks x,z in [0, 32) and y in [32, 64) -> world y [51.2, 76.8) m.
+# The surface sits at 51.2 + hills(x, z), so this region holds the surface over the part
+# of its footprint where hills() > 0 (measured: > 20 active bricks under the strided sweep).
+const REGION := Vector3i(0, 2, 0)
 const SLOT := 1
 
 func make_world() -> VoxelWorld:
@@ -31,11 +32,13 @@ func test_marking_allocates_exactly_the_bricks_the_cpu_calls_active() -> void:
 	var cpu_active := 0
 	var disagreements := 0
 	# Sampling every brick is 32768 round-trips through GDScript; a strided sweep over
-	# 2048 of them still crosses the surface in every column it touches.
+	# 2048 of them still crosses the surface in every column it touches. Bricks are GLOBAL
+	# lattice coordinates, so the sweep offsets the region-local (x, y, z) by REGION * 32
+	# to land inside REGION (world y [51.2, 76.8) m for REGION.y = 2).
 	for z in range(0, 32, 2):
 		for y in range(0, 32):
 			for x in range(0, 32, 8):
-				var brick := Vector3i(x, y, z)
+				var brick := Vector3i(REGION.x * 32 + x, REGION.y * 32 + y, REGION.z * 32 + z)
 				var on_gpu: bool = w.debug_region_table_slot(SLOT, brick) >= 0
 				var on_cpu: bool = w.debug_brick_has_surface(brick, PackedByteArray(), 0)
 				gpu_active += 1 if on_gpu else 0

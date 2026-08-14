@@ -10,6 +10,10 @@ const uint OP_SPHERE_SUBTRACT = 0u;
 const uint OP_SPHERE_ADD = 1u;
 const uint OP_SPHERE_PAINT = 2u;
 const uint MAX_REGION_OPS = 256u;
+// Mirror of ve::kSurfaceY (extension/src/generator/generator.h): 51.2 = -origin_bricks.y *
+// kBrickSize for the default world origin (0, -64, 0). Must stay in lockstep with the CPU
+// constant; tests/test_field_diff.gd guards the agreement.
+const float SURFACE_Y = 51.2;
 
 // ve::EditOp is 32 bytes; storing two uvec4 per op and unpacking by hand keeps the mirror
 // exact, because a std430 struct with a vec3 member would silently pad to 48.
@@ -27,9 +31,9 @@ float hills(float x, float z) {
 
 void base_field(vec3 p, out float sdf, out uint mat) {
 	float h = hills(p.x, p.z);
-	sdf = p.y - h;
+	sdf = p.y - SURFACE_Y - h;
 	const float cx = 30.0, cz = 30.0;
-	float cy = hills(cx, cz) - 2.0;
+	float cy = SURFACE_Y + hills(cx, cz) - 2.0;
 	float sphere = length(p - vec3(cx, cy, cz)) - 5.0;
 	sdf = max(sdf, -sphere); // CSG subtract: the one carved cave
 	mat = 0u;

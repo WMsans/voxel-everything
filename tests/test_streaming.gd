@@ -11,17 +11,9 @@ const REGION_SLOTS := 16
 const ORIGIN := Vector3i(0, -64, 0)   # y regions {-2..2}: world y in [-51.2, 76.8) m
 const REGIONS := Vector3i(4, 5, 4)
 const RADIUS := 20.0
-
-# DEVIATION from the brief (Task 12 report, "issues"): the brief's camera sat at
-# y = 56.2 with the sweep over bricks y in [56, 72), on the premise that "the world
-# surface sits at y ~ 51.2 +- 10 m". The implemented field samples at GLOBAL
-# coordinates (plan line "Brick coordinates are GLOBAL ... no origin term" — validated
-# by every committed baseline test, e.g. test_raycast.cpp hits terrain at y = hills),
-# so the surface is at y = hills(x, z) in [-10, 10] m and the brief's y-range holds no
-# terrain. This file therefore places the camera just above the surface (y = 12) and
-# sweeps the column at world (12.8, *, 12.8) over the real surface bricks (y ~ -1..3).
-# The region asserts are the brief's own: (0,0,0)/(3,0,3) are the camera's regions here.
-# The demo scene keeps the brief's +51.2 transforms verbatim (see report).
+# Errata 9: the generator field now carries the +51.2 surface offset (ve::kSurfaceY), so
+# the surface sits at 51.2 +- 10 m and the brief's camera/sweep constants are correct:
+# the camera flies at y = 56.2 and the column sweep crosses the surface near brick 64.
 
 func make_world() -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
@@ -46,19 +38,22 @@ func settle(w: VoxelWorld, cam: Vector3) -> void:
 
 func test_streaming_loads_the_camera_neighbourhood() -> void:
 	var w := make_world()
-	settle(w, Vector3(20, 12, 20)) # 12 m: above the local surface everywhere here
+	settle(w, Vector3(20, 56.2, 20)) # 56.2 m: above the local surface (51.2 +- 10)
 	var s: Dictionary = w.debug_stream_stats()
 	assert_int(s["resident_regions"]).is_greater(4)
 	assert_int(s["overflow_ever"]).is_equal(0)
-	# Region (0, 0, 0) spans x,z in [0, 25.6) m: the camera is directly above it.
-	var rslot: int = w.debug_region_map_entry(Vector3i(0, 0, 0))
+	# The camera at (20, 56.2, 20) sits inside region (0, 2, 0) (world y [51.2, 76.8));
+	# region (0, 1, 0) (world y [25.6, 51.2)) is 5 m below it and also resident.
+	var rslot: int = w.debug_region_map_entry(Vector3i(0, 2, 0))
 	assert_int(rslot).is_greater_equal(0)
-	# Its surface bricks must be resident: sweep the column at world (12.8, *, 12.8) and
-	# require the GPU to hold exactly the bricks the CPU probe calls active. Each swept
-	# brick is read from the table of the region that OWNS it (y-regions {-1, 0} here).
+	assert_int(w.debug_region_map_entry(Vector3i(0, 1, 0))).is_greater_equal(0)
+	# The column at world (12.8, *, 12.8) crosses the surface near brick 64 (world y
+	# 51.2): sweep bricks y in [56, 72) (world [44.8, 57.6) m) and require the GPU to hold
+	# exactly the bricks the CPU probe calls active. Each swept brick is read from the
+	# table of the region that OWNS it (y-regions {1, 2} here).
 	var cpu_active := 0
 	var gpu_match := 0
-	for by in range(-2, 4):
+	for by in range(56, 72):
 		var brick := Vector3i(16, by, 16)
 		if w.debug_brick_has_surface(brick, PackedByteArray(), 0):
 			cpu_active += 1
@@ -71,17 +66,20 @@ func test_streaming_loads_the_camera_neighbourhood() -> void:
 
 func test_moving_the_camera_streams_the_new_neighbourhood_and_recycles_slots() -> void:
 	var w := make_world()
-	settle(w, Vector3(20, 12, 20))
+	settle(w, Vector3(20, 56.2, 20))
 	var used_before := ATLAS.x * ATLAS.y * ATLAS.z - int(w.debug_atlas_stats()["free_slots"])
 	assert_int(used_before).is_greater(0)
 	assert_bool(w.debug_region_map_consistent()).is_true()
 
-	settle(w, Vector3(90, 12, 90))
-	# Region (0, -1, 0) is now ~90 m away, far past the 23 m evict boundary.
+	settle(w, Vector3(90, 56.2, 90))
+	# Region (0, -1, 0) (world x,z [0, 25.6), y [-25.6, 0)) is ~107 m from the new camera,
+	# far past the 23 m evict boundary.
 	assert_int(w.debug_slot_of_region(Vector3i(0, -1, 0))).is_equal(-1)
 	assert_int(w.debug_region_map_entry(Vector3i(0, -1, 0))).is_equal(-1)
-	# The new neighbourhood is resident and the residency core agrees with the GPU map.
-	assert_int(w.debug_region_map_entry(Vector3i(3, 0, 3))).is_greater_equal(0)
+	# The new neighbourhood is resident and the residency core agrees with the GPU map:
+	# the camera at (90, 56.2, 90) sits inside region (3, 2, 3) (x,z [76.8, 102.4),
+	# y [51.2, 76.8)) — distance 0, so it must be resident.
+	assert_int(w.debug_region_map_entry(Vector3i(3, 2, 3))).is_greater_equal(0)
 	assert_bool(w.debug_region_map_consistent()).is_true()
 	# Evicted regions returned their atlas slots: no leak, no overflow, no unbounded drop.
 	var s: Dictionary = w.debug_stream_stats()

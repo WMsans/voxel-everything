@@ -11,11 +11,11 @@ static float hills(float x, float z) {
 
 Sample AnalyticGenerator::sample(float x, float y, float z) const {
 	const float h = hills(x, z);
-	float sdf = y - h;
+	float sdf = (y - kSurfaceY) - h;
 
-	// Carved cave: sphere at (30, hills(30,30)-2, 30), radius 5.
+	// Carved cave: sphere at (30, kSurfaceY + hills(30,30) - 2, 30), radius 5.
 	const float cx = 30.0f, cz = 30.0f;
-	const float cy = hills(cx, cz) - 2.0f;
+	const float cy = kSurfaceY + hills(cx, cz) - 2.0f;
 	const float dx = x - cx, dy = y - cy, dz = z - cz;
 	const float sphere = sqrtf(dx * dx + dy * dy + dz * dz) - 5.0f;
 	sdf = fmaxf(sdf, -sphere); // CSG subtract

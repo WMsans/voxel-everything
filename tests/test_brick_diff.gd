@@ -16,7 +16,9 @@ extends GdUnitTestSuite
 const ATLAS := Vector3i(16, 8, 16)
 const REGION_SLOTS := 4
 const REGIONS := Vector3i(4, 2, 4)
-const REGION := Vector3i(0, 0, 0)
+# Region (0, 2, 0) spans world y [51.2, 76.8) m — the surface (51.2 + hills) crosses it
+# where hills() > 0, which the strided sweep confirms holds > 20 active bricks.
+const REGION := Vector3i(0, 2, 0)
 const SLOT := 1
 
 func make_world() -> VoxelWorld:
@@ -102,14 +104,17 @@ func test_near_surface_cells_carry_a_real_material() -> void:
 
 func test_carved_bricks_match_the_cpu_reference() -> void:
 	var w := make_world()
-	var ops := make_op(0, 0, Vector3(12.8, 4.0, 12.8), 5.0) # sphere subtract
+	# Sphere subtract straddling the surface (51.2 + hills(12.8, 12.8) ~= 51.26 m) inside
+	# region (0, 2, 0): it must cut the surface and activate new bricks there.
+	var ops := make_op(0, 0, Vector3(12.8, 55.2, 12.8), 5.0) # sphere subtract
 	w.debug_upload_region_ops(SLOT, ops, 1)
 	generate_region(w, REGION, SLOT, 1)
 	check_bricks(w, active_bricks(w, SLOT, 12), SLOT, ops, 1, "carved")
 
 func test_filled_bricks_match_and_introduce_the_new_material() -> void:
 	var w := make_world()
-	var ops := make_op(1, 4, Vector3(12.8, 12.0, 12.8), 4.0) # sphere add, material 4
+	# Sphere add in the air above the surface: fills bricks with material 4.
+	var ops := make_op(1, 4, Vector3(12.8, 63.2, 12.8), 4.0) # sphere add, material 4
 	w.debug_upload_region_ops(SLOT, ops, 1)
 	generate_region(w, REGION, SLOT, 1)
 	var bricks := active_bricks(w, SLOT, 16)
@@ -125,9 +130,10 @@ func test_filled_bricks_match_and_introduce_the_new_material() -> void:
 
 func test_an_ordered_op_chain_matches() -> void:
 	var w := make_world()
-	var ops := make_op(0, 0, Vector3(12.8, 4.0, 12.8), 6.0)
-	ops.append_array(make_op(1, 4, Vector3(12.8, 4.0, 12.8), 3.0))
-	ops.append_array(make_op(2, 2, Vector3(6.0, 4.0, 6.0), 5.0))
+	# All three ops centred at the new surface height (51.2), inside region (0, 2, 0).
+	var ops := make_op(0, 0, Vector3(12.8, 55.2, 12.8), 6.0)
+	ops.append_array(make_op(1, 4, Vector3(12.8, 55.2, 12.8), 3.0))
+	ops.append_array(make_op(2, 2, Vector3(6.0, 55.2, 6.0), 5.0))
 	w.debug_upload_region_ops(SLOT, ops, 3)
 	generate_region(w, REGION, SLOT, 3)
 	check_bricks(w, active_bricks(w, SLOT, 12), SLOT, ops, 3, "chain")

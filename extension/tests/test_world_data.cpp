@@ -10,31 +10,31 @@ static float hills(float x, float z) { // test oracle
 }
 
 TEST_CASE("generation activates a bounded subset of bricks") {
-	ve::WorldData w(20, 12, 20); // 16m x 9.6m x 16m
+	ve::WorldData w(20, 90, 20); // 16m x 72m x 16m — y must span the surface at ~51.2 m
 	ve::AnalyticGenerator gen;
 	w.generate(gen);
 	CHECK(w.active_brick_count() > 0);
-	CHECK(w.active_brick_count() < 20 * 12 * 20 / 4); // narrow band: well under 25%
+	CHECK(w.active_brick_count() < 20 * 90 * 20 / 4); // narrow band: well under 25%
 }
 
 TEST_CASE("brick at the terrain surface is active; sky brick is not") {
-	ve::WorldData w(20, 12, 20);
+	ve::WorldData w(20, 90, 20);
 	ve::AnalyticGenerator gen;
 	w.generate(gen);
 	const float h = hills(8.0f, 8.0f); // ~3.07m
 	CHECK(w.brick_active(static_cast<int>(8.0f / 0.8f),
-	                     static_cast<int>(h / 0.8f),
+	                     static_cast<int>((ve::kSurfaceY + h) / 0.8f),
 	                     static_cast<int>(8.0f / 0.8f)));
-	CHECK_FALSE(w.brick_active(10, 11, 10)); // y >= 8.8m: above all hills here
+	CHECK_FALSE(w.brick_active(10, 90, 10)); // y >= 72m: above all hills here
 }
 
 TEST_CASE("active brick contains a sign change and a non-empty palette") {
-	ve::WorldData w(20, 12, 20);
+	ve::WorldData w(20, 90, 20);
 	ve::AnalyticGenerator gen;
 	w.generate(gen);
 	const float h = hills(8.0f, 8.0f);
 	const int slot = w.brick_slot(static_cast<int>(8.0f / 0.8f),
-	                              static_cast<int>(h / 0.8f),
+	                              static_cast<int>((ve::kSurfaceY + h) / 0.8f),
 	                              static_cast<int>(8.0f / 0.8f));
 	REQUIRE(slot >= 0);
 	const ve::Brick &b = w.brick(slot);
@@ -52,12 +52,12 @@ TEST_CASE("active brick contains a sign change and a non-empty palette") {
 }
 
 TEST_CASE("indirection round-trips slot for active bricks, -1 for inactive") {
-	ve::WorldData w(20, 12, 20);
+	ve::WorldData w(20, 90, 20);
 	ve::AnalyticGenerator gen;
 	w.generate(gen);
-	CHECK(static_cast<int>(w.indirection().size()) == 20 * 12 * 20);
+	CHECK(static_cast<int>(w.indirection().size()) == 20 * 90 * 20);
 	for (int z = 0; z < 20; z++)
-		for (int y = 0; y < 12; y++)
+		for (int y = 0; y < 90; y++)
 			for (int x = 0; x < 20; x++)
 				CHECK((w.brick_slot(x, y, z) >= 0) == w.brick_active(x, y, z));
 }

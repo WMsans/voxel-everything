@@ -5,7 +5,8 @@ extends GdUnitTestSuite
 # rule of thumb (see test_streaming.gd) puts at ~25k bricks in the worst case.
 const ATLAS := Vector3i(48, 24, 32)   # 36864 slots (~380 MB on the test device)
 const REGION_SLOTS := 64              # a 45 m ball intersects ~47 regions; leave headroom
-const CAM := Vector3(20, 12, 20)      # just above the local surface (hills max ~10 m)
+# 56.2 = 51.2 + 5: just above the local surface (surface sits at 51.2 + hills, hills +-10).
+const CAM := Vector3(20, 56.2, 20)
 
 func make_world() -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
@@ -17,7 +18,7 @@ func make_world() -> VoxelWorld:
 	w.residency_radius_m = 45.0
 	add_child(w)
 	w.ensure_initialized()
-	# Settle AT CAM: this suite's rays (x,z in [5, 13], hits y ~ 1-7 m) all land within
+	# Settle AT CAM: this suite's rays (x,z in [5, 13], hits y ~ 52-58 m) all land within
 	# 45 m of it, so settling anywhere else could leave their hit regions non-resident.
 	for i in range(90):
 		if w.debug_stream_frame(CAM) == 0:
@@ -26,8 +27,8 @@ func make_world() -> VoxelWorld:
 
 func test_ray_down_from_sky_hits_terrain() -> void:
 	var w := make_world()
-	# From (8, 12, 8) looking straight down: hills here are ~3m, must hit.
-	var c: Color = w.debug_raymarch_pixel(Vector3(8, 12, 8), Vector3(0, -1, 0))
+	# From (8, 63.2, 8) looking straight down: hills here are ~3m, must hit.
+	var c: Color = w.debug_raymarch_pixel(Vector3(8, 63.2, 8), Vector3(0, -1, 0))
 	# Reject both a sky miss and the error-magenta albedo while accepting real
 	# terrain colors: (a) r < 0.52 — any terrain albedo (grass 0.36, rock 0.45,
 	# dirt 0.50) times (0.25 + 0.75*lam), lam <= 1, gives r <= 0.50, and sky-down
@@ -37,15 +38,15 @@ func test_ray_down_from_sky_hits_terrain() -> void:
 
 func test_ray_up_from_air_misses_to_sky() -> void:
 	var w := make_world()
-	var c: Color = w.debug_raymarch_pixel(Vector3(8, 8, 8), Vector3(0, 1, 0))
+	var c: Color = w.debug_raymarch_pixel(Vector3(8, 59.2, 8), Vector3(0, 1, 0))
 	# Sky gradient looking up is blue-dominant.
 	assert_bool(c.b > c.r).is_true()
 
 func test_ray_down_from_non_boundary_origin_hits_terrain() -> void:
 	var w := make_world()
-	# Origin NOT on a brick boundary (8.25, 12.3, 7.9 are not multiples of 0.8):
+	# Origin NOT on a brick boundary (8.25, 63.5, 7.9 are not multiples of 0.8):
 	# the negative-direction DDA must still reach terrain (~3.1m here).
-	var c: Color = w.debug_raymarch_pixel(Vector3(8.25, 12.3, 7.9), Vector3(0, -1, 0))
+	var c: Color = w.debug_raymarch_pixel(Vector3(8.25, 63.5, 7.9), Vector3(0, -1, 0))
 	# Discriminates hit from miss, AND true albedo from error-magenta. (a) r < 0.52:
 	# any terrain albedo (grass 0.36, rock 0.45, dirt 0.50) times (0.25 + 0.75*lam),
 	# lam <= 1, gives r <= 0.50; the miss color sky-down has r = 0.5498 after the
@@ -57,7 +58,7 @@ func test_ray_down_from_non_boundary_origin_hits_terrain() -> void:
 func test_ray_diagonal_down_from_non_boundary_origin_hits_terrain() -> void:
 	var w := make_world()
 	# Diagonal negative-direction DDA from a non-boundary origin.
-	var c: Color = w.debug_raymarch_pixel(Vector3(7.3, 11.2, 9.1), Vector3(0, -0.9, -0.2))
+	var c: Color = w.debug_raymarch_pixel(Vector3(7.3, 62.4, 9.1), Vector3(0, -0.9, -0.2))
 	# Measured hit color (grass albedo, rgba16f round-trip): (0.3066, 0.4685, 0.1874).
 	# Sky miss for the SAME direction (measured from a high origin): (0.5464, 0.45, 0.3557)
 	# — r >= 0.52 makes (b > g or r < 0.52) false, so a sky miss is rejected.
@@ -92,7 +93,7 @@ func test_brick_face_slab_is_not_darker_than_the_rest() -> void:
 			var h := hills(x, z)
 			if h < 1.0 or h > 7.0:
 				continue
-			var c: Color = w.debug_raymarch_pixel(Vector3(x, 9.0, z), Vector3(0, -1, 0))
+			var c: Color = w.debug_raymarch_pixel(Vector3(x, 60.2, z), Vector3(0, -1, 0))
 			if c.b > c.g:
 				continue # sky miss
 			var slab := int(floor(fposmod(h, BRICK_SIZE) / VOXEL_SIZE))

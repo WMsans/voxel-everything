@@ -43,15 +43,17 @@ func make_op(type: int, material: int, pos: Vector3, radius: float) -> PackedByt
 
 func sample_points() -> PackedVector3Array:
 	# A deterministic spread over the demo neighbourhood, the cave, and below the origin
-	# plane, plus a few far-out points where sin() range reduction is hardest.
+	# plane, plus a few far-out points where sin() range reduction is hardest. The y ranges
+	# are shifted +51.2 (the surface offset) so the samples cross the surface at
+	# 51.2 +- 10 m and the carved cave (centre ~50.85 m) instead of the old surface at 0.
 	var pts := PackedVector3Array()
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 20260813
 	for i in range(512):
-		pts.append(Vector3(rng.randf_range(-20.0, 60.0), rng.randf_range(-30.0, 30.0),
+		pts.append(Vector3(rng.randf_range(-20.0, 60.0), rng.randf_range(21.2, 81.2),
 			rng.randf_range(-20.0, 60.0)))
 	for i in range(128):
-		pts.append(Vector3(rng.randf_range(700.0, 900.0), rng.randf_range(-40.0, 20.0),
+		pts.append(Vector3(rng.randf_range(700.0, 900.0), rng.randf_range(11.2, 71.2),
 			rng.randf_range(700.0, 900.0)))
 	return pts
 
@@ -145,20 +147,21 @@ func test_base_field_matches_the_cpu_generator() -> void:
 	compare(sample_points(), PackedByteArray(), 0, "base")
 
 func test_sphere_subtract_matches() -> void:
-	var ops := make_op(OP_SUBTRACT, 0, Vector3(10.0, 0.0, 10.0), 6.0)
+	# Op centred on the new surface (51.2) so the samples actually pass through its sphere.
+	var ops := make_op(OP_SUBTRACT, 0, Vector3(10.0, 51.2, 10.0), 6.0)
 	compare(sample_points(), ops, 1, "subtract")
 
 func test_sphere_add_matches() -> void:
-	var ops := make_op(OP_ADD, 4, Vector3(10.0, 5.0, 10.0), 6.0)
+	var ops := make_op(OP_ADD, 4, Vector3(10.0, 56.2, 10.0), 6.0)
 	compare(sample_points(), ops, 1, "add")
 
 func test_sphere_paint_matches() -> void:
-	var ops := make_op(OP_PAINT, 2, Vector3(10.0, -2.0, 10.0), 8.0)
+	var ops := make_op(OP_PAINT, 2, Vector3(10.0, 49.2, 10.0), 8.0)
 	compare(sample_points(), ops, 1, "paint")
 
 func test_ordered_op_chain_matches() -> void:
 	# Order matters: an add inside an earlier subtract must refill it on both sides.
-	var ops := make_op(OP_SUBTRACT, 0, Vector3(10.0, 0.0, 10.0), 8.0)
-	ops.append_array(make_op(OP_ADD, 4, Vector3(10.0, 0.0, 10.0), 4.0))
-	ops.append_array(make_op(OP_PAINT, 3, Vector3(12.0, 0.0, 12.0), 5.0))
+	var ops := make_op(OP_SUBTRACT, 0, Vector3(10.0, 51.2, 10.0), 8.0)
+	ops.append_array(make_op(OP_ADD, 4, Vector3(10.0, 51.2, 10.0), 4.0))
+	ops.append_array(make_op(OP_PAINT, 3, Vector3(12.0, 51.2, 12.0), 5.0))
 	compare(sample_points(), ops, 3, "chain")
