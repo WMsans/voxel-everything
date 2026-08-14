@@ -47,3 +47,58 @@ func test_ray_diagonal_down_from_non_boundary_origin_hits_terrain() -> void:
 	# — r >= 0.52 makes (b > g or r < 0.52) false, so a sky miss is rejected.
 	# Error-magenta (r≈b>0.7, g=0): g = 0 fails the g > 0.05 gate.
 	assert_bool((c.b > c.g or c.r < 0.52) and c.g > 0.05).is_true()
+
+const BRICK_SIZE := 0.8
+const VOXEL_SIZE := 0.05
+
+func hills(x: float, z: float) -> float: # test oracle, mirrors AnalyticGenerator
+	return 6.0 * sin(x * 0.11) * cos(z * 0.13) \
+		+ 3.0 * sin(x * 0.031 + 1.7) * sin(z * 0.043) \
+		+ 1.0 * sin(x * 0.23 + z * 0.19)
+
+func luminance(c: Color) -> float:
+	return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+
+# Regression: the SDF brick apron. A brick stores a 17^3 lattice so trilinear
+# reconstruction covers its whole [0,16) extent. Without the apron the last voxel slab
+# clamps to a constant, the gradient along that axis collapses, calc_normal() returns a
+# wrong normal, and every brick face draws a dark seam — the visible "stripes" on the
+# terrain. Measured on the reference GPU: slab-15 minimum luminance was 0.121 without the
+# apron (all other slabs >= 0.30) and 0.304 with it.
+func test_brick_face_slab_is_not_darker_than_the_rest() -> void:
+	var w := make_world()
+	var lum_face := []   # hits landing in the last voxel slab of a brick
+	var lum_other := []  # hits landing anywhere else
+	for i in range(60):
+		for j in range(60):
+			var x := 5.0 + i * 0.13
+			var z := 5.0 + j * 0.11
+			var h := hills(x, z)
+			if h < 1.0 or h > 7.0:
+				continue
+			var c: Color = w.debug_raymarch_pixel(Vector3(x, 9.0, z), Vector3(0, -1, 0))
+			if c.b > c.g:
+				continue # sky miss
+			var slab := int(floor(fposmod(h, BRICK_SIZE) / VOXEL_SIZE))
+			if slab == 15:
+				lum_face.append(luminance(c))
+			else:
+				lum_other.append(luminance(c))
+	assert_int(lum_face.size()).is_greater(50)
+	assert_int(lum_other.size()).is_greater(500)
+
+	var face_min: float = lum_face.min()
+	var other_min: float = lum_other.min()
+	var face_mean: float = 0.0
+	for v in lum_face:
+		face_mean += v
+	face_mean /= lum_face.size()
+	var other_mean: float = 0.0
+	for v in lum_other:
+		other_mean += v
+	other_mean /= lum_other.size()
+
+	# No pixel on a brick face may be dramatically darker than the darkest ordinary pixel,
+	# and the face slab's average shading must track the rest of the surface.
+	assert_float(face_min).is_greater(other_min * 0.75)
+	assert_float(absf(face_mean - other_mean)).is_less(0.02)

@@ -39,7 +39,7 @@ TEST_CASE("active brick contains a sign change and a non-empty palette") {
 	REQUIRE(slot >= 0);
 	const ve::Brick &b = w.brick(slot);
 	bool has_pos = false, has_neg = false;
-	for (int i = 0; i < ve::kBrickVoxelCount; i++) {
+	for (int i = 0; i < ve::kBrickSdfCount; i++) {
 		const float d = ve::decode_sdf(b.sdf[i]);
 		has_pos = has_pos || d > 0.0f;
 		has_neg = has_neg || d < 0.0f;

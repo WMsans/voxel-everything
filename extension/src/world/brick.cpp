@@ -17,6 +17,10 @@ int voxel_index(int x, int y, int z) {
 	return x + y * kBrickVoxels + z * kBrickVoxels * kBrickVoxels;
 }
 
+int sdf_index(int x, int y, int z) {
+	return x + y * kBrickSdfStride + z * kBrickSdfStride * kBrickSdfStride;
+}
+
 uint8_t get_mat_index(const Brick &b, int idx) {
 	return (b.mat[idx >> 2] >> ((idx & 3) * 2)) & 0x3;
 }

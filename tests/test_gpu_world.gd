@@ -23,7 +23,10 @@ func test_gpu_readback_returns_data() -> void:
 	# (texture.layers = 1), so texture_get_data(tex, 0) returns the FULL volume
 	# (width*height*depth*bytes), not a single 2D slice.
 	var slice0: PackedByteArray = rd.texture_get_data(w.debug_sdf_atlas(), 0)
-	assert_int(slice0.size()).is_equal(512 * 256 * 512) # R8: 1 byte per texel, full 3D volume
+	# The SDF atlas is strided by 17, not 16: each brick carries a one-voxel apron on its
+	# positive faces so the shader's trilinear filter covers the brick's whole extent
+	# (see ve::kBrickSdfStride). Atlas is 32x16x32 bricks -> 544 x 272 x 544 texels.
+	assert_int(slice0.size()).is_equal(544 * 272 * 544) # R8: 1 byte per texel, full 3D volume
 	var ind0: PackedByteArray = rd.texture_get_data(w.debug_indirection_tex(), 0)
 	assert_int(ind0.size()).is_equal(20 * 12 * 20 * 4) # R32_SINT: 4 bytes per texel, full volume
 

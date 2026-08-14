@@ -22,15 +22,18 @@ layout(push_constant, std430) uniform Push {
 	ivec4 dims;   // world dims in bricks
 } pc;
 
-// Manual trilinear inside one brick (adjacent bricks are unrelated: never filter across).
-float brick_sdf(int slot, vec3 local) { // local in voxel units [0, 16)
-	vec3 p = clamp(local, vec3(0.0), vec3(15.0));
+// Manual trilinear inside one brick. Never filter across the atlas: adjacent atlas slots
+// hold unrelated bricks. The brick's own one-voxel apron (lattice plane 16, see
+// BRICK_SDF_STRIDE) supplies the far corner of the last cell, so the whole [0,16) extent
+// reconstructs correctly from this slot alone.
+float brick_sdf(int slot, vec3 local) { // local in voxel units [0, 16]
+	vec3 p = clamp(local, vec3(0.0), vec3(BRICK_SDF_MAX));
 	ivec3 i0 = ivec3(floor(p));
 	vec3 f = p - vec3(i0);
-	ivec3 i1 = min(i0 + 1, ivec3(15));
+	ivec3 i1 = min(i0 + 1, ivec3(BRICK_VOXELS));
 	ivec3 base = ivec3(slot % ATLAS_BRICKS.x,
 	                   (slot / ATLAS_BRICKS.x) % ATLAS_BRICKS.y,
-	                   slot / (ATLAS_BRICKS.x * ATLAS_BRICKS.y)) * BRICK_VOXELS;
+	                   slot / (ATLAS_BRICKS.x * ATLAS_BRICKS.y)) * BRICK_SDF_STRIDE;
 	float c000 = texelFetch(sdf_atlas, base + ivec3(i0.x, i0.y, i0.z), 0).r;
 	float c100 = texelFetch(sdf_atlas, base + ivec3(i1.x, i0.y, i0.z), 0).r;
 	float c010 = texelFetch(sdf_atlas, base + ivec3(i0.x, i1.y, i0.z), 0).r;
@@ -57,12 +60,24 @@ float world_sdf(vec3 p) {
 	return brick_sdf(slot, local);
 }
 
-vec3 calc_normal(vec3 p) {
+// Field sample for gradient taps around a hit. The apron makes the reconstruction
+// continuous across brick faces, so a tap that lands in the neighbouring brick agrees with
+// this one. But a tap can also land in a brick with NO atlas slot (the activation probe is
+// conservative, not exact): world_sdf would answer SDF_RANGE there and blow the normal out.
+// Fall back to the anchor brick, whose apron covers the shared face exactly.
+float sdf_near(vec3 p, ivec3 anchor, int anchor_slot) {
+	ivec3 brick = ivec3(floor(p / BRICK_SIZE));
+	int slot = all(equal(brick, anchor)) ? anchor_slot : slot_at(brick);
+	if (slot < 0) { brick = anchor; slot = anchor_slot; }
+	return brick_sdf(slot, (p - vec3(brick) * BRICK_SIZE) / VOXEL_SIZE);
+}
+
+vec3 calc_normal(vec3 p, ivec3 anchor, int anchor_slot) {
 	const float e = 0.01;
 	return normalize(vec3(
-		world_sdf(p + vec3(e, 0, 0)) - world_sdf(p - vec3(e, 0, 0)),
-		world_sdf(p + vec3(0, e, 0)) - world_sdf(p - vec3(0, e, 0)),
-		world_sdf(p + vec3(0, 0, e)) - world_sdf(p - vec3(0, 0, e))));
+		sdf_near(p + vec3(e, 0, 0), anchor, anchor_slot) - sdf_near(p - vec3(e, 0, 0), anchor, anchor_slot),
+		sdf_near(p + vec3(0, e, 0), anchor, anchor_slot) - sdf_near(p - vec3(0, e, 0), anchor, anchor_slot),
+		sdf_near(p + vec3(0, 0, e), anchor, anchor_slot) - sdf_near(p - vec3(0, 0, e), anchor, anchor_slot)));
 }
 
 // Material of the surface crossing found inside brick `brick` (atlas slot `slot`).
@@ -137,7 +152,7 @@ void main() {
 						t += dk * 0.5;
 						p = ro + rd * t;
 					}
-					vec3 n = calc_normal(p);
+					vec3 n = calc_normal(p, map, slot);
 					vec3 alb = material_albedo(material_at(p, map, slot));
 					vec3 sun = normalize(vec3(0.6, 0.8, 0.3));
 					float lam = max(dot(n, sun), 0.0);

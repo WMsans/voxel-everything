@@ -32,18 +32,21 @@ void WorldData::generate(const Generator &gen) {
 				bricks_.emplace_back();
 				Brick &b = bricks_.back();
 				bool overflow = false;
-				for (int vz = 0; vz < kBrickVoxels; vz++)
-					for (int vy = 0; vy < kBrickVoxels; vy++)
-						for (int vx = 0; vx < kBrickVoxels; vx++) {
+				// The SDF runs over the 17^3 lattice (see kBrickSdfStride): the extra plane at
+				// local 16 on each axis is the apron the shader's trilinear filter needs in order
+				// to cover the brick's last voxel slab. Materials stay on the 16^3 cell grid.
+				for (int vz = 0; vz < kBrickSdfStride; vz++)
+					for (int vy = 0; vy < kBrickSdfStride; vy++)
+						for (int vx = 0; vx < kBrickSdfStride; vx++) {
 							const float wx = (bx * kBrickVoxels + vx) * kVoxelSize;
 							const float wy = (by * kBrickVoxels + vy) * kVoxelSize;
 							const float wz = (bz * kBrickVoxels + vz) * kVoxelSize;
 							const Sample s = gen.sample(wx, wy, wz);
-							const int idx = voxel_index(vx, vy, vz);
-							b.sdf[idx] = encode_sdf(s.sdf);
-							if (s.material != 0) {
+							b.sdf[sdf_index(vx, vy, vz)] = encode_sdf(s.sdf);
+							const bool apron = vx == kBrickVoxels || vy == kBrickVoxels || vz == kBrickVoxels;
+							if (!apron && s.material != 0) {
 								const int pslot = palette_slot(b.palette, s.material, &overflow);
-								set_mat_index(b, idx, static_cast<uint8_t>(pslot));
+								set_mat_index(b, voxel_index(vx, vy, vz), static_cast<uint8_t>(pslot));
 							}
 						}
 			}

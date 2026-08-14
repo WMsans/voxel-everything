@@ -26,34 +26,48 @@ bool GpuWorld::initialize(RenderingDevice *rd, const ve::WorldData &world) {
 		return false;
 	}
 
-	const int vx_w = kAtlasBricksX * ve::kBrickVoxels; // 512
-	const int vx_h = kAtlasBricksY * ve::kBrickVoxels; // 256
-	const int vx_d = kAtlasBricksZ * ve::kBrickVoxels; // 512
-	const int vx_count = vx_w * vx_h * vx_d;
+	// The two atlases have DIFFERENT strides. The SDF is a lattice field carrying a
+	// one-voxel apron on each brick's positive faces (ve::kBrickSdfStride == 17) so the
+	// shader's trilinear filter can cover the brick's full extent; materials are a plain
+	// 16^3 cell grid read with nearest filtering and need no apron.
+	const int sdf_w = kAtlasBricksX * ve::kBrickSdfStride; // 544
+	const int sdf_h = kAtlasBricksY * ve::kBrickSdfStride; // 272
+	const int sdf_d = kAtlasBricksZ * ve::kBrickSdfStride; // 544
+	const int mat_w = kAtlasBricksX * ve::kBrickVoxels; // 512
+	const int mat_h = kAtlasBricksY * ve::kBrickVoxels; // 256
+	const int mat_d = kAtlasBricksZ * ve::kBrickVoxels; // 512
 
 	// On Godot 4.7.1 a 3D texture has exactly one layer, so texture_create expects a
 	// single full-volume PackedByteArray (width*height*depth*bytes), tightly packed in
 	// (x, y, z) order with x fastest. texture_get_data returns the same full volume.
 	PackedByteArray sdf_vol, mat_vol;
-	sdf_vol.resize(vx_count);
+	sdf_vol.resize(sdf_w * sdf_h * sdf_d);
 	sdf_vol.fill(0);
-	mat_vol.resize(vx_count);
+	mat_vol.resize(mat_w * mat_h * mat_d);
 	mat_vol.fill(0);
 	for (int slot = 0; slot < active; slot++) {
 		const ve::Brick &b = world.brick(slot);
 		const int sx = slot % kAtlasBricksX;
 		const int sy = (slot / kAtlasBricksX) % kAtlasBricksY;
 		const int sz = slot / (kAtlasBricksX * kAtlasBricksY);
+		for (int vz = 0; vz < ve::kBrickSdfStride; vz++) {
+			const int az = sz * ve::kBrickSdfStride + vz;
+			for (int vy = 0; vy < ve::kBrickSdfStride; vy++) {
+				const int ay = sy * ve::kBrickSdfStride + vy;
+				for (int vx = 0; vx < ve::kBrickSdfStride; vx++) {
+					const int ax = sx * ve::kBrickSdfStride + vx;
+					sdf_vol[ax + ay * sdf_w + az * sdf_w * sdf_h] = b.sdf[ve::sdf_index(vx, vy, vz)];
+				}
+			}
+		}
 		for (int vz = 0; vz < ve::kBrickVoxels; vz++) {
 			const int az = sz * ve::kBrickVoxels + vz;
 			for (int vy = 0; vy < ve::kBrickVoxels; vy++) {
 				const int ay = sy * ve::kBrickVoxels + vy;
 				for (int vx = 0; vx < ve::kBrickVoxels; vx++) {
 					const int ax = sx * ve::kBrickVoxels + vx;
-					const int idx = ve::voxel_index(vx, vy, vz);
-					const int vol_i = ax + ay * vx_w + az * vx_w * vx_h;
-					sdf_vol[vol_i] = b.sdf[idx];
-					mat_vol[vol_i] = ve::get_mat_index(b, idx);
+					mat_vol[ax + ay * mat_w + az * mat_w * mat_h] =
+							ve::get_mat_index(b, ve::voxel_index(vx, vy, vz));
 				}
 			}
 		}
@@ -65,17 +79,20 @@ bool GpuWorld::initialize(RenderingDevice *rd, const ve::WorldData &world) {
 	Ref<RDTextureFormat> fmt;
 	fmt.instantiate();
 	fmt->set_texture_type(RenderingDevice::TEXTURE_TYPE_3D);
-	fmt->set_width(vx_w);
-	fmt->set_height(vx_h);
-	fmt->set_depth(vx_d);
 	fmt->set_mipmaps(1);
 	fmt->set_usage_bits(RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
 			RenderingDevice::TEXTURE_USAGE_CAN_UPDATE_BIT |
 			RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT);
 	Ref<RDTextureView> view;
 	view.instantiate();
+	fmt->set_width(sdf_w);
+	fmt->set_height(sdf_h);
+	fmt->set_depth(sdf_d);
 	fmt->set_format(RenderingDevice::DATA_FORMAT_R8_UNORM);
 	sdf_atlas_ = rd->texture_create(fmt, view, sdf_ta);
+	fmt->set_width(mat_w);
+	fmt->set_height(mat_h);
+	fmt->set_depth(mat_d);
 	fmt->set_format(RenderingDevice::DATA_FORMAT_R8_UINT);
 	mat_atlas_ = rd->texture_create(fmt, view, mat_ta);
 

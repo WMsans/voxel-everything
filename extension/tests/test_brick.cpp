@@ -33,6 +33,25 @@ TEST_CASE("voxel_index is a bijection over 4096 cells") {
 	CHECK(ve::voxel_index(0, 1, 0) == 16);
 }
 
+TEST_CASE("sdf_index is a bijection over the 17^3 apron lattice") {
+	std::set<int> seen;
+	for (int z = 0; z < ve::kBrickSdfStride; z++)
+		for (int y = 0; y < ve::kBrickSdfStride; y++)
+			for (int x = 0; x < ve::kBrickSdfStride; x++) {
+				int idx = ve::sdf_index(x, y, z);
+				CHECK(idx >= 0);
+				CHECK(idx < ve::kBrickSdfCount);
+				seen.insert(idx);
+			}
+	CHECK(seen.size() == ve::kBrickSdfCount);
+	// Pin the exact layout (x + y*17 + z*289): the GPU atlas upload mirrors this stride.
+	CHECK(ve::kBrickSdfStride == 17);
+	CHECK(ve::kBrickSdfCount == 4913);
+	CHECK(ve::sdf_index(1, 0, 0) == 1);
+	CHECK(ve::sdf_index(0, 1, 0) == 17);
+	CHECK(ve::sdf_index(0, 0, 1) == 289);
+}
+
 TEST_CASE("2-bit material index roundtrip") {
 	ve::Brick b{};
 	for (int i = 0; i < ve::kBrickVoxelCount; i++) ve::set_mat_index(b, i, i % 4);
