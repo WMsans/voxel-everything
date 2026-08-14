@@ -22,6 +22,9 @@ func _process(delta: float) -> void:
 	if _frames >= FRAMES:
 		var avg := _accum_ms / FRAMES
 		print("BENCH frame_avg_ms=%.2f fps=%.1f" % [avg, 1000.0 / avg])
+		var world: VoxelWorld = get_parent().get_node("VoxelWorld")
+		var st: Dictionary = world.debug_stream_stats()
+		print("BENCH regions=%d overflow=%d" % [st.get("resident_regions", -1), st.get("overflow_ever", -1)])
 		if avg > 16.6:
 			push_warning("BENCH: frame budget exceeded (target 16.6ms)")
 		get_tree().quit()

@@ -1,8 +1,9 @@
-[gd_scene load_steps=8 format=3 uid="uid://dx2akrpw2s62k"]
+[gd_scene load_steps=9 format=3 uid="uid://dx2akrpw2s62k"]
 
 [ext_resource type="Script" path="res://demo/fly_camera.gd" id="1"]
 [ext_resource type="Script" path="res://demo/hud.gd" id="2"]
 [ext_resource type="Script" path="res://demo/benchmark.gd" id="3"]
+[ext_resource type="Script" path="res://demo/edit_tool.gd" id="4"]
 
 [sub_resource type="RaymarchCompositor" id="1"]
 world_path = NodePath("/root/Main/VoxelWorld")
@@ -44,7 +45,13 @@ mesh = SubResource(4)
 [node name="Label" type="Label" parent="HUD"]
 offset_left = 10.0
 offset_top = 10.0
+world_path = NodePath("/root/Main/VoxelWorld")
 script = ExtResource(2)
 
 [node name="Benchmark" type="Node" parent="."]
 script = ExtResource(3)
+
+[node name="EditTool" type="Node" parent="."]
+script = ExtResource(4)
+world_path = NodePath("/root/Main/VoxelWorld")
+camera_path = NodePath("/root/Main/Camera3D")

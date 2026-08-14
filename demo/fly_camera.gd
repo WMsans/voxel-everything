@@ -1,6 +1,6 @@
 extends Camera3D
 
-@export var speed := 10.0
+@export var speed := 25.0
 @export var look_sensitivity := 0.0025
 
 func _ready() -> void:
