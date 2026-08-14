@@ -56,21 +56,34 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 	// at the demo camera the resident set fills it, so an SDF-changing edit that net-ADDS
 	// surface bricks (a crater has more wall area than the disk it removes) cannot allocate
 	// and the drop arm alone would leave the edit invisible in the raymarcher. Evict the
-	// furthest resident region this frame's edits do NOT touch so their allocations succeed;
-	// the evicted region re-streams next frame with the new ops. Paint edits change no SDF,
-	// so they can never need slots and never trigger this. One eviction frees ~1k slots —
-	// far more than any single edit in the demo needs.
+	// furthest resident region this frame's edits do NOT touch and that was NOT loaded this
+	// frame so their allocations succeed; the evicted region re-streams next frame with the
+	// new ops. Paint edits change no SDF, so they can never need slots and never trigger
+	// this. One eviction frees ~1k slots — far more than any single edit in the demo needs.
 	if (!edits.empty()) {
 		std::vector<ve::IVec3> edit_resident;
+		std::vector<ve::IVec3> exclude;
 		bool sdf_edit = false;
 		for (const auto &pe : edits) {
 			if (pe.op.type != ve::kOpSpherePaint) sdf_edit = true;
 			for (const ve::IVec3 &r : pe.result.touched)
 				if (residency_->slot_of(r) >= 0) edit_resident.push_back(r);
 		}
+		// The evicted region must not be one this frame just loaded. update() displaced the
+		// furthest residents to make room for candidates, so a freshly loaded candidate is by
+		// construction the furthest resident and evict_furthest would pick it — but its own
+		// load mark re-allocates the very bricks the eviction freed, BEFORE the edit's
+		// force-marks. The arm would free zero net headroom and the edit would still hit the
+		// empty free list and silently drop (the symptom Errata 11 fixed). Only a steady
+		// resident the edit does not touch is evictable: its slot's bricks stay in the free
+		// list until the edit's marks take them.
+		exclude = edit_resident;
+		for (const auto &l : plan.loads)
+			if (std::find(exclude.begin(), exclude.end(), l.region) == exclude.end())
+				exclude.push_back(l.region);
 		if (sdf_edit && !edit_resident.empty() &&
 				atlas_->read_free_count(rd) < kEditSlotHeadroom)
-			residency_->evict_furthest(cx, cy, cz, &plan, edit_resident);
+			residency_->evict_furthest(cx, cy, cz, &plan, exclude);
 	}
 
 	// --- buffer_update phase (must precede compute_list_begin: Godot errors otherwise) ---
