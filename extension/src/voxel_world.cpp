@@ -17,6 +17,7 @@
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <cmath>
 #include <cstring>
+#include <algorithm>
 
 using namespace godot;
 
@@ -38,6 +39,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_pixel", "origin", "dir"), &VoxelWorld::debug_raymarch_pixel);
+	ClassDB::bind_method(D_METHOD("debug_raymarch_probe", "origin", "dir"), &VoxelWorld::debug_raymarch_probe);
 	ClassDB::bind_method(D_METHOD("debug_sdf_atlas"), &VoxelWorld::debug_sdf_atlas);
 	ClassDB::bind_method(D_METHOD("debug_local_rd"), &VoxelWorld::debug_local_rd);
 	ClassDB::bind_method(D_METHOD("debug_load_shader", "res_path"), &VoxelWorld::debug_load_shader);
@@ -206,6 +208,74 @@ Color VoxelWorld::debug_raymarch_pixel(Vector3 origin, Vector3 dir) {
 	if (data.size() < 8) return Color(1, 0, 1);
 	const uint16_t *h = reinterpret_cast<const uint16_t *>(data.ptr());
 	return Color(half_to_float(h[0]), half_to_float(h[1]), half_to_float(h[2]), 1.0);
+}
+
+Dictionary VoxelWorld::debug_raymarch_probe(Vector3 origin, Vector3 dir) {
+	Dictionary d;
+	d["hit"] = false;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_ || !raymarch_pass_) return d;
+	ve::CameraParams cam = ve::CameraParams::looking_at(
+			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
+	const ve::WorldBounds wb = world_bounds();
+	const ve::IVec3 rorig = wb.origin_regions();
+	cam.dims[0] = world_size_regions_.x; cam.dims[1] = world_size_regions_.y;
+	cam.dims[2] = world_size_regions_.z;
+	cam.region_origin[0] = rorig.x; cam.region_origin[1] = rorig.y; cam.region_origin[2] = rorig.z;
+	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
+	cam.atlas_bricks[2] = atlas_bricks_.z;
+	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
+	if (!raymarch_pass_->render(device, *atlas_, cam, 1, 1, kNoEdit)) return d;
+	device->submit();
+	device->sync();
+	const PackedByteArray hp = device->texture_get_data(raymarch_pass_->hitpos_texture(), 0);
+	const PackedByteArray col = device->texture_get_data(raymarch_pass_->color_texture(), 0);
+	if (hp.size() < 16 || col.size() < 8) return d;
+	const float *hf = reinterpret_cast<const float *>(hp.ptr());
+	const uint16_t *h = reinterpret_cast<const uint16_t *>(col.ptr());
+	d["color"] = Color(half_to_float(h[0]), half_to_float(h[1]), half_to_float(h[2]), 1.0);
+	if (hf[3] < 0.5f) return d; // sky miss
+	d["hit"] = true;
+	const ve::IVec3 brick = ve::WorldBounds::brick_of_point(hf[0], hf[1], hf[2]);
+	d["brick"] = Vector3i(brick.x, brick.y, brick.z);
+	// Reproduce the shader's lookups on the CPU to report what the mips said there.
+	const ve::IVec3 rs_region = ve::WorldBounds::region_of_brick(brick);
+	const int rslot = debug_region_map_entry(Vector3i(rs_region.x, rs_region.y, rs_region.z));
+	if (rslot < 0) return d;
+	const int slot = debug_region_table_slot(rslot, Vector3i(brick.x, brick.y, brick.z));
+	if (slot < 0) return d;
+	const float lx = hf[0] - brick.x * ve::kBrickSize;
+	const float ly = hf[1] - brick.y * ve::kBrickSize;
+	const float lz = hf[2] - brick.z * ve::kBrickSize;
+	const int cx = std::min(7, std::max(0, static_cast<int>(lx / ve::kVoxelSize) / 2));
+	const int cy = std::min(7, std::max(0, static_cast<int>(ly / ve::kVoxelSize) / 2));
+	const int cz = std::min(7, std::max(0, static_cast<int>(lz / ve::kVoxelSize) / 2));
+	d["cell8"] = Vector3i(cx, cy, cz);
+	const ve::IVec3 abv = atlas_->config().atlas_bricks;
+	const ve::IVec3 cell{slot % abv.x, (slot / abv.x) % abv.y, slot / (abv.x * abv.y)};
+	const PackedByteArray m2 = device->texture_get_data(atlas_->mip_atlas(0), 0);
+	const PackedByteArray m8 = device->texture_get_data(atlas_->mip_atlas(2), 0);
+	{
+		const int w = abv.x * 2, hh = abv.y * 2;
+		uint8_t mn = 255, mx = 0;
+		for (int z = 0; z < 2; z++)
+			for (int y = 0; y < 2; y++)
+				for (int x = 0; x < 2; x++) {
+					const int64_t o = (static_cast<int64_t>(cell.x * 2 + x) +
+							(cell.y * 2 + y) * w + (cell.z * 2 + z) * w * hh) * 2;
+					mn = std::min(mn, m2[o]);
+					mx = std::max(mx, m2[o + 1]);
+				}
+		d["brick_surface"] = mn <= ve::kEncodedZero && mx >= ve::kEncodedZero;
+	}
+	{
+		const int w = abv.x * 8, hh = abv.y * 8;
+		const int64_t o = (static_cast<int64_t>(cell.x * 8 + cx) + (cell.y * 8 + cy) * w +
+				(cell.z * 8 + cz) * static_cast<int64_t>(w) * hh) * 2;
+		d["cell8_surface"] = m8[o] <= ve::kEncodedZero && m8[o + 1] >= ve::kEncodedZero;
+	}
+	return d;
 }
 
 String VoxelWorld::debug_load_shader(const String &res_path) const {

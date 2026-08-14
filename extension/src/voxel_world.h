@@ -129,6 +129,7 @@ public:
 
 	// --- Task 12 hooks ---
 	Color debug_raymarch_pixel(Vector3 origin, Vector3 dir);
+	Dictionary debug_raymarch_probe(Vector3 origin, Vector3 dir);
 	int debug_stream_frame(Vector3 cam);
 	Dictionary debug_stream_stats();
 	int debug_slot_of_region(Vector3i region) const;

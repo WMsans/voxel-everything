@@ -92,29 +92,29 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas, i
 	width_ = w;
 	height_ = h;
 
-	Ref<RDUniform> u[10];
-	for (int i = 0; i < 10; i++) u[i].instantiate();
+	Ref<RDUniform> u[13];
+	for (int i = 0; i < 13; i++) u[i].instantiate();
 	u[0]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
 	u[0]->set_binding(0); u[0]->add_id(color_);
 	u[1]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
 	u[1]->set_binding(1); u[1]->add_id(hitpos_);
-	u[2]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-	u[2]->set_binding(2); u[2]->add_id(sampler_); u[2]->add_id(atlas.sdf_atlas());
-	u[3]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-	u[3]->set_binding(3); u[3]->add_id(sampler_); u[3]->add_id(atlas.mat_atlas());
-	for (int i = 4; i <= 8; i++) { // palette, region_map, region_tables, op_pool, op_counts
-		u[i]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-		u[i]->set_binding(i);
+	const RID sampled[5] = {atlas.sdf_atlas(), atlas.mat_atlas(), atlas.mip_atlas(0),
+			atlas.mip_atlas(1), atlas.mip_atlas(2)};
+	for (int i = 2; i <= 6; i++) {
+		u[i]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
+		u[i]->set_binding(i); u[i]->add_id(sampler_); u[i]->add_id(sampled[i - 2]);
 	}
-	u[4]->add_id(atlas.palette());
-	u[5]->add_id(atlas.region_map());
-	u[6]->add_id(atlas.region_tables());
-	u[7]->add_id(atlas.op_pool());
-	u[8]->add_id(atlas.op_counts());
-	u[9]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
-	u[9]->set_binding(9); u[9]->add_id(edits_ubo_);
-	uset_ = rd->uniform_set_create(
-			Array::make(u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], u[9]), shader_, 0);
+	const RID buffers[5] = {atlas.palette(), atlas.region_map(), atlas.region_tables(),
+			atlas.op_pool(), atlas.op_counts()};
+	for (int i = 7; i <= 11; i++) {
+		u[i]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
+		u[i]->set_binding(i); u[i]->add_id(buffers[i - 7]);
+	}
+	u[12]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
+	u[12]->set_binding(12); u[12]->add_id(edits_ubo_);
+	Array uset_args;
+	for (int i = 0; i < 13; i++) uset_args.push_back(u[i]);
+	uset_ = rd->uniform_set_create(uset_args, shader_, 0);
 }
 
 bool RaymarchPass::render(RenderingDevice *rd, const GpuAtlas &atlas, const ve::CameraParams &cam,

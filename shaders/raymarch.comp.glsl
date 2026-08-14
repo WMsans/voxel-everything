@@ -10,14 +10,17 @@ layout(set = 0, binding = 0, rgba16f) writeonly uniform image2D out_color;
 layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D out_hitpos;
 layout(set = 0, binding = 2) uniform sampler3D sdf_atlas;   // R8 unorm, nearest
 layout(set = 0, binding = 3) uniform usampler3D mat_atlas;  // R8 uint, nearest
-layout(set = 0, binding = 4, std430) readonly buffer Palette { uint ids[]; } palette_buf;
-layout(set = 0, binding = 5, std430) readonly buffer RegionMap { int slot[]; } region_map;
-layout(set = 0, binding = 6, std430) readonly buffer RegionTables { int slot[]; } region_tables;
-layout(set = 0, binding = 7, std430) readonly buffer OpPool { uvec4 v[]; } op_pool;
-layout(set = 0, binding = 8, std430) readonly buffer OpCounts { int n[]; } op_counts;
+layout(set = 0, binding = 4) uniform usampler3D mip2_atlas; // RG8 uint, 2^3 cells/brick
+layout(set = 0, binding = 5) uniform usampler3D mip4_atlas; // 4^3 (built, unused here)
+layout(set = 0, binding = 6) uniform usampler3D mip8_atlas; // 8^3
+layout(set = 0, binding = 7, std430) readonly buffer Palette { uint ids[]; } palette_buf;
+layout(set = 0, binding = 8, std430) readonly buffer RegionMap { int slot[]; } region_map;
+layout(set = 0, binding = 9, std430) readonly buffer RegionTables { int slot[]; } region_tables;
+layout(set = 0, binding = 10, std430) readonly buffer OpPool { uvec4 v[]; } op_pool;
+layout(set = 0, binding = 11, std430) readonly buffer OpCounts { int n[]; } op_counts;
 // The pending-edit visualizer: tint the atlas content an edit WILL change, so the player
 // gets one frame of feedback before the regenerated bricks land (spec §5 latency).
-layout(set = 0, binding = 9) uniform Edits { vec4 center; vec4 params; } edits;
+layout(set = 0, binding = 12) uniform Edits { vec4 center; vec4 params; } edits;
 
 layout(push_constant, std430) uniform Push {
 	vec4 cam_pos;
@@ -102,6 +105,28 @@ uint material_at(vec3 p, ivec3 brick, int slot) {
 	return palette_buf.ids[slot * 4 + idx];
 }
 
+// The chain stores inclusive min/max over each cell's trilinear corner samples (Task 4),
+// so "no surface" is a SOUND skip: the reconstructed field inside the cell cannot cross 0.
+// Whole-brick rejection: the 2^3 level holds one min/max per 8^3-voxel octant, so the
+// brick summary is the reduce over all eight cells — inclusive-exact, never hides a hit.
+bool brick_may_have_surface(int slot) {
+	ivec3 base = atlas_base(slot, pc.atlas_bricks.xyz, 2);
+	uint mn = 255u, mx = 0u;
+	for (int z = 0; z < 2; z++)
+		for (int y = 0; y < 2; y++)
+			for (int x = 0; x < 2; x++) {
+				uvec2 mm = texelFetch(mip2_atlas, base + ivec3(x, y, z), 0).xy;
+				mn = min(mn, mm.x);
+				mx = max(mx, mm.y);
+			}
+	return mn <= ENCODED_ZERO && mx >= ENCODED_ZERO;
+}
+
+bool cell8_may_have_surface(int slot, ivec3 cell) { // cell in [0,8)^3, 2 voxels per cell
+	uvec2 mm = texelFetch(mip8_atlas, atlas_base(slot, pc.atlas_bricks.xyz, 8) + cell, 0).xy;
+	return mm.x <= ENCODED_ZERO && mm.y >= ENCODED_ZERO;
+}
+
 void main() {
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
 	ivec2 size = imageSize(out_color);
@@ -137,7 +162,7 @@ void main() {
 		if (t_exit > max_dist) break;
 
 		int slot = slot_at(map);
-		if (slot >= 0) {
+		if (slot >= 0 && brick_may_have_surface(slot)) {
 			// Air-margin bricks (activated by the probe pad) hold no solid voxels and an
 			// EMPTY palette; their interpolated field can still dip below the hit threshold
 			// near a brick face. That is not a renderable surface — skip it (M1 fix).
@@ -146,6 +171,25 @@ void main() {
 			for (int j = 0; j < 64; j++) {
 				if (t > t_exit) break;
 				vec3 p = ro + rd * t;
+				// 8^3 empty-cell skip: jump to the cell's exit face. t is clamped to keep
+				// progress monotone; the cell's AABB spans its voxels' inclusive lattice,
+				// which is exactly the range the mip entry bounds.
+				vec3 vox = (p - vec3(map) * BRICK_SIZE) / VOXEL_SIZE; // [0, 16)
+				ivec3 cell8 = clamp(ivec3(floor(vox * 0.5)), ivec3(0), ivec3(7));
+				if (!cell8_may_have_surface(slot, cell8)) {
+					vec3 cell_lo = vec3(map) * BRICK_SIZE + vec3(cell8 * 2) * VOXEL_SIZE;
+					vec3 cell_hi = cell_lo + 2.0 * VOXEL_SIZE;
+					vec3 far = mix(cell_lo, cell_hi, step(0.0, rd));
+					vec3 tf = (far - p) / rd; // t-DELTA to the exit face along each axis
+					if (st.x == 0) tf.x = 1.0 / 0.0;
+					if (st.y == 0) tf.y = 1.0 / 0.0;
+					if (st.z == 0) tf.z = 1.0 / 0.0;
+					// Jump to the first exit face (t + min(tf)), never less than 0.002 m of
+					// progress, and never past the brick's exit. The cell's AABB spans its
+					// voxels' inclusive lattice, exactly the range the mip entry bounds.
+					t = min(t + max(min(tf.x, min(tf.y, tf.z)), 0.002), t_exit);
+					continue;
+				}
 				float d = world_sdf(p);
 				if (d < 0.002 && has_material) {
 					for (int k = 0; k < 4; k++) { // secant refinement
