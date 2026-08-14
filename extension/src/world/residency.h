@@ -41,6 +41,13 @@ public:
 	void clear();
 	const ResidencyConfig &config() const { return cfg_; }
 
+	// Plan-evict the furthest resident region whose coords are not in `exclude`, so an
+	// SDF-changing edit can force atlas headroom (spec §8 "evicts or drops": the drop arm
+	// alone leaves the edit's new bricks absent and the hole invisible). Returns false when
+	// every resident region is excluded — the caller then falls back to the drop.
+	bool evict_furthest(float cx, float cy, float cz, ResidencyPlan *plan,
+			const std::vector<IVec3> &exclude);
+
 	// Distance from a point to the region's world AABB; 0 inside.
 	static float region_distance(IVec3 region, float cx, float cy, float cz);
 

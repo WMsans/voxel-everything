@@ -118,4 +118,23 @@ ResidencyPlan RegionResidency::update(float cx, float cy, float cz) {
 	return plan;
 }
 
+bool RegionResidency::evict_furthest(float cx, float cy, float cz, ResidencyPlan *plan,
+		const std::vector<IVec3> &exclude) {
+	IVec3 worst{};
+	int worst_slot = -1;
+	float worst_d = -1.0f;
+	for (const auto &kv : by_region_) {
+		const IVec3 r{kv.first.x, kv.first.y, kv.first.z};
+		bool skip = false;
+		for (const IVec3 &e : exclude)
+			if (e == r) { skip = true; break; }
+		if (skip) continue;
+		const float d = region_distance(r, cx, cy, cz);
+		if (d > worst_d) { worst_d = d; worst = r; worst_slot = kv.second; }
+	}
+	if (worst_slot < 0) return false;
+	release(worst, worst_slot, plan);
+	return true;
+}
+
 } // namespace ve

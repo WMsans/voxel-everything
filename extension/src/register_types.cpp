@@ -3,6 +3,7 @@
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/defs.hpp>
 #include "voxel_world.h"
+#include "voxel_edit_tool.h"
 #include "raymarch_compositor.h"
 
 using namespace godot;
@@ -11,6 +12,7 @@ void voxel_everything_initialize(ModuleInitializationLevel p_level) {
 	if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) return;
 	GDREGISTER_CLASS(VoxelWorld);
 	GDREGISTER_CLASS(RaymarchCompositor);
+	GDREGISTER_CLASS(VoxelEditTool);
 }
 
 void voxel_everything_uninitialize(ModuleInitializationLevel p_level) {

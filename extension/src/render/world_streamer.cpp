@@ -2,6 +2,11 @@
 #include "voxel_world.h" // godot::PendingEdit
 #include <algorithm>
 
+// An SDF edit that must allocate atlas slots is granted this many free slots before the
+// streamer evicts a far region to make room (spec §8 "evicts or drops"). The largest net
+// demand in the demo tests is a crater (~100 bricks); one eviction frees ~1k.
+constexpr int kEditSlotHeadroom = 128;
+
 using namespace godot;
 
 void WorldStreamer::initialize(ve::RegionResidency *residency, ve::EditLog *edit_log,
@@ -44,8 +49,29 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		edits.swap(*pending_);
 	}
 
-	const ve::ResidencyPlan plan = residency_->update(cx, cy, cz);
+	ve::ResidencyPlan plan = residency_->update(cx, cy, cz);
 	frame_edits_ = static_cast<int>(edits.size());
+
+	// Edit headroom (spec §8 "evicts or drops"). The atlas is sized "tight" by design, and
+	// at the demo camera the resident set fills it, so an SDF-changing edit that net-ADDS
+	// surface bricks (a crater has more wall area than the disk it removes) cannot allocate
+	// and the drop arm alone would leave the edit invisible in the raymarcher. Evict the
+	// furthest resident region this frame's edits do NOT touch so their allocations succeed;
+	// the evicted region re-streams next frame with the new ops. Paint edits change no SDF,
+	// so they can never need slots and never trigger this. One eviction frees ~1k slots —
+	// far more than any single edit in the demo needs.
+	if (!edits.empty()) {
+		std::vector<ve::IVec3> edit_resident;
+		bool sdf_edit = false;
+		for (const auto &pe : edits) {
+			if (pe.op.type != ve::kOpSpherePaint) sdf_edit = true;
+			for (const ve::IVec3 &r : pe.result.touched)
+				if (residency_->slot_of(r) >= 0) edit_resident.push_back(r);
+		}
+		if (sdf_edit && !edit_resident.empty() &&
+				atlas_->read_free_count(rd) < kEditSlotHeadroom)
+			residency_->evict_furthest(cx, cy, cz, &plan, edit_resident);
+	}
 
 	// --- buffer_update phase (must precede compute_list_begin: Godot errors otherwise) ---
 	// edit_mutex_ guards edit_log_ (voxel_world.h): the tool thread appends ops while this
