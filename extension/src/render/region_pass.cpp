@@ -5,26 +5,10 @@
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
 #include <godot_cpp/classes/rd_uniform.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
-#include <sstream>
 
 using namespace godot;
 
 namespace {
-
-// Godot's shader_compile_spirv_from_source feeds GLSL to glslang, which rejects the
-// Godot-only `#[compute]` annotation. Same rule as M1's RaymarchPass.
-std::string strip_godot_annotations(const std::string &src) {
-	std::istringstream in(src);
-	std::ostringstream out;
-	std::string line;
-	while (std::getline(in, line)) {
-		const size_t first = line.find_first_not_of(" \t\r");
-		const bool annotation = first != std::string::npos && line[first] == '#' &&
-				first + 1 < line.size() && line[first + 1] == '[';
-		if (!annotation) out << line << '\n';
-	}
-	return out.str();
-}
 
 Ref<RDUniform> storage(int binding, RID rid) {
 	Ref<RDUniform> u;
@@ -51,7 +35,7 @@ bool RegionPass::build(RenderingDevice *rd, const char *res_path, RID *shader, R
 	const String path = ps->globalize_path(String(res_path));
 	const String inc = ps->globalize_path("res://shaders");
 	std::string err;
-	const std::string code = strip_godot_annotations(
+	const std::string code = ve::strip_shader_annotations(
 			ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err));
 	if (code.empty()) {
 		UtilityFunctions::printerr("RegionPass: ", res_path, " load failed: ", err.c_str());

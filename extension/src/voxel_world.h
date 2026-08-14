@@ -14,6 +14,7 @@ class GpuWorld;
 class RaymarchPass;
 class CompositePass;
 class RegionPass;
+class BrickGenPass;
 
 class VoxelWorld : public Node3D {
 	GDCLASS(VoxelWorld, Node3D)
@@ -28,6 +29,7 @@ class VoxelWorld : public Node3D {
 	float residency_radius_m_ = 96.0f;
 	GpuAtlas *atlas_ = nullptr;
 	RegionPass *region_pass_ = nullptr;
+	BrickGenPass *gen_pass_ = nullptr;
 
 	std::unique_ptr<ve::WorldData> world_;
 	std::unique_ptr<GpuWorld> gpu_;
@@ -98,6 +100,9 @@ public:
 	bool debug_brick_has_surface(Vector3i brick, const PackedByteArray &ops, int op_count) const;
 	void debug_mark_region(Vector3i region, int region_slot, Vector3i lo, Vector3i hi,
 			int op_count, bool force);
+	void debug_generate_pending();
+	Dictionary debug_brick_diff(Vector3i brick, int region_slot, const PackedByteArray &ops,
+			int op_count);
 	void debug_release_region(int region_slot);
 	PackedInt32Array debug_jobs();
 	int debug_region_table_slot(int region_slot, Vector3i brick);

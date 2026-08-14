@@ -56,4 +56,17 @@ std::string load_shader_source(const std::string &path, const std::string &inclu
 	return out.str();
 }
 
+std::string strip_shader_annotations(const std::string &src) {
+	std::istringstream in(src);
+	std::ostringstream out;
+	std::string line;
+	while (std::getline(in, line)) {
+		const size_t first = line.find_first_not_of(" \t\r");
+		const bool annotation = first != std::string::npos && line[first] == '#' &&
+				first + 1 < line.size() && line[first + 1] == '[';
+		if (!annotation) out << line << '\n';
+	}
+	return out.str();
+}
+
 } // namespace ve

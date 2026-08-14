@@ -8,4 +8,9 @@ namespace ve {
 std::string load_shader_source(const std::string &path, const std::string &include_dir,
 		std::string *error);
 
+// Godot's shader_compile_spirv_from_source feeds GLSL to glslang, which rejects the
+// Godot-only `#[compute]` annotation. Strips any line whose first non-space char is '#'
+// followed by '['. Shared by every compute pass that keeps the annotation verbatim.
+std::string strip_shader_annotations(const std::string &src);
+
 } // namespace ve

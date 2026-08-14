@@ -10,7 +10,6 @@
 #include <godot_cpp/classes/rd_uniform.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <cstring>
-#include <sstream>
 
 using namespace godot;
 
@@ -18,28 +17,12 @@ RaymarchPass::~RaymarchPass() {
 	teardown();
 }
 
-// Godot 4.7.1's shader_compile_spirv_from_source feeds GLSL to glslang, which rejects the
-// Godot-only `#[compute]` annotation. The .glsl file keeps it verbatim (per brief); we
-// strip any line whose first non-space char is '#' followed by '[' after loading.
-static std::string strip_godot_annotations(const std::string &src) {
-	std::istringstream in(src);
-	std::ostringstream out;
-	std::string line;
-	while (std::getline(in, line)) {
-		const size_t first = line.find_first_not_of(" \t\r");
-		const bool godot_annotation = first != std::string::npos && line[first] == '#' &&
-				first + 1 < line.size() && line[first + 1] == '[';
-		if (!godot_annotation) out << line << '\n';
-	}
-	return out.str();
-}
-
 void RaymarchPass::initialize(RenderingDevice *rd) {
 	rd_ = rd;
 	std::string err;
 	const String path = ProjectSettings::get_singleton()->globalize_path("res://shaders/raymarch.comp.glsl");
 	const String inc = ProjectSettings::get_singleton()->globalize_path("res://shaders");
-	const std::string code = strip_godot_annotations(
+	const std::string code = ve::strip_shader_annotations(
 			ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err));
 	if (code.empty()) {
 		UtilityFunctions::printerr("RaymarchPass: shader load failed: ", err.c_str());

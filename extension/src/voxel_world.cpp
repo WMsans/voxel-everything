@@ -5,13 +5,16 @@
 #include "render/raymarch_pass.h"
 #include "render/composite_pass.h"
 #include "render/region_pass.h"
+#include "render/brick_gen_pass.h"
 #include "render/shader_loader.h"
 #include "generator/generator.h"
 #include "world/brick_eval.h"
+#include "world/brick_mip.h"
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/core/memory.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
+#include <cmath>
 #include <cstring>
 
 using namespace godot;
@@ -49,6 +52,8 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_upload_region_ops", "region_slot", "ops", "count"), &VoxelWorld::debug_upload_region_ops);
 	ClassDB::bind_method(D_METHOD("debug_brick_has_surface", "brick", "ops", "op_count"), &VoxelWorld::debug_brick_has_surface);
 	ClassDB::bind_method(D_METHOD("debug_mark_region", "region", "region_slot", "lo", "hi", "op_count", "force"), &VoxelWorld::debug_mark_region);
+	ClassDB::bind_method(D_METHOD("debug_generate_pending"), &VoxelWorld::debug_generate_pending);
+	ClassDB::bind_method(D_METHOD("debug_brick_diff", "brick", "region_slot", "ops", "op_count"), &VoxelWorld::debug_brick_diff);
 	ClassDB::bind_method(D_METHOD("debug_release_region", "region_slot"), &VoxelWorld::debug_release_region);
 	ClassDB::bind_method(D_METHOD("debug_jobs"), &VoxelWorld::debug_jobs);
 	ClassDB::bind_method(D_METHOD("debug_region_table_slot", "region_slot", "brick"), &VoxelWorld::debug_region_table_slot);
@@ -75,8 +80,12 @@ void VoxelWorld::_ready() {}
 VoxelWorld::~VoxelWorld() {}
 
 void VoxelWorld::_exit_tree() {
-	// Delete the region pass before the atlas: it holds uniform sets referencing the
-	// atlas buffers, and freeing those buffers cascades to referencing sets.
+	// Delete the generation/region passes before the atlas: they hold uniform sets
+	// referencing the atlas buffers, and freeing those buffers cascades to referencing sets.
+	if (gen_pass_) {
+		delete gen_pass_;
+		gen_pass_ = nullptr;
+	}
 	if (region_pass_) {
 		delete region_pass_;
 		region_pass_ = nullptr;
@@ -249,13 +258,20 @@ bool VoxelWorld::debug_init_atlas() {
 		region_pass_ = nullptr;
 		return false;
 	}
+	if (!gen_pass_) gen_pass_ = new BrickGenPass();
+	if (!gen_pass_->initialize(device, *atlas_)) {
+		delete gen_pass_;
+		gen_pass_ = nullptr;
+		return false;
+	}
 	return true;
 }
 
 void VoxelWorld::debug_teardown_atlas() {
-	// The region pass's uniform sets reference the atlas buffers: tear it down first, or
+	// The passes' uniform sets reference the atlas buffers: tear them down first, or
 	// freeing the buffers leaves stale sets that error ("free invalid ID") on the next
-	// debug_init_atlas() -> RegionPass::initialize() -> teardown().
+	// debug_init_atlas() -> Pass::initialize() -> teardown().
+	if (gen_pass_) gen_pass_->teardown();
 	if (region_pass_) region_pass_->teardown();
 	if (atlas_) atlas_->teardown();
 }
@@ -311,6 +327,130 @@ void VoxelWorld::debug_mark_region(Vector3i region, int region_slot, Vector3i lo
 	device->compute_list_end();
 	device->submit();
 	device->sync();
+}
+
+void VoxelWorld::debug_generate_pending() {
+	RenderingDevice *device = rd();
+	if (!device || !atlas_ || !region_pass_ || !gen_pass_) return;
+	const int64_t list = device->compute_list_begin();
+	region_pass_->write_dispatch_args(device, list);
+	device->compute_list_add_barrier(list);
+	gen_pass_->dispatch(device, list, *atlas_);
+	device->compute_list_end();
+	device->submit();
+	device->sync();
+}
+
+Dictionary VoxelWorld::debug_brick_diff(Vector3i brick, int region_slot,
+		const PackedByteArray &ops, int op_count) {
+	Dictionary d;
+	RenderingDevice *device = rd();
+	if (!device || !atlas_) return d;
+	const ve::IVec3 b{brick.x, brick.y, brick.z};
+	const int slot = debug_region_table_slot(region_slot, brick);
+	d["slot"] = slot;
+	if (slot < 0) return d;
+
+	ve::AnalyticGenerator gen;
+	const ve::EditOp *ptr =
+			op_count > 0 ? reinterpret_cast<const ve::EditOp *>(ops.ptr()) : nullptr;
+	ve::BrickEval ref{};
+	ve::eval_brick(gen, ptr, op_count, b, &ref);
+
+	const ve::IVec3 ab = atlas_->config().atlas_bricks;
+	const ve::IVec3 cell{slot % ab.x, (slot / ab.x) % ab.y, slot / (ab.x * ab.y)};
+
+	// texture_get_data returns the whole volume; tests run a small atlas, so one read each.
+	const PackedByteArray sdf = device->texture_get_data(atlas_->sdf_atlas(), 0);
+	const PackedByteArray mat = device->texture_get_data(atlas_->mat_atlas(), 0);
+	const int sw = ab.x * ve::kBrickSdfStride, sh = ab.y * ve::kBrickSdfStride;
+	const int mw = ab.x * ve::kBrickVoxels, mh = ab.y * ve::kBrickVoxels;
+
+	int sdf_max = 0, sdf_over_one = 0;
+	for (int z = 0; z < ve::kBrickSdfStride; z++)
+		for (int y = 0; y < ve::kBrickSdfStride; y++)
+			for (int x = 0; x < ve::kBrickSdfStride; x++) {
+				const int ax = cell.x * ve::kBrickSdfStride + x;
+				const int ay = cell.y * ve::kBrickSdfStride + y;
+				const int az = cell.z * ve::kBrickSdfStride + z;
+				const int got = sdf[ax + ay * sw + az * sw * sh];
+				const int want = ref.brick.sdf[ve::sdf_index(x, y, z)];
+				const int diff = std::abs(got - want);
+				sdf_max = std::max(sdf_max, diff);
+				if (diff > 1) sdf_over_one++;
+			}
+	d["sdf_max_diff"] = sdf_max;
+	d["sdf_diff_over_one"] = sdf_over_one;
+
+	const PackedByteArray pal_bytes = device->buffer_get_data(atlas_->palette(),
+			static_cast<uint32_t>(slot) * ve::kBrickPaletteSize * 4,
+			ve::kBrickPaletteSize * 4);
+	const uint32_t *pal = reinterpret_cast<const uint32_t *>(pal_bytes.ptr());
+	bool pal_ok = true;
+	bool has_four = false;
+	for (int p = 0; p < ve::kBrickPaletteSize; p++) {
+		pal_ok = pal_ok && pal[p] == ref.brick.palette[p];
+		has_four = has_four || pal[p] == 4;
+	}
+	d["palette_match"] = pal_ok;
+	d["has_material_4"] = has_four;
+
+	// Materials are only meaningful where a hit point can land — within ~1.2 voxels of the
+	// surface. Compare RESOLVED ids, not packed indices: the two sides agree on the palette
+	// ordering, but comparing ids keeps the check honest if that ever changes.
+	int near_compared = 0, near_mismatch = 0;
+	for (int z = 0; z < ve::kBrickVoxels; z++)
+		for (int y = 0; y < ve::kBrickVoxels; y++)
+			for (int x = 0; x < ve::kBrickVoxels; x++) {
+				const float dist = ve::decode_sdf(ref.brick.sdf[ve::sdf_index(x, y, z)]);
+				if (std::fabs(dist) > 1.2f * ve::kVoxelSize) continue;
+				const int ax = cell.x * ve::kBrickVoxels + x;
+				const int ay = cell.y * ve::kBrickVoxels + y;
+				const int az = cell.z * ve::kBrickVoxels + z;
+				const int gi = mat[ax + ay * mw + az * mw * mh];
+				const uint32_t got_id = gi < ve::kBrickPaletteSize ? pal[gi] : 0;
+				const uint16_t want_id =
+						ref.brick.palette[ve::get_mat_index(ref.brick, ve::voxel_index(x, y, z))];
+				near_compared++;
+				if (got_id != want_id) near_mismatch++;
+			}
+	d["mat_near_compared"] = near_compared;
+	d["mat_near_mismatch"] = near_mismatch;
+
+	int mip_bad = 0;
+	// The reference mips are reduced from the GPU lattice just read back, not from the CPU
+	// one. The SDF diff already tolerates a one-step sin() drift (glibc vs driver), and a
+	// drifted extremum would otherwise flag a mip cell that is a perfectly correct
+	// reduction of what the GPU actually wrote (brief Step 5 note: "the property under
+	// test is that the reduction is right, not that sin is bit-identical").
+	uint8_t gpu_lattice[ve::kBrickSdfCount];
+	for (int z = 0; z < ve::kBrickSdfStride; z++)
+		for (int y = 0; y < ve::kBrickSdfStride; y++)
+			for (int x = 0; x < ve::kBrickSdfStride; x++) {
+				const int ax = cell.x * ve::kBrickSdfStride + x;
+				const int ay = cell.y * ve::kBrickSdfStride + y;
+				const int az = cell.z * ve::kBrickSdfStride + z;
+				gpu_lattice[ve::sdf_index(x, y, z)] = sdf[ax + ay * sw + az * sw * sh];
+			}
+	ve::BrickMips ref_mips{};
+	ve::build_brick_mips(gpu_lattice, &ref_mips);
+	for (int level = 0; level < ve::kMipLevels; level++) {
+		const int dim = ve::kMipDims[level];
+		const PackedByteArray mip = device->texture_get_data(atlas_->mip_atlas(level), 0);
+		const int w = ab.x * dim, h = ab.y * dim;
+		const uint8_t *want_mn = ve::mip_min(ref_mips, level);
+		const uint8_t *want_mx = ve::mip_max(ref_mips, level);
+		for (int z = 0; z < dim; z++)
+			for (int y = 0; y < dim; y++)
+				for (int x = 0; x < dim; x++) {
+					const int ax = cell.x * dim + x, ay = cell.y * dim + y, az = cell.z * dim + z;
+					const int64_t o = (static_cast<int64_t>(ax) + ay * w + az * w * h) * 2;
+					const int i = x + y * dim + z * dim * dim;
+					if (mip[o] != want_mn[i] || mip[o + 1] != want_mx[i]) mip_bad++;
+				}
+	}
+	d["mip_mismatch"] = mip_bad;
+	return d;
 }
 
 void VoxelWorld::debug_release_region(int region_slot) {
