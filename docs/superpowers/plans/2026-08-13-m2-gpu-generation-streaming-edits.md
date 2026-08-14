@@ -6776,3 +6776,26 @@ git commit -m "feat(demo): destruction tools, streaming HUD, benchmark counters"
    must now contain the surface near brick 64. The demo's +51.2 transforms then become
    correct as the plan intended. The cave centre becomes `(30, kSurfaceY + hills(30,30) - 2,
    30)`.
+10. Task 13 (human-approved): three corrections to the brief's verbatim
+    `shaders/raymarch.comp.glsl` mip-skip code, each caught by the brief's own tests.
+    (a) `brick_may_have_surface` reduces ALL eight mip2 cells instead of the brief's
+    "2³ cell 0" — cell 0 covers only the [0,8)³ octant, so the literal code tunnels
+    through upper-octant surfaces; the plan's own "whole-brick rejection" wording
+    requires the reduce. (b) The 8³ skip formula in the brief
+    (`t = min(max(min(tf...), t + 0.002), t_exit)`) compared a t-DELTA against an
+    absolute t, so the skip never jumped (rays crawled 0.002 m/iter and died on the
+    64-iteration cap; instrumented proof in the Task 13 report). Fixed to
+    `t = min(t + max(min(tf...), 0.002), t_exit)`. (c) `pc.atlas_bricks.xyz` ivec4→ivec3
+    compile fix (same as Errata 7).
+11. Task 14 (human-approved): the brief's test_edit_pipeline.gd config over-subscribes the
+    16,384-slot atlas at its cave-adjacent camera (resident set ≈ 17,014 surface bricks), so
+    the plan's drop-only fail-soft left SDF-changing edits (subtract/add — not paint) invisible
+    in the raymarcher, failing the brief's own "hole is visible" assertions. Implemented the
+    "evicts" arm of spec §8 ("pool exhaustion evicts or drops"): `ve::RegionResidency::
+    evict_furthest(cx, cy, cz, plan, exclude)` plans an eviction of the furthest resident
+    region not in the exclude set, and `WorldStreamer::run_frame` triggers it when a frame
+    drains an SDF edit touching resident regions and the free-slot count is below a 128-slot
+    headroom. Edit-touched regions are excluded; the drop arm remains the fallback when every
+    resident region is touched; the evicted region re-streams next frame with the new ops.
+    Files beyond the brief's list: extension/src/world/residency.h/.cpp,
+    extension/src/render/world_streamer.cpp.
