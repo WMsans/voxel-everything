@@ -54,6 +54,12 @@ public:
 	RID debug_indirection_tex() const;
 	RID debug_sdf_atlas() const;
 	RenderingDevice *debug_local_rd() const { return local_rd_; }
+
+	// Test/debug hooks for the GPU differential harness (spec §8). debug_eval_field takes
+	// the SAME PackedByteArray the GPU op buffer is filled from, so the op struct layout is
+	// verified end to end rather than transcribed twice.
+	String debug_load_shader(const String &res_path) const;
+	Vector2 debug_eval_field(Vector3 p, const PackedByteArray &ops, int op_count) const;
 };
 
 } // namespace godot

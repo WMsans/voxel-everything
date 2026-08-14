@@ -3,7 +3,10 @@
 #include "render/camera_params.h"
 #include "render/raymarch_pass.h"
 #include "render/composite_pass.h"
+#include "render/shader_loader.h"
 #include "generator/generator.h"
+#include "world/brick_eval.h"
+#include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/core/memory.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
@@ -22,6 +25,8 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_indirection_tex"), &VoxelWorld::debug_indirection_tex);
 	ClassDB::bind_method(D_METHOD("debug_sdf_atlas"), &VoxelWorld::debug_sdf_atlas);
 	ClassDB::bind_method(D_METHOD("debug_local_rd"), &VoxelWorld::debug_local_rd);
+	ClassDB::bind_method(D_METHOD("debug_load_shader", "res_path"), &VoxelWorld::debug_load_shader);
+	ClassDB::bind_method(D_METHOD("debug_eval_field", "p", "ops", "op_count"), &VoxelWorld::debug_eval_field);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "use_local_device"), "set_use_local_device", "get_use_local_device");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR3I, "world_size_bricks"), "set_world_size_bricks", "get_world_size_bricks");
 }
@@ -129,4 +134,32 @@ Color VoxelWorld::debug_raymarch_pixel(Vector3 origin, Vector3 dir) {
 	if (data.size() < 8) return Color(1, 0, 1);
 	const uint16_t *h = reinterpret_cast<const uint16_t *>(data.ptr());
 	return Color(half_to_float(h[0]), half_to_float(h[1]), half_to_float(h[2]), 1.0);
+}
+
+String VoxelWorld::debug_load_shader(const String &res_path) const {
+	ProjectSettings *ps = ProjectSettings::get_singleton();
+	const String path = ps->globalize_path(res_path);
+	const String inc = ps->globalize_path("res://shaders");
+	std::string err;
+	const std::string code =
+			ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err);
+	if (code.empty()) {
+		UtilityFunctions::printerr("debug_load_shader: ", err.c_str());
+		return String();
+	}
+	return String(code.c_str());
+}
+
+Vector2 VoxelWorld::debug_eval_field(Vector3 p, const PackedByteArray &ops, int op_count) const {
+	ve::AnalyticGenerator gen;
+	const ve::EditOp *ptr = nullptr;
+	if (op_count > 0) {
+		if (ops.size() < op_count * static_cast<int64_t>(sizeof(ve::EditOp))) {
+			UtilityFunctions::printerr("debug_eval_field: op buffer too small");
+			return Vector2();
+		}
+		ptr = reinterpret_cast<const ve::EditOp *>(ops.ptr());
+	}
+	const ve::Sample s = ve::eval_field(gen, ptr, op_count, p.x, p.y, p.z);
+	return Vector2(s.sdf, static_cast<float>(s.material));
 }
