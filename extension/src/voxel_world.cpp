@@ -4,6 +4,7 @@
 #include "render/camera_params.h"
 #include "render/raymarch_pass.h"
 #include "render/composite_pass.h"
+#include "render/region_pass.h"
 #include "render/shader_loader.h"
 #include "generator/generator.h"
 #include "world/brick_eval.h"
@@ -46,6 +47,11 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_reset_frame_counters"), &VoxelWorld::debug_reset_frame_counters);
 	ClassDB::bind_method(D_METHOD("debug_set_region_map_entry", "region_index", "region_slot"), &VoxelWorld::debug_set_region_map_entry);
 	ClassDB::bind_method(D_METHOD("debug_upload_region_ops", "region_slot", "ops", "count"), &VoxelWorld::debug_upload_region_ops);
+	ClassDB::bind_method(D_METHOD("debug_brick_has_surface", "brick", "ops", "op_count"), &VoxelWorld::debug_brick_has_surface);
+	ClassDB::bind_method(D_METHOD("debug_mark_region", "region", "region_slot", "lo", "hi", "op_count", "force"), &VoxelWorld::debug_mark_region);
+	ClassDB::bind_method(D_METHOD("debug_release_region", "region_slot"), &VoxelWorld::debug_release_region);
+	ClassDB::bind_method(D_METHOD("debug_jobs"), &VoxelWorld::debug_jobs);
+	ClassDB::bind_method(D_METHOD("debug_region_table_slot", "region_slot", "brick"), &VoxelWorld::debug_region_table_slot);
 	ClassDB::bind_method(D_METHOD("debug_mat_atlas"), &VoxelWorld::debug_mat_atlas);
 	ClassDB::bind_method(D_METHOD("debug_mip_atlas", "level"), &VoxelWorld::debug_mip_atlas);
 	ClassDB::bind_method(D_METHOD("debug_region_map"), &VoxelWorld::debug_region_map);
@@ -69,6 +75,12 @@ void VoxelWorld::_ready() {}
 VoxelWorld::~VoxelWorld() {}
 
 void VoxelWorld::_exit_tree() {
+	// Delete the region pass before the atlas: it holds uniform sets referencing the
+	// atlas buffers, and freeing those buffers cascades to referencing sets.
+	if (region_pass_) {
+		delete region_pass_;
+		region_pass_ = nullptr;
+	}
 	// Delete the atlas before the GpuWorld teardown: its destructor frees every RID it
 	// owns on rd(), and the device is still valid at this point.
 	if (atlas_) {
@@ -230,10 +242,21 @@ bool VoxelWorld::debug_init_atlas() {
 	cfg.max_region_slots = max_region_slots_;
 	cfg.max_brick_jobs = max_brick_jobs_;
 	cfg.bounds = world_bounds();
-	return atlas_->initialize(device, cfg);
+	if (!atlas_->initialize(device, cfg)) return false;
+	if (!region_pass_) region_pass_ = new RegionPass();
+	if (!region_pass_->initialize(device, *atlas_)) {
+		delete region_pass_;
+		region_pass_ = nullptr;
+		return false;
+	}
+	return true;
 }
 
 void VoxelWorld::debug_teardown_atlas() {
+	// The region pass's uniform sets reference the atlas buffers: tear it down first, or
+	// freeing the buffers leaves stale sets that error ("free invalid ID") on the next
+	// debug_init_atlas() -> RegionPass::initialize() -> teardown().
+	if (region_pass_) region_pass_->teardown();
 	if (atlas_) atlas_->teardown();
 }
 
@@ -268,6 +291,58 @@ void VoxelWorld::debug_upload_region_ops(int region_slot, const PackedByteArray 
 		ptr = reinterpret_cast<const ve::EditOp *>(ops.ptr());
 	}
 	atlas_->upload_region_ops(rd(), region_slot, ptr, count);
+}
+
+bool VoxelWorld::debug_brick_has_surface(Vector3i brick, const PackedByteArray &ops,
+		int op_count) const {
+	ve::AnalyticGenerator gen;
+	const ve::EditOp *ptr = op_count > 0 ? reinterpret_cast<const ve::EditOp *>(ops.ptr())
+	                                     : nullptr;
+	return ve::brick_has_surface(gen, ptr, op_count, {brick.x, brick.y, brick.z});
+}
+
+void VoxelWorld::debug_mark_region(Vector3i region, int region_slot, Vector3i lo, Vector3i hi,
+		int op_count, bool force) {
+	RenderingDevice *device = rd();
+	if (!device || !atlas_ || !region_pass_) return;
+	const int64_t list = device->compute_list_begin();
+	region_pass_->mark(device, list, {region.x, region.y, region.z}, region_slot,
+			{lo.x, lo.y, lo.z}, {hi.x, hi.y, hi.z}, op_count, force);
+	device->compute_list_end();
+	device->submit();
+	device->sync();
+}
+
+void VoxelWorld::debug_release_region(int region_slot) {
+	RenderingDevice *device = rd();
+	if (!device || !region_pass_) return;
+	const int64_t list = device->compute_list_begin();
+	region_pass_->release_region(device, list, region_slot);
+	device->compute_list_end();
+	device->submit();
+	device->sync();
+}
+
+PackedInt32Array VoxelWorld::debug_jobs() {
+	PackedInt32Array out;
+	RenderingDevice *device = rd();
+	if (!device || !atlas_) return out;
+	const int count = atlas_->read_job_count(device);
+	if (count <= 0) return out;
+	const PackedByteArray b = device->buffer_get_data(atlas_->jobs(), 0, count * 32);
+	out.resize(count * 8);
+	memcpy(out.ptrw(), b.ptr(), static_cast<size_t>(count) * 32);
+	return out;
+}
+
+int VoxelWorld::debug_region_table_slot(int region_slot, Vector3i brick) {
+	RenderingDevice *device = rd();
+	if (!device || !atlas_) return -1;
+	const int bi = ve::WorldBounds::brick_index_in_region({brick.x, brick.y, brick.z});
+	const uint32_t offset =
+			(static_cast<uint32_t>(region_slot) * ve::kRegionBrickCount + bi) * 4;
+	const PackedByteArray b = device->buffer_get_data(atlas_->region_tables(), offset, 4);
+	return b.size() >= 4 ? *reinterpret_cast<const int32_t *>(b.ptr()) : -1;
 }
 
 RID VoxelWorld::debug_mat_atlas() const { return atlas_ ? atlas_->mat_atlas() : RID(); }
