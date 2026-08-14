@@ -41,6 +41,10 @@ private:
 	RegionPass *region_pass_ = nullptr;
 	BrickGenPass *brick_gen_ = nullptr;
 	int frame_edits_ = 0;
+	// Regions marked last frame (loads + on-screen edit jobs). If the job list overflowed
+	// (brick_mark.comp.glsl sets frame.overflow bit 1), the next run_frame re-marks these
+	// with force_regen so the dropped bricks are re-enqueued (see run_frame).
+	std::vector<ve::IVec3> pending_regen_;
 	float last_edit_center_[3] = {0.0f, 0.0f, 0.0f};
 	float last_edit_radius_ = 0.0f;
 	int last_edit_type_ = 0;

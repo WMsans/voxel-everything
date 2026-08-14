@@ -99,8 +99,10 @@ void main() {
 		atomicOr(frame.overflow, 2u);
 		// The slot stays assigned but ungenerated for this frame. Releasing it here would
 		// mean freeing during the allocate phase — the very race the phase split avoids.
-		// The streamer sees overflow bit 1 and re-marks this region with force_regen next
-		// frame, which re-enqueues the brick; one frame of stale atlas bytes is the cost.
+		// The streamer sees overflow bit 1 (value 2, set above) and re-marks this region
+		// with force_regen next frame, which re-enqueues the brick; one frame of stale
+		// atlas bytes is the cost. (Bit 0, value 1, is the free-list-empty fail-soft and
+		// gets no re-mark — the brick stays absent until a later edit or re-mark.)
 		return;
 	}
 	jobs.v[j * 2 + 0] = ivec4(brick, slot);
