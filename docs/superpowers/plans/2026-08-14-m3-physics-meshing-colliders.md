@@ -4039,3 +4039,9 @@ git commit -m "feat: character controller walking on streamed colliders"
 ## Errata (recorded during M3 implementation — corrections to the task text)
 
 <!-- Append numbered entries here as the plan meets reality, in the style of M1/M2. -->
+
+1. **Task 7 — Jolt winding convention.** In the target Godot 4.7.1 + Jolt build, the triangle winding supplied by the brief's `ConcavePolygonShape3D` contract test and `ColliderStreamer::build_shape` is treated as the back face when `backface_collision=false`; a downward ray misses. `ColliderStreamer::build_shape` and `tests/test_collider_stream.gd` therefore swap the last two vertices of each triangle so the terrain's upward-facing surfaces collide from above. The one-sided collision behavior is unchanged.
+2. **Task 7 — gdUnit world cleanup.** The brief's collider tests did not free their `VoxelWorld` children. gdUnit does not clear root children between test cases in a suite, so later tests saw earlier physics bodies. Each world-creating test now calls `w.free()` after its assertions (non-failure-safe cleanup; a `teardown()` would be stronger).
+3. **Task 9 — player kick regression test.** To guard the explosion-kick fix, the demo task adds `tests/test_player_kick.gd`, which is outside the original task file list. This is an approved scope addition recorded as errata.
+4. **Task 9 — benchmark invocation.** The exact interactive benchmark command can stall on vsync/display frame throttling in a headless/CI-like environment. Running with `--disable-vsync` is an acceptable verification substitute; the demo's own BENCH output and acceptance criteria remain unchanged.
+
