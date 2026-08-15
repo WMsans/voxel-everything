@@ -49,6 +49,16 @@ public:
 	bool mesh_sync(const MeshJob &job, MeshResult *out, std::vector<uint8_t> *lattice,
 			std::vector<int32_t> *cell_vertex);
 
+	// Records and submits one batch; false when a batch is still in flight, the count is
+	// zero, or it exceeds config().max_jobs.
+	bool submit(const MeshJob *jobs, int count);
+	bool in_flight() const { return in_flight_; }
+	// Syncs the batch in flight, reads it back, appends to `out`, returns how many. Zero
+	// when nothing is in flight. The sync is for work submitted a frame ago, so it does not
+	// wait on the GPU in practice.
+	int collect(std::vector<MeshResult> *out);
+	float last_collect_ms() const { return last_collect_ms_; }
+
 private:
 	bool build(RenderingDevice *rd, const char *res_path, RID *shader, RID *pipeline);
 	void record_field(int64_t list, const MeshJob &job, int job_index);
@@ -73,6 +83,10 @@ private:
 	RID field_shader_, field_pipeline_, field_uset_;
 	RID cells_shader_, cells_pipeline_, cells_uset_;
 	RID quads_shader_, quads_pipeline_, quads_uset_;
+
+	bool in_flight_ = false;
+	std::vector<ve::IVec3> batch_; // the chunks in flight, in job order
+	float last_collect_ms_ = 0.0f;
 };
 
 } // namespace godot

@@ -4,6 +4,7 @@
 #include "world/edit_log.h"
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rd_shader_source.hpp>
+#include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
 #include <godot_cpp/classes/rd_texture_format.hpp>
 #include <godot_cpp/classes/rd_texture_view.hpp>
@@ -159,6 +160,11 @@ bool MeshPass::initialize(RenderingDevice *rd, const MeshPassConfig &cfg) {
 
 void MeshPass::teardown() {
 	if (!rd_) return;
+	if (in_flight_) {
+		rd_->sync();
+		in_flight_ = false;
+		batch_.clear();
+	}
 	// Uniform sets first: freeing a shader cascades to its pipelines and referencing sets
 	// (M1's documented order).
 	free_if_valid(rd_, quads_uset_);
@@ -293,9 +299,40 @@ void MeshPass::read_job(int job_index, ve::IVec3 chunk, MeshResult *out) {
 	}
 }
 
+bool MeshPass::submit(const MeshJob *jobs, int count) {
+	if (!is_valid() || in_flight_ || !jobs || count <= 0 || count > cfg_.max_jobs) return false;
+	reset_counts();
+	for (int j = 0; j < count; j++) upload_ops(jobs[j], j);
+	const int64_t list = rd_->compute_list_begin();
+	for (int j = 0; j < count; j++) record_job(list, jobs[j], j);
+	rd_->compute_list_end();
+	rd_->submit();
+	in_flight_ = true;
+	batch_.clear();
+	for (int j = 0; j < count; j++) batch_.push_back(jobs[j].chunk);
+	return true;
+}
+
+int MeshPass::collect(std::vector<MeshResult> *out) {
+	if (!in_flight_) return 0;
+	const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
+	rd_->sync();
+	in_flight_ = false;
+	const int n = static_cast<int>(batch_.size());
+	for (int j = 0; j < n; j++) {
+		MeshResult r;
+		read_job(j, batch_[j], &r);
+		if (out) out->push_back(std::move(r));
+	}
+	batch_.clear();
+	last_collect_ms_ =
+			static_cast<float>(Time::get_singleton()->get_ticks_usec() - t0) / 1000.0f;
+	return n;
+}
+
 bool MeshPass::mesh_sync(const MeshJob &job, MeshResult *out, std::vector<uint8_t> *lattice,
 		std::vector<int32_t> *cell_vertex) {
-	if (!is_valid()) return false;
+	if (!is_valid() || in_flight_) return false;
 	reset_counts();
 	upload_ops(job, 0);
 	const int64_t list = rd_->compute_list_begin();

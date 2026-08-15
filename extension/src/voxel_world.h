@@ -1,6 +1,7 @@
 #pragma once
 #include <godot_cpp/classes/node3d.hpp>
 #include <godot_cpp/classes/rendering_device.hpp>
+#include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/color.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/node_path.hpp>
@@ -181,6 +182,10 @@ public:
 
 	// --- Task 5 hook ---
 	Dictionary debug_mesh_diff(Vector3i chunk);
+
+	// --- Task 6 hooks ---
+	bool debug_mesh_submit(Array chunks);
+	Array debug_mesh_collect();
 };
 
 } // namespace godot

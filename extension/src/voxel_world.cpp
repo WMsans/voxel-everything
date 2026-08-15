@@ -58,6 +58,8 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_teardown_physics"), &VoxelWorld::debug_teardown_physics);
 	ClassDB::bind_method(D_METHOD("debug_mesh_lattice_diff", "chunk"), &VoxelWorld::debug_mesh_lattice_diff);
 	ClassDB::bind_method(D_METHOD("debug_mesh_diff", "chunk"), &VoxelWorld::debug_mesh_diff);
+	ClassDB::bind_method(D_METHOD("debug_mesh_submit", "chunks"), &VoxelWorld::debug_mesh_submit);
+	ClassDB::bind_method(D_METHOD("debug_mesh_collect"), &VoxelWorld::debug_mesh_collect);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_pixel", "origin", "dir"), &VoxelWorld::debug_raymarch_pixel);
@@ -447,6 +449,43 @@ Dictionary VoxelWorld::debug_mesh_diff(Vector3i chunk) {
 	d["winding_bad"] = winding_bad;
 	d["tri_sampled"] = tri_sampled;
 	return d;
+}
+
+bool VoxelWorld::debug_mesh_submit(Array chunks) {
+	ensure_physics_initialized();
+	if (!physics_ready_ || !mesh_pass_) return false;
+	std::vector<ve::IVec3> coords;
+	std::vector<std::vector<ve::EditOp>> ops;
+	for (int i = 0; i < chunks.size(); i++) {
+		const Vector3i v = chunks[i];
+		coords.push_back({v.x, v.y, v.z});
+	}
+	ops.reserve(coords.size());
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		for (const ve::IVec3 &c : coords) ops.push_back(edit_log_->ops(ve::region_of_chunk(c)));
+	}
+	std::vector<MeshJob> jobs;
+	jobs.reserve(coords.size());
+	for (size_t i = 0; i < coords.size(); i++)
+		jobs.push_back({coords[i], ops[i].data(), static_cast<int>(ops[i].size())});
+	return mesh_pass_->submit(jobs.data(), static_cast<int>(jobs.size()));
+}
+
+Array VoxelWorld::debug_mesh_collect() {
+	Array out;
+	if (!physics_ready_ || !mesh_pass_) return out;
+	std::vector<MeshResult> results;
+	mesh_pass_->collect(&results);
+	for (const MeshResult &r : results) {
+		Dictionary d;
+		d["chunk"] = Vector3i(r.chunk.x, r.chunk.y, r.chunk.z);
+		d["vertices"] = static_cast<int>(r.positions.size() / 3);
+		d["triangles"] = static_cast<int>(r.indices.size() / 3);
+		d["overflow"] = r.overflow;
+		out.push_back(d);
+	}
+	return out;
 }
 
 // Half-precision to single-precision (normal + subnormal paths).
