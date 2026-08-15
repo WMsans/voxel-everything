@@ -1,6 +1,7 @@
 #pragma once
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
+#include <vector>
 #include "generator/edit_ops.h"
 #include "world/brick_mip.h"
 #include "world/edit_log.h"
@@ -51,12 +52,17 @@ public:
 	RID jobs() const { return jobs_; }
 	RID op_pool() const { return op_pool_; }
 	RID op_counts() const { return op_counts_; }
+	RID region_slot_counts() const { return region_slot_counts_; }
 
 	void reset_frame_counters(RenderingDevice *rd);
 	void clear_overflow(RenderingDevice *rd);
 	int read_free_count(RenderingDevice *rd) const;
 	int read_job_count(RenderingDevice *rd) const;
 	uint32_t read_overflow(RenderingDevice *rd) const;
+	// How many atlas slots each region slot currently holds, written by the mark and free
+	// passes. One small readback (max_region_slots ints) per frame; it is what lets the
+	// streamer fund a stream-in out of evictions that actually return bricks.
+	void read_region_slot_counts(RenderingDevice *rd, std::vector<int> *out) const;
 
 	void upload_region_ops(RenderingDevice *rd, int region_slot, const ve::EditOp *ops,
 			int count);
@@ -71,7 +77,7 @@ private:
 	RID sdf_atlas_, mat_atlas_, palette_;
 	RID mips_[ve::kMipLevels];
 	RID region_map_, region_tables_, free_list_, counters_, frame_, dispatch_args_;
-	RID jobs_, op_pool_, op_counts_;
+	RID jobs_, op_pool_, op_counts_, region_slot_counts_;
 };
 
 } // namespace godot

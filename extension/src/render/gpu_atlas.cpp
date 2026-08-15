@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstring>
 #include "render/gpu_atlas.h"
 #include <godot_cpp/classes/rd_texture_format.hpp>
@@ -119,11 +120,15 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 			zeroed(static_cast<int64_t>(cfg_.max_region_slots) * ve::kMaxRegionOps * 32));
 	op_counts_ = rd->storage_buffer_create(static_cast<uint32_t>(cfg_.max_region_slots) * 4,
 			zeroed(static_cast<int64_t>(cfg_.max_region_slots) * 4));
+	region_slot_counts_ = rd->storage_buffer_create(
+			static_cast<uint32_t>(cfg_.max_region_slots) * 4,
+			zeroed(static_cast<int64_t>(cfg_.max_region_slots) * 4));
 
 	bool ok = sdf_atlas_.is_valid() && mat_atlas_.is_valid() && palette_.is_valid() &&
 			region_map_.is_valid() && region_tables_.is_valid() && free_list_.is_valid() &&
 			counters_.is_valid() && frame_.is_valid() && dispatch_args_.is_valid() &&
-			jobs_.is_valid() && op_pool_.is_valid() && op_counts_.is_valid();
+			jobs_.is_valid() && op_pool_.is_valid() && op_counts_.is_valid() &&
+			region_slot_counts_.is_valid();
 	for (int l = 0; l < ve::kMipLevels; l++) ok = ok && mips_[l].is_valid();
 	if (!ok) {
 		// Most likely cause: the driver refuses STORAGE usage on R8_UNORM / R8G8_UINT
@@ -151,6 +156,7 @@ void GpuAtlas::teardown() {
 	free_if_valid(rd_, jobs_);
 	free_if_valid(rd_, op_pool_);
 	free_if_valid(rd_, op_counts_);
+	free_if_valid(rd_, region_slot_counts_);
 	rd_ = nullptr;
 }
 
@@ -185,6 +191,14 @@ uint32_t GpuAtlas::read_overflow(RenderingDevice *rd) const {
 	if (!frame_.is_valid()) return 0;
 	const PackedByteArray b = rd->buffer_get_data(frame_, 4, 4);
 	return b.size() >= 4 ? *reinterpret_cast<const uint32_t *>(b.ptr()) : 0;
+}
+
+void GpuAtlas::read_region_slot_counts(RenderingDevice *rd, std::vector<int> *out) const {
+	out->assign(static_cast<size_t>(cfg_.max_region_slots), 0);
+	if (!region_slot_counts_.is_valid()) return;
+	const PackedByteArray b = rd->buffer_get_data(region_slot_counts_);
+	const int64_t n = std::min<int64_t>(b.size() / 4, cfg_.max_region_slots);
+	if (n > 0) memcpy(out->data(), b.ptr(), static_cast<size_t>(n) * 4);
 }
 
 void GpuAtlas::upload_region_ops(RenderingDevice *rd, int region_slot, const ve::EditOp *ops,

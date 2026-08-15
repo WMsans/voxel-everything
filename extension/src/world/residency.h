@@ -16,6 +16,27 @@ struct ResidencyConfig {
 	float evict_margin = 1.15f;
 };
 
+// What the atlas can pay for this frame, and what each resident region would give back.
+//
+// It exists because "which region is furthest" and "which region holds bricks" are almost
+// unrelated: only the region layers the surface crosses hold any atlas slots at all, and in a
+// 96 m residency ball most residents are pure air. Displacing the furthest resident to fund a
+// stream-in therefore used to return nothing at all about 70% of the time, so the free list
+// slid to zero and brick_mark.comp.glsl's fail-soft dropped the bricks the load had just
+// activated — a hole in freshly streamed ground until the repair sweep came back for it.
+struct AtlasBudget {
+	// Atlas slots held by each REGION slot (index by RegionResidency::slot_of), as reported
+	// by the mark pass. Null means "unknown": update() then falls back to the old behaviour
+	// of assuming one eviction funds one load.
+	const int *cost_by_slot = nullptr;
+	int slot_count = 0;
+	// Slots the streamer is willing to spend this frame (free list minus its reserve).
+	int available = 0;
+	// What one stream-in is assumed to cost. Deliberately the high end of what regions
+	// actually cost, so a load is over-funded rather than under-funded.
+	int per_load = 3072;
+};
+
 struct ResidencyPlan {
 	struct Entry {
 		IVec3 region;
@@ -32,18 +53,21 @@ class RegionResidency {
 public:
 	explicit RegionResidency(const ResidencyConfig &cfg);
 
-	// `bricks_scarce` reports that the ATLAS (not the region-slot pool) is nearly spent.
-	// The region pool and the brick pool are sized independently, and at the shipping
-	// radius the brick pool is the binding one: the surface shell of a 96 m ball wants
-	// ~140k bricks against a 65536-slot atlas. Left alone, streaming spends the last slot
-	// and every later edit hits the free-list-empty fail-soft in brick_mark.comp.glsl,
-	// dropping the bricks it activates for good. Under scarcity a load must therefore
-	// DISPLACE the furthest resident instead of taking a fresh region slot, which caps the
-	// resident set at what the atlas can hold and keeps a working reserve free. The set
-	// stays nearest-first, so what goes missing is the far horizon, never the edit.
+	// The region pool and the brick pool are sized independently, and at the shipping radius
+	// the brick pool is the binding one: the surface shell of a 96 m ball wants ~140k bricks
+	// against a 65536-slot atlas. So a load may only proceed once the atlas can PAY for it:
+	// while `budget.available` is short of `budget.per_load`, the furthest residents are
+	// released — one after another, crediting what each actually holds — until the load is
+	// funded. Air regions cost nothing and so fund nothing; the loop simply walks past them
+	// to the furthest region that does hold bricks. Nothing nearer than the candidate is ever
+	// released, so when the atlas is full the horizon stops arriving instead of the ground
+	// under the player going hollow.
+	//
 	// `max_loads` overrides ResidencyConfig::max_loads_per_frame downwards for this frame
-	// (negative means "use the config"); the streamer scales it to the free-slot budget.
-	ResidencyPlan update(float cx, float cy, float cz, bool bricks_scarce = false,
+	// (negative means "use the config").
+	// A default budget carries no costs, which means "the atlas is not the binding pool":
+	// only a full region-slot pool then forces a displacement, exactly as before.
+	ResidencyPlan update(float cx, float cy, float cz, const AtlasBudget &budget = AtlasBudget{},
 			int max_loads = -1);
 
 	int slot_of(IVec3 region) const;
@@ -58,8 +82,14 @@ public:
 	// SDF-changing edit can force atlas headroom (spec §8 "evicts or drops": the drop arm
 	// alone leaves the edit's new bricks absent and the hole invisible). Returns false when
 	// every resident region is excluded — the caller then falls back to the drop.
+	//
+	// With a budget carrying per-slot costs, it keeps evicting until it has actually
+	// recovered `want_slots`: the furthest region is usually air and gives back nothing, so
+	// evicting exactly one of them is headroom on paper only. Returns true if anything was
+	// evicted. Without costs it evicts exactly one region, as it always did.
 	bool evict_furthest(float cx, float cy, float cz, ResidencyPlan *plan,
-			const std::vector<IVec3> &exclude);
+			const std::vector<IVec3> &exclude, const AtlasBudget *budget = nullptr,
+			int want_slots = 0);
 
 	// Distance from a point to the region's world AABB; 0 inside.
 	static float region_distance(IVec3 region, float cx, float cy, float cz);
@@ -75,6 +105,7 @@ private:
 	};
 	static Key key(IVec3 r) { return Key{r.x, r.y, r.z}; }
 	void release(IVec3 region, int slot, ResidencyPlan *plan);
+	int slot_cost(const AtlasBudget &budget, int slot) const;
 
 	ResidencyConfig cfg_;
 	std::map<Key, int> by_region_;   // region -> slot
