@@ -248,3 +248,55 @@ TEST_CASE("note_failed puts the chunk back in the queue") {
 	for (const auto &b : p2.builds) requeued = requeued || b.chunk == p.builds[0].chunk;
 	CHECK(requeued);
 }
+
+TEST_CASE("evicted in-flight builds are not re-added until the old result lands") {
+	ve::ChunkResidency res(make_cfg(1, 1));
+	FakeProbe probe;
+	probe.everything = true;
+	const float at[3] = {100.0f, 30.0f, 100.0f};
+	const float away[3] = {300.0f, 30.0f, 300.0f};
+
+	const ve::ChunkPlan p0 = res.update(at, nullptr, 1, probe);
+	REQUIRE(p0.builds.size() == 1);
+	const ve::IVec3 c = p0.builds[0].chunk;
+
+	// Move far enough that C is released while still building; its result is outstanding.
+	res.update(away, nullptr, 1, probe, 0);
+	CHECK(res.slot_of(c) == -1);
+
+	// Back in range, C must stay out of the candidate set until the old result arrives.
+	const ve::ChunkPlan p1 = res.update(at, nullptr, 1, probe);
+	CHECK(res.slot_of(c) == -1);
+	for (const auto &b : p1.builds) CHECK_FALSE(b.chunk == c);
+
+	res.note_built(c);
+	const ve::ChunkPlan p2 = res.update(at, nullptr, 1, probe);
+	bool readded = false;
+	for (const auto &b : p2.builds) readded = readded || b.chunk == c;
+	CHECK(readded);
+}
+
+TEST_CASE("stale note_empty clears in-flight without hiding the re-added chunk") {
+	ve::ChunkResidency res(make_cfg(1, 1));
+	FakeProbe probe;
+	probe.everything = true;
+	const float at[3] = {100.0f, 30.0f, 100.0f};
+	const float away[3] = {300.0f, 30.0f, 300.0f};
+
+	const ve::ChunkPlan p0 = res.update(at, nullptr, 1, probe);
+	REQUIRE(p0.builds.size() == 1);
+	const ve::IVec3 c = p0.builds[0].chunk;
+
+	res.update(away, nullptr, 1, probe, 0);
+	CHECK(res.slot_of(c) == -1);
+	res.update(at, nullptr, 1, probe);
+	CHECK(res.slot_of(c) == -1);
+
+	// The old build was empty, but it belongs to the evicted build: clear the marker without
+	// caching empty for the current field.
+	res.note_empty(c);
+	const ve::ChunkPlan p2 = res.update(at, nullptr, 1, probe);
+	bool readded = false;
+	for (const auto &b : p2.builds) readded = readded || b.chunk == c;
+	CHECK(readded);
+}

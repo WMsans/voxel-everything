@@ -38,6 +38,7 @@ int ChunkResidency::pending_count() const {
 void ChunkResidency::clear() {
 	by_chunk_.clear();
 	probe_cache_.clear();
+	in_flight_.clear();
 	std::fill(slot_used_.begin(), slot_used_.end(), 0);
 	std::fill(slot_state_.begin(), slot_state_.end(), static_cast<char>(kNeedsBuild));
 	free_slots_.clear();
@@ -45,6 +46,7 @@ void ChunkResidency::clear() {
 }
 
 void ChunkResidency::release(IVec3 chunk, int slot, ChunkPlan *plan) {
+	if (slot_state_[slot] == kBuilding) in_flight_[key(chunk)] = 1;
 	by_chunk_.erase(key(chunk));
 	slot_used_[slot] = 0;
 	slot_state_[slot] = static_cast<char>(kNeedsBuild);
@@ -65,6 +67,7 @@ void ChunkResidency::mark_dirty(IVec3 lo, IVec3 hi) {
 
 void ChunkResidency::note_built(IVec3 chunk) {
 	const int slot = slot_of(chunk);
+	in_flight_.erase(key(chunk));
 	// Only when this is still the build we asked for. An edit that landed while the mesher
 	// was running has already put the chunk back to kNeedsBuild, and the result in hand is
 	// of the pre-edit field: promoting it would leave the crater uncollidable.
@@ -73,6 +76,7 @@ void ChunkResidency::note_built(IVec3 chunk) {
 
 void ChunkResidency::note_failed(IVec3 chunk) {
 	const int slot = slot_of(chunk);
+	in_flight_.erase(key(chunk));
 	if (slot >= 0 && slot_state_[slot] == kBuilding)
 		slot_state_[slot] = static_cast<char>(kNeedsBuild);
 }
@@ -85,11 +89,13 @@ int ChunkResidency::note_empty(IVec3 chunk) {
 	if (slot >= 0 && slot_state_[slot] == kBuilding) {
 		probe_cache_[key(chunk)] = 0;
 		release(chunk, slot, nullptr);
+		in_flight_.erase(key(chunk));
 		return slot;
 	}
 	// If the slot is absent or no longer kBuilding, this result belongs to a stale build:
 	// mark_dirty already erased the cache, and a cached empty would hide a later edit.
 	if (slot >= 0) release(chunk, slot, nullptr);
+	in_flight_.erase(key(chunk));
 	return slot;
 }
 
@@ -159,6 +165,10 @@ ChunkPlan ChunkResidency::update(const float *centers, const float *radii, int c
 					if (chunk_distance(c, cx, cy, cz) > r) continue;
 					if (!seen.insert(key(c)).second) continue;
 					if (slot_of(c) >= 0) continue;
+					// A chunk evicted/displaced while its build was in flight must stay out
+					// until that result lands; otherwise a stale result can promote the new
+					// build or cache empty for a re-added chunk.
+					if (in_flight_.count(key(c))) continue;
 					candidates.push_back({nearest(c), c});
 				}
 	}

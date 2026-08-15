@@ -91,6 +91,7 @@ private:
 	std::vector<char> slot_state_;   // State
 	std::vector<int> free_slots_;
 	std::map<Key, char> probe_cache_; // 1 = may hold a surface, 0 = known empty
+	std::map<Key, char> in_flight_;   // released while kBuilding; result still outstanding
 };
 
 } // namespace ve
