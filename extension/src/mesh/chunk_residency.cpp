@@ -126,14 +126,14 @@ ChunkPlan ChunkResidency::update(const float *centers, const float *radii, int c
 		it = inside(c, cfg_.evict_margin * 1.5f) ? std::next(it) : probe_cache_.erase(it);
 	}
 
-	// 3. Collect in-bounds, in-radius, surface-bearing candidates that are not resident yet.
+	// 3. Collect every in-bounds, in-radius, non-resident chunk first, then probe them in
+	//    nearest-first order so the per-frame budget always spends itself on the closest chunks.
 	struct Cand {
 		float dist;
 		IVec3 chunk;
 	};
-	std::vector<Cand> cands;
+	std::vector<Cand> candidates;
 	std::set<Key> seen;
-	int probes = 0;
 	for (int i = 0; i < center_count; i++) {
 		const float r = radius_of(i);
 		const float cx = centers[i * 3], cy = centers[i * 3 + 1], cz = centers[i * 3 + 2];
@@ -154,19 +154,25 @@ ChunkPlan ChunkResidency::update(const float *centers, const float *radii, int c
 					if (chunk_distance(c, cx, cy, cz) > r) continue;
 					if (!seen.insert(key(c)).second) continue;
 					if (slot_of(c) >= 0) continue;
-					auto pc = probe_cache_.find(key(c));
-					if (pc == probe_cache_.end()) {
-						if (probes >= cfg_.max_probes_per_frame) continue; // next frame
-						probes++;
-						pc = probe_cache_.emplace(key(c),
-								static_cast<char>(probe.chunk_has_surface(c) ? 1 : 0)).first;
-					}
-					if (pc->second == 0) continue;
-					cands.push_back({nearest(c), c});
+					candidates.push_back({nearest(c), c});
 				}
 	}
-	std::sort(cands.begin(), cands.end(),
+	std::sort(candidates.begin(), candidates.end(),
 			[](const Cand &a, const Cand &b) { return a.dist < b.dist; });
+
+	std::vector<Cand> cands;
+	int probes = 0;
+	for (const Cand &cand : candidates) {
+		auto pc = probe_cache_.find(key(cand.chunk));
+		if (pc == probe_cache_.end()) {
+			if (probes >= cfg_.max_probes_per_frame) continue; // next frame
+			probes++;
+			pc = probe_cache_.emplace(key(cand.chunk),
+					static_cast<char>(probe.chunk_has_surface(cand.chunk) ? 1 : 0)).first;
+		}
+		if (pc->second == 0) continue;
+		cands.push_back(cand);
+	}
 
 	// 4. Make them resident, nearest first. With the pool full, a closer candidate DISPLACES
 	//    the furthest resident, so what goes missing under pressure is the far edge of the

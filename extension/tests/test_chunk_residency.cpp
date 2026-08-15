@@ -19,10 +19,12 @@ static ve::ChunkResidencyConfig make_cfg(int max_chunks, int builds = 2, int pro
 // set something the test can enumerate independently.
 struct FakeProbe : ve::ChunkProbe {
 	mutable int calls = 0;
+	mutable std::vector<ve::IVec3> history;
 	int layer = 2;
 	bool everything = false;
 	bool chunk_has_surface(ve::IVec3 c) const override {
 		calls++;
+		history.push_back(c);
 		return everything || c.y == layer;
 	}
 };
@@ -88,6 +90,18 @@ TEST_CASE("probing is budgeted per frame and cached afterwards") {
 	res.update(c, nullptr, 1, probe);
 	CHECK(probe.calls == before); // every chunk in the ball has a cached verdict
 	CHECK(res.probe_cache_size() > res.resident_count());
+}
+
+TEST_CASE("probing is nearest-first within a budgeted frame") {
+	ve::ChunkResidency res(make_cfg(256, 2, 1));
+	FakeProbe probe;
+	const float c[3] = {100.0f, 30.0f, 100.0f};
+	const ve::IVec3 nearest = ve::chunk_of_point(c[0], c[1], c[2]);
+	const ve::ChunkPlan p = res.update(c, nullptr, 1, probe);
+	REQUIRE(!probe.history.empty());
+	CHECK(probe.history.front() == nearest);
+	REQUIRE(!p.builds.empty());
+	CHECK(p.builds.front().chunk == nearest);
 }
 
 TEST_CASE("builds are throttled, nearest first, and stop once ready") {
