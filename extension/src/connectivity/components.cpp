@@ -156,6 +156,8 @@ void label_islands(const FloodResult &r, const ComponentConfig &cfg,
 	out->clear();
 	const FloodWindow &w = r.window;
 	const int n = w.cells();
+	assert(r.solid.size() == static_cast<size_t>(n));
+	assert(r.anchored.size() == static_cast<size_t>(n));
 	std::vector<uint8_t> seen(static_cast<size_t>(n), 0);
 	std::vector<int> stack;
 
@@ -203,12 +205,19 @@ void label_islands(const FloodResult &r, const ComponentConfig &cfg,
 		}
 		// The work stack is LIFO and split() stacks the low-coordinate half before the
 		// high-coordinate half, so the pieces above come out in reverse window order.
-		// Reorder them here to honour the documented output contract.
+		// Reorder them by window index so each piece's `cells.front()` is its minimum.
 		std::sort(pieces.begin(), pieces.end(), [&](const IslandComponent &a, const IslandComponent &b) {
 			return w.index(a.cells.front()) < w.index(b.cells.front());
 		});
 		for (const IslandComponent &piece : pieces) out->push_back(piece);
 	}
+
+	// The scan loop appends one source component at a time, so a later component with a
+	// smaller lowest window index than an earlier component's last split piece would break
+	// the documented global order. Sort everything by lowest window index to restore it.
+	std::sort(out->begin(), out->end(), [&](const IslandComponent &a, const IslandComponent &b) {
+		return w.index(a.cells.front()) < w.index(b.cells.front());
+	});
 }
 
 } // namespace ve

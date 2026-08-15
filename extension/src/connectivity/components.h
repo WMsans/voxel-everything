@@ -6,10 +6,9 @@ namespace ve {
 
 // A component may be no wider than the island volume that will hold it. An island volume is
 // kIslandDim (64) samples with kIslandMarginVoxels (2) of clearance at each end, so its
-// usable reach at the coarse 0.10 m pitch is (64 - 1 - 4) * 0.10 = 5.6 m -- seven 0.8 m
-// cells. Wider components are split, which is spec §5's "oversized components split along
-// weakest box seams". generator/volume_set.cpp static_asserts the relationship, so the two
-// constants cannot drift apart silently.
+// usable reach at the coarse cell pitch is 7 × 0.8 m = 5.6 m -- seven 0.8 m cells. Wider
+// components are split, which is spec §5's "oversized components split along weakest box
+// seams". Keep this in sync with the island volume dimensions used by the generator.
 inline constexpr int kMaxIslandExtentCells = 7;
 
 struct ComponentConfig {
@@ -34,8 +33,10 @@ struct IslandComponent {
 };
 
 // Six-connected labelling of every solid cell the flood left unanchored, then splitting.
-// Output order is stable: components come out ordered by their lowest window index, and a
-// split component's pieces immediately follow each other, so a test can name them.
+// Output order is stable: components come out globally ordered by their lowest window index
+// (the first cell in `cells`, which is kept in window-index order). A split component's
+// pieces appear in the order of their own lowest indices, but later components with smaller
+// lowest indices may interleave between them.
 //
 // Splitting recursively cuts the offending component with an axis-aligned plane, choosing
 // the axis by longest extent and the plane by FEWEST CROSSING FACES among the candidate

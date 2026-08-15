@@ -200,6 +200,31 @@ TEST_CASE("a split half that is internally disconnected is re-labelled into conn
 	CHECK(total == 11);
 }
 
+TEST_CASE("components are globally sorted by lowest window index after splitting") {
+	const FloodWindow w = window16();
+	// A source component at index 0: a 1x4x4 slab at x = 0, z = 0..3, plus a single cell
+	// at (0,0,4). With max_extent_cells = 4 the z extent is 5, so it must split; the
+	// weakest seam is z < 4 (one crossing face, versus four at each seam inside the slab),
+	// giving pieces whose lowest indices are 0 and 1024. A later source component at
+	// (2,0,0) has lowest index 2 and must be emitted between them.
+	std::vector<IVec3> cells;
+	for (int z = 0; z <= 3; z++)
+		for (int y = 0; y <= 3; y++) cells.push_back({0, y, z});
+	cells.push_back({0, 0, 4});
+	cells.push_back({2, 0, 0});
+	const FloodResult r = floating(w, cells);
+
+	ComponentConfig cfg;
+	cfg.max_extent_cells = 4;
+	std::vector<IslandComponent> out;
+	label_islands(r, cfg, &out);
+
+	REQUIRE(out.size() == 3);
+	CHECK(w.index(out[0].cells.front()) == 0);
+	CHECK(w.index(out[1].cells.front()) == 2);
+	CHECK(w.index(out[2].cells.front()) == 1024);
+}
+
 TEST_CASE("world AABB is the cell AABB in metres, half-open on the high side") {
 	const FloodWindow w = window16();
 	const FloodResult r = floating(w, {{2, 3, 4}});
