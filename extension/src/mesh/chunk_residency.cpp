@@ -81,10 +81,15 @@ int ChunkResidency::note_empty(IVec3 chunk) {
 	// The probe is conservative by construction, so a chunk it passed can still hold no
 	// triangles. Caching the empty verdict is what stops it being re-planned every frame for
 	// ever; mark_dirty drops the entry, so an edit brings it back.
-	probe_cache_[key(chunk)] = 0;
 	const int slot = slot_of(chunk);
-	if (slot < 0) return -1;
-	release(chunk, slot, nullptr);
+	if (slot >= 0 && slot_state_[slot] == kBuilding) {
+		probe_cache_[key(chunk)] = 0;
+		release(chunk, slot, nullptr);
+		return slot;
+	}
+	// If the slot is absent or no longer kBuilding, this result belongs to a stale build:
+	// mark_dirty already erased the cache, and a cached empty would hide a later edit.
+	if (slot >= 0) release(chunk, slot, nullptr);
 	return slot;
 }
 

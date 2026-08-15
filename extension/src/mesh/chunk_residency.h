@@ -61,7 +61,7 @@ public:
 
 	void note_built(IVec3 chunk);  // a collider now exists for this chunk
 	void note_failed(IVec3 chunk); // build failed: keep the slot, retry next frame
-	int note_empty(IVec3 chunk);   // no geometry: caches "empty", frees and RETURNS the slot
+	int note_empty(IVec3 chunk);   // no geometry: caches "empty" when the build is still current, frees and RETURNS the slot
 
 	int slot_of(IVec3 chunk) const;
 	IVec3 chunk_of_slot(int slot) const;

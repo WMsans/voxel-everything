@@ -197,6 +197,26 @@ TEST_CASE("an edit during a build survives the build landing") {
 	CHECK(replanned);
 }
 
+TEST_CASE("an edit during a build does not let note_empty hide the chunk") {
+	ve::ChunkResidency res(make_cfg(256));
+	FakeProbe probe;
+	const float c[3] = {100.0f, 30.0f, 100.0f};
+	const ve::ChunkPlan p = res.update(c, nullptr, 1, probe);
+	REQUIRE(p.builds.size() == 2);
+	const ve::IVec3 building = p.builds[0].chunk;
+
+	res.mark_dirty(building, building);   // the edit lands while the mesher is running
+	res.note_empty(building);             // the pre-edit build returns no geometry
+	CHECK(res.slot_of(building) == -1);
+
+	const int calls = probe.calls;
+	const ve::ChunkPlan p2 = res.update(c, nullptr, 1, probe, 8);
+	bool replanned = false;
+	for (const auto &b : p2.builds) replanned = replanned || b.chunk == building;
+	CHECK(replanned);
+	CHECK(probe.calls > calls);
+}
+
 TEST_CASE("note_empty frees the slot and stops the chunk coming back") {
 	ve::ChunkResidency res(make_cfg(256));
 	FakeProbe probe;
