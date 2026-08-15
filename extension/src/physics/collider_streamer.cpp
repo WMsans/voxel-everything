@@ -6,10 +6,24 @@
 #include <godot_cpp/variant/transform3d.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <algorithm>
+#include <chrono>
 
 using namespace godot;
 
 namespace {
+
+using Clock = std::chrono::steady_clock;
+float ms_since(Clock::time_point t0) {
+	return std::chrono::duration<float, std::milli>(Clock::now() - t0).count();
+}
+
+// What handing Jolt one triangle of a concave shape costs, measured on the shipping backend
+// across 1k-64k triangle soups: the relationship is linear to within a few percent, and the
+// work lands on whichever call first needs the built shape (body_set_space for a new body,
+// shape_set_data for one already in the space). Only used to decide whether the NEXT chunk
+// fits in what is left of the frame's budget, so being off by a little just moves one build
+// to the next frame.
+constexpr float kShapeBuildMsPerTriangle = 0.00075f;
 
 // The residency's view of the world field. NOTE the qualification on ve::chunk_has_surface:
 // unqualified, the name would resolve to this override and recurse for ever.
@@ -32,7 +46,7 @@ ColliderStreamer::~ColliderStreamer() {
 }
 
 void ColliderStreamer::initialize(ve::ChunkResidency *chunks, ve::EditLog *edit_log,
-		std::mutex *edit_mutex, MeshPass *mesh, int max_slots) {
+		std::mutex *edit_mutex, MeshService *mesh, int max_slots) {
 	teardown();
 	chunks_ = chunks;
 	edit_log_ = edit_log;
@@ -90,6 +104,7 @@ RID ColliderStreamer::body_of_slot(int slot) const {
 ColliderStreamer::BuildOutcome ColliderStreamer::build_shape(int slot, const MeshResult &r) {
 	PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
 	if (!ps || slot < 0 || slot >= static_cast<int>(bodies_.size())) return kFailed;
+	const Clock::time_point t_faces = Clock::now();
 	const int verts = static_cast<int>(r.positions.size() / 3);
 
 	// ConcavePolygonShape3D takes a de-indexed triangle soup; Godot's own resource sends
@@ -120,6 +135,8 @@ ColliderStreamer::BuildOutcome ColliderStreamer::build_shape(int slot, const Mes
 		fw[n++] = v[1];
 	}
 	faces.resize(n);
+	last_faces_ms_ += ms_since(t_faces);
+	last_tris_ += n / 3;
 	if (n < 3) return kEmpty;
 
 	Dictionary data;
@@ -131,8 +148,11 @@ ColliderStreamer::BuildOutcome ColliderStreamer::build_shape(int slot, const Mes
 
 	if (!shapes_[slot].is_valid()) shapes_[slot] = ps->concave_polygon_shape_create();
 	if (!shapes_[slot].is_valid()) return kFailed;
+	const Clock::time_point t_set = Clock::now();
 	ps->shape_set_data(shapes_[slot], data);
+	last_setdata_ms_ += ms_since(t_set);
 
+	const Clock::time_point t_body = Clock::now();
 	if (!bodies_[slot].is_valid()) {
 		bodies_[slot] = ps->body_create();
 		if (!bodies_[slot].is_valid()) return kFailed;
@@ -152,6 +172,7 @@ ColliderStreamer::BuildOutcome ColliderStreamer::build_shape(int slot, const Mes
 		in_space_[slot] = 1;
 		active_bodies_++;
 	}
+	last_body_ms_ += ms_since(t_body);
 	return kBuilt;
 }
 
@@ -223,26 +244,50 @@ void ColliderStreamer::apply_result(const MeshResult &r) {
 
 int ColliderStreamer::run_frame(float cx, float cy, float cz) {
 	if (!chunks_ || !mesh_ || !mesh_->is_valid()) return 0;
+	const Clock::time_point t_frame = Clock::now();
+	last_plan_ms_ = 0.0f;
+	last_apply_ms_ = 0.0f;
+	last_submit_ms_ = 0.0f;
 	int actions = 0;
 
-	// 1. Land whatever the GPU finished. The sync inside collect() is for a batch submitted
-	//    on an earlier frame, so it does not wait on the GPU.
+	// 1. Land whatever the mesher thread has finished. Nothing here waits on the GPU: the
+	//    submit/sync/readback all happen on that thread, and this only drains its outbox.
 	{
 		std::vector<MeshResult> collected;
-		if (mesh_->in_flight()) mesh_->collect(&collected);
+		mesh_->collect(&collected);
 		for (MeshResult &r : collected) inbox_.push_back(std::move(r));
 	}
 
-	// 2. Turn results into shapes, throttled: shape_set_data builds Jolt's BVH on this
-	//    thread, and a 15k-triangle chunk is a millisecond or two of it.
+	// 2. Turn results into shapes, throttled by TIME rather than by a count. Handing Jolt a
+	//    triangle soup costs ~0.75 us per triangle (measured), and a chunk's triangle count
+	//    swings by 5x with how much surface crosses it — so "two chunks" is 12 ms one frame
+	//    and 60 ms the next, and the count that is safe for the worst chunk wastes most of
+	//    the budget on the best one. The budget is checked BEFORE each build, and the first
+	//    one always runs: a chunk that cannot fit the budget alone must still make progress,
+	//    or a slow chunk would wedge the queue for ever.
+	const Clock::time_point t_apply = Clock::now();
+	last_faces_ms_ = 0.0f;
+	last_setdata_ms_ = 0.0f;
+	last_body_ms_ = 0.0f;
+	last_tris_ = 0;
 	builds_last_frame_ = 0;
 	while (!inbox_.empty() && builds_last_frame_ < max_builds_per_frame_) {
+		// Admit by ESTIMATED cost, not by elapsed time alone. Checking only what has already
+		// been spent lets a 3 ms chunk wave through a 20 ms one behind it, which is how a
+		// frame with a 4 ms budget ends up 23 ms long. The estimate is the measured
+		// per-triangle constant, and the triangle count is already in hand.
+		if (builds_last_frame_ > 0) {
+			const float est = static_cast<float>(inbox_.front().indices.size() / 3) *
+					kShapeBuildMsPerTriangle;
+			if (ms_since(t_apply) + est > build_budget_ms_) break;
+		}
 		MeshResult r = std::move(inbox_.front());
 		inbox_.pop_front();
 		apply_result(r);
 		builds_last_frame_++;
 		actions++;
 	}
+	last_apply_ms_ = ms_since(t_apply);
 
 	// 3. Plan. No new work while a batch is in flight or results are still queued — the
 	//    mesher holds one batch at a time, and a chunk planned now would only be dropped.
@@ -251,33 +296,35 @@ int ColliderStreamer::run_frame(float cx, float cy, float cz) {
 	probe.gen = &gen_;
 	probe.log = edit_log_;
 	probe.mu = edit_mutex_;
-	const int build_cap = (mesh_->in_flight() || !inbox_.empty()) ? 0 : -1;
+	const int build_cap = (mesh_->busy() || !inbox_.empty()) ? 0 : -1;
+	const Clock::time_point t_plan = Clock::now();
 	const ve::ChunkPlan plan = chunks_->update(center, nullptr, 1, probe, build_cap);
+	last_plan_ms_ = ms_since(t_plan);
 	for (const auto &e : plan.releases) {
 		release_slot(e.slot);
 		actions++;
 	}
 
 	// 4. Mesh. Each chunk lies inside exactly one region, so one op list reconstructs it.
+	//    Each request OWNS its op list: the mesher thread reads it after this function has
+	//    returned, so it may not point into anything on this stack or into the edit log.
+	const Clock::time_point t_submit = Clock::now();
 	if (!plan.builds.empty()) {
-		std::vector<std::vector<ve::EditOp>> ops;
-		ops.reserve(plan.builds.size());
+		std::vector<MeshRequest> requests;
+		requests.reserve(plan.builds.size());
 		{
 			std::lock_guard<std::mutex> lock(*edit_mutex_);
 			for (const auto &e : plan.builds)
-				ops.push_back(edit_log_->ops(ve::region_of_chunk(e.chunk)));
+				requests.push_back({e.chunk, edit_log_->ops(ve::region_of_chunk(e.chunk))});
 		}
-		std::vector<MeshJob> jobs;
-		jobs.reserve(plan.builds.size());
-		// Built only after every copy exists: a push_back that reallocated `ops` would
-		// leave an earlier job pointing at freed memory.
-		for (size_t i = 0; i < plan.builds.size(); i++)
-			jobs.push_back({plan.builds[i].chunk, ops[i].data(), static_cast<int>(ops[i].size())});
-		if (mesh_->submit(jobs.data(), static_cast<int>(jobs.size()))) {
-			actions += static_cast<int>(jobs.size());
+		const int n = static_cast<int>(requests.size());
+		if (mesh_->submit(std::move(requests))) {
+			actions += n;
 		} else {
 			for (const auto &e : plan.builds) chunks_->note_failed(e.chunk);
 		}
 	}
+	last_submit_ms_ = ms_since(t_submit);
+	last_frame_ms_ = ms_since(t_frame);
 	return actions;
 }

@@ -17,12 +17,14 @@ struct ChunkProbe {
 struct ChunkResidencyConfig {
 	WorldBounds bounds{};
 	float radius_m = 64.0f;   // spec §6: collision streams in a ~64 m radius
-	int max_chunks = 160;
+	// Eight times the old 160, because a 6.4 m chunk covers an eighth of the volume the
+	// 12.8 m one did; this is the same ball, parcelled finer.
+	int max_chunks = 1280;
 	int max_builds_per_frame = 2;
-	// One probe is 729 field evaluations and a fresh world sees ~1300 unknown chunks on its
+	// One probe is 125 field evaluations and a fresh world sees ~10 000 unknown chunks on its
 	// first frame. Budgeted, nearest first: the ground under the player resolves immediately
 	// and the edge of the ball catches up over the next few frames.
-	int max_probes_per_frame = 64;
+	int max_probes_per_frame = 256;
 	// A chunk is released only past radius_m * evict_margin. Without the gap a player standing
 	// exactly on the boundary would mesh and drop the same chunk every frame.
 	float evict_margin = 1.15f;

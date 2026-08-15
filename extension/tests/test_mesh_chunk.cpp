@@ -7,13 +7,16 @@
 
 // A chunk must lie inside exactly one region: that is the whole reason the mesher can
 // reconstruct it from a single op list (EditLog appends an op to every region it touches).
-TEST_CASE("a chunk is 16 bricks and never straddles a region border") {
-	CHECK(ve::kChunkBricks == 16);
-	CHECK(ve::kChunkSize == doctest::Approx(12.8f));
-	CHECK(ve::kChunkCells == 128);
+TEST_CASE("a chunk is 8 bricks and never straddles a region border") {
+	CHECK(ve::kChunkBricks == 8);
+	CHECK(ve::kChunkSize == doctest::Approx(6.4f));
+	CHECK(ve::kChunkCells == 64);
+	// The sampling PITCH is the collision fidelity, and it did not change when the chunk
+	// edge halved — only how much surface one Jolt shape carries.
 	CHECK(ve::kChunkCellSize == doctest::Approx(0.1f));
-	CHECK(ve::kChunkMeshCells == 129);
-	CHECK(ve::kChunkLattice == 130);
+	CHECK(ve::kChunkMeshCells == 65);
+	CHECK(ve::kChunkLattice == 66);
+	CHECK(ve::kRegionBricks % ve::kChunkBricks == 0);
 	for (int cz = -3; cz < 3; cz++)
 		for (int cy = -3; cy < 3; cy++)
 			for (int cx = -3; cx < 3; cx++) {
@@ -32,12 +35,12 @@ TEST_CASE("a chunk is 16 bricks and never straddles a region border") {
 
 TEST_CASE("chunk lookups floor on negative coordinates") {
 	CHECK(ve::chunk_of_point(0.0f, 0.0f, 0.0f) == ve::IVec3{0, 0, 0});
-	CHECK(ve::chunk_of_point(12.79f, 0.0f, 0.0f) == ve::IVec3{0, 0, 0});
-	CHECK(ve::chunk_of_point(12.81f, 0.0f, 0.0f) == ve::IVec3{1, 0, 0});
+	CHECK(ve::chunk_of_point(6.39f, 0.0f, 0.0f) == ve::IVec3{0, 0, 0});
+	CHECK(ve::chunk_of_point(6.41f, 0.0f, 0.0f) == ve::IVec3{1, 0, 0});
 	CHECK(ve::chunk_of_point(-0.01f, 0.0f, 0.0f) == ve::IVec3{-1, 0, 0});
-	CHECK(ve::chunk_of_brick({-1, 0, 15}) == ve::IVec3{-1, 0, 0});
-	CHECK(ve::chunk_of_brick({16, -16, 31}) == ve::IVec3{1, -1, 1});
-	CHECK(ve::chunk_min_brick({2, -1, 0}) == ve::IVec3{32, -16, 0});
+	CHECK(ve::chunk_of_brick({-1, 0, 7}) == ve::IVec3{-1, 0, 0});
+	CHECK(ve::chunk_of_brick({8, -8, 23}) == ve::IVec3{1, -1, 2});
+	CHECK(ve::chunk_min_brick({2, -1, 0}) == ve::IVec3{16, -8, 0});
 }
 
 TEST_CASE("chunk_distance is zero inside and grows outside") {
@@ -89,8 +92,12 @@ TEST_CASE("op_chunk_range covers every chunk whose lattice the op changes") {
 TEST_CASE("chunk_has_surface never misses a chunk that holds a zero crossing") {
 	const ve::AnalyticGenerator gen;
 	int surfaced = 0;
+	// The generator's terrain sits at ~51.2 m; sweep the chunk layers straddling it. Derived
+	// from kChunkSize so the window follows the chunk, rather than a literal layer number that
+	// silently slid off the surface when the chunk edge changed.
+	const int surf = static_cast<int>(51.2f / ve::kChunkSize);
 	for (int cz = -1; cz <= 2; cz++)
-		for (int cy = 2; cy <= 6; cy++)   // world y 25.6 .. 89.6, the surface sits at ~51.2
+		for (int cy = surf - 2; cy <= surf + 2; cy++)
 			for (int cx = -1; cx <= 2; cx++) {
 				const ve::IVec3 c{cx, cy, cz};
 				float o[3];

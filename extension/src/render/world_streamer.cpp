@@ -1,6 +1,15 @@
 #include "render/world_streamer.h"
 #include "voxel_world.h" // godot::PendingEdit
 #include <algorithm>
+#include <chrono>
+#include <cstring>
+
+namespace {
+using Clock = std::chrono::steady_clock;
+float ms_since(Clock::time_point t0) {
+	return std::chrono::duration<float, std::milli>(Clock::now() - t0).count();
+}
+} // namespace
 
 // An SDF edit that must allocate atlas slots is granted this many free slots before the
 // streamer evicts a far region to make room (spec §8 "evicts or drops"). The largest net
@@ -55,9 +64,24 @@ void WorldStreamer::initialize(ve::RegionResidency *residency, ve::EditLog *edit
 	atlas_ = atlas;
 	region_pass_ = region_pass;
 	brick_gen_ = brick_gen;
+	overflow_read_.instantiate();
+	free_read_.instantiate();
+	costs_read_.instantiate();
+	// The atlas starts with every slot free and nothing marked, so these are the true values
+	// until the first readings land — and they keep cost_by_slot non-null from frame zero,
+	// which is what tells RegionResidency the atlas is a priced pool at all.
+	cached_free_slots_ = atlas_ ? atlas_->atlas_slot_count() : 0;
+	committed_ = 0;
+	committed_at_request_ = 0;
+	committed_base_ = 0;
+	region_slot_costs_.assign(
+			static_cast<size_t>(atlas_ ? atlas_->config().max_region_slots : 0), 0);
 }
 
 int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) {
+	const Clock::time_point t_start = Clock::now();
+	last_readback_ms_ = 0.0f;
+	last_total_ms_ = 0.0f;
 	frame_edits_ = 0;
 	// The edit preview is one frame of feedback: clear it every frame, and only re-arm it
 	// below for edits that actually produced an on-screen job. Otherwise a single edit
@@ -69,13 +93,39 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 	last_edit_center_[2] = 0.0f;
 	last_edit_type_ = 0;
 	last_edit_material_ = 0;
-	if (!rd || !atlas_ || !residency_ || !edit_log_ || !region_pass_ || !brick_gen_) return 0;
+	if (!rd || !atlas_ || !residency_ || !edit_log_ || !region_pass_ || !brick_gen_) {
+		last_total_ms_ = ms_since(t_start);
+		return 0;
+	}
 
-	// Both counters are read once, here, and reused for the rest of the frame: nothing this
-	// function records executes before the caller submits, so a second read would return the
-	// same bytes at the price of another readback stall.
-	const uint32_t overflow = atlas_->read_overflow(rd);
-	const int free_slots = atlas_->read_free_count(rd);
+	// The counters are read ASYNCHRONOUSLY: consume whatever a previous frame's request has
+	// delivered, then post the next one. The synchronous form blocks the GPU until the copy
+	// completes (the engine's own note on buffer_get_data), which made every frame wait for
+	// the generation work the last one queued — 39.6 ms on the worst frame measured.
+	//
+	// The price is that these values are a few frames old, so each is used in the direction
+	// that stays safe when it is stale: see the free-slot correction below, and note that the
+	// overflow word is only ever CLEARED on a frame whose read actually went out, so no bit
+	// can be dropped between a skipped request and the next clear.
+	const Clock::time_point t_rb0 = Clock::now();
+	uint32_t overflow = 0;
+	if (overflow_read_->take_fresh())
+		overflow = static_cast<uint32_t>(overflow_read_->as_i32());
+	if (free_read_->take_fresh()) {
+		cached_free_slots_ = free_read_->as_i32();
+		committed_base_ = committed_at_request_;
+	}
+	if (costs_read_->take_fresh()) {
+		const PackedByteArray &b = costs_read_->data();
+		const int64_t n = std::min<int64_t>(b.size() / 4, atlas_->config().max_region_slots);
+		region_slot_costs_.assign(
+				static_cast<size_t>(atlas_->config().max_region_slots), 0);
+		if (n > 0) memcpy(region_slot_costs_.data(), b.ptr(), static_cast<size_t>(n) * 4);
+	}
+	// What the atlas had, less what has been committed to loads since that reading was taken.
+	const int free_slots = static_cast<int>(
+			std::max<int64_t>(0, cached_free_slots_ - (committed_ - committed_base_)));
+	last_readback_ms_ += ms_since(t_rb0);
 	overflow_seen_ |= overflow;
 
 	// Overflow recovery, fast path (brick_mark.comp.glsl contract): the job list overflowed
@@ -99,9 +149,18 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 	// couple of regions per frame, and once the shortage passes, the last one queued runs to
 	// completion over the resident set.
 	if ((overflow & 3u) != 0) residency_->resident_regions(&repair_queue_);
-	// The word is sticky (GpuAtlas::reset_frame_counters); clear it now that both arms have
-	// been read, so the next frame reports what the next frame's marks actually hit.
-	if (overflow != 0u) atlas_->clear_overflow(rd);
+	// The word is sticky (GpuAtlas::reset_frame_counters). Post the next read FIRST and clear
+	// only if it went out: the copy is recorded ahead of the clear in the same command stream,
+	// so the bytes in flight are exactly the bits set since the previous clear and none are
+	// lost. On a frame where a request is still outstanding, nothing is cleared and the bits
+	// simply keep accumulating for the next one — a dropped brick nobody hears about is a
+	// hole in the world that never heals, so this arm must never lose a bit.
+	const Clock::time_point t_rb1 = Clock::now();
+	if (overflow_read_->request(rd, atlas_->frame_counters(), 4, 4)) atlas_->clear_overflow(rd);
+	if (free_read_->request(rd, atlas_->counters(), 0, 4)) committed_at_request_ = committed_;
+	costs_read_->request(rd, atlas_->region_slot_counts(), 0,
+			static_cast<uint32_t>(atlas_->config().max_region_slots) * 4);
+	last_readback_ms_ += ms_since(t_rb1);
 
 	// Drain the edit queue. The lock is held for a swap, never across GPU work.
 	std::vector<PendingEdit> edits;
@@ -123,7 +182,6 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 	// the displacement funded nothing. The free list slid to zero and stayed there, and every
 	// region streamed in after that had its bricks dropped — sky through freshly loaded
 	// ground until the repair sweep caught up.
-	atlas_->read_region_slot_counts(rd, &region_slot_costs_);
 	int max_region_cost = 0;
 	for (int c : region_slot_costs_) max_region_cost = std::max(max_region_cost, c);
 	ve::AtlasBudget budget;
@@ -138,6 +196,10 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 			residency_->config().max_loads_per_frame * budget.per_load);
 	budget.available = free_slots - reserve;
 	ve::ResidencyPlan plan = residency_->update(cx, cy, cz, budget);
+	// Charge this frame's loads against the free count until a fresh reading catches up with
+	// them. Evictions are deliberately NOT credited back here: under-counting what is free
+	// only shortens the horizon for a frame or two, while over-counting empties the free list.
+	committed_ += static_cast<int64_t>(plan.loads.size()) * budget.per_load;
 	frame_edits_ = static_cast<int>(edits.size());
 
 	// Shrink. The reserve only stops the resident set GROWING; a set that is already over
@@ -352,5 +414,6 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 			if (r == j.region) { dup = true; break; }
 		if (!dup) pending_regen_.push_back(j.region);
 	}
+	last_total_ms_ = ms_since(t_start);
 	return static_cast<int>(plan.loads.size() + plan.evicts.size() + edit_jobs.size());
 }

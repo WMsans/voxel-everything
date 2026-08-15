@@ -8,6 +8,7 @@
 #include "render/world_streamer.h"
 #include "render/shader_loader.h"
 #include "render/mesh_pass.h"
+#include "render/mesh_service.h"
 #include "physics/collider_streamer.h"
 #include "mesh/dual_contour.h"
 #include "mesh/mesh_chunk.h"
@@ -20,6 +21,8 @@
 #include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/core/memory.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
+#include <chrono>
+#include <thread>
 #include <cmath>
 #include <cstring>
 #include <algorithm>
@@ -63,6 +66,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_mesh_collect"), &VoxelWorld::debug_mesh_collect);
 	ClassDB::bind_method(D_METHOD("debug_physics_frame", "center"), &VoxelWorld::debug_physics_frame);
 	ClassDB::bind_method(D_METHOD("debug_physics_stats"), &VoxelWorld::debug_physics_stats);
+	ClassDB::bind_method(D_METHOD("debug_perf_stats"), &VoxelWorld::debug_perf_stats);
 	ClassDB::bind_method(D_METHOD("debug_body_of_chunk", "chunk"), &VoxelWorld::debug_body_of_chunk);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
@@ -230,19 +234,14 @@ ve::WorldBounds VoxelWorld::world_bounds() const {
 
 void VoxelWorld::ensure_physics_initialized() {
 	if (physics_ready_) return;
-	if (!mesh_rd_) mesh_rd_ = RenderingServer::get_singleton()->create_local_rendering_device();
-	if (!mesh_rd_) {
-		UtilityFunctions::printerr("VoxelWorld: no local RenderingDevice for the mesher");
-		return;
-	}
 	// The CPU cores are shared with the streaming path and outlive both (voxel_world.h).
 	if (!edit_log_) edit_log_ = new ve::EditLog(world_bounds());
-	mesh_pass_ = new MeshPass();
+	mesh_ = new MeshService();
 	MeshPassConfig mcfg;
 	mcfg.max_jobs = mesh_jobs_per_frame_;
-	if (!mesh_pass_->initialize(mesh_rd_, mcfg)) {
-		delete mesh_pass_;
-		mesh_pass_ = nullptr;
+	if (!mesh_->start(mcfg)) {
+		delete mesh_;
+		mesh_ = nullptr;
 		return;
 	}
 	ve::ChunkResidencyConfig ccfg;
@@ -252,18 +251,19 @@ void VoxelWorld::ensure_physics_initialized() {
 	ccfg.max_builds_per_frame = mesh_jobs_per_frame_;
 	chunks_ = new ve::ChunkResidency(ccfg);
 	colliders_ = new ColliderStreamer();
-	colliders_->initialize(chunks_, edit_log_, &edit_mutex_, mesh_pass_, max_collider_chunks_);
+	colliders_->initialize(chunks_, edit_log_, &edit_mutex_, mesh_, max_collider_chunks_);
 	colliders_->set_shape_builds_per_frame(shape_builds_per_frame_);
 	physics_ready_ = true;
 }
 
 void VoxelWorld::teardown_physics() {
 	physics_ready_ = false;
-	// Colliders first: they hold the mesher's results and the residency's slots.
+	// Colliders first: they hold the mesher's results and the residency's slots. Deleting the
+	// service joins its thread, which frees the device and the pass on the thread that made
+	// them; nothing else may outlive that.
 	if (colliders_) { delete colliders_; colliders_ = nullptr; }
-	if (mesh_pass_) { delete mesh_pass_; mesh_pass_ = nullptr; }
+	if (mesh_) { delete mesh_; mesh_ = nullptr; }
 	if (chunks_) { delete chunks_; chunks_ = nullptr; }
-	if (mesh_rd_) { memdelete(mesh_rd_); mesh_rd_ = nullptr; }
 	{
 		std::lock_guard<std::mutex> lock(edit_mutex_);
 		pending_dirty_.clear();
@@ -272,6 +272,7 @@ void VoxelWorld::teardown_physics() {
 
 int VoxelWorld::physics_tick(Vector3 center) {
 	if (!physics_ready_ || !colliders_ || !chunks_) return 0;
+	const auto t0 = std::chrono::steady_clock::now();
 	// Drain the dirty ranges the edit path queued. They are COLLECTED under edit_mutex_ and
 	// APPLIED here, on the main thread, so ChunkResidency needs no lock of its own — and the
 	// probe inside update(), which takes edit_mutex_, can never deadlock against an edit.
@@ -283,7 +284,26 @@ int VoxelWorld::physics_tick(Vector3 center) {
 	for (const auto &r : dirty) chunks_->mark_dirty(r.first, r.second);
 	const Ref<World3D> w = get_world_3d();
 	if (w.is_valid()) colliders_->set_space(w->get_space());
-	return colliders_->run_frame(center.x, center.y, center.z);
+	const int actions = colliders_->run_frame(center.x, center.y, center.z);
+	last_physics_tick_ms_ =
+			std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+	return actions;
+}
+
+Dictionary VoxelWorld::debug_perf_stats() {
+	Dictionary d;
+	d["physics_tick_ms"] = last_physics_tick_ms_;
+	d["phys_collect_ms"] = colliders_ ? colliders_->last_collect_ms() : 0.0f;
+	d["phys_apply_ms"] = colliders_ ? colliders_->last_apply_ms() : 0.0f;
+	d["phys_faces_ms"] = colliders_ ? colliders_->last_faces_ms() : 0.0f;
+	d["phys_setdata_ms"] = colliders_ ? colliders_->last_setdata_ms() : 0.0f;
+	d["phys_body_ms"] = colliders_ ? colliders_->last_body_ms() : 0.0f;
+	d["phys_tris"] = colliders_ ? colliders_->last_tris() : 0;
+	d["phys_plan_ms"] = colliders_ ? colliders_->last_plan_ms() : 0.0f;
+	d["phys_submit_ms"] = colliders_ ? colliders_->last_submit_ms() : 0.0f;
+	d["stream_total_ms"] = streamer_ ? streamer_->last_total_ms() : 0.0f;
+	d["stream_readback_ms"] = streamer_ ? streamer_->last_readback_ms() : 0.0f;
+	return d;
 }
 
 int VoxelWorld::debug_physics_frame(Vector3 center) {
@@ -322,7 +342,7 @@ void VoxelWorld::debug_teardown_physics() {
 Dictionary VoxelWorld::debug_mesh_lattice_diff(Vector3i chunk) {
 	Dictionary d;
 	ensure_physics_initialized();
-	if (!physics_ready_ || !mesh_pass_) return d;
+	if (!physics_ready_ || !mesh_) return d;
 	const ve::IVec3 c{chunk.x, chunk.y, chunk.z};
 	std::vector<ve::EditOp> ops;
 	{
@@ -331,7 +351,9 @@ Dictionary VoxelWorld::debug_mesh_lattice_diff(Vector3i chunk) {
 	}
 	MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
 	std::vector<uint8_t> gpu;
-	if (!mesh_pass_->run_field_sync(job, &gpu)) return d;
+	bool ok = false;
+	mesh_->run_sync([&](MeshPass &pass) { ok = pass.run_field_sync(job, &gpu); });
+	if (!ok) return d;
 
 	ve::AnalyticGenerator gen;
 	const ve::DcGrid g = ve::chunk_dc_grid(c);
@@ -363,7 +385,7 @@ Dictionary VoxelWorld::debug_mesh_lattice_diff(Vector3i chunk) {
 Dictionary VoxelWorld::debug_mesh_diff(Vector3i chunk) {
 	Dictionary d;
 	ensure_physics_initialized();
-	if (!physics_ready_ || !mesh_pass_) return d;
+	if (!physics_ready_ || !mesh_) return d;
 	const ve::IVec3 c{chunk.x, chunk.y, chunk.z};
 	std::vector<ve::EditOp> ops;
 	{
@@ -374,7 +396,11 @@ Dictionary VoxelWorld::debug_mesh_diff(Vector3i chunk) {
 	MeshResult gpu;
 	std::vector<uint8_t> lattice;
 	std::vector<int32_t> gpu_cells;
-	if (!mesh_pass_->mesh_sync(job, &gpu, &lattice, &gpu_cells)) return d;
+	bool ok = false;
+	mesh_->run_sync([&](MeshPass &pass) {
+		ok = pass.mesh_sync(job, &gpu, &lattice, &gpu_cells);
+	});
+	if (!ok) return d;
 	if (gpu.failed) return d; // short readback: do not present partial data as a diff
 
 	const ve::DcGrid g = ve::chunk_dc_grid(c);
@@ -511,30 +537,34 @@ Dictionary VoxelWorld::debug_mesh_diff(Vector3i chunk) {
 
 bool VoxelWorld::debug_mesh_submit(Array chunks) {
 	ensure_physics_initialized();
-	if (!physics_ready_ || !mesh_pass_) return false;
+	if (!physics_ready_ || !mesh_) return false;
 	std::vector<ve::IVec3> coords;
-	std::vector<std::vector<ve::EditOp>> ops;
 	for (int i = 0; i < chunks.size(); i++) {
 		const Vector3i v = chunks[i];
 		coords.push_back({v.x, v.y, v.z});
 	}
-	ops.reserve(coords.size());
+	std::vector<MeshRequest> requests;
+	requests.reserve(coords.size());
 	{
 		std::lock_guard<std::mutex> lock(edit_mutex_);
-		for (const ve::IVec3 &c : coords) ops.push_back(edit_log_->ops(ve::region_of_chunk(c)));
+		for (const ve::IVec3 &c : coords)
+			requests.push_back({c, edit_log_->ops(ve::region_of_chunk(c))});
 	}
-	std::vector<MeshJob> jobs;
-	jobs.reserve(coords.size());
-	for (size_t i = 0; i < coords.size(); i++)
-		jobs.push_back({coords[i], ops[i].data(), static_cast<int>(ops[i].size())});
-	return mesh_pass_->submit(jobs.data(), static_cast<int>(jobs.size()));
+	return mesh_->submit(std::move(requests));
 }
 
 Array VoxelWorld::debug_mesh_collect() {
 	Array out;
-	if (!physics_ready_ || !mesh_pass_) return out;
+	if (!physics_ready_ || !mesh_) return out;
+	// The mesher runs asynchronously now, so a test that submits and immediately collects
+	// would race it. Wait for the batch to land — this is a diagnostic hook, and its old
+	// contract was "collect returns the batch you submitted".
 	std::vector<MeshResult> results;
-	mesh_pass_->collect(&results);
+	while (mesh_->busy() && mesh_->is_valid()) {
+		if (mesh_->collect(&results) > 0) break;
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	mesh_->collect(&results);
 	for (const MeshResult &r : results) {
 		Dictionary d;
 		d["chunk"] = Vector3i(r.chunk.x, r.chunk.y, r.chunk.z);

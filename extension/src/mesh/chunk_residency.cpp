@@ -149,9 +149,13 @@ ChunkPlan ChunkResidency::update(const float *centers, const float *radii, int c
 	struct Cand {
 		float dist;
 		IVec3 chunk;
+		bool probed; // a cached "may hold a surface"; false means "not probed yet"
 	};
 	std::vector<Cand> candidates;
+	// Only needed to dedupe chunks shared by two centres' balls. With a single centre there
+	// is nothing to dedupe, and the set would cost a red-black insert per cell of the scan.
 	std::set<Key> seen;
+	const bool dedupe = center_count > 1;
 	for (int i = 0; i < center_count; i++) {
 		const float r = radius_of(i);
 		const float cx = centers[i * 3], cy = centers[i * 3 + 1], cz = centers[i * 3 + 2];
@@ -170,13 +174,19 @@ ChunkPlan ChunkResidency::update(const float *centers, const float *radii, int c
 					// chunk is either wholly inside or wholly outside: one corner decides.
 					if (!cfg_.bounds.contains_brick(chunk_min_brick(c))) continue;
 					if (chunk_distance(c, cx, cy, cz) > r) continue;
-					if (!seen.insert(key(c)).second) continue;
+					if (dedupe && !seen.insert(key(c)).second) continue;
 					if (slot_of(c) >= 0) continue;
 					// A chunk evicted/displaced while its build was in flight must stay out
 					// until that result lands; otherwise a stale result can promote the new
 					// build or cache empty for a re-added chunk.
 					if (in_flight_.count(key(c))) continue;
-					candidates.push_back({nearest(c), c});
+					// Drop chunks already KNOWN to be empty here, before the sort, rather
+					// than after it. Most of the ball is solid rock or open sky, so they are
+					// the large majority of the scan, and they were being re-collected and
+					// re-sorted every frame only to be discarded at the probe step below.
+					const auto pc = probe_cache_.find(key(c));
+					if (pc != probe_cache_.end() && pc->second == 0) continue;
+					candidates.push_back({nearest(c), c, pc != probe_cache_.end()});
 				}
 	}
 	std::sort(candidates.begin(), candidates.end(),
@@ -185,14 +195,13 @@ ChunkPlan ChunkResidency::update(const float *centers, const float *radii, int c
 	std::vector<Cand> cands;
 	int probes = 0;
 	for (const Cand &cand : candidates) {
-		auto pc = probe_cache_.find(key(cand.chunk));
-		if (pc == probe_cache_.end()) {
+		if (!cand.probed) {
 			if (probes >= cfg_.max_probes_per_frame) continue; // next frame
 			probes++;
-			pc = probe_cache_.emplace(key(cand.chunk),
-					static_cast<char>(probe.chunk_has_surface(cand.chunk) ? 1 : 0)).first;
+			const bool surface = probe.chunk_has_surface(cand.chunk);
+			probe_cache_[key(cand.chunk)] = static_cast<char>(surface ? 1 : 0);
+			if (!surface) continue;
 		}
-		if (pc->second == 0) continue;
 		cands.push_back(cand);
 	}
 

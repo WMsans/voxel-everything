@@ -26,7 +26,7 @@ class BrickGenPass;
 class RaymarchPass;
 class CompositePass;
 class WorldStreamer;
-class MeshPass;
+class MeshService;
 class ColliderStreamer;
 
 // One edit drained by the streamer: the op plus the regions its append touched/rejected.
@@ -50,7 +50,7 @@ class VoxelWorld : public Node3D {
 	bool physics_enabled_ = true;
 	NodePath physics_center_path_;
 	float physics_radius_m_ = 64.0f;
-	int max_collider_chunks_ = 160;
+	int max_collider_chunks_ = 1280;
 	int mesh_jobs_per_frame_ = 2;
 	int shape_builds_per_frame_ = 2;
 
@@ -68,12 +68,14 @@ class VoxelWorld : public Node3D {
 	std::vector<PendingEdit> pending_edits_;  // appended by tools, drained by the streamer
 	int overflow_seen_ = 0;                   // sticky OR of frame overflow bits (tests)
 
-	RenderingDevice *mesh_rd_ = nullptr; // owned; ALWAYS local (submit/sync are illegal on main)
-	MeshPass *mesh_pass_ = nullptr;
+	// The mesher runs on its own thread and owns its local RenderingDevice there; see
+	// MeshService. Nothing on the main thread touches that device.
+	MeshService *mesh_ = nullptr;
 	ve::ChunkResidency *chunks_ = nullptr;
 	ColliderStreamer *colliders_ = nullptr;
 	bool physics_ready_ = false;
 	std::vector<std::pair<ve::IVec3, ve::IVec3>> pending_dirty_; // guarded by edit_mutex_
+	float last_physics_tick_ms_ = 0.0f; // diagnostic; see debug_perf_stats
 
 	RenderingDevice *main_rd_ = nullptr;
 	RenderingDevice *local_rd_ = nullptr; // owned when use_local_device_
@@ -181,6 +183,9 @@ public:
 	Dictionary debug_mesh_lattice_diff(Vector3i chunk);
 	int debug_physics_frame(Vector3 center);
 	Dictionary debug_physics_stats();
+	// Per-phase frame timings for the two streaming paths. Diagnostic only: the HUD and the
+	// benchmark read it to say WHERE a frame went, rather than that it was slow.
+	Dictionary debug_perf_stats();
 	RID debug_body_of_chunk(Vector3i chunk);
 
 	// --- Task 5 hook ---

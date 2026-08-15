@@ -5,16 +5,26 @@
 
 namespace ve {
 
-// A collision chunk is 16 bricks (12.8 m) sampled at 0.1 m — half of L0's 5 cm, because
+// A collision chunk is 8 bricks (6.4 m) sampled at 0.1 m — half of L0's 5 cm, because
 // "5cm collision is wasted on Jolt; half-res keeps walking smooth and halves triangles"
-// (spec §6). 16 divides the region's 32, so a chunk lies inside exactly ONE region: the ops
+// (spec §6). 8 divides the region's 32, so a chunk lies inside exactly ONE region: the ops
 // that can change any of its samples are exactly that region's op list, since EditLog
 // appends an op to every region it touches. That is what lets a chunk be meshed with no
 // neighbour walk, on the CPU or the GPU.
-inline constexpr int kChunkBricks = 16;
-inline constexpr float kChunkSize = kChunkBricks * kBrickSize;  // 12.8 m
+//
+// The chunk was 16 bricks (12.8 m) until the collision streamer was profiled. Handing Jolt a
+// triangle soup costs ~0.75 us per triangle, and a chunk's triangle count follows its SURFACE
+// AREA, so a 12.8 m chunk is ~32k triangles and ~25 ms of main-thread shape build — one
+// chunk, on its own, over the whole 16.6 ms frame budget and impossible to split. Halving the
+// edge quarters the area and so the cost (~8k triangles, ~6 ms), which is what makes a single
+// chunk fit in a frame at all. It does NOT change the sampling pitch, so collision fidelity
+// is exactly what it was; it only changes how the same surface is parcelled up.
+inline constexpr int kChunkBricks = 8;
+inline constexpr float kChunkSize = kChunkBricks * kBrickSize;  // 6.4 m
 inline constexpr float kChunkCellSize = 2.0f * kVoxelSize;      // 0.1 m
-inline constexpr int kChunkCells = 128;                         // kChunkSize / kChunkCellSize
+// Derived, never written twice: the lattice sizes below and shaders/mesh_common.glslh all
+// hang off it, and a hand-maintained copy that drifted would corrupt every mesh silently.
+inline constexpr int kChunkCells = static_cast<int>(kChunkSize / kChunkCellSize + 0.5f); // 64
 
 // The mesher works one cell BELOW the chunk's own origin on every axis, so that the quads on
 // its minimum faces — whose four cells straddle the border — can be built from vertices this
@@ -25,8 +35,12 @@ inline constexpr int kChunkLattice = kChunkCells + 2;           // 130
 inline constexpr int kChunkLatticeCount = kChunkLattice * kChunkLattice * kChunkLattice;
 inline constexpr int kChunkCellCount = kChunkMeshCells * kChunkMeshCells * kChunkMeshCells;
 
-// The activation probe samples (kChunkProbeSteps + 1)^3 points over the chunk.
-inline constexpr int kChunkProbeSteps = 8;                      // 9^3 = 729 samples
+// The activation probe samples (kChunkProbeSteps + 1)^3 points over the chunk. Four steps
+// over a 6.4 m chunk is a 1.6 m pitch — the same sampling density the 12.8 m chunk used with
+// eight, so the derived pad below (and with it the false-positive rate) is unchanged while a
+// probe costs 125 evaluations instead of 729. That matters because halving the chunk edge put
+// eight times as many chunks in the ball to probe.
+inline constexpr int kChunkProbeSteps = 4;                      // 5^3 = 125 samples
 
 IVec3 chunk_of_brick(IVec3 brick);
 IVec3 chunk_of_point(float x, float y, float z);

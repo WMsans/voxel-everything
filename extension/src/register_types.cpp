@@ -5,11 +5,14 @@
 #include "voxel_world.h"
 #include "voxel_edit_tool.h"
 #include "raymarch_compositor.h"
+#include "render/async_readback.h"
 
 using namespace godot;
 
 void voxel_everything_initialize(ModuleInitializationLevel p_level) {
 	if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) return;
+	// Internal: it exists only so callable_mp can name its handler for the async readbacks.
+	GDREGISTER_INTERNAL_CLASS(AsyncBufferRead);
 	GDREGISTER_CLASS(VoxelWorld);
 	GDREGISTER_CLASS(RaymarchCompositor);
 	GDREGISTER_CLASS(VoxelEditTool);

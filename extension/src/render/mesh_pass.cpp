@@ -15,6 +15,15 @@
 
 using namespace godot;
 
+// shaders/mesh_common.glslh hard-codes these same numbers (GLSL cannot include the header),
+// and a mismatch would not fail anywhere — it would silently mesh the wrong volume. Pin them
+// here so changing the chunk size breaks the BUILD, with the file that must follow named.
+static_assert(ve::kChunkCells == 64, "update CHUNK_CELLS in shaders/mesh_common.glslh");
+static_assert(ve::kChunkMeshCells == 65, "update CHUNK_MESH_CELLS in shaders/mesh_common.glslh");
+static_assert(ve::kChunkLattice == 66, "update CHUNK_LATTICE in shaders/mesh_common.glslh");
+static_assert(ve::kChunkSize == 6.4f, "update CHUNK_SIZE in shaders/mesh_common.glslh");
+static_assert(ve::kChunkCellSize == 0.1f, "update CHUNK_CELL_SIZE in shaders/mesh_common.glslh");
+
 namespace {
 
 Ref<RDUniform> storage(int binding, RID rid) {

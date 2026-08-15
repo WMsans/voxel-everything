@@ -6,7 +6,7 @@
 #include <vector>
 #include "generator/generator.h"
 #include "mesh/chunk_residency.h"
-#include "render/mesh_pass.h"
+#include "render/mesh_service.h"
 #include "world/edit_log.h"
 
 namespace godot {
@@ -28,10 +28,13 @@ public:
 	~ColliderStreamer();
 
 	void initialize(ve::ChunkResidency *chunks, ve::EditLog *edit_log, std::mutex *edit_mutex,
-			MeshPass *mesh, int max_slots);
+			MeshService *mesh, int max_slots);
 	void teardown();
 	void set_space(RID space);
 	void set_shape_builds_per_frame(int v) { max_builds_per_frame_ = v; }
+	// Wall-clock ceiling for step 2 of run_frame. The first build of a frame always runs, so
+	// this bounds the queue drain rate, not one chunk's cost.
+	void set_shape_build_budget_ms(float v) { build_budget_ms_ = v; }
 
 	// One frame of collider maintenance around the given centre: land finished meshes, plan,
 	// release what left the ball, submit the next batch. Returns the number of actions taken,
@@ -45,6 +48,15 @@ public:
 	float last_build_ms() const { return last_build_ms_; }
 	float last_collect_ms() const;
 	RID body_of_slot(int slot) const;
+	// --- profiling (diagnostic only; see VoxelWorld::debug_perf_stats) ---
+	float last_faces_ms() const { return last_faces_ms_; }
+	float last_setdata_ms() const { return last_setdata_ms_; }
+	float last_body_ms() const { return last_body_ms_; }
+	int last_tris() const { return last_tris_; }
+	float last_plan_ms() const { return last_plan_ms_; }
+	float last_apply_ms() const { return last_apply_ms_; }
+	float last_submit_ms() const { return last_submit_ms_; }
+	float last_frame_ms() const { return last_frame_ms_; }
 
 private:
 	enum BuildOutcome { kBuilt, kEmpty, kFailed };
@@ -56,7 +68,7 @@ private:
 	ve::ChunkResidency *chunks_ = nullptr;
 	ve::EditLog *edit_log_ = nullptr;
 	std::mutex *edit_mutex_ = nullptr;
-	MeshPass *mesh_ = nullptr;
+	MeshService *mesh_ = nullptr;
 	// Spec §9 defers a configurable generator; when G becomes one, this moves to VoxelWorld
 	// and is handed in, exactly like the edit log.
 	ve::AnalyticGenerator gen_;
@@ -67,11 +79,20 @@ private:
 	std::vector<char> in_space_;
 	std::deque<MeshResult> inbox_; // collected, not yet turned into shapes
 	int max_builds_per_frame_ = 2;
+	float build_budget_ms_ = 4.0f;
 	int active_bodies_ = 0;
 	int builds_last_frame_ = 0;
 	int failures_ = 0;
 	int overflow_warnings_ = 0;
 	float last_build_ms_ = 0.0f;
+	float last_faces_ms_ = 0.0f;
+	float last_setdata_ms_ = 0.0f;
+	float last_body_ms_ = 0.0f;
+	int last_tris_ = 0;
+	float last_plan_ms_ = 0.0f;
+	float last_apply_ms_ = 0.0f;
+	float last_submit_ms_ = 0.0f;
+	float last_frame_ms_ = 0.0f;
 };
 
 } // namespace godot

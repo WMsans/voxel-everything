@@ -3,6 +3,7 @@
 #include <mutex>
 #include <vector>
 #include "generator/generator.h"
+#include "render/async_readback.h"
 #include "render/gpu_atlas.h"
 #include "render/brick_gen_pass.h"
 #include "render/region_pass.h"
@@ -27,6 +28,9 @@ public:
 	int run_frame(RenderingDevice *rd, float cx, float cy, float cz);
 
 	int last_frame_edits() const { return frame_edits_; }
+	// --- profiling (diagnostic only; see VoxelWorld::debug_perf_stats) ---
+	float last_readback_ms() const { return last_readback_ms_; }
+	float last_total_ms() const { return last_total_ms_; }
 	// Sticky OR of every overflow word this streamer has read. The frame word is cleared as
 	// soon as it is acted on, so this is the only place a player-facing HUD can learn that
 	// the atlas ever came up short — VoxelWorld's own counter only ticks on the debug
@@ -65,6 +69,22 @@ private:
 	float last_edit_radius_ = 0.0f;
 	int last_edit_type_ = 0;
 	int last_edit_material_ = 0;
+	float last_readback_ms_ = 0.0f;
+	float last_total_ms_ = 0.0f;
+
+	// --- asynchronous counter readback (see AsyncBufferRead) ---
+	Ref<AsyncBufferRead> overflow_read_;
+	Ref<AsyncBufferRead> free_read_;
+	Ref<AsyncBufferRead> costs_read_;
+	// The free count a request returned, and the running total of slots this streamer has
+	// COMMITTED to loads. Because the returned count is a few frames stale, the slots spent
+	// since that request went out are not in it; subtracting them is what keeps the estimate
+	// pessimistic rather than optimistic. Optimistic is the direction that empties the free
+	// list and makes brick_mark drop bricks out of freshly streamed ground.
+	int cached_free_slots_ = 0;
+	int64_t committed_ = 0;            // monotonic; only differences are ever used
+	int64_t committed_at_request_ = 0; // committed_ when the outstanding request went out
+	int64_t committed_base_ = 0;       // committed_ as of the reading now cached
 };
 
 } // namespace godot

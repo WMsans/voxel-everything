@@ -3,8 +3,19 @@
 #include <algorithm>
 #include <vector>
 
-// World: 8 x 4 x 8 regions from brick origin (0, -64, 0) => 204.8 x 102.4 x 204.8 m, so
-// chunks run x,z in [0, 16) and y in [-4, 4).
+// World: 8 x 4 x 8 regions from brick origin (0, -64, 0) => 204.8 x 102.4 x 204.8 m. How many
+// CHUNKS that is depends on ve::kChunkSize, so it is derived here rather than written down:
+// the fixture must follow the chunk size, not pin it (test_mesh_chunk.cpp does the pinning).
+static const int kChunkSpan = static_cast<int>(204.8f / ve::kChunkSize);
+// Every test below centres on this point; the "surface" layer is the chunk layer it falls in.
+static const ve::IVec3 kCentre = ve::chunk_of_point(100.0f, 30.0f, 100.0f);
+// A pool big enough that it is never the binding constraint, so a test that means to probe
+// residency logic is not silently testing the pool cap instead. The flat FakeProbe accepts one
+// layer, so the ball's eligible set is a disc of radius_m; the few tests that DO mean to test
+// the cap pass their own small number.
+static const int kAmplePool =
+		4 * static_cast<int>(3.15f * (64.0f / ve::kChunkSize + 1) * (64.0f / ve::kChunkSize + 1));
+
 static ve::ChunkResidencyConfig make_cfg(int max_chunks, int builds = 2, int probes = 4096) {
 	ve::ChunkResidencyConfig cfg;
 	cfg.bounds = ve::WorldBounds{{0, -64, 0}, {8, 4, 8}};
@@ -20,7 +31,7 @@ static ve::ChunkResidencyConfig make_cfg(int max_chunks, int builds = 2, int pro
 struct FakeProbe : ve::ChunkProbe {
 	mutable int calls = 0;
 	mutable std::vector<ve::IVec3> history;
-	int layer = 2;
+	int layer = kCentre.y;
 	bool everything = false;
 	bool chunk_has_surface(ve::IVec3 c) const override {
 		calls++;
@@ -40,7 +51,7 @@ static void settle(ve::ChunkResidency &r, const ve::ChunkProbe &probe, float x, 
 }
 
 TEST_CASE("the settled set is exactly the in-radius chunks the probe accepted") {
-	const auto cfg = make_cfg(256);
+	const auto cfg = make_cfg(kAmplePool);
 	ve::ChunkResidency res(cfg);
 	FakeProbe probe;
 	settle(res, probe, 100.0f, 30.0f, 100.0f);
@@ -60,8 +71,8 @@ TEST_CASE("the settled set is exactly the in-radius chunks the probe accepted") 
 	std::sort(slots.begin(), slots.end());
 	CHECK(std::adjacent_find(slots.begin(), slots.end()) == slots.end());
 	// ...and nothing eligible was left out.
-	for (int x = 0; x < 16; x++)
-		for (int z = 0; z < 16; z++) {
+	for (int x = 0; x < kChunkSpan; x++)
+		for (int z = 0; z < kChunkSpan; z++) {
 			const ve::IVec3 c{x, probe.layer, z};
 			if (ve::chunk_distance(c, 100.0f, 30.0f, 100.0f) > cfg.radius_m) continue;
 			CHECK(res.slot_of(c) >= 0);
@@ -69,7 +80,7 @@ TEST_CASE("the settled set is exactly the in-radius chunks the probe accepted") 
 }
 
 TEST_CASE("probing is budgeted per frame and cached afterwards") {
-	ve::ChunkResidency res(make_cfg(256, 2, 32));
+	ve::ChunkResidency res(make_cfg(kAmplePool, 2, 32));
 	FakeProbe probe;
 	const float c[3] = {100.0f, 30.0f, 100.0f};
 	res.update(c, nullptr, 1, probe);
@@ -93,7 +104,7 @@ TEST_CASE("probing is budgeted per frame and cached afterwards") {
 }
 
 TEST_CASE("probing is nearest-first within a budgeted frame") {
-	ve::ChunkResidency res(make_cfg(256, 2, 1));
+	ve::ChunkResidency res(make_cfg(kAmplePool, 2, 1));
 	FakeProbe probe;
 	const float c[3] = {100.0f, 30.0f, 100.0f};
 	const ve::IVec3 nearest = ve::chunk_of_point(c[0], c[1], c[2]);
@@ -105,7 +116,7 @@ TEST_CASE("probing is nearest-first within a budgeted frame") {
 }
 
 TEST_CASE("builds are throttled, nearest first, and stop once ready") {
-	ve::ChunkResidency res(make_cfg(256, 2));
+	ve::ChunkResidency res(make_cfg(kAmplePool, 2));
 	FakeProbe probe;
 	const float c[3] = {100.0f, 30.0f, 100.0f};
 	const ve::ChunkPlan p = res.update(c, nullptr, 1, probe);
@@ -138,7 +149,7 @@ TEST_CASE("the pool caps the resident set and keeps the nearest chunks") {
 }
 
 TEST_CASE("moving out of the hysteresis band releases the slot") {
-	const auto cfg = make_cfg(256);
+	const auto cfg = make_cfg(kAmplePool);
 	ve::ChunkResidency res(cfg);
 	FakeProbe probe;
 	settle(res, probe, 100.0f, 30.0f, 100.0f);
@@ -159,7 +170,7 @@ TEST_CASE("moving out of the hysteresis band releases the slot") {
 }
 
 TEST_CASE("mark_dirty re-plans resident chunks and re-probes cached ones") {
-	ve::ChunkResidency res(make_cfg(256));
+	ve::ChunkResidency res(make_cfg(kAmplePool));
 	FakeProbe probe;
 	settle(res, probe, 100.0f, 30.0f, 100.0f);
 	const float c[3] = {100.0f, 30.0f, 100.0f};
@@ -182,7 +193,7 @@ TEST_CASE("mark_dirty re-plans resident chunks and re-probes cached ones") {
 }
 
 TEST_CASE("an edit during a build survives the build landing") {
-	ve::ChunkResidency res(make_cfg(256));
+	ve::ChunkResidency res(make_cfg(kAmplePool));
 	FakeProbe probe;
 	const float c[3] = {100.0f, 30.0f, 100.0f};
 	const ve::ChunkPlan p = res.update(c, nullptr, 1, probe);
@@ -198,7 +209,7 @@ TEST_CASE("an edit during a build survives the build landing") {
 }
 
 TEST_CASE("dirty resident build is not reissued until the old build lands") {
-	ve::ChunkResidency res(make_cfg(256));
+	ve::ChunkResidency res(make_cfg(kAmplePool));
 	FakeProbe probe;
 	const float c[3] = {100.0f, 30.0f, 100.0f};
 	const ve::ChunkPlan p = res.update(c, nullptr, 1, probe);
@@ -217,7 +228,7 @@ TEST_CASE("dirty resident build is not reissued until the old build lands") {
 }
 
 TEST_CASE("dirty resident build is not reissued until stale note_empty lands") {
-	ve::ChunkResidency res(make_cfg(256));
+	ve::ChunkResidency res(make_cfg(kAmplePool));
 	FakeProbe probe;
 	const float c[3] = {100.0f, 30.0f, 100.0f};
 	const ve::ChunkPlan p = res.update(c, nullptr, 1, probe);
@@ -236,7 +247,7 @@ TEST_CASE("dirty resident build is not reissued until stale note_empty lands") {
 }
 
 TEST_CASE("an edit during a build does not let note_empty hide the chunk") {
-	ve::ChunkResidency res(make_cfg(256));
+	ve::ChunkResidency res(make_cfg(kAmplePool));
 	FakeProbe probe;
 	const float c[3] = {100.0f, 30.0f, 100.0f};
 	const ve::ChunkPlan p = res.update(c, nullptr, 1, probe);
@@ -256,7 +267,7 @@ TEST_CASE("an edit during a build does not let note_empty hide the chunk") {
 }
 
 TEST_CASE("note_empty frees the slot and stops the chunk coming back") {
-	ve::ChunkResidency res(make_cfg(256));
+	ve::ChunkResidency res(make_cfg(kAmplePool));
 	FakeProbe probe;
 	const float c[3] = {100.0f, 30.0f, 100.0f};
 	const ve::ChunkPlan p = res.update(c, nullptr, 1, probe);
@@ -275,7 +286,7 @@ TEST_CASE("note_empty frees the slot and stops the chunk coming back") {
 }
 
 TEST_CASE("note_failed puts the chunk back in the queue") {
-	ve::ChunkResidency res(make_cfg(256));
+	ve::ChunkResidency res(make_cfg(kAmplePool));
 	FakeProbe probe;
 	const float c[3] = {100.0f, 30.0f, 100.0f};
 	const ve::ChunkPlan p = res.update(c, nullptr, 1, probe);

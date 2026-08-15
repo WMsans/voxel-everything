@@ -10,8 +10,8 @@ namespace godot {
 
 struct MeshPassConfig {
 	int max_jobs = 2;      // chunks per batch
-	int max_verts = 65536; // a fully covered 12.8 m chunk holds ~16 400
-	int max_tris = 65536;  // ...and 32 768 triangles
+	int max_verts = 16384; // a fully covered 6.4 m chunk holds ~4 100
+	int max_tris = 32768;  // ...and ~8 200 triangles; edits can carve well past that
 };
 
 struct MeshJob {
