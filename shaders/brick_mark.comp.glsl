@@ -17,6 +17,11 @@ layout(set = 0, binding = 3, std430) buffer Frame {
 } frame;
 // binding 4 is the field op pool, declared by field.glslh
 layout(set = 0, binding = 5, std430) writeonly buffer Jobs { ivec4 v[]; } jobs;
+// Atlas slots currently held by each region slot. The streamer pays for a stream-in by
+// evicting residents, and until this existed it had no way to know what an eviction gives
+// back — most far regions are pure air and hold nothing, so a distance-picked eviction
+// funded nothing and the free list slid to zero (see WorldStreamer::run_frame).
+layout(set = 0, binding = 6, std430) buffer RegionSlotCounts { int n[]; } region_counts;
 
 layout(push_constant, std430) uniform Push {
 	ivec4 region; // xyz = global region coord (may be negative), w = region slot
@@ -74,6 +79,7 @@ void main() {
 			region_tables.slot[idx] = -1;
 			int k = atomicAdd(counters.free_count, 1);
 			free_list.slot[k] = cur;
+			atomicAdd(region_counts.n[rslot], -1);
 		}
 		return;
 	}
@@ -90,6 +96,7 @@ void main() {
 		}
 		slot = free_list.slot[old - 1];
 		region_tables.slot[idx] = slot;
+		atomicAdd(region_counts.n[rslot], 1);
 	} else if (pc.cfg.w == 0) {
 		return; // resident already and this is a plain stream-in: nothing to regenerate
 	}

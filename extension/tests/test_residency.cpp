@@ -197,9 +197,22 @@ TEST_CASE("clear releases everything") {
 	CHECK_FALSE(res.slot_resident(0));
 }
 
+// Every region slot priced the same, so "the furthest resident is worth something" holds and
+// the test is about the trade, not about which region happens to hold bricks.
+static ve::AtlasBudget uniform_budget(std::vector<int> &costs, int slots, int cost,
+		int available, int per_load) {
+	costs.assign(static_cast<size_t>(slots), cost);
+	ve::AtlasBudget b;
+	b.cost_by_slot = costs.data();
+	b.slot_count = slots;
+	b.available = available;
+	b.per_load = per_load;
+	return b;
+}
+
 TEST_CASE("under brick scarcity a load must displace the furthest resident") {
 	// The atlas and the region pool are sized independently, and it is the atlas that runs
-	// out first at the shipping radius. `bricks_scarce` is how the streamer says so: from
+	// out first at the shipping radius. An exhausted budget is how the streamer says so: from
 	// then on the resident set may not grow, only trade, so the region a load takes has to
 	// be paid for by giving the furthest one back.
 	ve::RegionResidency res(make_cfg(60.0f, 64, 4));
@@ -207,8 +220,10 @@ TEST_CASE("under brick scarcity a load must displace the furthest resident") {
 	const int settled = res.resident_count();
 	CHECK(settled > 4);
 
-	// Move far enough that new regions are candidates, then stream scarce.
-	const ve::ResidencyPlan p = res.update(160.0f, 20.0f, 160.0f, /*bricks_scarce=*/true, 2);
+	// Move far enough that new regions are candidates, then stream with nothing to spend.
+	std::vector<int> costs;
+	const ve::AtlasBudget budget = uniform_budget(costs, 64, 1000, 0, 1000);
+	const ve::ResidencyPlan p = res.update(160.0f, 20.0f, 160.0f, budget, 2);
 	CHECK(p.loads.size() <= 2u);
 	CHECK(p.loads.size() > 0u);
 	// Every load was matched by an eviction: the set traded rather than grew. (update() also
@@ -227,9 +242,74 @@ TEST_CASE("scarcity cannot bootstrap an empty world into a deadlock") {
 	// With nothing resident there is nothing to displace, so a scarce first frame must still
 	// be allowed to load — otherwise the world stays empty forever.
 	ve::RegionResidency res(make_cfg(60.0f, 64, 4));
-	const ve::ResidencyPlan p = res.update(100.0f, 20.0f, 100.0f, /*bricks_scarce=*/true, 1);
+	std::vector<int> costs;
+	const ve::AtlasBudget budget = uniform_budget(costs, 64, 1000, 0, 1000);
+	const ve::ResidencyPlan p = res.update(100.0f, 20.0f, 100.0f, budget, 1);
 	CHECK(p.loads.size() == 1u);
 	CHECK(p.evicts.empty());
+}
+
+TEST_CASE("a load is funded by regions that hold bricks, not merely by distant ones") {
+	// The transient-hole bug. Only the region layers the surface crosses hold atlas slots; in
+	// a residency ball most residents are pure air and give back nothing when evicted. Paying
+	// for a load with one distance-picked eviction therefore funded nothing at all most of the
+	// time, the free list slid to zero, and the mark pass dropped the bricks the load had just
+	// activated — sky through freshly streamed ground.
+	//
+	// Here only ONE region layer holds anything, the way only the layers a surface crosses do
+	// in a real world. With nothing to spend up front, every load in the plan has to be
+	// covered by what the plan's own evictions gave back.
+	ve::RegionResidency res(make_cfg(60.0f, 64, 4));
+	settle(res, 100.0f, 20.0f, 100.0f);
+	CHECK(res.resident_count() > 6);
+
+	std::vector<int> costs(64, 0);
+	int priced = 0;
+	for (int s = 0; s < 64; s++)
+		if (res.slot_resident(s) && res.region_of_slot(s).y == 0) {
+			costs[s] = 700;
+			priced++;
+		}
+	REQUIRE(priced > 0);
+	ve::AtlasBudget budget;
+	budget.cost_by_slot = costs.data();
+	budget.slot_count = 64;
+	budget.available = 0;
+	budget.per_load = 1000;
+
+	const ve::ResidencyPlan p = res.update(160.0f, 20.0f, 160.0f, budget, 2);
+	CHECK(p.loads.size() > 0u);
+	// The atlas paid for what it took. Evicting one distance-picked region per load would not
+	// have covered it: the furthest regions here are worth nothing at all.
+	int recovered = 0;
+	for (const auto &e : p.evicts) recovered += costs[e.slot];
+	CHECK(recovered >= budget.per_load * static_cast<int>(p.loads.size()));
+	// And it still never took a region nearer than the one it loaded.
+	for (const auto &l : p.loads)
+		for (const auto &e : p.evicts)
+			CHECK(oracle_distance(e.region, 160.0f, 20.0f, 160.0f) >=
+					oracle_distance(l.region, 160.0f, 20.0f, 160.0f));
+}
+
+TEST_CASE("an unfundable load is refused rather than streamed into a full atlas") {
+	// The other half: when nothing further away holds bricks either, the load must not
+	// happen. Streaming it anyway is what put holes in ground the player was looking at —
+	// the mark pass drops what the free list cannot serve. A short horizon is the correct
+	// failure here.
+	ve::RegionResidency res(make_cfg(60.0f, 64, 4));
+	settle(res, 100.0f, 20.0f, 100.0f);
+	const int settled = res.resident_count();
+
+	std::vector<int> costs(64, 0); // every resident is air: evicting frees nothing
+	ve::AtlasBudget budget;
+	budget.cost_by_slot = costs.data();
+	budget.slot_count = 64;
+	budget.available = 0;
+	budget.per_load = 1000;
+
+	const ve::ResidencyPlan p = res.update(160.0f, 20.0f, 160.0f, budget, 4);
+	CHECK(p.loads.empty());
+	CHECK(res.resident_count() <= settled);
 }
 
 TEST_CASE("resident_regions reports exactly the resident set") {

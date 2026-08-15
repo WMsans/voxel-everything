@@ -175,13 +175,76 @@ func test_an_oversubscribed_atlas_keeps_slots_for_edits() -> void:
 	assert_int(int(w.debug_stream_stats()["overflow_ever"])).override_failure_message(
 		"the edit tripped the fail-soft drop arm").is_equal(0)
 
+func test_flight_never_drops_the_bricks_it_is_streaming_in() -> void:
+	# The transient-hole report: while the camera flies, freshly streamed terrain shows sky
+	# through it for a few frames before healing. The cause is the free list bottoming out —
+	# the mark pass then fail-softly DROPS the bricks the load just activated, and every ray
+	# that should have hit them passes through the (hollow) terrain shell into the sky.
+	#
+	# Healing after the fact is not enough: the drop is what the player sees. Streaming must
+	# pay for each load out of slots it actually has, so the free list never reaches zero.
+	# Edits keep the drop arm (spec section 8 "evicts or drops"); plain streaming may not use it.
+	const SMALL_ATLAS := Vector3i(20, 10, 20) # 4000 slots vs a moving ~6k-brick demand
+	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	w.use_local_device = true
+	w.atlas_bricks = SMALL_ATLAS
+	w.max_region_slots = 64 # region slots are plentiful: the ATLAS is the binding pool
+	w.world_origin_bricks = ORIGIN
+	w.world_size_regions = REGIONS
+	w.residency_radius_m = RADIUS
+	add_child(w)
+	w.ensure_initialized()
+
+	var cam := Vector3(10, 56.2, 10)
+	var starved := 0
+	var dropped := 0
+	for i in range(150):
+		cam += Vector3(0.42, 0.0, 0.42)
+		w.debug_stream_frame(cam)
+		var a: Dictionary = w.debug_atlas_stats()
+		if int(a["free_slots"]) <= 0:
+			starved += 1
+		if int(a["overflow"]) & 1:
+			dropped += 1
+	assert_int(dropped).override_failure_message(
+		"streaming dropped bricks on %d of 150 flight frames: those frames render sky through the terrain"
+		% dropped).is_equal(0)
+	assert_int(starved).override_failure_message(
+		"the free list bottomed out on %d of 150 flight frames" % starved).is_equal(0)
+
+	# The user-visible half: the ground under the camera is whole DURING the flight, not
+	# merely after a repair sweep has caught up.
+	var region := Vector3i(floori(cam.x / 25.6), floori(cam.y / 25.6), floori(cam.z / 25.6))
+	var rslot: int = w.debug_region_map_entry(region)
+	assert_int(rslot).override_failure_message(
+		"the camera's own region is not resident").is_greater_equal(0)
+	var active := 0
+	var missing := 0
+	for bx in range(region.x * 32, region.x * 32 + 32, 3):
+		for bz in range(region.z * 32, region.z * 32 + 32, 3):
+			for by in range(region.y * 32, region.y * 32 + 32):
+				var brick := Vector3i(bx, by, bz)
+				if not w.debug_brick_has_surface(brick, PackedByteArray(), 0):
+					continue
+				active += 1
+				if w.debug_region_table_slot(rslot, brick) < 0:
+					missing += 1
+	assert_int(active).is_greater(0)
+	assert_int(missing).override_failure_message(
+		"%d of %d active bricks under the camera hold no slot mid-flight — the hole the player sees"
+		% [missing, active]).is_equal(0)
+
+
 func test_a_starved_atlas_heals_instead_of_keeping_the_holes() -> void:
-	# The other half of the demo failure: a camera that FLIES into an over-subscribed atlas
-	# passes through frames where the mark pass finds the free list empty and drops bricks.
-	# A dropped brick is in no load or edit range afterwards, so without the repair sweep and
-	# the give-back that follows a reported drop, those holes are permanent — the player is
-	# left looking at sky through the ground. Fly in, then let it settle, and require the
-	# world to be whole again.
+	# The repair sweep and the give-back that follows a reported drop. A dropped brick is in
+	# no load or edit range afterwards, so without them the hole is permanent — the player is
+	# left looking at sky through the ground.
+	#
+	# Streaming no longer starves the atlas (it funds each load out of what its evictions
+	# actually return — see test_flight_never_drops_the_bricks_it_is_streaming_in), so the
+	# trigger here is EDITS, which spec section 8 still lets hit the drop arm: three
+	# free-floating balls at capacity add more surface shell than the free list holds.
+	# Starve it that way, then let it settle and require the world to be whole again.
 	const SMALL_ATLAS := Vector3i(20, 10, 20)
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
@@ -192,15 +255,35 @@ func test_a_starved_atlas_heals_instead_of_keeping_the_holes() -> void:
 	w.residency_radius_m = RADIUS
 	add_child(w)
 	w.ensure_initialized()
-	var cam := Vector3(10, 56.2, 10)
-	for i in range(120): # the flight: fast enough to outrun the streamer
-		cam += Vector3(0.42, 0.0, 0.42)
-		w.debug_stream_frame(cam)
+	var tool: VoxelEditTool = ClassDB.instantiate("VoxelEditTool")
+	w.add_child(tool)
+
+	var cam := Vector3(40, 56.2, 40)
+	for i in range(60):
+		if w.debug_stream_frame(cam) == 0 and i > 5:
+			break
+
+	var hit: Dictionary = w.debug_raycast(Vector3(40, 80, 40), Vector3(0, -1, 0))
+	assert_bool(hit["hit"]).is_true()
+	var hp: Vector3 = hit["pos"]
+	# Clear of the ground, so the whole shell of each ball is new surface, and inside the one
+	# region under the camera, so its op list is exactly these three in this order.
+	var centres: Array[Vector3] = [
+		hp + Vector3(-6.0, 8.0, 0.0), hp + Vector3(0.0, 8.0, 0.0), hp + Vector3(6.0, 8.0, 0.0)]
+	var ops := PackedByteArray()
+	for c in centres:
+		tool.apply_sphere_add(c, 5.0, 4)
+		ops.append_array(make_op(1, 4, c, 5.0)) # 1 = ve::kOpSphereAdd
+		for i in range(4):
+			w.debug_stream_frame(cam)
 	assert_int(int(w.debug_stream_stats()["overflow_ever"]) & 1).override_failure_message(
-		"the flight did not starve the atlas; this test is not exercising the repair path"
+		"the edits did not starve the atlas; this test is not exercising the repair path"
 		).is_not_equal(0)
+
 	for i in range(240):
 		w.debug_stream_frame(cam)
+	assert_int(int(w.debug_atlas_stats()["free_slots"])).override_failure_message(
+		"the give-back never returned a slot; the atlas is still on the floor").is_greater(0)
 
 	# Every brick the CPU calls active in the region under the camera must hold a slot: the
 	# sweep re-marked it and the give-back made room for what it re-marked.
@@ -214,7 +297,7 @@ func test_a_starved_atlas_heals_instead_of_keeping_the_holes() -> void:
 		for bz in range(region.z * 32, region.z * 32 + 32, 3):
 			for by in range(region.y * 32, region.y * 32 + 32):
 				var brick := Vector3i(bx, by, bz)
-				if not w.debug_brick_has_surface(brick, PackedByteArray(), 0):
+				if not w.debug_brick_has_surface(brick, ops, centres.size()):
 					continue
 				active += 1
 				if w.debug_region_table_slot(rslot, brick) < 0:

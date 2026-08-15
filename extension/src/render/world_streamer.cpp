@@ -17,17 +17,21 @@ constexpr int kEditSlotHeadroom = 128;
 // spends the last slot, and from then on brick_mark.comp.glsl's allocate phase finds an
 // empty free list and fail-softly DROPS every brick an edit activates. The terrain around
 // each edit shatters into floating slabs, permanently.
-static int stream_slot_reserve(int slot_count) {
-	return std::min(slot_count / 4, std::max(1024, slot_count / 16));
+//
+// The reserve is also the margin that covers one frame of loads whose marks the free count
+// has not been told about yet, which is why it is never smaller than a frame's worth.
+static int stream_slot_reserve(int slot_count, int frame_load_cost) {
+	const int base = std::min(slot_count / 4, std::max(1024, slot_count / 16));
+	return std::min(slot_count / 4, std::max(base, frame_load_cost));
 }
 
-// What one region's stream-in is assumed to cost the atlas, used to cap how many loads may
-// be started before their true cost is known — the mark pass allocates on the GPU, so the
-// bill only arrives next frame. A region holds bricks only where the surface crosses it,
-// ~1.5-2.5k of its 32768 for the demo's hills; the estimate is deliberately on the high
-// side, since over-estimating merely streams a little more slowly while under-estimating
-// spends the reserve the edits live on.
-constexpr int kSlotsPerRegionEstimate = 3072;
+// The fallback cost of one region's stream-in, used only until the mark pass has reported
+// what real regions cost (first frames) or on a degenerate readback. A region holds bricks
+// only where the surface crosses it, ~1.5-2.5k of its 32768 for the demo's hills.
+constexpr int kSlotsPerRegionFallback = 3072;
+// The floor under the measured estimate. Without it a world whose first resident regions are
+// all air would price a load at nothing and let the whole atlas go in one frame.
+constexpr int kSlotsPerRegionFloor = 512;
 
 // How many regions the repair sweep re-marks per frame. A forced re-mark re-enqueues every
 // active brick in the region, so this is bounded by the job list (max_brick_jobs) as much as
@@ -106,29 +110,34 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		edits.swap(*pending_);
 	}
 
-	// Pace this frame's stream-in against what the atlas can pay for. Two brakes, and both
-	// are needed: the budget bounds how many loads may be in flight before their true cost
-	// lands, so the free list cannot be spent in a single frame; the reserve decides when
-	// the resident set has reached the atlas' capacity, after which a further region may
-	// only be taken by DISPLACING the furthest resident — an exchange that returns that
-	// region's bricks in the same compute list, before the load claims new ones. The set
-	// stays nearest-first, so what stops arriving is the far horizon, never the ground the
-	// player is editing. (RegionResidency::update exempts an empty world from scarcity, so a
-	// starved first frame cannot deadlock the bootstrap.)
-	const int reserve = stream_slot_reserve(atlas_->atlas_slot_count());
-	int inflight = 0;
-	for (int i = 0; i < kInflightFrames; i++) inflight += inflight_loads_[i];
-	const int budget_slots = free_slots - inflight * kSlotsPerRegionEstimate;
-	// Both decisions run off the debited figure, not the raw readback. Judging scarcity on
-	// the raw count would let the streamer keep taking fresh ground on the strength of slots
-	// that loads already in flight have spoken for — which is exactly how the free list gets
-	// to zero — and would leave it stalling outright rather than switching to the
-	// slot-neutral displacement that always makes progress.
-	const bool bricks_scarce = budget_slots <= reserve;
-	const int load_budget = std::max(1, budget_slots / kSlotsPerRegionEstimate);
-	ve::ResidencyPlan plan = residency_->update(cx, cy, cz, bricks_scarce, load_budget);
-	inflight_head_ = (inflight_head_ + 1) % kInflightFrames;
-	inflight_loads_[inflight_head_] = static_cast<int>(plan.loads.size());
+	// Pace this frame's stream-in against what the atlas can actually pay for. The mark pass
+	// tallies the slots each region slot holds; that tally is what a release is worth, and
+	// residency spends it: a load may only proceed once releases of regions FURTHER away
+	// than the candidate have covered its price. When they cannot, the horizon simply stops
+	// arriving — the resident set is capped at what the atlas holds, nearest-first, and no
+	// mark ever runs against a free list that cannot serve it.
+	//
+	// Before this, a load cost a flat guess and was funded by displacing one furthest
+	// resident. Both halves were wrong in the same direction: the guess (3072) was ~10x a
+	// real region, and the furthest resident is usually pure air holding nothing at all, so
+	// the displacement funded nothing. The free list slid to zero and stayed there, and every
+	// region streamed in after that had its bricks dropped — sky through freshly loaded
+	// ground until the repair sweep caught up.
+	atlas_->read_region_slot_counts(rd, &region_slot_costs_);
+	int max_region_cost = 0;
+	for (int c : region_slot_costs_) max_region_cost = std::max(max_region_cost, c);
+	ve::AtlasBudget budget;
+	budget.cost_by_slot = region_slot_costs_.data();
+	budget.slot_count = static_cast<int>(region_slot_costs_.size());
+	// The dearest resident region, not the average: a load has to be priced at what the
+	// region it is about to take might cost, and under-pricing is what puts the free list on
+	// the floor. Costing a little too much only shortens the horizon slightly.
+	budget.per_load = std::max(kSlotsPerRegionFloor,
+			max_region_cost > 0 ? max_region_cost : kSlotsPerRegionFallback);
+	const int reserve = stream_slot_reserve(atlas_->atlas_slot_count(),
+			residency_->config().max_loads_per_frame * budget.per_load);
+	budget.available = free_slots - reserve;
+	ve::ResidencyPlan plan = residency_->update(cx, cy, cz, budget);
 	frame_edits_ = static_cast<int>(edits.size());
 
 	// Shrink. The reserve only stops the resident set GROWING; a set that is already over
@@ -142,7 +151,8 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		std::vector<ve::IVec3> keep;
 		for (const auto &l : plan.loads) keep.push_back(l.region);
 		for (int i = 0; i < kShrinkRegionsPerFrame; i++)
-			if (!residency_->evict_furthest(cx, cy, cz, &plan, keep)) break;
+			if (!residency_->evict_furthest(cx, cy, cz, &plan, keep, &budget, budget.per_load))
+				break;
 	}
 
 	// Edit headroom (spec §8 "evicts or drops"). The atlas is sized "tight" by design, and
@@ -175,7 +185,10 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 			if (std::find(exclude.begin(), exclude.end(), l.region) == exclude.end())
 				exclude.push_back(l.region);
 		if (sdf_edit && !edit_resident.empty() && free_slots < kEditSlotHeadroom)
-			residency_->evict_furthest(cx, cy, cz, &plan, exclude);
+			// Evict until the headroom is REAL: one furthest region is usually air and hands
+			// back nothing, which left the edit hitting the same empty free list it was
+			// evicting to avoid.
+			residency_->evict_furthest(cx, cy, cz, &plan, exclude, &budget, kEditSlotHeadroom);
 	}
 
 	// --- buffer_update phase (must precede compute_list_begin: Godot errors otherwise) ---

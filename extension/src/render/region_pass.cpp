@@ -71,11 +71,12 @@ bool RegionPass::initialize(RenderingDevice *rd, const GpuAtlas &atlas) {
 	mark_uset_ = rd->uniform_set_create(
 			Array::make(storage(0, atlas.region_tables()), storage(1, atlas.free_list()),
 					storage(2, atlas.counters()), storage(3, atlas.frame_counters()),
-					storage(4, atlas.op_pool()), storage(5, atlas.jobs())),
+					storage(4, atlas.op_pool()), storage(5, atlas.jobs()),
+					storage(6, atlas.region_slot_counts())),
 			mark_shader_, 0);
 	free_uset_ = rd->uniform_set_create(
 			Array::make(storage(0, atlas.region_tables()), storage(1, atlas.free_list()),
-					storage(2, atlas.counters())),
+					storage(2, atlas.counters()), storage(3, atlas.region_slot_counts())),
 			free_shader_, 0);
 	args_uset_ = rd->uniform_set_create(
 			Array::make(storage(0, atlas.frame_counters()), storage(1, atlas.dispatch_args())),
