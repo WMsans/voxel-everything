@@ -53,6 +53,7 @@ public:
 	RID op_counts() const { return op_counts_; }
 
 	void reset_frame_counters(RenderingDevice *rd);
+	void clear_overflow(RenderingDevice *rd);
 	int read_free_count(RenderingDevice *rd) const;
 	int read_job_count(RenderingDevice *rd) const;
 	uint32_t read_overflow(RenderingDevice *rd) const;

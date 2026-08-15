@@ -27,14 +27,20 @@ func make_world() -> VoxelWorld:
 	w.ensure_initialized()
 	return w
 
+# Settled means SEVERAL consecutive frames with nothing to do. One is not enough: the
+# streamer paces stream-in against the atlas free count, which it reads back a frame or more
+# behind the GPU, so it deliberately holds back while the loads it has already started are
+# still charged against the budget. A quiet frame is that pause, not the end of the work —
+# so wait out more frames than the streamer's in-flight window (WorldStreamer's four).
+const SETTLE_QUIET_FRAMES := 6
+
 func settle(w: VoxelWorld, cam: Vector3) -> void:
-	var settled := false
-	for i in range(60):
-		if w.debug_stream_frame(cam) == 0:
-			settled = true
-			break
-	assert_bool(settled).override_failure_message(
-		"streamer did not settle within 60 frames").is_true()
+	var quiet := 0
+	for i in range(120):
+		quiet = quiet + 1 if w.debug_stream_frame(cam) == 0 else 0
+		if quiet >= SETTLE_QUIET_FRAMES:
+			return
+	fail("streamer did not settle within 120 frames")
 
 func test_streaming_loads_the_camera_neighbourhood() -> void:
 	var w := make_world()
@@ -88,6 +94,135 @@ func test_moving_the_camera_streams_the_new_neighbourhood_and_recycles_slots() -
 	# used_now < used_before + slack: slack tolerates terrain-density variation between the
 	# two spots; a leak of the whole old neighbourhood (~6k bricks) would blow past it.
 	assert_int(free_now).is_greater(ATLAS.x * ATLAS.y * ATLAS.z - used_before - 2048)
+
+func make_op(type: int, material: int, pos: Vector3, radius: float) -> PackedByteArray:
+	var b := StreamPeerBuffer.new()
+	b.big_endian = false
+	b.put_u32(type); b.put_u32(material)
+	b.put_float(pos.x); b.put_float(pos.y); b.put_float(pos.z)
+	b.put_float(radius)
+	b.put_u32(0); b.put_u32(0)
+	return b.data_array
+
+func test_an_oversubscribed_atlas_keeps_slots_for_edits() -> void:
+	# The demo's failure: at residency_radius_m = 96 m the surface shell demands ~140k
+	# bricks against a 65536-slot atlas, so plain streaming drains the free list to zero.
+	# Every later edit then hits the free-list-empty fail-soft in brick_mark.comp.glsl —
+	# the bricks it activates are dropped for good, and the terrain around the edit
+	# shatters into floating slabs. Streaming must cap the resident set at what the atlas
+	# holds (nearest regions win) instead of spending the last slot.
+	#
+	# 8000 slots against the ~6k-brick shell of a 20 m ball is not oversubscribed on its
+	# own, so this shrinks the atlas to 4000 and asks for the same ball.
+	const SMALL_ATLAS := Vector3i(20, 10, 20) # 4000 slots vs a ~6k-brick demand
+	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	w.use_local_device = true
+	w.atlas_bricks = SMALL_ATLAS
+	w.max_region_slots = REGION_SLOTS
+	w.world_origin_bricks = ORIGIN
+	w.world_size_regions = REGIONS
+	w.residency_radius_m = RADIUS
+	add_child(w)
+	w.ensure_initialized()
+	var cam := Vector3(40, 56.2, 40)
+	for i in range(120):
+		if w.debug_stream_frame(cam) == 0:
+			break
+
+	# The atlas is over-subscribed, so some regions must stay unloaded — but the free list
+	# must never bottom out, and no brick may be dropped.
+	var stats: Dictionary = w.debug_atlas_stats()
+	assert_int(int(stats["free_slots"])).override_failure_message(
+		"streaming drained the atlas free list to %d: an edit can no longer allocate"
+		% int(stats["free_slots"])).is_greater(0)
+	assert_int(int(w.debug_stream_stats()["overflow_ever"])).override_failure_message(
+		"streaming tripped the fail-soft drop arm; bricks were lost").is_equal(0)
+
+	# The user-visible half: an edit under a full atlas must still allocate every brick it
+	# activates. Compare the CPU probe (the contract brick_mark.comp.glsl mirrors) against
+	# the GPU region tables over the op's whole brick range.
+	var tool: VoxelEditTool = ClassDB.instantiate("VoxelEditTool")
+	w.add_child(tool)
+	var hit: Dictionary = w.debug_raycast(Vector3(40, 80, 40), Vector3(0, -1, 0))
+	assert_bool(hit["hit"]).is_true()
+	var hp: Vector3 = hit["pos"]
+	var r: Dictionary = tool.apply_sphere_subtract(hp, 2.5)
+	assert_array(r["rejected"]).is_empty()
+	for i in range(10):
+		w.debug_stream_frame(cam)
+
+	var ops := make_op(0, 0, hp, 2.5)
+	var corner := (hp - Vector3.ONE * 2.6) / 0.8 # ve::op_brick_range, kBrickSize = 0.8 m
+	var lo := Vector3i(floori(corner.x), floori(corner.y), floori(corner.z))
+	var missing := 0
+	var active := 0
+	for bx in range(lo.x, lo.x + 9):
+		for by in range(lo.y, lo.y + 9):
+			for bz in range(lo.z, lo.z + 9):
+				var brick := Vector3i(bx, by, bz)
+				if not w.debug_brick_has_surface(brick, ops, 1):
+					continue
+				active += 1
+				var region := Vector3i(floori(bx / 32.0), floori(by / 32.0), floori(bz / 32.0))
+				var rslot: int = w.debug_region_map_entry(region)
+				if rslot < 0 or w.debug_region_table_slot(rslot, brick) < 0:
+					missing += 1
+	assert_int(active).override_failure_message(
+		"the edit activated no bricks; check the aim").is_greater(0)
+	assert_int(missing).override_failure_message(
+		"%d of %d bricks the edit activated hold no atlas slot — the shattered-terrain bug"
+		% [missing, active]).is_equal(0)
+	assert_int(int(w.debug_stream_stats()["overflow_ever"])).override_failure_message(
+		"the edit tripped the fail-soft drop arm").is_equal(0)
+
+func test_a_starved_atlas_heals_instead_of_keeping_the_holes() -> void:
+	# The other half of the demo failure: a camera that FLIES into an over-subscribed atlas
+	# passes through frames where the mark pass finds the free list empty and drops bricks.
+	# A dropped brick is in no load or edit range afterwards, so without the repair sweep and
+	# the give-back that follows a reported drop, those holes are permanent — the player is
+	# left looking at sky through the ground. Fly in, then let it settle, and require the
+	# world to be whole again.
+	const SMALL_ATLAS := Vector3i(20, 10, 20)
+	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	w.use_local_device = true
+	w.atlas_bricks = SMALL_ATLAS
+	w.max_region_slots = REGION_SLOTS
+	w.world_origin_bricks = ORIGIN
+	w.world_size_regions = REGIONS
+	w.residency_radius_m = RADIUS
+	add_child(w)
+	w.ensure_initialized()
+	var cam := Vector3(10, 56.2, 10)
+	for i in range(120): # the flight: fast enough to outrun the streamer
+		cam += Vector3(0.42, 0.0, 0.42)
+		w.debug_stream_frame(cam)
+	assert_int(int(w.debug_stream_stats()["overflow_ever"]) & 1).override_failure_message(
+		"the flight did not starve the atlas; this test is not exercising the repair path"
+		).is_not_equal(0)
+	for i in range(240):
+		w.debug_stream_frame(cam)
+
+	# Every brick the CPU calls active in the region under the camera must hold a slot: the
+	# sweep re-marked it and the give-back made room for what it re-marked.
+	var region := Vector3i(floori(cam.x / 25.6), floori(cam.y / 25.6), floori(cam.z / 25.6))
+	var rslot: int = w.debug_region_map_entry(region)
+	assert_int(rslot).override_failure_message(
+		"the camera's own region is not resident").is_greater_equal(0)
+	var active := 0
+	var missing := 0
+	for bx in range(region.x * 32, region.x * 32 + 32, 3):
+		for bz in range(region.z * 32, region.z * 32 + 32, 3):
+			for by in range(region.y * 32, region.y * 32 + 32):
+				var brick := Vector3i(bx, by, bz)
+				if not w.debug_brick_has_surface(brick, PackedByteArray(), 0):
+					continue
+				active += 1
+				if w.debug_region_table_slot(rslot, brick) < 0:
+					missing += 1
+	assert_int(active).is_greater(0)
+	assert_int(missing).override_failure_message(
+		"%d of %d active bricks under the camera are still missing after the repair sweep"
+		% [missing, active]).is_equal(0)
 
 func test_job_overflow_recovers_via_force_regen() -> void:
 	# Final-review Finding 3b: the job-list overflow arm. brick_mark.comp.glsl sets

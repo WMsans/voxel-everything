@@ -7,6 +7,38 @@
 // demand in the demo tests is a crater (~100 bricks); one eviction frees ~1k.
 constexpr int kEditSlotHeadroom = 128;
 
+// The share of the atlas streaming will not spend, so that edits always have slots to
+// allocate from. Sized as a fraction because the atlas is a configuration knob; the floor
+// keeps it meaningful on small test atlases and the ceiling keeps it from swallowing one.
+//
+// It exists because the atlas and the residency radius are sized independently, and at the
+// shipping radius the atlas is the smaller of the two by more than 2x: the surface shell of
+// a 96 m ball wants ~140k bricks against 65536 slots. Without a reserve, plain streaming
+// spends the last slot, and from then on brick_mark.comp.glsl's allocate phase finds an
+// empty free list and fail-softly DROPS every brick an edit activates. The terrain around
+// each edit shatters into floating slabs, permanently.
+static int stream_slot_reserve(int slot_count) {
+	return std::min(slot_count / 4, std::max(1024, slot_count / 16));
+}
+
+// What one region's stream-in is assumed to cost the atlas, used to cap how many loads may
+// be started before their true cost is known — the mark pass allocates on the GPU, so the
+// bill only arrives next frame. A region holds bricks only where the surface crosses it,
+// ~1.5-2.5k of its 32768 for the demo's hills; the estimate is deliberately on the high
+// side, since over-estimating merely streams a little more slowly while under-estimating
+// spends the reserve the edits live on.
+constexpr int kSlotsPerRegionEstimate = 3072;
+
+// How many regions the repair sweep re-marks per frame. A forced re-mark re-enqueues every
+// active brick in the region, so this is bounded by the job list (max_brick_jobs) as much as
+// by the frame budget: two regions is ~4k jobs against a 16k list.
+constexpr int kRepairRegionsPerFrame = 2;
+
+// How many regions to give back per frame while the atlas is reporting dropped bricks. Two
+// converges in well under a second at 60 fps and keeps the give-back gentle enough that a
+// single starved frame does not visibly shorten the horizon.
+constexpr int kShrinkRegionsPerFrame = 2;
+
 using namespace godot;
 
 void WorldStreamer::initialize(ve::RegionResidency *residency, ve::EditLog *edit_log,
@@ -35,12 +67,36 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 	last_edit_material_ = 0;
 	if (!rd || !atlas_ || !residency_ || !edit_log_ || !region_pass_ || !brick_gen_) return 0;
 
-	// Overflow recovery (brick_mark.comp.glsl contract): the job list overflowed last
-	// frame (overflow bit 1, value 2), leaving bricks resident-but-ungenerated in stale
-	// atlas bytes. The caller has submitted last frame's list by now, so the bit is
-	// readable; re-mark last frame's marked regions with force_regen below so the dropped
-	// bricks are re-enqueued — one frame of stale bytes is the documented cost.
-	const bool overflow_regen = (atlas_->read_overflow(rd) & 2u) != 0;
+	// Both counters are read once, here, and reused for the rest of the frame: nothing this
+	// function records executes before the caller submits, so a second read would return the
+	// same bytes at the price of another readback stall.
+	const uint32_t overflow = atlas_->read_overflow(rd);
+	const int free_slots = atlas_->read_free_count(rd);
+
+	// Overflow recovery, fast path (brick_mark.comp.glsl contract): the job list overflowed
+	// (bit 1, value 2), leaving bricks resident-but-ungenerated in stale atlas bytes. Re-mark
+	// last frame's marked regions with force_regen below so the dropped bricks are
+	// re-enqueued — one frame of stale bytes is the documented cost.
+	const bool overflow_regen = (overflow & 2u) != 0;
+
+	// Overflow recovery, slow path. Either bit means bricks are missing or stale somewhere,
+	// and the fast path alone cannot be trusted to find them: the counter is read back on
+	// the render thread, where nothing stalls for a submit, so by the time a bit surfaces the
+	// regions it refers to may be several frames back and no longer in pending_regen_. And
+	// unlike a stale brick, a DROPPED one (bit 0, the free list ran empty) is never revisited
+	// by anything at all — no load or edit range covers it again, so the player is left
+	// looking at sky through the ground for as long as the region stays resident.
+	//
+	// So on either bit, queue every CURRENTLY resident region for a forced re-mark, replacing
+	// any sweep still in progress. Replacing rather than skipping is what makes this
+	// converge: a sweep started mid-flight only knows the regions resident when it began, so
+	// keeping it would leave everything that arrived since unhealed. The sweep is drained a
+	// couple of regions per frame, and once the shortage passes, the last one queued runs to
+	// completion over the resident set.
+	if ((overflow & 3u) != 0) residency_->resident_regions(&repair_queue_);
+	// The word is sticky (GpuAtlas::reset_frame_counters); clear it now that both arms have
+	// been read, so the next frame reports what the next frame's marks actually hit.
+	if (overflow != 0u) atlas_->clear_overflow(rd);
 
 	// Drain the edit queue. The lock is held for a swap, never across GPU work.
 	std::vector<PendingEdit> edits;
@@ -49,8 +105,44 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		edits.swap(*pending_);
 	}
 
-	ve::ResidencyPlan plan = residency_->update(cx, cy, cz);
+	// Pace this frame's stream-in against what the atlas can pay for. Two brakes, and both
+	// are needed: the budget bounds how many loads may be in flight before their true cost
+	// lands, so the free list cannot be spent in a single frame; the reserve decides when
+	// the resident set has reached the atlas' capacity, after which a further region may
+	// only be taken by DISPLACING the furthest resident — an exchange that returns that
+	// region's bricks in the same compute list, before the load claims new ones. The set
+	// stays nearest-first, so what stops arriving is the far horizon, never the ground the
+	// player is editing. (RegionResidency::update exempts an empty world from scarcity, so a
+	// starved first frame cannot deadlock the bootstrap.)
+	const int reserve = stream_slot_reserve(atlas_->atlas_slot_count());
+	int inflight = 0;
+	for (int i = 0; i < kInflightFrames; i++) inflight += inflight_loads_[i];
+	const int budget_slots = free_slots - inflight * kSlotsPerRegionEstimate;
+	// Both decisions run off the debited figure, not the raw readback. Judging scarcity on
+	// the raw count would let the streamer keep taking fresh ground on the strength of slots
+	// that loads already in flight have spoken for — which is exactly how the free list gets
+	// to zero — and would leave it stalling outright rather than switching to the
+	// slot-neutral displacement that always makes progress.
+	const bool bricks_scarce = budget_slots <= reserve;
+	const int load_budget = std::max(1, budget_slots / kSlotsPerRegionEstimate);
+	ve::ResidencyPlan plan = residency_->update(cx, cy, cz, bricks_scarce, load_budget);
+	inflight_head_ = (inflight_head_ + 1) % kInflightFrames;
+	inflight_loads_[inflight_head_] = static_cast<int>(plan.loads.size());
 	frame_edits_ = static_cast<int>(edits.size());
+
+	// Shrink. The reserve only stops the resident set GROWING; a set that is already over
+	// the atlas' capacity — which is what a run of starved frames leaves behind, since the
+	// free count understates the demand of regions whose bricks were dropped — would
+	// otherwise sit there forever, every frame dropping the bricks it cannot place and the
+	// repair sweep fighting for slots it will never get. A reported drop is the signal that
+	// the set is too big for the atlas, so give the furthest regions back until the drops
+	// stop. Regions loaded this frame are excluded: evicting one would undo the load.
+	if ((overflow & 1u) != 0) {
+		std::vector<ve::IVec3> keep;
+		for (const auto &l : plan.loads) keep.push_back(l.region);
+		for (int i = 0; i < kShrinkRegionsPerFrame; i++)
+			if (!residency_->evict_furthest(cx, cy, cz, &plan, keep)) break;
+	}
 
 	// Edit headroom (spec §8 "evicts or drops"). The atlas is sized "tight" by design, and
 	// at the demo camera the resident set fills it, so an SDF-changing edit that net-ADDS
@@ -81,8 +173,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		for (const auto &l : plan.loads)
 			if (std::find(exclude.begin(), exclude.end(), l.region) == exclude.end())
 				exclude.push_back(l.region);
-		if (sdf_edit && !edit_resident.empty() &&
-				atlas_->read_free_count(rd) < kEditSlotHeadroom)
+		if (sdf_edit && !edit_resident.empty() && free_slots < kEditSlotHeadroom)
 			residency_->evict_furthest(cx, cy, cz, &plan, exclude);
 	}
 
@@ -195,6 +286,33 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 			any = true;
 		}
 	}
+	// Drain the repair queue: the regions that lost bricks to an empty free list, forced
+	// back through the mark pass now that there are slots again. Paced so a whole resident
+	// set is healed over a second or so rather than in one frame. The gate is the edit
+	// headroom, NOT the stream reserve: once the resident set has reached the atlas'
+	// capacity the free count settles just below the reserve by construction, so gating the
+	// repair on being above it would mean the holes never healed at all.
+	int repairs = 0;
+	while (!repair_queue_.empty() && repairs < kRepairRegionsPerFrame &&
+			free_slots > kEditSlotHeadroom) {
+		const ve::IVec3 region = repair_queue_.back();
+		repair_queue_.pop_back();
+		const int slot = residency_->slot_of(region);
+		if (slot < 0) continue; // evicted since: it regenerates on stream-in
+		int op_count = 0;
+		{
+			std::lock_guard<std::mutex> lock(*edit_mutex_);
+			op_count = static_cast<int>(edit_log_->ops(region).size());
+		}
+		const ve::IVec3 lo{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
+				region.z * ve::kRegionBricks};
+		const ve::IVec3 hi{lo.x + 31, lo.y + 31, lo.z + 31};
+		rd->compute_list_add_barrier(list);
+		region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true);
+		any = true;
+		repairs++;
+	}
+
 	if (any) {
 		rd->compute_list_add_barrier(list);
 		region_pass_->write_dispatch_args(rd, list);

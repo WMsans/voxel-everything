@@ -156,7 +156,17 @@ void GpuAtlas::teardown() {
 
 void GpuAtlas::reset_frame_counters(RenderingDevice *rd) {
 	if (!frame_.is_valid()) return;
-	rd->buffer_update(frame_, 0, 16, zeroed(16));
+	// Only the job counter. The overflow word is STICKY: it is read back on the render
+	// thread, where nothing stalls for a submit, so a per-frame reset would race the
+	// readback and a frame's worth of dropped bricks could go unreported — and a dropped
+	// brick that nobody hears about is a hole in the world that never heals. Whoever acts
+	// on the bits clears them with clear_overflow().
+	rd->buffer_update(frame_, 0, 4, zeroed(4));
+}
+
+void GpuAtlas::clear_overflow(RenderingDevice *rd) {
+	if (!frame_.is_valid()) return;
+	rd->buffer_update(frame_, 4, 4, zeroed(4));
 }
 
 int GpuAtlas::read_free_count(RenderingDevice *rd) const {

@@ -33,6 +33,12 @@ bool RegionResidency::slot_resident(int slot) const {
 	return slot >= 0 && slot < cfg_.max_region_slots && slot_used_[slot] != 0;
 }
 
+void RegionResidency::resident_regions(std::vector<IVec3> *out) const {
+	out->clear();
+	out->reserve(by_region_.size());
+	for (const auto &kv : by_region_) out->push_back(IVec3{kv.first.x, kv.first.y, kv.first.z});
+}
+
 void RegionResidency::clear() {
 	by_region_.clear();
 	std::fill(slot_used_.begin(), slot_used_.end(), 0);
@@ -47,8 +53,14 @@ void RegionResidency::release(IVec3 region, int slot, ResidencyPlan *plan) {
 	plan->evicts.push_back({region, slot, cfg_.bounds.region_index(region)});
 }
 
-ResidencyPlan RegionResidency::update(float cx, float cy, float cz) {
+ResidencyPlan RegionResidency::update(float cx, float cy, float cz, bool bricks_scarce,
+		int max_loads) {
 	ResidencyPlan plan;
+	const int load_cap = max_loads < 0 ? cfg_.max_loads_per_frame
+									   : std::min(max_loads, cfg_.max_loads_per_frame);
+	// Bootstrapping is exempt from scarcity: with nothing resident there is nothing to
+	// displace, so honouring it on the first frame would leave the world empty forever.
+	const bool scarce = bricks_scarce && !by_region_.empty();
 
 	// 1. Evict anything that has drifted past the hysteresis boundary.
 	{
@@ -93,10 +105,15 @@ ResidencyPlan RegionResidency::update(float cx, float cy, float cz) {
 		return a.region.x < b.region.x;
 	});
 
-	// 3. Load the nearest candidates, displacing the furthest residents when the pool is full.
+	// 3. Load the nearest candidates, displacing the furthest residents when the pool is
+	//    full — or when the atlas is nearly spent, which makes the brick pool the binding
+	//    constraint even though region slots remain (see the header). Displacing returns a
+	//    whole region's bricks to the free list in the same frame's compute list, BEFORE
+	//    the load marks that claim them, so the exchange is slot-neutral rather than a net
+	//    draw on an atlas that has nothing left to give.
 	for (const Cand &c : cands) {
-		if (static_cast<int>(plan.loads.size()) >= cfg_.max_loads_per_frame) break;
-		if (free_slots_.empty()) {
+		if (static_cast<int>(plan.loads.size()) >= load_cap) break;
+		if (free_slots_.empty() || scarce) {
 			IVec3 worst{};
 			int worst_slot = -1;
 			float worst_dist = c.dist;

@@ -44,8 +44,10 @@ func make_world() -> VoxelWorld:
 	# Settle at THIS suite's DEMO_ORIGIN, not the pixel suite's CAM: the regression rays
 	# land ~40 m from DEMO_ORIGIN, and settling anywhere else would leave those hit
 	# regions non-resident.
-	for i in range(90):
-		if w.debug_stream_frame(DEMO_ORIGIN) == 0:
+	var _quiet := 0
+	for i in range(120):
+		_quiet = _quiet + 1 if w.debug_stream_frame(DEMO_ORIGIN) == 0 else 0
+		if _quiet >= 6:
 			break
 	return w
 

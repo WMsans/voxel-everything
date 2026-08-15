@@ -196,3 +196,47 @@ TEST_CASE("clear releases everything") {
 	CHECK(res.slot_of({3, 0, 3}) == -1);
 	CHECK_FALSE(res.slot_resident(0));
 }
+
+TEST_CASE("under brick scarcity a load must displace the furthest resident") {
+	// The atlas and the region pool are sized independently, and it is the atlas that runs
+	// out first at the shipping radius. `bricks_scarce` is how the streamer says so: from
+	// then on the resident set may not grow, only trade, so the region a load takes has to
+	// be paid for by giving the furthest one back.
+	ve::RegionResidency res(make_cfg(60.0f, 64, 4));
+	settle(res, 100.0f, 20.0f, 100.0f);
+	const int settled = res.resident_count();
+	CHECK(settled > 4);
+
+	// Move far enough that new regions are candidates, then stream scarce.
+	const ve::ResidencyPlan p = res.update(160.0f, 20.0f, 160.0f, /*bricks_scarce=*/true, 2);
+	CHECK(p.loads.size() <= 2u);
+	CHECK(p.loads.size() > 0u);
+	// Every load was matched by an eviction: the set traded rather than grew. (update() also
+	// evicts what drifted past the hysteresis boundary, so this is a lower bound.)
+	CHECK(p.evicts.size() >= p.loads.size());
+	CHECK(res.resident_count() <= settled);
+
+	// Nothing displaced is nearer than what replaced it.
+	for (const auto &l : p.loads)
+		for (const auto &e : p.evicts)
+			CHECK(oracle_distance(e.region, 160.0f, 20.0f, 160.0f) >=
+					oracle_distance(l.region, 160.0f, 20.0f, 160.0f));
+}
+
+TEST_CASE("scarcity cannot bootstrap an empty world into a deadlock") {
+	// With nothing resident there is nothing to displace, so a scarce first frame must still
+	// be allowed to load — otherwise the world stays empty forever.
+	ve::RegionResidency res(make_cfg(60.0f, 64, 4));
+	const ve::ResidencyPlan p = res.update(100.0f, 20.0f, 100.0f, /*bricks_scarce=*/true, 1);
+	CHECK(p.loads.size() == 1u);
+	CHECK(p.evicts.empty());
+}
+
+TEST_CASE("resident_regions reports exactly the resident set") {
+	ve::RegionResidency res(make_cfg(40.0f, 64, 4));
+	settle(res, 100.0f, 20.0f, 100.0f);
+	std::vector<ve::IVec3> regions;
+	res.resident_regions(&regions);
+	CHECK(static_cast<int>(regions.size()) == res.resident_count());
+	for (const ve::IVec3 &r : regions) CHECK(res.slot_of(r) >= 0);
+}

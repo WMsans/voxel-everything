@@ -75,7 +75,12 @@ func test_free_list_is_a_full_permutation_of_the_slots() -> void:
 		seen[v] = true
 	assert_int(seen.size()).is_equal(512)
 
-func test_frame_counters_reset() -> void:
+func test_frame_counters_reset_clears_the_job_count_but_not_the_overflow_bits() -> void:
+	# The job count is per frame; the overflow word is STICKY. It is read back on the render
+	# thread, where nothing stalls for a submit, so a per-frame reset would race the readback
+	# and a frame's worth of dropped bricks could go unreported — and an unreported drop is a
+	# hole in the world that nothing ever comes back to fill. Whoever acts on the bits is the
+	# one that clears them.
 	var w := make_world()
 	assert_bool(w.debug_init_atlas()).is_true()
 	var rd := w.debug_local_rd() as RenderingDevice
@@ -85,7 +90,8 @@ func test_frame_counters_reset() -> void:
 	w.debug_reset_frame_counters()
 	var s: Dictionary = w.debug_atlas_stats()
 	assert_int(s["job_count"]).is_equal(0)
-	assert_int(s["overflow"]).is_equal(0)
+	assert_int(s["overflow"]).override_failure_message(
+		"the overflow bits must survive a frame reset").is_equal(3)
 
 func test_region_ops_upload_byte_for_byte() -> void:
 	var w := make_world()

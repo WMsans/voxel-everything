@@ -16,8 +16,10 @@ func make_world() -> VoxelWorld:
 	w.residency_radius_m = 20.0
 	add_child(w)
 	w.ensure_initialized()
-	for i in range(60):
-		if w.debug_stream_frame(CAM) == 0:
+	var _quiet := 0
+	for i in range(120):
+		_quiet = _quiet + 1 if w.debug_stream_frame(CAM) == 0 else 0
+		if _quiet >= 6:
 			break
 	return w
 

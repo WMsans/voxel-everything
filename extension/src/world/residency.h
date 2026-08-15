@@ -32,12 +32,25 @@ class RegionResidency {
 public:
 	explicit RegionResidency(const ResidencyConfig &cfg);
 
-	ResidencyPlan update(float cx, float cy, float cz);
+	// `bricks_scarce` reports that the ATLAS (not the region-slot pool) is nearly spent.
+	// The region pool and the brick pool are sized independently, and at the shipping
+	// radius the brick pool is the binding one: the surface shell of a 96 m ball wants
+	// ~140k bricks against a 65536-slot atlas. Left alone, streaming spends the last slot
+	// and every later edit hits the free-list-empty fail-soft in brick_mark.comp.glsl,
+	// dropping the bricks it activates for good. Under scarcity a load must therefore
+	// DISPLACE the furthest resident instead of taking a fresh region slot, which caps the
+	// resident set at what the atlas can hold and keeps a working reserve free. The set
+	// stays nearest-first, so what goes missing is the far horizon, never the edit.
+	// `max_loads` overrides ResidencyConfig::max_loads_per_frame downwards for this frame
+	// (negative means "use the config"); the streamer scales it to the free-slot budget.
+	ResidencyPlan update(float cx, float cy, float cz, bool bricks_scarce = false,
+			int max_loads = -1);
 
 	int slot_of(IVec3 region) const;
 	bool slot_resident(int slot) const;
 	IVec3 region_of_slot(int slot) const { return slot_region_[slot]; }
 	int resident_count() const { return static_cast<int>(by_region_.size()); }
+	void resident_regions(std::vector<IVec3> *out) const;
 	void clear();
 	const ResidencyConfig &config() const { return cfg_; }
 

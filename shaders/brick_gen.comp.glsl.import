@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://b5ecx4qvb7e4b"
+path="res://.godot/imported/brick_gen.comp.glsl-6fa69f856b0c5eb3ca051d471715d800.res"
+
+[deps]
+
+source_file="res://shaders/brick_gen.comp.glsl"
+dest_files=["res://.godot/imported/brick_gen.comp.glsl-6fa69f856b0c5eb3ca051d471715d800.res"]
+
+[params]
+

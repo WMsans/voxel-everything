@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cm7alym0a6021"
+path="res://.godot/imported/brick_mark.comp.glsl-44c8e490c32100a30a4b498a6034a0cc.res"
+
+[deps]
+
+source_file="res://shaders/brick_mark.comp.glsl"
+dest_files=["res://.godot/imported/brick_mark.comp.glsl-44c8e490c32100a30a4b498a6034a0cc.res"]
+
+[params]
+

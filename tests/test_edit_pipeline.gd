@@ -16,10 +16,19 @@ func make_world() -> VoxelWorld:
 	w.residency_radius_m = 20.0
 	add_child(w)
 	w.ensure_initialized()
-	for i in range(60):
-		if w.debug_stream_frame(CAM) == 0:
-			break
+	settle(w, CAM)
 	return w
+
+# Settled means several consecutive quiet frames: the streamer paces stream-in against an
+# atlas free count it reads back a frame or more behind the GPU, so a single frame with
+# nothing to do is that pause, not the end of the work (six > its in-flight window).
+func settle(w: VoxelWorld, cam: Vector3, frames := 120) -> void:
+	var quiet := 0
+	for i in range(frames):
+		quiet = quiet + 1 if w.debug_stream_frame(cam) == 0 else 0
+		if quiet >= 6:
+			return
+
 
 func make_tool(w: VoxelWorld) -> VoxelEditTool:
 	var t: VoxelEditTool = ClassDB.instantiate("VoxelEditTool")
@@ -111,9 +120,7 @@ func test_an_op_on_a_region_border_updates_both_sides() -> void:
 	var tool := make_tool(w)
 	# x = 25.6 m is the boundary between regions 0 and 1 on x. Settle next to the border:
 	# the default CAM is >20 m from region 0's side of it, so it would not be resident.
-	for i in range(60):
-		if w.debug_stream_frame(Vector3(20, 53, 13)) == 0:
-			break
+	settle(w, Vector3(20, 53, 13))
 	var hit: Dictionary = w.debug_raycast(Vector3(25.6, 80, 12.8), Vector3(0, -1, 0))
 	assert_bool(hit["hit"]).is_true()
 	var hp: Vector3 = hit["pos"]
@@ -179,13 +186,18 @@ func test_hostile_edit_inputs_are_rejected_before_touching_the_log() -> void:
 	# The world still streams normally after the rejected inputs.
 	assert_int(w.debug_stream_frame(CAM)).is_greater_equal(0)
 
-func test_edit_headroom_evicts_a_far_region_when_the_atlas_is_nearly_full() -> void:
-	# Errata 11's eviction arm (spec §8 "evicts or drops"): when an SDF edit must
-	# allocate slots and the free-slot count is below the 128-slot headroom, the streamer
-	# evicts the furthest untouched resident region so the edit's marks succeed. The
-	# config is tuned so the resident set leaves free = 117 slots at this camera
-	# (atlas 26x16x26 = 10816 slots, 10 region slots): below the headroom, but the demand
-	# still fits the atlas, so the settle never trips the free-list-empty fail-soft.
+func test_an_edit_still_allocates_when_the_resident_set_fills_the_atlas() -> void:
+	# Errata 11's eviction arm (spec §8 "evicts or drops") guarded the case where an SDF
+	# edit must allocate slots and the atlas has none to give: the streamer evicts the
+	# furthest untouched resident region so the edit's marks succeed.
+	#
+	# The streamer no longer lets streaming get that far — it holds a reserve back and caps
+	# the resident set at what the atlas can hold — so the arm's old precondition (free < 128
+	# after a plain settle) can no longer be produced, and asserting on it would only be
+	# asserting that the starvation bug is still there. What is worth pinning is the
+	# user-visible contract the arm existed for, which this config still exercises: with the
+	# resident set filling a deliberately tight atlas, an edit's crater must be real and
+	# nothing may be dropped.
 	const EVICT_ATLAS := Vector3i(26, 16, 26)
 	const EVICT_SLOTS := 10
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
@@ -197,15 +209,18 @@ func test_edit_headroom_evicts_a_far_region_when_the_atlas_is_nearly_full() -> v
 	w.residency_radius_m = 20.0
 	add_child(w)
 	w.ensure_initialized()
-	for i in range(60):
-		if w.debug_stream_frame(CAM) == 0:
-			break
+	settle(w, CAM)
 
-	# Arm precondition: the resident set nearly fills the atlas (free < 128).
+	# Precondition: the resident set really does fill this atlas — most of it is spoken for,
+	# and what is left is the reserve the streamer keeps for edits.
 	var stats: Dictionary = w.debug_atlas_stats()
+	var used: int = int(stats["slot_count"]) - int(stats["free_slots"])
+	assert_int(used).override_failure_message(
+		"precondition unmet: the resident set does not fill the atlas (used %d of %d)"
+		% [used, int(stats["slot_count"])]).is_greater(int(stats["slot_count"]) / 2)
 	assert_int(int(stats["free_slots"])).override_failure_message(
-		"eviction-arm precondition unmet: free_slots not below the 128 headroom"
-		).is_less(128)
+		"streaming spent the whole atlas; an edit would have nothing to allocate from"
+		).is_greater(0)
 
 	var tool := make_tool(w)
 	var hit: Dictionary = w.debug_raycast(Vector3(40, 80, 40), Vector3(0, -1, 0))
@@ -217,16 +232,7 @@ func test_edit_headroom_evicts_a_far_region_when_the_atlas_is_nearly_full() -> v
 	var r: Dictionary = tool.apply_sphere_subtract(Vector3(hp.x, hp.y + 0.5, hp.z), 2.5)
 	assert_array(r["rejected"]).is_empty()
 
-	# One frame: the streamer drains the edit, sees free < 128, and evicts the furthest
-	# untouched resident region (the evicted region re-streams next frame).
-	w.debug_stream_frame(CAM)
-	var s: Dictionary = w.debug_stream_stats()
-	assert_int(int(s["resident_regions"])).override_failure_message(
-		"eviction arm did not run: no region was evicted for edit headroom"
-		).is_equal(EVICT_SLOTS - 1)
-
-	# Let the evicted region re-stream, then check the user-visible contract: the crater
-	# is real (deeper hit, still terrain below) and no overflow bit was ever set.
+	# The crater is real (deeper hit, still terrain below) and no brick was ever dropped.
 	for i in range(10):
 		w.debug_stream_frame(CAM)
 	var after: Dictionary = w.debug_raycast(Vector3(hp.x, hp.y + 2.0, hp.z), Vector3(0, -1, 0))

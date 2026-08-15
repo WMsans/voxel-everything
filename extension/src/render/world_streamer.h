@@ -45,6 +45,20 @@ private:
 	// (brick_mark.comp.glsl sets frame.overflow bit 1), the next run_frame re-marks these
 	// with force_regen so the dropped bricks are re-enqueued (see run_frame).
 	std::vector<ve::IVec3> pending_regen_;
+	// Loads started in each of the last kInflightFrames frames. The free-slot count is read
+	// back from a buffer the GPU is still working through, so on the render thread (where
+	// nothing stalls for a submit) it lags the truth by a few frames. Charging the loads
+	// already in flight against it is what keeps the streamer from spending an atlas it has
+	// not been told is empty yet — without this the reserve is read as intact right up to
+	// the frame it is gone.
+	static constexpr int kInflightFrames = 4;
+	int inflight_loads_[kInflightFrames] = {0, 0, 0, 0};
+	int inflight_head_ = 0;
+	// Regions still owed a forced re-mark after the free list ran dry. A dropped brick is
+	// invisible and nothing else ever comes back for it, so the world would keep the hole
+	// for as long as the region stays resident; this queue is what heals it once slots are
+	// available again. Drained a couple of regions per frame — a repair, not a stampede.
+	std::vector<ve::IVec3> repair_queue_;
 	float last_edit_center_[3] = {0.0f, 0.0f, 0.0f};
 	float last_edit_radius_ = 0.0f;
 	int last_edit_type_ = 0;

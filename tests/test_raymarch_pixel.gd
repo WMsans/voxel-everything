@@ -20,8 +20,10 @@ func make_world() -> VoxelWorld:
 	w.ensure_initialized()
 	# Settle AT CAM: this suite's rays (x,z in [5, 13], hits y ~ 52-58 m) all land within
 	# 45 m of it, so settling anywhere else could leave their hit regions non-resident.
-	for i in range(90):
-		if w.debug_stream_frame(CAM) == 0:
+	var _quiet := 0
+	for i in range(120):
+		_quiet = _quiet + 1 if w.debug_stream_frame(CAM) == 0 else 0
+		if _quiet >= 6:
 			break
 	return w
 
