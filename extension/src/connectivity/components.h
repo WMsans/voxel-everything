@@ -6,7 +6,7 @@ namespace ve {
 
 // A component may be no wider than the island volume that will hold it. An island volume is
 // kIslandDim (64) samples with kIslandMarginVoxels (2) of clearance at each end, so its
-// usable reach at the coarse 0.10 m pitch is (64 - 1 - 4) * 0.10 = 5.9 m -- seven 0.8 m
+// usable reach at the coarse 0.10 m pitch is (64 - 1 - 4) * 0.10 = 5.6 m -- seven 0.8 m
 // cells. Wider components are split, which is spec §5's "oversized components split along
 // weakest box seams". generator/volume_set.cpp static_asserts the relationship, so the two
 // constants cannot drift apart silently.

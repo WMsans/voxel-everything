@@ -113,7 +113,11 @@ TEST_CASE("a component wider than the volume can hold is split, losing no cells"
 	cfg.max_extent_cells = 8;
 	std::vector<IslandComponent> out;
 	label_islands(r, cfg, &out);
-	CHECK(out.size() >= 2);
+	REQUIRE(out.size() >= 2);
+	// Pieces from one source component come out ordered by their lowest window index:
+	// the x = 1..6 half must precede the x = 7..12 half.
+	CHECK(out[0].lo.x == 1);
+	CHECK(out[1].lo.x == 7);
 	int total = 0;
 	for (const IslandComponent &c : out) {
 		total += c.cell_count();
