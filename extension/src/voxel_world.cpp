@@ -264,7 +264,10 @@ void VoxelWorld::teardown_physics() {
 	if (mesh_pass_) { delete mesh_pass_; mesh_pass_ = nullptr; }
 	if (chunks_) { delete chunks_; chunks_ = nullptr; }
 	if (mesh_rd_) { memdelete(mesh_rd_); mesh_rd_ = nullptr; }
-	pending_dirty_.clear();
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		pending_dirty_.clear();
+	}
 }
 
 int VoxelWorld::physics_tick(Vector3 center) {
