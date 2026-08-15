@@ -225,7 +225,7 @@ ChunkPlan ChunkResidency::update(const float *centers, const float *radii, int c
 	if (cap > 0) {
 		std::vector<Cand> want;
 		for (const auto &kv : by_chunk_)
-			if (slot_state_[kv.second] == kNeedsBuild) {
+			if (slot_state_[kv.second] == kNeedsBuild && in_flight_.find(kv.first) == in_flight_.end()) {
 				const IVec3 c{kv.first.x, kv.first.y, kv.first.z};
 				want.push_back({nearest(c), c});
 			}
@@ -234,6 +234,9 @@ ChunkPlan ChunkResidency::update(const float *centers, const float *radii, int c
 		for (int i = 0; i < static_cast<int>(want.size()) && i < cap; i++) {
 			const int slot = slot_of(want[i].chunk);
 			slot_state_[slot] = static_cast<char>(kBuilding);
+			// Track every outstanding build, resident or evicted, so a dirty chunk cannot be
+			// re-issued before the old result lands.
+			in_flight_[key(want[i].chunk)] = 1;
 			plan.builds.push_back({want[i].chunk, slot});
 		}
 	}

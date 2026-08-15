@@ -197,6 +197,44 @@ TEST_CASE("an edit during a build survives the build landing") {
 	CHECK(replanned);
 }
 
+TEST_CASE("dirty resident build is not reissued until the old build lands") {
+	ve::ChunkResidency res(make_cfg(256));
+	FakeProbe probe;
+	const float c[3] = {100.0f, 30.0f, 100.0f};
+	const ve::ChunkPlan p = res.update(c, nullptr, 1, probe);
+	REQUIRE(p.builds.size() == 2);
+	const ve::IVec3 building = p.builds[0].chunk;
+
+	res.mark_dirty(building, building);
+	const ve::ChunkPlan p2 = res.update(c, nullptr, 1, probe);
+	for (const auto &b : p2.builds) CHECK_FALSE(b.chunk == building);
+
+	res.note_built(building); // stale pre-edit result arrives
+	const ve::ChunkPlan p3 = res.update(c, nullptr, 1, probe, 8);
+	bool replanned = false;
+	for (const auto &b : p3.builds) replanned = replanned || b.chunk == building;
+	CHECK(replanned);
+}
+
+TEST_CASE("dirty resident build is not reissued until stale note_empty lands") {
+	ve::ChunkResidency res(make_cfg(256));
+	FakeProbe probe;
+	const float c[3] = {100.0f, 30.0f, 100.0f};
+	const ve::ChunkPlan p = res.update(c, nullptr, 1, probe);
+	REQUIRE(p.builds.size() == 2);
+	const ve::IVec3 building = p.builds[0].chunk;
+
+	res.mark_dirty(building, building);
+	const ve::ChunkPlan p2 = res.update(c, nullptr, 1, probe);
+	for (const auto &b : p2.builds) CHECK_FALSE(b.chunk == building);
+
+	res.note_empty(building); // stale pre-edit result arrives
+	const ve::ChunkPlan p3 = res.update(c, nullptr, 1, probe, 8);
+	bool replanned = false;
+	for (const auto &b : p3.builds) replanned = replanned || b.chunk == building;
+	CHECK(replanned);
+}
+
 TEST_CASE("an edit during a build does not let note_empty hide the chunk") {
 	ve::ChunkResidency res(make_cfg(256));
 	FakeProbe probe;
