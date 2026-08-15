@@ -20,4 +20,13 @@ func _process(_delta: float) -> void:
 		s = "regions %d  edits %d  ovf %d" % [
 			st.get("resident_regions", 0), st.get("frame_edits", 0),
 			st.get("overflow_ever", 0)]
-	text = "%d fps  (%.1f ms)  |  %s" % [fps, ms, s]
+	var p := ""
+	if _world:
+		var ph: Dictionary = _world.debug_physics_stats()
+		# build_ms is the Jolt BVH build for the last chunk; it is the one physics number
+		# that can show up in the frame time (spec section 6 budgets nothing for it, and the
+		# streamer throttles it to shape_builds_per_frame).
+		p = "  |  chunks %d (+%d)  bodies %d  build %.1fms" % [
+			ph.get("chunks_resident", 0), ph.get("chunks_pending", 0),
+			ph.get("bodies", 0), ph.get("build_ms", 0.0)]
+	text = "%d fps  (%.1f ms)  |  %s%s" % [fps, ms, s, p]

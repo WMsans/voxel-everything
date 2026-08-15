@@ -1,6 +1,6 @@
-[gd_scene load_steps=9 format=3 uid="uid://dx2akrpw2s62k"]
+[gd_scene load_steps=10 format=3 uid="uid://dx2akrpw2s62k"]
 
-[ext_resource type="Script" path="res://demo/fly_camera.gd" id="1"]
+[ext_resource type="Script" path="res://demo/player.gd" id="1"]
 [ext_resource type="Script" path="res://demo/hud.gd" id="2"]
 [ext_resource type="Script" path="res://demo/benchmark.gd" id="3"]
 [ext_resource type="Script" path="res://demo/edit_tool.gd" id="4"]
@@ -19,19 +19,30 @@ ambient_light_energy = 0.4
 [sub_resource type="BoxMesh" id="4"]
 size = Vector3(2, 2, 2)
 
+[sub_resource type="CapsuleShape3D" id="5"]
+radius = 0.4
+height = 1.8
+
 [node name="Main" type="Node3D"]
 
 [node name="VoxelWorld" type="VoxelWorld" parent="."]
 world_origin_bricks = Vector3i(0, -64, 0)
 world_size_regions = Vector3i(64, 8, 64)
+physics_center_path = NodePath("/root/Main/Player")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource(3)
 compositor = SubResource(2)
 
-[node name="Camera3D" type="Camera3D" parent="."]
-transform = Transform3D(-0.58819, 0.30318, -0.74977, 0, 0.92710, 0.37489, 0.80872, 0.22051, -0.54530, 8, 65.2, 8)
+[node name="Player" type="CharacterBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 8, 62, 8)
 script = ExtResource(1)
+
+[node name="Collider" type="CollisionShape3D" parent="Player"]
+shape = SubResource(5)
+
+[node name="Camera3D" type="Camera3D" parent="Player"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.7, 0)
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
 transform = Transform3D(0.6, -0.48, 0.64, 0, 0.8, 0.6, -0.8, -0.36, 0.48, 0, 20, 0)
@@ -54,4 +65,5 @@ script = ExtResource(3)
 [node name="EditTool" type="Node" parent="."]
 script = ExtResource(4)
 world_path = NodePath("/root/Main/VoxelWorld")
-camera_path = NodePath("/root/Main/Camera3D")
+camera_path = NodePath("/root/Main/Player/Camera3D")
+player_path = NodePath("/root/Main/Player")
