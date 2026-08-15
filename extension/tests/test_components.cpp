@@ -32,6 +32,36 @@ bool has_cell(const IslandComponent &c, IVec3 v) {
 	return std::find(c.cells.begin(), c.cells.end(), v) != c.cells.end();
 }
 
+bool component_is_connected(const IslandComponent &c) {
+	if (c.cells.empty()) return false;
+	std::vector<uint8_t> seen(c.cells.size(), 0);
+	std::vector<size_t> stack;
+	seen[0] = 1;
+	stack.push_back(0);
+	size_t visited = 0;
+	while (!stack.empty()) {
+		const size_t k = stack.back();
+		stack.pop_back();
+		visited++;
+		const IVec3 v = c.cells[k];
+		for (int axis = 0; axis < 3; axis++) {
+			for (int sign = -1; sign <= 1; sign += 2) {
+				IVec3 n = v;
+				if (axis == 0) n.x += sign;
+				else if (axis == 1) n.y += sign;
+				else n.z += sign;
+				for (size_t j = 0; j < c.cells.size(); j++) {
+					if (!seen[j] && c.cells[j] == n) {
+						seen[j] = 1;
+						stack.push_back(j);
+					}
+				}
+			}
+		}
+	}
+	return visited == c.cells.size();
+}
+
 } // namespace
 
 TEST_CASE("two separated blobs are two components, and each carries its own AABB") {
@@ -137,6 +167,33 @@ TEST_CASE("the split plane is the weakest seam, not the midpoint") {
 	// Each side keeps its whole blob: a midpoint split would have cut a blob in half.
 	CHECK(std::max(out[0].cell_count(), out[1].cell_count()) == 28);
 	CHECK(std::min(out[0].cell_count(), out[1].cell_count()) == 27);
+}
+
+TEST_CASE("a split half that is internally disconnected is re-labelled into connected pieces") {
+	const FloodWindow w = window16();
+	// Two x-bars separated in z touch each other only through the x = 4 bridge. The whole
+	// component is 6-connected, but when the longest axis (x, extent 5) is split at its
+	// weakest seam, the x < 2 half holds two bars that are not face-adjacent to each other.
+	std::vector<IVec3> cells;
+	for (int x = 0; x <= 3; x++) {
+		cells.push_back({x, 0, 0});
+		cells.push_back({x, 0, 2});
+	}
+	for (int z = 0; z <= 2; z++) cells.push_back({4, 0, z});
+	const FloodResult r = floating(w, cells);
+
+	ComponentConfig cfg;
+	cfg.max_extent_cells = 4;
+	std::vector<IslandComponent> out;
+	label_islands(r, cfg, &out);
+	REQUIRE(out.size() == 3);
+
+	int total = 0;
+	for (const IslandComponent &c : out) {
+		total += c.cell_count();
+		CHECK(component_is_connected(c));
+	}
+	CHECK(total == 11);
 }
 
 TEST_CASE("world AABB is the cell AABB in metres, half-open on the high side") {

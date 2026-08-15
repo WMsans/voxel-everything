@@ -39,8 +39,10 @@ struct IslandComponent {
 //
 // Splitting recursively cuts the offending component with an axis-aligned plane, choosing
 // the axis by longest extent and the plane by FEWEST CROSSING FACES among the candidate
-// positions -- the "weakest box seam". Recursion stops when both halves fit, and a piece
-// that cannot be reduced further (a single cell) is emitted as it is.
+// positions -- the "weakest box seam". Each half is then 6-connectivity labelled and each
+// connected subgroup is emitted as its own component, so a partition never emits a
+// disconnected piece. Recursion stops when a piece fits, and a piece that cannot be reduced
+// further (a single cell) is emitted as it is.
 void label_islands(const FloodResult &r, const ComponentConfig &cfg,
 		std::vector<IslandComponent> *out);
 

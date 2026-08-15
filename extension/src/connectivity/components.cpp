@@ -21,12 +21,55 @@ IVec3 step(IVec3 c, int d) {
 
 int coord(IVec3 c, int axis) { return axis == 0 ? c.x : (axis == 1 ? c.y : c.z); }
 
+using CellKey = std::tuple<int, int, int>;
+using CellSet = std::map<CellKey, char>;
+
+CellKey cell_key(IVec3 v) { return {v.x, v.y, v.z}; }
+IVec3 cell_from_key(const CellKey &k) { return {std::get<0>(k), std::get<1>(k), std::get<2>(k)}; }
+
 void recompute_bounds(IslandComponent *c) {
 	c->lo = c->cells.front();
 	c->hi = c->cells.front();
 	for (const IVec3 &v : c->cells) {
 		c->lo = {std::min(c->lo.x, v.x), std::min(c->lo.y, v.y), std::min(c->lo.z, v.z)};
 		c->hi = {std::max(c->hi.x, v.x), std::max(c->hi.y, v.y), std::max(c->hi.z, v.z)};
+	}
+}
+
+void sort_by_window_index(IslandComponent *c, const FloodWindow &w) {
+	std::sort(c->cells.begin(), c->cells.end(), [&](const IVec3 &a, const IVec3 &b) {
+		return w.index(a) < w.index(b);
+	});
+}
+
+// Six-connected labelling of `piece`'s cells. A partition half is not guaranteed to be
+// connected on its own, so every connected subgroup is bounded and appended as its own
+// IslandComponent.
+void push_connected_pieces(const IslandComponent &piece, std::vector<IslandComponent> *work) {
+	CellSet remaining;
+	for (const IVec3 &v : piece.cells) remaining[cell_key(v)] = 1;
+
+	while (!remaining.empty()) {
+		IslandComponent sub;
+		const IVec3 start = cell_from_key(remaining.begin()->first);
+		std::vector<IVec3> stack;
+		remaining.erase(cell_key(start));
+		stack.push_back(start);
+
+		while (!stack.empty()) {
+			const IVec3 v = stack.back();
+			stack.pop_back();
+			sub.cells.push_back(v);
+			for (int d = 0; d < 6; d++) {
+				const IVec3 n = step(v, d);
+				const auto it = remaining.find(cell_key(n));
+				if (it == remaining.end()) continue;
+				remaining.erase(it);
+				stack.push_back(n);
+			}
+		}
+		recompute_bounds(&sub);
+		work->push_back(sub);
 	}
 }
 
@@ -38,8 +81,7 @@ bool fits(const IslandComponent &c, const ComponentConfig &cfg) {
 
 // The number of face links the plane "axis coordinate < p" would sever. Cheap: one hash
 // probe per cell, no adjacency structure.
-int seam_cost(const IslandComponent &c, int axis, int p,
-		const std::map<std::tuple<int, int, int>, char> &present) {
+int seam_cost(const IslandComponent &c, int axis, int p, const CellSet &present) {
 	int cost = 0;
 	for (const IVec3 &v : c.cells) {
 		if (coord(v, axis) != p - 1) continue;
@@ -52,8 +94,10 @@ int seam_cost(const IslandComponent &c, int axis, int p,
 	return cost;
 }
 
-// Split `c` into two halves along its longest axis at the cheapest seam, appending both to
-// `work`. A component of one cell cannot be split and is emitted as it stands.
+// Split `c` into two halves along its longest axis at the cheapest seam. Each half is then
+// 6-connectivity labelled and every connected subgroup is appended to `work`, so a half that
+// only touched through the seam is not emitted as one disconnected component. A component of
+// one cell cannot be split and is emitted as it stands.
 void split(const IslandComponent &c, std::vector<IslandComponent> *work) {
 	int axis = 0;
 	for (int a = 1; a < 3; a++)
@@ -61,8 +105,8 @@ void split(const IslandComponent &c, std::vector<IslandComponent> *work) {
 	const int lo = coord(c.lo, axis), hi = coord(c.hi, axis);
 	if (hi == lo) { work->push_back(c); return; } // one cell thick everywhere: cannot split
 
-	std::map<std::tuple<int, int, int>, char> present;
-	for (const IVec3 &v : c.cells) present[{v.x, v.y, v.z}] = 1;
+	CellSet present;
+	for (const IVec3 &v : c.cells) present[cell_key(v)] = 1;
 
 	// Candidate planes sit between lo and hi. Ties break towards the middle, so a uniform
 	// blob (every seam equally costly) still halves instead of shaving one cell off an end.
@@ -81,10 +125,8 @@ void split(const IslandComponent &c, std::vector<IslandComponent> *work) {
 	IslandComponent a, b;
 	for (const IVec3 &v : c.cells) (coord(v, axis) < best ? a : b).cells.push_back(v);
 	if (a.cells.empty() || b.cells.empty()) { work->push_back(c); return; }
-	recompute_bounds(&a);
-	recompute_bounds(&b);
-	work->push_back(a);
-	work->push_back(b);
+	push_connected_pieces(a, work);
+	push_connected_pieces(b, work);
 }
 
 } // namespace
@@ -133,16 +175,22 @@ void label_islands(const FloodResult &r, const ComponentConfig &cfg,
 		// longest extent or the cell count of both halves.
 		std::vector<IslandComponent> work{c};
 		while (!work.empty()) {
-			const IslandComponent piece = work.back();
+			IslandComponent piece = work.back();
 			work.pop_back();
-			if (fits(piece, cfg)) { out->push_back(piece); continue; }
+			if (fits(piece, cfg)) {
+				sort_by_window_index(&piece, w);
+				out->push_back(piece);
+				continue;
+			}
 			const size_t before = work.size();
 			split(piece, &work);
 			// split() pushes the piece back unchanged when it cannot divide it; emit it
 			// rather than looping for ever.
 			if (work.size() == before + 1) {
-				out->push_back(work.back());
+				IslandComponent last = work.back();
 				work.pop_back();
+				sort_by_window_index(&last, w);
+				out->push_back(last);
 			}
 		}
 	}
