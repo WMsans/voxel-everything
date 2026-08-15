@@ -207,6 +207,13 @@ ve::EditLog::AppendResult VoxelWorld::append_edit(const ve::EditOp &op) {
 				") — spec §8 fail-soft");
 	}
 	pending_edits_.push_back({op, r});
+	// Collision's half of the fan-out (spec §5: "Fan-out: raymarch set, physics remesh queue,
+	// LoD chain, connectivity"). Queued rather than applied, because this may run on any
+	// thread that owns a tool while ChunkResidency belongs to the main one; physics_tick
+	// drains it. Queued even when physics is off, so enabling it later starts consistent.
+	ve::IVec3 clo{}, chi{};
+	ve::op_chunk_range(op, &clo, &chi);
+	pending_dirty_.push_back({clo, chi});
 	return r;
 }
 
