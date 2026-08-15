@@ -1,0 +1,63 @@
+#pragma once
+#include <godot_cpp/classes/rendering_device.hpp>
+#include <godot_cpp/variant/rid.hpp>
+#include <cstdint>
+#include <vector>
+#include "generator/edit_ops.h"
+#include "world/region.h"
+
+namespace godot {
+
+struct MeshPassConfig {
+	int max_jobs = 2;      // chunks per batch
+	int max_verts = 65536; // a fully covered 12.8 m chunk holds ~16 400
+	int max_tris = 65536;  // ...and 32 768 triangles
+};
+
+struct MeshJob {
+	ve::IVec3 chunk{};
+	const ve::EditOp *ops = nullptr; // the chunk's region's op list; copied at submit
+	int op_count = 0;
+};
+
+struct MeshResult {
+	ve::IVec3 chunk{};
+	std::vector<float> positions;  // 3 per vertex, world space
+	std::vector<uint32_t> indices; // 3 per triangle
+	bool overflow = false;         // a cap was hit: the mesh is missing pieces
+};
+
+// The collision mesher. Owns every GPU resource on ITS OWN local RenderingDevice — the
+// mesher never reads the brick atlas (see the plan's Deliberate Decisions), so it shares no
+// resource with the renderer and can be submitted and synced without touching the frame.
+class MeshPass {
+public:
+	~MeshPass();
+
+	bool initialize(RenderingDevice *rd, const MeshPassConfig &cfg);
+	void teardown();
+	bool is_valid() const { return field_pipeline_.is_valid(); }
+	const MeshPassConfig &config() const { return cfg_; }
+
+	// Runs the field pass alone for one chunk, inline (record, submit, sync, read back).
+	// Diagnostic only — the streaming path never stalls like this.
+	bool run_field_sync(const MeshJob &job, std::vector<uint8_t> *lattice);
+
+private:
+	bool build(RenderingDevice *rd, const char *res_path, RID *shader, RID *pipeline);
+	void record_field(int64_t list, const MeshJob &job, int job_index);
+	void upload_ops(const MeshJob &job, int job_index);
+	void push(int64_t list, const MeshJob &job, int job_index);
+
+	RenderingDevice *rd_ = nullptr;
+	MeshPassConfig cfg_;
+	RID lattice_;     // R8_UNORM 3D, 130^3 encoded sdf
+	RID cells_;       // int32 per mesh cell: vertex index or -1
+	RID verts_;       // float3 per vertex, max_jobs * max_verts
+	RID tris_;        // uint3 per triangle, max_jobs * max_tris
+	RID counts_;      // 4 uints per job: vert count, tri count, overflow bits, pad
+	RID ops_;         // max_jobs * kMaxRegionOps EditOps
+	RID field_shader_, field_pipeline_, field_uset_;
+};
+
+} // namespace godot

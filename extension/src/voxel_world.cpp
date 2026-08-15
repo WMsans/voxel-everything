@@ -7,12 +7,16 @@
 #include "render/brick_gen_pass.h"
 #include "render/world_streamer.h"
 #include "render/shader_loader.h"
+#include "render/mesh_pass.h"
+#include "mesh/dual_contour.h"
+#include "mesh/mesh_chunk.h"
 #include "generator/generator.h"
 #include "world/brick_eval.h"
 #include "world/brick_mip.h"
 #include "world/raycast.h"
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
+#include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/core/memory.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <cmath>
@@ -36,6 +40,21 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_world_size_regions"), &VoxelWorld::get_world_size_regions);
 	ClassDB::bind_method(D_METHOD("set_residency_radius_m", "v"), &VoxelWorld::set_residency_radius_m);
 	ClassDB::bind_method(D_METHOD("get_residency_radius_m"), &VoxelWorld::get_residency_radius_m);
+	ClassDB::bind_method(D_METHOD("set_physics_enabled", "v"), &VoxelWorld::set_physics_enabled);
+	ClassDB::bind_method(D_METHOD("get_physics_enabled"), &VoxelWorld::get_physics_enabled);
+	ClassDB::bind_method(D_METHOD("set_physics_center_path", "p"), &VoxelWorld::set_physics_center_path);
+	ClassDB::bind_method(D_METHOD("get_physics_center_path"), &VoxelWorld::get_physics_center_path);
+	ClassDB::bind_method(D_METHOD("set_physics_radius_m", "v"), &VoxelWorld::set_physics_radius_m);
+	ClassDB::bind_method(D_METHOD("get_physics_radius_m"), &VoxelWorld::get_physics_radius_m);
+	ClassDB::bind_method(D_METHOD("set_max_collider_chunks", "v"), &VoxelWorld::set_max_collider_chunks);
+	ClassDB::bind_method(D_METHOD("get_max_collider_chunks"), &VoxelWorld::get_max_collider_chunks);
+	ClassDB::bind_method(D_METHOD("set_mesh_jobs_per_frame", "v"), &VoxelWorld::set_mesh_jobs_per_frame);
+	ClassDB::bind_method(D_METHOD("get_mesh_jobs_per_frame"), &VoxelWorld::get_mesh_jobs_per_frame);
+	ClassDB::bind_method(D_METHOD("set_shape_builds_per_frame", "v"), &VoxelWorld::set_shape_builds_per_frame);
+	ClassDB::bind_method(D_METHOD("get_shape_builds_per_frame"), &VoxelWorld::get_shape_builds_per_frame);
+	ClassDB::bind_method(D_METHOD("debug_init_physics"), &VoxelWorld::debug_init_physics);
+	ClassDB::bind_method(D_METHOD("debug_teardown_physics"), &VoxelWorld::debug_teardown_physics);
+	ClassDB::bind_method(D_METHOD("debug_mesh_lattice_diff", "chunk"), &VoxelWorld::debug_mesh_lattice_diff);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_pixel", "origin", "dir"), &VoxelWorld::debug_raymarch_pixel);
@@ -78,9 +97,26 @@ void VoxelWorld::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR3I, "world_origin_bricks"), "set_world_origin_bricks", "get_world_origin_bricks");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR3I, "world_size_regions"), "set_world_size_regions", "get_world_size_regions");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "residency_radius_m"), "set_residency_radius_m", "get_residency_radius_m");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "physics_enabled"), "set_physics_enabled", "get_physics_enabled");
+	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "physics_center_path"), "set_physics_center_path", "get_physics_center_path");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "physics_radius_m"), "set_physics_radius_m", "get_physics_radius_m");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_collider_chunks"), "set_max_collider_chunks", "get_max_collider_chunks");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "mesh_jobs_per_frame"), "set_mesh_jobs_per_frame", "get_mesh_jobs_per_frame");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "shape_builds_per_frame"), "set_shape_builds_per_frame", "get_shape_builds_per_frame");
 }
 
-void VoxelWorld::_ready() {}
+void VoxelWorld::_ready() {
+	// Godot only calls _process on a GDExtension node that asks for it.
+	set_process(true);
+}
+
+void VoxelWorld::_process(double) {
+	if (!physics_enabled_ || physics_center_path_.is_empty()) return;
+	Node3D *anchor = Object::cast_to<Node3D>(get_node_or_null(physics_center_path_));
+	if (!anchor) return;
+	ensure_physics_initialized();
+	physics_tick(anchor->get_global_position());
+}
 
 VoxelWorld::~VoxelWorld() {}
 
@@ -98,6 +134,7 @@ void VoxelWorld::teardown_gpu() {
 }
 
 void VoxelWorld::_exit_tree() {
+	teardown_physics();
 	teardown_gpu();
 	if (residency_) { delete residency_; residency_ = nullptr; }
 	if (edit_log_) { delete edit_log_; edit_log_ = nullptr; }
@@ -173,6 +210,92 @@ ve::WorldBounds VoxelWorld::world_bounds() const {
 	b.origin_bricks = {world_origin_bricks_.x, world_origin_bricks_.y, world_origin_bricks_.z};
 	b.size_regions = {world_size_regions_.x, world_size_regions_.y, world_size_regions_.z};
 	return b;
+}
+
+void VoxelWorld::ensure_physics_initialized() {
+	if (physics_ready_) return;
+	if (!mesh_rd_) mesh_rd_ = RenderingServer::get_singleton()->create_local_rendering_device();
+	if (!mesh_rd_) {
+		UtilityFunctions::printerr("VoxelWorld: no local RenderingDevice for the mesher");
+		return;
+	}
+	// The CPU cores are shared with the streaming path and outlive both (voxel_world.h).
+	if (!edit_log_) edit_log_ = new ve::EditLog(world_bounds());
+	mesh_pass_ = new MeshPass();
+	MeshPassConfig mcfg;
+	mcfg.max_jobs = mesh_jobs_per_frame_;
+	if (!mesh_pass_->initialize(mesh_rd_, mcfg)) {
+		delete mesh_pass_;
+		mesh_pass_ = nullptr;
+		return;
+	}
+	ve::ChunkResidencyConfig ccfg;
+	ccfg.bounds = world_bounds();
+	ccfg.radius_m = physics_radius_m_;
+	ccfg.max_chunks = max_collider_chunks_;
+	ccfg.max_builds_per_frame = mesh_jobs_per_frame_;
+	chunks_ = new ve::ChunkResidency(ccfg);
+	physics_ready_ = true;
+}
+
+void VoxelWorld::teardown_physics() {
+	physics_ready_ = false;
+	if (mesh_pass_) { delete mesh_pass_; mesh_pass_ = nullptr; }
+	if (chunks_) { delete chunks_; chunks_ = nullptr; }
+	if (mesh_rd_) { memdelete(mesh_rd_); mesh_rd_ = nullptr; }
+	pending_dirty_.clear();
+}
+
+int VoxelWorld::physics_tick(Vector3) { return 0; } // Task 7 fills this in
+
+bool VoxelWorld::debug_init_physics() {
+	ensure_physics_initialized();
+	return physics_ready_;
+}
+
+void VoxelWorld::debug_teardown_physics() {
+	teardown_physics();
+}
+
+Dictionary VoxelWorld::debug_mesh_lattice_diff(Vector3i chunk) {
+	Dictionary d;
+	ensure_physics_initialized();
+	if (!physics_ready_ || !mesh_pass_) return d;
+	const ve::IVec3 c{chunk.x, chunk.y, chunk.z};
+	std::vector<ve::EditOp> ops;
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		ops = edit_log_->ops(ve::region_of_chunk(c));
+	}
+	MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
+	std::vector<uint8_t> gpu;
+	if (!mesh_pass_->run_field_sync(job, &gpu)) return d;
+
+	ve::AnalyticGenerator gen;
+	const ve::DcGrid g = ve::chunk_dc_grid(c);
+	int max_diff = 0, over_one = 0;
+	bool pos = false, neg = false;
+	for (int z = 0; z < g.lattice; z++)
+		for (int y = 0; y < g.lattice; y++)
+			for (int x = 0; x < g.lattice; x++) {
+				const float p[3] = {g.origin[0] + (x - 1) * g.cell_size,
+						g.origin[1] + (y - 1) * g.cell_size,
+						g.origin[2] + (z - 1) * g.cell_size};
+				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
+						p[0], p[1], p[2]).sdf;
+				if (s <= 0.0f) neg = true; else pos = true;
+				const int want = ve::encode_sdf(s);
+				const int got = gpu[ve::dc_lattice_index(g, x, y, z)];
+				const int diff = std::abs(got - want);
+				max_diff = std::max(max_diff, diff);
+				if (diff > 1) over_one++;
+			}
+	d["samples"] = ve::kChunkLatticeCount;
+	d["max_diff"] = max_diff;
+	d["diff_over_one"] = over_one;
+	d["has_surface"] = pos && neg;
+	d["op_count"] = static_cast<int>(ops.size());
+	return d;
 }
 
 // Half-precision to single-precision (normal + subnormal paths).

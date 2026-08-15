@@ -3,13 +3,16 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/color.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
+#include <godot_cpp/variant/node_path.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/vector2.hpp>
 #include <mutex>
+#include <utility>
 #include <vector>
+#include "mesh/chunk_residency.h"
 #include "world/edit_log.h"
 #include "world/region.h"
 #include "world/residency.h"
@@ -22,6 +25,8 @@ class BrickGenPass;
 class RaymarchPass;
 class CompositePass;
 class WorldStreamer;
+class MeshPass;
+class ColliderStreamer;
 
 // One edit drained by the streamer: the op plus the regions its append touched/rejected.
 struct PendingEdit {
@@ -41,6 +46,13 @@ class VoxelWorld : public Node3D {
 	Vector3i world_size_regions_ = Vector3i(64, 8, 64);
 	float residency_radius_m_ = 96.0f;
 
+	bool physics_enabled_ = true;
+	NodePath physics_center_path_;
+	float physics_radius_m_ = 64.0f;
+	int max_collider_chunks_ = 160;
+	int mesh_jobs_per_frame_ = 2;
+	int shape_builds_per_frame_ = 2;
+
 	GpuAtlas *atlas_ = nullptr;
 	RegionPass *region_pass_ = nullptr;
 	BrickGenPass *gen_pass_ = nullptr;
@@ -55,6 +67,13 @@ class VoxelWorld : public Node3D {
 	std::vector<PendingEdit> pending_edits_;  // appended by tools, drained by the streamer
 	int overflow_seen_ = 0;                   // sticky OR of frame overflow bits (tests)
 
+	RenderingDevice *mesh_rd_ = nullptr; // owned; ALWAYS local (submit/sync are illegal on main)
+	MeshPass *mesh_pass_ = nullptr;
+	ve::ChunkResidency *chunks_ = nullptr;
+	ColliderStreamer *colliders_ = nullptr;
+	bool physics_ready_ = false;
+	std::vector<std::pair<ve::IVec3, ve::IVec3>> pending_dirty_; // guarded by edit_mutex_
+
 	RenderingDevice *main_rd_ = nullptr;
 	RenderingDevice *local_rd_ = nullptr; // owned when use_local_device_
 	bool initialized_ = false;
@@ -66,6 +85,7 @@ protected:
 
 public:
 	void _ready() override;
+	void _process(double delta) override;
 	void _exit_tree() override;
 	~VoxelWorld() override;
 
@@ -86,6 +106,22 @@ public:
 
 	void ensure_initialized();
 	bool is_initialized() const { return initialized_; }
+	void ensure_physics_initialized();
+	void teardown_physics();
+	int physics_tick(Vector3 center); // returns actions taken; Task 7 gives it a body
+	bool is_physics_ready() const { return physics_ready_; }
+	void set_physics_enabled(bool v) { physics_enabled_ = v; }
+	bool get_physics_enabled() const { return physics_enabled_; }
+	void set_physics_center_path(const NodePath &p) { physics_center_path_ = p; }
+	NodePath get_physics_center_path() const { return physics_center_path_; }
+	void set_physics_radius_m(float v) { physics_radius_m_ = v; }
+	float get_physics_radius_m() const { return physics_radius_m_; }
+	void set_max_collider_chunks(int v) { max_collider_chunks_ = v; }
+	int get_max_collider_chunks() const { return max_collider_chunks_; }
+	void set_mesh_jobs_per_frame(int v) { mesh_jobs_per_frame_ = v; }
+	int get_mesh_jobs_per_frame() const { return mesh_jobs_per_frame_; }
+	void set_shape_builds_per_frame(int v) { shape_builds_per_frame_ = v; }
+	int get_shape_builds_per_frame() const { return shape_builds_per_frame_; }
 	RenderingDevice *rd() const;
 	ve::WorldBounds world_bounds() const;
 
@@ -137,6 +173,11 @@ public:
 	bool debug_region_map_consistent();
 	Dictionary debug_raycast(Vector3 origin, Vector3 dir);
 	RenderingDevice *debug_local_rd() const { return local_rd_; }
+
+	// --- Task 4 hooks ---
+	bool debug_init_physics();
+	void debug_teardown_physics();
+	Dictionary debug_mesh_lattice_diff(Vector3i chunk);
 };
 
 } // namespace godot
