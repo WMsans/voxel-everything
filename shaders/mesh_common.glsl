@@ -1,0 +1,21 @@
+// Chunk lattice addressing, shared by the three collision-meshing passes so they can never
+// disagree. Mirror of extension/src/mesh/mesh_chunk.h and ve::dual_contour's conventions:
+// lattice array index i holds the sample at local coordinate i - 1, mesh-cell array index m
+// holds the cell at local coordinate m - 1, and cell m's corners are lattice m and m + 1.
+// The one-cell overlap below the origin is what lets a chunk close the quads on its minimum
+// faces without reading a neighbouring chunk's lattice.
+#include "common.glsl"
+
+const int CHUNK_CELLS = 128;        // ve::kChunkCells
+const int CHUNK_MESH_CELLS = 129;   // ve::kChunkMeshCells
+const int CHUNK_LATTICE = 130;      // ve::kChunkLattice
+const float CHUNK_CELL_SIZE = 0.1;  // ve::kChunkCellSize
+const float CHUNK_SIZE = 12.8;      // ve::kChunkSize
+
+vec3 lattice_world_pos(ivec3 chunk, ivec3 l) {
+	return vec3(chunk) * CHUNK_SIZE + (vec3(l) - 1.0) * CHUNK_CELL_SIZE;
+}
+
+int mesh_cell_index(ivec3 m) {
+	return m.x + m.y * CHUNK_MESH_CELLS + m.z * CHUNK_MESH_CELLS * CHUNK_MESH_CELLS;
+}

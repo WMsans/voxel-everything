@@ -7,17 +7,24 @@
 #include "render/brick_gen_pass.h"
 #include "render/world_streamer.h"
 #include "render/shader_loader.h"
+#include "render/mesh_pass.h"
+#include "physics/collider_streamer.h"
+#include "mesh/dual_contour.h"
+#include "mesh/mesh_chunk.h"
 #include "generator/generator.h"
 #include "world/brick_eval.h"
 #include "world/brick_mip.h"
 #include "world/raycast.h"
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
+#include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/core/memory.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <array>
+#include <iterator>
 
 using namespace godot;
 
@@ -36,6 +43,27 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_world_size_regions"), &VoxelWorld::get_world_size_regions);
 	ClassDB::bind_method(D_METHOD("set_residency_radius_m", "v"), &VoxelWorld::set_residency_radius_m);
 	ClassDB::bind_method(D_METHOD("get_residency_radius_m"), &VoxelWorld::get_residency_radius_m);
+	ClassDB::bind_method(D_METHOD("set_physics_enabled", "v"), &VoxelWorld::set_physics_enabled);
+	ClassDB::bind_method(D_METHOD("get_physics_enabled"), &VoxelWorld::get_physics_enabled);
+	ClassDB::bind_method(D_METHOD("set_physics_center_path", "p"), &VoxelWorld::set_physics_center_path);
+	ClassDB::bind_method(D_METHOD("get_physics_center_path"), &VoxelWorld::get_physics_center_path);
+	ClassDB::bind_method(D_METHOD("set_physics_radius_m", "v"), &VoxelWorld::set_physics_radius_m);
+	ClassDB::bind_method(D_METHOD("get_physics_radius_m"), &VoxelWorld::get_physics_radius_m);
+	ClassDB::bind_method(D_METHOD("set_max_collider_chunks", "v"), &VoxelWorld::set_max_collider_chunks);
+	ClassDB::bind_method(D_METHOD("get_max_collider_chunks"), &VoxelWorld::get_max_collider_chunks);
+	ClassDB::bind_method(D_METHOD("set_mesh_jobs_per_frame", "v"), &VoxelWorld::set_mesh_jobs_per_frame);
+	ClassDB::bind_method(D_METHOD("get_mesh_jobs_per_frame"), &VoxelWorld::get_mesh_jobs_per_frame);
+	ClassDB::bind_method(D_METHOD("set_shape_builds_per_frame", "v"), &VoxelWorld::set_shape_builds_per_frame);
+	ClassDB::bind_method(D_METHOD("get_shape_builds_per_frame"), &VoxelWorld::get_shape_builds_per_frame);
+	ClassDB::bind_method(D_METHOD("debug_init_physics"), &VoxelWorld::debug_init_physics);
+	ClassDB::bind_method(D_METHOD("debug_teardown_physics"), &VoxelWorld::debug_teardown_physics);
+	ClassDB::bind_method(D_METHOD("debug_mesh_lattice_diff", "chunk"), &VoxelWorld::debug_mesh_lattice_diff);
+	ClassDB::bind_method(D_METHOD("debug_mesh_diff", "chunk"), &VoxelWorld::debug_mesh_diff);
+	ClassDB::bind_method(D_METHOD("debug_mesh_submit", "chunks"), &VoxelWorld::debug_mesh_submit);
+	ClassDB::bind_method(D_METHOD("debug_mesh_collect"), &VoxelWorld::debug_mesh_collect);
+	ClassDB::bind_method(D_METHOD("debug_physics_frame", "center"), &VoxelWorld::debug_physics_frame);
+	ClassDB::bind_method(D_METHOD("debug_physics_stats"), &VoxelWorld::debug_physics_stats);
+	ClassDB::bind_method(D_METHOD("debug_body_of_chunk", "chunk"), &VoxelWorld::debug_body_of_chunk);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_pixel", "origin", "dir"), &VoxelWorld::debug_raymarch_pixel);
@@ -78,9 +106,26 @@ void VoxelWorld::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR3I, "world_origin_bricks"), "set_world_origin_bricks", "get_world_origin_bricks");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR3I, "world_size_regions"), "set_world_size_regions", "get_world_size_regions");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "residency_radius_m"), "set_residency_radius_m", "get_residency_radius_m");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "physics_enabled"), "set_physics_enabled", "get_physics_enabled");
+	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "physics_center_path"), "set_physics_center_path", "get_physics_center_path");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "physics_radius_m"), "set_physics_radius_m", "get_physics_radius_m");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_collider_chunks"), "set_max_collider_chunks", "get_max_collider_chunks");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "mesh_jobs_per_frame"), "set_mesh_jobs_per_frame", "get_mesh_jobs_per_frame");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "shape_builds_per_frame"), "set_shape_builds_per_frame", "get_shape_builds_per_frame");
 }
 
-void VoxelWorld::_ready() {}
+void VoxelWorld::_ready() {
+	// Godot only calls _process on a GDExtension node that asks for it.
+	set_process(true);
+}
+
+void VoxelWorld::_process(double) {
+	if (!physics_enabled_ || physics_center_path_.is_empty()) return;
+	Node3D *anchor = Object::cast_to<Node3D>(get_node_or_null(physics_center_path_));
+	if (!anchor) return;
+	ensure_physics_initialized();
+	physics_tick(anchor->get_global_position());
+}
 
 VoxelWorld::~VoxelWorld() {}
 
@@ -98,6 +143,7 @@ void VoxelWorld::teardown_gpu() {
 }
 
 void VoxelWorld::_exit_tree() {
+	teardown_physics();
 	teardown_gpu();
 	if (residency_) { delete residency_; residency_ = nullptr; }
 	if (edit_log_) { delete edit_log_; edit_log_ = nullptr; }
@@ -161,6 +207,13 @@ ve::EditLog::AppendResult VoxelWorld::append_edit(const ve::EditOp &op) {
 				") — spec §8 fail-soft");
 	}
 	pending_edits_.push_back({op, r});
+	// Collision's half of the fan-out (spec §5: "Fan-out: raymarch set, physics remesh queue,
+	// LoD chain, connectivity"). Queued rather than applied, because this may run on any
+	// thread that owns a tool while ChunkResidency belongs to the main one; physics_tick
+	// drains it. Queued even when physics is off, so enabling it later starts consistent.
+	ve::IVec3 clo{}, chi{};
+	ve::op_chunk_range(op, &clo, &chi);
+	pending_dirty_.push_back({clo, chi});
 	return r;
 }
 
@@ -173,6 +226,324 @@ ve::WorldBounds VoxelWorld::world_bounds() const {
 	b.origin_bricks = {world_origin_bricks_.x, world_origin_bricks_.y, world_origin_bricks_.z};
 	b.size_regions = {world_size_regions_.x, world_size_regions_.y, world_size_regions_.z};
 	return b;
+}
+
+void VoxelWorld::ensure_physics_initialized() {
+	if (physics_ready_) return;
+	if (!mesh_rd_) mesh_rd_ = RenderingServer::get_singleton()->create_local_rendering_device();
+	if (!mesh_rd_) {
+		UtilityFunctions::printerr("VoxelWorld: no local RenderingDevice for the mesher");
+		return;
+	}
+	// The CPU cores are shared with the streaming path and outlive both (voxel_world.h).
+	if (!edit_log_) edit_log_ = new ve::EditLog(world_bounds());
+	mesh_pass_ = new MeshPass();
+	MeshPassConfig mcfg;
+	mcfg.max_jobs = mesh_jobs_per_frame_;
+	if (!mesh_pass_->initialize(mesh_rd_, mcfg)) {
+		delete mesh_pass_;
+		mesh_pass_ = nullptr;
+		return;
+	}
+	ve::ChunkResidencyConfig ccfg;
+	ccfg.bounds = world_bounds();
+	ccfg.radius_m = physics_radius_m_;
+	ccfg.max_chunks = max_collider_chunks_;
+	ccfg.max_builds_per_frame = mesh_jobs_per_frame_;
+	chunks_ = new ve::ChunkResidency(ccfg);
+	colliders_ = new ColliderStreamer();
+	colliders_->initialize(chunks_, edit_log_, &edit_mutex_, mesh_pass_, max_collider_chunks_);
+	colliders_->set_shape_builds_per_frame(shape_builds_per_frame_);
+	physics_ready_ = true;
+}
+
+void VoxelWorld::teardown_physics() {
+	physics_ready_ = false;
+	// Colliders first: they hold the mesher's results and the residency's slots.
+	if (colliders_) { delete colliders_; colliders_ = nullptr; }
+	if (mesh_pass_) { delete mesh_pass_; mesh_pass_ = nullptr; }
+	if (chunks_) { delete chunks_; chunks_ = nullptr; }
+	if (mesh_rd_) { memdelete(mesh_rd_); mesh_rd_ = nullptr; }
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		pending_dirty_.clear();
+	}
+}
+
+int VoxelWorld::physics_tick(Vector3 center) {
+	if (!physics_ready_ || !colliders_ || !chunks_) return 0;
+	// Drain the dirty ranges the edit path queued. They are COLLECTED under edit_mutex_ and
+	// APPLIED here, on the main thread, so ChunkResidency needs no lock of its own — and the
+	// probe inside update(), which takes edit_mutex_, can never deadlock against an edit.
+	std::vector<std::pair<ve::IVec3, ve::IVec3>> dirty;
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		dirty.swap(pending_dirty_);
+	}
+	for (const auto &r : dirty) chunks_->mark_dirty(r.first, r.second);
+	const Ref<World3D> w = get_world_3d();
+	if (w.is_valid()) colliders_->set_space(w->get_space());
+	return colliders_->run_frame(center.x, center.y, center.z);
+}
+
+int VoxelWorld::debug_physics_frame(Vector3 center) {
+	ensure_physics_initialized();
+	return physics_tick(center);
+}
+
+Dictionary VoxelWorld::debug_physics_stats() {
+	Dictionary d;
+	d["chunks_resident"] = chunks_ ? chunks_->resident_count() : 0;
+	d["chunks_pending"] = chunks_ ? chunks_->pending_count() : 0;
+	d["probe_cache"] = chunks_ ? chunks_->probe_cache_size() : 0;
+	d["bodies"] = colliders_ ? colliders_->active_bodies() : 0;
+	d["builds"] = colliders_ ? colliders_->builds_last_frame() : 0;
+	d["queued"] = colliders_ ? colliders_->queued_results() : 0;
+	d["failures"] = colliders_ ? colliders_->failures() : 0;
+	d["build_ms"] = colliders_ ? colliders_->last_build_ms() : 0.0f;
+	d["collect_ms"] = colliders_ ? colliders_->last_collect_ms() : 0.0f;
+	return d;
+}
+
+RID VoxelWorld::debug_body_of_chunk(Vector3i chunk) {
+	if (!chunks_ || !colliders_) return RID();
+	return colliders_->body_of_slot(chunks_->slot_of({chunk.x, chunk.y, chunk.z}));
+}
+
+bool VoxelWorld::debug_init_physics() {
+	ensure_physics_initialized();
+	return physics_ready_;
+}
+
+void VoxelWorld::debug_teardown_physics() {
+	teardown_physics();
+}
+
+Dictionary VoxelWorld::debug_mesh_lattice_diff(Vector3i chunk) {
+	Dictionary d;
+	ensure_physics_initialized();
+	if (!physics_ready_ || !mesh_pass_) return d;
+	const ve::IVec3 c{chunk.x, chunk.y, chunk.z};
+	std::vector<ve::EditOp> ops;
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		ops = edit_log_->ops(ve::region_of_chunk(c));
+	}
+	MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
+	std::vector<uint8_t> gpu;
+	if (!mesh_pass_->run_field_sync(job, &gpu)) return d;
+
+	ve::AnalyticGenerator gen;
+	const ve::DcGrid g = ve::chunk_dc_grid(c);
+	int max_diff = 0, over_one = 0;
+	bool pos = false, neg = false;
+	for (int z = 0; z < g.lattice; z++)
+		for (int y = 0; y < g.lattice; y++)
+			for (int x = 0; x < g.lattice; x++) {
+				const float p[3] = {g.origin[0] + (x - 1) * g.cell_size,
+						g.origin[1] + (y - 1) * g.cell_size,
+						g.origin[2] + (z - 1) * g.cell_size};
+				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
+						p[0], p[1], p[2]).sdf;
+				if (s <= 0.0f) neg = true; else pos = true;
+				const int want = ve::encode_sdf(s);
+				const int got = gpu[ve::dc_lattice_index(g, x, y, z)];
+				const int diff = std::abs(got - want);
+				max_diff = std::max(max_diff, diff);
+				if (diff > 1) over_one++;
+			}
+	d["samples"] = ve::kChunkLatticeCount;
+	d["max_diff"] = max_diff;
+	d["diff_over_one"] = over_one;
+	d["has_surface"] = pos && neg;
+	d["op_count"] = static_cast<int>(ops.size());
+	return d;
+}
+
+Dictionary VoxelWorld::debug_mesh_diff(Vector3i chunk) {
+	Dictionary d;
+	ensure_physics_initialized();
+	if (!physics_ready_ || !mesh_pass_) return d;
+	const ve::IVec3 c{chunk.x, chunk.y, chunk.z};
+	std::vector<ve::EditOp> ops;
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		ops = edit_log_->ops(ve::region_of_chunk(c));
+	}
+	const MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
+	MeshResult gpu;
+	std::vector<uint8_t> lattice;
+	std::vector<int32_t> gpu_cells;
+	if (!mesh_pass_->mesh_sync(job, &gpu, &lattice, &gpu_cells)) return d;
+	if (gpu.failed) return d; // short readback: do not present partial data as a diff
+
+	const ve::DcGrid g = ve::chunk_dc_grid(c);
+	ve::AnalyticGenerator gen;
+
+	// 1. The lattice against the CPU field. One encoded step of sin() drift is invisible.
+	int lat_max = 0, lat_over = 0;
+	for (int z = 0; z < g.lattice; z++)
+		for (int y = 0; y < g.lattice; y++)
+			for (int x = 0; x < g.lattice; x++) {
+				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
+						g.origin[0] + (x - 1) * g.cell_size, g.origin[1] + (y - 1) * g.cell_size,
+						g.origin[2] + (z - 1) * g.cell_size).sdf;
+				const int diff = std::abs(static_cast<int>(lattice[ve::dc_lattice_index(g, x, y, z)]) -
+						static_cast<int>(ve::encode_sdf(s)));
+				lat_max = std::max(lat_max, diff);
+				if (diff > 1) lat_over++;
+			}
+	d["lattice_max_diff"] = lat_max;
+	d["lattice_diff_over_one"] = lat_over;
+	d["op_count"] = static_cast<int>(ops.size());
+	d["overflow"] = gpu.overflow;
+
+	// 2. The mesh against ve::dual_contour run on the GPU's OWN lattice, so the two sides
+	//    consume identical bytes and any difference is the algorithm drifting.
+	ve::MeshBuffer ref;
+	ve::dual_contour(lattice.data(), g, &ref);
+	const int gpu_verts = static_cast<int>(gpu.positions.size() / 3);
+
+	int both = 0, only_cpu = 0, only_gpu = 0;
+	float max_pos = 0.0f;
+	for (int i = 0; i < static_cast<int>(ref.cell_vertex.size()); i++) {
+		const int32_t a = ref.cell_vertex[i];
+		const int32_t b = gpu_cells[i];
+		if (a >= 0 && b >= 0 && b < gpu_verts) {
+			both++;
+			for (int k = 0; k < 3; k++)
+				max_pos = std::max(max_pos, std::fabs(ref.positions[a * 3 + k] -
+						gpu.positions[b * 3 + k]));
+		} else if (a >= 0) {
+			only_cpu++;
+		} else if (b >= 0) {
+			only_gpu++;
+		}
+	}
+	d["cells_cpu"] = ref.vertex_count();
+	d["cells_gpu"] = gpu_verts;
+	d["cells_both"] = both;
+	d["cells_only_cpu"] = only_cpu;
+	d["cells_only_gpu"] = only_gpu;
+	d["max_pos_diff"] = max_pos;
+
+	// 3. Triangles as cyclically normalised CELL triples: the GPU numbers its vertices with
+	//    atomics in no fixed order, but the cells they belong to are fixed, and keeping the
+	//    cycle (rather than sorting the three) means an inverted winding still differs.
+	std::vector<int32_t> cpu_v2c(ref.vertex_count(), -1), gpu_v2c(gpu_verts, -1);
+	for (int i = 0; i < static_cast<int>(ref.cell_vertex.size()); i++) {
+		if (ref.cell_vertex[i] >= 0) cpu_v2c[ref.cell_vertex[i]] = i;
+		if (gpu_cells[i] >= 0 && gpu_cells[i] < gpu_verts) gpu_v2c[gpu_cells[i]] = i;
+	}
+	const auto canonical = [](const std::vector<uint32_t> &idx, const std::vector<int32_t> &v2c) {
+		std::vector<std::array<int, 3>> out;
+		out.reserve(idx.size() / 3);
+		for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+			int cell[3];
+			bool ok = true;
+			for (int k = 0; k < 3; k++) {
+				const uint32_t v = idx[t + k];
+				if (v >= v2c.size()) { ok = false; break; }
+				cell[k] = v2c[v];
+			}
+			if (!ok) continue;
+			int r = 0;
+			if (cell[1] < cell[r]) r = 1;
+			if (cell[2] < cell[r]) r = 2;
+			out.push_back({cell[r], cell[(r + 1) % 3], cell[(r + 2) % 3]});
+		}
+		std::sort(out.begin(), out.end());
+		return out;
+	};
+	const std::vector<std::array<int, 3>> cpu_tris = canonical(ref.indices, cpu_v2c);
+	const std::vector<std::array<int, 3>> gpu_tris = canonical(gpu.indices, gpu_v2c);
+	std::vector<std::array<int, 3>> diff_a, diff_b;
+	std::set_difference(cpu_tris.begin(), cpu_tris.end(), gpu_tris.begin(), gpu_tris.end(),
+			std::back_inserter(diff_a));
+	std::set_difference(gpu_tris.begin(), gpu_tris.end(), cpu_tris.begin(), cpu_tris.end(),
+			std::back_inserter(diff_b));
+	d["tri_cpu"] = static_cast<int>(cpu_tris.size());
+	d["tri_gpu"] = static_cast<int>(gpu_tris.size());
+	d["tri_only_cpu"] = static_cast<int>(diff_a.size());
+	d["tri_only_gpu"] = static_cast<int>(diff_b.size());
+
+	// 4. Two properties nothing above can prove, checked against the field itself: every
+	//    vertex sits on the surface, and every triangle's normal points at the air.
+	float max_sdf = 0.0f;
+	int off_10cm = 0;
+	int winding_bad = 0, tri_sampled = 0;
+	const int tri_count = static_cast<int>(gpu.indices.size() / 3);
+	const int stride = std::max(1, tri_count / 512); // a spread sample, not the first 512
+	for (int v = 0; v < gpu_verts; v++) {
+		const float s = std::fabs(ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
+				gpu.positions[v * 3], gpu.positions[v * 3 + 1], gpu.positions[v * 3 + 2]).sdf);
+		max_sdf = std::max(max_sdf, s);
+		if (s > 0.1f) off_10cm++;
+	}
+	for (int t = 0; t < tri_count; t += stride) {
+		const uint32_t i0 = gpu.indices[t * 3], i1 = gpu.indices[t * 3 + 1],
+				i2 = gpu.indices[t * 3 + 2];
+		if (i0 >= static_cast<uint32_t>(gpu_verts) || i1 >= static_cast<uint32_t>(gpu_verts) ||
+				i2 >= static_cast<uint32_t>(gpu_verts))
+			continue;
+		const Vector3 p0(gpu.positions[i0 * 3], gpu.positions[i0 * 3 + 1], gpu.positions[i0 * 3 + 2]);
+		const Vector3 p1(gpu.positions[i1 * 3], gpu.positions[i1 * 3 + 1], gpu.positions[i1 * 3 + 2]);
+		const Vector3 p2(gpu.positions[i2 * 3], gpu.positions[i2 * 3 + 1], gpu.positions[i2 * 3 + 2]);
+		const Vector3 n = (p1 - p0).cross(p2 - p0);
+		if (n.length_squared() <= 0.0f) continue; // degenerate: carries no orientation
+		const Vector3 mid = (p0 + p1 + p2) / 3.0f;
+		// 2 cm: far enough out of the quantisation noise, short enough that the probe cannot
+		// step clean through a thin feature and read solid on both sides.
+		const Vector3 step = n.normalized() * 0.02f;
+		const float out_side = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
+				mid.x + step.x, mid.y + step.y, mid.z + step.z).sdf;
+		const float in_side = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
+				mid.x - step.x, mid.y - step.y, mid.z - step.z).sdf;
+		tri_sampled++;
+		if (out_side <= in_side) winding_bad++;
+	}
+	d["max_surface_sdf"] = max_sdf;
+	d["verts_off_10cm"] = off_10cm;
+	d["winding_bad"] = winding_bad;
+	d["tri_sampled"] = tri_sampled;
+	return d;
+}
+
+bool VoxelWorld::debug_mesh_submit(Array chunks) {
+	ensure_physics_initialized();
+	if (!physics_ready_ || !mesh_pass_) return false;
+	std::vector<ve::IVec3> coords;
+	std::vector<std::vector<ve::EditOp>> ops;
+	for (int i = 0; i < chunks.size(); i++) {
+		const Vector3i v = chunks[i];
+		coords.push_back({v.x, v.y, v.z});
+	}
+	ops.reserve(coords.size());
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		for (const ve::IVec3 &c : coords) ops.push_back(edit_log_->ops(ve::region_of_chunk(c)));
+	}
+	std::vector<MeshJob> jobs;
+	jobs.reserve(coords.size());
+	for (size_t i = 0; i < coords.size(); i++)
+		jobs.push_back({coords[i], ops[i].data(), static_cast<int>(ops[i].size())});
+	return mesh_pass_->submit(jobs.data(), static_cast<int>(jobs.size()));
+}
+
+Array VoxelWorld::debug_mesh_collect() {
+	Array out;
+	if (!physics_ready_ || !mesh_pass_) return out;
+	std::vector<MeshResult> results;
+	mesh_pass_->collect(&results);
+	for (const MeshResult &r : results) {
+		Dictionary d;
+		d["chunk"] = Vector3i(r.chunk.x, r.chunk.y, r.chunk.z);
+		d["vertices"] = static_cast<int>(r.positions.size() / 3);
+		d["triangles"] = static_cast<int>(r.indices.size() / 3);
+		d["overflow"] = r.overflow;
+		out.push_back(d);
+	}
+	return out;
 }
 
 // Half-precision to single-precision (normal + subnormal paths).
