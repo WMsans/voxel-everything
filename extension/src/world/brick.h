@@ -20,6 +20,16 @@ inline constexpr float kSdfRange = 0.64f; // uint8 maps to [-0.64, +0.64] meters
 inline constexpr int kBrickSdfStride = kBrickVoxels + 1; // 17
 inline constexpr int kBrickSdfCount = kBrickSdfStride * kBrickSdfStride * kBrickSdfStride; // 4913
 
+// Conservative pad for the 3^3 activation probe: the probe samples every 8 voxels, so the
+// field can dip across zero between samples. A brick is treated as empty only when all 27
+// probes agree AND clear zero by this margin. shaders/brick_mark.comp.glsl mirrors it as
+// ACTIVATION_PAD, and ve::op_brick_range widens an edit's re-mark range by it — a CSG
+// union or difference moves the field by up to the pad well outside the sphere it carves,
+// so bricks that far out can flip active or inactive and must be re-marked with the rest.
+// It lives here, at the bottom of the include graph, because the generator side (edit_ops)
+// and the world side (brick_eval) both need it and neither may include the other.
+inline constexpr float kActivationPad = 0.15f;
+
 uint8_t encode_sdf(float d);
 float decode_sdf(uint8_t v);
 

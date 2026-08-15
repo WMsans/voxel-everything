@@ -72,6 +72,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 	// same bytes at the price of another readback stall.
 	const uint32_t overflow = atlas_->read_overflow(rd);
 	const int free_slots = atlas_->read_free_count(rd);
+	overflow_seen_ |= overflow;
 
 	// Overflow recovery, fast path (brick_mark.comp.glsl contract): the job list overflowed
 	// (bit 1, value 2), leaving bricks resident-but-ungenerated in stale atlas bytes. Re-mark

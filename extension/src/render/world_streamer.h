@@ -27,6 +27,11 @@ public:
 	int run_frame(RenderingDevice *rd, float cx, float cy, float cz);
 
 	int last_frame_edits() const { return frame_edits_; }
+	// Sticky OR of every overflow word this streamer has read. The frame word is cleared as
+	// soon as it is acted on, so this is the only place a player-facing HUD can learn that
+	// the atlas ever came up short — VoxelWorld's own counter only ticks on the debug
+	// stream path, which the running demo never takes.
+	uint32_t overflow_seen() const { return overflow_seen_; }
 	const float *last_edit_center() const { return last_edit_center_; }
 	float last_edit_radius() const { return last_edit_radius_; }
 	int last_edit_type() const { return last_edit_type_; }
@@ -41,6 +46,7 @@ private:
 	RegionPass *region_pass_ = nullptr;
 	BrickGenPass *brick_gen_ = nullptr;
 	int frame_edits_ = 0;
+	uint32_t overflow_seen_ = 0;
 	// Regions marked last frame (loads + on-screen edit jobs). If the job list overflowed
 	// (brick_mark.comp.glsl sets frame.overflow bit 1), the next run_frame re-marks these
 	// with force_regen so the dropped bricks are re-enqueued (see run_frame).

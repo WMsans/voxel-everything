@@ -115,6 +115,52 @@ func test_paint_recolours_grass_to_rock_without_moving_the_surface() -> void:
 	var depth: Dictionary = w.debug_raycast(Vector3(hp.x, hp.y + 1.0, hp.z), Vector3(0, -1, 0))
 	assert_float(depth["pos"].y).is_equal_approx(hp.y, 0.01)
 
+func test_an_edit_leaves_no_brick_the_cpu_calls_active_without_a_slot() -> void:
+	# The streamer re-marks exactly ve::op_brick_range after an edit, so that range has to
+	# cover every brick the op flips. It is wider than the sphere for two reasons that are
+	# easy to miss: the brick apron, and the activation pad — a CSG difference is a max, so
+	# it raises the field OUTSIDE the sphere too, and a brick a few centimetres beyond the
+	# crater goes from solidly interior to reporting a surface. Scan well past the op and
+	# require the GPU's tables to agree with the CPU probe brick for brick.
+	var w := make_world()
+	var tool := make_tool(w)
+	var hit: Dictionary = w.debug_raycast(Vector3(40, 80, 40), Vector3(0, -1, 0))
+	assert_bool(hit["hit"]).is_true()
+	var hp: Vector3 = hit["pos"]
+	var r: Dictionary = tool.apply_sphere_subtract(hp, 2.5)
+	assert_array(r["rejected"]).is_empty()
+	for i in range(10):
+		w.debug_stream_frame(CAM)
+
+	var ops := make_op(0, 0, hp, 2.5)
+	var touched := {}
+	for t in r["touched"]:
+		touched[Vector3i(t)] = true
+	# The op's own range spans ~7 bricks; scan 12 either way so the flips beyond it count.
+	var centre := Vector3i(floori(hp.x / 0.8), floori(hp.y / 0.8), floori(hp.z / 0.8))
+	var active := 0
+	var missing := 0
+	for bx in range(centre.x - 12, centre.x + 13):
+		for by in range(centre.y - 12, centre.y + 13):
+			for bz in range(centre.z - 12, centre.z + 13):
+				var brick := Vector3i(bx, by, bz)
+				var region := Vector3i(floori(bx / 32.0), floori(by / 32.0), floori(bz / 32.0))
+				var rslot: int = w.debug_region_map_entry(region)
+				if rslot < 0:
+					continue # not resident: its bricks arrive on stream-in
+				# A brick is evaluated against ITS OWN region's op list, on both sides.
+				var n := 1 if touched.has(region) else 0
+				if not w.debug_brick_has_surface(brick, ops, n):
+					continue
+				active += 1
+				if w.debug_region_table_slot(rslot, brick) < 0:
+					missing += 1
+	assert_int(active).override_failure_message(
+		"the scan found no active bricks; check the aim").is_greater(0)
+	assert_int(missing).override_failure_message(
+		"%d of %d bricks the CPU calls active hold no atlas slot: the edit's re-mark range "
+		% [missing, active] + "does not cover every brick its own probe flips").is_equal(0)
+
 func test_an_op_on_a_region_border_updates_both_sides() -> void:
 	var w := make_world()
 	var tool := make_tool(w)

@@ -45,8 +45,8 @@ mesh = SubResource(4)
 [node name="Label" type="Label" parent="HUD"]
 offset_left = 10.0
 offset_top = 10.0
-world_path = NodePath("/root/Main/VoxelWorld")
 script = ExtResource(2)
+world_path = NodePath("/root/Main/VoxelWorld")
 
 [node name="Benchmark" type="Node" parent="."]
 script = ExtResource(3)

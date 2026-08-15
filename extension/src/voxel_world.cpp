@@ -581,7 +581,11 @@ Dictionary VoxelWorld::debug_stream_stats() {
 	d["resident_regions"] = residency_->resident_count();
 	d["frame_edits"] = streamer_->last_frame_edits();
 	d["overflow"] = static_cast<int>(atlas_->read_overflow(device));
-	d["overflow_ever"] = overflow_seen_;
+	// Either path may be the one running: debug_stream_frame drives the world in tests, the
+	// compositor's render callback drives it in the demo, and only the streamer sees the
+	// latter's frames. The HUD reads this, so it has to cover both.
+	d["overflow_ever"] =
+			overflow_seen_ | static_cast<int>(streamer_->overflow_seen());
 	return d;
 }
 

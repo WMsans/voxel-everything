@@ -7,10 +7,8 @@
 
 namespace ve {
 
-// Conservative pad for the 3^3 activation probe: the probe samples every 8 voxels, so the
-// field can dip across zero between samples. A brick is treated as empty only when all 27
-// probes agree AND clear zero by this margin. The GPU mark pass uses the same constant.
-inline constexpr float kActivationPad = 0.15f;
+// kActivationPad (the 3^3 probe's margin) lives in world/brick.h: ve::op_brick_range needs
+// it too, and generator/ may not include world/brick_eval.h.
 
 struct BrickEval {
 	Brick brick;

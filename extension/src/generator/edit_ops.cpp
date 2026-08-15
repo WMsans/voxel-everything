@@ -11,8 +11,18 @@ float sphere_sdf(const EditOp &op, float x, float y, float z) {
 }
 
 // Inclusive [lo, hi] cell range of the op's padded AABB on a lattice of the given pitch.
+//
+// Two margins, and the op's own radius covers neither. kVoxelSize is the brick's apron: its
+// SDF lattice reaches one voxel past its own extent (kBrickSdfStride == 17), so an op
+// grazing that plane still changes the bytes the brick stores. kActivationPad is the
+// activation probe's: a CSG difference is a max and a union is a min, so BOTH move the
+// field outside the sphere itself — a point d metres beyond a carved sphere reads -d, and
+// once d is under the pad, a brick that was solidly interior starts reporting a surface.
+// Those bricks flip active or inactive exactly like the ones inside the sphere, and the
+// streamer re-marks nothing but this range, so leaving them out means the GPU and the CPU
+// disagree about whether they hold an atlas slot with nothing to ever settle it.
 void padded_range(const EditOp &op, float pitch, IVec3 *lo, IVec3 *hi) {
-	const float r = op.radius + kVoxelSize;
+	const float r = op.radius + kActivationPad + kVoxelSize;
 	const auto cell = [pitch](float v) { return static_cast<int>(std::floor(v / pitch)); };
 	*lo = {cell(op.pos[0] - r), cell(op.pos[1] - r), cell(op.pos[2] - r)};
 	*hi = {cell(op.pos[0] + r), cell(op.pos[1] + r), cell(op.pos[2] + r)};
