@@ -8,6 +8,7 @@
 #include "render/world_streamer.h"
 #include "render/shader_loader.h"
 #include "render/mesh_pass.h"
+#include "physics/collider_streamer.h"
 #include "mesh/dual_contour.h"
 #include "mesh/mesh_chunk.h"
 #include "generator/generator.h"
@@ -60,6 +61,9 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_mesh_diff", "chunk"), &VoxelWorld::debug_mesh_diff);
 	ClassDB::bind_method(D_METHOD("debug_mesh_submit", "chunks"), &VoxelWorld::debug_mesh_submit);
 	ClassDB::bind_method(D_METHOD("debug_mesh_collect"), &VoxelWorld::debug_mesh_collect);
+	ClassDB::bind_method(D_METHOD("debug_physics_frame", "center"), &VoxelWorld::debug_physics_frame);
+	ClassDB::bind_method(D_METHOD("debug_physics_stats"), &VoxelWorld::debug_physics_stats);
+	ClassDB::bind_method(D_METHOD("debug_body_of_chunk", "chunk"), &VoxelWorld::debug_body_of_chunk);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_pixel", "origin", "dir"), &VoxelWorld::debug_raymarch_pixel);
@@ -240,18 +244,61 @@ void VoxelWorld::ensure_physics_initialized() {
 	ccfg.max_chunks = max_collider_chunks_;
 	ccfg.max_builds_per_frame = mesh_jobs_per_frame_;
 	chunks_ = new ve::ChunkResidency(ccfg);
+	colliders_ = new ColliderStreamer();
+	colliders_->initialize(chunks_, edit_log_, &edit_mutex_, mesh_pass_, max_collider_chunks_);
+	colliders_->set_shape_builds_per_frame(shape_builds_per_frame_);
 	physics_ready_ = true;
 }
 
 void VoxelWorld::teardown_physics() {
 	physics_ready_ = false;
+	// Colliders first: they hold the mesher's results and the residency's slots.
+	if (colliders_) { delete colliders_; colliders_ = nullptr; }
 	if (mesh_pass_) { delete mesh_pass_; mesh_pass_ = nullptr; }
 	if (chunks_) { delete chunks_; chunks_ = nullptr; }
 	if (mesh_rd_) { memdelete(mesh_rd_); mesh_rd_ = nullptr; }
 	pending_dirty_.clear();
 }
 
-int VoxelWorld::physics_tick(Vector3) { return 0; } // Task 7 fills this in
+int VoxelWorld::physics_tick(Vector3 center) {
+	if (!physics_ready_ || !colliders_ || !chunks_) return 0;
+	// Drain the dirty ranges the edit path queued. They are COLLECTED under edit_mutex_ and
+	// APPLIED here, on the main thread, so ChunkResidency needs no lock of its own — and the
+	// probe inside update(), which takes edit_mutex_, can never deadlock against an edit.
+	std::vector<std::pair<ve::IVec3, ve::IVec3>> dirty;
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		dirty.swap(pending_dirty_);
+	}
+	for (const auto &r : dirty) chunks_->mark_dirty(r.first, r.second);
+	const Ref<World3D> w = get_world_3d();
+	if (w.is_valid()) colliders_->set_space(w->get_space());
+	return colliders_->run_frame(center.x, center.y, center.z);
+}
+
+int VoxelWorld::debug_physics_frame(Vector3 center) {
+	ensure_physics_initialized();
+	return physics_tick(center);
+}
+
+Dictionary VoxelWorld::debug_physics_stats() {
+	Dictionary d;
+	d["chunks_resident"] = chunks_ ? chunks_->resident_count() : 0;
+	d["chunks_pending"] = chunks_ ? chunks_->pending_count() : 0;
+	d["probe_cache"] = chunks_ ? chunks_->probe_cache_size() : 0;
+	d["bodies"] = colliders_ ? colliders_->active_bodies() : 0;
+	d["builds"] = colliders_ ? colliders_->builds_last_frame() : 0;
+	d["queued"] = colliders_ ? colliders_->queued_results() : 0;
+	d["failures"] = colliders_ ? colliders_->failures() : 0;
+	d["build_ms"] = colliders_ ? colliders_->last_build_ms() : 0.0f;
+	d["collect_ms"] = colliders_ ? colliders_->last_collect_ms() : 0.0f;
+	return d;
+}
+
+RID VoxelWorld::debug_body_of_chunk(Vector3i chunk) {
+	if (!chunks_ || !colliders_) return RID();
+	return colliders_->body_of_slot(chunks_->slot_of({chunk.x, chunk.y, chunk.z}));
+}
 
 bool VoxelWorld::debug_init_physics() {
 	ensure_physics_initialized();

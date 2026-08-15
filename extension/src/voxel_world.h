@@ -179,6 +179,9 @@ public:
 	bool debug_init_physics();
 	void debug_teardown_physics();
 	Dictionary debug_mesh_lattice_diff(Vector3i chunk);
+	int debug_physics_frame(Vector3 center);
+	Dictionary debug_physics_stats();
+	RID debug_body_of_chunk(Vector3i chunk);
 
 	// --- Task 5 hook ---
 	Dictionary debug_mesh_diff(Vector3i chunk);
