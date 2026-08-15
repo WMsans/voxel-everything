@@ -351,8 +351,14 @@ void VoxelWorld::debug_upload_region_ops(int region_slot, const PackedByteArray 
 bool VoxelWorld::debug_brick_has_surface(Vector3i brick, const PackedByteArray &ops,
 		int op_count) const {
 	ve::AnalyticGenerator gen;
-	const ve::EditOp *ptr = op_count > 0 ? reinterpret_cast<const ve::EditOp *>(ops.ptr())
-	                                     : nullptr;
+	const ve::EditOp *ptr = nullptr;
+	if (op_count > 0) {
+		if (ops.size() < op_count * static_cast<int64_t>(sizeof(ve::EditOp))) {
+			UtilityFunctions::printerr("debug_brick_has_surface: op buffer too small");
+			return false;
+		}
+		ptr = reinterpret_cast<const ve::EditOp *>(ops.ptr());
+	}
 	return ve::brick_has_surface(gen, ptr, op_count, {brick.x, brick.y, brick.z});
 }
 
@@ -360,6 +366,13 @@ void VoxelWorld::debug_mark_region(Vector3i region, int region_slot, Vector3i lo
 		int op_count, bool force) {
 	RenderingDevice *device = rd();
 	if (!device || !atlas_ || !region_pass_) return;
+	if (region_slot < 0 || region_slot >= max_region_slots_) {
+		// The mark shader indexes region_tables with rslot * kRegionBrickCount + bi, so a
+		// hostile slot is a GPU-side out-of-bounds write. Refuse before recording.
+		UtilityFunctions::printerr("debug_mark_region: region_slot ", region_slot,
+				" out of range [0, ", max_region_slots_, ")");
+		return;
+	}
 	const int64_t list = device->compute_list_begin();
 	region_pass_->mark(device, list, {region.x, region.y, region.z}, region_slot,
 			{lo.x, lo.y, lo.z}, {hi.x, hi.y, hi.z}, op_count, force);
@@ -385,14 +398,20 @@ Dictionary VoxelWorld::debug_brick_diff(Vector3i brick, int region_slot,
 	Dictionary d;
 	RenderingDevice *device = rd();
 	if (!device || !atlas_) return d;
+	const ve::EditOp *ptr = nullptr;
+	if (op_count > 0) {
+		if (ops.size() < op_count * static_cast<int64_t>(sizeof(ve::EditOp))) {
+			UtilityFunctions::printerr("debug_brick_diff: op buffer too small");
+			return d;
+		}
+		ptr = reinterpret_cast<const ve::EditOp *>(ops.ptr());
+	}
 	const ve::IVec3 b{brick.x, brick.y, brick.z};
 	const int slot = debug_region_table_slot(region_slot, brick);
 	d["slot"] = slot;
 	if (slot < 0) return d;
 
 	ve::AnalyticGenerator gen;
-	const ve::EditOp *ptr =
-			op_count > 0 ? reinterpret_cast<const ve::EditOp *>(ops.ptr()) : nullptr;
 	ve::BrickEval ref{};
 	ve::eval_brick(gen, ptr, op_count, b, &ref);
 
@@ -495,6 +514,13 @@ Dictionary VoxelWorld::debug_brick_diff(Vector3i brick, int region_slot,
 void VoxelWorld::debug_release_region(int region_slot) {
 	RenderingDevice *device = rd();
 	if (!device || !region_pass_) return;
+	if (region_slot < 0 || region_slot >= max_region_slots_) {
+		// Same hostile-slot hazard as debug_mark_region: the free shader indexes
+		// region_tables with rslot * kRegionBrickCount + bi.
+		UtilityFunctions::printerr("debug_release_region: region_slot ", region_slot,
+				" out of range [0, ", max_region_slots_, ")");
+		return;
+	}
 	const int64_t list = device->compute_list_begin();
 	region_pass_->release_region(device, list, region_slot);
 	device->compute_list_end();
@@ -526,7 +552,10 @@ int VoxelWorld::debug_region_table_slot(int region_slot, Vector3i brick) {
 
 RID VoxelWorld::debug_sdf_atlas() const { return atlas_ ? atlas_->sdf_atlas() : RID(); }
 RID VoxelWorld::debug_mat_atlas() const { return atlas_ ? atlas_->mat_atlas() : RID(); }
-RID VoxelWorld::debug_mip_atlas(int level) const { return atlas_ ? atlas_->mip_atlas(level) : RID(); }
+RID VoxelWorld::debug_mip_atlas(int level) const {
+	if (!atlas_ || level < 0 || level >= ve::kMipLevels) return RID();
+	return atlas_->mip_atlas(level);
+}
 RID VoxelWorld::debug_region_map() const { return atlas_ ? atlas_->region_map() : RID(); }
 RID VoxelWorld::debug_region_tables() const { return atlas_ ? atlas_->region_tables() : RID(); }
 RID VoxelWorld::debug_free_list() const { return atlas_ ? atlas_->free_list() : RID(); }

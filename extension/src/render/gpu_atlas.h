@@ -36,7 +36,11 @@ public:
 
 	RID sdf_atlas() const { return sdf_atlas_; }
 	RID mat_atlas() const { return mat_atlas_; }
-	RID mip_atlas(int level) const { return mips_[level]; }
+	RID mip_atlas(int level) const {
+		// Defensive: mips_[level] is a native array OOB for hostile levels; the
+		// GDScript-reachable surface (VoxelWorld::debug_mip_atlas) clamps too.
+		return level >= 0 && level < ve::kMipLevels ? mips_[level] : RID();
+	}
 	RID palette() const { return palette_; }
 	RID region_map() const { return region_map_; }
 	RID region_tables() const { return region_tables_; }

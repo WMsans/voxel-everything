@@ -88,3 +88,58 @@ func test_moving_the_camera_streams_the_new_neighbourhood_and_recycles_slots() -
 	# used_now < used_before + slack: slack tolerates terrain-density variation between the
 	# two spots; a leak of the whole old neighbourhood (~6k bricks) would blow past it.
 	assert_int(free_now).is_greater(ATLAS.x * ATLAS.y * ATLAS.z - used_before - 2048)
+
+func test_job_overflow_recovers_via_force_regen() -> void:
+	# Final-review Finding 3b: the job-list overflow arm. brick_mark.comp.glsl sets
+	# overflow bit 1 (value 2) when the frame's job counter exceeds max_brick_jobs; the
+	# streamer reads the bit next frame and force-regens the regions it marked last
+	# frame, so the dropped bricks are re-enqueued (one frame of stale atlas bytes is
+	# the documented cost). With an 8-job list, the first stream frame's ~6k surface
+	# bricks overflow it, and the recovery frame regenerates the jobs it enqueues.
+	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	w.use_local_device = true
+	w.atlas_bricks = ATLAS
+	w.max_region_slots = REGION_SLOTS
+	w.max_brick_jobs = 8
+	w.world_origin_bricks = ORIGIN
+	w.world_size_regions = REGIONS
+	w.residency_radius_m = RADIUS
+	add_child(w)
+	w.ensure_initialized()
+
+	# Frame 1: the first stream frame marks the camera neighbourhood (~6k surface
+	# bricks) against an 8-job list — the job counter overflows.
+	w.debug_stream_frame(Vector3(20, 56.2, 20))
+	var a: Dictionary = w.debug_atlas_stats()
+	assert_int(int(a["overflow"]) & 2).override_failure_message(
+		"job-list overflow bit (2) was not set after the first stream frame"
+		).is_not_equal(0)
+
+	# Slots were still assigned during the overflowed mark: the slot assignment precedes
+	# the job-count check in brick_mark.comp.glsl, so surface bricks hold valid slots.
+	var rslot: int = w.debug_region_map_entry(Vector3i(0, 2, 0))
+	assert_int(rslot).is_greater_equal(0)
+	var slotted := 0
+	for by in range(64, 76):
+		var brick := Vector3i(16, by, 16)
+		if w.debug_region_table_slot(rslot, brick) >= 0:
+			slotted += 1
+	assert_int(slotted).override_failure_message(
+		"no surface bricks hold slots after the overflowed mark").is_greater(0)
+
+	# Frame 2: the streamer saw the overflow bit and force-regens the regions it marked
+	# last frame. The jobs it enqueued ARE the bricks regenerated this frame — diff one
+	# against the CPU reference.
+	w.debug_stream_frame(Vector3(20, 56.2, 20))
+	var jobs := w.debug_jobs()
+	assert_int(jobs.size()).override_failure_message(
+		"recovery frame enqueued no jobs").is_greater_equal(8)
+	var n := jobs.size() / 8
+	assert_int(n).is_greater(0)
+	var d: Dictionary = w.debug_brick_diff(
+		Vector3i(jobs[0], jobs[1], jobs[2]), jobs[4], PackedByteArray(), 0)
+	assert_int(int(d["sdf_max_diff"])).override_failure_message(
+		"recovery frame did not regenerate the job's brick").is_less_equal(1)
+	assert_bool(d["palette_match"]).is_true()
+	# Fail-soft: the world keeps streaming afterwards, overflow stays contained.
+	assert_int(w.debug_stream_frame(Vector3(20, 56.2, 20))).is_greater_equal(0)

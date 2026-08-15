@@ -152,3 +152,85 @@ func test_a_full_region_rejects_the_257th_op_without_crashing() -> void:
 	assert_array(r["rejected"]).is_not_empty()
 	# Fail-soft: the world keeps streaming happily afterwards.
 	assert_int(w.debug_stream_frame(CAM)).is_greater_equal(0)
+
+func test_hostile_edit_inputs_are_rejected_before_touching_the_log() -> void:
+	# Final-review Finding 2a: NaN/Inf positions or radius, a non-positive radius, or an
+	# absurd radius must be refused BEFORE the edit log — the last one used to freeze
+	# append for minutes (Finding 2b's loop), and NaN corrupts op_region_range (UB).
+	var w := make_world()
+	var tool := make_tool(w)
+	var nan_r: Dictionary = tool.apply_sphere_subtract(Vector3(40, 60, 40), NAN)
+	assert_array(nan_r["touched"]).is_empty()
+	assert_array(nan_r["rejected"]).is_empty()
+	var inf_r: Dictionary = tool.apply_sphere_add(Vector3(40, 60, 40), INF, 2)
+	assert_array(inf_r["touched"]).is_empty()
+	var zero_r: Dictionary = tool.apply_sphere_subtract(Vector3(40, 60, 40), 0.0)
+	assert_array(zero_r["touched"]).is_empty()
+	var neg_r: Dictionary = tool.apply_sphere_subtract(Vector3(40, 60, 40), -5.0)
+	assert_array(neg_r["touched"]).is_empty()
+	var huge_r: Dictionary = tool.apply_sphere_subtract(Vector3(40, 60, 40), 1.0e5)
+	assert_array(huge_r["touched"]).is_empty()
+	assert_array(huge_r["rejected"]).is_empty()
+	var nan_p: Dictionary = tool.apply_sphere_subtract(Vector3(NAN, 60, 40), 2.0)
+	assert_array(nan_p["touched"]).is_empty()
+	# A material outside the 16-bit id range is clamped, not rejected.
+	var add: Dictionary = tool.apply_sphere_add(Vector3(40, 68.2, 40), 1.5, 70000)
+	assert_array(add["rejected"]).is_empty()
+	# The world still streams normally after the rejected inputs.
+	assert_int(w.debug_stream_frame(CAM)).is_greater_equal(0)
+
+func test_edit_headroom_evicts_a_far_region_when_the_atlas_is_nearly_full() -> void:
+	# Errata 11's eviction arm (spec §8 "evicts or drops"): when an SDF edit must
+	# allocate slots and the free-slot count is below the 128-slot headroom, the streamer
+	# evicts the furthest untouched resident region so the edit's marks succeed. The
+	# config is tuned so the resident set leaves free = 117 slots at this camera
+	# (atlas 26x16x26 = 10816 slots, 10 region slots): below the headroom, but the demand
+	# still fits the atlas, so the settle never trips the free-list-empty fail-soft.
+	const EVICT_ATLAS := Vector3i(26, 16, 26)
+	const EVICT_SLOTS := 10
+	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	w.use_local_device = true
+	w.atlas_bricks = EVICT_ATLAS
+	w.max_region_slots = EVICT_SLOTS
+	w.world_origin_bricks = Vector3i(0, -64, 0)
+	w.world_size_regions = Vector3i(4, 5, 4)
+	w.residency_radius_m = 20.0
+	add_child(w)
+	w.ensure_initialized()
+	for i in range(60):
+		if w.debug_stream_frame(CAM) == 0:
+			break
+
+	# Arm precondition: the resident set nearly fills the atlas (free < 128).
+	var stats: Dictionary = w.debug_atlas_stats()
+	assert_int(int(stats["free_slots"])).override_failure_message(
+		"eviction-arm precondition unmet: free_slots not below the 128 headroom"
+		).is_less(128)
+
+	var tool := make_tool(w)
+	var hit: Dictionary = w.debug_raycast(Vector3(40, 80, 40), Vector3(0, -1, 0))
+	assert_bool(hit["hit"]).is_true()
+	var hp: Vector3 = hit["pos"]
+	var before: Color = w.debug_raymarch_pixel(Vector3(hp.x, hp.y + 2.0, hp.z), Vector3(0, -1, 0))
+	assert_bool(before.r < 0.52 and before.g > 0.05).is_true() # solid terrain
+
+	var r: Dictionary = tool.apply_sphere_subtract(Vector3(hp.x, hp.y + 0.5, hp.z), 2.5)
+	assert_array(r["rejected"]).is_empty()
+
+	# One frame: the streamer drains the edit, sees free < 128, and evicts the furthest
+	# untouched resident region (the evicted region re-streams next frame).
+	w.debug_stream_frame(CAM)
+	var s: Dictionary = w.debug_stream_stats()
+	assert_int(int(s["resident_regions"])).override_failure_message(
+		"eviction arm did not run: no region was evicted for edit headroom"
+		).is_equal(EVICT_SLOTS - 1)
+
+	# Let the evicted region re-stream, then check the user-visible contract: the crater
+	# is real (deeper hit, still terrain below) and no overflow bit was ever set.
+	for i in range(10):
+		w.debug_stream_frame(CAM)
+	var after: Dictionary = w.debug_raycast(Vector3(hp.x, hp.y + 2.0, hp.z), Vector3(0, -1, 0))
+	assert_float(after["pos"].y).is_less(hp.y - 1.0)
+	var c: Color = w.debug_raymarch_pixel(Vector3(hp.x, hp.y + 2.0, hp.z), Vector3(0, -1, 0))
+	assert_bool(c.r < 0.52 and c.g > 0.05).is_true()
+	assert_int(w.debug_stream_stats()["overflow_ever"]).is_equal(0)
