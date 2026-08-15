@@ -59,6 +59,9 @@ void ColliderStreamer::teardown() {
 	in_space_.clear();
 	inbox_.clear();
 	active_bodies_ = 0;
+	failures_ = 0;
+	overflow_warnings_ = 0;
+	last_build_ms_ = 0.0f;
 	chunks_ = nullptr;
 	edit_log_ = nullptr;
 	edit_mutex_ = nullptr;
@@ -166,7 +169,19 @@ void ColliderStreamer::release_slot(int slot) {
 
 void ColliderStreamer::apply_result(const MeshResult &r) {
 	const int slot = chunks_->slot_of(r.chunk);
-	if (slot < 0) return; // evicted while the mesh was in flight; nothing to attach it to
+	if (slot < 0) {
+		// Evicted/displaced while the mesh was in flight; there is no slot to attach it to.
+		// Still clear the outstanding-build marker, or the chunk can never be re-streamed.
+		chunks_->note_discarded(r.chunk);
+		return;
+	}
+	if (r.failed) {
+		failures_++;
+		UtilityFunctions::printerr("ColliderStreamer: readback failed for chunk (",
+				r.chunk.x, ", ", r.chunk.y, ", ", r.chunk.z, ")");
+		chunks_->note_failed(r.chunk);
+		return;
+	}
 	if (r.overflow && overflow_warnings_ < 8) {
 		overflow_warnings_++;
 		UtilityFunctions::push_warning("ColliderStreamer: chunk (", r.chunk.x, ", ", r.chunk.y,
@@ -180,12 +195,22 @@ void ColliderStreamer::apply_result(const MeshResult &r) {
 		case kBuilt:
 			chunks_->note_built(r.chunk);
 			break;
-		case kEmpty: {
-			// The probe is conservative, so a chunk it passed can hold no triangles at all.
-			const int freed = chunks_->note_empty(r.chunk);
-			release_slot(freed);
+		case kEmpty:
+			if (r.overflow) {
+				// An overflowed mesh is missing pieces; "fewer than 3 triangles survived" is
+				// not proof the chunk is empty. Caching empty would hide the real surface, so
+				// fail and retry instead.
+				failures_++;
+				UtilityFunctions::printerr("ColliderStreamer: overflowed chunk (", r.chunk.x,
+						", ", r.chunk.y, ", ", r.chunk.z,
+						") left fewer than 3 triangles; treating as failed build");
+				chunks_->note_failed(r.chunk);
+			} else {
+				// The probe is conservative, so a chunk it passed can hold no triangles at all.
+				const int freed = chunks_->note_empty(r.chunk);
+				release_slot(freed);
+			}
 			break;
-		}
 		case kFailed:
 			// Spec §6's failure policy: log, keep the previous collider, retry next frame.
 			failures_++;
@@ -202,14 +227,18 @@ int ColliderStreamer::run_frame(float cx, float cy, float cz) {
 
 	// 1. Land whatever the GPU finished. The sync inside collect() is for a batch submitted
 	//    on an earlier frame, so it does not wait on the GPU.
-	if (mesh_->in_flight()) mesh_->collect(&inbox_);
+	{
+		std::vector<MeshResult> collected;
+		if (mesh_->in_flight()) mesh_->collect(&collected);
+		for (MeshResult &r : collected) inbox_.push_back(std::move(r));
+	}
 
 	// 2. Turn results into shapes, throttled: shape_set_data builds Jolt's BVH on this
 	//    thread, and a 15k-triangle chunk is a millisecond or two of it.
 	builds_last_frame_ = 0;
 	while (!inbox_.empty() && builds_last_frame_ < max_builds_per_frame_) {
 		MeshResult r = std::move(inbox_.front());
-		inbox_.erase(inbox_.begin());
+		inbox_.pop_front();
 		apply_result(r);
 		builds_last_frame_++;
 		actions++;

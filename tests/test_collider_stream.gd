@@ -1,5 +1,13 @@
 extends GdUnitTestSuite
 
+var _worlds: Array = []
+
+func after_test() -> void:
+	for w in _worlds:
+		if is_instance_valid(w):
+			w.free()
+	_worlds.clear()
+
 # Collision streaming (spec section 6): dual-contoured chunks become Jolt concave shapes on
 # server-created static bodies, in a ball around the player, with no scene-tree nodes.
 #
@@ -20,6 +28,7 @@ func make_world() -> VoxelWorld:
 	w.mesh_jobs_per_frame = 2
 	w.shape_builds_per_frame = 4
 	add_child(w)
+	_worlds.append(w)
 	assert_bool(w.debug_init_physics()).is_true()
 	return w
 

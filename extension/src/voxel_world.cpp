@@ -375,6 +375,7 @@ Dictionary VoxelWorld::debug_mesh_diff(Vector3i chunk) {
 	std::vector<uint8_t> lattice;
 	std::vector<int32_t> gpu_cells;
 	if (!mesh_pass_->mesh_sync(job, &gpu, &lattice, &gpu_cells)) return d;
+	if (gpu.failed) return d; // short readback: do not present partial data as a diff
 
 	const ve::DcGrid g = ve::chunk_dc_grid(c);
 	ve::AnalyticGenerator gen;

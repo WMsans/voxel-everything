@@ -50,6 +50,11 @@ PackedByteArray zeroed(int64_t bytes) {
 // Groups for a dispatch of `n` threads per axis at local size 4.
 int groups(int n) { return (n + 3) / 4; }
 
+int sanitized_op_count(const MeshJob &job) {
+	if (!job.ops || job.op_count <= 0) return 0;
+	return std::min(job.op_count, ve::kMaxRegionOps);
+}
+
 } // namespace
 
 MeshPass::~MeshPass() {
@@ -186,7 +191,7 @@ void MeshPass::teardown() {
 }
 
 void MeshPass::upload_ops(const MeshJob &job, int job_index) {
-	const int n = job.ops ? std::min(job.op_count, ve::kMaxRegionOps) : 0;
+	const int n = sanitized_op_count(job);
 	if (n <= 0) return; // op_count in the push constant is what the shader reads
 	PackedByteArray b;
 	b.resize(static_cast<int64_t>(n) * 32);
@@ -204,7 +209,7 @@ void MeshPass::push(int64_t list, const MeshJob &job, int job_index) {
 	p[1] = job.chunk.y;
 	p[2] = job.chunk.z;
 	p[3] = job_index;
-	p[4] = std::min(job.op_count, ve::kMaxRegionOps);
+	p[4] = sanitized_op_count(job);
 	p[5] = cfg_.max_verts;
 	p[6] = cfg_.max_tris;
 	p[7] = 0;
@@ -220,7 +225,7 @@ void MeshPass::record_field(int64_t list, const MeshJob &job, int job_index) {
 }
 
 bool MeshPass::run_field_sync(const MeshJob &job, std::vector<uint8_t> *lattice) {
-	if (!is_valid()) return false;
+	if (!is_valid() || in_flight_) return false;
 	upload_ops(job, 0);
 	const int64_t list = rd_->compute_list_begin();
 	record_field(list, job, 0);
@@ -275,9 +280,13 @@ void MeshPass::read_job(int job_index, ve::IVec3 chunk, MeshResult *out) {
 	out->positions.clear();
 	out->indices.clear();
 	out->overflow = false;
+	out->failed = false;
 	const PackedByteArray cb =
 			rd_->buffer_get_data(counts_, static_cast<uint32_t>(job_index) * 16, 16);
-	if (cb.size() < 16) return;
+	if (cb.size() < 16) {
+		out->failed = true;
+		return;
+	}
 	const uint32_t *c = reinterpret_cast<const uint32_t *>(cb.ptr());
 	// The counters are raw atomic totals: they run past the cap when it is hit.
 	const int vcount = std::min<int>(static_cast<int>(c[0]), cfg_.max_verts);
@@ -287,6 +296,12 @@ void MeshPass::read_job(int job_index, ve::IVec3 chunk, MeshResult *out) {
 		const PackedByteArray vb = rd_->buffer_get_data(verts_,
 				static_cast<uint32_t>(job_index) * cfg_.max_verts * 12,
 				static_cast<uint32_t>(vcount) * 12);
+		if (vb.size() < static_cast<int64_t>(vcount) * 12) {
+			out->failed = true;
+			out->positions.clear();
+			out->indices.clear();
+			return;
+		}
 		out->positions.resize(static_cast<size_t>(vcount) * 3);
 		std::memcpy(out->positions.data(), vb.ptr(), static_cast<size_t>(vcount) * 12);
 	}
@@ -294,6 +309,12 @@ void MeshPass::read_job(int job_index, ve::IVec3 chunk, MeshResult *out) {
 		const PackedByteArray tb = rd_->buffer_get_data(tris_,
 				static_cast<uint32_t>(job_index) * cfg_.max_tris * 12,
 				static_cast<uint32_t>(tcount) * 12);
+		if (tb.size() < static_cast<int64_t>(tcount) * 12) {
+			out->failed = true;
+			out->positions.clear();
+			out->indices.clear();
+			return;
+		}
 		out->indices.resize(static_cast<size_t>(tcount) * 3);
 		std::memcpy(out->indices.data(), tb.ptr(), static_cast<size_t>(tcount) * 12);
 	}

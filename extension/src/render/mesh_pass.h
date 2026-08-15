@@ -25,6 +25,7 @@ struct MeshResult {
 	std::vector<float> positions;  // 3 per vertex, world space
 	std::vector<uint32_t> indices; // 3 per triangle
 	bool overflow = false;         // a cap was hit: the mesh is missing pieces
+	bool failed = false;           // readback was short/invalid; treat as a failed build
 };
 
 // The collision mesher. Owns every GPU resource on ITS OWN local RenderingDevice — the

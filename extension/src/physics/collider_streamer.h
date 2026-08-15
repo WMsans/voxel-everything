@@ -1,6 +1,7 @@
 #pragma once
 #include <godot_cpp/classes/physics_server3d.hpp>
 #include <godot_cpp/variant/rid.hpp>
+#include <deque>
 #include <mutex>
 #include <vector>
 #include "generator/generator.h"
@@ -64,7 +65,7 @@ private:
 	std::vector<RID> bodies_;
 	std::vector<RID> shapes_;
 	std::vector<char> in_space_;
-	std::vector<MeshResult> inbox_; // collected, not yet turned into shapes
+	std::deque<MeshResult> inbox_; // collected, not yet turned into shapes
 	int max_builds_per_frame_ = 2;
 	int active_bodies_ = 0;
 	int builds_last_frame_ = 0;

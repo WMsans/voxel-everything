@@ -314,6 +314,32 @@ TEST_CASE("evicted in-flight builds are not re-added until the old result lands"
 	CHECK(readded);
 }
 
+TEST_CASE("stale results for evicted builds are discarded without blocking re-add") {
+	ve::ChunkResidency res(make_cfg(1, 1));
+	FakeProbe probe;
+	probe.everything = true;
+	const float at[3] = {100.0f, 30.0f, 100.0f};
+	const float away[3] = {300.0f, 30.0f, 300.0f};
+
+	const ve::ChunkPlan p0 = res.update(at, nullptr, 1, probe);
+	REQUIRE(p0.builds.size() == 1);
+	const ve::IVec3 c = p0.builds[0].chunk;
+
+	// Move far enough that C is released while its build is still in flight.
+	res.update(away, nullptr, 1, probe, 0);
+	CHECK(res.slot_of(c) == -1);
+	res.update(at, nullptr, 1, probe);
+	CHECK(res.slot_of(c) == -1);
+
+	// The real ColliderStreamer used to return before clearing this marker, permanently
+	// blocking C. note_discarded is the explicit stale-result path.
+	res.note_discarded(c);
+	const ve::ChunkPlan p2 = res.update(at, nullptr, 1, probe);
+	bool readded = false;
+	for (const auto &b : p2.builds) readded = readded || b.chunk == c;
+	CHECK(readded);
+}
+
 TEST_CASE("stale note_empty clears in-flight without hiding the re-added chunk") {
 	ve::ChunkResidency res(make_cfg(1, 1));
 	FakeProbe probe;

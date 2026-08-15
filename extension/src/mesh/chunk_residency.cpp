@@ -81,6 +81,13 @@ void ChunkResidency::note_failed(IVec3 chunk) {
 		slot_state_[slot] = static_cast<char>(kNeedsBuild);
 }
 
+void ChunkResidency::note_discarded(IVec3 chunk) {
+	// A result arrived for a build that was evicted/displaced before it landed. There is no
+	// resident slot to promote, release, or mark dirty, but the outstanding-build marker must
+	// be cleared or the chunk can never be re-streamed.
+	in_flight_.erase(key(chunk));
+}
+
 int ChunkResidency::note_empty(IVec3 chunk) {
 	// The probe is conservative by construction, so a chunk it passed can still hold no
 	// triangles. Caching the empty verdict is what stops it being re-planned every frame for

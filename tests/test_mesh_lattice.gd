@@ -1,5 +1,13 @@
 extends GdUnitTestSuite
 
+var _worlds: Array = []
+
+func after_test() -> void:
+	for w in _worlds:
+		if is_instance_valid(w):
+			w.free()
+	_worlds.clear()
+
 # GPU/CPU differential test for the collision chunk lattice (spec section 8). The mesher does
 # not read the brick atlas: it evaluates shaders/field.glsl at 0.1 m, the same field the
 # bricks are generated from, so collision cannot inherit a dropped brick's hole and a chunk
@@ -16,6 +24,7 @@ func make_world() -> VoxelWorld:
 	w.world_origin_bricks = Vector3i(0, -64, 0)
 	w.world_size_regions = Vector3i(8, 5, 8)
 	add_child(w)
+	_worlds.append(w)
 	assert_bool(w.debug_init_physics()).is_true()
 	return w
 
