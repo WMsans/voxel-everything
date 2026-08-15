@@ -51,4 +51,4 @@ func _kick(pos: Vector3) -> void:
 	var reach := radius * 3.0
 	if d > reach or d < 0.001:
 		return
-	_player.velocity += away.normalized() * (1.0 - d / reach) * 14.0
+	_player._impulse += away.normalized() * (1.0 - d / reach) * 14.0

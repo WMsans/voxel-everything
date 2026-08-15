@@ -14,6 +14,10 @@ extends CharacterBody3D
 
 var flying := true
 
+# Radial impulse from the edit tool's explosion kick. It is added to velocity once,
+# immediately before move_and_slide(), so walking input/gravity cannot overwrite it.
+var _impulse := Vector3.ZERO
+
 @onready var _cam: Camera3D = $Camera3D
 
 func _ready() -> void:
@@ -45,6 +49,7 @@ func _physics_process(delta: float) -> void:
 		if Input.is_key_pressed(KEY_Q): lift -= 1.0
 		var boost := 4.0 if Input.is_key_pressed(KEY_SHIFT) else 1.0
 		velocity = (dir.normalized() + Vector3.UP * lift) * fly_speed * boost
+		_impulse = Vector3.ZERO # kicks only apply in walk mode; don't carry a stale one
 		global_position += velocity * delta # no collision in fly mode
 		return
 
@@ -56,4 +61,8 @@ func _physics_process(delta: float) -> void:
 		velocity.y = jump_velocity if Input.is_key_pressed(KEY_SPACE) else 0.0
 	else:
 		velocity.y -= gravity * delta
+	# Apply the pending kick after all normal velocity computation, so the impulse cannot
+	# be overwritten by WASD, floor snapping, or gravity before move_and_slide() sees it.
+	velocity += _impulse
+	_impulse = Vector3.ZERO
 	move_and_slide()
