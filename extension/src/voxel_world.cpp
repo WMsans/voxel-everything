@@ -22,6 +22,8 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <array>
+#include <iterator>
 
 using namespace godot;
 
@@ -55,6 +57,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_init_physics"), &VoxelWorld::debug_init_physics);
 	ClassDB::bind_method(D_METHOD("debug_teardown_physics"), &VoxelWorld::debug_teardown_physics);
 	ClassDB::bind_method(D_METHOD("debug_mesh_lattice_diff", "chunk"), &VoxelWorld::debug_mesh_lattice_diff);
+	ClassDB::bind_method(D_METHOD("debug_mesh_diff", "chunk"), &VoxelWorld::debug_mesh_diff);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_pixel", "origin", "dir"), &VoxelWorld::debug_raymarch_pixel);
@@ -295,6 +298,154 @@ Dictionary VoxelWorld::debug_mesh_lattice_diff(Vector3i chunk) {
 	d["diff_over_one"] = over_one;
 	d["has_surface"] = pos && neg;
 	d["op_count"] = static_cast<int>(ops.size());
+	return d;
+}
+
+Dictionary VoxelWorld::debug_mesh_diff(Vector3i chunk) {
+	Dictionary d;
+	ensure_physics_initialized();
+	if (!physics_ready_ || !mesh_pass_) return d;
+	const ve::IVec3 c{chunk.x, chunk.y, chunk.z};
+	std::vector<ve::EditOp> ops;
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		ops = edit_log_->ops(ve::region_of_chunk(c));
+	}
+	const MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
+	MeshResult gpu;
+	std::vector<uint8_t> lattice;
+	std::vector<int32_t> gpu_cells;
+	if (!mesh_pass_->mesh_sync(job, &gpu, &lattice, &gpu_cells)) return d;
+
+	const ve::DcGrid g = ve::chunk_dc_grid(c);
+	ve::AnalyticGenerator gen;
+
+	// 1. The lattice against the CPU field. One encoded step of sin() drift is invisible.
+	int lat_max = 0, lat_over = 0;
+	for (int z = 0; z < g.lattice; z++)
+		for (int y = 0; y < g.lattice; y++)
+			for (int x = 0; x < g.lattice; x++) {
+				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
+						g.origin[0] + (x - 1) * g.cell_size, g.origin[1] + (y - 1) * g.cell_size,
+						g.origin[2] + (z - 1) * g.cell_size).sdf;
+				const int diff = std::abs(static_cast<int>(lattice[ve::dc_lattice_index(g, x, y, z)]) -
+						static_cast<int>(ve::encode_sdf(s)));
+				lat_max = std::max(lat_max, diff);
+				if (diff > 1) lat_over++;
+			}
+	d["lattice_max_diff"] = lat_max;
+	d["lattice_diff_over_one"] = lat_over;
+	d["op_count"] = static_cast<int>(ops.size());
+	d["overflow"] = gpu.overflow;
+
+	// 2. The mesh against ve::dual_contour run on the GPU's OWN lattice, so the two sides
+	//    consume identical bytes and any difference is the algorithm drifting.
+	ve::MeshBuffer ref;
+	ve::dual_contour(lattice.data(), g, &ref);
+	const int gpu_verts = static_cast<int>(gpu.positions.size() / 3);
+
+	int both = 0, only_cpu = 0, only_gpu = 0;
+	float max_pos = 0.0f;
+	for (int i = 0; i < static_cast<int>(ref.cell_vertex.size()); i++) {
+		const int32_t a = ref.cell_vertex[i];
+		const int32_t b = gpu_cells[i];
+		if (a >= 0 && b >= 0 && b < gpu_verts) {
+			both++;
+			for (int k = 0; k < 3; k++)
+				max_pos = std::max(max_pos, std::fabs(ref.positions[a * 3 + k] -
+						gpu.positions[b * 3 + k]));
+		} else if (a >= 0) {
+			only_cpu++;
+		} else if (b >= 0) {
+			only_gpu++;
+		}
+	}
+	d["cells_cpu"] = ref.vertex_count();
+	d["cells_gpu"] = gpu_verts;
+	d["cells_both"] = both;
+	d["cells_only_cpu"] = only_cpu;
+	d["cells_only_gpu"] = only_gpu;
+	d["max_pos_diff"] = max_pos;
+
+	// 3. Triangles as cyclically normalised CELL triples: the GPU numbers its vertices with
+	//    atomics in no fixed order, but the cells they belong to are fixed, and keeping the
+	//    cycle (rather than sorting the three) means an inverted winding still differs.
+	std::vector<int32_t> cpu_v2c(ref.vertex_count(), -1), gpu_v2c(gpu_verts, -1);
+	for (int i = 0; i < static_cast<int>(ref.cell_vertex.size()); i++) {
+		if (ref.cell_vertex[i] >= 0) cpu_v2c[ref.cell_vertex[i]] = i;
+		if (gpu_cells[i] >= 0 && gpu_cells[i] < gpu_verts) gpu_v2c[gpu_cells[i]] = i;
+	}
+	const auto canonical = [](const std::vector<uint32_t> &idx, const std::vector<int32_t> &v2c) {
+		std::vector<std::array<int, 3>> out;
+		out.reserve(idx.size() / 3);
+		for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+			int cell[3];
+			bool ok = true;
+			for (int k = 0; k < 3; k++) {
+				const uint32_t v = idx[t + k];
+				if (v >= v2c.size()) { ok = false; break; }
+				cell[k] = v2c[v];
+			}
+			if (!ok) continue;
+			int r = 0;
+			if (cell[1] < cell[r]) r = 1;
+			if (cell[2] < cell[r]) r = 2;
+			out.push_back({cell[r], cell[(r + 1) % 3], cell[(r + 2) % 3]});
+		}
+		std::sort(out.begin(), out.end());
+		return out;
+	};
+	const std::vector<std::array<int, 3>> cpu_tris = canonical(ref.indices, cpu_v2c);
+	const std::vector<std::array<int, 3>> gpu_tris = canonical(gpu.indices, gpu_v2c);
+	std::vector<std::array<int, 3>> diff_a, diff_b;
+	std::set_difference(cpu_tris.begin(), cpu_tris.end(), gpu_tris.begin(), gpu_tris.end(),
+			std::back_inserter(diff_a));
+	std::set_difference(gpu_tris.begin(), gpu_tris.end(), cpu_tris.begin(), cpu_tris.end(),
+			std::back_inserter(diff_b));
+	d["tri_cpu"] = static_cast<int>(cpu_tris.size());
+	d["tri_gpu"] = static_cast<int>(gpu_tris.size());
+	d["tri_only_cpu"] = static_cast<int>(diff_a.size());
+	d["tri_only_gpu"] = static_cast<int>(diff_b.size());
+
+	// 4. Two properties nothing above can prove, checked against the field itself: every
+	//    vertex sits on the surface, and every triangle's normal points at the air.
+	float max_sdf = 0.0f;
+	int off_10cm = 0;
+	int winding_bad = 0, tri_sampled = 0;
+	const int tri_count = static_cast<int>(gpu.indices.size() / 3);
+	const int stride = std::max(1, tri_count / 512); // a spread sample, not the first 512
+	for (int v = 0; v < gpu_verts; v++) {
+		const float s = std::fabs(ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
+				gpu.positions[v * 3], gpu.positions[v * 3 + 1], gpu.positions[v * 3 + 2]).sdf);
+		max_sdf = std::max(max_sdf, s);
+		if (s > 0.1f) off_10cm++;
+	}
+	for (int t = 0; t < tri_count; t += stride) {
+		const uint32_t i0 = gpu.indices[t * 3], i1 = gpu.indices[t * 3 + 1],
+				i2 = gpu.indices[t * 3 + 2];
+		if (i0 >= static_cast<uint32_t>(gpu_verts) || i1 >= static_cast<uint32_t>(gpu_verts) ||
+				i2 >= static_cast<uint32_t>(gpu_verts))
+			continue;
+		const Vector3 p0(gpu.positions[i0 * 3], gpu.positions[i0 * 3 + 1], gpu.positions[i0 * 3 + 2]);
+		const Vector3 p1(gpu.positions[i1 * 3], gpu.positions[i1 * 3 + 1], gpu.positions[i1 * 3 + 2]);
+		const Vector3 p2(gpu.positions[i2 * 3], gpu.positions[i2 * 3 + 1], gpu.positions[i2 * 3 + 2]);
+		const Vector3 n = (p1 - p0).cross(p2 - p0);
+		if (n.length_squared() <= 0.0f) continue; // degenerate: carries no orientation
+		const Vector3 mid = (p0 + p1 + p2) / 3.0f;
+		// 2 cm: far enough out of the quantisation noise, short enough that the probe cannot
+		// step clean through a thin feature and read solid on both sides.
+		const Vector3 step = n.normalized() * 0.02f;
+		const float out_side = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
+				mid.x + step.x, mid.y + step.y, mid.z + step.z).sdf;
+		const float in_side = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
+				mid.x - step.x, mid.y - step.y, mid.z - step.z).sdf;
+		tri_sampled++;
+		if (out_side <= in_side) winding_bad++;
+	}
+	d["max_surface_sdf"] = max_sdf;
+	d["verts_off_10cm"] = off_10cm;
+	d["winding_bad"] = winding_bad;
+	d["tri_sampled"] = tri_sampled;
 	return d;
 }
 

@@ -178,6 +178,9 @@ public:
 	bool debug_init_physics();
 	void debug_teardown_physics();
 	Dictionary debug_mesh_lattice_diff(Vector3i chunk);
+
+	// --- Task 5 hook ---
+	Dictionary debug_mesh_diff(Vector3i chunk);
 };
 
 } // namespace godot

@@ -139,6 +139,21 @@ bool MeshPass::initialize(RenderingDevice *rd, const MeshPassConfig &cfg) {
 		teardown();
 		return false;
 	}
+
+	if (!build(rd, "res://shaders/mesh_cells.comp.glsl", &cells_shader_, &cells_pipeline_) ||
+			!build(rd, "res://shaders/mesh_quads.comp.glsl", &quads_shader_, &quads_pipeline_)) {
+		teardown();
+		return false;
+	}
+	cells_uset_ = rd->uniform_set_create(Array::make(image(0, lattice_), storage(1, cells_),
+			storage(2, verts_), storage(3, counts_)), cells_shader_, 0);
+	quads_uset_ = rd->uniform_set_create(Array::make(image(0, lattice_), storage(1, cells_),
+			storage(2, tris_), storage(3, counts_)), quads_shader_, 0);
+	if (!cells_uset_.is_valid() || !quads_uset_.is_valid()) {
+		UtilityFunctions::printerr("MeshPass: uniform set creation failed");
+		teardown();
+		return false;
+	}
 	return true;
 }
 
@@ -146,6 +161,12 @@ void MeshPass::teardown() {
 	if (!rd_) return;
 	// Uniform sets first: freeing a shader cascades to its pipelines and referencing sets
 	// (M1's documented order).
+	free_if_valid(rd_, quads_uset_);
+	free_if_valid(rd_, quads_pipeline_);
+	free_if_valid(rd_, quads_shader_);
+	free_if_valid(rd_, cells_uset_);
+	free_if_valid(rd_, cells_pipeline_);
+	free_if_valid(rd_, cells_shader_);
 	free_if_valid(rd_, field_uset_);
 	free_if_valid(rd_, field_pipeline_);
 	free_if_valid(rd_, field_shader_);
@@ -204,6 +225,97 @@ bool MeshPass::run_field_sync(const MeshJob &job, std::vector<uint8_t> *lattice)
 		const PackedByteArray data = rd_->texture_get_data(lattice_, 0);
 		if (data.size() < ve::kChunkLatticeCount) return false;
 		lattice->assign(data.ptr(), data.ptr() + ve::kChunkLatticeCount);
+	}
+	return true;
+}
+
+void MeshPass::record_cells(int64_t list, const MeshJob &job, int job_index) {
+	rd_->compute_list_bind_compute_pipeline(list, cells_pipeline_);
+	rd_->compute_list_bind_uniform_set(list, cells_uset_, 0);
+	push(list, job, job_index);
+	const int g = groups(ve::kChunkMeshCells);
+	rd_->compute_list_dispatch(list, g, g, g);
+}
+
+void MeshPass::record_quads(int64_t list, const MeshJob &job, int job_index) {
+	rd_->compute_list_bind_compute_pipeline(list, quads_pipeline_);
+	rd_->compute_list_bind_uniform_set(list, quads_uset_, 0);
+	push(list, job, job_index);
+	const int g = groups(ve::kChunkCells);
+	rd_->compute_list_dispatch(list, g, g, g);
+}
+
+// The three passes are strictly sequential, and so are the jobs in a batch: they share one
+// lattice volume and one cell map. The barriers are what makes that safe — and what makes a
+// batch cost three barriers per chunk rather than three buffers per chunk.
+void MeshPass::record_job(int64_t list, const MeshJob &job, int job_index) {
+	record_field(list, job, job_index);
+	rd_->compute_list_add_barrier(list);
+	record_cells(list, job, job_index);
+	rd_->compute_list_add_barrier(list);
+	record_quads(list, job, job_index);
+	rd_->compute_list_add_barrier(list);
+}
+
+void MeshPass::reset_counts() {
+	// Device-level, so it must precede compute_list_begin. One update covers the whole batch:
+	// every job writes only its own four uints.
+	rd_->buffer_update(counts_, 0, static_cast<uint32_t>(cfg_.max_jobs) * 16,
+			zeroed(static_cast<int64_t>(cfg_.max_jobs) * 16));
+}
+
+void MeshPass::read_job(int job_index, ve::IVec3 chunk, MeshResult *out) {
+	out->chunk = chunk;
+	out->positions.clear();
+	out->indices.clear();
+	out->overflow = false;
+	const PackedByteArray cb =
+			rd_->buffer_get_data(counts_, static_cast<uint32_t>(job_index) * 16, 16);
+	if (cb.size() < 16) return;
+	const uint32_t *c = reinterpret_cast<const uint32_t *>(cb.ptr());
+	// The counters are raw atomic totals: they run past the cap when it is hit.
+	const int vcount = std::min<int>(static_cast<int>(c[0]), cfg_.max_verts);
+	const int tcount = std::min<int>(static_cast<int>(c[1]), cfg_.max_tris);
+	out->overflow = c[2] != 0u;
+	if (vcount > 0) {
+		const PackedByteArray vb = rd_->buffer_get_data(verts_,
+				static_cast<uint32_t>(job_index) * cfg_.max_verts * 12,
+				static_cast<uint32_t>(vcount) * 12);
+		out->positions.resize(static_cast<size_t>(vcount) * 3);
+		std::memcpy(out->positions.data(), vb.ptr(), static_cast<size_t>(vcount) * 12);
+	}
+	if (tcount > 0) {
+		const PackedByteArray tb = rd_->buffer_get_data(tris_,
+				static_cast<uint32_t>(job_index) * cfg_.max_tris * 12,
+				static_cast<uint32_t>(tcount) * 12);
+		out->indices.resize(static_cast<size_t>(tcount) * 3);
+		std::memcpy(out->indices.data(), tb.ptr(), static_cast<size_t>(tcount) * 12);
+	}
+}
+
+bool MeshPass::mesh_sync(const MeshJob &job, MeshResult *out, std::vector<uint8_t> *lattice,
+		std::vector<int32_t> *cell_vertex) {
+	if (!is_valid()) return false;
+	reset_counts();
+	upload_ops(job, 0);
+	const int64_t list = rd_->compute_list_begin();
+	record_job(list, job, 0);
+	rd_->compute_list_end();
+	rd_->submit();
+	rd_->sync();
+	if (out) read_job(0, job.chunk, out);
+	if (lattice) {
+		const PackedByteArray data = rd_->texture_get_data(lattice_, 0);
+		if (data.size() < ve::kChunkLatticeCount) return false;
+		lattice->assign(data.ptr(), data.ptr() + ve::kChunkLatticeCount);
+	}
+	if (cell_vertex) {
+		const PackedByteArray data = rd_->buffer_get_data(cells_, 0,
+				static_cast<uint32_t>(ve::kChunkCellCount) * 4);
+		if (data.size() < static_cast<int64_t>(ve::kChunkCellCount) * 4) return false;
+		cell_vertex->resize(ve::kChunkCellCount);
+		std::memcpy(cell_vertex->data(), data.ptr(),
+				static_cast<size_t>(ve::kChunkCellCount) * 4);
 	}
 	return true;
 }

@@ -43,11 +43,24 @@ public:
 	// Diagnostic only — the streaming path never stalls like this.
 	bool run_field_sync(const MeshJob &job, std::vector<uint8_t> *lattice);
 
+	// Meshes one chunk inline (record, submit, sync, read back). Diagnostic only — the
+	// streaming path never stalls like this. `lattice` and `cell_vertex` are optional and
+	// exist for the differential test.
+	bool mesh_sync(const MeshJob &job, MeshResult *out, std::vector<uint8_t> *lattice,
+			std::vector<int32_t> *cell_vertex);
+
 private:
 	bool build(RenderingDevice *rd, const char *res_path, RID *shader, RID *pipeline);
 	void record_field(int64_t list, const MeshJob &job, int job_index);
 	void upload_ops(const MeshJob &job, int job_index);
 	void push(int64_t list, const MeshJob &job, int job_index);
+
+	// private
+	void record_job(int64_t list, const MeshJob &job, int job_index);
+	void record_cells(int64_t list, const MeshJob &job, int job_index);
+	void record_quads(int64_t list, const MeshJob &job, int job_index);
+	void read_job(int job_index, ve::IVec3 chunk, MeshResult *out);
+	void reset_counts();
 
 	RenderingDevice *rd_ = nullptr;
 	MeshPassConfig cfg_;
@@ -58,6 +71,8 @@ private:
 	RID counts_;      // 4 uints per job: vert count, tri count, overflow bits, pad
 	RID ops_;         // max_jobs * kMaxRegionOps EditOps
 	RID field_shader_, field_pipeline_, field_uset_;
+	RID cells_shader_, cells_pipeline_, cells_uset_;
+	RID quads_shader_, quads_pipeline_, quads_uset_;
 };
 
 } // namespace godot
