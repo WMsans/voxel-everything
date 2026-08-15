@@ -25,4 +25,23 @@ int palette_slot(uint16_t *palette, uint16_t mat_id, bool *overflow) {
 	return best;
 }
 
+void palette_occupancy_order(const uint16_t *palette, const int *counts, int *out_order) {
+	for (int i = 0; i < kBrickPaletteSize; i++) out_order[i] = i;
+	// Selection sort over four entries: small, branch-explicit, and trivially mirrored in
+	// GLSL by a single thread (see shaders/brick_gen.comp.glsl).
+	for (int a = 0; a < kBrickPaletteSize; a++)
+		for (int b = a + 1; b < kBrickPaletteSize; b++) {
+			const int ia = out_order[a], ib = out_order[b];
+			const bool a_empty = palette[ia] == 0, b_empty = palette[ib] == 0;
+			bool swap = false;
+			if (a_empty != b_empty) {
+				swap = a_empty; // non-empty slots always precede empty ones
+			} else if (!a_empty) {
+				swap = counts[ib] > counts[ia] ||
+						(counts[ib] == counts[ia] && palette[ib] < palette[ia]);
+			}
+			if (swap) { out_order[a] = ib; out_order[b] = ia; }
+		}
+}
+
 } // namespace ve

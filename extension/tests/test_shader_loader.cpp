@@ -63,3 +63,30 @@ TEST_CASE("malformed include (missing closing quote) reports error") {
 	CHECK(out.empty());
 	CHECK(err.find("malformed") != std::string::npos);
 }
+
+TEST_CASE("a header included down two paths is expanded once") {
+	auto dir = std::filesystem::temp_directory_path() / "ve_sl4";
+	write_file(dir, "common.glsl", "const float SHARED = 1.0;\n");
+	write_file(dir, "a.glsl", "#include \"common.glsl\"\nconst float A = SHARED;\n");
+	write_file(dir, "b.glsl", "#include \"common.glsl\"\nconst float B = SHARED;\n");
+	auto p = write_file(dir, "main.glsl", "#include \"a.glsl\"\n#include \"b.glsl\"\n");
+	std::string err;
+	auto out = ve::load_shader_source(p.string(), dir.string(), &err);
+	CHECK(err.empty());
+	// Declaring SHARED twice is a GLSL redefinition error, so it must appear exactly once.
+	const auto first = out.find("const float SHARED");
+	REQUIRE(first != std::string::npos);
+	CHECK(out.find("const float SHARED", first + 1) == std::string::npos);
+	CHECK(out.find("const float A") != std::string::npos);
+	CHECK(out.find("const float B") != std::string::npos);
+}
+
+TEST_CASE("include-once does not mask a real cycle") {
+	auto dir = std::filesystem::temp_directory_path() / "ve_sl5";
+	write_file(dir, "a.glsl", "#include \"b.glsl\"\n");
+	auto p = write_file(dir, "b.glsl", "#include \"a.glsl\"\n");
+	std::string err;
+	auto out = ve::load_shader_source(p.string(), dir.string(), &err);
+	CHECK(out.empty());
+	CHECK(err.find("cycle") != std::string::npos);
+}

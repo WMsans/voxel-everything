@@ -3,11 +3,8 @@
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/defs.hpp>
 #include "voxel_world.h"
+#include "voxel_edit_tool.h"
 #include "raymarch_compositor.h"
-// GpuWorld must be complete here: GCC instantiates VoxelWorld's destructor when
-// instantiating ClassDB::_create_instance_func<T> (new T), which requires complete
-// types for all unique_ptr members at the registration site.
-#include "render/gpu_world.h"
 
 using namespace godot;
 
@@ -15,6 +12,7 @@ void voxel_everything_initialize(ModuleInitializationLevel p_level) {
 	if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) return;
 	GDREGISTER_CLASS(VoxelWorld);
 	GDREGISTER_CLASS(RaymarchCompositor);
+	GDREGISTER_CLASS(VoxelEditTool);
 }
 
 void voxel_everything_uninitialize(ModuleInitializationLevel p_level) {

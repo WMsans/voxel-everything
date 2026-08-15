@@ -6709,4 +6709,93 @@ git commit -m "feat(demo): destruction tools, streaming HUD, benchmark counters"
 
 ## Errata (recorded during M2 implementation — corrections to the task text)
 
-(empty — add entries here as implementation finds them, following M1's format)
+1. Task 3: the test's `bounds()` helper read `WorldBounds{{0,-64,0},{64,8,64}}`, whose
+   `origin_regions` is `{0,-2,0}` — region y = -1 is in-bounds. The test spheres at y = z = 1
+   with r = 2 pad (one voxel) into regions y/z = -1, so the exact implementation yields 4
+   touched regions where the test expects 2 (and 2 where it expects 1 in the partial-bounds
+   case). Corrected to `WorldBounds{{0,0,0},{64,8,64}}` (one line), matching the test
+   comments' evident intent; implementation unchanged.
+2. Task 5: two corrections to `test_brick_eval.cpp`, both test-only (production code is
+   byte-identical to the brief). (a) In "an edit makes a previously-solid brick a surface
+   brick", `op.radius = 2.0f` was changed to `0.5f`: the sphere centred at brick-origin + 0.4
+   with r = 2.0 swallows the whole 0.8 m brick (farthest corner 0.693 m away), leaving every
+   probe air-side with no zero crossing — the test could not pass against the brief's own
+   implementation. (b) In "eval_brick produces…", the surface-brick search now requires the
+   evaluated lattice to actually cross zero: the pad probe (`brick_has_surface`) can flag a
+   near-surface SOLID brick (terrain dipping to ~2.54 m at the brick's far corner), which the
+   test's own pos/neg assertions would then fail on.
+3. Task 7: the brief's verbatim Step 3 `shader_loader.cpp` block drops the M1 malformed-include
+   guard (`end == std::string::npos` check), which contradicts its own Step-2 acceptance line
+   "all four M1 loader cases pass" — M1's "malformed include reports error" test
+   (test_shader_loader.cpp:54) requires the `"malformed include"` error string. Implementation
+   kept the guard as a strict superset (inert for the diamond-once and cycle cases); the
+   Step 3 code block in the plan should include the check.
+4. Task 7: removing `ATLAS_BRICKS` from `common.glsl` (per Step 4's "deliberately gone")
+   broke M1's `raymarch.comp.glsl`, which still references it at lines 34–36 and 92–94 —
+   the shader failed to compile and `test_raymarch_pixel.gd` regressed, contradicting
+   Task 8's mandate that "the raymarcher keeps rendering the M1 static world, and its
+   gdUnit tests keep passing, right up to the single atomic cutover in Task 12". Human
+   decision: restore `const ivec3 ATLAS_BRICKS = ivec3(32, 16, 32);` to `common.glsl`
+   now (inert for the new Task-7 shaders, which take atlas dims as parameters); Task 12's
+   raymarch rewrite replaces it with runtime dims, at which point it disappears.
+5. Task 9: the brief's verbatim Step 3 `brick_mark.comp.glsl` declares a local
+   `bool active = brick_has_surface(...)`, but `active` is a GLSL reserved word (spec
+   Appendix A), so Godot's glslang rejects the shader ("'active' : Reserved word") and
+   `debug_init_atlas()` fails. Implementation renamed the local to `has_surface` (three
+   occurrences, declaration + two uses, plus an explanatory comment); no semantic change.
+   Everything else in the shader is byte-identical to the plan text. The Step 3 code block
+   in the plan should use a non-reserved identifier.
+   Also: `debug_teardown_atlas()` (a Task 8 hook) frees the atlas buffers while the new
+   `RegionPass` still holds uniform sets referencing them; a subsequent `debug_init_atlas()`
+   then errored with three "Attempted to free invalid ID" lines in
+   `test_teardown_is_idempotent_and_survives_re_init`. The hook now tears the region pass
+   down first (mirroring `_exit_tree()`'s ordering), which also covers any future
+   re-init-without-teardown path.
+7. Task 10: the brief's verbatim `brick_gen.comp.glsl` would not compile under glslang for
+   two reasons — `pc.atlas_bricks` (an `ivec4`) is passed to `atlas_base`/`atlas_brick_cell`
+   which take `ivec3`, fixed with `.xyz`; and `mat2` is a GLSL reserved word (the 2×2 matrix
+   type), renamed to `matB` (no semantic change). Also, per the brief's own Step 5 note
+   (observed non-preemptively): `debug_brick_diff`'s mip reference is now reduced from the
+   GPU lattice read back, not the CPU lattice, so a one-step sin() drift cannot flag a mip
+   cell that is a correct reduction of what the GPU actually wrote.
+8. Task 10 (human-approved): `test_brick_diff.gd` test 2's per-brick assertion
+   `mat_near_compared > 0` is relaxed to "at least one sampled brick exercises the
+   near-surface band". ~15% of active bricks are apron-grazing (surface crosses only the
+   +face apron plane at local lattice 16..17, outside the 16³ cell volume), so their
+   mat_near_compared is legitimately 0 with GPU/CPU agreeing exactly; combined with
+   nondeterministic GPU job order, the strict form failed ~86% of runs.
+9. Task 12 (human-approved): the plan's premise "the M1-era surface now sits at y ≈ 51.2 ±
+   10 m" was FALSE in the committed code — the generator field is `sdf = y - hills(x, z)`
+   with NO origin term (the plan's own "Brick coordinates are GLOBAL" convention), so the
+   surface sits at y ≈ hills ∈ [−10, +10] m inside the new world's y-span [−51.2, +153.6).
+   The plan's +51.2 shifts in the Task-12 test origins and demo transforms were based on the
+   false premise. Human decision: make the premise TRUE — add a +51.2 surface offset to the
+   generator field (`sdf = (y - kSurfaceY) - hills` with `kSurfaceY = 51.2f`) and its GPU
+   mirror in `shaders/field.glsl`, then re-baseline every test that asserts absolute surface
+   heights (+51.2 on the relevant coordinates) and the WorldData-based worlds whose y-span
+   must now contain the surface near brick 64. The demo's +51.2 transforms then become
+   correct as the plan intended. The cave centre becomes `(30, kSurfaceY + hills(30,30) - 2,
+   30)`.
+10. Task 13 (human-approved): three corrections to the brief's verbatim
+    `shaders/raymarch.comp.glsl` mip-skip code, each caught by the brief's own tests.
+    (a) `brick_may_have_surface` reduces ALL eight mip2 cells instead of the brief's
+    "2³ cell 0" — cell 0 covers only the [0,8)³ octant, so the literal code tunnels
+    through upper-octant surfaces; the plan's own "whole-brick rejection" wording
+    requires the reduce. (b) The 8³ skip formula in the brief
+    (`t = min(max(min(tf...), t + 0.002), t_exit)`) compared a t-DELTA against an
+    absolute t, so the skip never jumped (rays crawled 0.002 m/iter and died on the
+    64-iteration cap; instrumented proof in the Task 13 report). Fixed to
+    `t = min(t + max(min(tf...), 0.002), t_exit)`. (c) `pc.atlas_bricks.xyz` ivec4→ivec3
+    compile fix (same as Errata 7).
+11. Task 14 (human-approved): the brief's test_edit_pipeline.gd config over-subscribes the
+    16,384-slot atlas at its cave-adjacent camera (resident set ≈ 17,014 surface bricks), so
+    the plan's drop-only fail-soft left SDF-changing edits (subtract/add — not paint) invisible
+    in the raymarcher, failing the brief's own "hole is visible" assertions. Implemented the
+    "evicts" arm of spec §8 ("pool exhaustion evicts or drops"): `ve::RegionResidency::
+    evict_furthest(cx, cy, cz, plan, exclude)` plans an eviction of the furthest resident
+    region not in the exclude set, and `WorldStreamer::run_frame` triggers it when a frame
+    drains an SDF edit touching resident regions and the free-slot count is below a 128-slot
+    headroom. Edit-touched regions are excluded; the drop arm remains the fallback when every
+    resident region is touched; the evicted region re-streams next frame with the new ops.
+    Files beyond the brief's list: extension/src/world/residency.h/.cpp,
+    extension/src/render/world_streamer.cpp.

@@ -1,5 +1,6 @@
 #pragma once
 #include "world/brick.h"
+#include "world/brick_mip.h"
 #include "generator/generator.h"
 #include <cstdint>
 #include <vector>
@@ -19,6 +20,7 @@ public:
 	bool brick_active(int bx, int by, int bz) const;
 	int brick_slot(int bx, int by, int bz) const; // -1 if inactive
 	const Brick &brick(int slot) const { return bricks_[slot]; }
+	const BrickMips &mips(int slot) const { return mips_[slot]; }
 	int active_brick_count() const { return static_cast<int>(bricks_.size()); }
 	const std::vector<int32_t> &indirection() const { return indirection_; }
 	Dims dims() const { return dims_; }
@@ -27,6 +29,7 @@ private:
 	Dims dims_;
 	std::vector<int32_t> indirection_; // brick grid -> slot or -1
 	std::vector<Brick> bricks_;
+	std::vector<BrickMips> mips_;
 };
 
 } // namespace ve

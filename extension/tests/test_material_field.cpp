@@ -24,9 +24,10 @@ float hills(float x, float z) { // test oracle, mirrors AnalyticGenerator
 }
 
 // Material of the terrain surface in the column through (x, z), asked of the generator so
-// the band thresholds themselves are not duplicated here.
+// the band thresholds themselves are not duplicated here. The surface now sits at
+// kSurfaceY + hills, so the probe is sampled one voxel below that.
 uint16_t column_material(const ve::Generator &gen, float x, float z) {
-	return gen.sample(x, hills(x, z) - 0.01f, z).material;
+	return gen.sample(x, ve::kSurfaceY + hills(x, z) - 0.01f, z).material;
 }
 
 } // namespace
@@ -34,13 +35,13 @@ uint16_t column_material(const ve::Generator &gen, float x, float z) {
 // Every cell within reach of a surface hit must resolve to that surface's material. This is
 // the property the fringe violates: near-surface AIR cells fall through to palette[0].
 TEST_CASE("near-surface cells carry the material of the surface beside them") {
-	ve::WorldData w(48, 20, 48);
+	ve::WorldData w(48, 90, 48);
 	ve::AnalyticGenerator gen;
 	w.generate(gen);
 
 	long tested = 0, wrong = 0, air_cells = 0;
 	for (int bz = 0; bz < 48; bz++)
-		for (int by = 0; by < 20; by++)
+		for (int by = 0; by < 90; by++)
 			for (int bx = 0; bx < 48; bx++) {
 				const int slot = w.brick_slot(bx, by, bz);
 				if (slot < 0) continue;
@@ -78,7 +79,7 @@ TEST_CASE("near-surface cells carry the material of the surface beside them") {
 }
 
 TEST_CASE("the fill introduces no material the brick did not already contain") {
-	ve::WorldData w(40, 20, 40);
+	ve::WorldData w(40, 90, 40);
 	ve::AnalyticGenerator gen;
 	w.generate(gen);
 	for (int slot = 0; slot < w.active_brick_count(); slot++) {
