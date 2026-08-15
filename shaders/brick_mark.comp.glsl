@@ -2,7 +2,8 @@
 #version 460
 
 #define FIELD_OP_POOL_BINDING 4
-#include "field.glsl"
+#include "common.glslh"
+#include "field.glslh"
 
 layout(local_size_x = 256) in;
 
@@ -14,7 +15,7 @@ layout(set = 0, binding = 2, std430) buffer Counters {
 layout(set = 0, binding = 3, std430) buffer Frame {
 	int job_count; uint overflow; uint pad0, pad1;
 } frame;
-// binding 4 is the field op pool, declared by field.glsl
+// binding 4 is the field op pool, declared by field.glslh
 layout(set = 0, binding = 5, std430) writeonly buffer Jobs { ivec4 v[]; } jobs;
 
 layout(push_constant, std430) uniform Push {

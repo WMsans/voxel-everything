@@ -1,7 +1,7 @@
 #[compute]
 #version 460
 
-#include "common.glsl"
+#include "common.glslh"
 
 layout(local_size_x = 256) in;
 

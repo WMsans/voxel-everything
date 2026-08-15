@@ -2,9 +2,8 @@
 // ve::apply_op (extension/src/generator/edit_ops.cpp). tests/test_field_diff.gd diffs the
 // two and fails when they drift (spec section 8).
 //
-// The includer MUST define FIELD_OP_POOL_BINDING to the set-0 binding of its op pool before
-// pulling this file in.
-#include "common.glsl"
+// The includer MUST include common.glslh first and define FIELD_OP_POOL_BINDING to the
+// set-0 binding of its op pool before pulling this file in.
 
 const uint OP_SPHERE_SUBTRACT = 0u;
 const uint OP_SPHERE_ADD = 1u;

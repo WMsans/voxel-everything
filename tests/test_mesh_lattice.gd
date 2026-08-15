@@ -9,7 +9,7 @@ func after_test() -> void:
 	_worlds.clear()
 
 # GPU/CPU differential test for the collision chunk lattice (spec section 8). The mesher does
-# not read the brick atlas: it evaluates shaders/field.glsl at 0.1 m, the same field the
+# not read the brick atlas: it evaluates shaders/field.glslh at 0.1 m, the same field the
 # bricks are generated from, so collision cannot inherit a dropped brick's hole and a chunk
 # outside the residency ball can still be meshed.
 #

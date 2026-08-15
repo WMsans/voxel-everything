@@ -1,7 +1,8 @@
 #[compute]
 #version 460
 
-#include "mesh_common.glsl"
+#include "common.glslh"
+#include "mesh_common.glslh"
 
 // One thread per owned edge coordinate; each handles that point's three axis edges.
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;

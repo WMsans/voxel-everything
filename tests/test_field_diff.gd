@@ -1,6 +1,6 @@
 extends GdUnitTestSuite
 
-# GPU/CPU differential test for the field mirror (spec section 8). shaders/field.glsl must
+# GPU/CPU differential test for the field mirror (spec section 8). shaders/field.glslh must
 # agree with ve::AnalyticGenerator + ve::apply_op or every brick the GPU generates is wrong.
 #
 # Tolerance: sin() is not bit-identical between glibc and a Vulkan driver, and the stored SDF

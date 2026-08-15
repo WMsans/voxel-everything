@@ -3,8 +3,7 @@
 // lattice array index i holds the sample at local coordinate i - 1, mesh-cell array index m
 // holds the cell at local coordinate m - 1, and cell m's corners are lattice m and m + 1.
 // The one-cell overlap below the origin is what lets a chunk close the quads on its minimum
-// faces without reading a neighbouring chunk's lattice.
-#include "common.glsl"
+// faces without reading a neighbouring chunk's lattice. Include common.glslh first.
 
 const int CHUNK_CELLS = 128;        // ve::kChunkCells
 const int CHUNK_MESH_CELLS = 129;   // ve::kChunkMeshCells

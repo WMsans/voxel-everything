@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cv73ahsmactrk"
+path="res://.godot/imported/mesh_quads.comp.glsl-fa4aea0e93b1fda79f245ad05e37ac7f.res"
+
+[deps]
+
+source_file="res://shaders/mesh_quads.comp.glsl"
+dest_files=["res://.godot/imported/mesh_quads.comp.glsl-fa4aea0e93b1fda79f245ad05e37ac7f.res"]
+
+[params]
+

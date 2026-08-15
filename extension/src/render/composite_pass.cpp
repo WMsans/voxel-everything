@@ -25,7 +25,8 @@ void CompositePass::initialize(RenderingDevice *rd) {
 		std::string err;
 		const String path = ProjectSettings::get_singleton()->globalize_path(String("res://shaders/") + file);
 		const String inc = ProjectSettings::get_singleton()->globalize_path("res://shaders");
-		const std::string code = ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err);
+		const std::string code = ve::strip_shader_annotations(
+				ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err));
 		if (code.empty()) {
 			UtilityFunctions::printerr("CompositePass: ", err.c_str());
 			return false;

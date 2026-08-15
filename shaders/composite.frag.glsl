@@ -1,3 +1,4 @@
+#[fragment]
 #version 460
 layout(location = 0) in vec2 uv_in;
 layout(location = 0) out vec4 frag_color;

@@ -2,8 +2,9 @@
 #version 460
 
 #define FIELD_OP_POOL_BINDING 7
-#include "field.glsl"
-#include "brick_layout.glsl"
+#include "common.glslh"
+#include "field.glslh"
+#include "brick_layout.glslh"
 
 // One workgroup per brick; 256 threads stride over the brick's 4096 cells and 4913 lattice
 // samples. Mirror of ve::eval_brick (extension/src/world/brick_eval.cpp).
@@ -18,7 +19,7 @@ layout(set = 0, binding = 3, rg8ui) writeonly uniform uimage3D mip4_atlas;
 layout(set = 0, binding = 4, rg8ui) writeonly uniform uimage3D mip8_atlas;
 layout(set = 0, binding = 5, std430) writeonly buffer Palette { uint id[]; } palette_buf;
 layout(set = 0, binding = 6, std430) readonly buffer Jobs { ivec4 v[]; } jobs;
-// binding 7 is the field op pool, declared by field.glsl
+// binding 7 is the field op pool, declared by field.glslh
 
 layout(push_constant, std430) uniform Push {
 	ivec4 atlas_bricks;

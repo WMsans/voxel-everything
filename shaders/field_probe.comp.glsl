@@ -2,7 +2,8 @@
 #version 460
 
 #define FIELD_OP_POOL_BINDING 0
-#include "field.glsl"
+#include "common.glslh"
+#include "field.glslh"
 
 layout(local_size_x = 64) in;
 

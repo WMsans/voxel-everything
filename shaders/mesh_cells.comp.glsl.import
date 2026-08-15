@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://5x8ig5xgrn7r"
+path="res://.godot/imported/mesh_cells.comp.glsl-8c65a7f1e8dac7f97ed0773798af024c.res"
+
+[deps]
+
+source_file="res://shaders/mesh_cells.comp.glsl"
+dest_files=["res://.godot/imported/mesh_cells.comp.glsl-8c65a7f1e8dac7f97ed0773798af024c.res"]
+
+[params]
+

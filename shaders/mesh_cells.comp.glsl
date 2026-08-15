@@ -1,7 +1,8 @@
 #[compute]
 #version 460
 
-#include "mesh_common.glsl"
+#include "common.glslh"
+#include "mesh_common.glslh"
 
 // One thread per mesh cell. 129 is not a multiple of 4, so the last group of each axis runs
 // partly out of bounds and returns.

@@ -2,15 +2,16 @@
 #version 460
 
 #define FIELD_OP_POOL_BINDING 1
-#include "field.glsl"
-#include "mesh_common.glsl"
+#include "common.glslh"
+#include "field.glslh"
+#include "mesh_common.glslh"
 
 // One thread per lattice sample. 130 is not a multiple of 4, so the last group in each axis
 // runs partly out of bounds and returns.
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 
 layout(set = 0, binding = 0, r8) writeonly uniform image3D lattice;
-// binding 1 is the field op pool, declared by field.glsl
+// binding 1 is the field op pool, declared by field.glslh
 
 layout(push_constant, std430) uniform Push {
 	ivec4 chunk;  // xyz = chunk coordinates, w = job index in this batch
