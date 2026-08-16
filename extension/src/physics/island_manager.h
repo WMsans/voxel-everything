@@ -83,6 +83,10 @@ public:
 	// Test hook: make the next re-merge resample fail so the resample backoff path can be
 	// exercised without depending on a worker-side failure mode.
 	void debug_set_fail_next_resample(bool fail) { debug_fail_next_resample_ = fail; }
+	// Test hook: treat the next landed extraction as holding no solid sample, which is what a
+	// sheet thinner than the lattice pitch produces. Exercises the crumble path without
+	// having to carve a sub-voxel sliver by hand.
+	void debug_set_empty_next_extraction(bool v) { debug_empty_next_extraction_ = v; }
 	// Test hook: wake an island body after a re-merge resample has been submitted, so the
 	// stale-rest-pose guard can be exercised deterministically.
 	void debug_wake_body(int index);
@@ -97,6 +101,7 @@ public:
 	void debug_set_fail_next_restore(bool fail) { (void)fail; }
 	void debug_set_fail_next_carve(bool fail) { (void)fail; }
 	void debug_set_fail_next_resample(bool fail) { (void)fail; }
+	void debug_set_empty_next_extraction(bool v) { (void)v; }
 	void debug_wake_body(int index) { (void)index; }
 	void debug_offset_body(int index, const Vector3 &offset) { (void)index; (void)offset; }
 #endif
@@ -156,6 +161,7 @@ private:
 
 	bool window_is_fresh(const PendingWindow &w) const;
 	int run_connectivity(const PendingWindow &w);
+	bool crumble_component(const InFlight &f);
 	void land_extraction(const IslandExtractResult &r);
 	void land_resample(const IslandExtractResult &r);
 	void publish_descriptors();
@@ -198,10 +204,24 @@ private:
 	int debris_spawned_ = 0;
 	int islands_merged_ = 0;
 	int refused_ = 0; // components left attached because a pool was full
+	// Why they were left attached, so a stall can name its own cause instead of being
+	// diagnosed by inspection.
+	int refused_box_merge_ = 0;
+	int refused_lattice_ = 0;
+	int refused_op_cap_ = 0;
+	int refused_body_cap_ = 0;
+	int refused_pool_full_ = 0;
+	int refused_unavailable_ = 0;
+	int refused_empty_ = 0;
+	int components_labelled_ = 0;
+	// Loose components the extractor could not represent, carved away rather than left
+	// standing as an invisible wedge (see crumble_component).
+	int crumbled_ = 0;
 	bool debug_fail_next_spawn_ = false;
 	bool debug_fail_next_restore_ = false;
 	bool debug_fail_next_carve_ = false;
 	bool debug_fail_next_resample_ = false;
+	bool debug_empty_next_extraction_ = false;
 	float last_ms_ = 0.0f;
 };
 

@@ -1008,3 +1008,88 @@ func test_post_spawn_carve_rejection_keeps_body_in_hole(timeout := 180000) -> vo
 		"post-spawn carve rejection body was not counted as spawned: %s" % st).is_greater(0)
 	assert_int(st["volume_pinned"]).override_failure_message(
 		"partial restore referenced the birth volume but it was unpinned: %s" % st).is_greater(0)
+
+# A component the extractor cannot represent must not be left standing.
+#
+# ve::plan_island_lattice drops to the 10 cm pitch for any component wider than 2.95 m, while
+# the occupancy grid the labeller reads is a conservative test over the 5 cm brick lattice. A
+# sheet thinner than the pitch therefore reads SOLID to the labeller and EMPTY to the
+# extractor -- which is exactly what a sphere carve through a sphere-add pillar leaves behind:
+# paper-thin dishes a few centimetres thick.
+#
+# Leaving one in place was the old behaviour, and it is the worst of the three outcomes: the
+# matter stays STATIC inside the space the freed piece was cut out of, so the piece wedges
+# against it instead of falling, and every later connectivity run re-labels and re-extracts
+# the same cells for ever.
+#
+# The subject is a small ball floating clear of the terrain: unanchored, and small enough
+# that no cell of it is kCellFull, which is the shape the crumble is allowed to act on. The
+# empty landing is forced with the hook rather than carved by hand, because no fixed set of
+# tool calls produces a sub-pitch sliver reliably across the analytic hills.
+func test_a_component_too_thin_to_extract_is_carved_away_not_left_standing(timeout := 120000) -> void:
+	var w := make_world()
+	var t := tool_of(w)
+	# Dead centre of occupancy cell (25, 77, 25) -- (floor(v / 0.8) + 0.5) * 0.8 -- with a
+	# radius small enough that the whole ball lies inside that one cell. One cell means the
+	# carve accounts for the whole ball, and a ball smaller than its cell means the cell is
+	# kCellSolid rather than kCellFull, which is the shape a crumble is allowed to act on.
+	var speck := Vector3(20.4, 62.0, 20.4)
+	var elsewhere := Vector3(24.4, 0.0, 24.4) # clear of the speck's cell
+	t.apply_sphere_add(speck, 0.35, 4)
+	step(w, 90)
+	assert_bool(solid_at(w, speck)).override_failure_message(
+		"the floating speck was never built").is_true()
+	var ground_before: Dictionary = w.debug_raycast(
+		Vector3(elsewhere.x, 90.0, elsewhere.z), Vector3(0, -1, 0))
+	assert_bool(ground_before["hit"]).is_true()
+
+	# The next extraction to land reports no solid sample, as a sub-pitch sheet does.
+	w.debug_set_empty_next_extraction(true)
+	# An edit near it, so connectivity has a window to act on; it misses the speck itself.
+	t.apply_sphere_subtract(speck + Vector3(0.0, -1.6, 0.0), 0.4)
+	step(w, 240)
+
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["crumbled"]).override_failure_message(
+		"the unrepresentable component was not crumbled: %s" % st).is_greater(0)
+	assert_int(st["refused_empty"]).override_failure_message(
+		"the crumble was refused: %s" % st).is_equal(0)
+	# The whole point: the matter is GONE from the static field. Before the fix it stayed --
+	# and stayed labelled, extracted and dropped again on every later connectivity run.
+	assert_bool(solid_at(w, speck)).override_failure_message(
+		"the component the extractor could not represent is still in the terrain: %s" % st
+		).is_false()
+	assert_int(w.debug_cell_state(Vector3i(25, 77, 25))).override_failure_message(
+		"the crumbled cell is still marked solid, so connectivity will label it again"
+		).is_equal(1) # ve::kCellAir
+	# ...and nothing outside the component went with it.
+	var ground_after: Dictionary = w.debug_raycast(
+		Vector3(elsewhere.x, 90.0, elsewhere.z), Vector3(0, -1, 0))
+	assert_bool(ground_after["hit"]).override_failure_message(
+		"crumbling removed the terrain beside the component").is_true()
+	assert_float((ground_after["pos"] as Vector3).y).is_equal_approx(
+		(ground_before["pos"] as Vector3).y, 0.01)
+
+# The corollary: a crumble must not be able to eat solid rock. A cell the mark pass called
+# kCellFull holds no air sample at 5 cm, so an extraction that finds nothing solid inside one
+# is a disagreement no thin sheet can explain -- the component is left alone and counted
+# under refused_empty instead.
+func test_a_solid_component_is_never_crumbled(timeout := 120000) -> void:
+	var w := make_world()
+	var t := tool_of(w)
+	build_pillar(w, t)
+	var top := Vector3(PILLAR_X, PILLAR_BASE + 4.0, PILLAR_Z)
+	assert_bool(solid_at(w, top)).is_true()
+
+	# The severed top is solid through and through: its inner cells hold no air sample at all.
+	w.debug_set_empty_next_extraction(true)
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	step(w, 240)
+
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["refused_empty"]).override_failure_message(
+		"a fully solid component was not protected from the crumble: %s" % st).is_greater(0)
+	# It is still there: better a piece that has to wait for the next connectivity run than
+	# a crumble that deletes rock on the strength of a disagreement it cannot explain.
+	assert_bool(solid_at(w, Vector3(PILLAR_X, PILLAR_BASE, PILLAR_Z))).override_failure_message(
+		"the crumble ate the stump").is_true()

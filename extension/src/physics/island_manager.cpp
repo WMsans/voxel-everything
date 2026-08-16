@@ -231,6 +231,7 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 
 	std::vector<ve::IslandComponent> comps;
 	ve::label_islands(r, comp_cfg_, &comps);
+	components_labelled_ += static_cast<int>(comps.size());
 
 	if (!world_->mesh_service()->extraction_available()) {
 		// Permanent for this physics lifetime: every field extraction would fail because the
@@ -238,6 +239,7 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 		// re-queue a remainder that can only fail forever. The components stay attached in
 		// the field, which is the same fail-soft outcome the worker would produce.
 		refused_ += static_cast<int>(comps.size());
+		refused_unavailable_ += static_cast<int>(comps.size());
 		return 0;
 	}
 
@@ -248,6 +250,7 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 		if (submitted >= kExtractsPerFrame) break;
 		if (live_body_count() + static_cast<int>(in_flight_.size()) >= max_dynamic_bodies_) {
 			refused_++;
+			refused_body_cap_++;
 			transient_refusal = true;
 			break;
 		}
@@ -258,6 +261,7 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 			// labeller's extent bound does not bound box COUNT, and a partial carve would
 			// leave matter in two places at once.
 			refused_++;
+			refused_box_merge_++;
 			continue;
 		}
 		float wlo[3], whi[3];
@@ -269,6 +273,7 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 		job.dim = ve::kIslandDim;
 		if (!ve::plan_island_lattice(wlo, whi, job.dim, &job.voxel, job.origin)) {
 			refused_++;
+			refused_lattice_++;
 			continue;
 		}
 		{
@@ -284,11 +289,13 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 		// current field/worker limits. Fail-soft leaves it attached.
 		if (job.ops.size() > static_cast<size_t>(ve::kMaxRegionOps)) {
 			refused_++;
+			refused_op_cap_++;
 			continue;
 		}
 		const int slot = world_->volumes().allocate();
 		if (slot < 0) {
 			refused_++;
+			refused_pool_full_++;
 			transient_refusal = true;
 			continue; // pool full: leave it attached
 		}
@@ -471,17 +478,105 @@ bool IslandManager::merge_retry_blocked(int body_index) {
 	return false;
 }
 
+// Remove a loose component the extractor could not represent. Returns false when it must be
+// left alone: the cells are already air (a carve landed while this extraction was in flight,
+// so carving again would spend permanent region ops on nothing), a cell is kCellFull (no air
+// sample at 5 cm -- a disagreement that size is not a thin sheet and carving would delete
+// solid rock), or a region has no op headroom for the boxes.
+bool IslandManager::crumble_component(const InFlight &f) {
+	if (f.boxes.empty()) return false;
+	std::lock_guard<std::mutex> lock(world_->edit_mutex());
+	if (!world_->edit_log()) return false;
+
+	const ve::OccupancyGrid &grid = world_->occupancy();
+	bool any_solid = false;
+	for (const ve::CellBox &box : f.boxes)
+		for (int z = box.lo.z; z <= box.hi.z; z++)
+			for (int y = box.lo.y; y <= box.hi.y; y++)
+				for (int x = box.lo.x; x <= box.hi.x; x++) {
+					const ve::CellState state = grid.state({x, y, z});
+					if (state == ve::kCellFull) return false;
+					if (state != ve::kCellAir) any_solid = true;
+				}
+	if (!any_solid) return false;
+
+	// Headroom region by region before the first append: a half-applied carve would leave
+	// half the sheet standing and spend the ops anyway.
+	std::vector<ve::IVec3> regions;
+	std::vector<int> ops_here;
+	for (const ve::CellBox &box : f.boxes) {
+		ve::IVec3 rlo, rhi;
+		ve::op_region_range(ve::make_box_subtract(box.lo, box.hi), &rlo, &rhi);
+		for (int z = rlo.z; z <= rhi.z; z++)
+			for (int y = rlo.y; y <= rhi.y; y++)
+				for (int x = rlo.x; x <= rhi.x; x++) {
+					const ve::IVec3 region{x, y, z};
+					if (!world_->edit_log()->bounds().contains_region(region)) continue;
+					const auto it = std::find(regions.begin(), regions.end(), region);
+					if (it == regions.end()) {
+						regions.push_back(region);
+						ops_here.push_back(1);
+					} else {
+						ops_here[static_cast<size_t>(it - regions.begin())]++;
+					}
+				}
+	}
+	for (size_t i = 0; i < regions.size(); i++)
+		if (world_->edit_log()->op_count(regions[i]) + ops_here[i] > ve::kMaxRegionOps)
+			return false;
+
+	// notify_islands = false: this matter was already labelled unanchored, so removing it
+	// cannot loosen anything that was not loose already, and a window per crumble would put
+	// the connectivity pass back into the loop this function exists to break.
+	for (const ve::CellBox &box : f.boxes)
+		world_->append_edit_locked(ve::make_box_subtract(box.lo, box.hi), false);
+	// Tell the occupancy grid straight away, exactly as the spawning carve does: the GPU
+	// readback that would say the same thing is several frames out, and until it lands the
+	// next connectivity run would label this component all over again.
+	for (const ve::CellBox &box : f.boxes)
+		for (int z = box.lo.z; z <= box.hi.z; z++)
+			for (int y = box.lo.y; y <= box.hi.y; y++)
+				for (int x = box.lo.x; x <= box.hi.x; x++)
+					world_->occupancy().set_cell({x, y, z}, ve::kCellAir, world_->edit_seq());
+	crumbled_++;
+	return true;
+}
+
 void IslandManager::land_extraction(const IslandExtractResult &r) {
 	auto it = std::find_if(in_flight_.begin(), in_flight_.end(),
 			[&r](const InFlight &f) { return f.id == r.id; });
 	if (it == in_flight_.end()) return;
 	const InFlight f = *it;
 	in_flight_.erase(it);
-	if (r.failed || r.data.solid_voxels == 0) {
+	bool empty = r.data.solid_voxels == 0;
+	if (debug_empty_next_extraction_) {
+		debug_empty_next_extraction_ = false;
+		empty = true;
+	}
+	if (r.failed || empty) {
 		world_->volumes().release(f.volume_slot);
-		if (r.failed) note_extract_failure(f.window);
-		else note_extract_success(f.window);
-		return; // nothing there after all: the terrain keeps whatever the boxes covered
+		if (r.failed) {
+			note_extract_failure(f.window);
+			return;
+		}
+		note_extract_success(f.window);
+		// NOT "nothing there after all". The occupancy grid the labeller reads is a
+		// CONSERVATIVE test over the 5 cm brick lattice, while the island lattice is a point
+		// sample at up to 10 cm -- ve::plan_island_lattice drops to the coarse pitch for any
+		// component wider than 2.95 m. A sheet thinner than that pitch therefore reads SOLID
+		// to the labeller and EMPTY to the extractor, and a sphere carve through a sphere-add
+		// pillar leaves exactly that: paper-thin dishes a few centimetres thick.
+		//
+		// Leaving one standing is the worst of the three outcomes. The matter stays as static
+		// terrain inside the space the freed piece was cut out of, so the piece wedges against
+		// it instead of falling; and because nothing changed, every later connectivity run
+		// labels the same cells, plans the same lattice and runs the same extraction again,
+		// for ever. Sub-voxel debris crumbles instead: carve the cells, spawn nothing.
+		if (!crumble_component(f)) {
+			refused_++;
+			refused_empty_++;
+		}
+		return;
 	}
 	// A successful extraction is progress on this window; reset any prior failure streak so
 	// only persistently failing batches accumulate toward dropping the remainder.
@@ -1181,6 +1276,24 @@ Dictionary IslandManager::stats() {
 	d["islands_merged"] = islands_merged_;
 	d["connectivity_runs"] = connectivity_runs_;
 	d["refused"] = refused_;
+	// Why a component was left attached, split by WHERE the decision was taken. The named
+	// reasons below are the ones connectivity can see before it submits an extraction;
+	// "refused_landing" is the remainder, taken once the extraction came back (a full island
+	// atlas, a stale volume, a preflight that found no op headroom, a failed spawn). The two
+	// groups sum to "refused" by construction, so a stall can always name its own cause.
+	const int named = refused_box_merge_ + refused_lattice_ + refused_op_cap_ +
+			refused_body_cap_ + refused_pool_full_ + refused_unavailable_ + refused_empty_;
+	d["refused_box_merge"] = refused_box_merge_;
+	d["refused_lattice"] = refused_lattice_;
+	d["refused_op_cap"] = refused_op_cap_;
+	d["refused_body_cap"] = refused_body_cap_;
+	d["refused_pool_full"] = refused_pool_full_;
+	d["refused_unavailable"] = refused_unavailable_;
+	d["refused_empty"] = refused_empty_;
+	d["refused_landing"] = refused_ - named;
+	d["crumbled"] = crumbled_;
+	d["components_labelled"] = components_labelled_;
+
 	{
 		std::lock_guard<std::mutex> lock(windows_mutex_);
 		d["pending_windows"] = static_cast<int>(windows_.size());

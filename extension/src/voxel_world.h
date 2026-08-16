@@ -267,6 +267,7 @@ public:
 	// Test hook: make the next re-merge resample fail so the resample backoff path can be
 	// exercised without depending on a worker-side failure mode.
 	void debug_set_fail_next_resample(bool fail);
+	void debug_set_empty_next_extraction(bool v);
 	// Test hook: wake an island body after a re-merge resample has been submitted, so the
 	// stale-rest-pose guard can be exercised deterministically.
 	void debug_wake_island_body(int index);
@@ -277,7 +278,12 @@ public:
 	ve::EditLog::AppendResult append_edit(const ve::EditOp &op);
 	// Low-level append used by IslandManager to hold edit_mutex_ across a carve/restore
 	// sequence. The caller MUST already hold edit_mutex_().
-	ve::EditLog::AppendResult append_edit_locked(const ve::EditOp &op);
+	// `notify_islands` is false only for the island manager's own crumble carve: the matter
+	// it removes was already labelled UNANCHORED, so nothing that was holding on can be
+	// loosened by its going, and enqueueing a window would relabel the same neighbourhood
+	// every time a speck of sub-voxel dust is swept up.
+	ve::EditLog::AppendResult append_edit_locked(const ve::EditOp &op,
+			bool notify_islands = true);
 
 	// --- debug/test hooks (Tasks 7-10 kept; debug_sdf_atlas now returns the ATLAS) ---
 	String debug_load_shader(const String &res_path) const;

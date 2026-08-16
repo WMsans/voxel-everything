@@ -109,6 +109,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_restore", "fail"), &VoxelWorld::debug_set_fail_next_restore);
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_carve", "fail"), &VoxelWorld::debug_set_fail_next_carve);
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_resample", "fail"), &VoxelWorld::debug_set_fail_next_resample);
+	ClassDB::bind_method(D_METHOD("debug_set_empty_next_extraction", "v"), &VoxelWorld::debug_set_empty_next_extraction);
 	ClassDB::bind_method(D_METHOD("debug_wake_island_body", "index"), &VoxelWorld::debug_wake_island_body);
 	ClassDB::bind_method(D_METHOD("debug_offset_island_body", "index", "offset"), &VoxelWorld::debug_offset_island_body);
 	ClassDB::bind_method(D_METHOD("debug_body_of_chunk", "chunk"), &VoxelWorld::debug_body_of_chunk);
@@ -277,7 +278,8 @@ ve::EditLog::AppendResult VoxelWorld::append_edit(const ve::EditOp &op) {
 	return append_edit_locked(op);
 }
 
-ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op) {
+ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
+		bool notify_islands) {
 	if (!edit_log_) return {};
 	ve::EditLog::AppendResult r = edit_log_->append(op);
 	// Bump AFTER the append and under the same lock the streamer uses to capture op counts.
@@ -296,7 +298,7 @@ ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op) {
 	// "new enough" to act on. A fully rejected op changed no field state, so it must not
 	// enqueue a window: doing so would re-label the same component and retry the rejected
 	// edit forever.
-	if (island_manager_ && !r.touched.empty())
+	if (notify_islands && island_manager_ && !r.touched.empty())
 		island_manager_->note_edit(op, edit_seq_.load(std::memory_order_relaxed));
 	// Collision's half of the fan-out (spec §5: "Fan-out: raymarch set, physics remesh queue,
 	// LoD chain, connectivity"). Queued rather than applied, because this may run on any
@@ -758,6 +760,11 @@ void VoxelWorld::debug_set_fail_next_carve(bool fail) {
 void VoxelWorld::debug_set_fail_next_resample(bool fail) {
 	ensure_physics_initialized();
 	if (island_manager_) island_manager_->debug_set_fail_next_resample(fail);
+}
+
+void VoxelWorld::debug_set_empty_next_extraction(bool v) {
+	ensure_physics_initialized();
+	if (island_manager_) island_manager_->debug_set_empty_next_extraction(v);
 }
 
 void VoxelWorld::debug_wake_island_body(int index) {
