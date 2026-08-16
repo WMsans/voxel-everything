@@ -211,6 +211,9 @@ public:
 	int debug_island_frame(float dt, Vector3 center);
 	Dictionary debug_island_stats();
 	void debug_set_merge_sleep_seconds(float v);
+	// Test hook: lower the dynamic-body guardrail so a small test can prove slot-pool holes
+	// after merges do not count against the cap.
+	void debug_set_max_dynamic_bodies(int v);
 
 	// Tool entry point (VoxelEditTool, Task 14). Main thread; takes edit_mutex_.
 	ve::EditLog::AppendResult append_edit(const ve::EditOp &op);

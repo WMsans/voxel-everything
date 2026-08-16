@@ -2,6 +2,7 @@
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/vector3.hpp>
 #include <deque>
+#include <mutex>
 #include <vector>
 #include "connectivity/components.h"
 #include "connectivity/contact_refine.h"
@@ -11,6 +12,10 @@
 #include "render/island_extract_pass.h"
 
 namespace godot {
+
+// Spec §5's "<=64 total active dynamic bodies". Kept in the header so the test hook can
+// expose a lower cap without duplicating the magic number.
+inline constexpr int kMaxDynamicBodies = 64;
 
 class VoxelWorld;
 
@@ -22,8 +27,9 @@ class VoxelWorld;
 //      connectivity ONCE (spec §5: "simultaneous blasts can't race") and submit extractions
 //   4. re-merge whatever has slept long enough
 //
-// Main thread only. Everything it hands to the render thread goes through VoxelWorld's
-// mutex-guarded island queues; everything it hands to the mesher goes through MeshService.
+// run_frame is main-thread only. note_edit may be called from a tool thread while
+// VoxelWorld::append_edit holds the edit mutex, so the pending-window queue has its own
+// small mutex instead of being touched from two threads unsynchronised.
 class IslandManager {
 public:
 	~IslandManager();
@@ -40,6 +46,7 @@ public:
 	int slot_high_water() const { return slot_high_water_; }
 	float last_ms() const { return last_ms_; }
 	void set_merge_sleep_seconds(float v) { merge_sleep_s_ = v; }
+	void debug_set_max_dynamic_bodies(int v) { max_dynamic_bodies_ = v; }
 	// Not const: the ground probe takes the edit lock.
 	Dictionary stats();
 
@@ -71,11 +78,13 @@ private:
 	void land_resample(const IslandExtractResult &r);
 	void publish_descriptors();
 	void start_merges();
+	int live_body_count() const;
 	int free_atlas_slot() const;
 	void despawn(int index);
 
 	VoxelWorld *world_ = nullptr;
 	ve::AnalyticGenerator gen_;
+	std::mutex windows_mutex_; // guards windows_ against note_edit from tool threads
 	std::deque<PendingWindow> windows_;
 	std::vector<InFlight> in_flight_;
 	std::vector<Merging> merging_;
@@ -88,6 +97,7 @@ private:
 	ve::ContactRefineConfig refine_cfg_;
 	int next_id_ = 1;
 	int slot_high_water_ = 0;
+	int max_dynamic_bodies_ = kMaxDynamicBodies;
 	float merge_sleep_s_ = 2.0f; // spec §5: "Body sleeps ~2s -> re-merge"
 	// Counters the HUD, the benchmark and tests/test_connectivity.gd read.
 	// Where the last re-merge landed, for stats()'s ground probe.

@@ -24,8 +24,6 @@ constexpr int kMaxWindowWaitFrames = 30;
 constexpr int kExtractsPerFrame = 2;
 // Spec §5: "components <~0.2 m^3 become plain mesh debris (not raymarch targets)".
 constexpr float kDebrisVolumeM3 = 0.2f;
-// Spec §5's "<=64 total active dynamic bodies".
-constexpr int kMaxDynamicBodies = 64;
 // A sleeping body is only re-merged once it is actually resting on the terrain, not while
 // it is still airborne. The body origin sits roughly half a body-height above the contact
 // surface, so a few metres of clearance covers the largest component without letting a
@@ -83,13 +81,17 @@ void IslandManager::teardown() {
 	for (const Merging &m : merging_)
 		if (world_) world_->volumes().release(m.out_slot);
 	merging_.clear();
-	windows_.clear();
+	{
+		std::lock_guard<std::mutex> lock(windows_mutex_);
+		windows_.clear();
+	}
 	atlas_used_.clear();
 	world_ = nullptr;
 }
 
 void IslandManager::note_edit(const ve::EditOp &op, int64_t seq) {
 	if (op.type == ve::kOpSpherePaint) return; // paint moves no matter
+	std::lock_guard<std::mutex> lock(windows_mutex_);
 	float lo[3], hi[3];
 	ve::op_world_aabb(op, lo, hi);
 	PendingWindow w;
@@ -174,7 +176,10 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 	std::vector<IslandExtractJob> jobs;
 	for (const ve::IslandComponent &c : comps) {
 		if (submitted >= kExtractsPerFrame) break;
-		if (static_cast<int>(bodies_.size()) >= kMaxDynamicBodies) { refused_++; break; }
+		if (live_body_count() + static_cast<int>(in_flight_.size()) >= max_dynamic_bodies_) {
+			refused_++;
+			break;
+		}
 
 		std::vector<ve::CellBox> boxes;
 		if (!ve::greedy_box_merge(c.cells, ve::kMaxIslandBoxes, &boxes)) {
@@ -227,6 +232,15 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 		jobs.push_back(std::move(job));
 		submitted++;
 	}
+	// A blast can label more loose components than kExtractsPerFrame (or than the body cap
+	// has room for). Re-queue the same window so the next connectivity pass -- gated on no
+	// in-flight extractions -- continues with the remainder once the current batch has been
+	// carved. Only re-queue when at least one job was submitted: otherwise there is no
+	// in-flight progress to wait for and the pass would spin forever on a full pool.
+	if (submitted > 0 && submitted < static_cast<int>(comps.size())) {
+		std::lock_guard<std::mutex> lock(windows_mutex_);
+		windows_.push_back(pw);
+	}
 	if (!jobs.empty()) world_->mesh_service()->submit_extracts(std::move(jobs));
 	return submitted;
 }
@@ -258,7 +272,12 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		slot_high_water_ = std::max(slot_high_water_, atlas_slot + 1);
 	}
 
-	world_->volumes().store(f.volume_slot, r.data);
+	if (!world_->volumes().store(f.volume_slot, r.data)) {
+		if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
+		world_->volumes().release(f.volume_slot);
+		refused_++;
+		return; // nothing carved yet: the piece stays attached in the field
+	}
 
 	// 1. Carve (spec §5 step 1). The boxes tile the component exactly, so this removes the
 	//    material that just became a body and nothing else. Ordered AFTER the extraction so
@@ -296,14 +315,33 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		delete b;
 		if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
 		// Restore the terrain. The slot is stored and becomes pinned by the volume add, so
-		// it is intentionally NOT released here.
+		// it is intentionally NOT released here. After the store() check above, pin() cannot
+		// fail unless an internal invariant is broken; if it ever does, do NOT release the
+		// slot into the carved hole -- keep the piece attached instead.
 		if (world_->volumes().pin(f.volume_slot)) {
 			world_->queue_field_volume_upload(f.volume_slot, r.data);
 			world_->append_edit(ve::make_volume_add(f.volume_slot, f.origin, f.voxel, f.dim));
+			// The field has the rock back; make the occupancy grid agree so a later
+			// connectivity/anchoring pass does not see a phantom air pocket.
+			for (const ve::CellBox &box : f.boxes)
+				for (int z = box.lo.z; z <= box.hi.z; z++)
+					for (int y = box.lo.y; y <= box.hi.y; y++)
+						for (int x = box.lo.x; x <= box.hi.x; x++)
+							world_->occupancy().set_cell(
+									{x, y, z}, ve::kCellSolid, world_->edit_seq());
 		} else {
 			UtilityFunctions::printerr(
-					"IslandManager: body spawn failed and the restore volume could not be pinned");
-			world_->volumes().release(f.volume_slot);
+					"IslandManager: body spawn failed and the restore volume could not be pinned; "
+					"leaving the slot allocated rather than releasing a hole");
+			// Invalidate the carve in the occupancy grid instead of leaving a stale "air"
+			// that disagrees with the restored field. Unknown cells are treated as solid by
+			// connectivity, so this errs toward keeping the piece attached.
+			for (const ve::CellBox &box : f.boxes)
+				for (int z = box.lo.z; z <= box.hi.z; z++)
+					for (int y = box.lo.y; y <= box.hi.y; y++)
+						for (int x = box.lo.x; x <= box.hi.x; x++)
+							world_->occupancy().set_cell(
+									{x, y, z}, ve::kCellUnknown, world_->edit_seq());
 		}
 		refused_++;
 		return; // no hole: the carve stands but the volume add put the rock back
@@ -445,19 +483,27 @@ int IslandManager::run_frame(float dt, const Vector3 &center) {
 	}
 
 	// 3. Connectivity, ONCE (spec §5). Held back while extractions are outstanding so a
-	//    component cannot be labelled twice before its carve lands.
-	if (!windows_.empty() && in_flight_.empty() && !world_->mesh_service()->extracts_busy()) {
-		PendingWindow w = windows_.front();
-		if (window_is_fresh(w) || w.waited >= kMaxWindowWaitFrames) {
-			windows_.pop_front();
-			if (!window_is_fresh(w))
-				UtilityFunctions::print_verbose(
-						"IslandManager: occupancy readback is behind; running anyway");
-			actions += run_connectivity(w);
-		} else {
-			windows_.front().waited++;
+	//    component cannot be labelled twice before its carve lands. The window queue is
+	//    guarded because note_edit can be called from a tool thread under the edit mutex.
+	bool run_window = false;
+	PendingWindow w;
+	{
+		std::lock_guard<std::mutex> lock(windows_mutex_);
+		if (!windows_.empty() && in_flight_.empty() &&
+				!world_->mesh_service()->extracts_busy()) {
+			w = windows_.front();
+			if (window_is_fresh(w) || w.waited >= kMaxWindowWaitFrames) {
+				windows_.pop_front();
+				if (!window_is_fresh(w))
+					UtilityFunctions::print_verbose(
+							"IslandManager: occupancy readback is behind; running anyway");
+				run_window = true;
+			} else {
+				windows_.front().waited++;
+			}
 		}
 	}
+	if (run_window) actions += run_connectivity(w);
 
 	// 4. Re-merge.
 	if (merging_.empty()) start_merges();
@@ -469,6 +515,13 @@ int IslandManager::run_frame(float dt, const Vector3 &center) {
 	last_ms_ = std::chrono::duration<float, std::milli>(Clock::now() - t0).count();
 	(void)center;
 	return actions;
+}
+
+int IslandManager::live_body_count() const {
+	int n = 0;
+	for (const IslandBody *b : bodies_)
+		if (b) n++;
+	return n;
 }
 
 int IslandManager::free_atlas_slot() const {
@@ -513,7 +566,10 @@ Dictionary IslandManager::stats() {
 	d["islands_merged"] = islands_merged_;
 	d["connectivity_runs"] = connectivity_runs_;
 	d["refused"] = refused_;
-	d["pending_windows"] = static_cast<int>(windows_.size());
+	{
+		std::lock_guard<std::mutex> lock(windows_mutex_);
+		d["pending_windows"] = static_cast<int>(windows_.size());
+	}
 	d["in_flight"] = static_cast<int>(in_flight_.size());
 	d["manager_ms"] = last_ms_;
 	// Where the ground is under the last body to fall, so a test can say "the rubble is

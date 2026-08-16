@@ -62,10 +62,10 @@ func solid_at(w: VoxelWorld, p: Vector3) -> bool:
 	# start already inside solid and return the origin (p.y + 0.6) as the hit.
 	return hit["hit"] and absf((hit["pos"] as Vector3).y - p.y) < 0.7
 
-func build_pillar(w: VoxelWorld, t: VoxelEditTool) -> void:
+func build_pillar(w: VoxelWorld, t: VoxelEditTool, x := PILLAR_X, z := PILLAR_Z) -> void:
 	# Five overlapping 1.2 m balls stacked into a 6 m column standing on the terrain.
 	for i in range(5):
-		t.apply_sphere_add(Vector3(PILLAR_X, PILLAR_BASE + 1.0 * i, PILLAR_Z), 1.2, 4)
+		t.apply_sphere_add(Vector3(x, PILLAR_BASE + 1.0 * i, z), 1.2, 4)
 	step(w, 90)
 
 func test_the_grid_and_the_flood_find_a_severed_pillar_top(timeout := 120000) -> void:
@@ -158,3 +158,61 @@ func test_connectivity_runs_once_per_frame_however_many_edits_land(timeout := 12
 	assert_int(st["connectivity_runs"]).is_greater(0)
 	# One window covered all three, so the pillar top came off exactly once.
 	assert_int(st["islands_spawned"]).is_between(1, 3)
+
+func test_more_than_two_loose_components_eventually_all_spawn(timeout := 180000) -> void:
+	var w := make_world()
+	w.debug_set_merge_sleep_seconds(999.0) # keep the spawned bodies from merging mid-test
+	var t := tool_of(w)
+	var xs := [PILLAR_X - 4.0, PILLAR_X, PILLAR_X + 4.0]
+	for x in xs:
+		build_pillar(w, t, x)
+	# Sever all three in one frame so a single connectivity window labels three components.
+	for x in xs:
+		t.apply_sphere_subtract(Vector3(x, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	step(w, 360)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["live_bodies"]).override_failure_message(
+		"a multi-component blast did not eventually spawn every piece: %s" % st
+		).is_greater_equal(3)
+	assert_int(st["pending_windows"]).override_failure_message(
+		"the remainder window was never drained: %s" % st).is_equal(0)
+
+func test_body_pool_holes_after_merges_do_not_count_against_the_cap(timeout := 180000) -> void:
+	var w := make_world()
+	w.debug_set_merge_sleep_seconds(999.0) # keep the spawn phase from merging mid-test
+	# Shrink the guardrail so three spawns are enough to prove the slot-pool bug: with the
+	# old bodies_.size() check, three merged-away bodies leave three holes and the pool still
+	# reads "full" for ever.
+	w.debug_set_max_dynamic_bodies(3)
+	var t := tool_of(w)
+	var xs := [PILLAR_X - 4.0, PILLAR_X, PILLAR_X + 4.0]
+	for x in xs:
+		build_pillar(w, t, x)
+	for x in xs:
+		t.apply_sphere_subtract(Vector3(x, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	step(w, 240)
+	assert_int(w.debug_island_stats()["live_bodies"]).is_greater_equal(3)
+	w.debug_set_merge_sleep_seconds(0.2)
+
+	# Let at least one body sleep and merge back, leaving a hole in the slot pool. We do not
+	# require all three to merge: a single hole is enough to show the old bodies_.size() check
+	# would still read "full" (size 3) while the live count is below the cap.
+	for i in range(1200):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		if w.debug_island_stats()["live_bodies"] < 3:
+			break
+	var merged_stats: Dictionary = w.debug_island_stats()
+	assert_int(merged_stats["islands_merged"]).override_failure_message(
+		"no body merged back to free a slot: %s" % merged_stats).is_greater_equal(1)
+	assert_int(merged_stats["live_bodies"]).override_failure_message(
+		"live bodies stayed at the cap after the merge window: %s" % merged_stats).is_less(3)
+
+	# A fresh island must still be allowed even though the slot pool has three holes in it.
+	build_pillar(w, t, PILLAR_X + 8.0)
+	t.apply_sphere_subtract(Vector3(PILLAR_X + 8.0, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	step(w, 240)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
+		"a later island was refused after merges freed the body slots: %s" % st).is_greater(0)

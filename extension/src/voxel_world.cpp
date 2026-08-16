@@ -80,6 +80,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_island_frame", "dt", "center"), &VoxelWorld::debug_island_frame);
 	ClassDB::bind_method(D_METHOD("debug_island_stats"), &VoxelWorld::debug_island_stats);
 	ClassDB::bind_method(D_METHOD("debug_set_merge_sleep_seconds", "v"), &VoxelWorld::debug_set_merge_sleep_seconds);
+	ClassDB::bind_method(D_METHOD("debug_set_max_dynamic_bodies", "v"), &VoxelWorld::debug_set_max_dynamic_bodies);
 	ClassDB::bind_method(D_METHOD("debug_body_of_chunk", "chunk"), &VoxelWorld::debug_body_of_chunk);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
@@ -472,6 +473,11 @@ Dictionary VoxelWorld::debug_island_stats() {
 void VoxelWorld::debug_set_merge_sleep_seconds(float v) {
 	ensure_physics_initialized();
 	if (island_manager_) island_manager_->set_merge_sleep_seconds(v);
+}
+
+void VoxelWorld::debug_set_max_dynamic_bodies(int v) {
+	ensure_physics_initialized();
+	if (island_manager_) island_manager_->debug_set_max_dynamic_bodies(v);
 }
 
 RID VoxelWorld::debug_body_of_chunk(Vector3i chunk) {
