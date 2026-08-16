@@ -495,6 +495,75 @@ func test_persistent_extraction_failures_backoff_and_drop_remainder(timeout := 1
 	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
 		"an extraction spawned despite persistent extraction failures: %s" % st).is_equal(0)
 
+func test_fully_submitted_extraction_failure_is_retried_and_dropped(timeout := 120000) -> void:
+	var w := make_world()
+	# A single component fits in one connectivity batch, so a failed field extraction has no
+	# queued remainder to keep the edit alive. It must be re-queued with the same backoff/drop
+	# policy, not silently dropped.
+	w.debug_set_fail_extractions(true)
+	var t := tool_of(w)
+	build_pillar(w, t)
+	var runs_before: int = w.debug_island_stats()["connectivity_runs"]
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	var st: Dictionary = w.debug_island_stats()
+	for i in range(120):
+		step(w, 1)
+		st = w.debug_island_stats()
+		if st["pending_windows"] > 0:
+			break
+	assert_int(st["pending_windows"]).override_failure_message(
+		"a fully-submitted extraction failure was not re-queued: %s" % st).is_greater(0)
+	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
+		"an extraction spawned despite persistent extraction failures: %s" % st).is_equal(0)
+	# Repeated failures reach the same drop threshold as a remainder window.
+	step(w, 300)
+	st = w.debug_island_stats()
+	assert_int(st["connectivity_runs"] - runs_before).override_failure_message(
+		"fully-submitted extraction failures relabelled without backoff: %s" % st).is_less(10)
+	assert_int(st["pending_windows"]).override_failure_message(
+		"fully-submitted extraction failures never dropped the window: %s" % st).is_equal(0)
+	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
+		"an extraction spawned despite persistent extraction failures: %s" % st).is_equal(0)
+
+func test_resample_submit_colliding_with_in_flight_extractions_does_not_strand_merging(timeout := 180000) -> void:
+	var w := make_world()
+	w.debug_set_merge_sleep_seconds(999.0) # keep the first body from merging before the collision
+	var t := tool_of(w)
+	build_pillar(w, t)
+	build_pillar(w, t, PILLAR_X + 6.0, PILLAR_Z)
+	# Sever the first pillar and let it spawn, fall and rest while merging is disabled.
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	step(w, 240)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["live_bodies"]).override_failure_message(
+		"the first severed top never became a body: %s" % st).is_greater(0)
+	var merged_before: int = st["islands_merged"]
+	# Sever the second pillar and stop as soon as its field extraction is in flight.
+	t.apply_sphere_subtract(Vector3(PILLAR_X + 6.0, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	for i in range(120):
+		step(w, 1)
+		st = w.debug_island_stats()
+		if st["in_flight"] > 0:
+			break
+	assert_int(st["in_flight"]).override_failure_message(
+		"the second extraction never entered flight: %s" % st).is_greater(0)
+	# Now allow the first body to merge. run_frame will call start_merges while the second
+	# extraction is still in flight; a rejected resample submit must not strand merging_.
+	w.debug_set_merge_sleep_seconds(0.2)
+	w.debug_stream_frame(CENTER)
+	w.debug_physics_frame(CENTER)
+	w.debug_island_frame(1.0 / 60.0, CENTER)
+	for i in range(1200):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		if st["islands_merged"] > merged_before:
+			break
+	assert_int(st["islands_merged"]).override_failure_message(
+		"a resample submit colliding with in-flight extractions stranded merging_: %s" % st
+		).is_greater(merged_before)
+
 func test_near_cap_carve_is_refused_before_any_carve(timeout := 120000) -> void:
 	var w := make_world()
 	var t := tool_of(w)
