@@ -62,7 +62,9 @@ EditOp make_volume_add(int slot, const float origin[3], float voxel, int dim) {
 	op.pos[0] = origin[0];
 	op.pos[1] = origin[1];
 	op.pos[2] = origin[2];
-	op.radius = voxel;
+	// The sampler rejects a non-positive pitch; clamp it to the engine's voxel size so a
+	// malformed op can never make op_world_aabb produce an inverted or degenerate box.
+	op.radius = voxel <= 0.0f ? kVoxelSize : voxel;
 	op.aux[0] = static_cast<uint32_t>(slot); // stored unchanged: a negative slot must
 	// stay out of range so VolumeSet::sample fail-softs instead of aliasing slot 0
 	op.aux[1] = static_cast<uint32_t>(dim < 1 ? 1 : dim);

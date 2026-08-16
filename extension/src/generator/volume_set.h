@@ -31,9 +31,15 @@ struct VolumeData {
 	std::vector<uint8_t> mat; // dim^3, 0 = air
 	int solid_voxels = 0;     // how many samples read solid; the island's mass comes from it
 
-	// A volume is usable only when both lattices are present at exactly dim^3
-	// samples; anything else is inconsistent and treated as empty.
-	bool empty() const { return sdf.empty() || mat.empty(); }
+	// A volume is usable only when dim >= 2 and both lattices are present at
+	// exactly dim^3 samples; anything else is inconsistent and treated as empty.
+	bool valid() const {
+		if (dim < 2) return false;
+		const size_t expected = static_cast<size_t>(dim) * static_cast<size_t>(dim) *
+				static_cast<size_t>(dim);
+		return sdf.size() == expected && mat.size() == expected;
+	}
+	bool empty() const { return !valid(); }
 	int voxel_count() const { return dim * dim * dim; }
 };
 
@@ -74,7 +80,8 @@ public:
 	// has no liveness flag and reads whatever bytes the slot holds, so a slot that an op
 	// still names must never come back as a different volume. Live island volumes are NOT
 	// pinned -- nothing in the field references them until they are pasted at rest.
-	void pin(int slot);
+	// Returns false and does nothing when the slot is not currently in use.
+	bool pin(int slot);
 	bool pinned(int slot) const;
 
 	bool sample(int slot, float x, float y, float z, const EditOp &op,

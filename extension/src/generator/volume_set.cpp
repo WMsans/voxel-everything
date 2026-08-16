@@ -80,10 +80,7 @@ void VolumeSet::release(int slot) {
 
 bool VolumeSet::store(int slot, VolumeData data) {
 	if (slot < 0 || slot >= kMaxVolumes || !slots_[slot].used) return false;
-	if (data.dim < 1) return false;
-	const size_t expected = static_cast<size_t>(data.dim) * static_cast<size_t>(data.dim) *
-			static_cast<size_t>(data.dim);
-	if (data.sdf.size() != expected || data.mat.size() != expected) return false;
+	if (!data.valid()) return false;
 	slots_[slot].data = std::move(data);
 	slots_[slot].version = next_version_++;
 	return true;
@@ -98,8 +95,10 @@ int64_t VolumeSet::version(int slot) const {
 	return slot >= 0 && slot < kMaxVolumes ? slots_[slot].version : 0;
 }
 
-void VolumeSet::pin(int slot) {
-	if (slot >= 0 && slot < kMaxVolumes) slots_[slot].pinned = true;
+bool VolumeSet::pin(int slot) {
+	if (slot < 0 || slot >= kMaxVolumes || !slots_[slot].used) return false;
+	slots_[slot].pinned = true;
+	return true;
 }
 
 bool VolumeSet::pinned(int slot) const {
@@ -116,7 +115,7 @@ bool VolumeSet::sample(int slot, float x, float y, float z, const EditOp &op,
 
 bool resample_volume(const VolumeData &src, const EditOp &src_op, const float basis[9],
 		const float origin[3], int slot, int dim, VolumeData *out, EditOp *out_op) {
-	if (src.empty() || dim < 2) return false;
+	if (!src.valid() || dim < 2 || !out || !out_op) return false;
 
 	// World AABB of the rotated source box: transform its eight corners.
 	const float span = static_cast<float>(src.dim - 1) * src_op.radius;

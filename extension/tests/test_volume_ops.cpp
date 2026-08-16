@@ -163,6 +163,12 @@ TEST_CASE("a negative volume slot stays out of range instead of aliasing slot 0"
 	CHECK(eval_field(gen, &op, 1, cx, cy, cz, &volumes).sdf > 0.0f);
 }
 
+TEST_CASE("make_volume_add clamps a non-positive voxel pitch") {
+	const float origin[3] = {0.0f, 0.0f, 0.0f};
+	CHECK(make_volume_add(0, origin, 0.0f, 32).radius == doctest::Approx(kVoxelSize));
+	CHECK(make_volume_add(0, origin, -0.1f, 32).radius == doctest::Approx(kVoxelSize));
+}
+
 TEST_CASE("volume data is empty unless both lattices are present") {
 	VolumeData v;
 	v.dim = 2;
@@ -204,6 +210,14 @@ TEST_CASE("store rejects volumes whose lattices are not exactly dim^3") {
 	CHECK(!volumes.store(slot, std::move(bad_dim)));
 	CHECK(volumes.get(slot) == nullptr);
 
+	VolumeData dim_one;
+	dim_one.dim = 1;
+	dim_one.sdf.assign(1, 0);
+	dim_one.mat.assign(1, 0);
+	CHECK(!volumes.store(slot, std::move(dim_one)));
+	CHECK(volumes.version(slot) == ver);
+	CHECK(volumes.get(slot) == nullptr);
+
 	VolumeData good;
 	good.dim = 4;
 	good.sdf.assign(64, 0);
@@ -243,7 +257,7 @@ TEST_CASE("a slot can be claimed by index, once") {
 TEST_CASE("a pinned slot can never be released or handed out again") {
 	VolumeSet volumes;
 	const int slot = volumes.allocate();
-	volumes.pin(slot);
+	CHECK(volumes.pin(slot));
 	CHECK(volumes.pinned(slot));
 	volumes.release(slot);
 	// Still live: an op in the edit log names this slot, and the GPU mirrors have no
@@ -251,6 +265,63 @@ TEST_CASE("a pinned slot can never be released or handed out again") {
 	CHECK(volumes.live_count() == 1);
 	for (int i = 0; i < kMaxVolumes - 1; i++) CHECK(volumes.allocate() != slot);
 	CHECK(volumes.allocate() == -1);
+}
+
+TEST_CASE("pin refuses a free slot") {
+	VolumeSet volumes;
+	CHECK(!volumes.pin(0));
+	CHECK(!volumes.pinned(0));
+	const int slot = volumes.allocate();
+	CHECK(volumes.pin(slot));
+	CHECK(volumes.pinned(slot));
+}
+
+TEST_CASE("resample_volume rejects a malformed short-vector VolumeData") {
+	const float origin[3] = {0.0f, 0.0f, 0.0f};
+	const EditOp src_op = make_volume_add(0, origin, 0.05f, 64);
+	const float identity[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+	const float at[3] = {0.0f, 0.0f, 0.0f};
+	const size_t n = static_cast<size_t>(64) * 64 * 64;
+
+	VolumeData bad;
+	bad.dim = 64;
+	bad.sdf.assign(n - 1, 0);
+	bad.mat.assign(n, 0);
+	VolumeData out;
+	EditOp out_op{};
+	CHECK(!resample_volume(bad, src_op, identity, at, 0, kIslandDim, &out, &out_op));
+
+	bad.sdf.assign(n, 0);
+	bad.mat.assign(n - 1, 0);
+	CHECK(!resample_volume(bad, src_op, identity, at, 0, kIslandDim, &out, &out_op));
+
+	bad.dim = 1;
+	bad.sdf.assign(1, 0);
+	bad.mat.assign(1, 0);
+	CHECK(!resample_volume(bad, src_op, identity, at, 0, kIslandDim, &out, &out_op));
+}
+
+TEST_CASE("eval_brick threads a volume op through a VolumeStore") {
+	AnalyticGenerator gen;
+	VolumeSet volumes;
+	const int slot = volumes.allocate();
+	CHECK(volumes.store(slot, ball_volume(32, 0.05f, 0.4f, 2)));
+
+	const float origin[3] = {8.0f, 64.0f, 8.0f};
+	const EditOp op = make_volume_add(slot, origin, 0.05f, 32);
+	// Brick (10, 80, 10) has its origin at (8, 64, 8), so its lattice contains the
+	// ball centre at local (0.775, 0.775, 0.775).
+	const IVec3 brick{10, 80, 10};
+	BrickEval air{}, filled{};
+	eval_brick(gen, &op, 1, brick, &air, nullptr);
+	eval_brick(gen, &op, 1, brick, &filled, &volumes);
+
+	const int sdf_at = sdf_index(15, 15, 15); // local (0.75, 0.75, 0.75): inside the ball
+	CHECK(decode_sdf(air.brick.sdf[sdf_at]) > 0.0f);
+	CHECK(decode_sdf(filled.brick.sdf[sdf_at]) < 0.0f);
+
+	const int mat_at = voxel_index(15, 15, 15);
+	CHECK(filled.brick.palette[get_mat_index(filled.brick, mat_at)] == 2);
 }
 
 TEST_CASE("a volume resampled through the identity transform reproduces itself") {
