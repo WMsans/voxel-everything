@@ -83,6 +83,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_set_max_dynamic_bodies", "v"), &VoxelWorld::debug_set_max_dynamic_bodies);
 	ClassDB::bind_method(D_METHOD("debug_set_atlas_slot_used", "slot", "used"), &VoxelWorld::debug_set_atlas_slot_used);
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_spawn", "fail"), &VoxelWorld::debug_set_fail_next_spawn);
+	ClassDB::bind_method(D_METHOD("debug_set_fail_next_resample", "fail"), &VoxelWorld::debug_set_fail_next_resample);
 	ClassDB::bind_method(D_METHOD("debug_body_of_chunk", "chunk"), &VoxelWorld::debug_body_of_chunk);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
@@ -497,6 +498,11 @@ void VoxelWorld::debug_set_atlas_slot_used(int slot, bool used) {
 void VoxelWorld::debug_set_fail_next_spawn(bool fail) {
 	ensure_physics_initialized();
 	if (island_manager_) island_manager_->debug_set_fail_next_spawn(fail);
+}
+
+void VoxelWorld::debug_set_fail_next_resample(bool fail) {
+	ensure_physics_initialized();
+	if (island_manager_) island_manager_->debug_set_fail_next_resample(fail);
 }
 
 RID VoxelWorld::debug_body_of_chunk(Vector3i chunk) {

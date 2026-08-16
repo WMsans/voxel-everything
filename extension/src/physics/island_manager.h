@@ -60,6 +60,9 @@ public:
 		if (used) slot_high_water_ = std::max(slot_high_water_, slot + 1);
 	}
 	void debug_set_fail_next_spawn(bool fail) { debug_fail_next_spawn_ = fail; }
+	// Test hook: make the next re-merge resample fail so the resample backoff path can be
+	// exercised without depending on a worker-side failure mode.
+	void debug_set_fail_next_resample(bool fail) { debug_fail_next_resample_ = fail; }
 	// Not const: the ground probe takes the edit lock.
 	Dictionary stats();
 
@@ -134,6 +137,7 @@ private:
 	int islands_merged_ = 0;
 	int refused_ = 0; // components left attached because a pool was full
 	bool debug_fail_next_spawn_ = false;
+	bool debug_fail_next_resample_ = false;
 	float last_ms_ = 0.0f;
 };
 

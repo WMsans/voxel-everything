@@ -220,6 +220,9 @@ public:
 	// Test hook: make the next island spawn fail so the spawn-failure restore path can be
 	// exercised without depending on a Jolt failure mode.
 	void debug_set_fail_next_spawn(bool fail);
+	// Test hook: make the next re-merge resample fail so the resample backoff path can be
+	// exercised without depending on a worker-side failure mode.
+	void debug_set_fail_next_resample(bool fail);
 
 	// Tool entry point (VoxelEditTool, Task 14). Main thread; takes edit_mutex_.
 	ve::EditLog::AppendResult append_edit(const ve::EditOp &op);

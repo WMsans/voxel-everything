@@ -47,11 +47,12 @@ func tool_of(w: VoxelWorld) -> VoxelEditTool:
 	w.add_child(t)
 	return t
 
-# Fill the edit-log region containing `at` to kMaxRegionOps (256). Paint ops consume region
-# capacity without changing the SDF, which lets a test force append_edit rejection on the
-# carve/paste that follows without disturbing the terrain shape.
-func fill_region_ops(w: VoxelWorld, t: VoxelEditTool, at: Vector3) -> void:
-	for i in range(256):
+# Fill the edit-log region containing `at` with `count` paint ops (default kMaxRegionOps).
+# Paint ops consume region capacity without changing the SDF, which lets a test force
+# append_edit rejection (or near-cap preflight refusal) on the carve/paste that follows
+# without disturbing the terrain shape.
+func fill_region_ops(w: VoxelWorld, t: VoxelEditTool, at: Vector3, count := 256) -> void:
+	for i in range(count):
 		t.apply_sphere_paint(at, 0.1, 4)
 
 # One frame of everything: streaming (which fills the occupancy grid), collider maintenance
@@ -336,6 +337,103 @@ func test_atlas_slot_full_refusal_retries_after_a_slot_frees(timeout := 180000) 
 		"the retried island did not become a body: %s" % st).is_greater(0)
 	assert_int(st["pending_windows"]).override_failure_message(
 		"the retried window was never drained: %s" % st).is_equal(0)
+
+func test_atlas_full_remainder_window_gets_retry_backoff(timeout := 180000) -> void:
+	var w := make_world()
+	for i in range(32):
+		w.debug_set_atlas_slot_used(i, true)
+	var t := tool_of(w)
+	# 3 m spacing keeps the pillars separate while their cut windows still overlap, so one
+	# connectivity window labels all three and the first pass re-queues a remainder.
+	var xs := [PILLAR_X - 3.0, PILLAR_X, PILLAR_X + 3.0]
+	for x in xs:
+		build_pillar(w, t, x)
+	# Sever all three in one frame so the first connectivity pass submits two and re-queues a
+	# remainder window without a cooldown. When those extractions hit the full atlas, the
+	# duplicate-match in queue_retry_window must apply backoff to that existing remainder.
+	for x in xs:
+		t.apply_sphere_subtract(Vector3(x, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	step(w, 120)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
+		"an island spawned despite every atlas slot being full: %s" % st).is_equal(0)
+	assert_int(st["pending_windows"]).override_failure_message(
+		"the atlas-full refusal lost the originating window: %s" % st).is_greater(0)
+	# Without applying the cooldown to the existing remainder, the same connectivity window is
+	# relabelled as soon as the previous extractions land, so connectivity_runs grows almost
+	# every frame. The fixed backoff should keep it bounded while the atlas stays full.
+	assert_int(st["connectivity_runs"]).override_failure_message(
+		"atlas-full remainder was relabelled without a retry cooldown: %s" % st).is_less(10)
+
+func test_near_cap_carve_is_refused_before_any_carve(timeout := 120000) -> void:
+	var w := make_world()
+	var t := tool_of(w)
+	build_pillar(w, t)
+	var top := Vector3(PILLAR_X, PILLAR_BASE + 4.0, PILLAR_Z)
+	assert_bool(solid_at(w, top)).override_failure_message(
+		"the pillar was never built").is_true()
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	# Submit the extraction but do not let the result land yet; then bring the region to 255
+	# ops. Accepting the carve would make it 256 and reject the restore volume-add, which used
+	# to reach std::abort(). Preflight must refuse before any carve is appended.
+	w.debug_stream_frame(CENTER)
+	w.debug_physics_frame(CENTER)
+	w.debug_island_frame(1.0 / 60.0, CENTER)
+	fill_region_ops(w, t, top, 255)
+	var refused_before: int = w.debug_island_stats()["refused"]
+	step(w, 240)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["refused"]).override_failure_message(
+		"the near-cap extraction was not refused: %s" % st).is_greater(refused_before)
+	assert_int(st["islands_spawned"]).override_failure_message(
+		"a near-cap carve still spawned a body: %s" % st).is_equal(0)
+	assert_int(st["live_bodies"]).override_failure_message(
+		"a near-cap carve created a body in a field that still has the rock: %s" % st).is_equal(0)
+	assert_bool(solid_at(w, top)).override_failure_message(
+		"a near-cap carve left a field hole with no body: %s" % st).is_true()
+
+func test_failed_resample_backs_off_instead_of_retrying_every_frame(timeout := 180000) -> void:
+	var w := make_world()
+	w.debug_set_merge_sleep_seconds(999.0) # keep the body from merging before the test is ready
+	var t := tool_of(w)
+	build_pillar(w, t)
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	step(w, 180)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["live_bodies"]).override_failure_message(
+		"the severed top never became a body: %s" % st).is_greater(0)
+	var refused_before: int = st["refused"]
+	w.debug_set_merge_sleep_seconds(0.2)
+	w.debug_set_fail_next_resample(true)
+	for i in range(600):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		if st["refused"] > refused_before:
+			break
+	assert_int(st["refused"]).override_failure_message(
+		"the failed resample was not recorded: %s" % st).is_greater(refused_before)
+	# The merge-retry cooldown must keep the body out of start_merges for ~30 frames. If the
+	# failure path did not register a retry, the next frame would resample successfully and
+	# merge immediately.
+	for i in range(25):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+	assert_int(st["islands_merged"]).override_failure_message(
+		"a failed resample merged before the retry cooldown elapsed: %s" % st).is_equal(0)
+	# Once the cooldown expires, the body is allowed to try again and should merge normally.
+	for i in range(600):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		if st["islands_merged"] > 0:
+			break
+	assert_int(st["islands_merged"]).override_failure_message(
+		"the body never merged after the resample backoff: %s" % st).is_greater(0)
 
 func test_fully_rejected_op_does_not_enqueue_connectivity_window(timeout := 120000) -> void:
 	var w := make_world()
