@@ -306,7 +306,9 @@ func test_teardown_physics_clears_stale_island_handoffs(timeout := 60000) -> voi
 
 func test_teardown_physics_preserves_committed_field_volume_uploads(timeout := 60000) -> void:
 	var w := make_world()
-	var dim := 2
+	# Full 64^3 lattice: the worker's VolumePool is sized to kIslandDim, so a smaller dim
+	# would be rejected by the actual worker upload even though the CPU queue can hold it.
+	const dim := 64
 	var n := dim * dim * dim
 	var sdf := PackedByteArray()
 	sdf.resize(n)
@@ -327,3 +329,10 @@ func test_teardown_physics_preserves_committed_field_volume_uploads(timeout := 6
 	assert_bool(w.debug_init_physics()).is_true()
 	assert_int(w.debug_island_pending_uploads()).override_failure_message(
 		"committed field-volume upload was not preserved across physics re-init").is_equal(1)
+
+	# The fresh MeshService must also have received the pinned volume itself, not just a
+	# render-device queue entry; otherwise the worker's field evaluation reads a missing slot.
+	var worker_slots: PackedInt32Array = w.debug_mesh_volume_slots()
+	assert_bool(worker_slots.has(0)).override_failure_message(
+		"new MeshService did not receive the pinned-volume replay: %s" % worker_slots
+		).is_true()

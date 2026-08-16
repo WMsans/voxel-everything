@@ -47,10 +47,12 @@ void MeshService::stop() {
 	pending_extract_.clear();
 	extract_results_.clear();
 	pending_volumes_.clear();
+	submitted_volume_slots_.clear();
 	ready_.store(false, std::memory_order_release);
 	busy_.store(false, std::memory_order_release);
 	extract_busy_.store(false, std::memory_order_release);
 	extract_available_.store(false, std::memory_order_release);
+	fail_extracts_.store(false, std::memory_order_release);
 }
 
 bool MeshService::submit(std::vector<MeshRequest> requests) {
@@ -112,9 +114,15 @@ bool MeshService::submit_volume(int slot, ve::VolumeData data) {
 		std::lock_guard<std::mutex> lock(mu_);
 		if (stopping_) return false;
 		pending_volumes_.push_back({slot, std::move(data)});
+		submitted_volume_slots_.push_back(slot);
 	}
 	cv_.notify_one();
 	return true;
+}
+
+std::vector<int> MeshService::debug_submitted_volume_slots() const {
+	std::lock_guard<std::mutex> lock(mu_);
+	return submitted_volume_slots_;
 }
 
 bool MeshService::run_sync(const std::function<void(MeshPass &)> &fn) {
@@ -231,8 +239,14 @@ void MeshService::run() {
 					extract_out.push_back(std::move(r));
 				} else if (extract_) {
 					IslandExtractResult r;
-					extract_->extract(job, &r);
-					r.kind = job.kind;
+					if (fail_extracts_.load(std::memory_order_acquire)) {
+						r.id = job.id;
+						r.kind = job.kind;
+						r.failed = true;
+					} else {
+						extract_->extract(job, &r);
+						r.kind = job.kind;
+					}
 					extract_out.push_back(std::move(r));
 				} else {
 					IslandExtractResult r;

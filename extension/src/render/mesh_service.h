@@ -68,11 +68,20 @@ public:
 	void debug_set_extraction_available(bool v) {
 		extract_available_.store(v, std::memory_order_release);
 	}
+	// Test hook: force every field extraction to report failure, simulating a worker pass that
+	// exists but cannot extract (as opposed to no pass at all).
+	void debug_set_fail_extractions(bool v) {
+		fail_extracts_.store(v, std::memory_order_release);
+	}
 
 	// Copies one stored volume into THIS device's pool, on the worker thread. The main
 	// thread's ve::VolumeSet is authoritative; this keeps the mesher's field evaluation --
 	// and therefore collision against pasted rubble -- in step with it.
 	bool submit_volume(int slot, ve::VolumeData data);
+	// Test hook: report the slots this MeshService accepted through submit_volume since it
+	// was started. Used by teardown/reinit tests to verify pinned volumes are replayed into
+	// the new worker.
+	std::vector<int> debug_submitted_volume_slots() const;
 
 	// Runs `fn` on the worker thread and waits for it. The diagnostic entry points
 	// (debug_mesh_diff and friends) are inherently synchronous and must touch the pass on the
@@ -100,8 +109,10 @@ private:
 	std::vector<IslandExtractJob> pending_extract_;
 	std::vector<IslandExtractResult> extract_results_;
 	std::vector<VolumeUpload> pending_volumes_;
+	std::vector<int> submitted_volume_slots_; // debug: accepted volume upload slots
 	std::atomic<bool> extract_busy_{false};
 	std::atomic<bool> extract_available_{false};
+	std::atomic<bool> fail_extracts_{false};
 	const std::function<void(MeshPass &)> *sync_fn_ = nullptr;
 	bool sync_pending_ = false;
 	bool started_ = false;   // startup attempt has settled (ready_ is then meaningful)

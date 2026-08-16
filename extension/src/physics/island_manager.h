@@ -72,6 +72,7 @@ private:
 		int64_t seq = 0;
 		int waited = 0;
 		int retry_cooldown = 0; // frames to skip after a transient full-pool refusal
+		int extract_failures = 0; // consecutive failed field extractions from this window
 		float impulse_from[3] = {0, 0, 0}; // the edit's centre, for the radial kick
 		float impulse_scale = 0.0f;
 	};
@@ -104,6 +105,8 @@ private:
 	void publish_descriptors();
 	void start_merges();
 	void queue_retry_window(const PendingWindow &w);
+	void note_extract_failure(const PendingWindow &w);
+	void note_extract_success(const PendingWindow &w);
 	void note_merge_rejected(int body_index, const ve::EditLog::AppendResult &paste);
 	bool merge_retry_blocked(int body_index);
 	int live_body_count() const;

@@ -389,6 +389,29 @@ func test_permanently_unavailable_extraction_does_not_relabel_remainder(timeout 
 	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
 		"an extraction spawned despite being permanently unavailable: %s" % st).is_equal(0)
 
+func test_persistent_extraction_failures_backoff_and_drop_remainder(timeout := 120000) -> void:
+	var w := make_world()
+	# The worker has a live IslandExtractPass, but every field extraction reports failure.
+	# This exercises the per-window failure backoff/drop path rather than the no-pass path.
+	w.debug_set_fail_extractions(true)
+	var t := tool_of(w)
+	var xs := [PILLAR_X - 3.0, PILLAR_X, PILLAR_X + 3.0]
+	for x in xs:
+		build_pillar(w, t, x)
+	var runs_before: int = w.debug_island_stats()["connectivity_runs"]
+	for x in xs:
+		t.apply_sphere_subtract(Vector3(x, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	step(w, 240)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["connectivity_runs"] - runs_before).override_failure_message(
+		"persistent extraction failures relabelled a remainder every frame: %s" % st
+		).is_less(10)
+	assert_int(st["pending_windows"]).override_failure_message(
+		"persistent extraction failures never dropped/backed off the remainder: %s" % st
+		).is_equal(0)
+	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
+		"an extraction spawned despite persistent extraction failures: %s" % st).is_equal(0)
+
 func test_near_cap_carve_is_refused_before_any_carve(timeout := 120000) -> void:
 	var w := make_world()
 	var t := tool_of(w)

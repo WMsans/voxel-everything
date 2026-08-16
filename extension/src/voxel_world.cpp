@@ -81,6 +81,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_island_stats"), &VoxelWorld::debug_island_stats);
 	ClassDB::bind_method(D_METHOD("debug_island_pending_uploads"), &VoxelWorld::debug_island_pending_uploads);
 	ClassDB::bind_method(D_METHOD("debug_island_descriptors_pending"), &VoxelWorld::debug_island_descriptors_pending);
+	ClassDB::bind_method(D_METHOD("debug_mesh_volume_slots"), &VoxelWorld::debug_mesh_volume_slots);
 	ClassDB::bind_method(D_METHOD("debug_queue_test_island_upload", "slot", "sdf", "mat", "dim"),
 			&VoxelWorld::debug_queue_test_island_upload);
 	ClassDB::bind_method(D_METHOD("debug_queue_test_island_descriptors"),
@@ -89,6 +90,8 @@ void VoxelWorld::_bind_methods() {
 			"mat", "dim"), &VoxelWorld::debug_queue_committed_field_volume_upload);
 	ClassDB::bind_method(D_METHOD("debug_set_extraction_available", "v"),
 			&VoxelWorld::debug_set_extraction_available);
+	ClassDB::bind_method(D_METHOD("debug_set_fail_extractions", "v"),
+			&VoxelWorld::debug_set_fail_extractions);
 	ClassDB::bind_method(D_METHOD("debug_set_merge_sleep_seconds", "v"), &VoxelWorld::debug_set_merge_sleep_seconds);
 	ClassDB::bind_method(D_METHOD("debug_set_max_dynamic_bodies", "v"), &VoxelWorld::debug_set_max_dynamic_bodies);
 	ClassDB::bind_method(D_METHOD("debug_set_atlas_slot_used", "slot", "used"), &VoxelWorld::debug_set_atlas_slot_used);
@@ -308,6 +311,14 @@ void VoxelWorld::ensure_physics_initialized() {
 		mesh_ = nullptr;
 		return;
 	}
+	// A fresh MeshService starts with an empty worker-side volume pool. The edit log and
+	// VolumeSet survive physics teardown, so replay every pinned volume into the new worker;
+	// the preserved island_uploads_ only covers the render device's pool.
+	for (int slot = 0; slot < ve::kMaxVolumes; slot++) {
+		if (!volumes_.pinned(slot)) continue;
+		const ve::VolumeData *d = volumes_.get(slot);
+		if (d) mesh_->submit_volume(slot, *d);
+	}
 	ve::ChunkResidencyConfig ccfg;
 	ccfg.bounds = world_bounds();
 	ccfg.radius_m = physics_radius_m_;
@@ -496,6 +507,13 @@ int VoxelWorld::debug_island_descriptors_pending() {
 	return island_descs_dirty_ ? 1 : 0;
 }
 
+PackedInt32Array VoxelWorld::debug_mesh_volume_slots() {
+	PackedInt32Array out;
+	if (!mesh_) return out;
+	for (int slot : mesh_->debug_submitted_volume_slots()) out.append(slot);
+	return out;
+}
+
 void VoxelWorld::debug_queue_test_island_upload(int slot, const PackedByteArray &sdf,
 		const PackedByteArray &mat, int dim) {
 	if (slot < 0 || slot >= kMaxIslands || dim < 2 || dim > ve::kIslandDim) {
@@ -552,8 +570,8 @@ void VoxelWorld::debug_queue_committed_field_volume_upload(int slot,
 				"debug_queue_committed_field_volume_upload: store/pin failed for slot ", slot);
 		return;
 	}
-	// Only model the main-thread GPU handoff queue. The worker-side mirror upload is not
-	// needed for the teardown/reinit regression this hook exists to exercise.
+	// Only model the main-thread GPU handoff queue. The worker-side mirror is exercised by
+	// ensure_physics_initialized()'s pinned-volume replay after teardown/reinit.
 	{
 		std::lock_guard<std::mutex> lock(island_mutex_);
 		island_uploads_.push_back(IslandUpload{slot, false, d});
@@ -563,6 +581,11 @@ void VoxelWorld::debug_queue_committed_field_volume_upload(int slot,
 void VoxelWorld::debug_set_extraction_available(bool v) {
 	ensure_physics_initialized();
 	if (mesh_) mesh_->debug_set_extraction_available(v);
+}
+
+void VoxelWorld::debug_set_fail_extractions(bool v) {
+	ensure_physics_initialized();
+	if (mesh_) mesh_->debug_set_fail_extractions(v);
 }
 
 int VoxelWorld::debug_island_frame(float dt, Vector3 center) {

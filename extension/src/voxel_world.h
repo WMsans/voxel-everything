@@ -214,6 +214,9 @@ public:
 	// that teardown_physics() clears them before the next physics lifetime starts.
 	int debug_island_pending_uploads();
 	int debug_island_descriptors_pending();
+	// Test hook: slots the current MeshService has accepted through submit_volume since it
+	// started. Verifies pinned volumes are replayed into a new worker after physics re-init.
+	PackedInt32Array debug_mesh_volume_slots();
 	void debug_queue_test_island_upload(int slot, const PackedByteArray &sdf,
 			const PackedByteArray &mat, int dim);
 	void debug_queue_test_island_descriptors();
@@ -225,6 +228,8 @@ public:
 	// Test hook: force the mesher's extraction availability flag so the engine suite can
 	// simulate a permanently unavailable island extraction pass.
 	void debug_set_extraction_available(bool v);
+	// Test hook: force field extractions to fail even when the worker pass exists.
+	void debug_set_fail_extractions(bool v);
 	void debug_set_merge_sleep_seconds(float v);
 	// Test hook: lower the dynamic-body guardrail so a small test can prove slot-pool holes
 	// after merges do not count against the cap.
