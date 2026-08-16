@@ -17,15 +17,16 @@ struct BrickEval {
 
 // The world field: the generator with this point's region ops applied in order (spec §2).
 Sample eval_field(const Generator &gen, const EditOp *ops, int op_count,
-		float x, float y, float z);
+		float x, float y, float z, const VolumeStore *volumes = nullptr);
 
 // Coarse residency probe. Mirrored exactly by shaders/brick_mark.comp.glsl — a brick is
 // resident iff this returns true, on both sides.
-bool brick_has_surface(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick);
+bool brick_has_surface(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,
+		const VolumeStore *volumes = nullptr);
 
 // Full brick contents at L0. This is BOTH the path WorldData walks and the CPU reference
 // the GPU differential test diffs against (spec §8).
 void eval_brick(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,
-		BrickEval *out);
+		BrickEval *out, const VolumeStore *volumes = nullptr);
 
 } // namespace ve

@@ -51,10 +51,10 @@ void chunk_world_origin(IVec3 chunk, float out[3]);
 // Distance from a point to the chunk's world AABB; 0 inside.
 float chunk_distance(IVec3 chunk, float cx, float cy, float cz);
 
-// Inclusive chunk range whose stored triangles an op can move. Only the sphere plus two mesh
-// cells: a CSG max/min changes the field far outside its sphere, but only INSIDE the sphere
+// Inclusive chunk range whose stored triangles an op can move. Only the op's own shape plus
+// two mesh cells: a CSG max/min changes the field far outside the shape, but only INSIDE it
 // can it flip a sample's sign, and a sample whose sign it cannot flip only shifts a vertex
-// when it is itself within a cell of the surface — i.e. within a cell of the sphere. Two
+// when it is itself within a cell of the surface — i.e. within a cell of the shape. Two
 // cells of pad covers that and the mesh overlap plane below the chunk origin.
 void op_chunk_range(const EditOp &op, IVec3 *lo, IVec3 *hi);
 
@@ -64,6 +64,7 @@ void op_chunk_range(const EditOp &op, IVec3 *lo, IVec3 *hi);
 // shrink, so a probe clearing s·√3/2·L on one side proves there is no crossing between
 // probes. False positives cost one wasted mesh job; a false negative would leave a hole in
 // the collision, so the test only pins the safe direction.
-bool chunk_has_surface(const Generator &gen, const EditOp *ops, int op_count, IVec3 chunk);
+bool chunk_has_surface(const Generator &gen, const EditOp *ops, int op_count, IVec3 chunk,
+		const VolumeStore *volumes = nullptr);
 
 } // namespace ve

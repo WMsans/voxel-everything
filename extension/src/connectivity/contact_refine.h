@@ -58,6 +58,6 @@ int refine_anchoring(const OccupancyGrid &grid, const ContactProbe &probe,
 // and counts how many are solid. This is what the Godot-side probe calls once it has the
 // region's op list under the edit lock.
 int contact_samples_field(const Generator &gen, const EditOp *ops, int op_count, IVec3 cell,
-		int axis, int face_samples);
+		int axis, int face_samples, const VolumeStore *volumes = nullptr);
 
 } // namespace ve

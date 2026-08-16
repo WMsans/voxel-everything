@@ -115,7 +115,7 @@ int refine_anchoring(const OccupancyGrid &grid, const ContactProbe &probe,
 }
 
 int contact_samples_field(const Generator &gen, const EditOp *ops, int op_count, IVec3 cell,
-		int axis, int face_samples) {
+		int axis, int face_samples, const VolumeStore *volumes) {
 	if (face_samples < 1) return 0;
 	// The face is the plane at the far side of `cell` along `axis`; the other two axes span
 	// the cell's own extent. Samples are inset half a step so none lands on a corner shared
@@ -134,7 +134,7 @@ int contact_samples_field(const Generator &gen, const EditOp *ops, int op_count,
 			float p[3] = {base[0], base[1], base[2]};
 			p[u] += (static_cast<float>(i) + 0.5f) * step_m;
 			p[v] += (static_cast<float>(j) + 0.5f) * step_m;
-			if (eval_field(gen, ops, op_count, p[0], p[1], p[2]).sdf <= 0.0f) solid++;
+			if (eval_field(gen, ops, op_count, p[0], p[1], p[2], volumes).sdf <= 0.0f) solid++;
 		}
 	return solid;
 }
