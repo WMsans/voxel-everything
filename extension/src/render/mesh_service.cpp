@@ -208,6 +208,8 @@ void MeshService::run() {
 					UtilityFunctions::printerr("MeshService: volume upload failed for slot ",
 							vu.slot);
 			}
+			// run_sync waits on pending_volumes_ going empty as well as on its own turn.
+			done_cv_.notify_all();
 			continue;
 		}
 
