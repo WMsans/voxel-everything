@@ -365,6 +365,30 @@ func test_atlas_full_remainder_window_gets_retry_backoff(timeout := 180000) -> v
 	assert_int(st["connectivity_runs"]).override_failure_message(
 		"atlas-full remainder was relabelled without a retry cooldown: %s" % st).is_less(10)
 
+func test_permanently_unavailable_extraction_does_not_relabel_remainder(timeout := 120000) -> void:
+	var w := make_world()
+	w.debug_set_extraction_available(false)
+	var t := tool_of(w)
+	# 3 m spacing keeps the pillars separate while their cut windows still overlap, so one
+	# connectivity window labels three components and the first pass would ordinarily submit
+	# two and re-queue a remainder. With extraction permanently unavailable, that remainder
+	# must be dropped rather than relabelled and resubmitted every frame.
+	var xs := [PILLAR_X - 3.0, PILLAR_X, PILLAR_X + 3.0]
+	for x in xs:
+		build_pillar(w, t, x)
+	var runs_before: int = w.debug_island_stats()["connectivity_runs"]
+	for x in xs:
+		t.apply_sphere_subtract(Vector3(x, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	step(w, 240)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["connectivity_runs"] - runs_before).override_failure_message(
+		"permanently unavailable extraction relabelled a remainder every frame: %s" % st
+		).is_less(10)
+	assert_int(st["pending_windows"]).override_failure_message(
+		"permanently unavailable extraction kept a remainder window queued: %s" % st).is_equal(0)
+	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
+		"an extraction spawned despite being permanently unavailable: %s" % st).is_equal(0)
+
 func test_near_cap_carve_is_refused_before_any_carve(timeout := 120000) -> void:
 	var w := make_world()
 	var t := tool_of(w)

@@ -20,6 +20,7 @@ bool MeshService::start(const MeshPassConfig &cfg) {
 		ready_.store(false, std::memory_order_release);
 		busy_.store(false, std::memory_order_release);
 		extract_busy_.store(false, std::memory_order_release);
+		extract_available_.store(false, std::memory_order_release);
 	}
 	thread_ = std::thread([this] { run(); });
 	std::unique_lock<std::mutex> lock(mu_);
@@ -49,6 +50,7 @@ void MeshService::stop() {
 	ready_.store(false, std::memory_order_release);
 	busy_.store(false, std::memory_order_release);
 	extract_busy_.store(false, std::memory_order_release);
+	extract_available_.store(false, std::memory_order_release);
 }
 
 bool MeshService::submit(std::vector<MeshRequest> requests) {
@@ -149,11 +151,14 @@ void MeshService::run() {
 	if (!rd) UtilityFunctions::printerr("MeshService: no local RenderingDevice for the mesher");
 	if (rd && ok) {
 		extract_ = new IslandExtractPass();
-		if (!extract_->initialize(rd, &pass.volumes())) {
+		if (extract_->initialize(rd, &pass.volumes())) {
+			extract_available_.store(true, std::memory_order_release);
+		} else {
 			UtilityFunctions::printerr("MeshService: island extraction unavailable");
 			delete extract_;
 			extract_ = nullptr;
-			// Not fatal: collision meshing still works, and IslandManager reports the loss once.
+			// Not fatal: collision meshing still works, and IslandManager drops connectivity
+			// work it knows can never make progress.
 		}
 	}
 	{

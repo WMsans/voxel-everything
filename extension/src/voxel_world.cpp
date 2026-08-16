@@ -85,6 +85,10 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::debug_queue_test_island_upload);
 	ClassDB::bind_method(D_METHOD("debug_queue_test_island_descriptors"),
 			&VoxelWorld::debug_queue_test_island_descriptors);
+	ClassDB::bind_method(D_METHOD("debug_queue_committed_field_volume_upload", "slot", "sdf",
+			"mat", "dim"), &VoxelWorld::debug_queue_committed_field_volume_upload);
+	ClassDB::bind_method(D_METHOD("debug_set_extraction_available", "v"),
+			&VoxelWorld::debug_set_extraction_available);
 	ClassDB::bind_method(D_METHOD("debug_set_merge_sleep_seconds", "v"), &VoxelWorld::debug_set_merge_sleep_seconds);
 	ClassDB::bind_method(D_METHOD("debug_set_max_dynamic_bodies", "v"), &VoxelWorld::debug_set_max_dynamic_bodies);
 	ClassDB::bind_method(D_METHOD("debug_set_atlas_slot_used", "slot", "used"), &VoxelWorld::debug_set_atlas_slot_used);
@@ -328,10 +332,17 @@ void VoxelWorld::teardown_physics() {
 	physics_bubble_centers_.clear();
 	// Drop any uploads/descriptors the previous manager queued before the GPU pools are torn
 	// down. If physics is re-initialized, stale queue entries must not be drained into the
-	// new pools.
+	// new pools. The one exception is a field-volume upload for a slot the edit log already
+	// references: those bytes are part of the surviving CPU volume set and MUST be mirrored
+	// into any new GPU pool before an op that names the slot is evaluated.
 	{
 		std::lock_guard<std::mutex> lock(island_mutex_);
-		island_uploads_.clear();
+		std::vector<IslandUpload> keep;
+		keep.reserve(island_uploads_.size());
+		for (IslandUpload &u : island_uploads_)
+			if (!u.to_island_atlas && volumes_.pinned(u.slot))
+				keep.push_back(std::move(u));
+		island_uploads_.swap(keep);
 		island_descs_.clear();
 		island_descs_dirty_ = false;
 	}
@@ -509,6 +520,49 @@ void VoxelWorld::debug_queue_test_island_descriptors() {
 	std::lock_guard<std::mutex> lock(island_mutex_);
 	island_descs_.assign(1, IslandSlotDesc{});
 	island_descs_dirty_ = true;
+}
+
+void VoxelWorld::debug_queue_committed_field_volume_upload(int slot,
+		const PackedByteArray &sdf, const PackedByteArray &mat, int dim) {
+	if (slot < 0 || slot >= ve::kMaxVolumes || dim < 2 || dim > ve::kIslandDim) {
+		UtilityFunctions::printerr(
+				"debug_queue_committed_field_volume_upload: invalid slot or dim");
+		return;
+	}
+	const int64_t n = static_cast<int64_t>(dim) * dim * dim;
+	if (sdf.size() < n || mat.size() < n) {
+		UtilityFunctions::printerr(
+				"debug_queue_committed_field_volume_upload: short buffers for dim ", dim);
+		return;
+	}
+	if (!volumes_.reserve(slot)) {
+		UtilityFunctions::printerr(
+				"debug_queue_committed_field_volume_upload: slot ", slot, " is already in use");
+		return;
+	}
+	ve::VolumeData d;
+	d.dim = dim;
+	d.sdf.assign(sdf.ptr(), sdf.ptr() + n);
+	d.mat.assign(mat.ptr(), mat.ptr() + n);
+	for (int64_t i = 0; i < n; i++)
+		if (ve::decode_sdf(d.sdf[static_cast<size_t>(i)]) <= 0.0f) d.solid_voxels++;
+	if (!volumes_.store(slot, d) || !volumes_.pin(slot)) {
+		volumes_.release(slot);
+		UtilityFunctions::printerr(
+				"debug_queue_committed_field_volume_upload: store/pin failed for slot ", slot);
+		return;
+	}
+	// Only model the main-thread GPU handoff queue. The worker-side mirror upload is not
+	// needed for the teardown/reinit regression this hook exists to exercise.
+	{
+		std::lock_guard<std::mutex> lock(island_mutex_);
+		island_uploads_.push_back(IslandUpload{slot, false, d});
+	}
+}
+
+void VoxelWorld::debug_set_extraction_available(bool v) {
+	ensure_physics_initialized();
+	if (mesh_) mesh_->debug_set_extraction_available(v);
 }
 
 int VoxelWorld::debug_island_frame(float dt, Vector3 center) {

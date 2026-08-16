@@ -217,6 +217,14 @@ public:
 	void debug_queue_test_island_upload(int slot, const PackedByteArray &sdf,
 			const PackedByteArray &mat, int dim);
 	void debug_queue_test_island_descriptors();
+	// Test hook: store, pin, and queue a field-volume upload the way a committed re-merge or
+	// restore does. Teardown must preserve this upload across physics re-init because an edit
+	// log op may already reference the pinned slot.
+	void debug_queue_committed_field_volume_upload(int slot, const PackedByteArray &sdf,
+			const PackedByteArray &mat, int dim);
+	// Test hook: force the mesher's extraction availability flag so the engine suite can
+	// simulate a permanently unavailable island extraction pass.
+	void debug_set_extraction_available(bool v);
 	void debug_set_merge_sleep_seconds(float v);
 	// Test hook: lower the dynamic-body guardrail so a small test can prove slot-pool holes
 	// after merges do not count against the cap.

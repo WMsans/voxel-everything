@@ -57,6 +57,17 @@ public:
 	bool submit_extracts(std::vector<IslandExtractJob> jobs);
 	bool extracts_busy() const { return extract_busy_.load(std::memory_order_acquire); }
 	int collect_extracts(std::vector<IslandExtractResult> *out);
+	// True when the worker has a live IslandExtractPass. Field extractions (island carving)
+	// can never succeed without one, so the island manager treats this as a permanent
+	// no-progress condition rather than re-queueing work that can only fail.
+	bool extraction_available() const {
+		return extract_available_.load(std::memory_order_acquire);
+	}
+	// Test hook: force the availability flag so the engine suite can simulate a permanently
+	// unavailable extraction pass.
+	void debug_set_extraction_available(bool v) {
+		extract_available_.store(v, std::memory_order_release);
+	}
 
 	// Copies one stored volume into THIS device's pool, on the worker thread. The main
 	// thread's ve::VolumeSet is authoritative; this keeps the mesher's field evaluation --
@@ -90,6 +101,7 @@ private:
 	std::vector<IslandExtractResult> extract_results_;
 	std::vector<VolumeUpload> pending_volumes_;
 	std::atomic<bool> extract_busy_{false};
+	std::atomic<bool> extract_available_{false};
 	const std::function<void(MeshPass &)> *sync_fn_ = nullptr;
 	bool sync_pending_ = false;
 	bool started_ = false;   // startup attempt has settled (ready_ is then meaningful)

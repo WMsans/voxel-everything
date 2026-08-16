@@ -181,6 +181,15 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 	std::vector<ve::IslandComponent> comps;
 	ve::label_islands(r, comp_cfg_, &comps);
 
+	if (!world_->mesh_service()->extraction_available()) {
+		// Permanent for this physics lifetime: every field extraction would fail because the
+		// worker has no IslandExtractPass. Do not allocate volume slots, submit jobs, or
+		// re-queue a remainder that can only fail forever. The components stay attached in
+		// the field, which is the same fail-soft outcome the worker would produce.
+		refused_ += static_cast<int>(comps.size());
+		return 0;
+	}
+
 	int submitted = 0;
 	bool transient_refusal = false;
 	std::vector<IslandExtractJob> jobs;
