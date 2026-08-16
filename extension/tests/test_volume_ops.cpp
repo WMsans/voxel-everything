@@ -321,6 +321,16 @@ TEST_CASE("store rejects volumes whose lattices are not exactly dim^3") {
 	CHECK(volumes.version(slot) == ver);
 	CHECK(volumes.get(slot) == nullptr);
 
+	VolumeData too_big;
+	too_big.dim = kIslandDim + 1;
+	const size_t big = static_cast<size_t>(too_big.dim) * too_big.dim * too_big.dim;
+	too_big.sdf.assign(big, 0);
+	too_big.mat.assign(big, 0);
+	CHECK(!volumes.store(slot, std::move(too_big)));
+	CHECK(volumes.version(slot) == ver);
+	CHECK(volumes.get(slot) == nullptr);
+
+
 	VolumeData good;
 	good.dim = 4;
 	good.sdf.assign(64, 0);
@@ -370,6 +380,30 @@ TEST_CASE("a pinned slot can never be released or handed out again") {
 	CHECK(volumes.allocate() == -1);
 }
 
+TEST_CASE("store refuses a pinned slot and leaves its volume unchanged") {
+	VolumeSet volumes;
+	const int slot = volumes.allocate();
+	REQUIRE(volumes.store(slot, ball_volume(8, 0.05f, 0.2f, 3)));
+	const VolumeData *before = volumes.get(slot);
+	REQUIRE(before != nullptr);
+	const uint8_t sdf_before = before->sdf[0];
+	const uint8_t mat_before = before->mat[VolumeSet::voxel_index(8, 3, 3, 3)];
+	const int solid_before = before->solid_voxels;
+	const int64_t ver = volumes.version(slot);
+
+	CHECK(volumes.pin(slot));
+	VolumeData other = ball_volume(8, 0.05f, 0.3f, 4);
+	CHECK_FALSE(volumes.store(slot, std::move(other)));
+	CHECK(volumes.version(slot) == ver);
+
+	const VolumeData *after = volumes.get(slot);
+	REQUIRE(after != nullptr);
+	CHECK(after->sdf[0] == sdf_before);
+	CHECK(after->mat[VolumeSet::voxel_index(8, 3, 3, 3)] == mat_before);
+	CHECK(after->solid_voxels == solid_before);
+}
+
+
 TEST_CASE("pin refuses a free slot") {
 	VolumeSet volumes;
 	CHECK(!volumes.pin(0));
@@ -403,6 +437,21 @@ TEST_CASE("resample_volume rejects a malformed short-vector VolumeData") {
 	bad.mat.assign(1, 0);
 	CHECK(!resample_volume(bad, src_op, identity, at, 0, kIslandDim, &out, &out_op));
 }
+
+TEST_CASE("resample_volume rejects an out-of-range target slot") {
+	const float origin[3] = {8.0f, 64.0f, 8.0f};
+	const VolumeData src = ball_volume(32, 0.05f, 0.4f, 2);
+	const EditOp src_op = make_volume_add(0, origin, 0.05f, 32);
+	const float identity[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+	const float at[3] = {0.0f, 0.0f, 0.0f};
+	VolumeData out;
+	EditOp out_op{};
+
+	CHECK(!resample_volume(src, src_op, identity, at, -1, kIslandDim, &out, &out_op));
+	CHECK(!resample_volume(src, src_op, identity, at, kMaxVolumes, kIslandDim, &out,
+			&out_op));
+}
+
 
 TEST_CASE("resample_volume rejects a non-positive source voxel pitch") {
 	const float origin[3] = {8.0f, 64.0f, 8.0f};
@@ -447,6 +496,23 @@ TEST_CASE("resample_volume rejects a non-orthonormal basis") {
 	float skew[9] = {1, 0, 0, 0, 1, 0, 0.5f, 0, 1};
 	CHECK(!resample_volume(src, src_op, skew, at, 0, kIslandDim, &out, &out_op));
 }
+
+TEST_CASE("resample_volume rejects a rank-deficient basis with unit rows") {
+	const float origin[3] = {8.0f, 64.0f, 8.0f};
+	const VolumeData src = ball_volume(32, 0.05f, 0.4f, 2);
+	const EditOp src_op = make_volume_add(0, origin, 0.05f, 32);
+	const float at[3] = {0.0f, 0.0f, 0.0f};
+	VolumeData out;
+	EditOp out_op{};
+
+	// Row-major: rows (1,0,0), (0,1,0), (1,0,0). Every row has unit norm and
+	// every column pair is orthogonal, but the third column is zero and the
+	// matrix is singular, so transpose-as-inverse is invalid. The old check
+	// accepted this basis and resampled through it.
+	const float singular[9] = {1, 0, 0, 0, 1, 0, 1, 0, 0};
+	CHECK(!resample_volume(src, src_op, singular, at, 0, kIslandDim, &out, &out_op));
+}
+
 
 TEST_CASE("eval_brick threads a volume op through a VolumeStore") {
 	AnalyticGenerator gen;

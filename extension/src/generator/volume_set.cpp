@@ -7,12 +7,21 @@ namespace ve {
 namespace {
 
 // `basis` is row-major and must be orthonormal for resample_volume's
-// inverse-by-transpose mapping to be exact.
+// inverse-by-transpose mapping to be exact. Checking row norms, column norms,
+// and column-pair dots is exactly AᵀA ≈ I, so a rank-deficient matrix with
+// unit rows and mutually orthogonal columns (e.g. one zero column) is
+// rejected rather than being treated as invertible.
 bool is_orthonormal_basis(const float basis[9]) {
 	constexpr float kTol = 1e-4f;
 	for (int r = 0; r < 3; r++) {
 		const float *row = basis + 3 * r;
 		const float len2 = row[0] * row[0] + row[1] * row[1] + row[2] * row[2];
+		if (std::fabs(len2 - 1.0f) > kTol) return false;
+	}
+	for (int c = 0; c < 3; c++) {
+		const float len2 = basis[0 * 3 + c] * basis[0 * 3 + c] +
+				basis[1 * 3 + c] * basis[1 * 3 + c] +
+				basis[2 * 3 + c] * basis[2 * 3 + c];
 		if (std::fabs(len2 - 1.0f) > kTol) return false;
 	}
 	for (int a = 0; a < 3; a++) {
@@ -105,6 +114,9 @@ bool VolumeSet::release(int slot) {
 
 bool VolumeSet::store(int slot, VolumeData data) {
 	if (slot < 0 || slot >= kMaxVolumes || !slots_[slot].used) return false;
+	// A pinned slot is named by a live EditOp and the GPU mirror reads its bytes
+	// with no liveness flag, so it must never come back as a different volume.
+	if (slots_[slot].pinned) return false;
 	if (!data.valid()) return false;
 	slots_[slot].data = std::move(data);
 	slots_[slot].version = next_version_++;
@@ -145,10 +157,12 @@ bool VolumeSet::sample(int slot, float x, float y, float z, const EditOp &op,
 bool resample_volume(const VolumeData &src, const EditOp &src_op, const float basis[9],
 		const float origin[3], int slot, int dim, VolumeData *out, EditOp *out_op) {
 	// The inverse-by-transpose below only holds for an orthonormal basis, and the pitch
-	// is only meaningful for an op that actually names a volume lattice.
-	if (!src.valid() || src_op.type != kOpVolumeAdd || src_op.radius <= 0.0f ||
-			!basis || !origin || !is_orthonormal_basis(basis) || dim < 2 || !out ||
-			!out_op)
+	// is only meaningful for an op that actually names a volume lattice. The target
+	// slot must be a real pool index even though resample_volume itself does not
+	// touch the pool: make_volume_add bakes `slot` into out_op for the caller to store.
+	if (slot < 0 || slot >= kMaxVolumes || !src.valid() || src_op.type != kOpVolumeAdd ||
+			src_op.radius <= 0.0f || !basis || !origin || !is_orthonormal_basis(basis) ||
+			dim < 2 || !out || !out_op)
 		return false;
 
 	// World AABB of the rotated source box: transform its eight corners.

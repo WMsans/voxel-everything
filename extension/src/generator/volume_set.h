@@ -31,16 +31,22 @@ struct VolumeData {
 	std::vector<uint8_t> mat; // dim^3, 0 = air
 	int solid_voxels = 0;     // how many samples read solid; the island's mass comes from it
 
-	// A volume is usable only when dim >= 2 and both lattices are present at
-	// exactly dim^3 samples; anything else is inconsistent and treated as empty.
+	// A volume is usable only when 2 <= dim <= kIslandDim and both lattices are
+	// present at exactly dim^3 samples; anything else is inconsistent and treated
+	// as empty. kIslandDim caps both the arithmetic and every allocation the pool
+	// can perform for one volume.
 	bool valid() const {
-		if (dim < 2) return false;
-		const size_t expected = static_cast<size_t>(dim) * static_cast<size_t>(dim) *
-				static_cast<size_t>(dim);
+		if (dim < 2 || dim > kIslandDim) return false;
+		const size_t expected = static_cast<size_t>(voxel_count());
 		return sdf.size() == expected && mat.size() == expected;
 	}
 	bool empty() const { return !valid(); }
-	int voxel_count() const { return dim * dim * dim; }
+	// Mirrors valid()'s bounds: a dim outside [2, kIslandDim] has no meaningful
+	// lattice count and reports 0 rather than overflowing or aliasing.
+	int voxel_count() const {
+		if (dim < 2 || dim > kIslandDim) return 0;
+		return dim * dim * dim;
+	}
 };
 
 // Trilinear SDF and nearest material from a dim^3 lattice placed at `origin` with pitch
