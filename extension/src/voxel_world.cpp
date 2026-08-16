@@ -75,6 +75,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_sdf_atlas"), &VoxelWorld::debug_sdf_atlas);
 	ClassDB::bind_method(D_METHOD("debug_local_rd"), &VoxelWorld::debug_local_rd);
 	ClassDB::bind_method(D_METHOD("debug_load_shader", "res_path"), &VoxelWorld::debug_load_shader);
+	ClassDB::bind_method(D_METHOD("debug_store_volume", "slot", "sdf", "mat", "dim"), &VoxelWorld::debug_store_volume);
 	ClassDB::bind_method(D_METHOD("debug_eval_field", "p", "ops", "op_count"), &VoxelWorld::debug_eval_field);
 	ClassDB::bind_method(D_METHOD("debug_init_atlas"), &VoxelWorld::debug_init_atlas);
 	ClassDB::bind_method(D_METHOD("debug_teardown_atlas"), &VoxelWorld::debug_teardown_atlas);
@@ -366,7 +367,7 @@ Dictionary VoxelWorld::debug_mesh_lattice_diff(Vector3i chunk) {
 						g.origin[1] + (y - 1) * g.cell_size,
 						g.origin[2] + (z - 1) * g.cell_size};
 				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-						p[0], p[1], p[2]).sdf;
+						p[0], p[1], p[2], &volumes_).sdf;
 				if (s <= 0.0f) neg = true; else pos = true;
 				const int want = ve::encode_sdf(s);
 				const int got = gpu[ve::dc_lattice_index(g, x, y, z)];
@@ -413,7 +414,7 @@ Dictionary VoxelWorld::debug_mesh_diff(Vector3i chunk) {
 			for (int x = 0; x < g.lattice; x++) {
 				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
 						g.origin[0] + (x - 1) * g.cell_size, g.origin[1] + (y - 1) * g.cell_size,
-						g.origin[2] + (z - 1) * g.cell_size).sdf;
+						g.origin[2] + (z - 1) * g.cell_size, &volumes_).sdf;
 				const int diff = std::abs(static_cast<int>(lattice[ve::dc_lattice_index(g, x, y, z)]) -
 						static_cast<int>(ve::encode_sdf(s)));
 				lat_max = std::max(lat_max, diff);
@@ -502,7 +503,8 @@ Dictionary VoxelWorld::debug_mesh_diff(Vector3i chunk) {
 	const int stride = std::max(1, tri_count / 512); // a spread sample, not the first 512
 	for (int v = 0; v < gpu_verts; v++) {
 		const float s = std::fabs(ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-				gpu.positions[v * 3], gpu.positions[v * 3 + 1], gpu.positions[v * 3 + 2]).sdf);
+				gpu.positions[v * 3], gpu.positions[v * 3 + 1], gpu.positions[v * 3 + 2],
+				&volumes_).sdf);
 		max_sdf = std::max(max_sdf, s);
 		if (s > 0.1f) off_10cm++;
 	}
@@ -522,9 +524,9 @@ Dictionary VoxelWorld::debug_mesh_diff(Vector3i chunk) {
 		// step clean through a thin feature and read solid on both sides.
 		const Vector3 step = n.normalized() * 0.02f;
 		const float out_side = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-				mid.x + step.x, mid.y + step.y, mid.z + step.z).sdf;
+				mid.x + step.x, mid.y + step.y, mid.z + step.z, &volumes_).sdf;
 		const float in_side = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-				mid.x - step.x, mid.y - step.y, mid.z - step.z).sdf;
+				mid.x - step.x, mid.y - step.y, mid.z - step.z, &volumes_).sdf;
 		tri_sampled++;
 		if (out_side <= in_side) winding_bad++;
 	}
@@ -693,7 +695,28 @@ String VoxelWorld::debug_load_shader(const String &res_path) const {
 	return String(code.c_str());
 }
 
-Vector2 VoxelWorld::debug_eval_field(Vector3 p, const PackedByteArray &ops, int op_count) const {
+void VoxelWorld::debug_store_volume(int slot, const PackedByteArray &sdf,
+		const PackedByteArray &mat, int dim) {
+	if (dim < 2) {
+		UtilityFunctions::printerr("debug_store_volume: dim must be at least 2, got ", dim);
+		return;
+	}
+	const int64_t n = static_cast<int64_t>(dim) * dim * dim;
+	if (sdf.size() < n || mat.size() < n) {
+		UtilityFunctions::printerr("debug_store_volume: short buffers for dim ", dim);
+		return;
+	}
+	volumes_.reserve(slot); // no-op when the suite already claimed it
+	ve::VolumeData d;
+	d.dim = dim;
+	d.sdf.assign(sdf.ptr(), sdf.ptr() + n);
+	d.mat.assign(mat.ptr(), mat.ptr() + n);
+	for (int64_t i = 0; i < n; i++)
+		if (ve::decode_sdf(d.sdf[static_cast<size_t>(i)]) <= 0.0f) d.solid_voxels++;
+	volumes_.store(slot, std::move(d));
+}
+
+Vector2 VoxelWorld::debug_eval_field(Vector3 p, const PackedByteArray &ops, int op_count) {
 	ve::AnalyticGenerator gen;
 	const ve::EditOp *ptr = nullptr;
 	if (op_count > 0) {
@@ -703,7 +726,7 @@ Vector2 VoxelWorld::debug_eval_field(Vector3 p, const PackedByteArray &ops, int 
 		}
 		ptr = reinterpret_cast<const ve::EditOp *>(ops.ptr());
 	}
-	const ve::Sample s = ve::eval_field(gen, ptr, op_count, p.x, p.y, p.z);
+	const ve::Sample s = ve::eval_field(gen, ptr, op_count, p.x, p.y, p.z, &volumes_);
 	return Vector2(s.sdf, static_cast<float>(s.material));
 }
 
@@ -760,7 +783,7 @@ bool VoxelWorld::debug_brick_has_surface(Vector3i brick, const PackedByteArray &
 		}
 		ptr = reinterpret_cast<const ve::EditOp *>(ops.ptr());
 	}
-	return ve::brick_has_surface(gen, ptr, op_count, {brick.x, brick.y, brick.z});
+	return ve::brick_has_surface(gen, ptr, op_count, {brick.x, brick.y, brick.z}, &volumes_);
 }
 
 void VoxelWorld::debug_mark_region(Vector3i region, int region_slot, Vector3i lo, Vector3i hi,
@@ -814,7 +837,7 @@ Dictionary VoxelWorld::debug_brick_diff(Vector3i brick, int region_slot,
 
 	ve::AnalyticGenerator gen;
 	ve::BrickEval ref{};
-	ve::eval_brick(gen, ptr, op_count, b, &ref);
+	ve::eval_brick(gen, ptr, op_count, b, &ref, &volumes_);
 
 	const ve::IVec3 ab = atlas_->config().atlas_bricks;
 	const ve::IVec3 cell{slot % ab.x, (slot / ab.x) % ab.y, slot / (ab.x * ab.y)};
@@ -1032,7 +1055,7 @@ Dictionary VoxelWorld::debug_raycast(Vector3 origin, Vector3 dir) {
 	ve::AnalyticGenerator gen;
 	const float o[3] = {origin.x, origin.y, origin.z};
 	const float f[3] = {dir.x, dir.y, dir.z};
-	const ve::RayHit h = ve::raycast(gen, *edit_log_, o, f, 200.0f);
+	const ve::RayHit h = ve::raycast(gen, *edit_log_, o, f, 200.0f, &volumes_);
 	if (!h.hit) return d;
 	d["hit"] = true;
 	d["pos"] = Vector3(h.pos[0], h.pos[1], h.pos[2]);

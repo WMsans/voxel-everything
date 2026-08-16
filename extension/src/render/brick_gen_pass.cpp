@@ -83,6 +83,8 @@ bool BrickGenPass::initialize(RenderingDevice *rd, const GpuAtlas &atlas) {
 	uniforms.push_back(storage(5, atlas.palette()));
 	uniforms.push_back(storage(6, atlas.jobs()));
 	uniforms.push_back(storage(7, atlas.op_pool()));
+	uniforms.push_back(storage(8, atlas.volumes().sdf_buffer()));
+	uniforms.push_back(storage(9, atlas.volumes().mat_buffer()));
 	uset_ = rd->uniform_set_create(uniforms, shader_, 0);
 	if (!uset_.is_valid()) {
 		UtilityFunctions::printerr("BrickGenPass: uniform set creation failed");

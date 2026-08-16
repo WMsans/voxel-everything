@@ -13,6 +13,7 @@
 #include <mutex>
 #include <utility>
 #include <vector>
+#include "generator/volume_set.h"
 #include "mesh/chunk_residency.h"
 #include "world/edit_log.h"
 #include "world/region.h"
@@ -62,6 +63,9 @@ class VoxelWorld : public Node3D {
 	// CPU cores outlive the GPU objects: a re-init re-streams the same world, edits
 	// included. This is also what a future save/reload will do (saves ARE the edit log).
 	ve::EditLog *edit_log_ = nullptr;
+	// The authoritative copy of every stored volume. Owned here because it outlives the GPU
+	// objects exactly as the edit log does: a re-init re-uploads the same rubble.
+	ve::VolumeSet volumes_;
 	ve::RegionResidency *residency_ = nullptr;
 	WorldStreamer *streamer_ = nullptr;
 	std::mutex edit_mutex_;                   // guards edit_log_ + pending_edits_
@@ -131,6 +135,7 @@ public:
 	GpuAtlas *atlas() { return atlas_; }
 	WorldStreamer *streamer() { return streamer_; }
 	ve::EditLog *edit_log() { return edit_log_; }
+	ve::VolumeSet &volumes() { return volumes_; }
 	RaymarchPass *raymarch_pass() { return raymarch_pass_; }
 	CompositePass *composite_pass() { return composite_pass_; }
 	std::mutex &edit_mutex() { return edit_mutex_; }
@@ -140,7 +145,9 @@ public:
 
 	// --- debug/test hooks (Tasks 7-10 kept; debug_sdf_atlas now returns the ATLAS) ---
 	String debug_load_shader(const String &res_path) const;
-	Vector2 debug_eval_field(Vector3 p, const PackedByteArray &ops, int op_count) const;
+	void debug_store_volume(int slot, const PackedByteArray &sdf, const PackedByteArray &mat,
+			int dim);
+	Vector2 debug_eval_field(Vector3 p, const PackedByteArray &ops, int op_count);
 	bool debug_init_atlas();
 	void debug_teardown_atlas();
 	Dictionary debug_atlas_stats();

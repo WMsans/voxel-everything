@@ -2,6 +2,8 @@
 #version 460
 
 #define FIELD_OP_POOL_BINDING 4
+#define FIELD_VOLUME_SDF_BINDING 7
+#define FIELD_VOLUME_MAT_BINDING 8
 #include "common.glslh"
 #include "field.glslh"
 

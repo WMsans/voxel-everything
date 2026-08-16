@@ -123,12 +123,16 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 	region_slot_counts_ = rd->storage_buffer_create(
 			static_cast<uint32_t>(cfg_.max_region_slots) * 4,
 			zeroed(static_cast<int64_t>(cfg_.max_region_slots) * 4));
+	if (!volumes_.initialize(rd, ve::kMaxVolumes, ve::kIslandDim)) {
+		teardown();
+		return false;
+	}
 
 	bool ok = sdf_atlas_.is_valid() && mat_atlas_.is_valid() && palette_.is_valid() &&
 			region_map_.is_valid() && region_tables_.is_valid() && free_list_.is_valid() &&
 			counters_.is_valid() && frame_.is_valid() && dispatch_args_.is_valid() &&
 			jobs_.is_valid() && op_pool_.is_valid() && op_counts_.is_valid() &&
-			region_slot_counts_.is_valid();
+			region_slot_counts_.is_valid() && volumes_.is_valid();
 	for (int l = 0; l < ve::kMipLevels; l++) ok = ok && mips_[l].is_valid();
 	if (!ok) {
 		// Most likely cause: the driver refuses STORAGE usage on R8_UNORM / R8G8_UINT
@@ -142,6 +146,7 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 }
 
 void GpuAtlas::teardown() {
+	volumes_.teardown();
 	if (!rd_) return;
 	free_if_valid(rd_, sdf_atlas_);
 	free_if_valid(rd_, mat_atlas_);

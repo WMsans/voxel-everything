@@ -3,6 +3,7 @@
 #include <godot_cpp/variant/rid.hpp>
 #include <vector>
 #include "generator/edit_ops.h"
+#include "render/volume_pool.h"
 #include "world/brick_mip.h"
 #include "world/edit_log.h"
 #include "world/region.h"
@@ -53,6 +54,8 @@ public:
 	RID op_pool() const { return op_pool_; }
 	RID op_counts() const { return op_counts_; }
 	RID region_slot_counts() const { return region_slot_counts_; }
+	VolumePool &volumes() { return volumes_; }
+	const VolumePool &volumes() const { return volumes_; }
 
 	void reset_frame_counters(RenderingDevice *rd);
 	void clear_overflow(RenderingDevice *rd);
@@ -78,6 +81,7 @@ private:
 	RID mips_[ve::kMipLevels];
 	RID region_map_, region_tables_, free_list_, counters_, frame_, dispatch_args_;
 	RID jobs_, op_pool_, op_counts_, region_slot_counts_;
+	VolumePool volumes_;
 };
 
 } // namespace godot

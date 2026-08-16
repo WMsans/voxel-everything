@@ -82,9 +82,13 @@ func run_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: int) -> Pa
 		pt_bytes.append_array(PackedFloat32Array([p.x, p.y, p.z, 0.0]))
 	var pt_buf := _rd.storage_buffer_create(pt_bytes.size() * 4, pt_bytes.to_byte_array())
 	var out_buf := _rd.storage_buffer_create(pts.size() * 16)
+	# field_probe.comp.glsl now also declares the volume pool at bindings 3 and 4;
+	# sphere-op tests never touch those bytes, but the uniform set must cover every binding.
+	var vsdf_buf := _rd.storage_buffer_create(4, PackedByteArray([0, 0, 0, 0]))
+	var vmat_buf := _rd.storage_buffer_create(4, PackedByteArray([0, 0, 0, 0]))
 
 	var uniforms := []
-	for pair in [[0, op_buf], [1, pt_buf], [2, out_buf]]:
+	for pair in [[0, op_buf], [1, pt_buf], [2, out_buf], [3, vsdf_buf], [4, vmat_buf]]:
 		var u := RDUniform.new()
 		u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 		u.binding = pair[0]
@@ -110,6 +114,8 @@ func run_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: int) -> Pa
 	_rd.free_rid(op_buf)
 	_rd.free_rid(pt_buf)
 	_rd.free_rid(out_buf)
+	_rd.free_rid(vsdf_buf)
+	_rd.free_rid(vmat_buf)
 	return out
 
 func compare(pts: PackedVector3Array, ops: PackedByteArray, op_count: int, label: String) -> void:
