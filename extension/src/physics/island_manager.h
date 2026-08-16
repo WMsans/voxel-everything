@@ -61,9 +61,12 @@ public:
 	}
 #ifdef DEBUG_ENABLED
 	void debug_set_fail_next_spawn(bool fail) { debug_fail_next_spawn_ = fail; }
-	// Test hook: make the next spawn-failure restore appear not to cover every carved region,
-	// exercising the last-resort retry path without depending on an op-cap race.
+	// Test hook: make the next carve-rejection restore appear not to cover every carved
+	// region, exercising the keep-the-body-alive path without depending on an op-cap race.
 	void debug_set_fail_next_restore(bool fail) { debug_fail_next_restore_ = fail; }
+	// Test hook: treat the next carve as rejected after at least one box has been accepted,
+	// exercising the post-spawn carve-rejection path without depending on an op-cap race.
+	void debug_set_fail_next_carve(bool fail) { debug_fail_next_carve_ = fail; }
 	// Test hook: make the next re-merge resample fail so the resample backoff path can be
 	// exercised without depending on a worker-side failure mode.
 	void debug_set_fail_next_resample(bool fail) { debug_fail_next_resample_ = fail; }
@@ -72,6 +75,7 @@ public:
 	// island manager into the structurally-impossible no-hole restore branch.
 	void debug_set_fail_next_spawn(bool fail) { (void)fail; }
 	void debug_set_fail_next_restore(bool fail) { (void)fail; }
+	void debug_set_fail_next_carve(bool fail) { (void)fail; }
 	void debug_set_fail_next_resample(bool fail) { (void)fail; }
 #endif
 	// Not const: the ground probe takes the edit lock.
@@ -161,6 +165,7 @@ private:
 	int refused_ = 0; // components left attached because a pool was full
 	bool debug_fail_next_spawn_ = false;
 	bool debug_fail_next_restore_ = false;
+	bool debug_fail_next_carve_ = false;
 	bool debug_fail_next_resample_ = false;
 	float last_ms_ = 0.0f;
 };

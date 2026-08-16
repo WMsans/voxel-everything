@@ -703,15 +703,16 @@ func test_rejected_remerge_paste_does_not_leak_pinned_slots_or_retry_every_frame
 	assert_int(st["refused"]).override_failure_message(
 		"a fully rejected re-merge paste retried every frame: %s" % st).is_less(refused_before + 10)
 
-func test_spawn_failure_restores_field_with_no_body(timeout := 120000) -> void:
+func test_failed_spawn_before_carve_leaves_component_attached(timeout := 120000) -> void:
 	var w := make_world()
 	var t := tool_of(w)
 	build_pillar(w, t)
 	var top := Vector3(PILLAR_X, PILLAR_BASE + 4.0, PILLAR_Z)
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
-	# Submit the extraction, then force the next spawn to fail before its result lands. Stop
-	# as soon as the refusal is recorded, before any follow-up connectivity window can spawn
-	# the component again, and verify the failed spawn left the field restored, not a hole.
+	# Submit the extraction, then force the next spawn to fail before its result lands. The
+	# structural fix spawns BEFORE carving, so a spawn failure must leave the terrain intact
+	# (no carve, no hole) and the component still attached. Stop as soon as the refusal is
+	# recorded, before any follow-up connectivity window can spawn the component again.
 	w.debug_stream_frame(CENTER)
 	w.debug_physics_frame(CENTER)
 	w.debug_island_frame(1.0 / 60.0, CENTER)
@@ -731,8 +732,10 @@ func test_spawn_failure_restores_field_with_no_body(timeout := 120000) -> void:
 		"a failed spawn was still counted as spawned: %s" % st).is_equal(0)
 	assert_int(st["live_bodies"]).override_failure_message(
 		"a failed spawn left a body behind: %s" % st).is_equal(0)
+	assert_int(st["volume_pinned"]).override_failure_message(
+		"a pre-carve spawn failure left the birth volume pinned: %s" % st).is_equal(0)
 	assert_bool(solid_at(w, top)).override_failure_message(
-		"spawn failure left a field hole with no body: %s" % st).is_true()
+		"a pre-carve spawn failure left a field hole with no body: %s" % st).is_true()
 
 func test_rejected_extract_submit_rolls_back_in_flight_and_recovers(timeout := 180000) -> void:
 	var w := make_world()
@@ -776,19 +779,20 @@ func test_rejected_extract_submit_rolls_back_in_flight_and_recovers(timeout := 1
 	assert_int(st["in_flight"]).override_failure_message(
 		"post-recovery extraction stranded in-flight entries: %s" % st).is_equal(0)
 
-func test_partial_restore_retry_spawn_keeps_pinned_birth_volume(timeout := 180000) -> void:
+func test_post_spawn_carve_rejection_keeps_body_in_hole(timeout := 180000) -> void:
 	var w := make_world()
 	var t := tool_of(w)
 	build_pillar(w, t)
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
-	# Submit the extraction, then force the first spawn to fail AND make the restore appear to
-	# not cover every carved region. The one-shot spawn hook lets the last-resort retry
-	# succeed; because the restore volume-add was accepted (touched non-empty), the birth slot
-	# is referenced by the edit log and must remain pinned.
+	# Submit the extraction, then force the next carve to look rejected after at least one box
+	# was accepted and force its restore to appear incomplete. The structural fix spawns the
+	# body BEFORE carving, so this must leave the already-live body in the hole instead of
+	# despawned; because the restore volume-add was accepted (touched non-empty), the birth
+	# slot is referenced by the edit log and must remain pinned.
 	w.debug_stream_frame(CENTER)
 	w.debug_physics_frame(CENTER)
 	w.debug_island_frame(1.0 / 60.0, CENTER)
-	w.debug_set_fail_next_spawn(true)
+	w.debug_set_fail_next_carve(true)
 	w.debug_set_fail_next_restore(true)
 	var st: Dictionary = w.debug_island_stats()
 	for i in range(120):
@@ -799,8 +803,8 @@ func test_partial_restore_retry_spawn_keeps_pinned_birth_volume(timeout := 18000
 		if st["live_bodies"] > 0:
 			break
 	assert_int(st["live_bodies"]).override_failure_message(
-		"last-resort retry spawn never produced a body: %s" % st).is_greater(0)
+		"post-spawn carve rejection despawned the body into a hole: %s" % st).is_greater(0)
 	assert_int(st["islands_spawned"]).override_failure_message(
-		"last-resort retry body was not counted as spawned: %s" % st).is_greater(0)
+		"post-spawn carve rejection body was not counted as spawned: %s" % st).is_greater(0)
 	assert_int(st["volume_pinned"]).override_failure_message(
 		"partial restore referenced the birth volume but it was unpinned: %s" % st).is_greater(0)

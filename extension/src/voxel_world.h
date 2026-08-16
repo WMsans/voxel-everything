@@ -250,12 +250,15 @@ public:
 	// Test hook: mark/unmark an island-atlas slot as used so a small test can fill the
 	// 32-slot ceiling without spawning 32 real islands.
 	void debug_set_atlas_slot_used(int slot, bool used);
-	// Test hook: make the next island spawn fail so the spawn-failure restore path can be
-	// exercised without depending on a Jolt failure mode.
+	// Test hook: make the next island spawn fail before any carve so the no-carve fail-soft
+	// path can be exercised without depending on a Jolt failure mode.
 	void debug_set_fail_next_spawn(bool fail);
-	// Test hook: make the next spawn-failure restore appear not to cover every carved region,
-	// exercising the last-resort retry path without depending on an op-cap race.
+	// Test hook: make the next carve-rejection restore appear not to cover every carved
+	// region, exercising the keep-the-body-alive path without depending on an op-cap race.
 	void debug_set_fail_next_restore(bool fail);
+	// Test hook: treat the next carve as rejected after at least one box has been accepted,
+	// exercising the post-spawn carve-rejection path without depending on an op-cap race.
+	void debug_set_fail_next_carve(bool fail);
 	// Test hook: make the next re-merge resample fail so the resample backoff path can be
 	// exercised without depending on a worker-side failure mode.
 	void debug_set_fail_next_resample(bool fail);
