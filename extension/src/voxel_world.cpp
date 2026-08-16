@@ -209,10 +209,13 @@ void VoxelWorld::ensure_initialized() {
 }
 
 ve::EditLog::AppendResult VoxelWorld::append_edit(const ve::EditOp &op) {
-	edit_seq_.fetch_add(1, std::memory_order_relaxed);
 	std::lock_guard<std::mutex> lock(edit_mutex_);
 	if (!edit_log_) return {};
 	ve::EditLog::AppendResult r = edit_log_->append(op);
+	// Bump AFTER the append and under the same lock the streamer uses to capture op counts.
+	// If the seq moved before the append, a readback stamped between the bump and the append
+	// would claim edits that are not in the GPU state the readback describes.
+	edit_seq_.fetch_add(1, std::memory_order_relaxed);
 	if (!r.rejected.empty()) {
 		UtilityFunctions::printerr("VoxelWorld: region op list full, op rejected (",
 				r.rejected[0].x, ", ", r.rejected[0].y, ", ", r.rejected[0].z,
@@ -1012,8 +1015,12 @@ void VoxelWorld::drain_occupancy() {
 		std::lock_guard<std::mutex> lock(occupancy_mutex_);
 		blocks.swap(occupancy_inbox_);
 	}
-	for (const OccupancyBlock &b : blocks)
+	for (const OccupancyBlock &b : blocks) {
+		// A region marked in consecutive frames can have two reads in flight, and the older
+		// one can land after the newer one. Never let it regress the grid or the block's seq.
+		if (b.seq < occupancy_.block_seq(b.region)) continue;
 		occupancy_.set_block(b.region, b.bytes.data(), b.seq);
+	}
 }
 
 int VoxelWorld::debug_occupancy_state(Vector3i cell) {

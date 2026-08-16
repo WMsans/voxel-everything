@@ -30,6 +30,10 @@ OccupancyGrid::Block *OccupancyGrid::ensure(IVec3 region) {
 void OccupancyGrid::set_block(IVec3 region, const uint8_t *bytes, int64_t seq) {
 	if (!bytes) return;
 	Block *b = ensure(region);
+	// Reads can arrive out of order (a region marked in consecutive frames has two
+	// requests in flight). An older block must not overwrite a newer one, or the grid and
+	// block_seq would regress to a picture from before the latest edit.
+	if (seq < b->seq) return;
 	b->bytes.assign(bytes, bytes + kOccupancyBlockBytes);
 	b->seq = seq;
 }

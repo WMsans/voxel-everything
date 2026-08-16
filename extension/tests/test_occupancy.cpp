@@ -96,6 +96,23 @@ TEST_CASE("a re-stored block replaces the old contents and never leaks the old s
 	CHECK(g.state({32, 0, 32}) == kCellUnknown);
 }
 
+TEST_CASE("an older occupancy block cannot regress a newer one") {
+	OccupancyGrid g;
+	const std::vector<uint8_t> air = uniform_block(kCellAir);
+	const std::vector<uint8_t> full = uniform_block(kCellFull);
+	// Two reads of the same region are in flight; the newer one lands first...
+	g.set_block({1, 0, 1}, air.data(), 9);
+	// ...then the older read arrives. It must not overwrite the grid or the seq.
+	g.set_block({1, 0, 1}, full.data(), 5);
+	CHECK(g.block_seq({1, 0, 1}) == 9);
+	CHECK(g.state({32, 0, 32}) == kCellAir);
+	// An equal seq is not older: a duplicate read of the same mark may replace its own
+	// bytes, which is a harmless no-op because the data is identical.
+	g.set_block({1, 0, 1}, air.data(), 9);
+	CHECK(g.block_seq({1, 0, 1}) == 9);
+	CHECK(g.state({32, 0, 32}) == kCellAir);
+}
+
 TEST_CASE("cell_state_field classifies air, surface and interior") {
 	AnalyticGenerator gen;
 	// The surface at x, z ~ 8 m sits near y = 54 m, i.e. cell y ~ 67.

@@ -91,7 +91,7 @@ private:
 	std::vector<OccupancyBlock> *occ_inbox_ = nullptr;
 	std::atomic<int64_t> *edit_seq_ = nullptr;
 
-	void note_marked(ve::IVec3 region);
+	void note_marked(ve::IVec3 region, int64_t seq);
 	void pump_occupancy(RenderingDevice *rd);
 
 	float last_edit_center_[3] = {0.0f, 0.0f, 0.0f};
