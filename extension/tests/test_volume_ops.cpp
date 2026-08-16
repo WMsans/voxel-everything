@@ -367,9 +367,25 @@ TEST_CASE("a slot can be claimed by index, once") {
 	for (int i = 0; i < kMaxVolumes - 1; i++) CHECK(volumes.allocate() != 3);
 }
 
+TEST_CASE("pin refuses a reserved slot that has not stored a volume") {
+	VolumeSet volumes;
+	const int slot = 3;
+	REQUIRE(volumes.reserve(slot));
+	CHECK(volumes.get(slot) == nullptr);
+	// The invariant is store-then-pin: pinning a reserved-but-empty slot would let an
+	// op reach the log naming a slot the GPU mirror has no bytes for, so pin must fail.
+	CHECK(!volumes.pin(slot));
+	CHECK(!volumes.pinned(slot));
+	// The slot is still usable: store first, then pin.
+	REQUIRE(volumes.store(slot, ball_volume(8, 0.05f, 0.2f, 3)));
+	CHECK(volumes.pin(slot));
+	CHECK(volumes.pinned(slot));
+}
+
 TEST_CASE("a pinned slot can never be released or handed out again") {
 	VolumeSet volumes;
 	const int slot = volumes.allocate();
+	REQUIRE(volumes.store(slot, ball_volume(8, 0.05f, 0.2f, 3)));
 	CHECK(volumes.pin(slot));
 	CHECK(volumes.pinned(slot));
 	CHECK_FALSE(volumes.release(slot));
@@ -404,11 +420,15 @@ TEST_CASE("store refuses a pinned slot and leaves its volume unchanged") {
 }
 
 
-TEST_CASE("pin refuses a free slot") {
+TEST_CASE("pin refuses a free slot or an allocated-but-empty slot") {
 	VolumeSet volumes;
 	CHECK(!volumes.pin(0));
 	CHECK(!volumes.pinned(0));
 	const int slot = volumes.allocate();
+	// Allocated but nothing stored yet: pin must fail so an op cannot name an empty slot.
+	CHECK(!volumes.pin(slot));
+	CHECK(!volumes.pinned(slot));
+	REQUIRE(volumes.store(slot, ball_volume(8, 0.05f, 0.2f, 3)));
 	CHECK(volumes.pin(slot));
 	CHECK(volumes.pinned(slot));
 }

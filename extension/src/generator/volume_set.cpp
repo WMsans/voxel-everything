@@ -102,7 +102,7 @@ bool VolumeSet::reserve(int slot) {
 
 bool VolumeSet::release(int slot) {
 	if (slot < 0 || slot >= kMaxVolumes || !slots_[slot].used) return false;
-	if (slots_[slot].pinned) return false; // an op still names it; see pin()
+	if (slots_[slot].pinned) return false; // an op may only name a pinned slot; see pin()
 	slots_[slot].used = false;
 	// Assigning a fresh VolumeData destroys the old vectors and frees their
 	// buffers immediately; release() exists specifically to shed those bytes.
@@ -114,8 +114,9 @@ bool VolumeSet::release(int slot) {
 
 bool VolumeSet::store(int slot, VolumeData data) {
 	if (slot < 0 || slot >= kMaxVolumes || !slots_[slot].used) return false;
-	// A pinned slot is named by a live EditOp and the GPU mirror reads its bytes
-	// with no liveness flag, so it must never come back as a different volume.
+	// A pinned slot always holds stored bytes (pin() refuses an empty slot) that are
+	// named by a live EditOp; the GPU mirror reads those bytes with no liveness flag,
+	// so they must never come back as a different volume.
 	if (slots_[slot].pinned) return false;
 	if (!data.valid()) return false;
 	slots_[slot].data = std::move(data);
@@ -133,7 +134,10 @@ int64_t VolumeSet::version(int slot) const {
 }
 
 bool VolumeSet::pin(int slot) {
-	if (slot < 0 || slot >= kMaxVolumes || !slots_[slot].used) return false;
+	// Pinning requires a stored, non-empty volume: an allocated-but-empty slot (or a
+	// reserved-but-empty one) has no bytes for the GPU mirror to read, so an op that
+	// names it has nothing pinned and the invariant would not hold.
+	if (slot < 0 || slot >= kMaxVolumes || get(slot) == nullptr) return false;
 	slots_[slot].pinned = true;
 	return true;
 }

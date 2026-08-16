@@ -84,12 +84,16 @@ public:
 	// copy is behind.
 	int64_t version(int slot) const;
 
-	// Called the moment an EditOp referencing this slot enters the edit log. A pinned slot
-	// can never be released or reused, which is what makes the GPU mirrors safe: the shader
-	// has no liveness flag and reads whatever bytes the slot holds, so a slot that an op
-	// still names must never come back as a different volume. Live island volumes are NOT
-	// pinned -- nothing in the field references them until they are pasted at rest.
-	// Returns false and does nothing when the slot is not currently in use.
+	// Called the moment an EditOp referencing this slot enters the edit log. Pinning
+	// requires a stored, non-empty volume in the slot (get(slot) != nullptr): an op may
+	// only name a pinned slot, and the manager must not let an op reach the log unless
+	// its slot has been stored and then pinned. A pinned slot can never be released or
+	// reused, which is what makes the GPU mirrors safe: the shader has no liveness flag
+	// and reads whatever bytes the slot holds, so a slot that an op still names must
+	// never come back as a different volume. Live island volumes are NOT pinned --
+	// nothing in the field references them until they are pasted at rest. Returns false
+	// and does nothing when the slot has no stored volume (free, or reserved/allocated
+	// but still empty).
 	bool pin(int slot);
 	bool pinned(int slot) const;
 
