@@ -1,5 +1,6 @@
 #include "render/raymarch_pass.h"
 #include "render/gpu_atlas.h"
+#include "render/island_atlas.h"
 #include "render/shader_loader.h"
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rd_sampler_state.hpp>
@@ -60,10 +61,13 @@ void RaymarchPass::teardown() {
 	// Free order matters on Godot 4.7.1's RenderingDevice: freeing a texture (or shader)
 	// cascades to referencing uniform sets, and freeing a shader also tears down its
 	// pipelines — so uset_ first, then pipeline_ before shader_, then the targets.
+	// uset_mask_ is only a cache key for an externally owned tile-mask RID (usually the
+	// IslandAtlas fallback mask); it must not be freed here.
 	for (RID *r : {&uset_, &pipeline_, &shader_, &color_, &hitpos_, &sampler_, &edits_ubo_}) {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
+	uset_mask_ = RID();
 	rd_ = nullptr;
 }
 
@@ -81,7 +85,8 @@ RID RaymarchPass::make_target(RenderingDevice *rd, RenderingDevice::DataFormat f
 	return rd->texture_create(f, v, {});
 }
 
-void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas, int w, int h) {
+void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
+		const IslandAtlas *islands, RID tile_mask, int w, int h) {
 	// Old uniform set references the old color/hitpos textures: free it before them.
 	if (uset_.is_valid()) rd->free_rid(uset_);
 	uset_ = RID();
@@ -92,8 +97,8 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas, i
 	width_ = w;
 	height_ = h;
 
-	Ref<RDUniform> u[13];
-	for (int i = 0; i < 13; i++) u[i].instantiate();
+	Ref<RDUniform> u[18];
+	for (int i = 0; i < 18; i++) u[i].instantiate();
 	u[0]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
 	u[0]->set_binding(0); u[0]->add_id(color_);
 	u[1]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
@@ -112,16 +117,28 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas, i
 	}
 	u[12]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
 	u[12]->set_binding(12); u[12]->add_id(edits_ubo_);
+	// 13-17: island sdf, material, min-max chain, descriptors, tile mask.
+	const RID island_bufs[5] = {islands->sdf_buffer(), islands->mat_buffer(),
+			islands->mip_buffer(), islands->desc_buffer(),
+			tile_mask.is_valid() ? tile_mask : islands->fallback_mask()};
+	for (int i = 13; i <= 17; i++) {
+		u[i]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
+		u[i]->set_binding(i); u[i]->add_id(island_bufs[i - 13]);
+	}
 	Array uset_args;
-	for (int i = 0; i < 13; i++) uset_args.push_back(u[i]);
+	for (int i = 0; i < 18; i++) uset_args.push_back(u[i]);
 	uset_ = rd->uniform_set_create(uset_args, shader_, 0);
 }
 
-bool RaymarchPass::render(RenderingDevice *rd, const GpuAtlas &atlas, const ve::CameraParams &cam,
+bool RaymarchPass::render(RenderingDevice *rd, const GpuAtlas &atlas,
+		const IslandAtlas *islands, RID tile_mask, const ve::CameraParams &cam,
 		int width, int height, const float edit_state[6]) {
 	if (!shader_.is_valid()) return false;
-	if (width != width_ || height != height_ || !uset_.is_valid()) {
-		rebuild_targets(rd, atlas, width, height);
+	if (!islands || !islands->is_valid()) return false;
+	const RID mask = tile_mask.is_valid() ? tile_mask : islands->fallback_mask();
+	if (width != width_ || height != height_ || mask != uset_mask_ || !uset_.is_valid()) {
+		rebuild_targets(rd, atlas, islands, mask, width, height);
+		uset_mask_ = mask;
 	}
 	if (!uset_.is_valid() || !color_.is_valid() || !edits_ubo_.is_valid()) return false;
 

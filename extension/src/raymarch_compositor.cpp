@@ -70,9 +70,11 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	cp.params[0] = tan_x; cp.params[1] = tan_y; cp.params[2] = 200.0f;
 	const Vector3i sr = world->get_world_size_regions();
 	cp.dims[0] = sr.x; cp.dims[1] = sr.y; cp.dims[2] = sr.z;
+	cp.dims[3] = world->island_slot_count();
 	const Vector3i ob = world->get_world_origin_bricks();
 	cp.region_origin[0] = ob.x / 32; cp.region_origin[1] = ob.y / 32;
 	cp.region_origin[2] = ob.z / 32;
+	cp.region_origin[3] = 0; // Task 11 sets the cull grid
 	const Vector3i ab = world->get_atlas_bricks();
 	cp.atlas_bricks[0] = ab.x; cp.atlas_bricks[1] = ab.y; cp.atlas_bricks[2] = ab.z;
 
@@ -99,7 +101,7 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	const int rw = static_cast<int>(size.x * 0.66f);
 	const int rh = static_cast<int>(size.y * 0.66f);
 	if (rw <= 0 || rh <= 0) return;
-	if (!rmp->render(rd, *atlas, cp, rw, rh, edit_state)) return;
+	if (!rmp->render(rd, *atlas, world->islands(), RID(), cp, rw, rh, edit_state)) return;
 
 	const Projection view(cam.affine_inverse());
 	const Projection view_proj = proj * view;

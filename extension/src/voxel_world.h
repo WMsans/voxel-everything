@@ -31,6 +31,7 @@ class CompositePass;
 class WorldStreamer;
 class MeshService;
 class ColliderStreamer;
+class IslandAtlas;
 
 // One edit drained by the streamer: the op plus the regions its append touched/rejected.
 struct PendingEdit {
@@ -65,6 +66,8 @@ class VoxelWorld : public Node3D {
 	int shape_builds_per_frame_ = 2;
 
 	GpuAtlas *atlas_ = nullptr;
+	IslandAtlas *islands_ = nullptr;
+	int island_slots_ = 0; // high-water mark, not a population; see island_slot_count()
 	RegionPass *region_pass_ = nullptr;
 	BrickGenPass *gen_pass_ = nullptr;
 	RaymarchPass *raymarch_pass_ = nullptr;
@@ -152,6 +155,11 @@ public:
 	ve::WorldBounds world_bounds() const;
 
 	GpuAtlas *atlas() { return atlas_; }
+	IslandAtlas *islands() { return islands_; }
+	// High-water mark, not a population: the shader masks off bits at or above it and then
+	// tests each remaining slot's descriptor for dim >= 2, so a dead slot below the mark
+	// costs one branch and nothing else.
+	int island_slot_count() const { return island_slots_; }
 	WorldStreamer *streamer() { return streamer_; }
 	ve::EditLog *edit_log() { return edit_log_; }
 	ve::VolumeSet &volumes() { return volumes_; }
@@ -226,6 +234,13 @@ public:
 
 	// --- Task 9 hook ---
 	Dictionary debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_cell);
+
+	// --- Task 10 hooks ---
+	Dictionary debug_place_test_island(int slot, Vector3i lo_cell, Vector3i hi_cell,
+			Vector3 offset);
+	Dictionary debug_place_test_island_rotated(int slot, Vector3i lo_cell, Vector3i hi_cell,
+			Vector3 offset, float yaw);
+	void debug_clear_test_island(int slot);
 
 	// --- Task 6 hooks ---
 	bool debug_mesh_submit(Array chunks);

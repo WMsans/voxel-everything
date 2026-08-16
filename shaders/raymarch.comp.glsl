@@ -127,6 +127,255 @@ bool cell8_may_have_surface(int slot, ivec3 cell) { // cell in [0,8)^3, 2 voxels
 	return mm.x <= ENCODED_ZERO && mm.y >= ENCODED_ZERO;
 }
 
+// ---------------------------------------------------------------------------------------
+// Islands (spec §3, "Multi-target raymarching"). Each is a dense 64^3 volume in a pool of
+// byte-packed storage buffers, placed by a rigid transform. Its hit competes with the
+// terrain's on distance alone, which is what makes the two shade identically.
+// ---------------------------------------------------------------------------------------
+const int ISLAND_DIM = 64;          // ve::kIslandDim
+const int ISLAND_VOXELS = 262144;   // 64^3
+const int ISLAND_MIP_STRIDE = 8;    // ve::kVolumeMipStride
+const int ISLAND_MIP_CELLS = 8;     // ISLAND_DIM / ISLAND_MIP_STRIDE
+const int ISLAND_MIP_PER_SLOT = 512;
+
+layout(set = 0, binding = 13, std430) readonly buffer IslandSdf { uint w[]; } island_sdf;
+layout(set = 0, binding = 14, std430) readonly buffer IslandMat { uint w[]; } island_mat;
+layout(set = 0, binding = 15, std430) readonly buffer IslandMip { uint w[]; } island_mip;
+// Eight vec4 per island: basis columns 0-2 with the body translation in .w, then
+// (lattice origin.xyz, voxel), then (dim, 0, 0, 0) as ints, then the world AABB.
+layout(set = 0, binding = 16, std430) readonly buffer IslandDesc { vec4 v[]; } island_desc;
+// One uint per 16x16 screen tile, bit i = "island i may be visible here" (Task 11). When
+// pc.region_origin.w is 0 the buffer is a single all-ones entry and every island is marched.
+layout(set = 0, binding = 17, std430) readonly buffer TileMask { uint v[]; } tile_mask;
+
+struct Island {
+	mat3 basis;    // local -> world
+	vec3 pos;      // body translation, world
+	vec3 lo;       // lattice minimum corner, LOCAL
+	float voxel;
+	int dim;
+};
+
+bool island_load(int i, out Island isl) {
+	vec4 r0 = island_desc.v[i * 8 + 0];
+	vec4 r1 = island_desc.v[i * 8 + 1];
+	vec4 r2 = island_desc.v[i * 8 + 2];
+	vec4 lv = island_desc.v[i * 8 + 3];
+	int dim = floatBitsToInt(island_desc.v[i * 8 + 4].x);
+	if (dim < 2) return false; // dead slot
+	isl.basis = mat3(r0.xyz, r1.xyz, r2.xyz); // mat3(c0, c1, c2): columns, as written
+	isl.pos = vec3(r0.w, r1.w, r2.w);
+	isl.lo = lv.xyz;
+	isl.voxel = lv.w;
+	isl.dim = dim;
+	return true;
+}
+
+uint island_byte_sdf(int i) {
+	return (island_sdf.w[i >> 2] >> ((uint(i) & 3u) * 8u)) & 0xFFu;
+}
+uint island_byte_mat(int i) {
+	return (island_mat.w[i >> 2] >> ((uint(i) & 3u) * 8u)) & 0xFFu;
+}
+uint island_byte_mip(int i) {
+	return (island_mip.w[i >> 2] >> ((uint(i) & 3u) * 8u)) & 0xFFu;
+}
+
+float island_lattice(int slot, int dim, ivec3 v) {
+	int i = slot * ISLAND_VOXELS + v.x + v.y * dim + v.z * dim * dim;
+	return decode_sdf(float(island_byte_sdf(i)) / 255.0);
+}
+
+// Trilinear reconstruction in LOCAL space, mirroring ve::sample_volume_lattice's inside
+// branch. Callers clamp q to the lattice box first, so no outside branch is needed here.
+float island_sdf_at(int slot, Island isl, vec3 q) {
+	vec3 l = clamp((q - isl.lo) / isl.voxel, vec3(0.0), vec3(float(isl.dim - 1)));
+	ivec3 i0 = ivec3(l);
+	ivec3 i1 = min(i0 + 1, ivec3(isl.dim - 1));
+	vec3 f = l - vec3(i0);
+	float c000 = island_lattice(slot, isl.dim, ivec3(i0.x, i0.y, i0.z));
+	float c100 = island_lattice(slot, isl.dim, ivec3(i1.x, i0.y, i0.z));
+	float c010 = island_lattice(slot, isl.dim, ivec3(i0.x, i1.y, i0.z));
+	float c110 = island_lattice(slot, isl.dim, ivec3(i1.x, i1.y, i0.z));
+	float c001 = island_lattice(slot, isl.dim, ivec3(i0.x, i0.y, i1.z));
+	float c101 = island_lattice(slot, isl.dim, ivec3(i1.x, i0.y, i1.z));
+	float c011 = island_lattice(slot, isl.dim, ivec3(i0.x, i1.y, i1.z));
+	float c111 = island_lattice(slot, isl.dim, ivec3(i1.x, i1.y, i1.z));
+	return mix(mix(mix(c000, c100, f.x), mix(c010, c110, f.x), f.y),
+	           mix(mix(c001, c101, f.x), mix(c011, c111, f.x), f.y), f.z);
+}
+
+uint island_material_at(int slot, Island isl, vec3 q) {
+	vec3 l = clamp((q - isl.lo) / isl.voxel, vec3(0.0), vec3(float(isl.dim - 1)));
+	ivec3 m = min(ivec3(l + 0.5), ivec3(isl.dim - 1));
+	int i = slot * ISLAND_VOXELS + m.x + m.y * isl.dim + m.z * isl.dim * isl.dim;
+	return island_byte_mat(i);
+}
+
+// Spec §3's "own min-max mip": the same inclusive-corner soundness argument the brick chain
+// rests on, so a "no surface" verdict is a skip that cannot tunnel.
+bool island_cell_has_surface(int slot, ivec3 c) {
+	int i = (slot * ISLAND_MIP_PER_SLOT + c.x + c.y * ISLAND_MIP_CELLS +
+			c.z * ISLAND_MIP_CELLS * ISLAND_MIP_CELLS) * 2;
+	uint mn = island_byte_mip(i);
+	uint mx = island_byte_mip(i + 1);
+	return mn <= ENCODED_ZERO && mx >= ENCODED_ZERO;
+}
+
+// Slab test. rd components are nudged off zero rather than divided by it: 0 * inf is NaN,
+// and a NaN here would silently drop the island for that pixel.
+bool ray_box(vec3 ro, vec3 rd, vec3 lo, vec3 hi, out float t0, out float t1) {
+	vec3 srd = vec3(abs(rd.x) < 1e-8 ? 1e-8 : rd.x, abs(rd.y) < 1e-8 ? 1e-8 : rd.y,
+			abs(rd.z) < 1e-8 ? 1e-8 : rd.z);
+	vec3 a = (lo - ro) / srd;
+	vec3 b = (hi - ro) / srd;
+	vec3 tmn = min(a, b), tmx = max(a, b);
+	t0 = max(max(tmn.x, tmn.y), tmn.z);
+	t1 = min(min(tmx.x, tmx.y), tmx.z);
+	return t1 >= max(t0, 0.0);
+}
+
+struct Hit {
+	bool hit;
+	float t;
+	vec3 p;
+	vec3 n;
+	uint mat;
+};
+
+// Sphere-traces one island. `best` is updated only when this island is nearer, so calling it
+// for every island in the tile's mask resolves "nearest hit wins" with no sorting.
+void march_island(int slot, vec3 ro, vec3 rd, inout Hit best) {
+	Island isl;
+	if (!island_load(slot, isl)) return;
+
+	// World -> local. The basis is orthonormal, so its inverse is its transpose and the ray
+	// stays unit length: t values are directly comparable with the terrain's.
+	mat3 inv = transpose(isl.basis);
+	vec3 ro_l = inv * (ro - isl.pos);
+	vec3 rd_l = inv * rd;
+	vec3 span = vec3(float(isl.dim - 1) * isl.voxel);
+
+	float t0, t1;
+	if (!ray_box(ro_l, rd_l, isl.lo, isl.lo + span, t0, t1)) return;
+	t0 = max(t0, 0.0);
+	t1 = min(t1, best.t);
+	if (t0 > t1) return;
+
+	float t = t0;
+	float cell_m = float(ISLAND_MIP_STRIDE) * isl.voxel;
+	for (int k = 0; k < 192; k++) {
+		if (t > t1) return;
+		vec3 q = ro_l + rd_l * t;
+		ivec3 c = clamp(ivec3(floor((q - isl.lo) / cell_m)), ivec3(0),
+				ivec3(ISLAND_MIP_CELLS - 1));
+		if (!island_cell_has_surface(slot, c)) {
+			// Jump to the cell's exit face, exactly as the brick march does, with a floor on
+			// the step so a ray grazing a face still makes progress.
+			vec3 clo = isl.lo + vec3(c) * cell_m;
+			vec3 chi = clo + cell_m;
+			vec3 far = mix(clo, chi, step(0.0, rd_l));
+			vec3 tf = (far - q) / vec3(abs(rd_l.x) < 1e-8 ? 1e-8 : rd_l.x,
+					abs(rd_l.y) < 1e-8 ? 1e-8 : rd_l.y,
+					abs(rd_l.z) < 1e-8 ? 1e-8 : rd_l.z);
+			t += max(min(tf.x, min(tf.y, tf.z)), 0.002);
+			continue;
+		}
+		float d = island_sdf_at(slot, isl, q);
+		if (d < 0.002) {
+			for (int r = 0; r < 4; r++) { // secant refinement, as the terrain march does
+				q = ro_l + rd_l * t;
+				t += island_sdf_at(slot, isl, q) * 0.5;
+			}
+			if (t > best.t) return; // refinement pushed it behind the current winner
+			q = ro_l + rd_l * t;
+			const float e = 0.5 * 0.05;
+			vec3 n_l = normalize(vec3(
+				island_sdf_at(slot, isl, q + vec3(e, 0, 0)) -
+					island_sdf_at(slot, isl, q - vec3(e, 0, 0)),
+				island_sdf_at(slot, isl, q + vec3(0, e, 0)) -
+					island_sdf_at(slot, isl, q - vec3(0, e, 0)),
+				island_sdf_at(slot, isl, q + vec3(0, 0, e)) -
+					island_sdf_at(slot, isl, q - vec3(0, 0, e))));
+			best.hit = true;
+			best.t = t;
+			best.p = ro + rd * t;
+			best.n = normalize(isl.basis * n_l);
+			best.mat = island_material_at(slot, isl, q);
+			return;
+		}
+		t += max(d * 0.9, 0.005);
+	}
+}
+
+// The M1/M2 terrain march, unchanged in behaviour, returning a hit record instead of a
+// colour so an island can outrank it.
+Hit march_terrain(vec3 ro, vec3 rd, float max_dist) {
+	Hit h;
+	h.hit = false;
+	h.t = max_dist;
+	h.p = vec3(0.0);
+	h.n = vec3(0.0, 1.0, 0.0);
+	h.mat = 0u;
+
+	ivec3 map = ivec3(floor(ro / BRICK_SIZE));
+	vec3 delta = abs(vec3(BRICK_SIZE) / rd);
+	ivec3 st = ivec3(sign(rd));
+	vec3 side = (vec3(map) * BRICK_SIZE - ro + (vec3(st) * 0.5 + 0.5) * BRICK_SIZE) / rd;
+	if (st.x == 0) side.x = 1.0 / 0.0;
+	if (st.y == 0) side.y = 1.0 / 0.0;
+	if (st.z == 0) side.z = 1.0 / 0.0;
+	float t_prev = 0.0;
+
+	for (int i = 0; i < 1024; i++) {
+		float t_exit = min(side.x, min(side.y, side.z));
+		if (t_exit > max_dist) break;
+
+		int slot = slot_at(map);
+		if (slot >= 0 && brick_may_have_surface(slot)) {
+			bool has_material = palette_buf.ids[slot * 4] != 0u;
+			float t = t_prev;
+			for (int j = 0; j < 64; j++) {
+				if (t > t_exit) break;
+				vec3 p = ro + rd * t;
+				vec3 vox = (p - vec3(map) * BRICK_SIZE) / VOXEL_SIZE;
+				ivec3 cell8 = clamp(ivec3(floor(vox * 0.5)), ivec3(0), ivec3(7));
+				if (!cell8_may_have_surface(slot, cell8)) {
+					vec3 cell_lo = vec3(map) * BRICK_SIZE + vec3(cell8 * 2) * VOXEL_SIZE;
+					vec3 cell_hi = cell_lo + 2.0 * VOXEL_SIZE;
+					vec3 far = mix(cell_lo, cell_hi, step(0.0, rd));
+					vec3 tf = (far - p) / rd;
+					if (st.x == 0) tf.x = 1.0 / 0.0;
+					if (st.y == 0) tf.y = 1.0 / 0.0;
+					if (st.z == 0) tf.z = 1.0 / 0.0;
+					t = min(t + max(min(tf.x, min(tf.y, tf.z)), 0.002), t_exit);
+					continue;
+				}
+				float d = world_sdf(p);
+				if (d < 0.002 && has_material) {
+					for (int k = 0; k < 4; k++) {
+						float dk = world_sdf(p);
+						t += dk * 0.5;
+						p = ro + rd * t;
+					}
+					h.hit = true;
+					h.t = t;
+					h.p = p;
+					h.n = calc_normal(p, map, slot);
+					h.mat = material_at(p, map, slot);
+					return h;
+				}
+				t += max(d * 0.9, 0.005);
+			}
+		}
+
+		if (side.x < side.y && side.x < side.z) { t_prev = side.x; side.x += delta.x; map.x += st.x; }
+		else if (side.y < side.z)               { t_prev = side.y; side.y += delta.y; map.y += st.y; }
+		else                                    { t_prev = side.z; side.z += delta.z; map.z += st.z; }
+	}
+	return h;
+}
+
 void main() {
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
 	ivec2 size = imageSize(out_color);
@@ -140,91 +389,43 @@ void main() {
 		+ pc.cam_up.xyz * ndc.y * pc.params.y);
 	float max_dist = pc.params.z;
 
-	vec3 color = sky_color(rd);
-	vec4 hitpos = vec4(0.0);
+	Hit best = march_terrain(ro, rd, max_dist);
 
-	// Brick-grid DDA over the GLOBAL brick lattice (negative coords supported). side[d] =
-	// ray t at the next boundary along axis d; the st==0 guards keep NaNs out (M1 errata 4).
-	ivec3 map = ivec3(floor(ro / BRICK_SIZE));
-	vec3 delta = abs(vec3(BRICK_SIZE) / rd);
-	ivec3 st = ivec3(sign(rd));
-	vec3 side = (vec3(map) * BRICK_SIZE - ro
-	             + (vec3(st) * 0.5 + 0.5) * BRICK_SIZE) / rd;
-	if (st.x == 0) side.x = 1.0 / 0.0;
-	if (st.y == 0) side.y = 1.0 / 0.0;
-	if (st.z == 0) side.z = 1.0 / 0.0;
-	float t_prev = 0.0;
-
-	bool hit = false;
-	vec3 hp = vec3(0.0);
-	for (int i = 0; i < 1024; i++) {
-		float t_exit = min(side.x, min(side.y, side.z));
-		if (t_exit > max_dist) break;
-
-		int slot = slot_at(map);
-		if (slot >= 0 && brick_may_have_surface(slot)) {
-			// Air-margin bricks (activated by the probe pad) hold no solid voxels and an
-			// EMPTY palette; their interpolated field can still dip below the hit threshold
-			// near a brick face. That is not a renderable surface — skip it (M1 fix).
-			bool has_material = palette_buf.ids[slot * 4] != 0u;
-			float t = t_prev;
-			for (int j = 0; j < 64; j++) {
-				if (t > t_exit) break;
-				vec3 p = ro + rd * t;
-				// 8^3 empty-cell skip: jump to the cell's exit face. t is clamped to keep
-				// progress monotone; the cell's AABB spans its voxels' inclusive lattice,
-				// which is exactly the range the mip entry bounds.
-				vec3 vox = (p - vec3(map) * BRICK_SIZE) / VOXEL_SIZE; // [0, 16)
-				ivec3 cell8 = clamp(ivec3(floor(vox * 0.5)), ivec3(0), ivec3(7));
-				if (!cell8_may_have_surface(slot, cell8)) {
-					vec3 cell_lo = vec3(map) * BRICK_SIZE + vec3(cell8 * 2) * VOXEL_SIZE;
-					vec3 cell_hi = cell_lo + 2.0 * VOXEL_SIZE;
-					vec3 far = mix(cell_lo, cell_hi, step(0.0, rd));
-					vec3 tf = (far - p) / rd; // t-DELTA to the exit face along each axis
-					if (st.x == 0) tf.x = 1.0 / 0.0;
-					if (st.y == 0) tf.y = 1.0 / 0.0;
-					if (st.z == 0) tf.z = 1.0 / 0.0;
-					// Jump to the first exit face (t + min(tf)), never less than 0.002 m of
-					// progress, and never past the brick's exit. The cell's AABB spans its
-					// voxels' inclusive lattice, exactly the range the mip entry bounds.
-					t = min(t + max(min(tf.x, min(tf.y, tf.z)), 0.002), t_exit);
-					continue;
-				}
-				float d = world_sdf(p);
-				if (d < 0.002 && has_material) {
-					for (int k = 0; k < 4; k++) { // secant refinement
-						float dk = world_sdf(p);
-						t += dk * 0.5;
-						p = ro + rd * t;
-					}
-					vec3 n = calc_normal(p, map, slot);
-					vec3 alb = material_albedo(material_at(p, map, slot));
-					vec3 sun = normalize(vec3(0.6, 0.8, 0.3));
-					float lam = max(dot(n, sun), 0.0);
-					color = alb * (0.25 + 0.75 * lam);
-					hp = p;
-					hitpos = vec4(p, 1.0);
-					hit = true;
-					break;
-				}
-				t += max(d * 0.9, 0.005);
-			}
-			if (hit) break;
-		}
-
-		if (side.x < side.y && side.x < side.z) { t_prev = side.x; side.x += delta.x; map.x += st.x; }
-		else if (side.y < side.z)               { t_prev = side.y; side.y += delta.y; map.y += st.y; }
-		else                                    { t_prev = side.z; side.z += delta.z; map.z += st.z; }
+	// Which islands could be here? pc.region_origin.w is the cull grid's tiles-per-row, and
+	// 0 means "no mask" -- the 1x1 debug probes and any frame before the cull pass has run.
+	int island_count = min(pc.dims.w, 32);
+	uint mask = island_count > 0 ? 0xFFFFFFFFu : 0u;
+	int tiles_x = pc.region_origin.w;
+	if (tiles_x > 0) {
+		ivec2 tile = px / 16;
+		mask = tile_mask.v[tile.y * tiles_x + tile.x];
+	}
+	if (island_count < 32) mask &= (1u << uint(island_count)) - 1u;
+	while (mask != 0u) {
+		int i = findLSB(mask);
+		mask &= mask - 1u;
+		march_island(i, ro, rd, best);
 	}
 
-	// Pending-edit visualizer: the hit inside the edit sphere is tinted towards the tool's
-	// colour. It reads the OLD atlas content by design — this is the preview, and the
-	// regenerated bricks replace it next frame.
-	if (hit && edits.params.x > 0.0 && length(hp - edits.center.xyz) < edits.params.x) {
+	// One shading path for both (spec §3: "islands shade/shadow/reflect exactly like static
+	// terrain"). M6 replaces this with the deferred cel stack; the point is that there is
+	// exactly one of it.
+	vec3 color = sky_color(rd);
+	vec4 hitpos = vec4(0.0);
+	if (best.hit) {
+		vec3 alb = material_albedo(best.mat);
+		vec3 sun = normalize(vec3(0.6, 0.8, 0.3));
+		float lam = max(dot(best.n, sun), 0.0);
+		color = alb * (0.25 + 0.75 * lam);
+		hitpos = vec4(best.p, 1.0);
+	}
+
+	if (best.hit && edits.params.x > 0.0 &&
+			length(best.p - edits.center.xyz) < edits.params.x) {
 		uint t = uint(edits.params.y);
-		vec3 tint = t == 0u ? vec3(1.0, 0.55, 0.1)      // subtract: warning orange
-		          : t == 1u ? material_albedo(4u)        // add: the fill grey
-		          : material_albedo(uint(edits.params.z)); // paint: the target colour
+		vec3 tint = t == 0u ? vec3(1.0, 0.55, 0.1)
+		          : t == 1u ? material_albedo(4u)
+		          : material_albedo(uint(edits.params.z));
 		color = mix(color, tint, 0.45);
 	}
 

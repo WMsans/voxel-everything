@@ -1,6 +1,7 @@
 #include "voxel_world.h"
 #include "render/gpu_atlas.h"
 #include "render/camera_params.h"
+#include "render/island_atlas.h"
 #include "render/raymarch_pass.h"
 #include "render/composite_pass.h"
 #include "render/region_pass.h"
@@ -64,6 +65,9 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_mesh_lattice_diff", "chunk"), &VoxelWorld::debug_mesh_lattice_diff);
 	ClassDB::bind_method(D_METHOD("debug_mesh_diff", "chunk"), &VoxelWorld::debug_mesh_diff);
 	ClassDB::bind_method(D_METHOD("debug_island_extract_diff", "lo_cell", "hi_cell"), &VoxelWorld::debug_island_extract_diff);
+	ClassDB::bind_method(D_METHOD("debug_place_test_island", "slot", "lo_cell", "hi_cell", "offset"), &VoxelWorld::debug_place_test_island);
+	ClassDB::bind_method(D_METHOD("debug_place_test_island_rotated", "slot", "lo_cell", "hi_cell", "offset", "yaw"), &VoxelWorld::debug_place_test_island_rotated);
+	ClassDB::bind_method(D_METHOD("debug_clear_test_island", "slot"), &VoxelWorld::debug_clear_test_island);
 	ClassDB::bind_method(D_METHOD("debug_mesh_submit", "chunks"), &VoxelWorld::debug_mesh_submit);
 	ClassDB::bind_method(D_METHOD("debug_mesh_collect"), &VoxelWorld::debug_mesh_collect);
 	ClassDB::bind_method(D_METHOD("debug_physics_frame", "center"), &VoxelWorld::debug_physics_frame);
@@ -144,13 +148,16 @@ VoxelWorld::~VoxelWorld() {}
 
 void VoxelWorld::teardown_gpu() {
 	// Passes before the atlas: their uniform sets reference atlas RIDs, and freeing a
-	// texture cascades to referencing sets (M1's documented order).
+	// texture cascades to referencing sets (M1's documented order). Islands sit between
+	// passes and the atlas pool: RaymarchPass's uniform set references island buffers too.
 	if (composite_pass_) { delete composite_pass_; composite_pass_ = nullptr; }
 	if (raymarch_pass_) { delete raymarch_pass_; raymarch_pass_ = nullptr; }
 	if (gen_pass_) { delete gen_pass_; gen_pass_ = nullptr; }
 	if (region_pass_) { delete region_pass_; region_pass_ = nullptr; }
 	if (streamer_) { delete streamer_; streamer_ = nullptr; }
 	if (residency_) { residency_->clear(); } // slot assignments are meaningless pre-atlas
+	if (islands_) { delete islands_; islands_ = nullptr; }
+	island_slots_ = 0;
 	if (atlas_) { delete atlas_; atlas_ = nullptr; }
 	initialized_ = false;
 }
@@ -188,6 +195,8 @@ void VoxelWorld::ensure_initialized() {
 	cfg.max_brick_jobs = max_brick_jobs_;
 	cfg.bounds = world_bounds();
 	if (!atlas_->initialize(device, cfg)) { delete atlas_; atlas_ = nullptr; return; }
+	islands_ = new IslandAtlas();
+	if (!islands_->initialize(device)) { teardown_gpu(); return; }
 	region_pass_ = new RegionPass();
 	if (!region_pass_->initialize(device, *atlas_)) { teardown_gpu(); return; }
 	gen_pass_ = new BrickGenPass();
@@ -629,6 +638,104 @@ Dictionary VoxelWorld::debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_c
 	return d;
 }
 
+Dictionary VoxelWorld::debug_place_test_island_rotated(int slot, Vector3i lo_cell,
+		Vector3i hi_cell, Vector3 offset, float yaw) {
+	Dictionary d;
+	d["ok"] = false;
+	ensure_initialized();
+	ensure_physics_initialized();
+	RenderingDevice *device = rd();
+	if (!device || !islands_ || !mesh_ || !mesh_->is_valid()) return d;
+	if (slot < 0 || slot >= kMaxIslands) return d; // fail-soft, like the rest of the debug API
+
+	// Extract the component exactly as the real pipeline does (Task 9's hook shares this
+	// code path deliberately: a test island is a real island with a hand-picked cell set).
+	std::vector<ve::IVec3> cells;
+	for (int z = lo_cell.z; z <= hi_cell.z; z++)
+		for (int y = lo_cell.y; y <= hi_cell.y; y++)
+			for (int x = lo_cell.x; x <= hi_cell.x; x++) cells.push_back({x, y, z});
+	std::vector<ve::CellBox> boxes;
+	if (!ve::greedy_box_merge(cells, ve::kMaxIslandBoxes, &boxes)) return d;
+	float wlo[3] = {1e30f, 1e30f, 1e30f}, whi[3] = {-1e30f, -1e30f, -1e30f};
+	for (const ve::CellBox &b : boxes) {
+		float a[3], c[3];
+		b.world_aabb(a, c);
+		for (int k = 0; k < 3; k++) {
+			wlo[k] = std::min(wlo[k], a[k]);
+			whi[k] = std::max(whi[k], c[k]);
+		}
+	}
+	IslandExtractJob job;
+	job.id = slot;
+	job.boxes = boxes;
+	job.dim = ve::kIslandDim;
+	if (!ve::plan_island_lattice(wlo, whi, job.dim, &job.voxel, job.origin)) return d;
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		job.ops = edit_log_->ops(ve::WorldBounds::region_of_brick(
+				{lo_cell.x, lo_cell.y, lo_cell.z}));
+	}
+	std::vector<IslandExtractJob> jobs;
+	jobs.push_back(job);
+	if (!mesh_->submit_extracts(std::move(jobs))) return d;
+	std::vector<IslandExtractResult> results;
+	for (int i = 0; i < 2000 && results.empty(); i++) {
+		mesh_->collect_extracts(&results);
+		if (results.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	if (results.empty() || results[0].failed) return d;
+	if (!islands_->upload(device, slot, results[0].data)) return d;
+
+	// The body's local frame is the birth world frame shifted so the body origin is the
+	// lattice's centre -- the same convention IslandManager uses (Task 13), so the rotation
+	// happens about the piece rather than about the world origin.
+	const float span = static_cast<float>(job.dim - 1) * job.voxel;
+	IslandSlotDesc desc;
+	desc.live = true;
+	desc.dim = job.dim;
+	desc.voxel = job.voxel;
+	const float c = -0.5f * span;
+	desc.lattice_origin[0] = c;
+	desc.lattice_origin[1] = c;
+	desc.lattice_origin[2] = c;
+	const float cs = std::cos(yaw), sn = std::sin(yaw);
+	// COLUMN major: basis[0..2] is the world direction of local +x, and so on.
+	const float basis[9] = {cs, 0.0f, -sn, 0.0f, 1.0f, 0.0f, sn, 0.0f, cs};
+	std::memcpy(desc.basis, basis, sizeof(basis));
+	for (int a = 0; a < 3; a++)
+		desc.origin[a] = job.origin[a] + 0.5f * span;
+	desc.origin[0] += offset.x;
+	desc.origin[1] += offset.y;
+	desc.origin[2] += offset.z;
+	desc.recompute_world_aabb();
+
+	IslandSlotDesc all[kMaxIslands] = {};
+	all[slot] = desc;
+	islands_->upload_descriptors(device, all, kMaxIslands);
+	island_slots_ = std::max(island_slots_, slot + 1);
+	device->submit();
+	device->sync();
+
+	d["ok"] = true;
+	d["world_center"] = Vector3(desc.origin[0], desc.origin[1], desc.origin[2]);
+	d["voxel"] = job.voxel;
+	d["solid"] = results[0].data.solid_voxels;
+	return d;
+}
+
+Dictionary VoxelWorld::debug_place_test_island(int slot, Vector3i lo_cell, Vector3i hi_cell,
+		Vector3 offset) {
+	return debug_place_test_island_rotated(slot, lo_cell, hi_cell, offset, 0.0f);
+}
+
+void VoxelWorld::debug_clear_test_island(int slot) {
+	RenderingDevice *device = rd();
+	if (!device || !islands_) return;
+	islands_->clear_slot(device, slot);
+	device->submit();
+	device->sync();
+}
+
 bool VoxelWorld::debug_mesh_submit(Array chunks) {
 	ensure_physics_initialized();
 	if (!physics_ready_ || !mesh_) return false;
@@ -692,11 +799,13 @@ Color VoxelWorld::debug_raymarch_pixel(Vector3 origin, Vector3 dir) {
 	const ve::IVec3 ro = wb.origin_regions();
 	cam.dims[0] = world_size_regions_.x; cam.dims[1] = world_size_regions_.y;
 	cam.dims[2] = world_size_regions_.z;
+	cam.dims[3] = island_slot_count();
 	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
 	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
 	cam.atlas_bricks[2] = atlas_bricks_.z;
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!raymarch_pass_->render(device, *atlas_, cam, 1, 1, kNoEdit)) return Color(1, 0, 1);
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1, kNoEdit))
+		return Color(1, 0, 1);
 	device->submit();
 	device->sync();
 	const PackedByteArray data = device->texture_get_data(raymarch_pass_->color_texture(), 0);
@@ -717,11 +826,12 @@ Dictionary VoxelWorld::debug_raymarch_probe(Vector3 origin, Vector3 dir) {
 	const ve::IVec3 rorig = wb.origin_regions();
 	cam.dims[0] = world_size_regions_.x; cam.dims[1] = world_size_regions_.y;
 	cam.dims[2] = world_size_regions_.z;
+	cam.dims[3] = island_slot_count();
 	cam.region_origin[0] = rorig.x; cam.region_origin[1] = rorig.y; cam.region_origin[2] = rorig.z;
 	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
 	cam.atlas_bricks[2] = atlas_bricks_.z;
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!raymarch_pass_->render(device, *atlas_, cam, 1, 1, kNoEdit)) return d;
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1, kNoEdit)) return d;
 	device->submit();
 	device->sync();
 	const PackedByteArray hp = device->texture_get_data(raymarch_pass_->hitpos_texture(), 0);
@@ -732,6 +842,7 @@ Dictionary VoxelWorld::debug_raymarch_probe(Vector3 origin, Vector3 dir) {
 	d["color"] = Color(half_to_float(h[0]), half_to_float(h[1]), half_to_float(h[2]), 1.0);
 	if (hf[3] < 0.5f) return d; // sky miss
 	d["hit"] = true;
+	d["pos"] = Vector3(hf[0], hf[1], hf[2]);
 	const ve::IVec3 brick = ve::WorldBounds::brick_of_point(hf[0], hf[1], hf[2]);
 	d["brick"] = Vector3i(brick.x, brick.y, brick.z);
 	// Reproduce the shader's lookups on the CPU to report what the mips said there.
