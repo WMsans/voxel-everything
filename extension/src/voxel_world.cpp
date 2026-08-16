@@ -1,6 +1,8 @@
 #include "voxel_world.h"
 #include "render/gpu_atlas.h"
 #include "render/camera_params.h"
+#include "render/island_atlas.h"
+#include "render/island_cull_pass.h"
 #include "render/raymarch_pass.h"
 #include "render/composite_pass.h"
 #include "render/region_pass.h"
@@ -10,8 +12,10 @@
 #include "render/mesh_pass.h"
 #include "render/mesh_service.h"
 #include "physics/collider_streamer.h"
+#include "physics/island_manager.h"
 #include "mesh/dual_contour.h"
 #include "mesh/mesh_chunk.h"
+#include "mesh/box_merge.h"
 #include "generator/generator.h"
 #include "world/brick_eval.h"
 #include "world/brick_mip.h"
@@ -62,11 +66,48 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_teardown_physics"), &VoxelWorld::debug_teardown_physics);
 	ClassDB::bind_method(D_METHOD("debug_mesh_lattice_diff", "chunk"), &VoxelWorld::debug_mesh_lattice_diff);
 	ClassDB::bind_method(D_METHOD("debug_mesh_diff", "chunk"), &VoxelWorld::debug_mesh_diff);
+	ClassDB::bind_method(D_METHOD("debug_island_extract_diff", "lo_cell", "hi_cell"), &VoxelWorld::debug_island_extract_diff);
+	ClassDB::bind_method(D_METHOD("debug_place_test_island", "slot", "lo_cell", "hi_cell", "offset"), &VoxelWorld::debug_place_test_island);
+	ClassDB::bind_method(D_METHOD("debug_place_test_island_rotated", "slot", "lo_cell", "hi_cell", "offset", "yaw"), &VoxelWorld::debug_place_test_island_rotated);
+	ClassDB::bind_method(D_METHOD("debug_clear_test_island", "slot"), &VoxelWorld::debug_clear_test_island);
+	ClassDB::bind_method(D_METHOD("debug_island_tile_mask", "origin", "dir", "tan_x", "tan_y",
+			"width", "height"), &VoxelWorld::debug_island_tile_mask);
 	ClassDB::bind_method(D_METHOD("debug_mesh_submit", "chunks"), &VoxelWorld::debug_mesh_submit);
 	ClassDB::bind_method(D_METHOD("debug_mesh_collect"), &VoxelWorld::debug_mesh_collect);
 	ClassDB::bind_method(D_METHOD("debug_physics_frame", "center"), &VoxelWorld::debug_physics_frame);
 	ClassDB::bind_method(D_METHOD("debug_physics_stats"), &VoxelWorld::debug_physics_stats);
 	ClassDB::bind_method(D_METHOD("debug_perf_stats"), &VoxelWorld::debug_perf_stats);
+	ClassDB::bind_method(D_METHOD("debug_island_frame", "dt", "center"), &VoxelWorld::debug_island_frame);
+	ClassDB::bind_method(D_METHOD("debug_island_stats"), &VoxelWorld::debug_island_stats);
+	ClassDB::bind_method(D_METHOD("debug_island_pending_uploads"), &VoxelWorld::debug_island_pending_uploads);
+	ClassDB::bind_method(D_METHOD("debug_field_volume_upload_count"), &VoxelWorld::debug_field_volume_upload_count);
+	ClassDB::bind_method(D_METHOD("debug_island_descriptors_pending"), &VoxelWorld::debug_island_descriptors_pending);
+	ClassDB::bind_method(D_METHOD("debug_mesh_volume_slots"), &VoxelWorld::debug_mesh_volume_slots);
+	ClassDB::bind_method(D_METHOD("debug_queue_test_island_upload", "slot", "sdf", "mat", "dim"),
+			&VoxelWorld::debug_queue_test_island_upload);
+	ClassDB::bind_method(D_METHOD("debug_queue_test_island_descriptors"),
+			&VoxelWorld::debug_queue_test_island_descriptors);
+	ClassDB::bind_method(D_METHOD("debug_queue_committed_field_volume_upload", "slot", "sdf",
+			"mat", "dim"), &VoxelWorld::debug_queue_committed_field_volume_upload);
+	ClassDB::bind_method(D_METHOD("debug_set_extraction_available", "v"),
+			&VoxelWorld::debug_set_extraction_available);
+	ClassDB::bind_method(D_METHOD("debug_set_fail_extractions", "v"),
+			&VoxelWorld::debug_set_fail_extractions);
+	ClassDB::bind_method(D_METHOD("debug_set_fail_extract_submit", "v"),
+			&VoxelWorld::debug_set_fail_extract_submit);
+	ClassDB::bind_method(D_METHOD("debug_set_merge_sleep_seconds", "v"), &VoxelWorld::debug_set_merge_sleep_seconds);
+#ifdef DEBUG_ENABLED
+	// These hooks can change the production 64-body cap or mark atlas slots used; keep them
+	// out of release ClassDB so release scripts cannot call them.
+	ClassDB::bind_method(D_METHOD("debug_set_max_dynamic_bodies", "v"), &VoxelWorld::debug_set_max_dynamic_bodies);
+	ClassDB::bind_method(D_METHOD("debug_set_atlas_slot_used", "slot", "used"), &VoxelWorld::debug_set_atlas_slot_used);
+#endif
+	ClassDB::bind_method(D_METHOD("debug_set_fail_next_spawn", "fail"), &VoxelWorld::debug_set_fail_next_spawn);
+	ClassDB::bind_method(D_METHOD("debug_set_fail_next_restore", "fail"), &VoxelWorld::debug_set_fail_next_restore);
+	ClassDB::bind_method(D_METHOD("debug_set_fail_next_carve", "fail"), &VoxelWorld::debug_set_fail_next_carve);
+	ClassDB::bind_method(D_METHOD("debug_set_fail_next_resample", "fail"), &VoxelWorld::debug_set_fail_next_resample);
+	ClassDB::bind_method(D_METHOD("debug_wake_island_body", "index"), &VoxelWorld::debug_wake_island_body);
+	ClassDB::bind_method(D_METHOD("debug_offset_island_body", "index", "offset"), &VoxelWorld::debug_offset_island_body);
 	ClassDB::bind_method(D_METHOD("debug_body_of_chunk", "chunk"), &VoxelWorld::debug_body_of_chunk);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
@@ -75,6 +116,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_sdf_atlas"), &VoxelWorld::debug_sdf_atlas);
 	ClassDB::bind_method(D_METHOD("debug_local_rd"), &VoxelWorld::debug_local_rd);
 	ClassDB::bind_method(D_METHOD("debug_load_shader", "res_path"), &VoxelWorld::debug_load_shader);
+	ClassDB::bind_method(D_METHOD("debug_store_volume", "slot", "sdf", "mat", "dim"), &VoxelWorld::debug_store_volume);
 	ClassDB::bind_method(D_METHOD("debug_eval_field", "p", "ops", "op_count"), &VoxelWorld::debug_eval_field);
 	ClassDB::bind_method(D_METHOD("debug_init_atlas"), &VoxelWorld::debug_init_atlas);
 	ClassDB::bind_method(D_METHOD("debug_teardown_atlas"), &VoxelWorld::debug_teardown_atlas);
@@ -97,12 +139,19 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_frame_counters"), &VoxelWorld::debug_frame_counters);
 	ClassDB::bind_method(D_METHOD("debug_op_pool"), &VoxelWorld::debug_op_pool);
 	ClassDB::bind_method(D_METHOD("debug_op_counts"), &VoxelWorld::debug_op_counts);
+	ClassDB::bind_method(D_METHOD("debug_occupancy_state", "cell"), &VoxelWorld::debug_occupancy_state);
+	ClassDB::bind_method(D_METHOD("debug_cell_state", "cell"), &VoxelWorld::debug_cell_state);
+	ClassDB::bind_method(D_METHOD("debug_occupancy_stats", "center"), &VoxelWorld::debug_occupancy_stats);
 	ClassDB::bind_method(D_METHOD("debug_stream_frame", "cam"), &VoxelWorld::debug_stream_frame);
 	ClassDB::bind_method(D_METHOD("debug_stream_stats"), &VoxelWorld::debug_stream_stats);
 	ClassDB::bind_method(D_METHOD("debug_slot_of_region", "region"), &VoxelWorld::debug_slot_of_region);
 	ClassDB::bind_method(D_METHOD("debug_region_map_entry", "region"), &VoxelWorld::debug_region_map_entry);
 	ClassDB::bind_method(D_METHOD("debug_region_map_consistent"), &VoxelWorld::debug_region_map_consistent);
 	ClassDB::bind_method(D_METHOD("debug_raycast", "origin", "dir"), &VoxelWorld::debug_raycast);
+	ClassDB::bind_method(D_METHOD("debug_spawn_test_body", "lo_cell", "hi_cell", "offset", "impulse", "debris"), &VoxelWorld::debug_spawn_test_body);
+	ClassDB::bind_method(D_METHOD("debug_test_body_stats", "index"), &VoxelWorld::debug_test_body_stats);
+	ClassDB::bind_method(D_METHOD("debug_tick_test_bodies", "dt"), &VoxelWorld::debug_tick_test_bodies);
+	ClassDB::bind_method(D_METHOD("debug_despawn_test_body", "index"), &VoxelWorld::debug_despawn_test_body);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "use_local_device"), "set_use_local_device", "get_use_local_device");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR3I, "atlas_bricks"), "set_atlas_bricks", "get_atlas_bricks");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_region_slots"), "set_max_region_slots", "get_max_region_slots");
@@ -123,25 +172,39 @@ void VoxelWorld::_ready() {
 	set_process(true);
 }
 
-void VoxelWorld::_process(double) {
+void VoxelWorld::_process(double delta) {
+	// Unconditional: the grid must keep filling even with physics disabled, because the
+	// island manager (Task 13) and the debug hooks both read it.
+	drain_occupancy();
 	if (!physics_enabled_ || physics_center_path_.is_empty()) return;
 	Node3D *anchor = Object::cast_to<Node3D>(get_node_or_null(physics_center_path_));
 	if (!anchor) return;
 	ensure_physics_initialized();
 	physics_tick(anchor->get_global_position());
+	if (island_manager_) island_manager_->run_frame(static_cast<float>(delta),
+			anchor->get_global_position());
 }
 
 VoxelWorld::~VoxelWorld() {}
 
 void VoxelWorld::teardown_gpu() {
 	// Passes before the atlas: their uniform sets reference atlas RIDs, and freeing a
-	// texture cascades to referencing sets (M1's documented order).
+	// texture cascades to referencing sets (M1's documented order). Islands sit between
+	// passes and the atlas pool: RaymarchPass's uniform set references island buffers too.
 	if (composite_pass_) { delete composite_pass_; composite_pass_ = nullptr; }
 	if (raymarch_pass_) { delete raymarch_pass_; raymarch_pass_ = nullptr; }
 	if (gen_pass_) { delete gen_pass_; gen_pass_ = nullptr; }
 	if (region_pass_) { delete region_pass_; region_pass_ = nullptr; }
 	if (streamer_) { delete streamer_; streamer_ = nullptr; }
 	if (residency_) { residency_->clear(); } // slot assignments are meaningless pre-atlas
+	if (island_cull_) { delete island_cull_; island_cull_ = nullptr; }
+	if (islands_) { delete islands_; islands_ = nullptr; }
+	{
+		// island_slot_count() can still be on the render thread during teardown; keep the
+		// high-water mark's write under the same mutex.
+		std::lock_guard<std::mutex> lock(island_mutex_);
+		island_slots_ = 0;
+	}
 	if (atlas_) { delete atlas_; atlas_ = nullptr; }
 	initialized_ = false;
 }
@@ -179,6 +242,10 @@ void VoxelWorld::ensure_initialized() {
 	cfg.max_brick_jobs = max_brick_jobs_;
 	cfg.bounds = world_bounds();
 	if (!atlas_->initialize(device, cfg)) { delete atlas_; atlas_ = nullptr; return; }
+	islands_ = new IslandAtlas();
+	if (!islands_->initialize(device)) { teardown_gpu(); return; }
+	island_cull_ = new IslandCullPass();
+	if (!island_cull_->initialize(device)) { teardown_gpu(); return; }
 	region_pass_ = new RegionPass();
 	if (!region_pass_->initialize(device, *atlas_)) { teardown_gpu(); return; }
 	gen_pass_ = new BrickGenPass();
@@ -193,7 +260,7 @@ void VoxelWorld::ensure_initialized() {
 	}
 	streamer_ = new WorldStreamer();
 	streamer_->initialize(residency_, edit_log_, &edit_mutex_, &pending_edits_, atlas_,
-			region_pass_, gen_pass_);
+			region_pass_, gen_pass_, &occupancy_mutex_, &occupancy_inbox_, &edit_seq_);
 	raymarch_pass_ = new RaymarchPass();
 	raymarch_pass_->initialize(device);
 	composite_pass_ = new CompositePass();
@@ -203,14 +270,30 @@ void VoxelWorld::ensure_initialized() {
 
 ve::EditLog::AppendResult VoxelWorld::append_edit(const ve::EditOp &op) {
 	std::lock_guard<std::mutex> lock(edit_mutex_);
+	return append_edit_locked(op);
+}
+
+ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op) {
 	if (!edit_log_) return {};
 	ve::EditLog::AppendResult r = edit_log_->append(op);
+	// Bump AFTER the append and under the same lock the streamer uses to capture op counts.
+	// If the seq moved before the append, a readback stamped between the bump and the append
+	// would claim edits that are not in the GPU state the readback describes.
+	edit_seq_.fetch_add(1, std::memory_order_relaxed);
 	if (!r.rejected.empty()) {
 		UtilityFunctions::printerr("VoxelWorld: region op list full, op rejected (",
 				r.rejected[0].x, ", ", r.rejected[0].y, ", ", r.rejected[0].z,
 				") — spec §8 fail-soft");
 	}
 	pending_edits_.push_back({op, r});
+	// Connectivity's half of the fan-out. Runs under the append lock; the manager's
+	// pending-window queue is guarded by its own windows_mutex_ (note_edit may be called
+	// from a tool thread), and the seq bump above lets the window know which readback is
+	// "new enough" to act on. A fully rejected op changed no field state, so it must not
+	// enqueue a window: doing so would re-label the same component and retry the rejected
+	// edit forever.
+	if (island_manager_ && !r.touched.empty())
+		island_manager_->note_edit(op, edit_seq_.load(std::memory_order_relaxed));
 	// Collision's half of the fan-out (spec §5: "Fan-out: raymarch set, physics remesh queue,
 	// LoD chain, connectivity"). Queued rather than applied, because this may run on any
 	// thread that owns a tool while ChunkResidency belongs to the main one; physics_tick
@@ -232,6 +315,16 @@ ve::WorldBounds VoxelWorld::world_bounds() const {
 	return b;
 }
 
+int VoxelWorld::island_slot_count() const {
+	// The render thread calls this from RaymarchCompositor::_render_callback. The manager
+	// pointer and island_slots_ are written on the main thread, so reads must hold
+	// island_mutex_. The manager's own slot_high_water_ is atomic as well, since it is also
+	// updated outside this mutex.
+	std::lock_guard<std::mutex> lock(island_mutex_);
+	const int manager_slots = island_manager_ ? island_manager_->slot_high_water() : 0;
+	return island_slots_ > manager_slots ? island_slots_ : manager_slots;
+}
+
 void VoxelWorld::ensure_physics_initialized() {
 	if (physics_ready_) return;
 	// The CPU cores are shared with the streaming path and outlive both (voxel_world.h).
@@ -244,6 +337,14 @@ void VoxelWorld::ensure_physics_initialized() {
 		mesh_ = nullptr;
 		return;
 	}
+	// A fresh MeshService starts with an empty worker-side volume pool. The edit log and
+	// VolumeSet survive physics teardown, so replay every pinned volume into the new worker;
+	// the preserved island_uploads_ only covers the render device's pool.
+	for (int slot = 0; slot < ve::kMaxVolumes; slot++) {
+		if (!volumes_.pinned(slot)) continue;
+		const ve::VolumeData *d = volumes_.get(slot);
+		if (d) mesh_->submit_volume(slot, *d);
+	}
 	ve::ChunkResidencyConfig ccfg;
 	ccfg.bounds = world_bounds();
 	ccfg.radius_m = physics_radius_m_;
@@ -253,11 +354,56 @@ void VoxelWorld::ensure_physics_initialized() {
 	colliders_ = new ColliderStreamer();
 	colliders_->initialize(chunks_, edit_log_, &edit_mutex_, mesh_, max_collider_chunks_);
 	colliders_->set_shape_builds_per_frame(shape_builds_per_frame_);
+	// Publish the manager under edit_mutex_: append_edit_locked() can be called from a tool
+	// thread and reads island_manager_ while holding that lock, so creation must not expose a
+	// half-initialized pointer to it. Also take island_mutex_ (edit_mutex_ -> island_mutex_
+	// order, matching teardown) so the render thread's island_slot_count() sees a stable
+	// pointer.
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		std::lock_guard<std::mutex> island_lock(island_mutex_);
+		island_manager_ = new IslandManager();
+		island_manager_->initialize(this);
+	}
 	physics_ready_ = true;
 }
 
 void VoxelWorld::teardown_physics() {
 	physics_ready_ = false;
+	for (IslandBody *b : test_bodies_) delete b;
+	test_bodies_.clear();
+	// The manager owns the real island bodies; tear it down before the mesher's worker and
+	// the colliders so its volume-slot bookkeeping still has a live VolumeSet to ask. Hold
+	// edit_mutex_ while deleting/null it: a tool thread may already be inside
+	// append_edit_locked() reading island_manager_ to call note_edit(). Also take
+	// island_mutex_ so the render thread's island_slot_count() cannot dereference a manager
+	// that is being destroyed (lock order: edit_mutex_ -> island_mutex_).
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		std::lock_guard<std::mutex> island_lock(island_mutex_);
+		if (island_manager_) {
+			island_manager_->teardown();
+			delete island_manager_;
+			island_manager_ = nullptr;
+		}
+	}
+	physics_bubble_centers_.clear();
+	// Drop any uploads/descriptors the previous manager queued before the GPU pools are torn
+	// down. If physics is re-initialized, stale queue entries must not be drained into the
+	// new pools. The one exception is a field-volume upload for a slot the edit log already
+	// references: those bytes are part of the surviving CPU volume set and MUST be mirrored
+	// into any new GPU pool before an op that names the slot is evaluated.
+	{
+		std::lock_guard<std::mutex> lock(island_mutex_);
+		std::vector<IslandUpload> keep;
+		keep.reserve(island_uploads_.size());
+		for (IslandUpload &u : island_uploads_)
+			if (!u.to_island_atlas && volumes_.pinned(u.slot))
+				keep.push_back(std::move(u));
+		island_uploads_.swap(keep);
+		island_descs_.clear();
+		island_descs_dirty_ = false;
+	}
 	// Colliders first: they hold the mesher's results and the residency's slots. Deleting the
 	// service joins its thread, which frees the device and the pass on the thread that made
 	// them; nothing else may outlive that.
@@ -284,7 +430,8 @@ int VoxelWorld::physics_tick(Vector3 center) {
 	for (const auto &r : dirty) chunks_->mark_dirty(r.first, r.second);
 	const Ref<World3D> w = get_world_3d();
 	if (w.is_valid()) colliders_->set_space(w->get_space());
-	const int actions = colliders_->run_frame(center.x, center.y, center.z);
+	const int actions = colliders_->run_frame(center.x, center.y, center.z,
+			physics_bubble_centers_.data(), static_cast<int>(physics_bubble_centers_.size() / 3));
 	last_physics_tick_ms_ =
 			std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
 	return actions;
@@ -303,6 +450,7 @@ Dictionary VoxelWorld::debug_perf_stats() {
 	d["phys_submit_ms"] = colliders_ ? colliders_->last_submit_ms() : 0.0f;
 	d["stream_total_ms"] = streamer_ ? streamer_->last_total_ms() : 0.0f;
 	d["stream_readback_ms"] = streamer_ ? streamer_->last_readback_ms() : 0.0f;
+	d["island_ms"] = island_manager_ ? island_manager_->last_ms() : 0.0f;
 	return d;
 }
 
@@ -323,6 +471,279 @@ Dictionary VoxelWorld::debug_physics_stats() {
 	d["build_ms"] = colliders_ ? colliders_->last_build_ms() : 0.0f;
 	d["collect_ms"] = colliders_ ? colliders_->last_collect_ms() : 0.0f;
 	return d;
+}
+
+void VoxelWorld::queue_island_upload(int slot, const ve::VolumeData &d) {
+	std::lock_guard<std::mutex> lock(island_mutex_);
+	island_uploads_.push_back(IslandUpload{slot, true, d});
+}
+
+void VoxelWorld::queue_field_volume_upload(int slot, const ve::VolumeData &d) {
+	{
+		std::lock_guard<std::mutex> lock(island_mutex_);
+		island_uploads_.push_back(IslandUpload{slot, false, d});
+	}
+	// The worker's volume pool must see the paste before its next field job, otherwise the
+	// mesher's collision against the new rubble lags a frame (or more) behind the main copy.
+	if (mesh_) mesh_->submit_volume(slot, d);
+}
+
+void VoxelWorld::discard_field_volume_upload(int slot) {
+	{
+		std::lock_guard<std::mutex> lock(island_mutex_);
+		island_uploads_.erase(
+				std::remove_if(island_uploads_.begin(), island_uploads_.end(),
+						[slot](const IslandUpload &u) {
+							return !u.to_island_atlas && u.slot == slot;
+						}),
+				island_uploads_.end());
+	}
+	if (mesh_) mesh_->discard_pending_volume_upload(slot);
+}
+
+void VoxelWorld::publish_island_descriptors(const std::vector<IslandSlotDesc> &d) {
+	std::lock_guard<std::mutex> lock(island_mutex_);
+	island_descs_ = d;
+	island_descs_dirty_ = true;
+}
+
+void VoxelWorld::set_physics_bubbles(const std::vector<IslandBody *> &bodies) {
+	std::vector<float> centers;
+	centers.reserve(bodies.size() * 3);
+	for (IslandBody *b : bodies) {
+		if (!b || !b->live()) continue;
+		const Vector3 o = b->transform().origin;
+		centers.push_back(o.x);
+		centers.push_back(o.y);
+		centers.push_back(o.z);
+	}
+	physics_bubble_centers_.swap(centers);
+}
+
+ve::RayHit VoxelWorld::analytic_raycast_down(const float xz[2]) {
+	ve::RayHit h;
+	if (!edit_log_) return h;
+	std::lock_guard<std::mutex> lock(edit_mutex_);
+	ve::AnalyticGenerator gen;
+	const float o[3] = {xz[0], 200.0f, xz[1]};
+	const float dir[3] = {0.0f, -1.0f, 0.0f};
+	return ve::raycast(gen, *edit_log_, o, dir, 400.0f, &volumes_);
+}
+
+int VoxelWorld::drain_island_uploads(RenderingDevice *device) {
+	if (!device) return 0;
+	std::vector<IslandUpload> uploads;
+	std::vector<IslandSlotDesc> descs;
+	bool dirty = false;
+	{
+		std::lock_guard<std::mutex> lock(island_mutex_);
+		uploads.swap(island_uploads_);
+		descs = island_descs_;
+		dirty = island_descs_dirty_;
+		island_descs_dirty_ = false;
+	}
+	for (const IslandUpload &u : uploads) {
+		if (u.to_island_atlas) {
+			if (islands_ && !islands_->upload(device, u.slot, u.data))
+				UtilityFunctions::printerr("VoxelWorld: island atlas upload failed for slot ",
+						u.slot);
+		} else {
+			if (atlas_ && !atlas_->volumes().upload(device, u.slot, u.data))
+				UtilityFunctions::printerr("VoxelWorld: field volume upload failed for slot ",
+						u.slot);
+			// Count attempts, not successes: a stale rejected-paste upload that reaches the
+			// GPU is the bug this hook exists to detect, even if the upload call itself failed.
+			debug_field_volume_upload_count_.fetch_add(1, std::memory_order_relaxed);
+		}
+	}
+	if (dirty && islands_)
+		islands_->upload_descriptors(device, descs.data(), static_cast<int>(descs.size()));
+	return static_cast<int>(uploads.size());
+}
+
+int VoxelWorld::debug_island_pending_uploads() {
+	std::lock_guard<std::mutex> lock(island_mutex_);
+	return static_cast<int>(island_uploads_.size());
+}
+
+int VoxelWorld::debug_field_volume_upload_count() const {
+	return debug_field_volume_upload_count_.load(std::memory_order_relaxed);
+}
+
+int VoxelWorld::debug_island_descriptors_pending() {
+	std::lock_guard<std::mutex> lock(island_mutex_);
+	return island_descs_dirty_ ? 1 : 0;
+}
+
+PackedInt32Array VoxelWorld::debug_mesh_volume_slots() {
+	PackedInt32Array out;
+	if (!mesh_) return out;
+	for (int slot : mesh_->debug_submitted_volume_slots()) out.append(slot);
+	return out;
+}
+
+void VoxelWorld::debug_queue_test_island_upload(int slot, const PackedByteArray &sdf,
+		const PackedByteArray &mat, int dim) {
+	if (slot < 0 || slot >= kMaxIslands || dim != ve::kIslandDim) {
+		UtilityFunctions::printerr(
+				"debug_queue_test_island_upload: invalid slot or dim (island atlas upload "
+				"requires dim == ",
+				ve::kIslandDim);
+		return;
+	}
+	const int64_t n = static_cast<int64_t>(dim) * dim * dim;
+	if (sdf.size() < n || mat.size() < n) {
+		UtilityFunctions::printerr("debug_queue_test_island_upload: short buffers for dim ", dim);
+		return;
+	}
+	ve::VolumeData d;
+	d.dim = dim;
+	d.sdf.assign(sdf.ptr(), sdf.ptr() + n);
+	d.mat.assign(mat.ptr(), mat.ptr() + n);
+	for (int64_t i = 0; i < n; i++)
+		if (ve::decode_sdf(d.sdf[static_cast<size_t>(i)]) <= 0.0f) d.solid_voxels++;
+	queue_island_upload(slot, d);
+}
+
+void VoxelWorld::debug_queue_test_island_descriptors() {
+	std::lock_guard<std::mutex> lock(island_mutex_);
+	island_descs_.assign(1, IslandSlotDesc{});
+	island_descs_dirty_ = true;
+}
+
+void VoxelWorld::debug_queue_committed_field_volume_upload(int slot,
+		const PackedByteArray &sdf, const PackedByteArray &mat, int dim) {
+	if (slot < 0 || slot >= ve::kMaxVolumes || dim < 2 || dim > ve::kIslandDim) {
+		UtilityFunctions::printerr(
+				"debug_queue_committed_field_volume_upload: invalid slot or dim");
+		return;
+	}
+	const int64_t n = static_cast<int64_t>(dim) * dim * dim;
+	if (sdf.size() < n || mat.size() < n) {
+		UtilityFunctions::printerr(
+				"debug_queue_committed_field_volume_upload: short buffers for dim ", dim);
+		return;
+	}
+	if (!volumes_.reserve(slot)) {
+		UtilityFunctions::printerr(
+				"debug_queue_committed_field_volume_upload: slot ", slot, " is already in use");
+		return;
+	}
+	ve::VolumeData d;
+	d.dim = dim;
+	d.sdf.assign(sdf.ptr(), sdf.ptr() + n);
+	d.mat.assign(mat.ptr(), mat.ptr() + n);
+	for (int64_t i = 0; i < n; i++)
+		if (ve::decode_sdf(d.sdf[static_cast<size_t>(i)]) <= 0.0f) d.solid_voxels++;
+	if (!volumes_.store(slot, d) || !volumes_.pin(slot)) {
+		volumes_.release(slot);
+		UtilityFunctions::printerr(
+				"debug_queue_committed_field_volume_upload: store/pin failed for slot ", slot);
+		return;
+	}
+	// Only model the main-thread GPU handoff queue. The worker-side mirror is exercised by
+	// ensure_physics_initialized()'s pinned-volume replay after teardown/reinit.
+	{
+		std::lock_guard<std::mutex> lock(island_mutex_);
+		island_uploads_.push_back(IslandUpload{slot, false, d});
+	}
+}
+
+void VoxelWorld::debug_set_extraction_available(bool v) {
+	ensure_physics_initialized();
+	if (mesh_) mesh_->debug_set_extraction_available(v);
+}
+
+void VoxelWorld::debug_set_fail_extractions(bool v) {
+	ensure_physics_initialized();
+	if (mesh_) mesh_->debug_set_fail_extractions(v);
+}
+
+void VoxelWorld::debug_set_fail_extract_submit(bool v) {
+	ensure_physics_initialized();
+	if (mesh_) mesh_->debug_set_fail_extract_submit(v);
+}
+
+int VoxelWorld::debug_island_frame(float dt, Vector3 center) {
+	ensure_initialized();
+	ensure_physics_initialized();
+	if (!island_manager_) return 0;
+	drain_occupancy();
+	const int n = island_manager_->run_frame(dt, center);
+	// The tests drive the world by hand and never enter the compositor, so the render-thread
+	// half of the handoff has to happen here too.
+	RenderingDevice *device = rd();
+	if (device) {
+		drain_island_uploads(device);
+		device->submit();
+		device->sync();
+	}
+	return n;
+}
+
+Dictionary VoxelWorld::debug_island_stats() {
+	return island_manager_ ? island_manager_->stats() : Dictionary();
+}
+
+void VoxelWorld::debug_set_merge_sleep_seconds(float v) {
+	ensure_physics_initialized();
+	if (island_manager_) island_manager_->set_merge_sleep_seconds(v);
+}
+
+#ifdef DEBUG_ENABLED
+void VoxelWorld::debug_set_max_dynamic_bodies(int v) {
+	ensure_physics_initialized();
+	// Clamp before forwarding: a test hook should be able to lower the guardrail but not
+	// silently disable it with an absurd value.
+	v = v < 1 ? 1 : (v > kMaxDynamicBodies ? kMaxDynamicBodies : v);
+	if (island_manager_) island_manager_->debug_set_max_dynamic_bodies(v);
+}
+
+void VoxelWorld::debug_set_atlas_slot_used(int slot, bool used) {
+	ensure_physics_initialized();
+	if (island_manager_) island_manager_->debug_set_atlas_slot_used(slot, used);
+}
+#else
+void VoxelWorld::debug_set_max_dynamic_bodies(int v) {
+	// Debug-only hook: release scripts cannot lower the 64-body guardrail.
+	(void)v;
+}
+
+void VoxelWorld::debug_set_atlas_slot_used(int slot, bool used) {
+	// Debug-only hook: release scripts cannot mark atlas slots used.
+	(void)slot;
+	(void)used;
+}
+#endif
+
+void VoxelWorld::debug_set_fail_next_spawn(bool fail) {
+	ensure_physics_initialized();
+	if (island_manager_) island_manager_->debug_set_fail_next_spawn(fail);
+}
+
+void VoxelWorld::debug_set_fail_next_restore(bool fail) {
+	ensure_physics_initialized();
+	if (island_manager_) island_manager_->debug_set_fail_next_restore(fail);
+}
+
+void VoxelWorld::debug_set_fail_next_carve(bool fail) {
+	ensure_physics_initialized();
+	if (island_manager_) island_manager_->debug_set_fail_next_carve(fail);
+}
+
+void VoxelWorld::debug_set_fail_next_resample(bool fail) {
+	ensure_physics_initialized();
+	if (island_manager_) island_manager_->debug_set_fail_next_resample(fail);
+}
+
+void VoxelWorld::debug_wake_island_body(int index) {
+	ensure_physics_initialized();
+	if (island_manager_) island_manager_->debug_wake_body(index);
+}
+
+void VoxelWorld::debug_offset_island_body(int index, Vector3 offset) {
+	ensure_physics_initialized();
+	if (island_manager_) island_manager_->debug_offset_body(index, offset);
 }
 
 RID VoxelWorld::debug_body_of_chunk(Vector3i chunk) {
@@ -366,7 +787,7 @@ Dictionary VoxelWorld::debug_mesh_lattice_diff(Vector3i chunk) {
 						g.origin[1] + (y - 1) * g.cell_size,
 						g.origin[2] + (z - 1) * g.cell_size};
 				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-						p[0], p[1], p[2]).sdf;
+						p[0], p[1], p[2], &volumes_).sdf;
 				if (s <= 0.0f) neg = true; else pos = true;
 				const int want = ve::encode_sdf(s);
 				const int got = gpu[ve::dc_lattice_index(g, x, y, z)];
@@ -413,7 +834,7 @@ Dictionary VoxelWorld::debug_mesh_diff(Vector3i chunk) {
 			for (int x = 0; x < g.lattice; x++) {
 				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
 						g.origin[0] + (x - 1) * g.cell_size, g.origin[1] + (y - 1) * g.cell_size,
-						g.origin[2] + (z - 1) * g.cell_size).sdf;
+						g.origin[2] + (z - 1) * g.cell_size, &volumes_).sdf;
 				const int diff = std::abs(static_cast<int>(lattice[ve::dc_lattice_index(g, x, y, z)]) -
 						static_cast<int>(ve::encode_sdf(s)));
 				lat_max = std::max(lat_max, diff);
@@ -502,7 +923,8 @@ Dictionary VoxelWorld::debug_mesh_diff(Vector3i chunk) {
 	const int stride = std::max(1, tri_count / 512); // a spread sample, not the first 512
 	for (int v = 0; v < gpu_verts; v++) {
 		const float s = std::fabs(ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-				gpu.positions[v * 3], gpu.positions[v * 3 + 1], gpu.positions[v * 3 + 2]).sdf);
+				gpu.positions[v * 3], gpu.positions[v * 3 + 1], gpu.positions[v * 3 + 2],
+				&volumes_).sdf);
 		max_sdf = std::max(max_sdf, s);
 		if (s > 0.1f) off_10cm++;
 	}
@@ -522,9 +944,9 @@ Dictionary VoxelWorld::debug_mesh_diff(Vector3i chunk) {
 		// step clean through a thin feature and read solid on both sides.
 		const Vector3 step = n.normalized() * 0.02f;
 		const float out_side = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-				mid.x + step.x, mid.y + step.y, mid.z + step.z).sdf;
+				mid.x + step.x, mid.y + step.y, mid.z + step.z, &volumes_).sdf;
 		const float in_side = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-				mid.x - step.x, mid.y - step.y, mid.z - step.z).sdf;
+				mid.x - step.x, mid.y - step.y, mid.z - step.z, &volumes_).sdf;
 		tri_sampled++;
 		if (out_side <= in_side) winding_bad++;
 	}
@@ -533,6 +955,353 @@ Dictionary VoxelWorld::debug_mesh_diff(Vector3i chunk) {
 	d["winding_bad"] = winding_bad;
 	d["tri_sampled"] = tri_sampled;
 	return d;
+}
+
+bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandExtractJob *job,
+		std::vector<ve::CellBox> *boxes, ve::VolumeData *out) {
+	if (!job || !boxes || !out || !mesh_ || !mesh_->is_valid() || cells.empty()) return false;
+	if (!ve::greedy_box_merge(cells, ve::kMaxIslandBoxes, boxes)) return false;
+
+	float wlo[3] = {1e30f, 1e30f, 1e30f}, whi[3] = {-1e30f, -1e30f, -1e30f};
+	for (const ve::CellBox &b : *boxes) {
+		float a[3], c[3];
+		b.world_aabb(a, c);
+		for (int k = 0; k < 3; k++) {
+			wlo[k] = std::min(wlo[k], a[k]);
+			whi[k] = std::max(whi[k], c[k]);
+		}
+	}
+	job->boxes = *boxes;
+	if (!ve::plan_island_lattice(wlo, whi, ve::kIslandDim, &job->voxel, job->origin)) return false;
+	job->dim = ve::kIslandDim;
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		if (!edit_log_) return false;
+		ve::collect_ops_for_aabb(*edit_log_, wlo, whi, &job->ops);
+	}
+
+	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
+	std::vector<IslandExtractJob> jobs;
+	jobs.push_back(*job);
+	if (!mesh_->submit_extracts(std::move(jobs))) return false;
+	std::vector<IslandExtractResult> results;
+	for (int i = 0; i < 2000 && results.empty(); i++) {
+		mesh_->collect_extracts(&results);
+		if (results.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	if (results.empty() || results[0].failed) return false;
+
+	std::vector<float> aabbs(boxes->size() * 6);
+	for (size_t i = 0; i < boxes->size(); i++)
+		(*boxes)[i].world_aabb(&aabbs[i * 6], &aabbs[i * 6 + 3]);
+	ve::VolumeData cpu;
+	ve::AnalyticGenerator gen;
+	ve::extract_island_volume(gen, job->ops.data(), static_cast<int>(job->ops.size()),
+			&volumes_, job->origin, job->voxel, job->dim, aabbs.data(),
+			static_cast<int>(boxes->size()), &cpu);
+	*out = std::move(cpu);
+	return true;
+}
+
+Dictionary VoxelWorld::debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_cell) {
+	Dictionary d;
+	d["ok"] = false;
+	ensure_physics_initialized();
+	if (!mesh_ || !mesh_->is_valid()) return d;
+
+	const ve::IVec3 lo{lo_cell.x, lo_cell.y, lo_cell.z};
+	const ve::IVec3 hi{hi_cell.x, hi_cell.y, hi_cell.z};
+	std::vector<ve::IVec3> cells;
+	for (int z = lo.z; z <= hi.z; z++)
+		for (int y = lo.y; y <= hi.y; y++)
+			for (int x = lo.x; x <= hi.x; x++) cells.push_back({x, y, z});
+	std::vector<ve::CellBox> boxes;
+	if (!ve::greedy_box_merge(cells, ve::kMaxIslandBoxes, &boxes)) return d;
+
+	float wlo[3] = {1e30f, 1e30f, 1e30f}, whi[3] = {-1e30f, -1e30f, -1e30f};
+	for (const ve::CellBox &b : boxes) {
+		float a[3], c[3];
+		b.world_aabb(a, c);
+		for (int k = 0; k < 3; k++) {
+			wlo[k] = std::min(wlo[k], a[k]);
+			whi[k] = std::max(whi[k], c[k]);
+		}
+	}
+	IslandExtractJob job;
+	job.id = 0;
+	job.boxes = boxes;
+	if (!ve::plan_island_lattice(wlo, whi, ve::kIslandDim, &job.voxel, job.origin)) return d;
+	job.dim = ve::kIslandDim;
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		ve::collect_ops_for_aabb(*edit_log_, wlo, whi, &job.ops);
+	}
+
+	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
+	std::vector<IslandExtractJob> jobs;
+	jobs.push_back(job);
+	if (!mesh_->submit_extracts(std::move(jobs))) return d;
+	std::vector<IslandExtractResult> results;
+	for (int i = 0; i < 2000 && results.empty(); i++) {
+		mesh_->collect_extracts(&results);
+		if (results.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	if (results.empty() || results[0].failed) return d;
+
+	std::vector<float> aabbs(boxes.size() * 6);
+	for (size_t i = 0; i < boxes.size(); i++)
+		boxes[i].world_aabb(&aabbs[i * 6], &aabbs[i * 6 + 3]);
+	ve::VolumeData cpu;
+	ve::AnalyticGenerator gen;
+	ve::extract_island_volume(gen, job.ops.data(), static_cast<int>(job.ops.size()),
+			&volumes_, job.origin, job.voxel, job.dim, aabbs.data(),
+			static_cast<int>(boxes.size()), &cpu);
+
+	int worst = 0, mat_mismatch = 0, mat_compared = 0;
+	const ve::VolumeData &gpu = results[0].data;
+	for (size_t i = 0; i < cpu.sdf.size(); i++) {
+		const int diff = std::abs(static_cast<int>(gpu.sdf[i]) - static_cast<int>(cpu.sdf[i]));
+		worst = std::max(worst, diff);
+		// Materials only where the sample is clear of the surface band, for the same reason
+		// test_brick_diff.gd compares them only near-but-not-on it: a one-step sdf drift
+		// flips the classification and says nothing about the material logic.
+		if (std::abs(static_cast<int>(cpu.sdf[i]) - 128) > 4) {
+			mat_compared++;
+			if (gpu.mat[i] != cpu.mat[i]) mat_mismatch++;
+		}
+	}
+	d["ok"] = true;
+	d["worst_steps"] = worst;
+	d["mat_mismatch"] = mat_mismatch;
+	d["mat_compared"] = mat_compared;
+	d["gpu_solid"] = gpu.solid_voxels;
+	d["cpu_solid"] = cpu.solid_voxels;
+	d["voxel"] = job.voxel;
+	d["boxes"] = static_cast<int>(boxes.size());
+	return d;
+}
+
+Dictionary VoxelWorld::debug_place_test_island_rotated(int slot, Vector3i lo_cell,
+		Vector3i hi_cell, Vector3 offset, float yaw) {
+	Dictionary d;
+	d["ok"] = false;
+	ensure_initialized();
+	ensure_physics_initialized();
+	RenderingDevice *device = rd();
+	if (!device || !islands_ || !mesh_ || !mesh_->is_valid()) return d;
+	if (slot < 0 || slot >= kMaxIslands) return d; // fail-soft, like the rest of the debug API
+
+	// Extract the component exactly as the real pipeline does (Task 9's hook shares this
+	// code path deliberately: a test island is a real island with a hand-picked cell set).
+	std::vector<ve::IVec3> cells;
+	for (int z = lo_cell.z; z <= hi_cell.z; z++)
+		for (int y = lo_cell.y; y <= hi_cell.y; y++)
+			for (int x = lo_cell.x; x <= hi_cell.x; x++) cells.push_back({x, y, z});
+	IslandExtractJob job;
+	job.id = slot;
+	std::vector<ve::CellBox> boxes;
+	ve::VolumeData volume;
+	if (!extract_component(cells, &job, &boxes, &volume)) return d;
+
+	// Task 11's multi-island tests place a second island and expect the first to stay live.
+	// The atlas's upload_descriptors replaces the whole array, so preserve the existing
+	// descriptors by reading the GPU array back before overwriting the one slot. (The bytes
+	// are the same 128-byte layout upload_descriptors writes; a dead slot has dim 0.)
+	const int64_t desc_bytes = static_cast<int64_t>(kMaxIslands) * 128;
+	const PackedByteArray existing =
+			device->buffer_get_data(islands_->desc_buffer(), 0, static_cast<uint32_t>(desc_bytes));
+	IslandSlotDesc all[kMaxIslands] = {};
+	if (existing.size() == desc_bytes) {
+		const uint8_t *src = existing.ptr();
+		for (int s = 0; s < kMaxIslands; s++) {
+			const float *f = reinterpret_cast<const float *>(src + static_cast<int64_t>(s) * 128);
+			const int32_t *i = reinterpret_cast<const int32_t *>(src + static_cast<int64_t>(s) * 128);
+			if (i[16] < 2) continue; // dead slot
+			IslandSlotDesc &d = all[s];
+			d.live = true;
+			d.dim = i[16];
+			d.voxel = f[15];
+			for (int a = 0; a < 3; a++) {
+				d.basis[a * 3 + 0] = f[a * 4 + 0];
+				d.basis[a * 3 + 1] = f[a * 4 + 1];
+				d.basis[a * 3 + 2] = f[a * 4 + 2];
+				d.origin[a] = f[a * 4 + 3];
+				d.lattice_origin[a] = f[12 + a];
+				d.aabb_lo[a] = f[20 + a];
+				d.aabb_hi[a] = f[24 + a];
+			}
+		}
+	}
+
+	if (!islands_->upload(device, slot, volume)) return d;
+
+	// The body's local frame is the birth world frame shifted so the body origin is the
+	// lattice's centre -- the same convention IslandManager uses (Task 13), so the rotation
+	// happens about the piece rather than about the world origin.
+	const float span = static_cast<float>(job.dim - 1) * job.voxel;
+	IslandSlotDesc desc;
+	desc.live = true;
+	desc.dim = job.dim;
+	desc.voxel = job.voxel;
+	const float c = -0.5f * span;
+	desc.lattice_origin[0] = c;
+	desc.lattice_origin[1] = c;
+	desc.lattice_origin[2] = c;
+	const float cs = std::cos(yaw), sn = std::sin(yaw);
+	// COLUMN major: basis[0..2] is the world direction of local +x, and so on.
+	const float basis[9] = {cs, 0.0f, -sn, 0.0f, 1.0f, 0.0f, sn, 0.0f, cs};
+	std::memcpy(desc.basis, basis, sizeof(basis));
+	for (int a = 0; a < 3; a++)
+		desc.origin[a] = job.origin[a] + 0.5f * span;
+	desc.origin[0] += offset.x;
+	desc.origin[1] += offset.y;
+	desc.origin[2] += offset.z;
+	desc.recompute_world_aabb();
+
+	all[slot] = desc;
+	islands_->upload_descriptors(device, all, kMaxIslands);
+	{
+		std::lock_guard<std::mutex> lock(island_mutex_);
+		island_slots_ = std::max(island_slots_, slot + 1);
+	}
+	device->submit();
+	device->sync();
+
+	d["ok"] = true;
+	d["world_center"] = Vector3(desc.origin[0], desc.origin[1], desc.origin[2]);
+	d["voxel"] = job.voxel;
+	d["solid"] = volume.solid_voxels;
+	return d;
+}
+
+Dictionary VoxelWorld::debug_place_test_island(int slot, Vector3i lo_cell, Vector3i hi_cell,
+		Vector3 offset) {
+	return debug_place_test_island_rotated(slot, lo_cell, hi_cell, offset, 0.0f);
+}
+
+Dictionary VoxelWorld::debug_spawn_test_body(Vector3i lo_cell, Vector3i hi_cell, Vector3 offset,
+		Vector3 impulse, bool debris) {
+	Dictionary d;
+	d["ok"] = false;
+	ensure_initialized();
+	ensure_physics_initialized();
+	std::vector<ve::IVec3> cells;
+	for (int z = lo_cell.z; z <= hi_cell.z; z++)
+		for (int y = lo_cell.y; y <= hi_cell.y; y++)
+			for (int x = lo_cell.x; x <= hi_cell.x; x++) cells.push_back({x, y, z});
+	IslandExtractJob job;
+	std::vector<ve::CellBox> boxes;
+	ve::VolumeData volume;
+	if (!extract_component(cells, &job, &boxes, &volume)) return d;
+
+	const int slot = volumes_.allocate();
+	if (slot < 0) return d;
+	if (!volumes_.store(slot, volume)) {
+		volumes_.release(slot);
+		return d;
+	}
+
+	IslandSpawn info;
+	info.volume_slot = slot;
+	info.boxes = boxes;
+	info.voxel = job.voxel;
+	info.dim = job.dim;
+	info.solid_voxels = volume.solid_voxels;
+	info.debris = debris;
+	// The offset moves the WHOLE piece: its boxes and its lattice alike, so the collision
+	// and the volume stay registered with each other.
+	for (int a = 0; a < 3; a++) info.lattice_origin[a] = job.origin[a];
+	const ve::IVec3 shift{static_cast<int>(std::lround(offset.x / ve::kOccupancyCellSize)),
+			static_cast<int>(std::lround(offset.y / ve::kOccupancyCellSize)),
+			static_cast<int>(std::lround(offset.z / ve::kOccupancyCellSize))};
+	for (ve::CellBox &b : info.boxes) {
+		b.lo = {b.lo.x + shift.x, b.lo.y + shift.y, b.lo.z + shift.z};
+		b.hi = {b.hi.x + shift.x, b.hi.y + shift.y, b.hi.z + shift.z};
+	}
+	info.lattice_origin[0] += shift.x * ve::kOccupancyCellSize;
+	info.lattice_origin[1] += shift.y * ve::kOccupancyCellSize;
+	info.lattice_origin[2] += shift.z * ve::kOccupancyCellSize;
+	info.impulse[0] = impulse.x;
+	info.impulse[1] = impulse.y;
+	info.impulse[2] = impulse.z;
+
+	IslandBody *b = new IslandBody();
+	const Ref<World3D> w3 = get_world_3d();
+	if (!b->spawn(w3.is_valid() ? w3->get_space() : RID(),
+				w3.is_valid() ? w3->get_scenario() : RID(), info, &volume)) {
+		delete b;
+		volumes_.release(slot);
+		return d;
+	}
+	test_bodies_.push_back(b);
+	d["ok"] = true;
+	d["index"] = static_cast<int>(test_bodies_.size()) - 1;
+	d["mass"] = b->mass();
+	d["shapes"] = b->shape_count();
+	d["origin"] = b->transform().origin;
+	d["has_render_mesh"] = b->has_render_mesh();
+	d["render_tris"] = b->render_triangles();
+	return d;
+}
+
+Dictionary VoxelWorld::debug_test_body_stats(int index) {
+	Dictionary d;
+	d["live"] = false;
+	if (index < 0 || index >= static_cast<int>(test_bodies_.size()) || !test_bodies_[index])
+		return d;
+	IslandBody *b = test_bodies_[index];
+	d["live"] = b->live();
+	d["origin"] = b->transform().origin;
+	d["asleep_s"] = b->asleep_seconds();
+	d["mass"] = b->mass();
+	return d;
+}
+
+void VoxelWorld::debug_tick_test_bodies(float dt) {
+	for (IslandBody *b : test_bodies_)
+		if (b) {
+			b->tick(dt);
+			b->sync_render();
+		}
+}
+
+void VoxelWorld::debug_despawn_test_body(int index) {
+	if (index < 0 || index >= static_cast<int>(test_bodies_.size()) || !test_bodies_[index])
+		return;
+	test_bodies_[index]->despawn();
+}
+
+void VoxelWorld::debug_clear_test_island(int slot) {
+	RenderingDevice *device = rd();
+	if (!device || !islands_) return;
+	islands_->clear_slot(device, slot);
+	device->submit();
+	device->sync();
+}
+
+PackedInt32Array VoxelWorld::debug_island_tile_mask(Vector3 origin, Vector3 dir, float tan_x,
+		float tan_y, int width, int height) {
+	PackedInt32Array out;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!device || !islands_ || !island_cull_) return out;
+	ve::CameraParams cam = ve::CameraParams::looking_at(origin.x, origin.y, origin.z,
+			dir.x, dir.y, dir.z, 0, 1, 0);
+	// looking_at leaves the tangents at 0 (the 1x1 probes need no frustum); a cull test does.
+	cam.params[0] = tan_x;
+	cam.params[1] = tan_y;
+	if (!island_cull_->render(device, *islands_, cam, width, height,
+				std::max(island_slot_count(), 1)))
+		return out;
+	device->submit();
+	device->sync();
+	const int n = island_cull_->tiles_x() * island_cull_->tiles_y();
+	const PackedByteArray b = device->buffer_get_data(island_cull_->mask_buffer(), 0,
+			static_cast<uint32_t>(n) * 4);
+	if (b.size() < static_cast<int64_t>(n) * 4) return out;
+	out.resize(n);
+	std::memcpy(out.ptrw(), b.ptr(), static_cast<size_t>(n) * 4);
+	return out;
 }
 
 bool VoxelWorld::debug_mesh_submit(Array chunks) {
@@ -598,11 +1367,13 @@ Color VoxelWorld::debug_raymarch_pixel(Vector3 origin, Vector3 dir) {
 	const ve::IVec3 ro = wb.origin_regions();
 	cam.dims[0] = world_size_regions_.x; cam.dims[1] = world_size_regions_.y;
 	cam.dims[2] = world_size_regions_.z;
+	cam.dims[3] = island_slot_count();
 	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
 	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
 	cam.atlas_bricks[2] = atlas_bricks_.z;
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!raymarch_pass_->render(device, *atlas_, cam, 1, 1, kNoEdit)) return Color(1, 0, 1);
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1, kNoEdit))
+		return Color(1, 0, 1);
 	device->submit();
 	device->sync();
 	const PackedByteArray data = device->texture_get_data(raymarch_pass_->color_texture(), 0);
@@ -623,11 +1394,12 @@ Dictionary VoxelWorld::debug_raymarch_probe(Vector3 origin, Vector3 dir) {
 	const ve::IVec3 rorig = wb.origin_regions();
 	cam.dims[0] = world_size_regions_.x; cam.dims[1] = world_size_regions_.y;
 	cam.dims[2] = world_size_regions_.z;
+	cam.dims[3] = island_slot_count();
 	cam.region_origin[0] = rorig.x; cam.region_origin[1] = rorig.y; cam.region_origin[2] = rorig.z;
 	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
 	cam.atlas_bricks[2] = atlas_bricks_.z;
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!raymarch_pass_->render(device, *atlas_, cam, 1, 1, kNoEdit)) return d;
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1, kNoEdit)) return d;
 	device->submit();
 	device->sync();
 	const PackedByteArray hp = device->texture_get_data(raymarch_pass_->hitpos_texture(), 0);
@@ -638,6 +1410,7 @@ Dictionary VoxelWorld::debug_raymarch_probe(Vector3 origin, Vector3 dir) {
 	d["color"] = Color(half_to_float(h[0]), half_to_float(h[1]), half_to_float(h[2]), 1.0);
 	if (hf[3] < 0.5f) return d; // sky miss
 	d["hit"] = true;
+	d["pos"] = Vector3(hf[0], hf[1], hf[2]);
 	const ve::IVec3 brick = ve::WorldBounds::brick_of_point(hf[0], hf[1], hf[2]);
 	d["brick"] = Vector3i(brick.x, brick.y, brick.z);
 	// Reproduce the shader's lookups on the CPU to report what the mips said there.
@@ -693,7 +1466,40 @@ String VoxelWorld::debug_load_shader(const String &res_path) const {
 	return String(code.c_str());
 }
 
-Vector2 VoxelWorld::debug_eval_field(Vector3 p, const PackedByteArray &ops, int op_count) const {
+void VoxelWorld::debug_store_volume(int slot, const PackedByteArray &sdf,
+		const PackedByteArray &mat, int dim) {
+	// Debug-only hook: validate the inputs the CPU's production paths guarantee, so a
+	// broken test or console call fails loudly instead of aliasing pool memory.
+	if (slot < 0 || slot >= ve::kMaxVolumes) {
+		UtilityFunctions::printerr("debug_store_volume: slot ", slot, " out of range [0, ",
+				ve::kMaxVolumes, ")");
+		return;
+	}
+	if (dim > ve::kIslandDim) {
+		UtilityFunctions::printerr("debug_store_volume: dim ", dim, " exceeds ve::kIslandDim (",
+				ve::kIslandDim, ")");
+		return;
+	}
+	if (dim < 2) {
+		UtilityFunctions::printerr("debug_store_volume: dim must be at least 2, got ", dim);
+		return;
+	}
+	const int64_t n = static_cast<int64_t>(dim) * dim * dim;
+	if (sdf.size() < n || mat.size() < n) {
+		UtilityFunctions::printerr("debug_store_volume: short buffers for dim ", dim);
+		return;
+	}
+	volumes_.reserve(slot); // no-op when the suite already claimed it
+	ve::VolumeData d;
+	d.dim = dim;
+	d.sdf.assign(sdf.ptr(), sdf.ptr() + n);
+	d.mat.assign(mat.ptr(), mat.ptr() + n);
+	for (int64_t i = 0; i < n; i++)
+		if (ve::decode_sdf(d.sdf[static_cast<size_t>(i)]) <= 0.0f) d.solid_voxels++;
+	volumes_.store(slot, std::move(d));
+}
+
+Vector2 VoxelWorld::debug_eval_field(Vector3 p, const PackedByteArray &ops, int op_count) {
 	ve::AnalyticGenerator gen;
 	const ve::EditOp *ptr = nullptr;
 	if (op_count > 0) {
@@ -703,7 +1509,7 @@ Vector2 VoxelWorld::debug_eval_field(Vector3 p, const PackedByteArray &ops, int 
 		}
 		ptr = reinterpret_cast<const ve::EditOp *>(ops.ptr());
 	}
-	const ve::Sample s = ve::eval_field(gen, ptr, op_count, p.x, p.y, p.z);
+	const ve::Sample s = ve::eval_field(gen, ptr, op_count, p.x, p.y, p.z, &volumes_);
 	return Vector2(s.sdf, static_cast<float>(s.material));
 }
 
@@ -760,7 +1566,7 @@ bool VoxelWorld::debug_brick_has_surface(Vector3i brick, const PackedByteArray &
 		}
 		ptr = reinterpret_cast<const ve::EditOp *>(ops.ptr());
 	}
-	return ve::brick_has_surface(gen, ptr, op_count, {brick.x, brick.y, brick.z});
+	return ve::brick_has_surface(gen, ptr, op_count, {brick.x, brick.y, brick.z}, &volumes_);
 }
 
 void VoxelWorld::debug_mark_region(Vector3i region, int region_slot, Vector3i lo, Vector3i hi,
@@ -814,7 +1620,7 @@ Dictionary VoxelWorld::debug_brick_diff(Vector3i brick, int region_slot,
 
 	ve::AnalyticGenerator gen;
 	ve::BrickEval ref{};
-	ve::eval_brick(gen, ptr, op_count, b, &ref);
+	ve::eval_brick(gen, ptr, op_count, b, &ref, &volumes_);
 
 	const ve::IVec3 ab = atlas_->config().atlas_bricks;
 	const ve::IVec3 cell{slot % ab.x, (slot / ab.x) % ab.y, slot / (ab.x * ab.y)};
@@ -964,6 +1770,47 @@ RID VoxelWorld::debug_frame_counters() const { return atlas_ ? atlas_->frame_cou
 RID VoxelWorld::debug_op_pool() const { return atlas_ ? atlas_->op_pool() : RID(); }
 RID VoxelWorld::debug_op_counts() const { return atlas_ ? atlas_->op_counts() : RID(); }
 
+void VoxelWorld::drain_occupancy() {
+	std::vector<OccupancyBlock> blocks;
+	{
+		std::lock_guard<std::mutex> lock(occupancy_mutex_);
+		blocks.swap(occupancy_inbox_);
+	}
+	for (const OccupancyBlock &b : blocks) {
+		// A region marked in consecutive frames can have two reads in flight, and the older
+		// one can land after the newer one. Never let it regress the grid or the block's seq.
+		if (b.seq < occupancy_.block_seq(b.region)) continue;
+		occupancy_.set_block(b.region, b.bytes.data(), b.seq);
+	}
+}
+
+int VoxelWorld::debug_occupancy_state(Vector3i cell) {
+	drain_occupancy(); // tests step the streamer by hand and never run _process
+	return static_cast<int>(occupancy_.state({cell.x, cell.y, cell.z}));
+}
+
+int VoxelWorld::debug_cell_state(Vector3i cell) {
+	if (!edit_log_) return static_cast<int>(ve::kCellUnknown);
+	const ve::IVec3 c{cell.x, cell.y, cell.z};
+	ve::AnalyticGenerator gen;
+	std::lock_guard<std::mutex> lock(edit_mutex_);
+	const std::vector<ve::EditOp> &ops = edit_log_->ops(ve::WorldBounds::region_of_brick(c));
+	return static_cast<int>(ve::cell_state_field(gen, ops.data(),
+			static_cast<int>(ops.size()), c, &volumes_));
+}
+
+Dictionary VoxelWorld::debug_occupancy_stats(Vector3 center) {
+	drain_occupancy();
+	Dictionary d;
+	d["regions"] = occupancy_.region_count();
+	d["edit_seq"] = static_cast<int64_t>(edit_seq());
+	// The block covering the streaming centre, so a test can tell "the grid has been told
+	// about this edit" from "some other region's block arrived".
+	const ve::IVec3 r = ve::WorldBounds::region_of_point(center.x, center.y, center.z);
+	d["seq_at_center"] = static_cast<int64_t>(occupancy_.block_seq(r));
+	return d;
+}
+
 int VoxelWorld::debug_stream_frame(Vector3 cam) {
 	ensure_initialized();
 	RenderingDevice *device = rd();
@@ -972,6 +1819,7 @@ int VoxelWorld::debug_stream_frame(Vector3 cam) {
 	device->submit();
 	device->sync();
 	overflow_seen_ |= static_cast<int>(atlas_->read_overflow(device));
+	drain_occupancy();
 	return actions;
 }
 
@@ -1032,7 +1880,7 @@ Dictionary VoxelWorld::debug_raycast(Vector3 origin, Vector3 dir) {
 	ve::AnalyticGenerator gen;
 	const float o[3] = {origin.x, origin.y, origin.z};
 	const float f[3] = {dir.x, dir.y, dir.z};
-	const ve::RayHit h = ve::raycast(gen, *edit_log_, o, f, 200.0f);
+	const ve::RayHit h = ve::raycast(gen, *edit_log_, o, f, 200.0f, &volumes_);
 	if (!h.hit) return d;
 	d["hit"] = true;
 	d["pos"] = Vector3(h.pos[0], h.pos[1], h.pos[2]);

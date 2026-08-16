@@ -243,6 +243,11 @@ void ColliderStreamer::apply_result(const MeshResult &r) {
 }
 
 int ColliderStreamer::run_frame(float cx, float cy, float cz) {
+	return run_frame(cx, cy, cz, nullptr, 0);
+}
+
+int ColliderStreamer::run_frame(float cx, float cy, float cz, const float *extra_centers,
+		int extra_count) {
 	if (!chunks_ || !mesh_ || !mesh_->is_valid()) return 0;
 	const Clock::time_point t_frame = Clock::now();
 	last_plan_ms_ = 0.0f;
@@ -291,14 +296,21 @@ int ColliderStreamer::run_frame(float cx, float cy, float cz) {
 
 	// 3. Plan. No new work while a batch is in flight or results are still queued — the
 	//    mesher holds one batch at a time, and a chunk planned now would only be dropped.
-	const float center[3] = {cx, cy, cz};
+	std::vector<float> centers;
+	centers.reserve(3 * (1 + std::max(0, extra_count)));
+	centers.push_back(cx);
+	centers.push_back(cy);
+	centers.push_back(cz);
+	if (extra_centers && extra_count > 0)
+		centers.insert(centers.end(), extra_centers, extra_centers + extra_count * 3);
 	LogProbe probe;
 	probe.gen = &gen_;
 	probe.log = edit_log_;
 	probe.mu = edit_mutex_;
 	const int build_cap = (mesh_->busy() || !inbox_.empty()) ? 0 : -1;
 	const Clock::time_point t_plan = Clock::now();
-	const ve::ChunkPlan plan = chunks_->update(center, nullptr, 1, probe, build_cap);
+	const ve::ChunkPlan plan = chunks_->update(centers.data(), nullptr,
+			static_cast<int>(centers.size() / 3), probe, build_cap);
 	last_plan_ms_ = ms_since(t_plan);
 	for (const auto &e : plan.releases) {
 		release_slot(e.slot);

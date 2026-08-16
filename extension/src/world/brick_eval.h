@@ -1,4 +1,5 @@
 #pragma once
+#include "connectivity/occupancy.h"
 #include "generator/edit_ops.h"
 #include "generator/generator.h"
 #include "world/brick.h"
@@ -17,15 +18,22 @@ struct BrickEval {
 
 // The world field: the generator with this point's region ops applied in order (spec §2).
 Sample eval_field(const Generator &gen, const EditOp *ops, int op_count,
-		float x, float y, float z);
+		float x, float y, float z, const VolumeStore *volumes = nullptr);
 
 // Coarse residency probe. Mirrored exactly by shaders/brick_mark.comp.glsl — a brick is
 // resident iff this returns true, on both sides.
-bool brick_has_surface(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick);
+bool brick_has_surface(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,
+		const VolumeStore *volumes = nullptr);
+
+// The occupancy classification shaders/brick_mark.comp.glsl writes, as a pure function: the
+// same 3^3 probe brick_has_surface uses, reduced to spec §5's two bits. Never returns
+// kCellUnknown -- the field always answers; only the GRID has a "nobody looked" state.
+CellState cell_state_field(const Generator &gen, const EditOp *ops, int op_count, IVec3 cell,
+		const VolumeStore *volumes = nullptr);
 
 // Full brick contents at L0. This is BOTH the path WorldData walks and the CPU reference
 // the GPU differential test diffs against (spec §8).
 void eval_brick(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,
-		BrickEval *out);
+		BrickEval *out, const VolumeStore *volumes = nullptr);
 
 } // namespace ve

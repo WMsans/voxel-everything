@@ -8,6 +8,9 @@
 
 using namespace godot;
 
+static_assert(ve::kOccupancyBlockBytes == ve::kRegionBrickCount / 4,
+		"update OCC_WORDS_PER_REGION in shaders/brick_mark.comp.glsl and region_free.comp.glsl");
+
 namespace {
 
 void free_if_valid(RenderingDevice *rd, RID &rid) {
@@ -124,11 +127,21 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 			static_cast<uint32_t>(cfg_.max_region_slots) * 4,
 			zeroed(static_cast<int64_t>(cfg_.max_region_slots) * 4));
 
+	// 8 KB per region slot: 4 MB at the shipping 512 slots.
+	region_occupancy_ = rd->storage_buffer_create(
+			static_cast<uint32_t>(cfg.max_region_slots) * ve::kOccupancyBlockBytes,
+			zeroed(static_cast<int64_t>(cfg.max_region_slots) * ve::kOccupancyBlockBytes));
+
+	if (!volumes_.initialize(rd, ve::kMaxVolumes, ve::kIslandDim)) {
+		teardown();
+		return false;
+	}
+
 	bool ok = sdf_atlas_.is_valid() && mat_atlas_.is_valid() && palette_.is_valid() &&
 			region_map_.is_valid() && region_tables_.is_valid() && free_list_.is_valid() &&
 			counters_.is_valid() && frame_.is_valid() && dispatch_args_.is_valid() &&
 			jobs_.is_valid() && op_pool_.is_valid() && op_counts_.is_valid() &&
-			region_slot_counts_.is_valid();
+			region_slot_counts_.is_valid() && region_occupancy_.is_valid() && volumes_.is_valid();
 	for (int l = 0; l < ve::kMipLevels; l++) ok = ok && mips_[l].is_valid();
 	if (!ok) {
 		// Most likely cause: the driver refuses STORAGE usage on R8_UNORM / R8G8_UINT
@@ -142,6 +155,7 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 }
 
 void GpuAtlas::teardown() {
+	volumes_.teardown();
 	if (!rd_) return;
 	free_if_valid(rd_, sdf_atlas_);
 	free_if_valid(rd_, mat_atlas_);
@@ -157,6 +171,7 @@ void GpuAtlas::teardown() {
 	free_if_valid(rd_, op_pool_);
 	free_if_valid(rd_, op_counts_);
 	free_if_valid(rd_, region_slot_counts_);
+	free_if_valid(rd_, region_occupancy_);
 	rd_ = nullptr;
 }
 

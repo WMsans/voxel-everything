@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dvuoxqldnjjcs"
+path="res://.godot/imported/island_cull.comp.glsl-7295ff1bb94c32812a35f4fb06520f29.res"
+
+[deps]
+
+source_file="res://shaders/island_cull.comp.glsl"
+dest_files=["res://.godot/imported/island_cull.comp.glsl-7295ff1bb94c32812a35f4fb06520f29.res"]
+
+[params]
+

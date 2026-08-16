@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <vector>
 #include "generator/edit_ops.h"
+#include "render/volume_pool.h"
 #include "world/region.h"
 
 namespace godot {
@@ -39,6 +40,11 @@ public:
 	void teardown();
 	bool is_valid() const { return field_pipeline_.is_valid(); }
 	const MeshPassConfig &config() const { return cfg_; }
+	VolumePool &volumes() { return volumes_; }
+
+	// Uploads one stored volume to THIS device. Called on the worker thread only (the device
+	// belongs to it); MeshService::submit_volume is the main thread's way in.
+	bool upload_volume(int slot, const ve::VolumeData &data);
 
 	// Runs the field pass alone for one chunk, inline (record, submit, sync, read back).
 	// Diagnostic only — the streaming path never stalls like this.
@@ -81,6 +87,7 @@ private:
 	RID tris_;        // uint3 per triangle, max_jobs * max_tris
 	RID counts_;      // 4 uints per job: vert count, tri count, overflow bits, pad
 	RID ops_;         // max_jobs * kMaxRegionOps EditOps
+	VolumePool volumes_;
 	RID field_shader_, field_pipeline_, field_uset_;
 	RID cells_shader_, cells_pipeline_, cells_uset_;
 	RID quads_shader_, quads_pipeline_, quads_uset_;

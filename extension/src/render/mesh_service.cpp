@@ -2,6 +2,8 @@
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/core/memory.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
+#include <algorithm>
+#include <utility>
 
 using namespace godot;
 
@@ -18,6 +20,9 @@ bool MeshService::start(const MeshPassConfig &cfg) {
 		stopping_ = false;
 		ready_.store(false, std::memory_order_release);
 		busy_.store(false, std::memory_order_release);
+		extract_busy_.store(false, std::memory_order_release);
+		extract_available_.store(false, std::memory_order_release);
+		fail_extract_submit_.store(false, std::memory_order_release);
 	}
 	thread_ = std::thread([this] { run(); });
 	std::unique_lock<std::mutex> lock(mu_);
@@ -41,8 +46,18 @@ void MeshService::stop() {
 	started_ = false;
 	pending_.clear();
 	results_.clear();
+	pending_extract_.clear();
+	extract_results_.clear();
+	pending_volumes_.clear();
+#ifdef DEBUG_ENABLED
+	submitted_volume_slots_.clear();
+#endif
 	ready_.store(false, std::memory_order_release);
 	busy_.store(false, std::memory_order_release);
+	extract_busy_.store(false, std::memory_order_release);
+	extract_available_.store(false, std::memory_order_release);
+	fail_extracts_.store(false, std::memory_order_release);
+	fail_extract_submit_.store(false, std::memory_order_release);
 }
 
 bool MeshService::submit(std::vector<MeshRequest> requests) {
@@ -72,14 +87,74 @@ int MeshService::collect(std::vector<MeshResult> *out) {
 	return n;
 }
 
+bool MeshService::submit_extracts(std::vector<IslandExtractJob> jobs) {
+	if (jobs.empty() || !is_valid()) return false;
+	if (fail_extract_submit_.load(std::memory_order_acquire)) return false;
+	{
+		std::lock_guard<std::mutex> lock(mu_);
+		if (stopping_ || !pending_extract_.empty() ||
+				extract_busy_.load(std::memory_order_acquire))
+			return false;
+		pending_extract_ = std::move(jobs);
+		extract_busy_.store(true, std::memory_order_release);
+	}
+	cv_.notify_one();
+	return true;
+}
+
+int MeshService::collect_extracts(std::vector<IslandExtractResult> *out) {
+	std::vector<IslandExtractResult> got;
+	{
+		std::lock_guard<std::mutex> lock(mu_);
+		got.swap(extract_results_);
+	}
+	const int n = static_cast<int>(got.size());
+	if (out)
+		for (IslandExtractResult &r : got) out->push_back(std::move(r));
+	return n;
+}
+
+bool MeshService::submit_volume(int slot, ve::VolumeData data) {
+	if (!is_valid() || !data.valid()) return false;
+	{
+		std::lock_guard<std::mutex> lock(mu_);
+		if (stopping_) return false;
+		pending_volumes_.push_back({slot, std::move(data)});
+#ifdef DEBUG_ENABLED
+		submitted_volume_slots_.push_back(slot);
+#endif
+	}
+	cv_.notify_one();
+	return true;
+}
+
+void MeshService::discard_pending_volume_upload(int slot) {
+	std::lock_guard<std::mutex> lock(mu_);
+	pending_volumes_.erase(std::remove_if(pending_volumes_.begin(), pending_volumes_.end(),
+								  [slot](const VolumeUpload &u) { return u.slot == slot; }),
+			pending_volumes_.end());
+}
+
+std::vector<int> MeshService::debug_submitted_volume_slots() const {
+#ifdef DEBUG_ENABLED
+	std::lock_guard<std::mutex> lock(mu_);
+	return submitted_volume_slots_;
+#else
+	return {};
+#endif
+}
+
 bool MeshService::run_sync(const std::function<void(MeshPass &)> &fn) {
 	if (!is_valid()) return false;
 	std::unique_lock<std::mutex> lock(mu_);
 	if (stopping_) return false;
-	// One at a time, and never while a batch is running: the diagnostic hooks share the
-	// pass's single lattice and cell map with the streaming path.
+	// One at a time, and never while a batch, an extraction, or a queued volume upload is
+	// running: the diagnostic hooks share the pass's single lattice and cell map with the
+	// streaming path, and volume uploads must land before a diagnostic sees the field.
 	done_cv_.wait(lock, [this] {
-		return stopping_ || (!sync_pending_ && !busy_.load(std::memory_order_acquire));
+		return stopping_ || (!sync_pending_ && !busy_.load(std::memory_order_acquire) &&
+				!extract_busy_.load(std::memory_order_acquire) && pending_extract_.empty() &&
+				pending_volumes_.empty());
 	});
 	if (stopping_) return false;
 	sync_fn_ = &fn;
@@ -101,6 +176,18 @@ void MeshService::run() {
 	MeshPass pass;
 	const bool ok = rd && pass.initialize(rd, cfg_);
 	if (!rd) UtilityFunctions::printerr("MeshService: no local RenderingDevice for the mesher");
+	if (rd && ok) {
+		extract_ = new IslandExtractPass();
+		if (extract_->initialize(rd, &pass.volumes())) {
+			extract_available_.store(true, std::memory_order_release);
+		} else {
+			UtilityFunctions::printerr("MeshService: island extraction unavailable");
+			delete extract_;
+			extract_ = nullptr;
+			// Not fatal: collision meshing still works, and IslandManager drops connectivity
+			// work it knows can never make progress.
+		}
+	}
 	{
 		std::lock_guard<std::mutex> lock(mu_);
 		ready_.store(ok, std::memory_order_release);
@@ -114,14 +201,23 @@ void MeshService::run() {
 	}
 
 	for (;;) {
+		std::vector<VolumeUpload> volumes_to_upload;
+		std::vector<IslandExtractJob> extracts;
 		std::vector<MeshRequest> batch;
 		const std::function<void(MeshPass &)> *sync_fn = nullptr;
 		{
 			std::unique_lock<std::mutex> lock(mu_);
-			cv_.wait(lock, [this] { return stopping_ || !pending_.empty() || sync_pending_; });
+			cv_.wait(lock, [this] {
+				return stopping_ || sync_pending_ || !pending_volumes_.empty() ||
+						!pending_extract_.empty() || !pending_.empty();
+			});
 			if (stopping_) break;
 			if (sync_pending_) {
 				sync_fn = sync_fn_;
+			} else if (!pending_volumes_.empty()) {
+				volumes_to_upload.swap(pending_volumes_);
+			} else if (!pending_extract_.empty()) {
+				extracts.swap(pending_extract_);
 			} else {
 				batch.swap(pending_);
 			}
@@ -134,6 +230,57 @@ void MeshService::run() {
 				sync_pending_ = false;
 				sync_fn_ = nullptr;
 			}
+			done_cv_.notify_all();
+			continue;
+		}
+
+		if (!volumes_to_upload.empty()) {
+			for (const VolumeUpload &vu : volumes_to_upload) {
+				if (!pass.upload_volume(vu.slot, vu.data))
+					UtilityFunctions::printerr("MeshService: volume upload failed for slot ",
+							vu.slot);
+			}
+			// run_sync waits on pending_volumes_ going empty as well as on its own turn.
+			done_cv_.notify_all();
+			continue;
+		}
+
+		if (!extracts.empty()) {
+			std::vector<IslandExtractResult> extract_out;
+			extract_out.reserve(extracts.size());
+			for (const IslandExtractJob &job : extracts) {
+				if (job.kind == kResampleVolume) {
+					IslandExtractResult r;
+					r.id = job.id;
+					r.kind = job.kind;
+					r.failed = !ve::resample_volume(job.source, job.source_op, job.basis,
+							job.rest_origin, job.out_slot, job.dim, &r.data, &r.op);
+					extract_out.push_back(std::move(r));
+				} else if (extract_) {
+					IslandExtractResult r;
+					if (fail_extracts_.load(std::memory_order_acquire)) {
+						r.id = job.id;
+						r.kind = job.kind;
+						r.failed = true;
+					} else {
+						extract_->extract(job, &r);
+						r.kind = job.kind;
+					}
+					extract_out.push_back(std::move(r));
+				} else {
+					IslandExtractResult r;
+					r.id = job.id;
+					r.kind = job.kind;
+					r.failed = true;
+					extract_out.push_back(std::move(r));
+				}
+			}
+			{
+				std::lock_guard<std::mutex> lock(mu_);
+				for (IslandExtractResult &r : extract_out) extract_results_.push_back(std::move(r));
+				extract_busy_.store(false, std::memory_order_release);
+			}
+			// run_sync waits on extract_busy_ going false as well as on its own turn.
 			done_cv_.notify_all();
 			continue;
 		}
@@ -167,6 +314,10 @@ void MeshService::run() {
 		done_cv_.notify_all();
 	}
 
+	if (extract_) {
+		delete extract_;
+		extract_ = nullptr;
+	}
 	pass.teardown();
 	memdelete(rd);
 }

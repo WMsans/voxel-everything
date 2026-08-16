@@ -8,7 +8,14 @@
 const uint OP_SPHERE_SUBTRACT = 0u;
 const uint OP_SPHERE_ADD = 1u;
 const uint OP_SPHERE_PAINT = 2u;
+const uint OP_BOX_SUBTRACT = 3u;
+const uint OP_VOLUME_ADD = 4u;
 const uint MAX_REGION_OPS = 256u;
+// ve::kOccupancyCellSize -- a box op's extent is counted in 0.8 m occupancy cells.
+const float OCCUPANCY_CELL_SIZE = 0.8;
+// ve::kIslandDim ^ 3: the per-slot stride of both volume buffers. render/volume_pool.cpp
+// static_asserts that this matches, so changing the C++ constant breaks the BUILD.
+const int VOLUME_VOXELS = 262144;
 // Mirror of ve::kSurfaceY (extension/src/generator/generator.h): 51.2 = -origin_bricks.y *
 // kBrickSize for the default world origin (0, -64, 0). Must stay in lockstep with the CPU
 // constant; tests/test_field_diff.gd guards the agreement.
@@ -17,7 +24,7 @@ const float SURFACE_Y = 51.2;
 // ve::EditOp is 32 bytes; storing two uvec4 per op and unpacking by hand keeps the mirror
 // exact, because a std430 struct with a vec3 member would silently pad to 48.
 //   uvec4 a = { type, material, pos.x, pos.y }
-//   uvec4 b = { pos.z, radius, pad, pad }
+//   uvec4 b = { pos.z, radius, aux0, aux1 }
 layout(set = 0, binding = FIELD_OP_POOL_BINDING, std430) readonly buffer FieldOpPool {
 	uvec4 v[];
 } field_op_pool;
@@ -39,6 +46,77 @@ void base_field(vec3 p, out float sdf, out uint mat) {
 	if (sdf <= 0.0) mat = h > 4.0 ? 2u : (h > 1.0 ? 1u : 3u);
 }
 
+// Mirror of ve::box_sdf (extension/src/generator/edit_ops.cpp).
+float op_box_sdf(vec3 lo, vec3 hi, vec3 p) {
+	vec3 c = 0.5 * (lo + hi);
+	vec3 h = 0.5 * (hi - lo);
+	vec3 q = abs(p - c) - h;
+	return length(max(q, vec3(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+
+// The stored-volume pool. Two buffers rather than one so a slot's byte offset is
+// slot * VOLUME_VOXELS in BOTH of them: a test can then stand up a one-slot pool without
+// knowing how many slots the shipping pool has. Bytes are unpacked by hand out of uint
+// words for the same reason ve::EditOp is unpacked by hand -- there is exactly one layout
+// rule, and it is written here.
+#ifdef FIELD_VOLUME_SDF_BINDING
+layout(set = 0, binding = FIELD_VOLUME_SDF_BINDING, std430) readonly buffer FieldVolumeSdf {
+	uint w[];
+} field_volume_sdf;
+layout(set = 0, binding = FIELD_VOLUME_MAT_BINDING, std430) readonly buffer FieldVolumeMat {
+	uint w[];
+} field_volume_mat;
+
+uint volume_sdf_byte(int i) {
+	return (field_volume_sdf.w[i >> 2] >> ((uint(i) & 3u) * 8u)) & 0xFFu;
+}
+uint volume_mat_byte(int i) {
+	return (field_volume_mat.w[i >> 2] >> ((uint(i) & 3u) * 8u)) & 0xFFu;
+}
+
+// Mirror of ve::sample_volume_lattice (extension/src/generator/volume_set.cpp), including
+// its outside-the-box rule: beyond the lattice the value is the distance TO the lattice box,
+// which is a sound lower bound on the distance to anything inside it and therefore cannot
+// add material through the union the op performs.
+void sample_field_volume(int slot, vec3 origin, float voxel, int dim, vec3 p,
+		out float sdf, out uint mat) {
+	// A malformed/corrupt op must never drive an out-of-bounds SSBO read or a divide by
+	// zero. Fail soft: contribute nothing to the union. The `!(voxel > 0.0)` form rejects
+	// NaN as well as zero/negative pitches.
+	if (slot < 0 || slot >= 64 || dim < 2 || dim > 64 || !(voxel > 0.0)) {
+		sdf = 1e30;
+		mat = 0u;
+		return;
+	}
+	float span = float(dim - 1) * voxel;
+	vec3 lo = origin, hi = origin + vec3(span);
+	float outside = op_box_sdf(lo, hi, p);
+	if (outside > 0.0) { sdf = outside; mat = 0u; return; }
+
+	vec3 l = clamp((p - lo) / voxel, vec3(0.0), vec3(float(dim - 1)));
+	ivec3 i0 = ivec3(l);
+	ivec3 i1 = min(i0 + 1, ivec3(dim - 1));
+	vec3 f = l - vec3(i0);
+	int base = slot * VOLUME_VOXELS;
+	int sy = dim, sz = dim * dim;
+	float c000 = decode_sdf(float(volume_sdf_byte(base + i0.x + i0.y * sy + i0.z * sz)) / 255.0);
+	float c100 = decode_sdf(float(volume_sdf_byte(base + i1.x + i0.y * sy + i0.z * sz)) / 255.0);
+	float c010 = decode_sdf(float(volume_sdf_byte(base + i0.x + i1.y * sy + i0.z * sz)) / 255.0);
+	float c110 = decode_sdf(float(volume_sdf_byte(base + i1.x + i1.y * sy + i0.z * sz)) / 255.0);
+	float c001 = decode_sdf(float(volume_sdf_byte(base + i0.x + i0.y * sy + i1.z * sz)) / 255.0);
+	float c101 = decode_sdf(float(volume_sdf_byte(base + i1.x + i0.y * sy + i1.z * sz)) / 255.0);
+	float c011 = decode_sdf(float(volume_sdf_byte(base + i0.x + i1.y * sy + i1.z * sz)) / 255.0);
+	float c111 = decode_sdf(float(volume_sdf_byte(base + i1.x + i1.y * sy + i1.z * sz)) / 255.0);
+	sdf = mix(mix(mix(c000, c100, f.x), mix(c010, c110, f.x), f.y),
+	          mix(mix(c001, c101, f.x), mix(c011, c111, f.x), f.y), f.z);
+
+	// Nearest, not interpolated: a material id is a label and blending two labels is
+	// meaningless. Same rule the brick material atlas uses.
+	ivec3 m = min(ivec3(l + 0.5), ivec3(dim - 1));
+	mat = volume_mat_byte(base + m.x + m.y * sy + m.z * sz);
+}
+#endif
+
 void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat) {
 	uvec4 a = field_op_pool.v[index * 2u + 0u];
 	uvec4 b = field_op_pool.v[index * 2u + 1u];
@@ -46,6 +124,26 @@ void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat) {
 	uint material = a.y;
 	vec3 c = vec3(uintBitsToFloat(a.z), uintBitsToFloat(a.w), uintBitsToFloat(b.x));
 	float radius = uintBitsToFloat(b.y);
+
+	if (type == OP_BOX_SUBTRACT) {
+		// aux[0] packs the cell extent as 3 x 10 bits (ve::pack_extent3).
+		vec3 n = vec3(float(b.z & 0x3FFu), float((b.z >> 10) & 0x3FFu),
+		              float((b.z >> 20) & 0x3FFu));
+		float bd = op_box_sdf(c, c + n * OCCUPANCY_CELL_SIZE, p);
+		if (-bd > sdf) { sdf = -bd; if (sdf > 0.0) mat = 0u; }
+		return;
+	}
+	if (type == OP_VOLUME_ADD) {
+#ifdef FIELD_VOLUME_SDF_BINDING
+		// aux[0] = slot, aux[1] = lattice dimension; radius carries the voxel pitch.
+		float vd;
+		uint vm;
+		sample_field_volume(int(b.z), c, radius, int(b.w), p, vd, vm);
+		if (vd < sdf) { sdf = vd; if (sdf <= 0.0 && vm != 0u) mat = vm; }
+#endif
+		return;
+	}
+
 	float sp = length(p - c) - radius;
 	if (type == OP_SPHERE_SUBTRACT) {
 		if (-sp > sdf) { sdf = -sp; if (sdf > 0.0) mat = 0u; }

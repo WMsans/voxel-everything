@@ -2,6 +2,7 @@
 #include "voxel_world.h"
 #include "render/composite_pass.h"
 #include "render/gpu_atlas.h"
+#include "render/island_cull_pass.h"
 #include "render/raymarch_pass.h"
 #include "render/world_streamer.h"
 #include <godot_cpp/classes/engine.hpp>
@@ -70,14 +71,17 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	cp.params[0] = tan_x; cp.params[1] = tan_y; cp.params[2] = 200.0f;
 	const Vector3i sr = world->get_world_size_regions();
 	cp.dims[0] = sr.x; cp.dims[1] = sr.y; cp.dims[2] = sr.z;
+	cp.dims[3] = world->island_slot_count();
 	const Vector3i ob = world->get_world_origin_bricks();
 	cp.region_origin[0] = ob.x / 32; cp.region_origin[1] = ob.y / 32;
 	cp.region_origin[2] = ob.z / 32;
+	cp.region_origin[3] = 0; // Task 11 sets the cull grid
 	const Vector3i ab = world->get_atlas_bricks();
 	cp.atlas_bricks[0] = ab.x; cp.atlas_bricks[1] = ab.y; cp.atlas_bricks[2] = ab.z;
 
-	// One streaming pass per frame, before the march: the new bricks land in the same
-	// submit, so there is no torn frame where the map points at ungenerated slots.
+	// Volumes before anything that evaluates the field: an op naming a slot may already be
+	// in the edit log, and the streamer is about to regenerate the bricks that read it.
+	world->drain_island_uploads(rd);
 	WorldStreamer *st = world->streamer();
 	if (st) st->run_frame(rd, cam.origin.x, cam.origin.y, cam.origin.z);
 
@@ -99,7 +103,16 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	const int rw = static_cast<int>(size.x * 0.66f);
 	const int rh = static_cast<int>(size.y * 0.66f);
 	if (rw <= 0 || rh <= 0) return;
-	if (!rmp->render(rd, *atlas, cp, rw, rh, edit_state)) return;
+	const int islands = world->island_slot_count();
+	IslandCullPass *cull = world->island_cull();
+	RID mask;
+	if (cull && islands > 0 && cull->render(rd, *world->islands(), cp, rw, rh, islands)) {
+		mask = cull->mask_buffer();
+		cp.region_origin[3] = cull->tiles_x();
+		cp.atlas_bricks[3] = cull->tiles_y();
+	}
+	cp.dims[3] = islands;
+	if (!rmp->render(rd, *atlas, world->islands(), mask, cp, rw, rh, edit_state)) return;
 
 	const Projection view(cam.affine_inverse());
 	const Projection view_proj = proj * view;

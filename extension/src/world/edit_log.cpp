@@ -5,6 +5,7 @@ namespace ve {
 
 namespace {
 const std::vector<EditOp> kEmpty;
+const std::vector<uint64_t> kEmptySeqs;
 } // namespace
 
 EditLog::AppendResult EditLog::append(const EditOp &op) {
@@ -22,16 +23,21 @@ EditLog::AppendResult EditLog::append(const EditOp &op) {
 	lo.x = std::max(lo.x, mn.x); lo.y = std::max(lo.y, mn.y); lo.z = std::max(lo.z, mn.z);
 	hi.x = std::min(hi.x, mx.x); hi.y = std::min(hi.y, mx.y); hi.z = std::min(hi.z, mx.z);
 	if (lo.x > hi.x || lo.y > hi.y || lo.z > hi.z) return result; // entirely outside
+	// One global sequence per append op. Every region that accepts this op stores the same
+	// sequence, so a cross-region collector can reconstruct the true append order.
+	const uint64_t seq = next_seq_++;
 	for (int z = lo.z; z <= hi.z; z++)
 		for (int y = lo.y; y <= hi.y; y++)
 			for (int x = lo.x; x <= hi.x; x++) {
 				const IVec3 r{x, y, z};
-				std::vector<EditOp> &list = lists_[Key{x, y, z}];
+				const Key key{r.x, r.y, r.z};
+				std::vector<EditOp> &list = lists_[key];
 				if (static_cast<int>(list.size()) >= kMaxRegionOps) {
 					result.rejected.push_back(r);
 					continue;
 				}
 				list.push_back(op);
+				seqs_[key].push_back(seq);
 				result.touched.push_back(r);
 			}
 	return result;
@@ -40,6 +46,11 @@ EditLog::AppendResult EditLog::append(const EditOp &op) {
 const std::vector<EditOp> &EditLog::ops(IVec3 region) const {
 	const auto it = lists_.find(Key{region.x, region.y, region.z});
 	return it == lists_.end() ? kEmpty : it->second;
+}
+
+const std::vector<uint64_t> &EditLog::seqs(IVec3 region) const {
+	const auto it = seqs_.find(Key{region.x, region.y, region.z});
+	return it == seqs_.end() ? kEmptySeqs : it->second;
 }
 
 } // namespace ve

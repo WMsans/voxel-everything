@@ -44,13 +44,20 @@ float chunk_distance(IVec3 c, float cx, float cy, float cz) {
 }
 
 void op_chunk_range(const EditOp &op, IVec3 *lo, IVec3 *hi) {
-	const float r = op.radius + 2.0f * kChunkCellSize;
+	float a[3], b[3];
+	op_world_aabb(op, a, b);
+	// Two mesh cells of pad: a CSG max/min changes the field far outside its own shape, but
+	// only INSIDE it can it flip a sample's sign, and a sample whose sign it cannot flip only
+	// shifts a vertex when it is itself within a cell of the surface. Two cells covers that
+	// and the mesh overlap plane below the chunk origin.
+	const float pad = 2.0f * kChunkCellSize;
 	const auto cell = [](float v) { return static_cast<int>(std::floor(v / kChunkSize)); };
-	*lo = {cell(op.pos[0] - r), cell(op.pos[1] - r), cell(op.pos[2] - r)};
-	*hi = {cell(op.pos[0] + r), cell(op.pos[1] + r), cell(op.pos[2] + r)};
+	*lo = {cell(a[0] - pad), cell(a[1] - pad), cell(a[2] - pad)};
+	*hi = {cell(b[0] + pad), cell(b[1] + pad), cell(b[2] + pad)};
 }
 
-bool chunk_has_surface(const Generator &gen, const EditOp *ops, int op_count, IVec3 chunk) {
+bool chunk_has_surface(const Generator &gen, const EditOp *ops, int op_count, IVec3 chunk,
+		const VolumeStore *volumes) {
 	float o[3];
 	chunk_world_origin(chunk, o);
 	const float step = kChunkSize / static_cast<float>(kChunkProbeSteps); // 1.6 m
@@ -60,7 +67,7 @@ bool chunk_has_surface(const Generator &gen, const EditOp *ops, int op_count, IV
 		for (int sy = 0; sy <= kChunkProbeSteps; sy++)
 			for (int sx = 0; sx <= kChunkProbeSteps; sx++) {
 				const float d = eval_field(gen, ops, op_count, o[0] + sx * step,
-						o[1] + sy * step, o[2] + sz * step).sdf;
+						o[1] + sy * step, o[2] + sz * step, volumes).sdf;
 				mn = std::min(mn, d);
 				mx = std::max(mx, d);
 			}

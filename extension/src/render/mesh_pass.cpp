@@ -136,8 +136,13 @@ bool MeshPass::initialize(RenderingDevice *rd, const MeshPassConfig &cfg) {
 	ops_ = rd->storage_buffer_create(
 			static_cast<uint32_t>(cfg_.max_jobs) * ve::kMaxRegionOps * 32,
 			zeroed(static_cast<int64_t>(cfg_.max_jobs) * ve::kMaxRegionOps * 32));
+	if (!volumes_.initialize(rd, ve::kMaxVolumes, ve::kIslandDim)) {
+		UtilityFunctions::printerr("MeshPass: volume pool creation failed");
+		teardown();
+		return false;
+	}
 	if (!lattice_.is_valid() || !cells_.is_valid() || !verts_.is_valid() || !tris_.is_valid() ||
-			!counts_.is_valid() || !ops_.is_valid()) {
+			!counts_.is_valid() || !ops_.is_valid() || !volumes_.is_valid()) {
 		UtilityFunctions::printerr("MeshPass: buffer creation failed");
 		teardown();
 		return false;
@@ -147,7 +152,8 @@ bool MeshPass::initialize(RenderingDevice *rd, const MeshPassConfig &cfg) {
 		teardown();
 		return false;
 	}
-	field_uset_ = rd->uniform_set_create(Array::make(image(0, lattice_), storage(1, ops_)),
+	field_uset_ = rd->uniform_set_create(Array::make(image(0, lattice_), storage(1, ops_),
+			storage(2, volumes_.sdf_buffer()), storage(3, volumes_.mat_buffer())),
 			field_shader_, 0);
 	if (!field_uset_.is_valid()) {
 		UtilityFunctions::printerr("MeshPass: uniform set creation failed");
@@ -188,6 +194,7 @@ void MeshPass::teardown() {
 	free_if_valid(rd_, cells_pipeline_);
 	free_if_valid(rd_, cells_shader_);
 	free_if_valid(rd_, field_uset_);
+	volumes_.teardown();
 	free_if_valid(rd_, field_pipeline_);
 	free_if_valid(rd_, field_shader_);
 	free_if_valid(rd_, ops_);
@@ -207,6 +214,12 @@ void MeshPass::upload_ops(const MeshJob &job, int job_index) {
 	std::memcpy(b.ptrw(), job.ops, static_cast<size_t>(n) * 32);
 	rd_->buffer_update(ops_, static_cast<uint32_t>(job_index) * ve::kMaxRegionOps * 32,
 			static_cast<uint32_t>(b.size()), b);
+}
+
+bool MeshPass::upload_volume(int slot, const ve::VolumeData &data) {
+	// buffer_update is device-level and must not land inside an open compute list; the
+	// worker only ever calls this between jobs, which is where that is guaranteed.
+	return rd_ && !in_flight_ && volumes_.upload(rd_, slot, data);
 }
 
 // The same 32-byte block for all three passes, so one helper serves them all.

@@ -40,6 +40,9 @@ public:
 	// release what left the ball, submit the next batch. Returns the number of actions taken,
 	// so a caller (or a test) can tell a settled world from a busy one.
 	int run_frame(float cx, float cy, float cz);
+	// Same, with additional physics-bubble centres (3 floats each) around active bodies.
+	// The player centre is always the first bubble; the extra centres extend the residency.
+	int run_frame(float cx, float cy, float cz, const float *extra_centers, int extra_count);
 
 	int active_bodies() const { return active_bodies_; }
 	int builds_last_frame() const { return builds_last_frame_; }

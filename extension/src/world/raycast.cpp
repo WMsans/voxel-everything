@@ -1,6 +1,7 @@
 #include "world/raycast.h"
 #include "world/brick_eval.h"
 #include <cmath>
+#include <limits>
 
 namespace ve {
 
@@ -12,15 +13,30 @@ const std::vector<EditOp> &ops_at(const EditLog &log, float x, float y, float z)
 	return log.ops(WorldBounds::region_of_point(x, y, z));
 }
 
-float field_at(const Generator &gen, const EditLog &log, float x, float y, float z) {
+float field_at(const Generator &gen, const EditLog &log, float x, float y, float z,
+		const VolumeStore *volumes) {
 	const std::vector<EditOp> &ops = ops_at(log, x, y, z);
-	return eval_field(gen, ops.data(), static_cast<int>(ops.size()), x, y, z).sdf;
+	return eval_field(gen, ops.data(), static_cast<int>(ops.size()), x, y, z, volumes).sdf;
+}
+
+// Sign-crossing is only meaningful when the field at this point can actually contain a
+// volume op's positive box-distance apron. Both the store pointer and a live slot are
+// required: apply_op fail-softs a missing/released slot, so a kOpVolumeAdd whose slot is
+// gone leaves the field identical to a pure analytic one and must keep the classic
+// hit_eps path.
+bool region_has_live_volume_add(const std::vector<EditOp> &ops, const VolumeStore *volumes) {
+	if (!volumes) return false;
+	for (const EditOp &op : ops) {
+		if (op.type == kOpVolumeAdd && volumes->has(static_cast<int>(op.aux[0])))
+			return true;
+	}
+	return false;
 }
 
 } // namespace
 
 RayHit raycast(const Generator &gen, const EditLog &log, const float origin[3],
-		const float dir[3], float max_dist) {
+		const float dir[3], float max_dist, const VolumeStore *volumes) {
 	RayHit out;
 	const float len = std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
 	if (len <= 0.0f) return out;
@@ -30,21 +46,33 @@ RayHit raycast(const Generator &gen, const EditLog &log, const float origin[3],
 	const float hit_eps = 0.2f * kVoxelSize;
 
 	float t = 0.0f;
+	// A volume op unions sample_volume_lattice's outside-the-lattice box distance into
+	// the field: a small POSITIVE value in empty air around the lattice's AABB. When the
+	// current region actually contains a volume op AND a store is present to sample it,
+	// require an actual sign crossing so that apron never reads as a surface. Otherwise
+	// keep the classic hit_eps tolerance, even when a caller passes a non-null (but
+	// irrelevant or empty) VolumeStore over a pure analytic field.
+	// +inf makes a ray that starts inside solid hit at its origin.
+	float prev_f = std::numeric_limits<float>::infinity();
 	for (int i = 0; i < 4096 && t <= max_dist; i++) {
 		const float p[3] = {origin[0] + d[0] * t, origin[1] + d[1] * t, origin[2] + d[2] * t};
-		const float f = field_at(gen, log, p[0], p[1], p[2]);
-		if (f < hit_eps) {
+		const std::vector<EditOp> &ops = ops_at(log, p[0], p[1], p[2]);
+		const float f = eval_field(gen, ops.data(), static_cast<int>(ops.size()), p[0], p[1],
+				p[2], volumes).sdf;
+		const bool sign_crossing = region_has_live_volume_add(ops, volumes);
+		const bool hit = sign_crossing ? (prev_f > 0.0f && f <= 0.0f) : (f < hit_eps);
+		if (hit) {
 			out.hit = true;
 			out.distance = t;
 			out.pos[0] = p[0]; out.pos[1] = p[1]; out.pos[2] = p[2];
 			// Central-difference gradient over one voxel; the field is smooth at this scale.
 			const float e = kVoxelSize;
-			const float gx = field_at(gen, log, p[0] + e, p[1], p[2]) -
-					field_at(gen, log, p[0] - e, p[1], p[2]);
-			const float gy = field_at(gen, log, p[0], p[1] + e, p[2]) -
-					field_at(gen, log, p[0], p[1] - e, p[2]);
-			const float gz = field_at(gen, log, p[0], p[1], p[2] + e) -
-					field_at(gen, log, p[0], p[1], p[2] - e);
+			const float gx = field_at(gen, log, p[0] + e, p[1], p[2], volumes) -
+					field_at(gen, log, p[0] - e, p[1], p[2], volumes);
+			const float gy = field_at(gen, log, p[0], p[1] + e, p[2], volumes) -
+					field_at(gen, log, p[0], p[1] - e, p[2], volumes);
+			const float gz = field_at(gen, log, p[0], p[1], p[2] + e, volumes) -
+					field_at(gen, log, p[0], p[1], p[2] - e, volumes);
 			const float gl = std::sqrt(gx * gx + gy * gy + gz * gz);
 			if (gl > 0.0f) {
 				out.normal[0] = gx / gl; out.normal[1] = gy / gl; out.normal[2] = gz / gl;
@@ -54,6 +82,7 @@ RayHit raycast(const Generator &gen, const EditLog &log, const float origin[3],
 			return out;
 		}
 		t += std::max(f * inv_l, min_step);
+		prev_f = f;
 	}
 	return out;
 }

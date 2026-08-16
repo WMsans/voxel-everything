@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include "world/edit_log.h"
+#include <cstring>
 
 static ve::EditOp sphere(float x, float y, float z, float r) {
 	ve::EditOp op{};
@@ -21,6 +22,92 @@ TEST_CASE("an op lands in every region it touches, and only those") {
 	CHECK(log.op_count({1, 0, 0}) == 1);
 	CHECK(log.op_count({2, 0, 0}) == 0);
 	CHECK(log.region_count() == 2);
+}
+
+TEST_CASE("collect_ops_for_aabb gathers ops from every region a component straddles") {
+	ve::EditLog log(bounds());
+	// The region boundary is at 25.6 m (brick 32). A two-cell component covering bricks
+	// 31..32 spans [24.8, 26.4) m: it is smaller than a region, but its op list must come
+	// from both regions.
+	log.append(sphere(24.8f, 1.0f, 1.0f, 0.5f)); // region 0 only, intersects
+	log.append(sphere(26.2f, 1.0f, 1.0f, 0.1f)); // region 1 only, intersects
+	log.append(sphere(25.6f, 1.0f, 1.0f, 0.5f)); // straddles: stored in both, one global seq
+	log.append(sphere(30.0f, 1.0f, 1.0f, 0.2f)); // region 1 only, does not intersect
+	const float lo[3] = {24.8f, 0.0f, 0.0f};
+	const float hi[3] = {26.4f, 2.0f, 2.0f};
+	std::vector<ve::EditOp> ops;
+	ve::collect_ops_for_aabb(log, lo, hi, &ops);
+	REQUIRE(ops.size() == 3);
+	CHECK(std::any_of(ops.begin(), ops.end(),
+			[](const ve::EditOp &op) { return op.pos[0] == doctest::Approx(24.8f); }));
+	CHECK(std::any_of(ops.begin(), ops.end(),
+			[](const ve::EditOp &op) { return op.pos[0] == doctest::Approx(25.6f); }));
+	CHECK(std::any_of(ops.begin(), ops.end(),
+			[](const ve::EditOp &op) { return op.pos[0] == doctest::Approx(26.2f); }));
+}
+
+TEST_CASE("collect_ops_for_aabb preserves global order across a region boundary") {
+	ve::EditLog log(bounds());
+	// Region 0 ends at x = 25.6. Append a region-1-only op first, then an op that straddles
+	// both regions. Region 0's list is [straddler], region 1's list is [region1-only,
+	// straddler]. Iterating regions in z/y/x order without sequence numbers would return
+	// [straddler, region1-only]; the true global order for the straddling component is
+	// [region1-only, straddler].
+	log.append(sphere(26.2f, 1.0f, 1.0f, 0.1f)); // region 1 only
+	log.append(sphere(25.6f, 1.0f, 1.0f, 0.5f)); // straddles regions 0 and 1
+	const float lo[3] = {24.8f, 0.0f, 0.0f};
+	const float hi[3] = {26.4f, 2.0f, 2.0f};
+	std::vector<ve::EditOp> ops;
+	ve::collect_ops_for_aabb(log, lo, hi, &ops);
+	REQUIRE(ops.size() == 2);
+	CHECK(ops[0].pos[0] == doctest::Approx(26.2f));
+	CHECK(ops[1].pos[0] == doctest::Approx(25.6f));
+	CHECK(log.seqs({0, 0, 0}).size() == 1);
+	CHECK(log.seqs({1, 0, 0}).size() == 2);
+	CHECK(log.seqs({0, 0, 0})[0] == log.seqs({1, 0, 0})[1]); // same append op, same seq
+}
+
+TEST_CASE("collect_ops_for_aabb keeps byte-identical edits as separate ops in order") {
+	ve::EditLog log(bounds());
+	// Two independent edits with identical 32-byte payloads must not be collapsed by the
+	// collector. They have distinct sequence numbers, so the output contains both and they
+	// appear before a later distinct edit.
+	const ve::EditOp a = sphere(1.0f, 1.0f, 1.0f, 0.5f);
+	log.append(a);
+	log.append(a);
+	log.append(sphere(2.0f, 1.0f, 1.0f, 0.5f));
+	const float lo[3] = {0.0f, 0.0f, 0.0f};
+	const float hi[3] = {3.0f, 2.0f, 2.0f};
+	std::vector<ve::EditOp> ops;
+	ve::collect_ops_for_aabb(log, lo, hi, &ops);
+	REQUIRE(ops.size() == 3);
+	CHECK(std::memcmp(&ops[0], &a, sizeof(ve::EditOp)) == 0);
+	CHECK(std::memcmp(&ops[1], &a, sizeof(ve::EditOp)) == 0);
+	CHECK(ops[2].pos[0] == doctest::Approx(2.0f));
+	CHECK(log.seqs({0, 0, 0}).size() == 3);
+	CHECK(log.seqs({0, 0, 0})[0] != log.seqs({0, 0, 0})[1]);
+	CHECK(log.seqs({0, 0, 0})[0] < log.seqs({0, 0, 0})[1]);
+	CHECK(log.seqs({0, 0, 0})[1] < log.seqs({0, 0, 0})[2]);
+}
+
+TEST_CASE("collect_ops_for_aabb can exceed kMaxRegionOps across a boundary even when each region is under cap") {
+	ve::EditLog log(bounds());
+	// Region 0 ends at x = 25.6. Fill each side with 200 small ops: neither region alone is
+	// full, but a component straddling the boundary sees the flattened 400-op list.
+	for (int i = 0; i < 200; i++) {
+		log.append(sphere(24.8f, 1.0f, 1.0f, 0.1f)); // region 0 only
+		log.append(sphere(26.0f, 1.0f, 1.0f, 0.1f)); // region 1 only
+	}
+	CHECK(log.op_count({0, 0, 0}) == 200);
+	CHECK(log.op_count({1, 0, 0}) == 200);
+	CHECK(log.op_count({0, 0, 0}) < ve::kMaxRegionOps);
+	CHECK(log.op_count({1, 0, 0}) < ve::kMaxRegionOps);
+	const float lo[3] = {24.8f, 0.0f, 0.0f};
+	const float hi[3] = {26.4f, 2.0f, 2.0f};
+	std::vector<ve::EditOp> ops;
+	ve::collect_ops_for_aabb(log, lo, hi, &ops);
+	REQUIRE(ops.size() > static_cast<size_t>(ve::kMaxRegionOps));
+	CHECK(ops.size() == 400);
 }
 
 TEST_CASE("ops outside the world bounds are dropped, not stored") {
@@ -82,4 +169,5 @@ TEST_CASE("clear drops everything") {
 	CHECK(log.region_count() == 0);
 	CHECK(log.op_count({0, 0, 0}) == 0);
 	CHECK(log.ops({0, 0, 0}).empty());
+	CHECK(log.seqs({0, 0, 0}).empty());
 }
