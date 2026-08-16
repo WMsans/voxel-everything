@@ -65,7 +65,9 @@ public:
 	// volume's slot index is baked into the op that names it, so reloading a saved edit log
 	// has to put each volume back where it was rather than wherever allocate() felt like.
 	bool reserve(int slot);
-	void release(int slot); // frees the bytes; refused on a pinned slot
+	// Frees the bytes. Returns false when the slot is out of range, not in use, or
+	// pinned (see pin()); true means the slot is free and its buffers were destroyed.
+	bool release(int slot);
 	// Stores only a complete, consistent volume (both vectors exactly dim^3
 	// samples). Returns false and leaves the slot unchanged on invalid data.
 	bool store(int slot, VolumeData data);

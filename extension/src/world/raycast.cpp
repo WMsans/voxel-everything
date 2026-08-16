@@ -19,6 +19,16 @@ float field_at(const Generator &gen, const EditLog &log, float x, float y, float
 	return eval_field(gen, ops.data(), static_cast<int>(ops.size()), x, y, z, volumes).sdf;
 }
 
+// Sign-crossing is only meaningful when the field at this point can actually contain a
+// volume op's positive box-distance apron. The store pointer alone is not enough: a
+// non-null but empty store over a pure analytic field must keep the classic hit_eps path.
+bool region_has_volume_add(const std::vector<EditOp> &ops) {
+	for (const EditOp &op : ops) {
+		if (op.type == kOpVolumeAdd) return true;
+	}
+	return false;
+}
+
 } // namespace
 
 RayHit raycast(const Generator &gen, const EditLog &log, const float origin[3],
@@ -33,14 +43,20 @@ RayHit raycast(const Generator &gen, const EditLog &log, const float origin[3],
 
 	float t = 0.0f;
 	// A volume op unions sample_volume_lattice's outside-the-lattice box distance into
-	// the field: a small POSITIVE value in empty air around the lattice's AABB. When a
-	// VolumeStore is present, require an actual sign crossing so that apron never reads
-	// as a surface. +inf makes a ray that starts inside solid hit at its origin.
+	// the field: a small POSITIVE value in empty air around the lattice's AABB. When the
+	// current region actually contains a volume op AND a store is present to sample it,
+	// require an actual sign crossing so that apron never reads as a surface. Otherwise
+	// keep the classic hit_eps tolerance, even when a caller passes a non-null (but
+	// irrelevant or empty) VolumeStore over a pure analytic field.
+	// +inf makes a ray that starts inside solid hit at its origin.
 	float prev_f = std::numeric_limits<float>::infinity();
 	for (int i = 0; i < 4096 && t <= max_dist; i++) {
 		const float p[3] = {origin[0] + d[0] * t, origin[1] + d[1] * t, origin[2] + d[2] * t};
-		const float f = field_at(gen, log, p[0], p[1], p[2], volumes);
-		const bool hit = volumes ? (prev_f > 0.0f && f <= 0.0f) : (f < hit_eps);
+		const std::vector<EditOp> &ops = ops_at(log, p[0], p[1], p[2]);
+		const float f = eval_field(gen, ops.data(), static_cast<int>(ops.size()), p[0], p[1],
+				p[2], volumes).sdf;
+		const bool sign_crossing = volumes != nullptr && region_has_volume_add(ops);
+		const bool hit = sign_crossing ? (prev_f > 0.0f && f <= 0.0f) : (f < hit_eps);
 		if (hit) {
 			out.hit = true;
 			out.distance = t;

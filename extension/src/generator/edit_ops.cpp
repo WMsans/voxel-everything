@@ -46,6 +46,12 @@ void unpack_extent3(uint32_t v, int *nx, int *ny, int *nz) {
 }
 
 EditOp make_box_subtract(IVec3 lo_cell, IVec3 hi_cell) {
+	// The cell range is inclusive; an inverted range used to collapse into a silent
+	// one-cell box via pack_extent3's clamp. Normalise instead so the op still names the
+	// same set of cells whichever order the caller passed them in.
+	if (lo_cell.x > hi_cell.x) std::swap(lo_cell.x, hi_cell.x);
+	if (lo_cell.y > hi_cell.y) std::swap(lo_cell.y, hi_cell.y);
+	if (lo_cell.z > hi_cell.z) std::swap(lo_cell.z, hi_cell.z);
 	EditOp op{};
 	op.type = kOpBoxSubtract;
 	op.pos[0] = static_cast<float>(lo_cell.x) * kOccupancyCellSize;

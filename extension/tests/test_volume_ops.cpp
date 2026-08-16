@@ -51,6 +51,21 @@ TEST_CASE("a box op round-trips its cell range through 32 bytes") {
 	CHECK(nz == 4);
 }
 
+TEST_CASE("make_box_subtract normalises an inverted cell range") {
+	const EditOp op = make_box_subtract({5, -2, 10}, {3, -2, 7});
+	CHECK(op.type == kOpBoxSubtract);
+	// The op must name the same cells as the correctly ordered range, not silently
+	// collapse into a one-cell box at the original (now meaningless) lo corner.
+	CHECK(op.pos[0] == doctest::Approx(3.0f * kOccupancyCellSize));
+	CHECK(op.pos[1] == doctest::Approx(-2.0f * kOccupancyCellSize));
+	CHECK(op.pos[2] == doctest::Approx(7.0f * kOccupancyCellSize));
+	int nx = 0, ny = 0, nz = 0;
+	unpack_extent3(op.aux[0], &nx, &ny, &nz);
+	CHECK(nx == 3);
+	CHECK(ny == 1);
+	CHECK(nz == 4);
+}
+
 TEST_CASE("extent packing survives every value it must carry") {
 	for (int n : {1, 2, 63, 64, 1023}) {
 		int a = 0, b = 0, c = 0;
@@ -161,6 +176,28 @@ TEST_CASE("raycast with volumes misses the lattice apron and only hits solid") {
 	CHECK(solid.pos[1] > 65.0f);
 }
 
+TEST_CASE("raycast with an empty VolumeStore keeps the pure-field hit_eps behavior") {
+	AnalyticGenerator gen;
+	EditLog log(WorldBounds{{0, -64, 0}, {64, 8, 64}});
+	VolumeSet volumes; // non-null, but no volume op exists anywhere in the log
+	// The ray starts at y = 47.603, where the field is +0.0262, and the tracer's
+	// min_step lands it at y = 47.578, where the field is +0.00119 -- positive, but
+	// within hit_eps (0.2 * kVoxelSize = 0.01). The hit_eps rule must still fire at
+	// that sample; a sign-crossing rule would only hit 2.5 cm further down.
+	const float o[3] = {100.0f, 47.603f, 100.0f};
+	const float d[3] = {0.0f, -1.0f, 0.0f};
+	const RayHit without = raycast(gen, log, o, d, 2.0f);
+	const RayHit with_empty = raycast(gen, log, o, d, 2.0f, &volumes);
+	REQUIRE(without.hit);
+	REQUIRE(with_empty.hit);
+	CHECK(with_empty.distance == doctest::Approx(without.distance));
+	CHECK(with_empty.pos[1] == doctest::Approx(without.pos[1]));
+	const float f = eval_field(gen, nullptr, 0, with_empty.pos[0], with_empty.pos[1],
+			with_empty.pos[2]).sdf;
+	CHECK(f > 0.0f);
+	CHECK(f < 0.2f * kVoxelSize);
+}
+
 TEST_CASE("a volume op with no store, or a released slot, is a no-op") {
 	AnalyticGenerator gen;
 	const float origin[3] = {8.0f, 64.0f, 8.0f};
@@ -175,7 +212,7 @@ TEST_CASE("a volume op with no store, or a released slot, is a no-op") {
 	// that no longer holds a volume.
 	const int slot = volumes.allocate();
 	REQUIRE(slot == 0);
-	volumes.release(slot);
+	CHECK(volumes.release(slot));
 	CHECK(volumes.live_count() == 0);
 	CHECK(eval_field(gen, &op, 1, cx, cy, cz, &volumes).sdf > 0.0f);
 }
@@ -273,7 +310,7 @@ TEST_CASE("the volume pool hands out every slot once and takes them back") {
 	}
 	CHECK(volumes.allocate() == -1);
 	CHECK(volumes.live_count() == kMaxVolumes);
-	volumes.release(slots[7]);
+	CHECK(volumes.release(slots[7]));
 	CHECK(volumes.live_count() == kMaxVolumes - 1);
 	// Releasing frees the bytes: a 64-slot pool of 64^3 volumes is 33 MB and the manager
 	// leans on release() to stay under spec §5's island-texture cap.
@@ -295,7 +332,7 @@ TEST_CASE("a pinned slot can never be released or handed out again") {
 	const int slot = volumes.allocate();
 	CHECK(volumes.pin(slot));
 	CHECK(volumes.pinned(slot));
-	volumes.release(slot);
+	CHECK_FALSE(volumes.release(slot));
 	// Still live: an op in the edit log names this slot, and the GPU mirrors have no
 	// liveness flag -- reusing it would silently swap one piece of rubble for another.
 	CHECK(volumes.live_count() == 1);
@@ -352,6 +389,33 @@ TEST_CASE("resample_volume rejects a non-positive source voxel pitch") {
 
 	src_op.radius = -0.05f;
 	CHECK(!resample_volume(src, src_op, identity, at, 0, kIslandDim, &out, &out_op));
+}
+
+TEST_CASE("resample_volume rejects a source op that is not a volume add") {
+	const float origin[3] = {8.0f, 64.0f, 8.0f};
+	const VolumeData src = ball_volume(32, 0.05f, 0.4f, 2);
+	EditOp src_op = make_volume_add(0, origin, 0.05f, 32);
+	src_op.type = kOpSphereAdd; // a malformed edit log could hand us any op type
+	const float identity[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+	const float at[3] = {0.0f, 0.0f, 0.0f};
+	VolumeData out;
+	EditOp out_op{};
+	CHECK(!resample_volume(src, src_op, identity, at, 0, kIslandDim, &out, &out_op));
+}
+
+TEST_CASE("resample_volume rejects a non-orthonormal basis") {
+	const float origin[3] = {8.0f, 64.0f, 8.0f};
+	const VolumeData src = ball_volume(32, 0.05f, 0.4f, 2);
+	const EditOp src_op = make_volume_add(0, origin, 0.05f, 32);
+	const float at[3] = {0.0f, 0.0f, 0.0f};
+	VolumeData out;
+	EditOp out_op{};
+
+	float scaled[9] = {2, 0, 0, 0, 1, 0, 0, 0, 1};
+	CHECK(!resample_volume(src, src_op, scaled, at, 0, kIslandDim, &out, &out_op));
+
+	float skew[9] = {1, 0, 0, 0, 1, 0, 0.5f, 0, 1};
+	CHECK(!resample_volume(src, src_op, skew, at, 0, kIslandDim, &out, &out_op));
 }
 
 TEST_CASE("eval_brick threads a volume op through a VolumeStore") {

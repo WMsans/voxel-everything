@@ -4,6 +4,30 @@
 
 namespace ve {
 
+namespace {
+
+// `basis` is row-major and must be orthonormal for resample_volume's
+// inverse-by-transpose mapping to be exact.
+bool is_orthonormal_basis(const float basis[9]) {
+	constexpr float kTol = 1e-4f;
+	for (int r = 0; r < 3; r++) {
+		const float *row = basis + 3 * r;
+		const float len2 = row[0] * row[0] + row[1] * row[1] + row[2] * row[2];
+		if (std::fabs(len2 - 1.0f) > kTol) return false;
+	}
+	for (int a = 0; a < 3; a++) {
+		for (int b = a + 1; b < 3; b++) {
+			const float dot = basis[0 * 3 + a] * basis[0 * 3 + b] +
+					basis[1 * 3 + a] * basis[1 * 3 + b] +
+					basis[2 * 3 + a] * basis[2 * 3 + b];
+			if (std::fabs(dot) > kTol) return false;
+		}
+	}
+	return true;
+}
+
+} // namespace
+
 bool sample_volume_lattice(const uint8_t *sdf, const uint8_t *mat, int dim,
 		const float origin[3], float voxel, float x, float y, float z, VolumeSample *out) {
 	if (!sdf || !mat || !out || dim < 2 || voxel <= 0.0f) return false;
@@ -67,15 +91,16 @@ bool VolumeSet::reserve(int slot) {
 	return true;
 }
 
-void VolumeSet::release(int slot) {
-	if (slot < 0 || slot >= kMaxVolumes || !slots_[slot].used) return;
-	if (slots_[slot].pinned) return; // an op still names it; see pin()
+bool VolumeSet::release(int slot) {
+	if (slot < 0 || slot >= kMaxVolumes || !slots_[slot].used) return false;
+	if (slots_[slot].pinned) return false; // an op still names it; see pin()
 	slots_[slot].used = false;
 	// Assigning a fresh VolumeData destroys the old vectors and frees their
 	// buffers immediately; release() exists specifically to shed those bytes.
 	slots_[slot].data = VolumeData{};
 	slots_[slot].version = next_version_++;
 	live_--;
+	return true;
 }
 
 bool VolumeSet::store(int slot, VolumeData data) {
@@ -115,7 +140,12 @@ bool VolumeSet::sample(int slot, float x, float y, float z, const EditOp &op,
 
 bool resample_volume(const VolumeData &src, const EditOp &src_op, const float basis[9],
 		const float origin[3], int slot, int dim, VolumeData *out, EditOp *out_op) {
-	if (!src.valid() || src_op.radius <= 0.0f || dim < 2 || !out || !out_op) return false;
+	// The inverse-by-transpose below only holds for an orthonormal basis, and the pitch
+	// is only meaningful for an op that actually names a volume lattice.
+	if (!src.valid() || src_op.type != kOpVolumeAdd || src_op.radius <= 0.0f ||
+			!basis || !origin || !is_orthonormal_basis(basis) || dim < 2 || !out ||
+			!out_op)
+		return false;
 
 	// World AABB of the rotated source box: transform its eight corners.
 	const float span = static_cast<float>(src.dim - 1) * src_op.radius;
