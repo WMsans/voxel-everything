@@ -370,8 +370,9 @@ func test_atlas_slot_full_refusal_retries_after_a_slot_frees(timeout := 180000) 
 		w.debug_island_frame(1.0 / 60.0, CENTER)
 		st = w.debug_island_stats()
 		# The carve itself enqueues a follow-up connectivity window; wait for that too so the
-		# re-queued atlas window has provably been consumed.
-		if st["islands_spawned"] > 0 and st["pending_windows"] == 0:
+		# re-queued atlas window has provably been consumed. Also wait for in_flight == 0: a
+		# landing extraction can enqueue another window after pending_windows briefly reads 0.
+		if st["islands_spawned"] > 0 and st["in_flight"] == 0 and st["pending_windows"] == 0:
 			break
 	assert_int(st["islands_spawned"]).override_failure_message(
 		"the atlas-full refusal was never retried after a slot freed: %s" % st).is_greater(0)

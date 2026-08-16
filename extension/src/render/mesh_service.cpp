@@ -48,7 +48,9 @@ void MeshService::stop() {
 	pending_extract_.clear();
 	extract_results_.clear();
 	pending_volumes_.clear();
+#ifdef DEBUG_ENABLED
 	submitted_volume_slots_.clear();
+#endif
 	ready_.store(false, std::memory_order_release);
 	busy_.store(false, std::memory_order_release);
 	extract_busy_.store(false, std::memory_order_release);
@@ -116,7 +118,9 @@ bool MeshService::submit_volume(int slot, ve::VolumeData data) {
 		std::lock_guard<std::mutex> lock(mu_);
 		if (stopping_) return false;
 		pending_volumes_.push_back({slot, std::move(data)});
+#ifdef DEBUG_ENABLED
 		submitted_volume_slots_.push_back(slot);
+#endif
 	}
 	cv_.notify_one();
 	return true;
@@ -130,8 +134,12 @@ void MeshService::discard_pending_volume_upload(int slot) {
 }
 
 std::vector<int> MeshService::debug_submitted_volume_slots() const {
+#ifdef DEBUG_ENABLED
 	std::lock_guard<std::mutex> lock(mu_);
 	return submitted_volume_slots_;
+#else
+	return {};
+#endif
 }
 
 bool MeshService::run_sync(const std::function<void(MeshPass &)> &fn) {

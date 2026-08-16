@@ -96,8 +96,12 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_set_fail_extract_submit", "v"),
 			&VoxelWorld::debug_set_fail_extract_submit);
 	ClassDB::bind_method(D_METHOD("debug_set_merge_sleep_seconds", "v"), &VoxelWorld::debug_set_merge_sleep_seconds);
+#ifdef DEBUG_ENABLED
+	// These hooks can change the production 64-body cap or mark atlas slots used; keep them
+	// out of release ClassDB so release scripts cannot call them.
 	ClassDB::bind_method(D_METHOD("debug_set_max_dynamic_bodies", "v"), &VoxelWorld::debug_set_max_dynamic_bodies);
 	ClassDB::bind_method(D_METHOD("debug_set_atlas_slot_used", "slot", "used"), &VoxelWorld::debug_set_atlas_slot_used);
+#endif
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_spawn", "fail"), &VoxelWorld::debug_set_fail_next_spawn);
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_restore", "fail"), &VoxelWorld::debug_set_fail_next_restore);
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_carve", "fail"), &VoxelWorld::debug_set_fail_next_carve);
@@ -193,7 +197,12 @@ void VoxelWorld::teardown_gpu() {
 	if (residency_) { residency_->clear(); } // slot assignments are meaningless pre-atlas
 	if (island_cull_) { delete island_cull_; island_cull_ = nullptr; }
 	if (islands_) { delete islands_; islands_ = nullptr; }
-	island_slots_ = 0;
+	{
+		// island_slot_count() can still be on the render thread during teardown; keep the
+		// high-water mark's write under the same mutex.
+		std::lock_guard<std::mutex> lock(island_mutex_);
+		island_slots_ = 0;
+	}
 	if (atlas_) { delete atlas_; atlas_ = nullptr; }
 	initialized_ = false;
 }
@@ -304,6 +313,16 @@ ve::WorldBounds VoxelWorld::world_bounds() const {
 	return b;
 }
 
+int VoxelWorld::island_slot_count() const {
+	// The render thread calls this from RaymarchCompositor::_render_callback. The manager
+	// pointer and island_slots_ are written on the main thread, so reads must hold
+	// island_mutex_. The manager's own slot_high_water_ is atomic as well, since it is also
+	// updated outside this mutex.
+	std::lock_guard<std::mutex> lock(island_mutex_);
+	const int manager_slots = island_manager_ ? island_manager_->slot_high_water() : 0;
+	return island_slots_ > manager_slots ? island_slots_ : manager_slots;
+}
+
 void VoxelWorld::ensure_physics_initialized() {
 	if (physics_ready_) return;
 	// The CPU cores are shared with the streaming path and outlive both (voxel_world.h).
@@ -335,9 +354,12 @@ void VoxelWorld::ensure_physics_initialized() {
 	colliders_->set_shape_builds_per_frame(shape_builds_per_frame_);
 	// Publish the manager under edit_mutex_: append_edit_locked() can be called from a tool
 	// thread and reads island_manager_ while holding that lock, so creation must not expose a
-	// half-initialized pointer to it.
+	// half-initialized pointer to it. Also take island_mutex_ (edit_mutex_ -> island_mutex_
+	// order, matching teardown) so the render thread's island_slot_count() sees a stable
+	// pointer.
 	{
 		std::lock_guard<std::mutex> lock(edit_mutex_);
+		std::lock_guard<std::mutex> island_lock(island_mutex_);
 		island_manager_ = new IslandManager();
 		island_manager_->initialize(this);
 	}
@@ -351,9 +373,12 @@ void VoxelWorld::teardown_physics() {
 	// The manager owns the real island bodies; tear it down before the mesher's worker and
 	// the colliders so its volume-slot bookkeeping still has a live VolumeSet to ask. Hold
 	// edit_mutex_ while deleting/null it: a tool thread may already be inside
-	// append_edit_locked() reading island_manager_ to call note_edit().
+	// append_edit_locked() reading island_manager_ to call note_edit(). Also take
+	// island_mutex_ so the render thread's island_slot_count() cannot dereference a manager
+	// that is being destroyed (lock order: edit_mutex_ -> island_mutex_).
 	{
 		std::lock_guard<std::mutex> lock(edit_mutex_);
+		std::lock_guard<std::mutex> island_lock(island_mutex_);
 		if (island_manager_) {
 			island_manager_->teardown();
 			delete island_manager_;
@@ -659,6 +684,7 @@ void VoxelWorld::debug_set_merge_sleep_seconds(float v) {
 	if (island_manager_) island_manager_->set_merge_sleep_seconds(v);
 }
 
+#ifdef DEBUG_ENABLED
 void VoxelWorld::debug_set_max_dynamic_bodies(int v) {
 	ensure_physics_initialized();
 	// Clamp before forwarding: a test hook should be able to lower the guardrail but not
@@ -671,6 +697,18 @@ void VoxelWorld::debug_set_atlas_slot_used(int slot, bool used) {
 	ensure_physics_initialized();
 	if (island_manager_) island_manager_->debug_set_atlas_slot_used(slot, used);
 }
+#else
+void VoxelWorld::debug_set_max_dynamic_bodies(int v) {
+	// Debug-only hook: release scripts cannot lower the 64-body guardrail.
+	(void)v;
+}
+
+void VoxelWorld::debug_set_atlas_slot_used(int slot, bool used) {
+	// Debug-only hook: release scripts cannot mark atlas slots used.
+	(void)slot;
+	(void)used;
+}
+#endif
 
 void VoxelWorld::debug_set_fail_next_spawn(bool fail) {
 	ensure_physics_initialized();
@@ -1111,7 +1149,10 @@ Dictionary VoxelWorld::debug_place_test_island_rotated(int slot, Vector3i lo_cel
 
 	all[slot] = desc;
 	islands_->upload_descriptors(device, all, kMaxIslands);
-	island_slots_ = std::max(island_slots_, slot + 1);
+	{
+		std::lock_guard<std::mutex> lock(island_mutex_);
+		island_slots_ = std::max(island_slots_, slot + 1);
+	}
 	device->submit();
 	device->sync();
 
@@ -1239,7 +1280,7 @@ PackedInt32Array VoxelWorld::debug_island_tile_mask(Vector3 origin, Vector3 dir,
 	cam.params[0] = tan_x;
 	cam.params[1] = tan_y;
 	if (!island_cull_->render(device, *islands_, cam, width, height,
-				std::max(island_slots_, 1)))
+				std::max(island_slot_count(), 1)))
 		return out;
 	device->submit();
 	device->sync();

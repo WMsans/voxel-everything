@@ -98,7 +98,7 @@ public:
 	void discard_pending_volume_upload(int slot);
 	// Test hook: report the slots this MeshService accepted through submit_volume since it
 	// was started. Used by teardown/reinit tests to verify pinned volumes are replayed into
-	// the new worker.
+	// the new worker. Debug-only: release builds do not accumulate the backing vector.
 	std::vector<int> debug_submitted_volume_slots() const;
 
 	// Runs `fn` on the worker thread and waits for it. The diagnostic entry points
@@ -127,7 +127,11 @@ private:
 	std::vector<IslandExtractJob> pending_extract_;
 	std::vector<IslandExtractResult> extract_results_;
 	std::vector<VolumeUpload> pending_volumes_;
-	std::vector<int> submitted_volume_slots_; // debug: accepted volume upload slots
+#ifdef DEBUG_ENABLED
+	// Debug-only: accepted volume upload slots, used by debug_submitted_volume_slots().
+	// Guarded so release builds do not grow this vector forever across re-merges/restores.
+	std::vector<int> submitted_volume_slots_;
+#endif
 	std::atomic<bool> extract_busy_{false};
 	std::atomic<bool> extract_available_{false};
 	std::atomic<bool> fail_extracts_{false};

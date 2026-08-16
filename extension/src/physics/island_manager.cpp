@@ -444,7 +444,8 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 			return;
 		}
 		atlas_used_[static_cast<size_t>(atlas_slot)] = 1;
-		slot_high_water_ = std::max(slot_high_water_, atlas_slot + 1);
+		const int high = std::max(slot_high_water_.load(std::memory_order_relaxed), atlas_slot + 1);
+		slot_high_water_.store(high, std::memory_order_relaxed);
 	}
 
 	if (!world_->volumes().store(f.volume_slot, r.data)) {

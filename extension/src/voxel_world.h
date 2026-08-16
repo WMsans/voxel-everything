@@ -73,7 +73,7 @@ class VoxelWorld : public Node3D {
 
 	GpuAtlas *atlas_ = nullptr;
 	IslandAtlas *islands_ = nullptr;
-	int island_slots_ = 0; // high-water mark, not a population; see island_slot_count()
+	int island_slots_ = 0; // high-water mark, not a population; guarded by island_mutex_
 	IslandCullPass *island_cull_ = nullptr;
 	RegionPass *region_pass_ = nullptr;
 	BrickGenPass *gen_pass_ = nullptr;
@@ -107,7 +107,7 @@ class VoxelWorld : public Node3D {
 	ve::ChunkResidency *chunks_ = nullptr;
 	ColliderStreamer *colliders_ = nullptr;
 	IslandManager *island_manager_ = nullptr;
-	std::mutex island_mutex_;
+	mutable std::mutex island_mutex_; // also guards island_manager_ and island_slots_
 	// Bytes on their way to a GPU pool. Filled on the main thread, drained on the render
 	// thread by the compositor before it runs the streamer -- an op that names a volume must
 	// never be evaluated before the volume is there.
@@ -185,11 +185,9 @@ public:
 	IslandAtlas *islands() { return islands_; }
 	// High-water mark, not a population: the shader masks off bits at or above it and then
 	// tests each remaining slot's descriptor for dim >= 2, so a dead slot below the mark
-	// costs one branch and nothing else.
-	int island_slot_count() const {
-		const int manager_slots = island_manager_ ? island_manager_->slot_high_water() : 0;
-		return island_slots_ > manager_slots ? island_slots_ : manager_slots;
-	}
+	// costs one branch and nothing else. Non-inline: the render thread calls this and must
+	// take island_mutex_ before touching island_manager_ / island_slots_.
+	int island_slot_count() const;
 	WorldStreamer *streamer() { return streamer_; }
 	ve::EditLog *edit_log() { return edit_log_; }
 	ve::VolumeSet &volumes() { return volumes_; }
