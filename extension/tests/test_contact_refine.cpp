@@ -80,7 +80,7 @@ TEST_CASE("a solidly attached slab has no bridge at its base") {
 	flood_anchored(g, w, nullptr, &r);
 	std::vector<BridgeLink> bridges;
 	find_anchor_bridges(r, ContactRefineConfig{}, &bridges);
-	for (const BridgeLink &b : bridges) CHECK(b.axis != 1);
+	CHECK(bridges.empty());
 }
 
 TEST_CASE("a thin contact is cut and the piece above becomes an island") {
@@ -100,7 +100,7 @@ TEST_CASE("a thin contact is cut and the piece above becomes an island") {
 	CHECK(r.anchored[w.index({8, 1, 8})] == 1); // the floor is untouched
 }
 
-TEST_CASE("a fat contact is left alone and the probe is asked once") {
+TEST_CASE("a fat contact is left alone and the probe is asked once per bridge") {
 	const FloodWindow w = window16();
 	const OccupancyGrid g = mushroom();
 	FloodResult r;
@@ -112,7 +112,10 @@ TEST_CASE("a fat contact is left alone and the probe is asked once") {
 	CHECK(refine_anchoring(g, probe, ContactRefineConfig{}, &cuts, &r) == 0);
 	CHECK(cuts.size() == 0);
 	CHECK(r.anchored_count == anchored_before);
-	CHECK(probe.calls >= 1);
+	// The mushroom's seedless subtree is a one-cell stalk + cap chain, so every link on
+	// that chain is a bridge: cap (25), stalk joints (26, 27) and foot (28). Each is
+	// probed exactly once, all read fat, and no further pass is needed.
+	CHECK(probe.calls == 4);
 }
 
 TEST_CASE("cutting one neck exposes the next one, within the iteration budget") {
@@ -135,22 +138,29 @@ TEST_CASE("cutting one neck exposes the next one, within the iteration budget") 
 	CHECK(r.anchored[w.index({8, 2, 8})] == 0);
 }
 
-TEST_CASE("a bridge separating most of the window is not a candidate") {
+TEST_CASE("a bridge separating more than max_piece_cells is not a candidate") {
 	const FloodWindow w = window16();
-	OccupancyGrid g = air_grid({-1, -1, -1}, {16, 16, 16});
-	// Two full halves joined by one cell. Whichever side the DFS roots in, the other is
-	// huge, and a piece that big is the world, not a rock.
-	fill(&g, {0, 0, 0}, {6, 15, 15}, kCellFull);
-	fill(&g, {8, 0, 0}, {15, 15, 15}, kCellFull);
-	g.set_cell({7, 8, 8}, kCellFull, 2);
+	const OccupancyGrid g = mushroom();
 	FloodResult r;
 	flood_anchored(g, w, nullptr, &r);
 
 	ContactRefineConfig cfg;
-	cfg.max_piece_cells = 512;
+	cfg.max_piece_cells = 26;
 	std::vector<BridgeLink> bridges;
 	find_anchor_bridges(r, cfg, &bridges);
-	for (const BridgeLink &b : bridges) CHECK(b.piece_cells <= cfg.max_piece_cells);
+
+	// The mushroom's seedless stalk + cap chain yields four bridges (25, 26, 27, 28 cells).
+	// With the cap at 26, the foot (8,1,8)+y -- the largest piece, 28 cells -- is filtered
+	// out, while the cap link (8,4,8)+y (25 cells) still qualifies.
+	bool foot_found = false;
+	bool cap_found = false;
+	for (const BridgeLink &b : bridges) {
+		if (b.cell == IVec3{8, 1, 8} && b.axis == 1) foot_found = true;
+		if (b.cell == IVec3{8, 4, 8} && b.axis == 1) cap_found = true;
+		CHECK(b.piece_cells <= cfg.max_piece_cells);
+	}
+	CHECK(!foot_found);
+	CHECK(cap_found);
 }
 
 TEST_CASE("contact_samples_field counts solid samples on the shared face") {
