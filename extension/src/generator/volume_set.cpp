@@ -115,7 +115,7 @@ bool VolumeSet::sample(int slot, float x, float y, float z, const EditOp &op,
 
 bool resample_volume(const VolumeData &src, const EditOp &src_op, const float basis[9],
 		const float origin[3], int slot, int dim, VolumeData *out, EditOp *out_op) {
-	if (!src.valid() || dim < 2 || !out || !out_op) return false;
+	if (!src.valid() || src_op.radius <= 0.0f || dim < 2 || !out || !out_op) return false;
 
 	// World AABB of the rotated source box: transform its eight corners.
 	const float span = static_cast<float>(src.dim - 1) * src_op.radius;

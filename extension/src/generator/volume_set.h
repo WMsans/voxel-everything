@@ -50,8 +50,8 @@ struct VolumeData {
 // sound lower bound on the distance to anything the volume contains (the contents are inside
 // the box). For the union the op performs that can only ever tighten a positive distance,
 // never add material, and it keeps sphere tracing conservative. The extraction pads the
-// island so its outermost lattice shell is already positive, so the two branches agree at
-// the seam.
+// island so its outermost lattice shell is already positive, but at the seam the outside
+// value is a conservative lower bound on the lattice's own value, not an exact match.
 bool sample_volume_lattice(const uint8_t *sdf, const uint8_t *mat, int dim,
 		const float origin[3], float voxel, float x, float y, float z, VolumeSample *out);
 
@@ -71,7 +71,8 @@ public:
 	bool store(int slot, VolumeData data);
 	const VolumeData *get(int slot) const;
 	int live_count() const { return live_; }
-	// Bumped on every successful store(); the GPU mirrors re-upload a slot when their
+	// Bumped on every mutation that allocates, frees, or replaces a slot's bytes
+	// (allocate, reserve, release, store); the GPU mirrors re-upload a slot when their
 	// copy is behind.
 	int64_t version(int slot) const;
 

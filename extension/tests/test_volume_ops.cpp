@@ -1,6 +1,7 @@
 #include "connectivity/occupancy.h"
 #include "generator/volume_set.h"
 #include "world/brick_eval.h"
+#include "world/raycast.h"
 #include <doctest/doctest.h>
 #include <cmath>
 #include <vector>
@@ -132,6 +133,34 @@ TEST_CASE("a volume op adds exactly what its lattice holds") {
 	CHECK(eval_field(gen, &op, 1, cx + 20.0f, cy, cz, &volumes).sdf > 0.0f);
 }
 
+TEST_CASE("raycast with volumes misses the lattice apron and only hits solid") {
+	AnalyticGenerator gen;
+	EditLog log(WorldBounds{{0, -64, 0}, {64, 8, 64}});
+	VolumeSet volumes;
+	const int slot = volumes.allocate();
+	REQUIRE(slot == 0);
+	REQUIRE(volumes.store(slot, ball_volume(32, 0.05f, 0.4f, 2)));
+	const float origin[3] = {8.0f, 64.0f, 8.0f};
+	const EditOp op = make_volume_add(slot, origin, 0.05f, 32);
+	REQUIRE_FALSE(log.append(op).touched.empty());
+
+	// The ray passes 5 mm outside the lattice's top corner, far from the ball inside.
+	// The volume op unions the lattice's box distance into the field there, so an
+	// f < hit_eps test reads empty air as a surface; only a sign crossing is real.
+	const float o[3] = {9.555f, 70.0f, 9.555f};
+	const float d[3] = {0.0f, -1.0f, 0.0f};
+	const RayHit h = raycast(gen, log, o, d, 6.0f, &volumes);
+	CHECK_FALSE(h.hit);
+
+	// Control: a ray through the ball's centre still reports the real surface, so the
+	// sign-crossing test above is rejecting only the apron, not volume hits in general.
+	const float co[3] = {8.775f, 70.0f, 8.775f};
+	const RayHit solid = raycast(gen, log, co, d, 20.0f, &volumes);
+	REQUIRE(solid.hit);
+	CHECK(solid.pos[1] < 66.0f);
+	CHECK(solid.pos[1] > 65.0f);
+}
+
 TEST_CASE("a volume op with no store, or a released slot, is a no-op") {
 	AnalyticGenerator gen;
 	const float origin[3] = {8.0f, 64.0f, 8.0f};
@@ -141,6 +170,13 @@ TEST_CASE("a volume op with no store, or a released slot, is a no-op") {
 	// putting a block of undefined bytes into the terrain.
 	CHECK(eval_field(gen, &op, 1, cx, cy, cz, nullptr).sdf > 0.0f);
 	VolumeSet volumes;
+	CHECK(eval_field(gen, &op, 1, cx, cy, cz, &volumes).sdf > 0.0f);
+	// A released slot must be indistinguishable from an empty one: the op names a slot
+	// that no longer holds a volume.
+	const int slot = volumes.allocate();
+	REQUIRE(slot == 0);
+	volumes.release(slot);
+	CHECK(volumes.live_count() == 0);
 	CHECK(eval_field(gen, &op, 1, cx, cy, cz, &volumes).sdf > 0.0f);
 }
 
@@ -299,6 +335,23 @@ TEST_CASE("resample_volume rejects a malformed short-vector VolumeData") {
 	bad.sdf.assign(1, 0);
 	bad.mat.assign(1, 0);
 	CHECK(!resample_volume(bad, src_op, identity, at, 0, kIslandDim, &out, &out_op));
+}
+
+TEST_CASE("resample_volume rejects a non-positive source voxel pitch") {
+	const float origin[3] = {8.0f, 64.0f, 8.0f};
+	const VolumeData src = ball_volume(32, 0.05f, 0.4f, 2);
+	// make_volume_add clamps non-positive pitches, so build an op the way a malformed
+	// edit log could: a kOpVolumeAdd whose radius is zero or negative.
+	EditOp src_op = make_volume_add(0, origin, 0.05f, 32);
+	src_op.radius = 0.0f;
+	const float identity[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+	const float at[3] = {0.0f, 0.0f, 0.0f};
+	VolumeData out;
+	EditOp out_op{};
+	CHECK(!resample_volume(src, src_op, identity, at, 0, kIslandDim, &out, &out_op));
+
+	src_op.radius = -0.05f;
+	CHECK(!resample_volume(src, src_op, identity, at, 0, kIslandDim, &out, &out_op));
 }
 
 TEST_CASE("eval_brick threads a volume op through a VolumeStore") {

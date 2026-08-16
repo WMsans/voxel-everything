@@ -1,6 +1,7 @@
 #include "world/raycast.h"
 #include "world/brick_eval.h"
 #include <cmath>
+#include <limits>
 
 namespace ve {
 
@@ -31,10 +32,16 @@ RayHit raycast(const Generator &gen, const EditLog &log, const float origin[3],
 	const float hit_eps = 0.2f * kVoxelSize;
 
 	float t = 0.0f;
+	// A volume op unions sample_volume_lattice's outside-the-lattice box distance into
+	// the field: a small POSITIVE value in empty air around the lattice's AABB. When a
+	// VolumeStore is present, require an actual sign crossing so that apron never reads
+	// as a surface. +inf makes a ray that starts inside solid hit at its origin.
+	float prev_f = std::numeric_limits<float>::infinity();
 	for (int i = 0; i < 4096 && t <= max_dist; i++) {
 		const float p[3] = {origin[0] + d[0] * t, origin[1] + d[1] * t, origin[2] + d[2] * t};
 		const float f = field_at(gen, log, p[0], p[1], p[2], volumes);
-		if (f < hit_eps) {
+		const bool hit = volumes ? (prev_f > 0.0f && f <= 0.0f) : (f < hit_eps);
+		if (hit) {
 			out.hit = true;
 			out.distance = t;
 			out.pos[0] = p[0]; out.pos[1] = p[1]; out.pos[2] = p[2];
@@ -55,6 +62,7 @@ RayHit raycast(const Generator &gen, const EditLog &log, const float origin[3],
 			return out;
 		}
 		t += std::max(f * inv_l, min_step);
+		prev_f = f;
 	}
 	return out;
 }
