@@ -145,6 +145,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_op_counts"), &VoxelWorld::debug_op_counts);
 	ClassDB::bind_method(D_METHOD("debug_occupancy_state", "cell"), &VoxelWorld::debug_occupancy_state);
 	ClassDB::bind_method(D_METHOD("debug_cell_state", "cell"), &VoxelWorld::debug_cell_state);
+	ClassDB::bind_method(D_METHOD("debug_field_sdf", "p"), &VoxelWorld::debug_field_sdf);
 	ClassDB::bind_method(D_METHOD("debug_occupancy_stats", "center"), &VoxelWorld::debug_occupancy_stats);
 	ClassDB::bind_method(D_METHOD("debug_stream_frame", "cam"), &VoxelWorld::debug_stream_frame);
 	ClassDB::bind_method(D_METHOD("debug_stream_stats"), &VoxelWorld::debug_stream_stats);
@@ -1818,6 +1819,16 @@ void VoxelWorld::drain_occupancy() {
 int VoxelWorld::debug_occupancy_state(Vector3i cell) {
 	drain_occupancy(); // tests step the streamer by hand and never run _process
 	return static_cast<int>(occupancy_.state({cell.x, cell.y, cell.z}));
+}
+
+float VoxelWorld::debug_field_sdf(Vector3 p) {
+	if (!edit_log_) return 1e30f;
+	ve::AnalyticGenerator gen;
+	std::lock_guard<std::mutex> lock(edit_mutex_);
+	const std::vector<ve::EditOp> &ops =
+			edit_log_->ops(ve::WorldBounds::region_of_point(p.x, p.y, p.z));
+	return ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()), p.x, p.y, p.z,
+			&volumes_).sdf;
 }
 
 int VoxelWorld::debug_cell_state(Vector3i cell) {

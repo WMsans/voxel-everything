@@ -4,6 +4,7 @@
 #include "render/mesh_service.h"
 #include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/core/error_macros.hpp>
+#include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <algorithm>
 #include <chrono>
@@ -11,6 +12,12 @@
 #include <cstring>
 
 using namespace godot;
+
+#ifdef DEBUG_ENABLED
+#define DBG_LAND(n) (debug_land_.n++)
+#else
+#define DBG_LAND(n) ((void)0)
+#endif
 
 namespace {
 
@@ -600,7 +607,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 			// refusals before submission, the originating window has already been popped by
 			// the time we learn the atlas is full, so re-queue it or the edit is lost when a
 			// slot later frees.
-			refused_++;
+			refused_++; DBG_LAND(atlas_full);
 			world_->volumes().release(f.volume_slot);
 			queue_retry_window(f.window);
 			return;
@@ -613,7 +620,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 	if (!world_->volumes().store(f.volume_slot, r.data)) {
 		if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
 		world_->volumes().release(f.volume_slot);
-		refused_++;
+		refused_++; DBG_LAND(store_failed);
 		return; // nothing carved yet: the piece stays attached in the field
 	}
 
@@ -677,26 +684,63 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		if (!world_->edit_log()) {
 			if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
 			world_->volumes().release(f.volume_slot);
-			refused_++;
+			refused_++; DBG_LAND(no_edit_log);
 			return;
 		}
 		if (!has_restore_headroom()) {
 			if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
 			world_->volumes().release(f.volume_slot);
-			refused_++;
+			refused_++; DBG_LAND(preflight);
 			return; // preflight refused: no carve, no hole, the component stays attached
 		}
 
 		// Re-check freshness under the SAME lock as preflight/pin/spawn/carve. The ops were
-		// captured at submit time; if the field changed since then (including by a carve from
-		// another extraction that landed first), do not carve a stale volume. Release the
-		// atlas/volume resources and back off -- the edit that changed the field queued its
-		// own connectivity window.
+		// captured at submit time; if the field changed since then, do not carve a stale
+		// volume. Release the atlas/volume resources and back off -- the edit that changed the
+		// field queued its own connectivity window.
+		//
+		// Only ops that reach INSIDE THE BOXES count. The captured list was gathered over the
+		// component's whole AABB, but the island is the field intersected with the box union
+		// (ve::extract_island_volume masks every sample with max(field, box union)), so an op
+		// that misses every box changed nothing this extraction depends on and nothing the
+		// carve is about to remove.
+		//
+		// Comparing the whole AABB list instead was a livelock. One connectivity pass submits
+		// kExtractsPerFrame extractions from the SAME blast, and neighbouring components have
+		// overlapping AABBs; the first to land appends its carve ops, which land in the second
+		// one's AABB and declare it stale even though the two components are cell-disjoint by
+		// construction (ve::label_islands emits disjoint components and ve::greedy_box_merge
+		// tiles each one exactly). The second was thrown away and its window re-queued, every
+		// time -- so a blast that freed many pieces dropped one piece per pass at best, and
+		// could make no progress at all. That is the "some parts take a very long time to fall,
+		// or never do" report. Overlap is STRICT so that a sibling's box sharing a face plane
+		// with ours -- which removes nothing on our side of it -- does not count.
 		{
+			const auto reaches_the_boxes = [&f](const ve::EditOp &op) {
+				float olo[3], ohi[3];
+				ve::op_world_aabb(op, olo, ohi);
+				for (const ve::CellBox &box : f.boxes) {
+					float blo[3], bhi[3];
+					box.world_aabb(blo, bhi);
+					bool overlaps = true;
+					for (int a = 0; a < 3; a++)
+						if (!(olo[a] < bhi[a] && ohi[a] > blo[a])) {
+							overlaps = false;
+							break;
+						}
+					if (overlaps) return true;
+				}
+				return false;
+			};
 			std::vector<ve::EditOp> current_ops;
 			ve::collect_ops_for_aabb(*world_->edit_log(), f.aabb_lo, f.aabb_hi, &current_ops);
-			const bool stale = current_ops.size() != f.ops.size() ||
-					!std::equal(current_ops.begin(), current_ops.end(), f.ops.begin(),
+			std::vector<ve::EditOp> now, then;
+			for (const ve::EditOp &op : current_ops)
+				if (reaches_the_boxes(op)) now.push_back(op);
+			for (const ve::EditOp &op : f.ops)
+				if (reaches_the_boxes(op)) then.push_back(op);
+			const bool stale = now.size() != then.size() ||
+					!std::equal(now.begin(), now.end(), then.begin(),
 							[](const ve::EditOp &a, const ve::EditOp &b) {
 								return std::memcmp(&a, &b, sizeof(ve::EditOp)) == 0;
 							});
@@ -704,7 +748,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 				if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
 				world_->volumes().release(f.volume_slot);
 				queue_retry_window(f.window);
-				refused_++;
+				refused_++; DBG_LAND(stale);
 				return; // stale extraction: no carve, the component stays attached
 			}
 		}
@@ -715,7 +759,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		if (!world_->volumes().pin(f.volume_slot)) {
 			if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
 			world_->volumes().release(f.volume_slot);
-			refused_++;
+			refused_++; DBG_LAND(pin_failed);
 			return; // no carve happened: the component stays attached
 		}
 
@@ -751,7 +795,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 			debug_fail_next_carve_ = false;
 			if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
 			release_unreferenced_birth_slot();
-			refused_++;
+			refused_++; DBG_LAND(spawn_failed);
 			return; // no carve happened: the component stays attached
 		}
 
@@ -787,6 +831,9 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 						for (int x = box.lo.x; x <= box.hi.x; x++)
 							world_->occupancy().set_cell(
 									{x, y, z}, ve::kCellAir, world_->edit_seq());
+#ifdef DEBUG_ENABLED
+			for (const ve::CellBox &box : f.boxes) debug_carved_boxes_.push_back(box);
+#endif
 			// A live body's birth volume is normally unpinned. If a carve-rejection restore
 			// already appended a volume-add naming this slot, it must stay pinned forever.
 			if (!restore_referenced_slot) world_->volumes().unpin(f.volume_slot);
@@ -804,7 +851,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 				delete body;
 				if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
 				release_unreferenced_birth_slot();
-				refused_++;
+				refused_++; DBG_LAND(carve_nothing);
 				return; // nothing was carved: the component simply stays attached
 			}
 			// The slot was pinned before the first carve, so the restore volume-add can always
@@ -835,7 +882,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 										{x, y, z}, ve::kCellSolid, world_->edit_seq());
 				delete body;
 				if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
-				refused_++;
+				refused_++; DBG_LAND(carve_restored);
 				return; // no hole: the component is back in the field, not a body
 			}
 			// The restore cannot cover every carved region. Keep the body alive so every
@@ -1293,6 +1340,29 @@ Dictionary IslandManager::stats() {
 	d["refused_landing"] = refused_ - named;
 	d["crumbled"] = crumbled_;
 	d["components_labelled"] = components_labelled_;
+#ifdef DEBUG_ENABLED
+	{
+		PackedInt32Array carved;
+		for (const ve::CellBox &box : debug_carved_boxes_) {
+			carved.push_back(box.lo.x);
+			carved.push_back(box.lo.y);
+			carved.push_back(box.lo.z);
+			carved.push_back(box.hi.x);
+			carved.push_back(box.hi.y);
+			carved.push_back(box.hi.z);
+		}
+		d["carved_boxes"] = carved;
+		d["land_atlas_full"] = debug_land_.atlas_full;
+		d["land_store_failed"] = debug_land_.store_failed;
+		d["land_no_edit_log"] = debug_land_.no_edit_log;
+		d["land_preflight"] = debug_land_.preflight;
+		d["land_stale"] = debug_land_.stale;
+		d["land_pin_failed"] = debug_land_.pin_failed;
+		d["land_spawn_failed"] = debug_land_.spawn_failed;
+		d["land_carve_nothing"] = debug_land_.carve_nothing;
+		d["land_carve_restored"] = debug_land_.carve_restored;
+	}
+#endif
 
 	{
 		std::lock_guard<std::mutex> lock(windows_mutex_);

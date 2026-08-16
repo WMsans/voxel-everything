@@ -217,6 +217,17 @@ private:
 	// Loose components the extractor could not represent, carved away rather than left
 	// standing as an invisible wedge (see crumble_component).
 	int crumbled_ = 0;
+#ifdef DEBUG_ENABLED
+	// Diagnostic only: every cell box this manager has committed a carve for, so a test can
+	// ask whether leftover matter sits inside a carved box or outside every one of them.
+	std::vector<ve::CellBox> debug_carved_boxes_;
+	// Diagnostic only: "refused_landing" split by the branch that took the decision, so a
+	// stall after an extraction comes back can name itself.
+	struct LandRefusals {
+		int atlas_full = 0, store_failed = 0, no_edit_log = 0, preflight = 0, stale = 0,
+			pin_failed = 0, spawn_failed = 0, carve_nothing = 0, carve_restored = 0;
+	} debug_land_;
+#endif
 	bool debug_fail_next_spawn_ = false;
 	bool debug_fail_next_restore_ = false;
 	bool debug_fail_next_carve_ = false;

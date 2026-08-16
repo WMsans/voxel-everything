@@ -121,3 +121,4 @@ func test_occupancy_survives_a_region_being_evicted_and_reloaded(timeout := 9000
 	assert_int(w.debug_occupancy_state(cell)).is_equal(state)
 	settle(w, CENTER)
 	assert_int(w.debug_occupancy_state(cell)).is_equal(state)
+
