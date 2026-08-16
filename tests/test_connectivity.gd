@@ -625,6 +625,50 @@ func test_near_cap_carve_is_refused_before_any_carve(timeout := 120000) -> void:
 	assert_bool(solid_at(w, top)).override_failure_message(
 		"a near-cap carve left a field hole with no body: %s" % st).is_true()
 
+func test_stale_extraction_is_refused_before_any_carve(timeout := 120000) -> void:
+	var w := make_world()
+	var t := tool_of(w)
+	build_pillar(w, t)
+	var top := Vector3(PILLAR_X, PILLAR_BASE + 4.0, PILLAR_Z)
+	assert_bool(solid_at(w, top)).override_failure_message(
+		"the pillar was never built").is_true()
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	# Submit the extraction but do not let the result land yet; then change the field inside
+	# the component's AABB. The captured ops no longer match the current field, so landing the
+	# extraction must be refused under the same edit lock that guards the carve -- never
+	# carving a stale volume into a field that has moved on.
+	var st: Dictionary = w.debug_island_stats()
+	for i in range(120):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_physics_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		if st["in_flight"] > 0:
+			break
+	assert_int(st["in_flight"]).override_failure_message(
+		"the connectivity pass did not submit an extraction: %s" % st).is_greater(0)
+	t.apply_sphere_subtract(top, 0.3)
+	var refused_before: int = st["refused"]
+	# Keep stepping until the stale result is collected and refused. The retry backoff after
+	# a stale refusal prevents the newly queued window from carving in the same frame, so the
+	# assertions below still catch the no-carve outcome before any replacement spawn lands.
+	for i in range(120):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_physics_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		if st["refused"] > refused_before:
+			break
+	assert_int(st["refused"]).override_failure_message(
+		"a stale extraction was not refused: %s" % st).is_greater(refused_before)
+	assert_int(st["islands_spawned"]).override_failure_message(
+		"a stale extraction still spawned a body: %s" % st).is_equal(0)
+	assert_int(st["live_bodies"]).override_failure_message(
+		"a stale extraction created a body in a field that still has the rock: %s" % st).is_equal(0)
+
+
 func test_failed_resample_backs_off_instead_of_retrying_every_frame(timeout := 180000) -> void:
 	var w := make_world()
 	w.debug_set_merge_sleep_seconds(999.0) # keep the body from merging before the test is ready

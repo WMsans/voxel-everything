@@ -81,8 +81,9 @@ uint volume_mat_byte(int i) {
 void sample_field_volume(int slot, vec3 origin, float voxel, int dim, vec3 p,
 		out float sdf, out uint mat) {
 	// A malformed/corrupt op must never drive an out-of-bounds SSBO read or a divide by
-	// zero. Fail soft: contribute nothing to the union.
-	if (slot < 0 || slot >= 64 || dim < 2 || dim > 64 || voxel <= 0.0) {
+	// zero. Fail soft: contribute nothing to the union. The `!(voxel > 0.0)` form rejects
+	// NaN as well as zero/negative pitches.
+	if (slot < 0 || slot >= 64 || dim < 2 || dim > 64 || !(voxel > 0.0)) {
 		sdf = 1e30;
 		mat = 0u;
 		return;

@@ -3,6 +3,7 @@
 #include "world/region.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <map>
 #include <vector>
@@ -28,10 +29,16 @@ public:
 
 	AppendResult append(const EditOp &op);
 	const std::vector<EditOp> &ops(IVec3 region) const;
+	// Parallel to ops(): the global append sequence number of every op in that region list.
+	const std::vector<uint64_t> &seqs(IVec3 region) const;
 	int op_count(IVec3 region) const { return static_cast<int>(ops(region).size()); }
 	int region_count() const { return static_cast<int>(lists_.size()); }
 	const WorldBounds &bounds() const { return bounds_; }
-	void clear() { lists_.clear(); }
+	void clear() {
+		lists_.clear();
+		seqs_.clear();
+		next_seq_ = 1;
+	}
 
 private:
 	struct Key {
@@ -45,6 +52,8 @@ private:
 
 	WorldBounds bounds_;
 	std::map<Key, std::vector<EditOp>> lists_;
+	std::map<Key, std::vector<uint64_t>> seqs_;
+	uint64_t next_seq_ = 1;
 };
 
 // Collects every region op that can influence a world-space AABB, for use when an extraction
@@ -53,7 +62,12 @@ private:
 // enough. Ops are appended to every region they touch (with the same activation/voxel pad the
 // append path uses); this helper gathers all overlapping regions' lists, keeps only ops whose
 // own world AABB touches the queried AABB (plus a small pad, so boundary-touching ops are
-// not dropped), and deduplicates identical 32-byte ops across region lists.
+// not dropped), and emits them in GLOBAL append order.
+//
+// Sequence numbers let us reconstruct the order across region boundaries: each region list is
+// only a subsequence of the global op stream, so region iteration order cannot recover it.
+// Every copy of one append op shares the same sequence; distinct byte-identical edits have
+// distinct sequences and are therefore preserved as separate ops.
 inline void collect_ops_for_aabb(const EditLog &log, const float lo[3], const float hi[3],
 		std::vector<EditOp> *out) {
 	out->clear();
@@ -80,22 +94,40 @@ inline void collect_ops_for_aabb(const EditLog &log, const float lo[3], const fl
 		}
 		return true;
 	};
-	const auto already_have = [&](const EditOp &op) {
-		return std::find_if(out->begin(), out->end(), [&](const EditOp &e) {
-			return std::memcmp(&e, &op, sizeof(EditOp)) == 0;
-		}) != out->end();
-	};
 
+	struct SeqOp {
+		EditOp op;
+		uint64_t seq;
+	};
+	std::vector<SeqOp> found;
 	for (int z = rlo.z; z <= rhi.z; z++)
 		for (int y = rlo.y; y <= rhi.y; y++)
 			for (int x = rlo.x; x <= rhi.x; x++) {
 				const ve::IVec3 region{x, y, z};
 				if (!log.bounds().contains_region(region)) continue;
-				for (const EditOp &op : log.ops(region)) {
-					if (!intersects(op) || already_have(op)) continue;
-					out->push_back(op);
+				const std::vector<EditOp> &ops = log.ops(region);
+				const std::vector<uint64_t> &seqs = log.seqs(region);
+				// Both vectors are kept parallel by append(); defensive size handling keeps
+				// the helper safe even if a corrupted log ever desynchronised them.
+				const size_t n = std::min(ops.size(), seqs.size());
+				for (size_t i = 0; i < n; i++) {
+					if (!intersects(ops[i])) continue;
+					found.push_back({ops[i], seqs[i]});
 				}
 			}
+
+	// Sort by the global append sequence, then drop region-list duplicates (same sequence)
+	// while keeping distinct byte-identical edits (different sequences).
+	std::sort(found.begin(), found.end(),
+			[](const SeqOp &a, const SeqOp &b) { return a.seq < b.seq; });
+	uint64_t last_seq = 0;
+	bool have_last = false;
+	for (const SeqOp &s : found) {
+		if (have_last && s.seq == last_seq) continue;
+		have_last = true;
+		last_seq = s.seq;
+		out->push_back(s.op);
+	}
 }
 
 } // namespace ve

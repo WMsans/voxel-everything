@@ -137,6 +137,22 @@ void IslandManager::note_edit(const ve::EditOp &op, int64_t seq) {
 		w.impulse_scale = op.radius;
 	}
 
+	const auto overlaps = [](const PendingWindow &a, const PendingWindow &b) {
+		return a.lo.x <= b.hi.x && a.hi.x >= b.lo.x && a.lo.y <= b.hi.y &&
+				a.hi.y >= b.lo.y && a.lo.z <= b.hi.z && a.hi.z >= b.lo.z;
+	};
+	const auto absorb = [](PendingWindow &dst, const PendingWindow &src) {
+		dst.lo = {std::min(dst.lo.x, src.lo.x), std::min(dst.lo.y, src.lo.y),
+				std::min(dst.lo.z, src.lo.z)};
+		dst.hi = {std::max(dst.hi.x, src.hi.x), std::max(dst.hi.y, src.hi.y),
+				std::max(dst.hi.z, src.hi.z)};
+		dst.seq = std::max(dst.seq, src.seq);
+		if (src.impulse_scale > dst.impulse_scale) {
+			dst.impulse_scale = src.impulse_scale;
+			for (int a = 0; a < 3; a++) dst.impulse_from[a] = src.impulse_from[a];
+		}
+	};
+
 	// Merge into every overlapping window rather than queueing a second one: spec §5 wants ONE
 	// connectivity run per frame however many blasts landed, and two windows over the same
 	// rubble would label the same component twice. A single edit can overlap several existing
@@ -144,19 +160,31 @@ void IslandManager::note_edit(const ve::EditOp &op, int64_t seq) {
 	// them absorb it.
 	bool merged = false;
 	for (PendingWindow &e : windows_) {
-		const bool overlap = e.lo.x <= w.hi.x && e.hi.x >= w.lo.x && e.lo.y <= w.hi.y &&
-				e.hi.y >= w.lo.y && e.lo.z <= w.hi.z && e.hi.z >= w.lo.z;
-		if (!overlap) continue;
+		if (!overlaps(e, w)) continue;
 		merged = true;
-		e.lo = {std::min(e.lo.x, w.lo.x), std::min(e.lo.y, w.lo.y), std::min(e.lo.z, w.lo.z)};
-		e.hi = {std::max(e.hi.x, w.hi.x), std::max(e.hi.y, w.hi.y), std::max(e.hi.z, w.hi.z)};
-		e.seq = std::max(e.seq, w.seq);
-		if (w.impulse_scale > e.impulse_scale) {
-			e.impulse_scale = w.impulse_scale;
-			for (int a = 0; a < 3; a++) e.impulse_from[a] = w.impulse_from[a];
-		}
+		absorb(e, w);
 	}
 	if (!merged) windows_.push_back(w);
+
+	// A bridging edit can also make two previously disjoint windows overlap each other.
+	// Coalesce until stable so two windows never cover the same component.
+	bool coalesced = true;
+	while (coalesced) {
+		coalesced = false;
+		for (auto it = windows_.begin(); it != windows_.end(); ++it) {
+			auto jt = it;
+			++jt;
+			while (jt != windows_.end()) {
+				if (!overlaps(*it, *jt)) {
+					++jt;
+					continue;
+				}
+				absorb(*it, *jt);
+				jt = windows_.erase(jt);
+				coalesced = true;
+			}
+		}
+	}
 }
 
 bool IslandManager::window_is_fresh(const PendingWindow &w) const {
@@ -243,20 +271,26 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 			refused_++;
 			continue;
 		}
+		{
+			std::lock_guard<std::mutex> lock(world_->edit_mutex());
+			if (!world_->edit_log()) {
+				refused_++;
+				continue;
+			}
+			ve::collect_ops_for_aabb(*world_->edit_log(), wlo, whi, &job.ops);
+		}
+		// Refuse before allocating a volume slot or submitting: the extraction pass cannot
+		// evaluate more than kMaxRegionOps ops, so this component can never be carved by the
+		// current field/worker limits. Fail-soft leaves it attached.
+		if (job.ops.size() > static_cast<size_t>(ve::kMaxRegionOps)) {
+			refused_++;
+			continue;
+		}
 		const int slot = world_->volumes().allocate();
 		if (slot < 0) {
 			refused_++;
 			transient_refusal = true;
 			continue; // pool full: leave it attached
-		}
-		{
-			std::lock_guard<std::mutex> lock(world_->edit_mutex());
-			if (!world_->edit_log()) {
-				world_->volumes().release(slot);
-				refused_++;
-				continue;
-			}
-			ve::collect_ops_for_aabb(*world_->edit_log(), wlo, whi, &job.ops);
 		}
 
 		InFlight f;
@@ -456,30 +490,9 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 	// The extraction was computed from the field as of submit time. If a newer edit (including
 	// another carve from the same batch) has changed any op that can influence this component's
 	// AABB, the volume in hand is stale: carving it into the current field would remove matter
-	// using a shape that no longer matches the field. Fail soft instead -- release the slot,
-	// back off the originating window, and leave the component attached. The edit that made it
-	// stale already queued its own window, so connectivity will revisit this piece.
-	{
-		std::lock_guard<std::mutex> lock(world_->edit_mutex());
-		if (!world_->edit_log()) {
-			world_->volumes().release(f.volume_slot);
-			refused_++;
-			return;
-		}
-		std::vector<ve::EditOp> current_ops;
-		ve::collect_ops_for_aabb(*world_->edit_log(), f.aabb_lo, f.aabb_hi, &current_ops);
-		const bool stale = current_ops.size() != f.ops.size() ||
-				!std::equal(current_ops.begin(), current_ops.end(), f.ops.begin(),
-						[](const ve::EditOp &a, const ve::EditOp &b) {
-							return std::memcmp(&a, &b, sizeof(ve::EditOp)) == 0;
-						});
-		if (stale) {
-			world_->volumes().release(f.volume_slot);
-			queue_retry_window(f.window);
-			refused_++;
-			return; // stale extraction: no carve, the component stays attached
-		}
-	}
+	// using a shape that no longer matches the field. The freshness comparison is deliberately
+	// re-run INSIDE the edit_mutex_ hold that also does preflight/pin/spawn/carve, so no
+	// tool-thread edit can land between the comparison and the first carve.
 
 	const float solid_m3 = static_cast<float>(r.data.solid_voxels) * f.voxel * f.voxel * f.voxel;
 	const bool debris = solid_m3 < kDebrisVolumeM3;
@@ -566,11 +579,39 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 	const Ref<World3D> w3 = world_->get_world_3d();
 	{
 		std::lock_guard<std::mutex> lock(world_->edit_mutex());
+		if (!world_->edit_log()) {
+			if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
+			world_->volumes().release(f.volume_slot);
+			refused_++;
+			return;
+		}
 		if (!has_restore_headroom()) {
 			if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
 			world_->volumes().release(f.volume_slot);
 			refused_++;
 			return; // preflight refused: no carve, no hole, the component stays attached
+		}
+
+		// Re-check freshness under the SAME lock as preflight/pin/spawn/carve. The ops were
+		// captured at submit time; if the field changed since then (including by a carve from
+		// another extraction that landed first), do not carve a stale volume. Release the
+		// atlas/volume resources and back off -- the edit that changed the field queued its
+		// own connectivity window.
+		{
+			std::vector<ve::EditOp> current_ops;
+			ve::collect_ops_for_aabb(*world_->edit_log(), f.aabb_lo, f.aabb_hi, &current_ops);
+			const bool stale = current_ops.size() != f.ops.size() ||
+					!std::equal(current_ops.begin(), current_ops.end(), f.ops.begin(),
+							[](const ve::EditOp &a, const ve::EditOp &b) {
+								return std::memcmp(&a, &b, sizeof(ve::EditOp)) == 0;
+							});
+			if (stale) {
+				if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
+				world_->volumes().release(f.volume_slot);
+				queue_retry_window(f.window);
+				refused_++;
+				return; // stale extraction: no carve, the component stays attached
+			}
 		}
 
 		// Pin the birth volume before the first carve. The slot is already stored; pinning
