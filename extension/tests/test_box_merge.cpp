@@ -95,3 +95,27 @@ TEST_CASE("a box's world AABB is its cell range in metres, half-open on the high
 	CHECK(hi[0] == doctest::Approx(4.0f * kOccupancyCellSize));
 	CHECK(hi[2] == doctest::Approx(3.0f * kOccupancyCellSize));
 }
+
+TEST_CASE("a box compound's mass properties are its boxes' volume-weighted centre") {
+	// Two 1-cell boxes two cells apart on x: the centre of mass is exactly between them.
+	const std::vector<CellBox> pair{CellBox{{0, 0, 0}, {0, 0, 0}}, CellBox{{2, 0, 0}, {2, 0, 0}}};
+	float com[3] = {0, 0, 0};
+	float vol = 0.0f;
+	box_compound_mass(pair.data(), 2, com, &vol);
+	const float c = kOccupancyCellSize;
+	CHECK(com[0] == doctest::Approx(1.5f * c));  // centres at 0.5c and 2.5c
+	CHECK(com[1] == doctest::Approx(0.5f * c));
+	CHECK(com[2] == doctest::Approx(0.5f * c));
+	CHECK(vol == doctest::Approx(2.0f * c * c * c));
+
+	// A big box and a small one: the big one dominates.
+	const std::vector<CellBox> uneven{CellBox{{0, 0, 0}, {3, 3, 3}}, CellBox{{10, 0, 0}, {10, 0, 0}}};
+	box_compound_mass(uneven.data(), 2, com, &vol);
+	CHECK(vol == doctest::Approx(65.0f * c * c * c));
+	// 64 cells at x = 2c against 1 cell at x = 10.5c: (128 + 10.5) / 65 = 2.13077c.
+	CHECK(com[0] == doctest::Approx(138.5f / 65.0f * c));
+
+	// Degenerate input is answered, not crashed on (spec §8's fail-soft).
+	box_compound_mass(nullptr, 0, com, &vol);
+	CHECK(vol == doctest::Approx(0.0f));
+}

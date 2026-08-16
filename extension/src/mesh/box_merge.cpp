@@ -14,6 +14,21 @@ void CellBox::world_aabb(float lo_m[3], float hi_m[3]) const {
 	hi_m[2] = static_cast<float>(hi.z + 1) * kOccupancyCellSize;
 }
 
+void box_compound_mass(const CellBox *boxes, int count, float *out_com, float *out_volume_m3) {
+	double acc[3] = {0.0, 0.0, 0.0};
+	double total = 0.0;
+	for (int i = 0; i < count; i++) {
+		float lo[3], hi[3];
+		boxes[i].world_aabb(lo, hi);
+		const double v = static_cast<double>(hi[0] - lo[0]) * (hi[1] - lo[1]) * (hi[2] - lo[2]);
+		total += v;
+		for (int a = 0; a < 3; a++) acc[a] += v * 0.5 * (lo[a] + hi[a]);
+	}
+	for (int a = 0; a < 3; a++)
+		out_com[a] = total > 0.0 ? static_cast<float>(acc[a] / total) : 0.0f;
+	*out_volume_m3 = static_cast<float>(total);
+}
+
 bool greedy_box_merge(const std::vector<IVec3> &cells, int max_boxes,
 		std::vector<CellBox> *out) {
 	out->clear();

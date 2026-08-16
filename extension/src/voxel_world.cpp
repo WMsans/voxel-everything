@@ -116,6 +116,10 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_region_map_entry", "region"), &VoxelWorld::debug_region_map_entry);
 	ClassDB::bind_method(D_METHOD("debug_region_map_consistent"), &VoxelWorld::debug_region_map_consistent);
 	ClassDB::bind_method(D_METHOD("debug_raycast", "origin", "dir"), &VoxelWorld::debug_raycast);
+	ClassDB::bind_method(D_METHOD("debug_spawn_test_body", "lo_cell", "hi_cell", "offset", "impulse", "debris"), &VoxelWorld::debug_spawn_test_body);
+	ClassDB::bind_method(D_METHOD("debug_test_body_stats", "index"), &VoxelWorld::debug_test_body_stats);
+	ClassDB::bind_method(D_METHOD("debug_tick_test_bodies", "dt"), &VoxelWorld::debug_tick_test_bodies);
+	ClassDB::bind_method(D_METHOD("debug_despawn_test_body", "index"), &VoxelWorld::debug_despawn_test_body);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "use_local_device"), "set_use_local_device", "get_use_local_device");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR3I, "atlas_bricks"), "set_atlas_bricks", "get_atlas_bricks");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_region_slots"), "set_max_region_slots", "get_max_region_slots");
@@ -286,6 +290,8 @@ void VoxelWorld::ensure_physics_initialized() {
 
 void VoxelWorld::teardown_physics() {
 	physics_ready_ = false;
+	for (IslandBody *b : test_bodies_) delete b;
+	test_bodies_.clear();
 	// Colliders first: they hold the mesher's results and the residency's slots. Deleting the
 	// service joins its thread, which frees the device and the pass on the thread that made
 	// them; nothing else may outlive that.
@@ -564,6 +570,55 @@ Dictionary VoxelWorld::debug_mesh_diff(Vector3i chunk) {
 	return d;
 }
 
+bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandExtractJob *job,
+		std::vector<ve::CellBox> *boxes, ve::VolumeData *out) {
+	if (!job || !boxes || !out || !mesh_ || !mesh_->is_valid() || cells.empty()) return false;
+	if (!ve::greedy_box_merge(cells, ve::kMaxIslandBoxes, boxes)) return false;
+
+	float wlo[3] = {1e30f, 1e30f, 1e30f}, whi[3] = {-1e30f, -1e30f, -1e30f};
+	for (const ve::CellBox &b : *boxes) {
+		float a[3], c[3];
+		b.world_aabb(a, c);
+		for (int k = 0; k < 3; k++) {
+			wlo[k] = std::min(wlo[k], a[k]);
+			whi[k] = std::max(whi[k], c[k]);
+		}
+	}
+	job->boxes = *boxes;
+	if (!ve::plan_island_lattice(wlo, whi, ve::kIslandDim, &job->voxel, job->origin)) return false;
+	job->dim = ve::kIslandDim;
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		if (!edit_log_) return false;
+		// One region's list: a component never spans regions, because Task 3's extent bound
+		// (5.6 m) is a fifth of a region and the manager splits any that would.
+		job->ops = edit_log_->ops(ve::WorldBounds::region_of_brick(
+				{cells[0].x, cells[0].y, cells[0].z}));
+	}
+
+	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
+	std::vector<IslandExtractJob> jobs;
+	jobs.push_back(*job);
+	if (!mesh_->submit_extracts(std::move(jobs))) return false;
+	std::vector<IslandExtractResult> results;
+	for (int i = 0; i < 2000 && results.empty(); i++) {
+		mesh_->collect_extracts(&results);
+		if (results.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	if (results.empty() || results[0].failed) return false;
+
+	std::vector<float> aabbs(boxes->size() * 6);
+	for (size_t i = 0; i < boxes->size(); i++)
+		(*boxes)[i].world_aabb(&aabbs[i * 6], &aabbs[i * 6 + 3]);
+	ve::VolumeData cpu;
+	ve::AnalyticGenerator gen;
+	ve::extract_island_volume(gen, job->ops.data(), static_cast<int>(job->ops.size()),
+			&volumes_, job->origin, job->voxel, job->dim, aabbs.data(),
+			static_cast<int>(boxes->size()), &cpu);
+	*out = std::move(cpu);
+	return true;
+}
+
 Dictionary VoxelWorld::debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_cell) {
 	Dictionary d;
 	d["ok"] = false;
@@ -660,36 +715,11 @@ Dictionary VoxelWorld::debug_place_test_island_rotated(int slot, Vector3i lo_cel
 	for (int z = lo_cell.z; z <= hi_cell.z; z++)
 		for (int y = lo_cell.y; y <= hi_cell.y; y++)
 			for (int x = lo_cell.x; x <= hi_cell.x; x++) cells.push_back({x, y, z});
-	std::vector<ve::CellBox> boxes;
-	if (!ve::greedy_box_merge(cells, ve::kMaxIslandBoxes, &boxes)) return d;
-	float wlo[3] = {1e30f, 1e30f, 1e30f}, whi[3] = {-1e30f, -1e30f, -1e30f};
-	for (const ve::CellBox &b : boxes) {
-		float a[3], c[3];
-		b.world_aabb(a, c);
-		for (int k = 0; k < 3; k++) {
-			wlo[k] = std::min(wlo[k], a[k]);
-			whi[k] = std::max(whi[k], c[k]);
-		}
-	}
 	IslandExtractJob job;
 	job.id = slot;
-	job.boxes = boxes;
-	job.dim = ve::kIslandDim;
-	if (!ve::plan_island_lattice(wlo, whi, job.dim, &job.voxel, job.origin)) return d;
-	{
-		std::lock_guard<std::mutex> lock(edit_mutex_);
-		job.ops = edit_log_->ops(ve::WorldBounds::region_of_brick(
-				{lo_cell.x, lo_cell.y, lo_cell.z}));
-	}
-	std::vector<IslandExtractJob> jobs;
-	jobs.push_back(job);
-	if (!mesh_->submit_extracts(std::move(jobs))) return d;
-	std::vector<IslandExtractResult> results;
-	for (int i = 0; i < 2000 && results.empty(); i++) {
-		mesh_->collect_extracts(&results);
-		if (results.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
-	}
-	if (results.empty() || results[0].failed) return d;
+	std::vector<ve::CellBox> boxes;
+	ve::VolumeData volume;
+	if (!extract_component(cells, &job, &boxes, &volume)) return d;
 
 	// Task 11's multi-island tests place a second island and expect the first to stay live.
 	// The atlas's upload_descriptors replaces the whole array, so preserve the existing
@@ -721,7 +751,7 @@ Dictionary VoxelWorld::debug_place_test_island_rotated(int slot, Vector3i lo_cel
 		}
 	}
 
-	if (!islands_->upload(device, slot, results[0].data)) return d;
+	if (!islands_->upload(device, slot, volume)) return d;
 
 	// The body's local frame is the birth world frame shifted so the body origin is the
 	// lattice's centre -- the same convention IslandManager uses (Task 13), so the rotation
@@ -755,13 +785,105 @@ Dictionary VoxelWorld::debug_place_test_island_rotated(int slot, Vector3i lo_cel
 	d["ok"] = true;
 	d["world_center"] = Vector3(desc.origin[0], desc.origin[1], desc.origin[2]);
 	d["voxel"] = job.voxel;
-	d["solid"] = results[0].data.solid_voxels;
+	d["solid"] = volume.solid_voxels;
 	return d;
 }
 
 Dictionary VoxelWorld::debug_place_test_island(int slot, Vector3i lo_cell, Vector3i hi_cell,
 		Vector3 offset) {
 	return debug_place_test_island_rotated(slot, lo_cell, hi_cell, offset, 0.0f);
+}
+
+Dictionary VoxelWorld::debug_spawn_test_body(Vector3i lo_cell, Vector3i hi_cell, Vector3 offset,
+		Vector3 impulse, bool debris) {
+	Dictionary d;
+	d["ok"] = false;
+	ensure_initialized();
+	ensure_physics_initialized();
+	std::vector<ve::IVec3> cells;
+	for (int z = lo_cell.z; z <= hi_cell.z; z++)
+		for (int y = lo_cell.y; y <= hi_cell.y; y++)
+			for (int x = lo_cell.x; x <= hi_cell.x; x++) cells.push_back({x, y, z});
+	IslandExtractJob job;
+	std::vector<ve::CellBox> boxes;
+	ve::VolumeData volume;
+	if (!extract_component(cells, &job, &boxes, &volume)) return d;
+
+	const int slot = volumes_.allocate();
+	if (slot < 0) return d;
+	if (!volumes_.store(slot, volume)) {
+		volumes_.release(slot);
+		return d;
+	}
+
+	IslandSpawn info;
+	info.volume_slot = slot;
+	info.boxes = boxes;
+	info.voxel = job.voxel;
+	info.dim = job.dim;
+	info.solid_voxels = volume.solid_voxels;
+	info.debris = debris;
+	// The offset moves the WHOLE piece: its boxes and its lattice alike, so the collision
+	// and the volume stay registered with each other.
+	for (int a = 0; a < 3; a++) info.lattice_origin[a] = job.origin[a];
+	const ve::IVec3 shift{static_cast<int>(std::lround(offset.x / ve::kOccupancyCellSize)),
+			static_cast<int>(std::lround(offset.y / ve::kOccupancyCellSize)),
+			static_cast<int>(std::lround(offset.z / ve::kOccupancyCellSize))};
+	for (ve::CellBox &b : info.boxes) {
+		b.lo = {b.lo.x + shift.x, b.lo.y + shift.y, b.lo.z + shift.z};
+		b.hi = {b.hi.x + shift.x, b.hi.y + shift.y, b.hi.z + shift.z};
+	}
+	info.lattice_origin[0] += shift.x * ve::kOccupancyCellSize;
+	info.lattice_origin[1] += shift.y * ve::kOccupancyCellSize;
+	info.lattice_origin[2] += shift.z * ve::kOccupancyCellSize;
+	info.impulse[0] = impulse.x;
+	info.impulse[1] = impulse.y;
+	info.impulse[2] = impulse.z;
+
+	IslandBody *b = new IslandBody();
+	const Ref<World3D> w3 = get_world_3d();
+	if (!b->spawn(w3.is_valid() ? w3->get_space() : RID(),
+				w3.is_valid() ? w3->get_scenario() : RID(), info, &volume)) {
+		delete b;
+		volumes_.release(slot);
+		return d;
+	}
+	test_bodies_.push_back(b);
+	d["ok"] = true;
+	d["index"] = static_cast<int>(test_bodies_.size()) - 1;
+	d["mass"] = b->mass();
+	d["shapes"] = b->shape_count();
+	d["origin"] = b->transform().origin;
+	d["has_render_mesh"] = b->has_render_mesh();
+	d["render_tris"] = b->render_triangles();
+	return d;
+}
+
+Dictionary VoxelWorld::debug_test_body_stats(int index) {
+	Dictionary d;
+	d["live"] = false;
+	if (index < 0 || index >= static_cast<int>(test_bodies_.size()) || !test_bodies_[index])
+		return d;
+	IslandBody *b = test_bodies_[index];
+	d["live"] = b->live();
+	d["origin"] = b->transform().origin;
+	d["asleep_s"] = b->asleep_seconds();
+	d["mass"] = b->mass();
+	return d;
+}
+
+void VoxelWorld::debug_tick_test_bodies(float dt) {
+	for (IslandBody *b : test_bodies_)
+		if (b) {
+			b->tick(dt);
+			b->sync_render();
+		}
+}
+
+void VoxelWorld::debug_despawn_test_body(int index) {
+	if (index < 0 || index >= static_cast<int>(test_bodies_.size()) || !test_bodies_[index])
+		return;
+	test_bodies_[index]->despawn();
 }
 
 void VoxelWorld::debug_clear_test_island(int slot) {

@@ -33,4 +33,13 @@ struct CellBox {
 bool greedy_box_merge(const std::vector<IVec3> &cells, int max_boxes,
 		std::vector<CellBox> *out);
 
+// Volume-weighted centre of the boxes and their total volume in m^3. Spec §5's "mass/inertia
+// from solid volume" -- Jolt derives the inertia tensor from the compound's own shapes, so
+// only the mass and the origin the shapes hang off come from here.
+//
+// The BOX volume, not the solid volume inside it: a body's origin has to be the centre of
+// the shapes Jolt is given, or the compound tumbles about a point outside itself. Mass uses
+// the true solid count instead (see IslandSpawn::solid_voxels).
+void box_compound_mass(const CellBox *boxes, int count, float *out_com, float *out_volume_m3);
+
 } // namespace ve

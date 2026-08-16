@@ -17,6 +17,7 @@
 #include "connectivity/occupancy.h"
 #include "generator/volume_set.h"
 #include "mesh/chunk_residency.h"
+#include "physics/island_body.h"
 #include "world/edit_log.h"
 #include "world/region.h"
 #include "world/residency.h"
@@ -33,6 +34,7 @@ class MeshService;
 class ColliderStreamer;
 class IslandAtlas;
 class IslandCullPass;
+struct IslandExtractJob;
 
 // One edit drained by the streamer: the op plus the regions its append touched/rejected.
 struct PendingEdit {
@@ -103,6 +105,9 @@ class VoxelWorld : public Node3D {
 	ColliderStreamer *colliders_ = nullptr;
 	bool physics_ready_ = false;
 	std::vector<std::pair<ve::IVec3, ve::IVec3>> pending_dirty_; // guarded by edit_mutex_
+	// A hand-driven body pool for tests. Task 13's IslandManager owns the real one and
+	// takes these over; until then this is what proves the body path works.
+	std::vector<IslandBody *> test_bodies_;
 	float last_physics_tick_ms_ = 0.0f; // diagnostic; see debug_perf_stats
 
 	RenderingDevice *main_rd_ = nullptr;
@@ -110,6 +115,8 @@ class VoxelWorld : public Node3D {
 	bool initialized_ = false;
 
 	void teardown_gpu(); // every GPU object; CPU cores survive
+	bool extract_component(const std::vector<ve::IVec3> &cells, IslandExtractJob *job,
+			std::vector<ve::CellBox> *boxes, ve::VolumeData *out);
 
 protected:
 	static void _bind_methods();
@@ -220,6 +227,13 @@ public:
 	bool debug_region_map_consistent();
 	Dictionary debug_raycast(Vector3 origin, Vector3 dir);
 	RenderingDevice *debug_local_rd() const { return local_rd_; }
+
+	// --- Task 12 body hooks ---
+	Dictionary debug_spawn_test_body(Vector3i lo_cell, Vector3i hi_cell, Vector3 offset,
+			Vector3 impulse, bool debris);
+	Dictionary debug_test_body_stats(int index);
+	void debug_tick_test_bodies(float dt);
+	void debug_despawn_test_body(int index);
 
 	// --- Task 4 hooks ---
 	bool debug_init_physics();
