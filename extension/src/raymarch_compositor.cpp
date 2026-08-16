@@ -79,8 +79,9 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	const Vector3i ab = world->get_atlas_bricks();
 	cp.atlas_bricks[0] = ab.x; cp.atlas_bricks[1] = ab.y; cp.atlas_bricks[2] = ab.z;
 
-	// One streaming pass per frame, before the march: the new bricks land in the same
-	// submit, so there is no torn frame where the map points at ungenerated slots.
+	// Volumes before anything that evaluates the field: an op naming a slot may already be
+	// in the edit log, and the streamer is about to regenerate the bricks that read it.
+	world->drain_island_uploads(rd);
 	WorldStreamer *st = world->streamer();
 	if (st) st->run_frame(rd, cam.origin.x, cam.origin.y, cam.origin.z);
 

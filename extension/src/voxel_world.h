@@ -18,7 +18,10 @@
 #include "generator/volume_set.h"
 #include "mesh/chunk_residency.h"
 #include "physics/island_body.h"
+#include "physics/island_manager.h"
+#include "render/island_atlas.h"
 #include "world/edit_log.h"
+#include "world/raycast.h"
 #include "world/region.h"
 #include "world/residency.h"
 
@@ -103,6 +106,20 @@ class VoxelWorld : public Node3D {
 	MeshService *mesh_ = nullptr;
 	ve::ChunkResidency *chunks_ = nullptr;
 	ColliderStreamer *colliders_ = nullptr;
+	IslandManager *island_manager_ = nullptr;
+	std::mutex island_mutex_;
+	// Bytes on their way to a GPU pool. Filled on the main thread, drained on the render
+	// thread by the compositor before it runs the streamer -- an op that names a volume must
+	// never be evaluated before the volume is there.
+	struct IslandUpload {
+		int slot = -1;
+		bool to_island_atlas = false; // false = the field volume pool
+		ve::VolumeData data;
+	};
+	std::vector<IslandUpload> island_uploads_;
+	std::vector<IslandSlotDesc> island_descs_;
+	bool island_descs_dirty_ = false;
+	std::vector<float> physics_bubble_centers_;
 	bool physics_ready_ = false;
 	std::vector<std::pair<ve::IVec3, ve::IVec3>> pending_dirty_; // guarded by edit_mutex_
 	// A hand-driven body pool for tests. Task 13's IslandManager owns the real one and
@@ -168,7 +185,10 @@ public:
 	// High-water mark, not a population: the shader masks off bits at or above it and then
 	// tests each remaining slot's descriptor for dim >= 2, so a dead slot below the mark
 	// costs one branch and nothing else.
-	int island_slot_count() const { return island_slots_; }
+	int island_slot_count() const {
+		const int manager_slots = island_manager_ ? island_manager_->slot_high_water() : 0;
+		return island_slots_ > manager_slots ? island_slots_ : manager_slots;
+	}
 	WorldStreamer *streamer() { return streamer_; }
 	ve::EditLog *edit_log() { return edit_log_; }
 	ve::VolumeSet &volumes() { return volumes_; }
@@ -176,6 +196,21 @@ public:
 	IslandCullPass *island_cull() { return island_cull_; }
 	CompositePass *composite_pass() { return composite_pass_; }
 	std::mutex &edit_mutex() { return edit_mutex_; }
+	MeshService *mesh_service() { return mesh_; }
+	void queue_island_upload(int slot, const ve::VolumeData &d);
+	void queue_field_volume_upload(int slot, const ve::VolumeData &d);
+	void publish_island_descriptors(const std::vector<IslandSlotDesc> &d);
+	void set_physics_bubbles(const std::vector<IslandBody *> &bodies);
+	// A downward ve::raycast at (xz[0], xz[1]) from above the world, on the analytic field
+	// plus its region ops and volumes -- the same call debug_raycast makes. The manager may
+	// not build its own EditLog view, and this is the one field query it needs.
+	ve::RayHit analytic_raycast_down(const float xz[2]);
+	// Drained by RaymarchCompositor on the render thread; returns how many landed.
+	int drain_island_uploads(RenderingDevice *device);
+
+	int debug_island_frame(float dt, Vector3 center);
+	Dictionary debug_island_stats();
+	void debug_set_merge_sleep_seconds(float v);
 
 	// Tool entry point (VoxelEditTool, Task 14). Main thread; takes edit_mutex_.
 	ve::EditLog::AppendResult append_edit(const ve::EditOp &op);

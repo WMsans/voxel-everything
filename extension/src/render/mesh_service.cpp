@@ -217,12 +217,25 @@ void MeshService::run() {
 			std::vector<IslandExtractResult> extract_out;
 			extract_out.reserve(extracts.size());
 			for (const IslandExtractJob &job : extracts) {
-				IslandExtractResult r;
-				if (!extract_ || !extract_->extract(job, &r)) {
+				if (job.kind == kResampleVolume) {
+					IslandExtractResult r;
 					r.id = job.id;
+					r.kind = job.kind;
+					r.failed = !ve::resample_volume(job.source, job.source_op, job.basis,
+							job.rest_origin, job.out_slot, job.dim, &r.data, &r.op);
+					extract_out.push_back(std::move(r));
+				} else if (extract_) {
+					IslandExtractResult r;
+					extract_->extract(job, &r);
+					r.kind = job.kind;
+					extract_out.push_back(std::move(r));
+				} else {
+					IslandExtractResult r;
+					r.id = job.id;
+					r.kind = job.kind;
 					r.failed = true;
+					extract_out.push_back(std::move(r));
 				}
-				extract_out.push_back(std::move(r));
 			}
 			{
 				std::lock_guard<std::mutex> lock(mu_);

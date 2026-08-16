@@ -12,6 +12,7 @@
 #include "render/mesh_pass.h"
 #include "render/mesh_service.h"
 #include "physics/collider_streamer.h"
+#include "physics/island_manager.h"
 #include "mesh/dual_contour.h"
 #include "mesh/mesh_chunk.h"
 #include "mesh/box_merge.h"
@@ -76,6 +77,9 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_physics_frame", "center"), &VoxelWorld::debug_physics_frame);
 	ClassDB::bind_method(D_METHOD("debug_physics_stats"), &VoxelWorld::debug_physics_stats);
 	ClassDB::bind_method(D_METHOD("debug_perf_stats"), &VoxelWorld::debug_perf_stats);
+	ClassDB::bind_method(D_METHOD("debug_island_frame", "dt", "center"), &VoxelWorld::debug_island_frame);
+	ClassDB::bind_method(D_METHOD("debug_island_stats"), &VoxelWorld::debug_island_stats);
+	ClassDB::bind_method(D_METHOD("debug_set_merge_sleep_seconds", "v"), &VoxelWorld::debug_set_merge_sleep_seconds);
 	ClassDB::bind_method(D_METHOD("debug_body_of_chunk", "chunk"), &VoxelWorld::debug_body_of_chunk);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
@@ -140,7 +144,7 @@ void VoxelWorld::_ready() {
 	set_process(true);
 }
 
-void VoxelWorld::_process(double) {
+void VoxelWorld::_process(double delta) {
 	// Unconditional: the grid must keep filling even with physics disabled, because the
 	// island manager (Task 13) and the debug hooks both read it.
 	drain_occupancy();
@@ -149,6 +153,8 @@ void VoxelWorld::_process(double) {
 	if (!anchor) return;
 	ensure_physics_initialized();
 	physics_tick(anchor->get_global_position());
+	if (island_manager_) island_manager_->run_frame(static_cast<float>(delta),
+			anchor->get_global_position());
 }
 
 VoxelWorld::~VoxelWorld() {}
@@ -243,6 +249,10 @@ ve::EditLog::AppendResult VoxelWorld::append_edit(const ve::EditOp &op) {
 				") — spec §8 fail-soft");
 	}
 	pending_edits_.push_back({op, r});
+	// Connectivity's half of the fan-out. Runs under the append lock but touches only the
+	// manager's main-thread state; it is deliberately after the seq bump so the window knows
+	// which readback is "new enough" to act on.
+	if (island_manager_) island_manager_->note_edit(op, edit_seq_.load(std::memory_order_relaxed));
 	// Collision's half of the fan-out (spec §5: "Fan-out: raymarch set, physics remesh queue,
 	// LoD chain, connectivity"). Queued rather than applied, because this may run on any
 	// thread that owns a tool while ChunkResidency belongs to the main one; physics_tick
@@ -285,6 +295,8 @@ void VoxelWorld::ensure_physics_initialized() {
 	colliders_ = new ColliderStreamer();
 	colliders_->initialize(chunks_, edit_log_, &edit_mutex_, mesh_, max_collider_chunks_);
 	colliders_->set_shape_builds_per_frame(shape_builds_per_frame_);
+	island_manager_ = new IslandManager();
+	island_manager_->initialize(this);
 	physics_ready_ = true;
 }
 
@@ -292,6 +304,10 @@ void VoxelWorld::teardown_physics() {
 	physics_ready_ = false;
 	for (IslandBody *b : test_bodies_) delete b;
 	test_bodies_.clear();
+	// The manager owns the real island bodies; tear it down before the mesher's worker and
+	// the colliders so its volume-slot bookkeeping still has a live VolumeSet to ask.
+	if (island_manager_) { island_manager_->teardown(); delete island_manager_; island_manager_ = nullptr; }
+	physics_bubble_centers_.clear();
 	// Colliders first: they hold the mesher's results and the residency's slots. Deleting the
 	// service joins its thread, which frees the device and the pass on the thread that made
 	// them; nothing else may outlive that.
@@ -318,7 +334,8 @@ int VoxelWorld::physics_tick(Vector3 center) {
 	for (const auto &r : dirty) chunks_->mark_dirty(r.first, r.second);
 	const Ref<World3D> w = get_world_3d();
 	if (w.is_valid()) colliders_->set_space(w->get_space());
-	const int actions = colliders_->run_frame(center.x, center.y, center.z);
+	const int actions = colliders_->run_frame(center.x, center.y, center.z,
+			physics_bubble_centers_.data(), static_cast<int>(physics_bubble_centers_.size() / 3));
 	last_physics_tick_ms_ =
 			std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
 	return actions;
@@ -357,6 +374,104 @@ Dictionary VoxelWorld::debug_physics_stats() {
 	d["build_ms"] = colliders_ ? colliders_->last_build_ms() : 0.0f;
 	d["collect_ms"] = colliders_ ? colliders_->last_collect_ms() : 0.0f;
 	return d;
+}
+
+void VoxelWorld::queue_island_upload(int slot, const ve::VolumeData &d) {
+	std::lock_guard<std::mutex> lock(island_mutex_);
+	island_uploads_.push_back(IslandUpload{slot, true, d});
+}
+
+void VoxelWorld::queue_field_volume_upload(int slot, const ve::VolumeData &d) {
+	{
+		std::lock_guard<std::mutex> lock(island_mutex_);
+		island_uploads_.push_back(IslandUpload{slot, false, d});
+	}
+	// The worker's volume pool must see the paste before its next field job, otherwise the
+	// mesher's collision against the new rubble lags a frame (or more) behind the main copy.
+	if (mesh_) mesh_->submit_volume(slot, d);
+}
+
+void VoxelWorld::publish_island_descriptors(const std::vector<IslandSlotDesc> &d) {
+	std::lock_guard<std::mutex> lock(island_mutex_);
+	island_descs_ = d;
+	island_descs_dirty_ = true;
+}
+
+void VoxelWorld::set_physics_bubbles(const std::vector<IslandBody *> &bodies) {
+	std::vector<float> centers;
+	centers.reserve(bodies.size() * 3);
+	for (IslandBody *b : bodies) {
+		if (!b || !b->live()) continue;
+		const Vector3 o = b->transform().origin;
+		centers.push_back(o.x);
+		centers.push_back(o.y);
+		centers.push_back(o.z);
+	}
+	physics_bubble_centers_.swap(centers);
+}
+
+ve::RayHit VoxelWorld::analytic_raycast_down(const float xz[2]) {
+	ve::RayHit h;
+	if (!edit_log_) return h;
+	std::lock_guard<std::mutex> lock(edit_mutex_);
+	ve::AnalyticGenerator gen;
+	const float o[3] = {xz[0], 200.0f, xz[1]};
+	const float dir[3] = {0.0f, -1.0f, 0.0f};
+	return ve::raycast(gen, *edit_log_, o, dir, 400.0f, &volumes_);
+}
+
+int VoxelWorld::drain_island_uploads(RenderingDevice *device) {
+	if (!device) return 0;
+	std::vector<IslandUpload> uploads;
+	std::vector<IslandSlotDesc> descs;
+	bool dirty = false;
+	{
+		std::lock_guard<std::mutex> lock(island_mutex_);
+		uploads.swap(island_uploads_);
+		descs = island_descs_;
+		dirty = island_descs_dirty_;
+		island_descs_dirty_ = false;
+	}
+	for (const IslandUpload &u : uploads) {
+		if (u.to_island_atlas) {
+			if (islands_ && !islands_->upload(device, u.slot, u.data))
+				UtilityFunctions::printerr("VoxelWorld: island atlas upload failed for slot ",
+						u.slot);
+		} else {
+			if (atlas_ && !atlas_->volumes().upload(device, u.slot, u.data))
+				UtilityFunctions::printerr("VoxelWorld: field volume upload failed for slot ",
+						u.slot);
+		}
+	}
+	if (dirty && islands_)
+		islands_->upload_descriptors(device, descs.data(), static_cast<int>(descs.size()));
+	return static_cast<int>(uploads.size());
+}
+
+int VoxelWorld::debug_island_frame(float dt, Vector3 center) {
+	ensure_initialized();
+	ensure_physics_initialized();
+	if (!island_manager_) return 0;
+	drain_occupancy();
+	const int n = island_manager_->run_frame(dt, center);
+	// The tests drive the world by hand and never enter the compositor, so the render-thread
+	// half of the handoff has to happen here too.
+	RenderingDevice *device = rd();
+	if (device) {
+		drain_island_uploads(device);
+		device->submit();
+		device->sync();
+	}
+	return n;
+}
+
+Dictionary VoxelWorld::debug_island_stats() {
+	return island_manager_ ? island_manager_->stats() : Dictionary();
+}
+
+void VoxelWorld::debug_set_merge_sleep_seconds(float v) {
+	ensure_physics_initialized();
+	if (island_manager_) island_manager_->set_merge_sleep_seconds(v);
 }
 
 RID VoxelWorld::debug_body_of_chunk(Vector3i chunk) {

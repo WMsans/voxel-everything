@@ -177,13 +177,34 @@ bool resample_volume(const VolumeData &src, const EditOp &src_op, const float ba
 			dim < 2 || !out || !out_op)
 		return false;
 
-	// World AABB of the rotated source box: transform its eight corners.
-	const float span = static_cast<float>(src.dim - 1) * src_op.radius;
+	// World AABB of the rotated SOLID content, not the full lattice box. The lattice
+	// carries a margin of air around the component, and a coarse-pitch 64^3 volume spans
+	// 6.3 m -- wider than a 64^3 target can re-cover with the same margin. Only the
+	// matter matters for the paste; the positive apron outside it contributes nothing to
+	// a CSG union. The solid sample AABB is conservative: a cell whose corners are all
+	// positive cannot contain a negative trilinear value.
+	float slo[3] = {1e30f, 1e30f, 1e30f}, shi[3] = {-1e30f, -1e30f, -1e30f};
+	for (int z = 0; z < src.dim; z++)
+		for (int y = 0; y < src.dim; y++)
+			for (int x = 0; x < src.dim; x++) {
+				const int idx = VolumeSet::voxel_index(src.dim, x, y, z);
+				if (decode_sdf(src.sdf[static_cast<size_t>(idx)]) > 0.0f) continue;
+				const float q[3] = {src_op.pos[0] + static_cast<float>(x) * src_op.radius,
+						src_op.pos[1] + static_cast<float>(y) * src_op.radius,
+						src_op.pos[2] + static_cast<float>(z) * src_op.radius};
+				for (int a = 0; a < 3; a++) {
+					slo[a] = std::min(slo[a], q[a]);
+					shi[a] = std::max(shi[a], q[a]);
+				}
+			}
+	if (slo[0] > shi[0]) return false; // nothing solid to paste
+
+	// Transform the solid AABB's eight corners; the rotated solid stays inside that box.
 	float wlo[3] = {1e30f, 1e30f, 1e30f}, whi[3] = {-1e30f, -1e30f, -1e30f};
 	for (int c = 0; c < 8; c++) {
-		const float q[3] = {src_op.pos[0] + ((c & 1) ? span : 0.0f),
-				src_op.pos[1] + ((c & 2) ? span : 0.0f),
-				src_op.pos[2] + ((c & 4) ? span : 0.0f)};
+		const float q[3] = {slo[0] + ((c & 1) ? (shi[0] - slo[0]) : 0.0f),
+				slo[1] + ((c & 2) ? (shi[1] - slo[1]) : 0.0f),
+				slo[2] + ((c & 4) ? (shi[2] - slo[2]) : 0.0f)};
 		for (int a = 0; a < 3; a++) {
 			const float w = basis[a * 3 + 0] * q[0] + basis[a * 3 + 1] * q[1] +
 					basis[a * 3 + 2] * q[2] + origin[a];
