@@ -2,6 +2,7 @@
 #include "render/gpu_atlas.h"
 #include "render/camera_params.h"
 #include "render/island_atlas.h"
+#include "render/island_cull_pass.h"
 #include "render/raymarch_pass.h"
 #include "render/composite_pass.h"
 #include "render/region_pass.h"
@@ -68,6 +69,8 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_place_test_island", "slot", "lo_cell", "hi_cell", "offset"), &VoxelWorld::debug_place_test_island);
 	ClassDB::bind_method(D_METHOD("debug_place_test_island_rotated", "slot", "lo_cell", "hi_cell", "offset", "yaw"), &VoxelWorld::debug_place_test_island_rotated);
 	ClassDB::bind_method(D_METHOD("debug_clear_test_island", "slot"), &VoxelWorld::debug_clear_test_island);
+	ClassDB::bind_method(D_METHOD("debug_island_tile_mask", "origin", "dir", "tan_x", "tan_y",
+			"width", "height"), &VoxelWorld::debug_island_tile_mask);
 	ClassDB::bind_method(D_METHOD("debug_mesh_submit", "chunks"), &VoxelWorld::debug_mesh_submit);
 	ClassDB::bind_method(D_METHOD("debug_mesh_collect"), &VoxelWorld::debug_mesh_collect);
 	ClassDB::bind_method(D_METHOD("debug_physics_frame", "center"), &VoxelWorld::debug_physics_frame);
@@ -156,6 +159,7 @@ void VoxelWorld::teardown_gpu() {
 	if (region_pass_) { delete region_pass_; region_pass_ = nullptr; }
 	if (streamer_) { delete streamer_; streamer_ = nullptr; }
 	if (residency_) { residency_->clear(); } // slot assignments are meaningless pre-atlas
+	if (island_cull_) { delete island_cull_; island_cull_ = nullptr; }
 	if (islands_) { delete islands_; islands_ = nullptr; }
 	island_slots_ = 0;
 	if (atlas_) { delete atlas_; atlas_ = nullptr; }
@@ -197,6 +201,8 @@ void VoxelWorld::ensure_initialized() {
 	if (!atlas_->initialize(device, cfg)) { delete atlas_; atlas_ = nullptr; return; }
 	islands_ = new IslandAtlas();
 	if (!islands_->initialize(device)) { teardown_gpu(); return; }
+	island_cull_ = new IslandCullPass();
+	if (!island_cull_->initialize(device)) { teardown_gpu(); return; }
 	region_pass_ = new RegionPass();
 	if (!region_pass_->initialize(device, *atlas_)) { teardown_gpu(); return; }
 	gen_pass_ = new BrickGenPass();
@@ -684,6 +690,37 @@ Dictionary VoxelWorld::debug_place_test_island_rotated(int slot, Vector3i lo_cel
 		if (results.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 	}
 	if (results.empty() || results[0].failed) return d;
+
+	// Task 11's multi-island tests place a second island and expect the first to stay live.
+	// The atlas's upload_descriptors replaces the whole array, so preserve the existing
+	// descriptors by reading the GPU array back before overwriting the one slot. (The bytes
+	// are the same 128-byte layout upload_descriptors writes; a dead slot has dim 0.)
+	const int64_t desc_bytes = static_cast<int64_t>(kMaxIslands) * 128;
+	const PackedByteArray existing =
+			device->buffer_get_data(islands_->desc_buffer(), 0, static_cast<uint32_t>(desc_bytes));
+	IslandSlotDesc all[kMaxIslands] = {};
+	if (existing.size() == desc_bytes) {
+		const uint8_t *src = existing.ptr();
+		for (int s = 0; s < kMaxIslands; s++) {
+			const float *f = reinterpret_cast<const float *>(src + static_cast<int64_t>(s) * 128);
+			const int32_t *i = reinterpret_cast<const int32_t *>(src + static_cast<int64_t>(s) * 128);
+			if (i[16] < 2) continue; // dead slot
+			IslandSlotDesc &d = all[s];
+			d.live = true;
+			d.dim = i[16];
+			d.voxel = f[15];
+			for (int a = 0; a < 3; a++) {
+				d.basis[a * 3 + 0] = f[a * 4 + 0];
+				d.basis[a * 3 + 1] = f[a * 4 + 1];
+				d.basis[a * 3 + 2] = f[a * 4 + 2];
+				d.origin[a] = f[a * 4 + 3];
+				d.lattice_origin[a] = f[12 + a];
+				d.aabb_lo[a] = f[20 + a];
+				d.aabb_hi[a] = f[24 + a];
+			}
+		}
+	}
+
 	if (!islands_->upload(device, slot, results[0].data)) return d;
 
 	// The body's local frame is the birth world frame shifted so the body origin is the
@@ -709,7 +746,6 @@ Dictionary VoxelWorld::debug_place_test_island_rotated(int slot, Vector3i lo_cel
 	desc.origin[2] += offset.z;
 	desc.recompute_world_aabb();
 
-	IslandSlotDesc all[kMaxIslands] = {};
 	all[slot] = desc;
 	islands_->upload_descriptors(device, all, kMaxIslands);
 	island_slots_ = std::max(island_slots_, slot + 1);
@@ -734,6 +770,31 @@ void VoxelWorld::debug_clear_test_island(int slot) {
 	islands_->clear_slot(device, slot);
 	device->submit();
 	device->sync();
+}
+
+PackedInt32Array VoxelWorld::debug_island_tile_mask(Vector3 origin, Vector3 dir, float tan_x,
+		float tan_y, int width, int height) {
+	PackedInt32Array out;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!device || !islands_ || !island_cull_) return out;
+	ve::CameraParams cam = ve::CameraParams::looking_at(origin.x, origin.y, origin.z,
+			dir.x, dir.y, dir.z, 0, 1, 0);
+	// looking_at leaves the tangents at 0 (the 1x1 probes need no frustum); a cull test does.
+	cam.params[0] = tan_x;
+	cam.params[1] = tan_y;
+	if (!island_cull_->render(device, *islands_, cam, width, height,
+				std::max(island_slots_, 1)))
+		return out;
+	device->submit();
+	device->sync();
+	const int n = island_cull_->tiles_x() * island_cull_->tiles_y();
+	const PackedByteArray b = device->buffer_get_data(island_cull_->mask_buffer(), 0,
+			static_cast<uint32_t>(n) * 4);
+	if (b.size() < static_cast<int64_t>(n) * 4) return out;
+	out.resize(n);
+	std::memcpy(out.ptrw(), b.ptr(), static_cast<size_t>(n) * 4);
+	return out;
 }
 
 bool VoxelWorld::debug_mesh_submit(Array chunks) {

@@ -125,3 +125,87 @@ func test_a_cleared_slot_stops_being_marched(timeout := 60000) -> void:
 	var probe: Dictionary = w.debug_raymarch_probe(centre + Vector3(0, 6, 0), Vector3(0, -1, 0))
 	# The terrain 30 m below is still there, so this hits -- just not up here.
 	assert_float(probe["pos"].y if probe["hit"] else -1000.0).is_less(centre.y - 20.0)
+
+# Spec section 3's tiled target culling. The mask is one uint per 16x16 tile, bit i set when
+# island i's world AABB may cover that tile. Correctness has one direction that matters: a
+# tile that CAN see the island must have the bit, or the island vanishes for those pixels.
+# An extra bit only costs a march.
+const TAN_X := 0.6
+const TAN_Y := 0.4
+
+func test_the_tile_mask_marks_the_tiles_the_island_covers(timeout := 60000) -> void:
+	var w := make_world()
+	var d: Dictionary = w.debug_place_test_island(0, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
+		Vector3(0.0, 30.0, 0.0))
+	assert_bool(d.get("ok", false)).is_true()
+	var centre: Vector3 = d["world_center"]
+
+	# Look straight at it from 20 m away, at 128x128 -> an 8x8 tile grid.
+	var eye := centre + Vector3(0.0, 0.0, 20.0)
+	var mask: PackedInt32Array = w.debug_island_tile_mask(eye, Vector3(0, 0, -1),
+		TAN_X, TAN_Y, 128, 128)
+	assert_int(mask.size()).is_equal(64)
+	var set_tiles := 0
+	for m in mask:
+		if (m & 1) != 0:
+			set_tiles += 1
+	# A 1.6 m lump 20 m away subtends a small part of the view: some tiles, not all of them.
+	assert_int(set_tiles).is_greater(0)
+	assert_int(set_tiles).is_less(64)
+	# The island sits at NDC (0, 0), which is the shared corner of the four middle tiles;
+	# whichever of them the inclusive bounds hand it to, at least one must be marked.
+	var middle: int = mask[3 * 8 + 3] | mask[3 * 8 + 4] | mask[4 * 8 + 3] | mask[4 * 8 + 4]
+	assert_int(middle & 1).is_not_equal(0)
+
+func test_an_island_behind_the_camera_marks_nothing(timeout := 60000) -> void:
+	var w := make_world()
+	var d: Dictionary = w.debug_place_test_island(0, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
+		Vector3(0.0, 30.0, 0.0))
+	assert_bool(d.get("ok", false)).is_true()
+	var centre: Vector3 = d["world_center"]
+	var mask: PackedInt32Array = w.debug_island_tile_mask(centre + Vector3(0, 0, 20),
+		Vector3(0, 0, 1), TAN_X, TAN_Y, 128, 128)
+	for m in mask:
+		assert_int(m & 1).is_equal(0)
+
+func test_an_island_the_camera_is_inside_marks_every_tile(timeout := 60000) -> void:
+	var w := make_world()
+	var d: Dictionary = w.debug_place_test_island(0, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
+		Vector3(0.0, 30.0, 0.0))
+	assert_bool(d.get("ok", false)).is_true()
+	# Inside the lattice box, where the projection of its corners says nothing useful: the
+	# pass must fail SAFE and mark everything rather than culling the island away.
+	var mask: PackedInt32Array = w.debug_island_tile_mask(d["world_center"], Vector3(0, 0, -1),
+		TAN_X, TAN_Y, 128, 128)
+	for m in mask:
+		assert_int(m & 1).is_not_equal(0)
+
+func test_a_cleared_slot_is_never_marked(timeout := 60000) -> void:
+	var w := make_world()
+	var a: Dictionary = w.debug_place_test_island(0, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
+		Vector3(0.0, 30.0, 0.0))
+	assert_bool(a.get("ok", false)).is_true()
+	# A second island in slot 3, in the same place, then killed. Its BYTES stay in the atlas
+	# by design (clear_slot only zeroes the descriptor), so this is the test that the
+	# descriptor -- not the bytes -- is what decides whether a slot is marched.
+	var b: Dictionary = w.debug_place_test_island(3, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
+		Vector3(0.0, 30.0, 0.0))
+	assert_bool(b.get("ok", false)).is_true()
+	var eye: Vector3 = (a["world_center"] as Vector3) + Vector3(0, 0, 20)
+	var both: PackedInt32Array = w.debug_island_tile_mask(eye, Vector3(0, 0, -1), TAN_X,
+		TAN_Y, 128, 128)
+	var saw_three := false
+	for m in both:
+		if (m & 8) != 0:
+			saw_three = true
+	assert_bool(saw_three).is_true()
+
+	w.debug_clear_test_island(3)
+	var after: PackedInt32Array = w.debug_island_tile_mask(eye, Vector3(0, 0, -1), TAN_X,
+		TAN_Y, 128, 128)
+	var live_zero := false
+	for m in after:
+		assert_int(m & 8).is_equal(0)
+		if (m & 1) != 0:
+			live_zero = true
+	assert_bool(live_zero).is_true()

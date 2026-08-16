@@ -2,6 +2,7 @@
 #include "voxel_world.h"
 #include "render/composite_pass.h"
 #include "render/gpu_atlas.h"
+#include "render/island_cull_pass.h"
 #include "render/raymarch_pass.h"
 #include "render/world_streamer.h"
 #include <godot_cpp/classes/engine.hpp>
@@ -101,7 +102,16 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	const int rw = static_cast<int>(size.x * 0.66f);
 	const int rh = static_cast<int>(size.y * 0.66f);
 	if (rw <= 0 || rh <= 0) return;
-	if (!rmp->render(rd, *atlas, world->islands(), RID(), cp, rw, rh, edit_state)) return;
+	const int islands = world->island_slot_count();
+	IslandCullPass *cull = world->island_cull();
+	RID mask;
+	if (cull && islands > 0 && cull->render(rd, *world->islands(), cp, rw, rh, islands)) {
+		mask = cull->mask_buffer();
+		cp.region_origin[3] = cull->tiles_x();
+		cp.atlas_bricks[3] = cull->tiles_y();
+	}
+	cp.dims[3] = islands;
+	if (!rmp->render(rd, *atlas, world->islands(), mask, cp, rw, rh, edit_state)) return;
 
 	const Projection view(cam.affine_inverse());
 	const Projection view_proj = proj * view;

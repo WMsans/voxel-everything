@@ -32,6 +32,7 @@ class WorldStreamer;
 class MeshService;
 class ColliderStreamer;
 class IslandAtlas;
+class IslandCullPass;
 
 // One edit drained by the streamer: the op plus the regions its append touched/rejected.
 struct PendingEdit {
@@ -68,6 +69,7 @@ class VoxelWorld : public Node3D {
 	GpuAtlas *atlas_ = nullptr;
 	IslandAtlas *islands_ = nullptr;
 	int island_slots_ = 0; // high-water mark, not a population; see island_slot_count()
+	IslandCullPass *island_cull_ = nullptr;
 	RegionPass *region_pass_ = nullptr;
 	BrickGenPass *gen_pass_ = nullptr;
 	RaymarchPass *raymarch_pass_ = nullptr;
@@ -164,6 +166,7 @@ public:
 	ve::EditLog *edit_log() { return edit_log_; }
 	ve::VolumeSet &volumes() { return volumes_; }
 	RaymarchPass *raymarch_pass() { return raymarch_pass_; }
+	IslandCullPass *island_cull() { return island_cull_; }
 	CompositePass *composite_pass() { return composite_pass_; }
 	std::mutex &edit_mutex() { return edit_mutex_; }
 
@@ -241,6 +244,8 @@ public:
 	Dictionary debug_place_test_island_rotated(int slot, Vector3i lo_cell, Vector3i hi_cell,
 			Vector3 offset, float yaw);
 	void debug_clear_test_island(int slot);
+	PackedInt32Array debug_island_tile_mask(Vector3 origin, Vector3 dir, float tan_x,
+			float tan_y, int width, int height);
 
 	// --- Task 6 hooks ---
 	bool debug_mesh_submit(Array chunks);
