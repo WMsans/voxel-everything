@@ -106,7 +106,13 @@ bool IslandCullPass::render(RenderingDevice *rd, const IslandAtlas &atlas,
 
 	// The push constant IS ve::CameraParams, with the cull grid in the three trailing ints.
 	// Copying rather than re-deriving is the point: the raymarcher gets the same bytes.
+	// This private copy also repurposes dims.xy as the ACTUAL raymarch target size: the cull
+	// shader's tile NDC must divide by imageSize(out_color), not by the padded 16-multiple
+	// grid, or a visible island near a partial edge tile can be assigned to a nonexistent
+	// neighboring tile. The raymarcher still receives the original dims.xyz world size.
 	ve::CameraParams pc = cam;
+	pc.dims[0] = width;
+	pc.dims[1] = height;
 	pc.dims[3] = island_count;
 	pc.region_origin[3] = tx;
 	pc.atlas_bricks[3] = ty;

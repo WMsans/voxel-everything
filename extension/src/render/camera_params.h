@@ -14,6 +14,8 @@ struct CameraParams {
 	float cam_fwd[4];
 	float params[4];          // tan_half_fov_x, tan_half_fov_y, max_dist, unused
 	int32_t dims[4];          // world size in REGIONS (xyz), w = live island count
+	                          // (IslandCullPass's private push-constant copy repurposes xy
+	                          // as the actual raymarch target size for tile NDC bounds)
 	int32_t region_origin[4]; // world origin in REGIONS, w = island cull tiles per row
 	int32_t atlas_bricks[4];  // atlas grid in bricks, w = island cull tile rows
 

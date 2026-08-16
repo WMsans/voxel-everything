@@ -13,14 +13,16 @@ layout(set = 0, binding = 1, std430) writeonly buffer TileMask { uint v[]; } til
 
 // ve::CameraParams, byte for byte -- the SAME struct the raymarcher takes. Sharing it is
 // what guarantees the two agree about where a world point lands on screen: there is one
-// projection, written once, below.
+// projection, written once, below. This compute pass receives IslandCullPass's private
+// copy, which overrides dims.xy with the actual raymarch target size; the camera/projection
+// fields are identical to the raymarcher's.
 layout(push_constant, std430) uniform Push {
 	vec4 cam_pos;
 	vec4 cam_right;
 	vec4 cam_up;
 	vec4 cam_fwd;
 	vec4 params;          // tan_half_fov_x, tan_half_fov_y, max_dist, unused
-	ivec4 dims;           // w = live island count
+	ivec4 dims;           // x,y = actual raymarch target size (private cull copy), w = live island count
 	ivec4 region_origin;  // w = tiles per row
 	ivec4 atlas_bricks;   // w = tile rows
 } pc;
@@ -40,7 +42,12 @@ void main() {
 	// (dot(v, right), dot(v, up), dot(v, fwd)) = (x, y, z) lands at ndc = (x / (z * tan_x),
 	// y / (z * tan_y)). The tile spans whole pixels, so its NDC bounds come from its corner
 	// pixel edges -- inclusive on both sides, which is the conservative direction.
-	vec2 size = vec2(float(tiles_x * TILE), float(tiles_y * TILE));
+	//
+	// The denominator must be the ACTUAL raymarch target size (imageSize(out_color)), not the
+	// padded 16-multiple grid. IslandCullPass writes the real rw/rh into dims.xy of its
+	// private push-constant copy, so the last partial tile's NDC bounds reach the real edge
+	// and a visible island near it is never handed to a nonexistent neighboring tile.
+	vec2 size = vec2(float(pc.dims.x), float(pc.dims.y));
 	vec2 lo_px = vec2(tile) * float(TILE);
 	vec2 hi_px = lo_px + float(TILE);
 	vec2 ndc_lo = vec2(lo_px.x / size.x * 2.0 - 1.0, 1.0 - hi_px.y / size.y * 2.0);
@@ -68,17 +75,23 @@ void main() {
 			// AABB straddles the eye plane (the camera is inside/overlapping it) the island
 			// is marked everywhere rather than culled away, which costs a march and cannot
 			// make it disappear. An AABB entirely behind the eye is skipped after the loop;
-			// degenerate fov (the 1x1 debug probes) fails safe like a straddle.
-			if (z < 0.01 || pc.params.x <= 0.0 || pc.params.y <= 0.0) {
+			// degenerate fov (the 1x1 debug probes) fails safe like a straddle. Keep scanning
+			// every corner so zmax is the TRUE farthest distance: an early break on a behind
+			// corner would make a straddling AABB look fully behind.
+			if (pc.params.x <= 0.0 || pc.params.y <= 0.0) {
 				near_clip = true;
-				break;
+				continue;
+			}
+			if (z < 0.01) {
+				near_clip = true;
+				continue;
 			}
 			vec2 s = vec2(dot(v, pc.cam_right.xyz) / (z * pc.params.x),
 					dot(v, pc.cam_up.xyz) / (z * pc.params.y));
 			smin = min(smin, s);
 			smax = max(smax, s);
 		}
-		if (zmax < 0.01) continue; // entirely behind the eye plane: never visible
+		if (zmax < 0.0) continue; // entirely behind the eye plane: never visible
 		if (near_clip) {
 			mask |= 1u << uint(i);
 			continue;

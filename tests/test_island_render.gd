@@ -209,3 +209,69 @@ func test_a_cleared_slot_is_never_marked(timeout := 60000) -> void:
 		if (m & 1) != 0:
 			live_zero = true
 	assert_bool(live_zero).is_true()
+
+func test_non_multiple_of_16_viewport_marks_the_tile_that_contains_the_island(timeout := 60000) -> void:
+	var w := make_world()
+	var d: Dictionary = w.debug_place_test_island(0, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
+		Vector3(0.0, 30.0, 0.0))
+	assert_bool(d.get("ok", false)).is_true()
+	var centre: Vector3 = d["world_center"]
+
+	# 130x90 -> a 9x6 tile grid whose last column/row are partial. Put the island near the
+	# right edge, with its leftmost projected corner in column 7. The OLD padded denominator
+	# (9*16=144) made column 7's NDC bound end at 128/144 = 0.7778 even though real pixels in
+	# that column extend to 128/130 = 0.9692. With the real 130-wide denominator the tile
+	# containing that leftmost visible corner is marked; with the padded denominator it would
+	# be handed to column 8 and the pixels that can actually see it would not have the bit.
+	const VIEW_W := 130
+	const VIEW_H := 90
+	var tiles_x: int = ceili(float(VIEW_W) / 16.0)
+	var tiles_y: int = ceili(float(VIEW_H) / 16.0)
+	assert_int(tiles_x).is_equal(9)
+	assert_int(tiles_y).is_equal(6)
+
+	# The island's centre is at NDC x ~1.0 (just off the right edge of the 130-wide view),
+	# but its AABB still reaches left into column 7. Probe the tile at the AABB's leftmost
+	# projected corner: with the padded denominator that corner (ndc ~0.805) lies beyond
+	# column 7's old bound (0.778), so the tile is dropped; with the real denominator it is
+	# correctly inside column 7.
+	const OFFSET_X := 12.0
+	const DIST := 20.0
+	const HALF_SPAN := 1.575 # (kIslandDim - 1) * kIslandVoxelFine / 2
+	var eye := centre + Vector3(-OFFSET_X, 0.0, DIST)
+	var mask: PackedInt32Array = w.debug_island_tile_mask(eye, Vector3(0, 0, -1), TAN_X,
+		TAN_Y, VIEW_W, VIEW_H)
+	assert_int(mask.size()).is_equal(tiles_x * tiles_y)
+
+	# Leftmost AABB corner: x = centre - half, z = centre - half, so
+	# ndc = (OFFSET_X - HALF_SPAN) / ((DIST + HALF_SPAN) * TAN_X).
+	var ndc_x := (OFFSET_X - HALF_SPAN) / ((DIST + HALF_SPAN) * TAN_X)
+	var pixel_x := int((ndc_x + 1.0) * 0.5 * float(VIEW_W) - 0.5)
+	var pixel_y := int((0.0 + 1.0) * 0.5 * float(VIEW_H) - 0.5)
+	var tile_x := int(floor(float(pixel_x) / 16.0))
+	var tile_y := int(floor(float(pixel_y) / 16.0))
+	var probe_tile := tile_y * tiles_x + tile_x
+	assert_int(tile_x).is_equal(7)
+	assert_int(tile_y).is_equal(2)
+	assert_int(mask[probe_tile] & 1).override_failure_message(
+		"the tile containing the island's visible projection was not marked").is_not_equal(0)
+
+func test_a_camera_just_outside_the_near_epsilon_still_marks_every_tile(timeout := 60000) -> void:
+	var w := make_world()
+	var d: Dictionary = w.debug_place_test_island(0, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
+		Vector3(0.0, 30.0, 0.0))
+	assert_bool(d.get("ok", false)).is_true()
+	var centre: Vector3 = d["world_center"]
+
+	# Stand 5 mm outside the +z face of the (unrotated) 64-voxel lattice box and look almost
+	# straight away from it, but tilted just enough that the far corner is a hair in front of
+	# the eye plane: zmax ~0.0013, i.e. < 0.01 but >= 0. The near-clip fail-safe must mark
+	# every tile; the old `zmax < 0.01` skip treated this close-but-not-behind box as fully
+	# behind and dropped it.
+	const HALF_SPAN := 1.575 # (kIslandDim - 1) * kIslandVoxelFine / 2
+	const OUTSIDE := 0.005
+	var eye := centre + Vector3(0.0, 0.0, HALF_SPAN + OUTSIDE)
+	var dir := Vector3(0.004, 0.0, 1.0).normalized()
+	var mask: PackedInt32Array = w.debug_island_tile_mask(eye, dir, TAN_X, TAN_Y, 128, 128)
+	for m in mask:
+		assert_int(m & 1).is_not_equal(0)
