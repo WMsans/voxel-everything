@@ -87,6 +87,7 @@ public:
 	bool pin(int slot);
 	bool pinned(int slot) const;
 
+	bool has(int slot) const override;
 	bool sample(int slot, float x, float y, float z, const EditOp &op,
 			VolumeSample *out) const override;
 

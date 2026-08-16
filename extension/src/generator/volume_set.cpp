@@ -130,6 +130,10 @@ bool VolumeSet::pinned(int slot) const {
 	return slot >= 0 && slot < kMaxVolumes && slots_[slot].pinned;
 }
 
+bool VolumeSet::has(int slot) const {
+	return get(slot) != nullptr;
+}
+
 bool VolumeSet::sample(int slot, float x, float y, float z, const EditOp &op,
 		VolumeSample *out) const {
 	const VolumeData *v = get(slot);

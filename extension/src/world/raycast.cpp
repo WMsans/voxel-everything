@@ -20,11 +20,15 @@ float field_at(const Generator &gen, const EditLog &log, float x, float y, float
 }
 
 // Sign-crossing is only meaningful when the field at this point can actually contain a
-// volume op's positive box-distance apron. The store pointer alone is not enough: a
-// non-null but empty store over a pure analytic field must keep the classic hit_eps path.
-bool region_has_volume_add(const std::vector<EditOp> &ops) {
+// volume op's positive box-distance apron. Both the store pointer and a live slot are
+// required: apply_op fail-softs a missing/released slot, so a kOpVolumeAdd whose slot is
+// gone leaves the field identical to a pure analytic one and must keep the classic
+// hit_eps path.
+bool region_has_live_volume_add(const std::vector<EditOp> &ops, const VolumeStore *volumes) {
+	if (!volumes) return false;
 	for (const EditOp &op : ops) {
-		if (op.type == kOpVolumeAdd) return true;
+		if (op.type == kOpVolumeAdd && volumes->has(static_cast<int>(op.aux[0])))
+			return true;
 	}
 	return false;
 }
@@ -55,7 +59,7 @@ RayHit raycast(const Generator &gen, const EditLog &log, const float origin[3],
 		const std::vector<EditOp> &ops = ops_at(log, p[0], p[1], p[2]);
 		const float f = eval_field(gen, ops.data(), static_cast<int>(ops.size()), p[0], p[1],
 				p[2], volumes).sdf;
-		const bool sign_crossing = volumes != nullptr && region_has_volume_add(ops);
+		const bool sign_crossing = region_has_live_volume_add(ops, volumes);
 		const bool hit = sign_crossing ? (prev_f > 0.0f && f <= 0.0f) : (f < hit_eps);
 		if (hit) {
 			out.hit = true;

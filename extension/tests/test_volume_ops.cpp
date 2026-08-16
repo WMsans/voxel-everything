@@ -198,6 +198,36 @@ TEST_CASE("raycast with an empty VolumeStore keeps the pure-field hit_eps behavi
 	CHECK(f < 0.2f * kVoxelSize);
 }
 
+TEST_CASE("raycast with a released volume slot keeps the pure-field hit_eps behavior") {
+	AnalyticGenerator gen;
+	const WorldBounds bounds{{0, -64, 0}, {64, 8, 64}};
+	EditLog log(bounds);
+	VolumeSet volumes;
+	const int slot = volumes.allocate();
+	REQUIRE(slot == 0);
+	// The op still exists in the region's list, but its slot is gone. apply_op
+	// fail-softs that to a no-op, so the raycast must not switch to the stricter
+	// sign-crossing rule; it still has to hit at the classic f < hit_eps sample.
+	REQUIRE(volumes.release(slot));
+	const float op_origin[3] = {100.0f, 25.7f, 100.0f}; // region (3,1,3), off the ray's path
+	const EditOp op = make_volume_add(slot, op_origin, 0.05f, 32);
+	REQUIRE_FALSE(log.append(op).touched.empty());
+
+	const EditLog no_op_log(bounds);
+	const float o[3] = {100.0f, 47.603f, 100.0f};
+	const float d[3] = {0.0f, -1.0f, 0.0f};
+	const RayHit no_op = raycast(gen, no_op_log, o, d, 2.0f);
+	const RayHit with_dead = raycast(gen, log, o, d, 2.0f, &volumes);
+	REQUIRE(no_op.hit);
+	REQUIRE(with_dead.hit);
+	CHECK(with_dead.distance == doctest::Approx(no_op.distance));
+	CHECK(with_dead.pos[1] == doctest::Approx(no_op.pos[1]));
+	const float f = eval_field(gen, nullptr, 0, with_dead.pos[0], with_dead.pos[1],
+			with_dead.pos[2]).sdf;
+	CHECK(f > 0.0f);
+	CHECK(f < 0.2f * kVoxelSize);
+}
+
 TEST_CASE("a volume op with no store, or a released slot, is a no-op") {
 	AnalyticGenerator gen;
 	const float origin[3] = {8.0f, 64.0f, 8.0f};

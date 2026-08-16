@@ -51,6 +51,10 @@ struct VolumeStore {
 	// False when the slot holds nothing: the op is then skipped entirely (fail-soft).
 	virtual bool sample(int slot, float x, float y, float z, const EditOp &op,
 			VolumeSample *out) const = 0;
+	// True when the slot currently holds a live, sampleable volume. Raycast uses this
+	// to decide whether a region's kOpVolumeAdd can actually contribute a field value,
+	// because apply_op fail-softs a missing slot and leaves the field identical.
+	virtual bool has(int slot) const = 0;
 };
 
 Sample apply_op(Sample s, const EditOp &op, float x, float y, float z,
