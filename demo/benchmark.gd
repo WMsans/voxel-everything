@@ -5,9 +5,9 @@ extends Node
 #   --benchmark-move   the player flies forward continuously, so regions and collision
 #                      chunks stream in for the whole run.
 #   --benchmark-edit   the player is frozen and the edit tool fires every frame.
-#   --benchmark-island the player is frozen and the drill severs an overhang every second,
-#                      so connectivity, extraction, spawning and re-merging all run under
-#                      the frame timer.
+#   --benchmark-island the player is frozen and a sphere subtract severs a pillar every
+#                      second, so connectivity, extraction, spawning and re-merging all run
+#                      under the frame timer.
 #
 # The last two are the cases players actually complain about, and an AVERAGE hides them:
 # a run that is 8 ms most of the time and 50 ms whenever a batch lands reads as "fine".
@@ -15,6 +15,7 @@ extends Node
 
 const WARMUP := 60
 const FRAMES := 300
+const ISLAND_FRAMES := 900
 const TARGET_MS := 16.6
 
 var _mode := ""
@@ -32,6 +33,8 @@ var _cam: Camera3D
 var _edit_phase := 0.0
 var _island_timer := 0.0
 var _island_built := false
+var _island_waiting_for_merge := false
+var _target_frames := FRAMES
 
 func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
@@ -41,6 +44,8 @@ func _ready() -> void:
 			break
 	if _mode == "":
 		return
+	if _mode == "--benchmark-island":
+		_target_frames = ISLAND_FRAMES
 
 	_player = get_parent().get_node("Player")
 	_world = get_parent().get_node("VoxelWorld")
@@ -88,7 +93,7 @@ func _process(delta: float) -> void:
 		_worst_ms = ms
 		_worst = perf.duplicate()
 
-	if _samples.size() >= FRAMES:
+	if _samples.size() >= _target_frames:
 		_report()
 		get_tree().quit()
 
@@ -104,21 +109,33 @@ func _fire_edit() -> void:
 	_tool.apply_sphere_subtract(hit["pos"], 3.0)
 
 func _island_cycle(delta: float) -> void:
-	# Build a pillar, wait for it to stream in, drill through its middle, repeat. Each cycle
-	# puts one connectivity run, one extraction, one spawn and (a couple of seconds later)
-	# one re-merge inside the sampled window.
+	# Build a pillar, wait for it to stream in, subtract through its middle, then wait for
+	# the severed piece to re-merge before building the next. Each cycle puts one
+	# connectivity run, one extraction, one spawn and one re-merge inside the sampled window.
 	_island_timer += delta
 	var base := _player.global_position + Vector3(6.0, -4.0, 6.0)
 	if not _island_built:
 		for i in range(5):
 			_tool.apply_sphere_add(base + Vector3(0, 1.0 * i, 0), 1.2, 4)
 		_island_built = true
+		_island_waiting_for_merge = false
 		_island_timer = 0.0
+		return
+	if _island_waiting_for_merge:
+		# Do not start another pillar until the previous island has fallen asleep and
+		# re-merged; otherwise cycles overlap, live islands accumulate, and refusals appear.
+		if _island_timer >= 2.0:
+			var st: Dictionary = _world.debug_island_stats()
+			var live_islands := int(st.get("live_islands", 0))
+			if live_islands == 0:
+				_island_built = false
+				_island_waiting_for_merge = false
+				_island_timer = 0.0
 		return
 	if _island_timer < 1.0:
 		return
 	_tool.apply_sphere_subtract(base + Vector3(0, 2.0, 0), 1.6)
-	_island_built = false
+	_island_waiting_for_merge = true
 	_island_timer = 0.0
 
 func _percentile(sorted: PackedFloat32Array, p: float) -> float:
