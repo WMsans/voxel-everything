@@ -25,13 +25,16 @@ const uint ENCODED_ZERO = 128u;
 
 float decode_sdf(float unorm) { return unorm * 2.0 * SDF_RANGE - SDF_RANGE; }
 
-// The float an R8_UNORM imageStore must receive for the written byte to equal
-// ve::encode_sdf(d). Quantising here rather than leaning on the hardware's float->unorm
-// conversion removes the only rounding-mode difference between CPU and GPU generation.
-float quantise_sdf(float d) {
+// The BYTE ve::encode_sdf produces. Quantising here rather than leaning on the hardware's
+// float->unorm conversion removes the only rounding-mode difference between CPU and GPU.
+uint encode_sdf_byte(float d) {
 	float t = clamp((d + SDF_RANGE) / (2.0 * SDF_RANGE), 0.0, 1.0);
-	return floor(t * 255.0 + 0.5) / 255.0;
+	return uint(floor(t * 255.0 + 0.5));
 }
+
+// The float an R8_UNORM imageStore must receive for the written byte to equal
+// ve::encode_sdf(d).
+float quantise_sdf(float d) { return float(encode_sdf_byte(d)) / 255.0; }
 
 vec3 material_albedo(uint mat_id) {
 	switch (mat_id) {

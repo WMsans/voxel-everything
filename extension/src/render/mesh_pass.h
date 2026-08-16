@@ -40,6 +40,7 @@ public:
 	void teardown();
 	bool is_valid() const { return field_pipeline_.is_valid(); }
 	const MeshPassConfig &config() const { return cfg_; }
+	VolumePool &volumes() { return volumes_; }
 
 	// Uploads one stored volume to THIS device. Called on the worker thread only (the device
 	// belongs to it); MeshService::submit_volume is the main thread's way in.

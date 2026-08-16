@@ -224,6 +224,9 @@ public:
 	// --- Task 5 hook ---
 	Dictionary debug_mesh_diff(Vector3i chunk);
 
+	// --- Task 9 hook ---
+	Dictionary debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_cell);
+
 	// --- Task 6 hooks ---
 	bool debug_mesh_submit(Array chunks);
 	Array debug_mesh_collect();

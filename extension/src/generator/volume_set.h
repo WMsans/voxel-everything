@@ -20,6 +20,14 @@ inline constexpr float kIslandVoxelCoarse = 0.10f; // spec §5's "halved ... for
 // forces an early merge long before that cap could bite.
 inline constexpr int kMaxVolumes = 64;
 
+// Margin between the component's AABB and the lattice's outer shell, in voxels. It exists so
+// the outermost shell is strictly outside every mask box and therefore reads POSITIVE, which
+// is what makes sample_volume_lattice's inside and outside branches agree at the seam.
+inline constexpr int kIslandMarginVoxels = 2;
+// Voxels per min-max cell along each axis. 8 gives an 8^3 chain per 64^3 volume: 1 KB per
+// island, the same shape (and the same inclusive-corner rule) as ve::build_brick_mips.
+inline constexpr int kVolumeMipStride = 8;
+
 // One dense volume: a lattice of encoded SDF plus one global material id per sample.
 //
 // A byte of material rather than spec §3's 2-bit palette index plus a palette: at 64^3 the
@@ -48,6 +56,30 @@ struct VolumeData {
 		return dim * dim * dim;
 	}
 };
+
+// Where to put a component's lattice: the finest of kIslandVoxelFine / kIslandVoxelCoarse
+// whose usable reach ((dim - 1 - 2 * kIslandMarginVoxels) * pitch) covers the AABB, and an
+// origin that centres the AABB inside it. False when even the coarse pitch cannot -- the
+// caller splits the component (ve::kMaxIslandExtentCells is chosen so that never happens for
+// a labelled component, and volume_set.cpp static_asserts the relationship).
+bool plan_island_lattice(const float lo[3], const float hi[3], int dim, float *voxel,
+		float origin[3]);
+
+// The CPU reference for shaders/island_extract.comp.glsl (spec §8's differential testing):
+// the world field intersected with the union of the component's boxes. The intersection is
+// what makes the island exactly the material that left, and the carve exactly those boxes.
+//
+// `box_aabbs` holds 6 floats per box -- min xyz then max xyz, in world space. Flat floats
+// rather than ve::CellBox so generator/ need not depend on mesh/: the extractor does not
+// care that the boxes came from occupancy cells, only where they are.
+void extract_island_volume(const Generator &gen, const EditOp *ops, int op_count,
+		const VolumeStore *volumes, const float origin[3], float voxel, int dim,
+		const float *box_aabbs, int box_count, VolumeData *out);
+
+// Spec §3's "own min-max mip". Two bytes (min, max) per kVolumeMipStride^3 cell, INCLUSIVE
+// over the cell's corner range so a "no surface" verdict is a sound skip for the trilinear
+// reconstruction inside it -- the same soundness argument ve::build_brick_mips rests on.
+void build_volume_mip(const VolumeData &v, std::vector<uint8_t> *out);
 
 // Trilinear SDF and nearest material from a dim^3 lattice placed at `origin` with pitch
 // `voxel`. Mirrored exactly by sample_field_volume() in shaders/field.glslh.

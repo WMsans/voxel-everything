@@ -1,8 +1,11 @@
+#include "connectivity/components.h"
 #include "connectivity/occupancy.h"
+#include "mesh/box_merge.h"
 #include "generator/volume_set.h"
 #include "world/brick_eval.h"
 #include "world/raycast.h"
 #include <doctest/doctest.h>
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -606,4 +609,143 @@ TEST_CASE("a volume resampled through a rotation lands where the transform puts 
 	CHECK(sample_volume_lattice(out.sdf.data(), out.mat.data(), out.dim, out_op.pos,
 			out_op.radius, 0.775f, 0.775f, 0.775f, &t));
 	CHECK(t.sdf > 0.0f);
+}
+
+
+namespace {
+
+// extract_island_volume takes 6 world-space floats per box; ve::CellBox knows how to produce
+// them, so this is the one place the two representations meet in a test.
+std::vector<float> flat_aabbs(const std::vector<CellBox> &boxes) {
+	std::vector<float> v(boxes.size() * 6);
+	for (size_t i = 0; i < boxes.size(); i++) boxes[i].world_aabb(&v[i * 6], &v[i * 6 + 3]);
+	return v;
+}
+
+} // namespace
+
+TEST_CASE("plan_island_lattice picks the finest pitch that fits with its margin") {
+	float voxel = 0.0f;
+	float origin[3] = {0, 0, 0};
+
+	// A 1 m box: comfortably inside the fine pitch's (64 - 1 - 4) * 0.05 = 2.95 m reach.
+	const float small_lo[3] = {10.0f, 20.0f, 30.0f};
+	const float small_hi[3] = {11.0f, 21.0f, 31.0f};
+	CHECK(plan_island_lattice(small_lo, small_hi, kIslandDim, &voxel, origin));
+	CHECK(voxel == doctest::Approx(kIslandVoxelFine));
+	// The box is centred in the lattice, so both margins are equal and at least two voxels.
+	const float span = static_cast<float>(kIslandDim - 1) * voxel;
+	CHECK(origin[0] == doctest::Approx(10.0f - 0.5f * (span - 1.0f)));
+	CHECK(small_lo[0] - origin[0] >= kIslandMarginVoxels * voxel);
+	CHECK((origin[0] + span) - small_hi[0] >= kIslandMarginVoxels * voxel);
+
+	// A 4 m box needs the coarse pitch.
+	const float mid_hi[3] = {14.0f, 24.0f, 34.0f};
+	CHECK(plan_island_lattice(small_lo, mid_hi, kIslandDim, &voxel, origin));
+	CHECK(voxel == doctest::Approx(kIslandVoxelCoarse));
+
+	// The largest component the labeller can emit still fits at the coarse pitch. This is
+	// the invariant that lets Task 3 split on extent alone.
+	const float big_hi[3] = {
+		10.0f + kMaxIslandExtentCells * kOccupancyCellSize,
+		20.0f + kMaxIslandExtentCells * kOccupancyCellSize,
+		30.0f + kMaxIslandExtentCells * kOccupancyCellSize};
+	CHECK(plan_island_lattice(small_lo, big_hi, kIslandDim, &voxel, origin));
+
+	// ...and anything bigger is refused rather than silently clipped.
+	const float huge_hi[3] = {30.0f, 40.0f, 50.0f};
+	CHECK(plan_island_lattice(small_lo, huge_hi, kIslandDim, &voxel, origin) == false);
+}
+
+TEST_CASE("extract_island_volume is the field intersected with the component's boxes") {
+	AnalyticGenerator gen;
+	// Cells 10..11 on x, 20 on y and z: solid rock, deep underground.
+	const std::vector<CellBox> boxes{CellBox{{10, 20, 20}, {11, 20, 20}}};
+	const std::vector<float> aabbs = flat_aabbs(boxes);
+	float lo[3], hi[3];
+	boxes[0].world_aabb(lo, hi);
+	float voxel = 0.0f;
+	float origin[3] = {0, 0, 0};
+	REQUIRE(plan_island_lattice(lo, hi, kIslandDim, &voxel, origin));
+
+	VolumeData v;
+	extract_island_volume(gen, nullptr, 0, nullptr, origin, voxel, kIslandDim, aabbs.data(),
+			1, &v);
+	CHECK(v.dim == kIslandDim);
+	CHECK(v.solid_voxels > 0);
+
+	VolumeSample s{};
+	// The middle of the box: solid rock, so the island holds it.
+	REQUIRE(sample_volume_lattice(v.sdf.data(), v.mat.data(), v.dim, origin, voxel,
+			lo[0] + 0.4f, lo[1] + 0.4f, lo[2] + 0.4f, &s));
+	CHECK(s.sdf < 0.0f);
+	CHECK(s.material != 0);
+	// Outside the box but inside the lattice: the mask cut it away even though the terrain
+	// there is solid.
+	REQUIRE(sample_volume_lattice(v.sdf.data(), v.mat.data(), v.dim, origin, voxel,
+			hi[0] + 0.3f, lo[1] + 0.4f, lo[2] + 0.4f, &s));
+	CHECK(s.sdf > 0.0f);
+	// The outermost lattice shell is positive on every face, which is what makes
+	// sample_volume_lattice's outside-the-box branch agree with its inside branch.
+	const int d = v.dim;
+	for (int z = 0; z < d; z += d - 1)
+		for (int y = 0; y < d; y++)
+			for (int x = 0; x < d; x++)
+				CHECK(decode_sdf(v.sdf[VolumeSet::voxel_index(d, x, y, z)]) > 0.0f);
+}
+
+TEST_CASE("an extraction whose boxes hold no solid comes back empty") {
+	AnalyticGenerator gen;
+	// High above the terrain: the field is air, so the intersection is nothing.
+	const std::vector<CellBox> boxes{CellBox{{10, 100, 20}, {10, 100, 20}}};
+	const std::vector<float> aabbs = flat_aabbs(boxes);
+	float lo[3], hi[3];
+	boxes[0].world_aabb(lo, hi);
+	float voxel = 0.0f;
+	float origin[3] = {0, 0, 0};
+	REQUIRE(plan_island_lattice(lo, hi, kIslandDim, &voxel, origin));
+	VolumeData v;
+	extract_island_volume(gen, nullptr, 0, nullptr, origin, voxel, kIslandDim, aabbs.data(),
+			1, &v);
+	CHECK(v.solid_voxels == 0);
+}
+
+TEST_CASE("the volume min-max mip bounds every sample in its cell") {
+	AnalyticGenerator gen;
+	const std::vector<CellBox> boxes{CellBox{{10, 20, 20}, {12, 21, 21}}};
+	const std::vector<float> aabbs = flat_aabbs(boxes);
+	float lo[3], hi[3];
+	boxes[0].world_aabb(lo, hi);
+	float voxel = 0.0f;
+	float origin[3] = {0, 0, 0};
+	REQUIRE(plan_island_lattice(lo, hi, kIslandDim, &voxel, origin));
+	VolumeData v;
+	extract_island_volume(gen, nullptr, 0, nullptr, origin, voxel, kIslandDim, aabbs.data(),
+			1, &v);
+
+	std::vector<uint8_t> mip;
+	build_volume_mip(v, &mip);
+	const int cells = kIslandDim / kVolumeMipStride;
+	CHECK(static_cast<int>(mip.size()) == cells * cells * cells * 2);
+	// Inclusive over the cell's CORNER range, exactly as ve::build_brick_mips is, so a
+	// "no surface" verdict is a sound skip for the trilinear reconstruction inside it.
+	for (int cz = 0; cz < cells; cz++)
+		for (int cy = 0; cy < cells; cy++)
+			for (int cx = 0; cx < cells; cx++) {
+				const int ci = (cx + cy * cells + cz * cells * cells) * 2;
+				uint8_t mn = 255, mx = 0;
+				for (int z = 0; z <= kVolumeMipStride; z++)
+					for (int y = 0; y <= kVolumeMipStride; y++)
+						for (int x = 0; x <= kVolumeMipStride; x++) {
+							const int sx = std::min(cx * kVolumeMipStride + x, kIslandDim - 1);
+							const int sy = std::min(cy * kVolumeMipStride + y, kIslandDim - 1);
+							const int sz = std::min(cz * kVolumeMipStride + z, kIslandDim - 1);
+							const uint8_t s =
+									v.sdf[VolumeSet::voxel_index(kIslandDim, sx, sy, sz)];
+							mn = std::min(mn, s);
+							mx = std::max(mx, s);
+						}
+				CHECK(mip[ci + 0] == mn);
+				CHECK(mip[ci + 1] == mx);
+			}
 }

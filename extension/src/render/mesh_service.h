@@ -7,6 +7,7 @@
 #include <thread>
 #include <vector>
 #include "generator/edit_ops.h"
+#include "render/island_extract_pass.h"
 #include "render/mesh_pass.h"
 #include "world/region.h"
 
@@ -50,6 +51,18 @@ public:
 	// Moves whatever has finished into `out`. Never blocks on the GPU.
 	int collect(std::vector<MeshResult> *out);
 
+	// Extraction shares the worker thread with meshing, in its own queue: an island is a
+	// player-visible event and must not wait behind a collider batch, but it is also rare
+	// enough that a dedicated thread would idle.
+	bool submit_extracts(std::vector<IslandExtractJob> jobs);
+	bool extracts_busy() const { return extract_busy_.load(std::memory_order_acquire); }
+	int collect_extracts(std::vector<IslandExtractResult> *out);
+
+	// Copies one stored volume into THIS device's pool, on the worker thread. The main
+	// thread's ve::VolumeSet is authoritative; this keeps the mesher's field evaluation --
+	// and therefore collision against pasted rubble -- in step with it.
+	bool submit_volume(int slot, ve::VolumeData data);
+
 	// Runs `fn` on the worker thread and waits for it. The diagnostic entry points
 	// (debug_mesh_diff and friends) are inherently synchronous and must touch the pass on the
 	// thread that owns its device; this is how they still can.
@@ -68,6 +81,15 @@ private:
 	MeshPassConfig cfg_;
 	std::vector<MeshRequest> pending_;  // submitted, not yet picked up
 	std::vector<MeshResult> results_;   // meshed, not yet collected
+	struct VolumeUpload {
+		int slot = -1;
+		ve::VolumeData data;
+	};
+	IslandExtractPass *extract_ = nullptr;         // worker thread only
+	std::vector<IslandExtractJob> pending_extract_;
+	std::vector<IslandExtractResult> extract_results_;
+	std::vector<VolumeUpload> pending_volumes_;
+	std::atomic<bool> extract_busy_{false};
 	const std::function<void(MeshPass &)> *sync_fn_ = nullptr;
 	bool sync_pending_ = false;
 	bool started_ = false;   // startup attempt has settled (ready_ is then meaningful)

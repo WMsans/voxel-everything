@@ -1,8 +1,16 @@
 #include "generator/volume_set.h"
+#include "connectivity/components.h"
+#include "world/brick_eval.h"
 #include <algorithm>
 #include <cmath>
 
 namespace ve {
+
+// The labeller splits on extent alone, so its bound must be one the lattice can always hold.
+static_assert(static_cast<double>(kMaxIslandExtentCells) * kOccupancyCellSize <=
+				static_cast<double>(kIslandDim - 1 - 2 * kIslandMarginVoxels) *
+						kIslandVoxelCoarse,
+		"kMaxIslandExtentCells is larger than an island volume can cover");
 
 namespace {
 
@@ -183,20 +191,9 @@ bool resample_volume(const VolumeData &src, const EditOp &src_op, const float ba
 			whi[a] = std::max(whi[a], w);
 		}
 	}
-	float extent = 0.0f;
-	for (int a = 0; a < 3; a++) extent = std::max(extent, whi[a] - wlo[a]);
-
-	float pitch = kIslandVoxelFine;
-	if (extent > static_cast<float>(dim - 1) * kIslandVoxelFine) pitch = kIslandVoxelCoarse;
-	if (extent > static_cast<float>(dim - 1) * pitch) return false;
-
-	// Centre the new lattice on the rotated AABB so the margin is shared on both sides,
-	// which is what keeps the outermost shell positive (see sample_volume_lattice).
-	float o[3];
-	for (int a = 0; a < 3; a++) {
-		const float slack = static_cast<float>(dim - 1) * pitch - (whi[a] - wlo[a]);
-		o[a] = wlo[a] - 0.5f * slack;
-	}
+	float pitch = 0.0f;
+	float o[3] = {0, 0, 0};
+	if (!plan_island_lattice(wlo, whi, dim, &pitch, o)) return false;
 
 	out->dim = dim;
 	out->sdf.assign(static_cast<size_t>(dim) * dim * dim, encode_sdf(kSdfRange));
@@ -224,6 +221,79 @@ bool resample_volume(const VolumeData &src, const EditOp &src_op, const float ba
 
 	*out_op = make_volume_add(slot, o, pitch, dim);
 	return true;
+}
+
+bool plan_island_lattice(const float lo[3], const float hi[3], int dim, float *voxel,
+		float origin[3]) {
+	if (dim < 2 + 2 * kIslandMarginVoxels) return false;
+	float extent = 0.0f;
+	for (int a = 0; a < 3; a++) extent = std::max(extent, hi[a] - lo[a]);
+	const float usable = static_cast<float>(dim - 1 - 2 * kIslandMarginVoxels);
+	float pitch = kIslandVoxelFine;
+	if (extent > usable * pitch) pitch = kIslandVoxelCoarse;
+	if (extent > usable * pitch) return false;
+	const float span = static_cast<float>(dim - 1) * pitch;
+	for (int a = 0; a < 3; a++) origin[a] = lo[a] - 0.5f * (span - (hi[a] - lo[a]));
+	*voxel = pitch;
+	return true;
+}
+
+void extract_island_volume(const Generator &gen, const EditOp *ops, int op_count,
+		const VolumeStore *volumes, const float origin[3], float voxel, int dim,
+		const float *box_aabbs, int box_count, VolumeData *out) {
+	out->dim = dim;
+	out->sdf.assign(static_cast<size_t>(dim) * dim * dim, 0);
+	out->mat.assign(static_cast<size_t>(dim) * dim * dim, 0);
+	out->solid_voxels = 0;
+
+	for (int z = 0; z < dim; z++)
+		for (int y = 0; y < dim; y++)
+			for (int x = 0; x < dim; x++) {
+				const float p[3] = {origin[0] + x * voxel, origin[1] + y * voxel,
+						origin[2] + z * voxel};
+				Sample s = eval_field(gen, ops, op_count, p[0], p[1], p[2], volumes);
+				// The island IS the solid field intersected with the union of its cells, so
+				// the mask is a CSG intersection: max(field, min over boxes).
+				float bu = 1e30f;
+				for (int b = 0; b < box_count; b++)
+					bu = std::min(bu, box_sdf(&box_aabbs[static_cast<size_t>(b) * 6 + 0],
+									 &box_aabbs[static_cast<size_t>(b) * 6 + 3],
+									 p[0], p[1], p[2]));
+				s.sdf = std::max(s.sdf, bu);
+				if (s.sdf > 0.0f) s.material = 0;
+				const int i = VolumeSet::voxel_index(dim, x, y, z);
+				out->sdf[i] = encode_sdf(s.sdf);
+				out->mat[i] = static_cast<uint8_t>(s.material > 255 ? 255 : s.material);
+				if (s.sdf <= 0.0f) out->solid_voxels++;
+			}
+}
+
+void build_volume_mip(const VolumeData &v, std::vector<uint8_t> *out) {
+	const int dim = v.dim;
+	const int cells = dim / kVolumeMipStride;
+	out->assign(static_cast<size_t>(cells) * cells * cells * 2, 0);
+	for (int cz = 0; cz < cells; cz++)
+		for (int cy = 0; cy < cells; cy++)
+			for (int cx = 0; cx < cells; cx++) {
+				uint8_t mn = 255, mx = 0;
+				// INCLUSIVE corner range: the trilinear interpolant inside a cell is a
+				// multilinear combination of its corner samples and therefore never leaves
+				// their convex hull, so an inclusive bound is sound and an exclusive one is
+				// not (the argument in world/brick_mip.h, applied to a 64^3 lattice).
+				for (int z = 0; z <= kVolumeMipStride; z++)
+					for (int y = 0; y <= kVolumeMipStride; y++)
+						for (int x = 0; x <= kVolumeMipStride; x++) {
+							const int sx = std::min(cx * kVolumeMipStride + x, dim - 1);
+							const int sy = std::min(cy * kVolumeMipStride + y, dim - 1);
+							const int sz = std::min(cz * kVolumeMipStride + z, dim - 1);
+							const uint8_t s = v.sdf[VolumeSet::voxel_index(dim, sx, sy, sz)];
+							mn = std::min(mn, s);
+							mx = std::max(mx, s);
+						}
+				const int ci = (cx + cy * cells + cz * cells * cells) * 2;
+				(*out)[static_cast<size_t>(ci) + 0] = mn;
+				(*out)[static_cast<size_t>(ci) + 1] = mx;
+			}
 }
 
 } // namespace ve

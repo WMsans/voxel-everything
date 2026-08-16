@@ -12,6 +12,7 @@
 #include "physics/collider_streamer.h"
 #include "mesh/dual_contour.h"
 #include "mesh/mesh_chunk.h"
+#include "mesh/box_merge.h"
 #include "generator/generator.h"
 #include "world/brick_eval.h"
 #include "world/brick_mip.h"
@@ -62,6 +63,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_teardown_physics"), &VoxelWorld::debug_teardown_physics);
 	ClassDB::bind_method(D_METHOD("debug_mesh_lattice_diff", "chunk"), &VoxelWorld::debug_mesh_lattice_diff);
 	ClassDB::bind_method(D_METHOD("debug_mesh_diff", "chunk"), &VoxelWorld::debug_mesh_diff);
+	ClassDB::bind_method(D_METHOD("debug_island_extract_diff", "lo_cell", "hi_cell"), &VoxelWorld::debug_island_extract_diff);
 	ClassDB::bind_method(D_METHOD("debug_mesh_submit", "chunks"), &VoxelWorld::debug_mesh_submit);
 	ClassDB::bind_method(D_METHOD("debug_mesh_collect"), &VoxelWorld::debug_mesh_collect);
 	ClassDB::bind_method(D_METHOD("debug_physics_frame", "center"), &VoxelWorld::debug_physics_frame);
@@ -544,6 +546,86 @@ Dictionary VoxelWorld::debug_mesh_diff(Vector3i chunk) {
 	d["verts_off_10cm"] = off_10cm;
 	d["winding_bad"] = winding_bad;
 	d["tri_sampled"] = tri_sampled;
+	return d;
+}
+
+Dictionary VoxelWorld::debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_cell) {
+	Dictionary d;
+	d["ok"] = false;
+	ensure_physics_initialized();
+	if (!mesh_ || !mesh_->is_valid()) return d;
+
+	const ve::IVec3 lo{lo_cell.x, lo_cell.y, lo_cell.z};
+	const ve::IVec3 hi{hi_cell.x, hi_cell.y, hi_cell.z};
+	std::vector<ve::IVec3> cells;
+	for (int z = lo.z; z <= hi.z; z++)
+		for (int y = lo.y; y <= hi.y; y++)
+			for (int x = lo.x; x <= hi.x; x++) cells.push_back({x, y, z});
+	std::vector<ve::CellBox> boxes;
+	if (!ve::greedy_box_merge(cells, ve::kMaxIslandBoxes, &boxes)) return d;
+
+	float wlo[3] = {1e30f, 1e30f, 1e30f}, whi[3] = {-1e30f, -1e30f, -1e30f};
+	for (const ve::CellBox &b : boxes) {
+		float a[3], c[3];
+		b.world_aabb(a, c);
+		for (int k = 0; k < 3; k++) {
+			wlo[k] = std::min(wlo[k], a[k]);
+			whi[k] = std::max(whi[k], c[k]);
+		}
+	}
+	IslandExtractJob job;
+	job.id = 0;
+	job.boxes = boxes;
+	if (!ve::plan_island_lattice(wlo, whi, ve::kIslandDim, &job.voxel, job.origin)) return d;
+	job.dim = ve::kIslandDim;
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		// One region's list: a component never spans regions, because Task 3's extent bound
+		// (5.6 m) is a fifth of a region and the manager splits any that would.
+		job.ops = edit_log_->ops(ve::WorldBounds::region_of_brick(lo));
+	}
+
+	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
+	std::vector<IslandExtractJob> jobs;
+	jobs.push_back(job);
+	if (!mesh_->submit_extracts(std::move(jobs))) return d;
+	std::vector<IslandExtractResult> results;
+	for (int i = 0; i < 2000 && results.empty(); i++) {
+		mesh_->collect_extracts(&results);
+		if (results.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	if (results.empty() || results[0].failed) return d;
+
+	std::vector<float> aabbs(boxes.size() * 6);
+	for (size_t i = 0; i < boxes.size(); i++)
+		boxes[i].world_aabb(&aabbs[i * 6], &aabbs[i * 6 + 3]);
+	ve::VolumeData cpu;
+	ve::AnalyticGenerator gen;
+	ve::extract_island_volume(gen, job.ops.data(), static_cast<int>(job.ops.size()),
+			&volumes_, job.origin, job.voxel, job.dim, aabbs.data(),
+			static_cast<int>(boxes.size()), &cpu);
+
+	int worst = 0, mat_mismatch = 0, mat_compared = 0;
+	const ve::VolumeData &gpu = results[0].data;
+	for (size_t i = 0; i < cpu.sdf.size(); i++) {
+		const int diff = std::abs(static_cast<int>(gpu.sdf[i]) - static_cast<int>(cpu.sdf[i]));
+		worst = std::max(worst, diff);
+		// Materials only where the sample is clear of the surface band, for the same reason
+		// test_brick_diff.gd compares them only near-but-not-on it: a one-step sdf drift
+		// flips the classification and says nothing about the material logic.
+		if (std::abs(static_cast<int>(cpu.sdf[i]) - 128) > 4) {
+			mat_compared++;
+			if (gpu.mat[i] != cpu.mat[i]) mat_mismatch++;
+		}
+	}
+	d["ok"] = true;
+	d["worst_steps"] = worst;
+	d["mat_mismatch"] = mat_mismatch;
+	d["mat_compared"] = mat_compared;
+	d["gpu_solid"] = gpu.solid_voxels;
+	d["cpu_solid"] = cpu.solid_voxels;
+	d["voxel"] = job.voxel;
+	d["boxes"] = static_cast<int>(boxes.size());
 	return d;
 }
 
