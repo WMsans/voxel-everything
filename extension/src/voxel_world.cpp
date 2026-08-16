@@ -106,6 +106,8 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_restore", "fail"), &VoxelWorld::debug_set_fail_next_restore);
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_carve", "fail"), &VoxelWorld::debug_set_fail_next_carve);
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_resample", "fail"), &VoxelWorld::debug_set_fail_next_resample);
+	ClassDB::bind_method(D_METHOD("debug_wake_island_body", "index"), &VoxelWorld::debug_wake_island_body);
+	ClassDB::bind_method(D_METHOD("debug_offset_island_body", "index", "offset"), &VoxelWorld::debug_offset_island_body);
 	ClassDB::bind_method(D_METHOD("debug_body_of_chunk", "chunk"), &VoxelWorld::debug_body_of_chunk);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
@@ -732,6 +734,16 @@ void VoxelWorld::debug_set_fail_next_carve(bool fail) {
 void VoxelWorld::debug_set_fail_next_resample(bool fail) {
 	ensure_physics_initialized();
 	if (island_manager_) island_manager_->debug_set_fail_next_resample(fail);
+}
+
+void VoxelWorld::debug_wake_island_body(int index) {
+	ensure_physics_initialized();
+	if (island_manager_) island_manager_->debug_wake_body(index);
+}
+
+void VoxelWorld::debug_offset_island_body(int index, Vector3 offset) {
+	ensure_physics_initialized();
+	if (island_manager_) island_manager_->debug_offset_body(index, offset);
 }
 
 RID VoxelWorld::debug_body_of_chunk(Vector3i chunk) {

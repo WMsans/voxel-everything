@@ -47,7 +47,7 @@ bool is_orthonormal_basis(const float basis[9]) {
 
 bool sample_volume_lattice(const uint8_t *sdf, const uint8_t *mat, int dim,
 		const float origin[3], float voxel, float x, float y, float z, VolumeSample *out) {
-	if (!sdf || !mat || !out || dim < 2 || voxel <= 0.0f) return false;
+	if (!sdf || !mat || !out || dim < 2 || !(voxel > 0.0f)) return false;
 	const float span = static_cast<float>(dim - 1) * voxel;
 	float lo[3] = {origin[0], origin[1], origin[2]};
 	float hi[3] = {origin[0] + span, origin[1] + span, origin[2] + span};

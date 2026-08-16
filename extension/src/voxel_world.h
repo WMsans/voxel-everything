@@ -260,6 +260,11 @@ public:
 	// Test hook: make the next re-merge resample fail so the resample backoff path can be
 	// exercised without depending on a worker-side failure mode.
 	void debug_set_fail_next_resample(bool fail);
+	// Test hook: wake an island body after a re-merge resample has been submitted, so the
+	// stale-rest-pose guard can be exercised deterministically.
+	void debug_wake_island_body(int index);
+	// Test hook: offset and wake a live island body, for the stale-rest-pose regression.
+	void debug_offset_island_body(int index, Vector3 offset);
 
 	// Tool entry point (VoxelEditTool, Task 14). Main thread; takes edit_mutex_.
 	ve::EditLog::AppendResult append_edit(const ve::EditOp &op);

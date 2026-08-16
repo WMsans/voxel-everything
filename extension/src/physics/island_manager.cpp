@@ -1135,6 +1135,30 @@ void IslandManager::despawn(int index) {
 			merge_retries_.end());
 }
 
+#ifdef DEBUG_ENABLED
+void IslandManager::debug_wake_body(int index) {
+	if (index < 0 || index >= static_cast<int>(bodies_.size()) || !bodies_[index] ||
+			!bodies_[index]->live())
+		return;
+	PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
+	if (!ps) return;
+	ps->body_set_state(bodies_[index]->body(), PhysicsServer3D::BODY_STATE_SLEEPING, false);
+}
+
+void IslandManager::debug_offset_body(int index, const Vector3 &offset) {
+	if (index < 0 || index >= static_cast<int>(bodies_.size()) || !bodies_[index] ||
+			!bodies_[index]->live())
+		return;
+	PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
+	if (!ps) return;
+	const Transform3D xf = bodies_[index]->transform();
+	Transform3D moved = xf;
+	moved.origin += offset;
+	ps->body_set_state(bodies_[index]->body(), PhysicsServer3D::BODY_STATE_TRANSFORM, moved);
+	ps->body_set_state(bodies_[index]->body(), PhysicsServer3D::BODY_STATE_SLEEPING, false);
+}
+#endif
+
 Dictionary IslandManager::stats() {
 	Dictionary d;
 	int live_bodies = 0, live_islands = 0, live_debris = 0, sleeping_bodies = 0;
@@ -1162,6 +1186,7 @@ Dictionary IslandManager::stats() {
 		d["pending_windows"] = static_cast<int>(windows_.size());
 	}
 	d["in_flight"] = static_cast<int>(in_flight_.size());
+	d["merging"] = static_cast<int>(merging_.size());
 	d["volume_live"] = world_ ? world_->volumes().live_count() : 0;
 	int volume_pinned = 0;
 	if (world_)

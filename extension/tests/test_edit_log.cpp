@@ -90,6 +90,26 @@ TEST_CASE("collect_ops_for_aabb keeps byte-identical edits as separate ops in or
 	CHECK(log.seqs({0, 0, 0})[1] < log.seqs({0, 0, 0})[2]);
 }
 
+TEST_CASE("collect_ops_for_aabb can exceed kMaxRegionOps across a boundary even when each region is under cap") {
+	ve::EditLog log(bounds());
+	// Region 0 ends at x = 25.6. Fill each side with 200 small ops: neither region alone is
+	// full, but a component straddling the boundary sees the flattened 400-op list.
+	for (int i = 0; i < 200; i++) {
+		log.append(sphere(24.8f, 1.0f, 1.0f, 0.1f)); // region 0 only
+		log.append(sphere(26.0f, 1.0f, 1.0f, 0.1f)); // region 1 only
+	}
+	CHECK(log.op_count({0, 0, 0}) == 200);
+	CHECK(log.op_count({1, 0, 0}) == 200);
+	CHECK(log.op_count({0, 0, 0}) < ve::kMaxRegionOps);
+	CHECK(log.op_count({1, 0, 0}) < ve::kMaxRegionOps);
+	const float lo[3] = {24.8f, 0.0f, 0.0f};
+	const float hi[3] = {26.4f, 2.0f, 2.0f};
+	std::vector<ve::EditOp> ops;
+	ve::collect_ops_for_aabb(log, lo, hi, &ops);
+	REQUIRE(ops.size() > static_cast<size_t>(ve::kMaxRegionOps));
+	CHECK(ops.size() == 400);
+}
+
 TEST_CASE("ops outside the world bounds are dropped, not stored") {
 	ve::EditLog log(bounds());
 	const auto r = log.append(sphere(-100.0f, 0.0f, 0.0f, 1.0f));

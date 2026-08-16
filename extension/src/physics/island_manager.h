@@ -83,6 +83,13 @@ public:
 	// Test hook: make the next re-merge resample fail so the resample backoff path can be
 	// exercised without depending on a worker-side failure mode.
 	void debug_set_fail_next_resample(bool fail) { debug_fail_next_resample_ = fail; }
+	// Test hook: wake an island body after a re-merge resample has been submitted, so the
+	// stale-rest-pose guard can be exercised deterministically.
+	void debug_wake_body(int index);
+	// Test hook: offset a live island body and wake it, again for deterministic stale-pose
+	// tests. Moving is stronger than waking alone: Jolt may put a motionless body back to
+	// sleep before the next poll, but a changed transform always trips the stale guard.
+	void debug_offset_body(int index, const Vector3 &offset);
 #else
 	// Fail-injection hooks are debug-only: release builds must not be able to drive the
 	// island manager into the structurally-impossible no-hole restore branch.
@@ -90,6 +97,8 @@ public:
 	void debug_set_fail_next_restore(bool fail) { (void)fail; }
 	void debug_set_fail_next_carve(bool fail) { (void)fail; }
 	void debug_set_fail_next_resample(bool fail) { (void)fail; }
+	void debug_wake_body(int index) { (void)index; }
+	void debug_offset_body(int index, const Vector3 &offset) { (void)index; (void)offset; }
 #endif
 	// Not const: the ground probe takes the edit lock.
 	Dictionary stats();

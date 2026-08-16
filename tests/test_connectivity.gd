@@ -625,6 +625,34 @@ func test_near_cap_carve_is_refused_before_any_carve(timeout := 120000) -> void:
 	assert_bool(solid_at(w, top)).override_failure_message(
 		"a near-cap carve left a field hole with no body: %s" % st).is_true()
 
+func test_cross_region_combined_op_count_is_refused_before_any_carve(timeout := 120000) -> void:
+	var w := make_world()
+	var t := tool_of(w)
+	# Put the pillar on the x region boundary (region 0 ends at 25.6 m), so its severed top
+	# is a cross-region component. Each region individually stays under kMaxRegionOps, but
+	# the flattened collector sees > 256 ops for the component and submit_extracts() must
+	# refuse before allocating a slot or carving anything.
+	var x := 24.8
+	build_pillar(w, t, x)
+	var top := Vector3(x, PILLAR_BASE + 4.0, PILLAR_Z)
+	assert_bool(solid_at(w, top)).override_failure_message(
+		"the cross-region pillar was never built").is_true()
+	# 200 paint ops on each side of the boundary. They consume op capacity but do not change
+	# the SDF, and both points are inside the component's world AABB.
+	fill_region_ops(w, t, Vector3(x - 0.5, PILLAR_BASE + 3.0, PILLAR_Z), 200)
+	fill_region_ops(w, t, Vector3(x + 1.2, PILLAR_BASE + 3.0, PILLAR_Z), 200)
+	t.apply_sphere_subtract(Vector3(x, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	step(w, 240)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["refused"]).override_failure_message(
+		"the cross-region over-cap extraction was not refused: %s" % st).is_greater(0)
+	assert_int(st["islands_spawned"]).override_failure_message(
+		"a cross-region over-cap extraction still spawned a body: %s" % st).is_equal(0)
+	assert_int(st["live_bodies"]).override_failure_message(
+		"a cross-region over-cap extraction created a body: %s" % st).is_equal(0)
+	assert_bool(solid_at(w, top)).override_failure_message(
+		"a cross-region over-cap extraction left a field hole with no body: %s" % st).is_true()
+
 func test_stale_extraction_is_refused_before_any_carve(timeout := 120000) -> void:
 	var w := make_world()
 	var t := tool_of(w)
@@ -711,6 +739,51 @@ func test_failed_resample_backs_off_instead_of_retrying_every_frame(timeout := 1
 			break
 	assert_int(st["islands_merged"]).override_failure_message(
 		"the body never merged after the resample backoff: %s" % st).is_greater(0)
+
+func test_stale_rest_pose_resample_is_refused_before_paste(timeout := 180000) -> void:
+	var w := make_world()
+	w.debug_set_merge_sleep_seconds(999.0) # keep the body from merging until the test is ready
+	var t := tool_of(w)
+	build_pillar(w, t)
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	step(w, 180)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["live_bodies"]).override_failure_message(
+		"the severed top never became a body: %s" % st).is_greater(0)
+	var refused_before: int = st["refused"]
+	var merged_before: int = st["islands_merged"]
+
+	# Let the body sleep, then lower the threshold and run until a re-merge resample is
+	# actually in flight. `merging` is the number of submitted resamples waiting to land.
+	w.debug_set_merge_sleep_seconds(0.2)
+	for i in range(1200):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		if st["merging"] > 0:
+			break
+	assert_int(st["merging"]).override_failure_message(
+		"a re-merge resample was never submitted: %s" % st).is_greater(0)
+
+	# The resample was captured at the body's rest pose. Offset and wake the body before the
+	# worker result lands; the stale-rest-pose guard must refuse to paste the old pose and
+	# must not despawn the body from its new pose.
+	w.debug_offset_island_body(0, Vector3(0.25, 0.0, 0.0))
+	for i in range(120):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		if st["islands_merged"] > merged_before or st["refused"] > refused_before:
+			break
+	assert_int(st["islands_merged"]).override_failure_message(
+		"a stale-rest-pose resample still pasted and despawned the body: %s" % st
+		).is_equal(merged_before)
+	assert_int(st["refused"]).override_failure_message(
+		"the stale-rest-pose resample was not refused: %s" % st).is_greater(refused_before)
+	assert_int(st["live_bodies"]).override_failure_message(
+		"the stale-rest-pose resample despawned the body anyway: %s" % st).is_greater(0)
 
 func test_fully_rejected_op_does_not_enqueue_connectivity_window(timeout := 120000) -> void:
 	var w := make_world()
