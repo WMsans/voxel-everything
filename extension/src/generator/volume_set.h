@@ -31,7 +31,9 @@ struct VolumeData {
 	std::vector<uint8_t> mat; // dim^3, 0 = air
 	int solid_voxels = 0;     // how many samples read solid; the island's mass comes from it
 
-	bool empty() const { return sdf.empty(); }
+	// A volume is usable only when both lattices are present at exactly dim^3
+	// samples; anything else is inconsistent and treated as empty.
+	bool empty() const { return sdf.empty() || mat.empty(); }
 	int voxel_count() const { return dim * dim * dim; }
 };
 
@@ -58,10 +60,13 @@ public:
 	// has to put each volume back where it was rather than wherever allocate() felt like.
 	bool reserve(int slot);
 	void release(int slot); // frees the bytes; refused on a pinned slot
-	void store(int slot, VolumeData data);
+	// Stores only a complete, consistent volume (both vectors exactly dim^3
+	// samples). Returns false and leaves the slot unchanged on invalid data.
+	bool store(int slot, VolumeData data);
 	const VolumeData *get(int slot) const;
 	int live_count() const { return live_; }
-	// Bumped on every store(); the GPU mirrors re-upload a slot when their copy is behind.
+	// Bumped on every successful store(); the GPU mirrors re-upload a slot when their
+	// copy is behind.
 	int64_t version(int slot) const;
 
 	// Called the moment an EditOp referencing this slot enters the edit log. A pinned slot

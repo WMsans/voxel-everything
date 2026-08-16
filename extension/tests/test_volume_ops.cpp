@@ -1,8 +1,9 @@
+#include "connectivity/occupancy.h"
 #include "generator/volume_set.h"
-#include "mesh/box_merge.h"
 #include "world/brick_eval.h"
 #include <doctest/doctest.h>
 #include <cmath>
+#include <vector>
 
 using namespace ve;
 
@@ -107,7 +108,7 @@ TEST_CASE("a volume op adds exactly what its lattice holds") {
 	const float origin[3] = {8.0f, 64.0f, 8.0f}; // above the terrain: base field is air
 	VolumeData v = ball_volume(32, 0.05f, 0.4f, 2);
 	CHECK(v.solid_voxels > 0);
-	volumes.store(slot, std::move(v));
+	CHECK(volumes.store(slot, std::move(v)));
 	const EditOp op = make_volume_add(slot, origin, 0.05f, 32);
 	CHECK(op.type == kOpVolumeAdd);
 	CHECK(op.radius == doctest::Approx(0.05f));
@@ -143,6 +144,75 @@ TEST_CASE("a volume op with no store, or a released slot, is a no-op") {
 	CHECK(eval_field(gen, &op, 1, cx, cy, cz, &volumes).sdf > 0.0f);
 }
 
+TEST_CASE("a negative volume slot stays out of range instead of aliasing slot 0") {
+	AnalyticGenerator gen;
+	VolumeSet volumes;
+	const int slot0 = volumes.allocate();
+	CHECK(slot0 == 0);
+	// Fill the pool so the old clamp-to-zero path would find a live, populated slot 0.
+	for (int i = 1; i < kMaxVolumes; i++) CHECK(volumes.allocate() >= 0);
+	CHECK(volumes.allocate() == -1);
+	CHECK(volumes.store(slot0, ball_volume(32, 0.05f, 0.4f, 2)));
+
+	const float origin[3] = {8.0f, 64.0f, 8.0f};
+	const float cx = 8.775f, cy = 64.775f, cz = 8.775f;
+	const EditOp op = make_volume_add(-1, origin, 0.05f, 32);
+	CHECK(op.aux[0] == 0xFFFFFFFFu);
+	// Slot 0 holds a ball that would read solid at this point; the op names slot -1,
+	// so fail-soft means it contributes nothing and the air field survives.
+	CHECK(eval_field(gen, &op, 1, cx, cy, cz, &volumes).sdf > 0.0f);
+}
+
+TEST_CASE("volume data is empty unless both lattices are present") {
+	VolumeData v;
+	v.dim = 2;
+	v.sdf.assign(8, 0);
+	CHECK(v.empty()); // mat missing
+	v.sdf.clear();
+	v.mat.assign(8, 0);
+	CHECK(v.empty()); // sdf missing
+	v.sdf.assign(8, 0);
+	CHECK(!v.empty());
+}
+
+TEST_CASE("store rejects volumes whose lattices are not exactly dim^3") {
+	VolumeSet volumes;
+	const int slot = volumes.allocate();
+	CHECK(slot == 0);
+	const int64_t ver = volumes.version(slot);
+
+	VolumeData short_sdf;
+	short_sdf.dim = 4;
+	short_sdf.sdf.assign(63, 0);
+	short_sdf.mat.assign(64, 0);
+	CHECK(!volumes.store(slot, std::move(short_sdf)));
+	CHECK(volumes.version(slot) == ver);
+	CHECK(volumes.get(slot) == nullptr);
+
+	VolumeData short_mat;
+	short_mat.dim = 4;
+	short_mat.sdf.assign(64, 0);
+	short_mat.mat.assign(63, 0);
+	CHECK(!volumes.store(slot, std::move(short_mat)));
+	CHECK(volumes.version(slot) == ver);
+	CHECK(volumes.get(slot) == nullptr);
+
+	VolumeData bad_dim;
+	bad_dim.dim = -1;
+	bad_dim.sdf.assign(1, 0);
+	bad_dim.mat.assign(1, 0);
+	CHECK(!volumes.store(slot, std::move(bad_dim)));
+	CHECK(volumes.get(slot) == nullptr);
+
+	VolumeData good;
+	good.dim = 4;
+	good.sdf.assign(64, 0);
+	good.mat.assign(64, 0);
+	CHECK(volumes.store(slot, std::move(good)));
+	CHECK(volumes.version(slot) > ver);
+	CHECK(volumes.get(slot) != nullptr);
+}
+
 TEST_CASE("the volume pool hands out every slot once and takes them back") {
 	VolumeSet volumes;
 	std::vector<int> slots;
@@ -173,7 +243,6 @@ TEST_CASE("a slot can be claimed by index, once") {
 TEST_CASE("a pinned slot can never be released or handed out again") {
 	VolumeSet volumes;
 	const int slot = volumes.allocate();
-	volumes.store(slot, VolumeData{});
 	volumes.pin(slot);
 	CHECK(volumes.pinned(slot));
 	volumes.release(slot);

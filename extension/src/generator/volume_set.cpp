@@ -6,7 +6,7 @@ namespace ve {
 
 bool sample_volume_lattice(const uint8_t *sdf, const uint8_t *mat, int dim,
 		const float origin[3], float voxel, float x, float y, float z, VolumeSample *out) {
-	if (!sdf || !mat || dim < 2 || voxel <= 0.0f) return false;
+	if (!sdf || !mat || !out || dim < 2 || voxel <= 0.0f) return false;
 	const float span = static_cast<float>(dim - 1) * voxel;
 	float lo[3] = {origin[0], origin[1], origin[2]};
 	float hi[3] = {origin[0] + span, origin[1] + span, origin[2] + span};
@@ -71,17 +71,22 @@ void VolumeSet::release(int slot) {
 	if (slot < 0 || slot >= kMaxVolumes || !slots_[slot].used) return;
 	if (slots_[slot].pinned) return; // an op still names it; see pin()
 	slots_[slot].used = false;
+	// Assigning a fresh VolumeData destroys the old vectors and frees their
+	// buffers immediately; release() exists specifically to shed those bytes.
 	slots_[slot].data = VolumeData{};
-	slots_[slot].data.sdf.shrink_to_fit();
-	slots_[slot].data.mat.shrink_to_fit();
 	slots_[slot].version = next_version_++;
 	live_--;
 }
 
-void VolumeSet::store(int slot, VolumeData data) {
-	if (slot < 0 || slot >= kMaxVolumes || !slots_[slot].used) return;
+bool VolumeSet::store(int slot, VolumeData data) {
+	if (slot < 0 || slot >= kMaxVolumes || !slots_[slot].used) return false;
+	if (data.dim < 1) return false;
+	const size_t expected = static_cast<size_t>(data.dim) * static_cast<size_t>(data.dim) *
+			static_cast<size_t>(data.dim);
+	if (data.sdf.size() != expected || data.mat.size() != expected) return false;
 	slots_[slot].data = std::move(data);
 	slots_[slot].version = next_version_++;
+	return true;
 }
 
 const VolumeData *VolumeSet::get(int slot) const {
