@@ -79,6 +79,12 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_perf_stats"), &VoxelWorld::debug_perf_stats);
 	ClassDB::bind_method(D_METHOD("debug_island_frame", "dt", "center"), &VoxelWorld::debug_island_frame);
 	ClassDB::bind_method(D_METHOD("debug_island_stats"), &VoxelWorld::debug_island_stats);
+	ClassDB::bind_method(D_METHOD("debug_island_pending_uploads"), &VoxelWorld::debug_island_pending_uploads);
+	ClassDB::bind_method(D_METHOD("debug_island_descriptors_pending"), &VoxelWorld::debug_island_descriptors_pending);
+	ClassDB::bind_method(D_METHOD("debug_queue_test_island_upload", "slot", "sdf", "mat", "dim"),
+			&VoxelWorld::debug_queue_test_island_upload);
+	ClassDB::bind_method(D_METHOD("debug_queue_test_island_descriptors"),
+			&VoxelWorld::debug_queue_test_island_descriptors);
 	ClassDB::bind_method(D_METHOD("debug_set_merge_sleep_seconds", "v"), &VoxelWorld::debug_set_merge_sleep_seconds);
 	ClassDB::bind_method(D_METHOD("debug_set_max_dynamic_bodies", "v"), &VoxelWorld::debug_set_max_dynamic_bodies);
 	ClassDB::bind_method(D_METHOD("debug_set_atlas_slot_used", "slot", "used"), &VoxelWorld::debug_set_atlas_slot_used);
@@ -241,6 +247,10 @@ void VoxelWorld::ensure_initialized() {
 
 ve::EditLog::AppendResult VoxelWorld::append_edit(const ve::EditOp &op) {
 	std::lock_guard<std::mutex> lock(edit_mutex_);
+	return append_edit_locked(op);
+}
+
+ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op) {
 	if (!edit_log_) return {};
 	ve::EditLog::AppendResult r = edit_log_->append(op);
 	// Bump AFTER the append and under the same lock the streamer uses to capture op counts.
@@ -316,6 +326,15 @@ void VoxelWorld::teardown_physics() {
 	// the colliders so its volume-slot bookkeeping still has a live VolumeSet to ask.
 	if (island_manager_) { island_manager_->teardown(); delete island_manager_; island_manager_ = nullptr; }
 	physics_bubble_centers_.clear();
+	// Drop any uploads/descriptors the previous manager queued before the GPU pools are torn
+	// down. If physics is re-initialized, stale queue entries must not be drained into the
+	// new pools.
+	{
+		std::lock_guard<std::mutex> lock(island_mutex_);
+		island_uploads_.clear();
+		island_descs_.clear();
+		island_descs_dirty_ = false;
+	}
 	// Colliders first: they hold the mesher's results and the residency's slots. Deleting the
 	// service joins its thread, which frees the device and the pass on the thread that made
 	// them; nothing else may outlive that.
@@ -454,6 +473,42 @@ int VoxelWorld::drain_island_uploads(RenderingDevice *device) {
 	if (dirty && islands_)
 		islands_->upload_descriptors(device, descs.data(), static_cast<int>(descs.size()));
 	return static_cast<int>(uploads.size());
+}
+
+int VoxelWorld::debug_island_pending_uploads() {
+	std::lock_guard<std::mutex> lock(island_mutex_);
+	return static_cast<int>(island_uploads_.size());
+}
+
+int VoxelWorld::debug_island_descriptors_pending() {
+	std::lock_guard<std::mutex> lock(island_mutex_);
+	return island_descs_dirty_ ? 1 : 0;
+}
+
+void VoxelWorld::debug_queue_test_island_upload(int slot, const PackedByteArray &sdf,
+		const PackedByteArray &mat, int dim) {
+	if (slot < 0 || slot >= kMaxIslands || dim < 2 || dim > ve::kIslandDim) {
+		UtilityFunctions::printerr("debug_queue_test_island_upload: invalid slot or dim");
+		return;
+	}
+	const int64_t n = static_cast<int64_t>(dim) * dim * dim;
+	if (sdf.size() < n || mat.size() < n) {
+		UtilityFunctions::printerr("debug_queue_test_island_upload: short buffers for dim ", dim);
+		return;
+	}
+	ve::VolumeData d;
+	d.dim = dim;
+	d.sdf.assign(sdf.ptr(), sdf.ptr() + n);
+	d.mat.assign(mat.ptr(), mat.ptr() + n);
+	for (int64_t i = 0; i < n; i++)
+		if (ve::decode_sdf(d.sdf[static_cast<size_t>(i)]) <= 0.0f) d.solid_voxels++;
+	queue_island_upload(slot, d);
+}
+
+void VoxelWorld::debug_queue_test_island_descriptors() {
+	std::lock_guard<std::mutex> lock(island_mutex_);
+	island_descs_.assign(1, IslandSlotDesc{});
+	island_descs_dirty_ = true;
 }
 
 int VoxelWorld::debug_island_frame(float dt, Vector3 center) {

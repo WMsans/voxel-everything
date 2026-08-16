@@ -305,6 +305,9 @@ void IslandManager::note_merge_rejected(int body_index, const ve::EditLog::Appen
 }
 
 bool IslandManager::merge_retry_blocked(int body_index) {
+	// op_count() reads EditLog's region lists, which append_edit/note_edit mutate under
+	// edit_mutex_; a tool-thread edit can land while start_merges() is checking retries.
+	std::lock_guard<std::mutex> lock(world_->edit_mutex());
 	for (auto it = merge_retries_.begin(); it != merge_retries_.end();) {
 		if (it->body_index != body_index) {
 			++it;
@@ -373,6 +376,11 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 	// carve, hit 256, and then reject the restore; the old abort paths turned that into a
 	// release-build crash. Refuse up front: the component stays attached, which is the safe
 	// fail-soft direction.
+	//
+	// The preflight, the carve loop, and any restore all run under one edit_mutex_ hold. A
+	// tool-thread append_edit cannot fill a region between the preflight and the restore, so
+	// a preflight pass means every carve box will be accepted and the restore volume-add will
+	// be accepted if a spawn failure later needs it.
 	const auto has_restore_headroom = [&]() -> bool {
 		std::vector<ve::IVec3> carve_regions;
 		std::vector<ve::IVec3> restore_regions;
@@ -399,206 +407,221 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 			if (std::find(restore_regions.begin(), restore_regions.end(), region) ==
 					restore_regions.end())
 				return false;
-		{
-			std::lock_guard<std::mutex> lock(world_->edit_mutex());
-			for (const ve::IVec3 &region : restore_regions) {
-				int carve_ops_here = 0;
-				for (const ve::CellBox &box : f.boxes) {
-					ve::IVec3 brlo, brhi;
-					ve::op_region_range(ve::make_box_subtract(box.lo, box.hi), &brlo, &brhi);
-					if (region.x >= brlo.x && region.x <= brhi.x &&
-							region.y >= brlo.y && region.y <= brhi.y &&
-							region.z >= brlo.z && region.z <= brhi.z)
-						carve_ops_here++;
-				}
-				if (world_->edit_log()->op_count(region) + carve_ops_here + 1 >
-						ve::kMaxRegionOps)
-					return false;
+		for (const ve::IVec3 &region : restore_regions) {
+			int carve_ops_here = 0;
+			for (const ve::CellBox &box : f.boxes) {
+				ve::IVec3 brlo, brhi;
+				ve::op_region_range(ve::make_box_subtract(box.lo, box.hi), &brlo, &brhi);
+				if (region.x >= brlo.x && region.x <= brhi.x &&
+						region.y >= brlo.y && region.y <= brhi.y &&
+						region.z >= brlo.z && region.z <= brhi.z)
+					carve_ops_here++;
 			}
+			if (world_->edit_log()->op_count(region) + carve_ops_here + 1 >
+					ve::kMaxRegionOps)
+				return false;
 		}
 		return true;
 	};
-	if (!has_restore_headroom()) {
-		if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
-		world_->volumes().release(f.volume_slot);
-		refused_++;
-		return; // preflight refused: no carve, no hole, the component stays attached
-	}
 
-	// 1. Carve (spec §5 step 1). The boxes tile the component exactly, so this removes the
-	//    material that just became a body and nothing else. Ordered AFTER the extraction so
-	//    the volume holds the rock rather than the hole.
-	bool carve_rejected = false;
-	std::vector<ve::IVec3> carved_regions;
-	for (const ve::CellBox &box : f.boxes) {
-		const ve::EditLog::AppendResult carve = world_->append_edit(ve::make_box_subtract(box.lo, box.hi));
-		for (const ve::IVec3 &region : carve.touched) carved_regions.push_back(region);
-		if (!carve.rejected.empty()) {
-			carve_rejected = true;
-			break;
-		}
-	}
-	if (carve_rejected) {
-		// A region's op list was full: the carve was rejected (possibly after some boxes
-		// were already removed). Do NOT spawn a body into a field that still contains the
-		// rock. Restore any accepted carve with a pinned volume add and keep the component
-		// attached. Full regions that rejected the carve were never carved, so a volume add
-		// rejected there is harmless; every region that WAS carved must accept the restore.
-		if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
-		if (carved_regions.empty()) {
+	IslandBody *b = nullptr;
+	const Ref<World3D> w3 = world_->get_world_3d();
+	{
+		std::lock_guard<std::mutex> lock(world_->edit_mutex());
+		if (!has_restore_headroom()) {
+			if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
 			world_->volumes().release(f.volume_slot);
 			refused_++;
-			return; // nothing was carved: the component simply stays attached
+			return; // preflight refused: no carve, no hole, the component stays attached
 		}
-		if (!world_->volumes().pin(f.volume_slot)) {
-			// Preflight guarantees the restore volume-add can be appended, and pin after a
-			// successful store is an internal invariant. If this still fails, fail-soft by
-			// refusing the spawn without releasing the slot into a hole.
-			UtilityFunctions::printerr(
-					"IslandManager: cannot pin carved island for restore after carve rejection; "
-					"refusing spawn");
-			return;
+
+		// 1. Carve (spec §5 step 1). The boxes tile the component exactly, so this removes the
+		//    material that just became a body and nothing else. Ordered AFTER the extraction so
+		//    the volume holds the rock rather than the hole.
+		bool carve_rejected = false;
+		std::vector<ve::IVec3> carved_regions;
+		for (const ve::CellBox &box : f.boxes) {
+			const ve::EditLog::AppendResult carve =
+					world_->append_edit_locked(ve::make_box_subtract(box.lo, box.hi));
+			for (const ve::IVec3 &region : carve.touched) carved_regions.push_back(region);
+			if (!carve.rejected.empty()) {
+				carve_rejected = true;
+				break;
+			}
 		}
-		world_->queue_field_volume_upload(f.volume_slot, r.data);
-		const ve::EditLog::AppendResult restore =
-				world_->append_edit(ve::make_volume_add(f.volume_slot, f.origin, f.voxel, f.dim));
-		bool restored_all_carved = !restore.touched.empty();
-		for (const ve::IVec3 &region : carved_regions)
-			if (std::find(restore.touched.begin(), restore.touched.end(), region) ==
-					restore.touched.end())
-				restored_all_carved = false;
-		if (!restored_all_carved) {
-			// The preflight above made this unreachable unless the edit log changed between
-			// the check and the carve. Fail-soft: do not release the pinned slot into the
-			// carved hole and do not spawn a body into a field that still contains rock.
-			UtilityFunctions::printerr(
-					"IslandManager: cannot restore an accepted carve after carve rejection; "
-					"refusing spawn");
-			return;
+		if (carve_rejected) {
+			// With the preflight and the carve under the same lock this is unreachable under
+			// op-cap pressure. It remains as a defensive fail-soft branch: if a carve was
+			// rejected (possibly after some boxes were already removed), do NOT spawn a body
+			// into a field that still contains the rock. Restore any accepted carve with a
+			// pinned volume add and keep the component attached. Full regions that rejected
+			// the carve were never carved, so a volume add rejected there is harmless; every
+			// region that WAS carved must accept the restore.
+			if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
+			if (carved_regions.empty()) {
+				world_->volumes().release(f.volume_slot);
+				refused_++;
+				return; // nothing was carved: the component simply stays attached
+			}
+			if (!world_->volumes().pin(f.volume_slot)) {
+				// Preflight guarantees the restore volume-add can be appended, and pin after a
+				// successful store is an internal invariant. If this still fails, fail-soft by
+				// refusing the spawn without releasing the slot into a hole.
+				UtilityFunctions::printerr(
+						"IslandManager: cannot pin carved island for restore after carve rejection; "
+						"refusing spawn");
+				return;
+			}
+			world_->queue_field_volume_upload(f.volume_slot, r.data);
+			const ve::EditLog::AppendResult restore =
+					world_->append_edit_locked(ve::make_volume_add(f.volume_slot, f.origin,
+							f.voxel, f.dim));
+			bool restored_all_carved = !restore.touched.empty();
+			for (const ve::IVec3 &region : carved_regions)
+				if (std::find(restore.touched.begin(), restore.touched.end(), region) ==
+						restore.touched.end())
+					restored_all_carved = false;
+			if (!restored_all_carved) {
+				// Preflight made this unreachable unless an internal invariant is broken.
+				// Fail-soft: do not release the pinned slot into the carved hole and do not
+				// spawn a body into a field that still contains rock.
+				UtilityFunctions::printerr(
+						"IslandManager: cannot restore an accepted carve after carve rejection; "
+						"refusing spawn");
+				return;
+			}
+			// The field has the rock back everywhere that was carved; the regions that rejected
+			// the carve were never carved and already read solid.
+			for (const ve::CellBox &box : f.boxes)
+				for (int z = box.lo.z; z <= box.hi.z; z++)
+					for (int y = box.lo.y; y <= box.hi.y; y++)
+						for (int x = box.lo.x; x <= box.hi.x; x++)
+							world_->occupancy().set_cell(
+									{x, y, z}, ve::kCellSolid, world_->edit_seq());
+			refused_++;
+			return; // no hole: the component is back in the field, not a body
 		}
-		// The field has the rock back everywhere that was carved; the regions that rejected
-		// the carve were never carved and already read solid.
+
+		// 2. Tell the occupancy grid straight away. The GPU readback that would say the same
+		//    thing is several frames out, and until it lands the next connectivity run would
+		//    find this component all over again and carve it twice.
 		for (const ve::CellBox &box : f.boxes)
 			for (int z = box.lo.z; z <= box.hi.z; z++)
 				for (int y = box.lo.y; y <= box.hi.y; y++)
 					for (int x = box.lo.x; x <= box.hi.x; x++)
-						world_->occupancy().set_cell(
-								{x, y, z}, ve::kCellSolid, world_->edit_seq());
-		refused_++;
-		return; // no hole: the component is back in the field, not a body
-	}
+						world_->occupancy().set_cell({x, y, z}, ve::kCellAir, world_->edit_seq());
 
-	// 2. Tell the occupancy grid straight away. The GPU readback that would say the same
-	//    thing is several frames out, and until it lands the next connectivity run would
-	//    find this component all over again and carve it twice.
-	for (const ve::CellBox &box : f.boxes)
-		for (int z = box.lo.z; z <= box.hi.z; z++)
-			for (int y = box.lo.y; y <= box.hi.y; y++)
-				for (int x = box.lo.x; x <= box.hi.x; x++)
-					world_->occupancy().set_cell({x, y, z}, ve::kCellAir, world_->edit_seq());
+		// 3. Spawn (spec §5 step 3). Spawned AFTER the carve so the body is born into the hole,
+		//    not overlapping the static terrain it just left. If spawn still fails, restore the
+		//    rock as a pinned volume add: the carve already happened, and the global fail-soft
+		//    rule forbids leaving a hole with no body. The edit lock is held across this so the
+		//    restore cannot be rejected by a tool-thread edit that lands between carve and
+		//    restore.
+		IslandSpawn info;
+		info.volume_slot = f.volume_slot;
+		info.atlas_slot = atlas_slot;
+		info.boxes = f.boxes;
+		for (int a = 0; a < 3; a++) info.lattice_origin[a] = f.origin[a];
+		info.voxel = f.voxel;
+		info.dim = f.dim;
+		info.solid_voxels = r.data.solid_voxels;
+		for (int a = 0; a < 3; a++) info.impulse[a] = f.impulse[a];
+		info.debris = debris;
 
-	// 3. Spawn (spec §5 step 3). Spawned AFTER the carve so the body is born into the hole,
-	//    not overlapping the static terrain it just left. If spawn still fails, restore the
-	//    rock as a pinned volume add: the carve already happened, and the global fail-soft
-	//    rule forbids leaving a hole with no body.
-	IslandSpawn info;
-	info.volume_slot = f.volume_slot;
-	info.atlas_slot = atlas_slot;
-	info.boxes = f.boxes;
-	for (int a = 0; a < 3; a++) info.lattice_origin[a] = f.origin[a];
-	info.voxel = f.voxel;
-	info.dim = f.dim;
-	info.solid_voxels = r.data.solid_voxels;
-	for (int a = 0; a < 3; a++) info.impulse[a] = f.impulse[a];
-	info.debris = debris;
-
-	IslandBody *b = new IslandBody();
-	const Ref<World3D> w3 = world_->get_world_3d();
-	const bool spawn_failed = debug_fail_next_spawn_ || !b->spawn(w3.is_valid() ? w3->get_space() : RID(),
-			w3.is_valid() ? w3->get_scenario() : RID(), info, &r.data);
-	debug_fail_next_spawn_ = false;
-	if (spawn_failed) {
-		delete b;
-		if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
-		// Nothing was carved (e.g. an out-of-bounds edge case), so there is no hole to
-		// restore; the stored birth slot is unreferenced and can be released.
-		if (carved_regions.empty()) {
-			world_->volumes().release(f.volume_slot);
+		b = new IslandBody();
+		const bool spawn_failed = debug_fail_next_spawn_ ||
+				!b->spawn(w3.is_valid() ? w3->get_space() : RID(),
+						w3.is_valid() ? w3->get_scenario() : RID(), info, &r.data);
+		debug_fail_next_spawn_ = false;
+		if (spawn_failed) {
+			delete b;
+			b = nullptr;
+			if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
+			// Nothing was carved (e.g. an out-of-bounds edge case), so there is no hole to
+			// restore; the stored birth slot is unreferenced and can be released.
+			if (carved_regions.empty()) {
+				world_->volumes().release(f.volume_slot);
+				refused_++;
+				return;
+			}
+			const auto restore_covers_carved = [&](const ve::EditLog::AppendResult &restore) {
+				if (!restore.rejected.empty() || restore.touched.empty()) return false;
+				for (const ve::IVec3 &region : carved_regions)
+					if (std::find(restore.touched.begin(), restore.touched.end(), region) ==
+							restore.touched.end())
+						return false;
+				return true;
+			};
+			// Restore the terrain. The slot is stored and becomes pinned by the volume add, so
+			// it is intentionally NOT released here. After the store() check above, pin() cannot
+			// fail unless an internal invariant is broken; if it ever does, do NOT release the
+			// slot into the carved hole -- keep the piece attached instead.
+			if (world_->volumes().pin(f.volume_slot)) {
+				world_->queue_field_volume_upload(f.volume_slot, r.data);
+				const ve::EditLog::AppendResult restore =
+						world_->append_edit_locked(ve::make_volume_add(f.volume_slot, f.origin,
+								f.voxel, f.dim));
+				if (!restore_covers_carved(restore)) {
+					// Preflight + atomic lock made this unreachable under normal op-cap
+					// pressure; fail-soft rather than aborting the process.
+					UtilityFunctions::printerr(
+							"IslandManager: restore volume-add rejected or did not cover every carved "
+							"region after spawn failure; refusing to release the pinned slot");
+					return;
+				}
+				// The field has the rock back; make the occupancy grid agree so a later
+				// connectivity/anchoring pass does not see a phantom air pocket.
+				for (const ve::CellBox &box : f.boxes)
+					for (int z = box.lo.z; z <= box.hi.z; z++)
+						for (int y = box.lo.y; y <= box.hi.y; y++)
+							for (int x = box.lo.x; x <= box.hi.x; x++)
+								world_->occupancy().set_cell(
+										{x, y, z}, ve::kCellSolid, world_->edit_seq());
+			} else {
+				// The original slot is not referenced by any edit (it was only stored for the
+				// body), so it can be released and re-stored as a fresh pinned restore volume.
+				// Releasing first guarantees the allocate below has a free slot even if the pool
+				// was full. This branch should be unreachable: after store() succeeded above,
+				// pin() cannot fail unless an internal invariant is broken.
+				world_->volumes().release(f.volume_slot);
+				const int restore_slot = world_->volumes().allocate();
+				if (restore_slot < 0 || !world_->volumes().store(restore_slot, r.data) ||
+						!world_->volumes().pin(restore_slot)) {
+					// Unreachable after a successful store + preflight; fail-soft instead of
+					// crashing the process.
+					UtilityFunctions::printerr(
+							"IslandManager: cannot restore a carved island after spawn failure; "
+							"refusing to release the carved slot");
+					return;
+				}
+				world_->queue_field_volume_upload(restore_slot, r.data);
+				const ve::EditLog::AppendResult restore =
+						world_->append_edit_locked(ve::make_volume_add(restore_slot, f.origin,
+								f.voxel, f.dim));
+				if (!restore_covers_carved(restore)) {
+					// Preflight + atomic lock made this unreachable under normal op-cap
+					// pressure; fail-soft rather than aborting the process.
+					UtilityFunctions::printerr(
+							"IslandManager: restore volume-add rejected or did not cover every carved "
+							"region after spawn failure; refusing to release the pinned slot");
+					return;
+				}
+				// The field has the rock back; make the occupancy grid agree so a later
+				// connectivity/anchoring pass does not see a phantom air pocket.
+				for (const ve::CellBox &box : f.boxes)
+					for (int z = box.lo.z; z <= box.hi.z; z++)
+						for (int y = box.lo.y; y <= box.hi.y; y++)
+							for (int x = box.lo.x; x <= box.hi.x; x++)
+								world_->occupancy().set_cell(
+										{x, y, z}, ve::kCellSolid, world_->edit_seq());
+			}
 			refused_++;
-			return;
+			return; // no hole: the carve stands and either volume add put the rock back
 		}
-		const auto restore_covers_carved = [&](const ve::EditLog::AppendResult &restore) {
-			if (!restore.rejected.empty() || restore.touched.empty()) return false;
-			for (const ve::IVec3 &region : carved_regions)
-				if (std::find(restore.touched.begin(), restore.touched.end(), region) ==
-						restore.touched.end())
-					return false;
-			return true;
-		};
-		// Restore the terrain. The slot is stored and becomes pinned by the volume add, so
-		// it is intentionally NOT released here. After the store() check above, pin() cannot
-		// fail unless an internal invariant is broken; if it ever does, do NOT release the
-		// slot into the carved hole -- keep the piece attached instead.
-		if (world_->volumes().pin(f.volume_slot)) {
-			world_->queue_field_volume_upload(f.volume_slot, r.data);
-			const ve::EditLog::AppendResult restore =
-					world_->append_edit(ve::make_volume_add(f.volume_slot, f.origin, f.voxel, f.dim));
-			if (!restore_covers_carved(restore)) {
-				// Preflight made this unreachable under normal op-cap pressure; fail-soft
-				// rather than aborting the process.
-				UtilityFunctions::printerr(
-						"IslandManager: restore volume-add rejected or did not cover every carved "
-						"region after spawn failure; refusing to release the pinned slot");
-				return;
-			}
-			// The field has the rock back; make the occupancy grid agree so a later
-			// connectivity/anchoring pass does not see a phantom air pocket.
-			for (const ve::CellBox &box : f.boxes)
-				for (int z = box.lo.z; z <= box.hi.z; z++)
-					for (int y = box.lo.y; y <= box.hi.y; y++)
-						for (int x = box.lo.x; x <= box.hi.x; x++)
-							world_->occupancy().set_cell(
-									{x, y, z}, ve::kCellSolid, world_->edit_seq());
-		} else {
-			// The original slot is not referenced by any edit (it was only stored for the
-			// body), so it can be released and re-stored as a fresh pinned restore volume.
-			// Releasing first guarantees the allocate below has a free slot even if the pool
-			// was full. This branch should be unreachable: after store() succeeded above,
-			// pin() cannot fail unless an internal invariant is broken.
-			world_->volumes().release(f.volume_slot);
-			const int restore_slot = world_->volumes().allocate();
-			if (restore_slot < 0 || !world_->volumes().store(restore_slot, r.data) ||
-					!world_->volumes().pin(restore_slot)) {
-				// Unreachable after a successful store + preflight; fail-soft instead of
-				// crashing the process.
-				UtilityFunctions::printerr(
-						"IslandManager: cannot restore a carved island after spawn failure; "
-						"refusing to release the carved slot");
-				return;
-			}
-			world_->queue_field_volume_upload(restore_slot, r.data);
-			const ve::EditLog::AppendResult restore =
-					world_->append_edit(ve::make_volume_add(restore_slot, f.origin, f.voxel, f.dim));
-			if (!restore_covers_carved(restore)) {
-				// Preflight made this unreachable under normal op-cap pressure; fail-soft
-				// rather than aborting the process.
-				UtilityFunctions::printerr(
-						"IslandManager: restore volume-add rejected or did not cover every carved "
-						"region after spawn failure; refusing to release the pinned slot");
-				return;
-			}
-			// The field has the rock back; make the occupancy grid agree so a later
-			// connectivity/anchoring pass does not see a phantom air pocket.
-			for (const ve::CellBox &box : f.boxes)
-				for (int z = box.lo.z; z <= box.hi.z; z++)
-					for (int y = box.lo.y; y <= box.hi.y; y++)
-						for (int x = box.lo.x; x <= box.hi.x; x++)
-							world_->occupancy().set_cell(
-									{x, y, z}, ve::kCellSolid, world_->edit_seq());
-		}
-		refused_++;
-		return; // no hole: the carve stands and either volume add put the rock back
 	}
+	// The edit lock is released only after the carve either has a live body in the hole or
+	// has put the rock back. No tool-thread edit can create a carved cell with neither.
+
 	// Reuse a hole left by a despawn; append only when there is none.
 	{
 		size_t k = 0;

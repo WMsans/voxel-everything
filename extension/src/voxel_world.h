@@ -210,6 +210,13 @@ public:
 
 	int debug_island_frame(float dt, Vector3 center);
 	Dictionary debug_island_stats();
+	// Test hooks for teardown/reinit: let a test queue stale island GPU handoffs and observe
+	// that teardown_physics() clears them before the next physics lifetime starts.
+	int debug_island_pending_uploads();
+	int debug_island_descriptors_pending();
+	void debug_queue_test_island_upload(int slot, const PackedByteArray &sdf,
+			const PackedByteArray &mat, int dim);
+	void debug_queue_test_island_descriptors();
 	void debug_set_merge_sleep_seconds(float v);
 	// Test hook: lower the dynamic-body guardrail so a small test can prove slot-pool holes
 	// after merges do not count against the cap.
@@ -226,6 +233,9 @@ public:
 
 	// Tool entry point (VoxelEditTool, Task 14). Main thread; takes edit_mutex_.
 	ve::EditLog::AppendResult append_edit(const ve::EditOp &op);
+	// Low-level append used by IslandManager to hold edit_mutex_ across a carve/restore
+	// sequence. The caller MUST already hold edit_mutex_().
+	ve::EditLog::AppendResult append_edit_locked(const ve::EditOp &op);
 
 	// --- debug/test hooks (Tasks 7-10 kept; debug_sdf_atlas now returns the ATLAS) ---
 	String debug_load_shader(const String &res_path) const;

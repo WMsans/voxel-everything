@@ -275,3 +275,31 @@ func test_a_camera_just_outside_the_near_epsilon_still_marks_every_tile(timeout 
 	var mask: PackedInt32Array = w.debug_island_tile_mask(eye, dir, TAN_X, TAN_Y, 128, 128)
 	for m in mask:
 		assert_int(m & 1).is_not_equal(0)
+
+func test_teardown_physics_clears_stale_island_handoffs(timeout := 60000) -> void:
+	var w := make_world()
+	var dim := 2
+	var n := dim * dim * dim
+	var sdf := PackedByteArray()
+	sdf.resize(n)
+	sdf.fill(0) # solid samples; only the queue state matters for this test
+	var mat := PackedByteArray()
+	mat.resize(n)
+	mat.fill(0)
+	w.debug_queue_test_island_upload(0, sdf, mat, dim)
+	w.debug_queue_test_island_descriptors()
+	assert_int(w.debug_island_pending_uploads()).override_failure_message(
+		"test island upload was not queued").is_equal(1)
+	assert_int(w.debug_island_descriptors_pending()).override_failure_message(
+		"test island descriptors were not marked dirty").is_equal(1)
+
+	w.debug_teardown_physics()
+	assert_int(w.debug_island_pending_uploads()).override_failure_message(
+		"teardown left stale island uploads queued").is_equal(0)
+	assert_int(w.debug_island_descriptors_pending()).override_failure_message(
+		"teardown left stale island descriptors dirty").is_equal(0)
+
+	# Reinitializing physics must not drain those cleared entries into a fresh GPU pool.
+	assert_bool(w.debug_init_physics()).is_true()
+	assert_int(w.debug_island_pending_uploads()).is_equal(0)
+	assert_int(w.debug_island_descriptors_pending()).is_equal(0)
