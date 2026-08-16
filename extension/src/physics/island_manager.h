@@ -119,6 +119,7 @@ private:
 		int body_index = -1;
 		int cooldown = 0;
 		std::vector<ve::IVec3> blocked_regions; // paste regions still at the op cap
+		bool permanent = false; // defensive: never re-merge this body again
 	};
 
 	bool window_is_fresh(const PendingWindow &w) const;
@@ -131,6 +132,7 @@ private:
 	void note_extract_failure(const PendingWindow &w);
 	void note_extract_success(const PendingWindow &w);
 	void note_merge_rejected(int body_index, const ve::EditLog::AppendResult &paste);
+	void block_merge_permanently(int body_index);
 	bool merge_retry_blocked(int body_index);
 	int live_body_count() const;
 	int free_atlas_slot() const;

@@ -63,6 +63,7 @@ public:
 	bool extraction_available() const {
 		return extract_available_.load(std::memory_order_acquire);
 	}
+#ifdef DEBUG_ENABLED
 	// Test hook: force the availability flag so the engine suite can simulate a permanently
 	// unavailable extraction pass.
 	void debug_set_extraction_available(bool v) {
@@ -78,6 +79,13 @@ public:
 	void debug_set_fail_extract_submit(bool v) {
 		fail_extract_submit_.store(v, std::memory_order_release);
 	}
+#else
+	// Fail-injection hooks are debug-only: release builds must not be able to drive the
+	// mesh service into artificial failure states.
+	void debug_set_extraction_available(bool v) { (void)v; }
+	void debug_set_fail_extractions(bool v) { (void)v; }
+	void debug_set_fail_extract_submit(bool v) { (void)v; }
+#endif
 
 	// Copies one stored volume into THIS device's pool, on the worker thread. The main
 	// thread's ve::VolumeSet is authoritative; this keeps the mesher's field evaluation --

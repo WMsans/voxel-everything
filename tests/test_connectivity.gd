@@ -126,30 +126,63 @@ func test_the_island_body_falls_and_the_bodies_are_capped(timeout := 120000) -> 
 
 func test_a_rested_island_merges_back_into_the_terrain(timeout := 180000) -> void:
 	var w := make_world()
-	w.debug_set_merge_sleep_seconds(0.2) # the demo waits 2 s; a test should not
+	# Hold the body out of start_merges() until we have observed it sleeping for several
+	# consecutive frames; only then lower the sleep threshold and let it merge.
+	w.debug_set_merge_sleep_seconds(999.0)
 	var t := tool_of(w)
 	build_pillar(w, t)
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 120)
-	assert_int(w.debug_island_stats()["islands_spawned"]).is_greater(0)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["islands_spawned"]).override_failure_message(
+		"the severed top never became a body: %s" % st).is_greater(0)
 
+	# Wait for the body to fall and be reported asleep by the physics server.
 	for i in range(600):
 		await get_tree().physics_frame
 		w.debug_stream_frame(CENTER)
 		w.debug_island_frame(1.0 / 60.0, CENTER)
-		if w.debug_island_stats()["islands_merged"] > 0:
+		st = w.debug_island_stats()
+		if int(st["sleeping_bodies"]) > 0:
 			break
-	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["sleeping_bodies"]).override_failure_message(
+		"the body never fell asleep: %s" % st).is_greater(0)
+
+	# Require several consecutive sleeping frames so the merge starts from a settled rest pose.
+	var consecutive := 0
+	for i in range(30):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		consecutive = consecutive + 1 if int(st["sleeping_bodies"]) > 0 else 0
+		if consecutive >= 5:
+			break
+	assert_int(consecutive).override_failure_message(
+		"the body did not stay asleep for five consecutive frames: %s" % st).is_greater_equal(5)
+
+	w.debug_set_merge_sleep_seconds(0.2)
+	for i in range(600):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		if st["islands_merged"] > 0:
+			break
 	assert_int(st["islands_merged"]).override_failure_message(
 		"the island never merged back: %s" % st).is_greater(0)
 	assert_int(st["live_bodies"]).is_equal(0)
 	# Spec section 5: "Rubble permanently accumulates as terrain." The rock is somewhere on
-	# the ground under where it fell, and the FIELD knows about it.
-	var down: Dictionary = w.debug_raycast(Vector3(PILLAR_X, 90.0, PILLAR_Z), Vector3(0, -1, 0))
+	# the ground under where it fell, and the FIELD knows about it. Probe the exact xz where
+	# the manager recorded the merge rather than the pillar's original xz, which can drift as
+	# the body tumbles before settling.
+	var merge_x: float = st.get("last_merge_x", PILLAR_X)
+	var merge_z: float = st.get("last_merge_z", PILLAR_Z)
+	var down: Dictionary = w.debug_raycast(Vector3(merge_x, 90.0, merge_z), Vector3(0, -1, 0))
 	assert_bool(down["hit"]).is_true()
 	assert_float((down["pos"] as Vector3).y).override_failure_message(
-		"the merged rubble is not standing on the ground").is_greater(
-		(st["ground_y"] as float) - 0.1)
+		"the merged rubble is not standing on the ground at %s: %s" % [Vector3(merge_x, 0, merge_z), st]
+		).is_greater((st["ground_y"] as float) - 0.1)
 
 func test_an_anchored_overhang_is_left_alone(timeout := 120000) -> void:
 	var w := make_world()
@@ -702,6 +735,55 @@ func test_rejected_remerge_paste_does_not_leak_pinned_slots_or_retry_every_frame
 		% st).is_equal(field_uploads_before)
 	assert_int(st["refused"]).override_failure_message(
 		"a fully rejected re-merge paste retried every frame: %s" % st).is_less(refused_before + 10)
+
+func test_partially_rejected_remerge_preflight_never_corrupts_reused_birth_slot(timeout := 180000) -> void:
+	var w := make_world()
+	w.debug_set_merge_sleep_seconds(999.0) # keep the body from merging before the pool is full
+	var t := tool_of(w)
+	build_pillar(w, t)
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	step(w, 180)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["live_bodies"]).override_failure_message(
+		"the severed top never became a body: %s" % st).is_greater(0)
+
+	# Fill every remaining volume slot so start_merges() is forced to reuse the body's own
+	# birth slot as the resample out-slot.
+	for slot in range(1, 64):
+		w.debug_queue_committed_field_volume_upload(
+				slot, dummy_volume_bytes(2), dummy_volume_bytes(2), 2)
+	st = w.debug_island_stats()
+	assert_int(st["volume_live"]).override_failure_message(
+		"the volume pool was not filled: %s" % st).is_equal(64)
+	var volume_before: int = st["volume_live"]
+	var pinned_before: int = st["volume_pinned"]
+
+	# Fill only one of the paste regions. The rest volume spans more than one region, so a
+	# naive append would be partially accepted and partially rejected; the fixed land_resample
+	# must preflight-refuse before storing/pinning into the reused birth slot.
+	fill_region_ops(w, t, Vector3(PILLAR_X, st["lowest_body_y"], PILLAR_Z))
+	var refused_before: int = w.debug_island_stats()["refused"]
+	w.debug_set_merge_sleep_seconds(0.2)
+	for i in range(600):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		if st["refused"] > refused_before or st["islands_merged"] > 0:
+			break
+	assert_int(st["refused"]).override_failure_message(
+		"the partially-rejected re-merge was never preflight-refused: %s" % st
+		).is_greater(refused_before)
+	assert_int(st["islands_merged"]).override_failure_message(
+		"a partially-rejected re-merge paste despawned the body: %s" % st).is_equal(0)
+	assert_int(st["live_bodies"]).override_failure_message(
+		"a partially-rejected re-merge paste destroyed the body: %s" % st).is_greater(0)
+	# The birth slot was never overwritten or pinned by the rejected attempt: volume_live and
+	# volume_pinned are exactly what they were before the re-merge was allowed to run.
+	assert_int(st["volume_live"]).override_failure_message(
+		"partially-rejected preflight changed the volume pool: %s" % st).is_equal(volume_before)
+	assert_int(st["volume_pinned"]).override_failure_message(
+		"partially-rejected preflight pinned the body's birth slot: %s" % st).is_equal(pinned_before)
 
 func test_failed_spawn_before_carve_leaves_component_attached(timeout := 120000) -> void:
 	var w := make_world()

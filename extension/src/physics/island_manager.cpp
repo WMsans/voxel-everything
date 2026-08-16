@@ -360,7 +360,8 @@ void IslandManager::note_merge_rejected(int body_index, const ve::EditLog::Appen
 	auto it = std::find_if(merge_retries_.begin(), merge_retries_.end(),
 			[&](const MergeRetry &r) { return r.body_index == body_index; });
 	if (it == merge_retries_.end()) {
-		merge_retries_.push_back(MergeRetry{body_index, kMergeRetryCooldownFrames, paste.rejected});
+		merge_retries_.push_back(
+				MergeRetry{body_index, kMergeRetryCooldownFrames, paste.rejected, false});
 		return;
 	}
 	it->cooldown = kMergeRetryCooldownFrames;
@@ -368,6 +369,17 @@ void IslandManager::note_merge_rejected(int body_index, const ve::EditLog::Appen
 		if (std::find(it->blocked_regions.begin(), it->blocked_regions.end(), region) ==
 				it->blocked_regions.end())
 			it->blocked_regions.push_back(region);
+}
+
+void IslandManager::block_merge_permanently(int body_index) {
+	auto it = std::find_if(merge_retries_.begin(), merge_retries_.end(),
+			[&](const MergeRetry &r) { return r.body_index == body_index; });
+	if (it == merge_retries_.end()) {
+		merge_retries_.push_back(MergeRetry{body_index, 0, {}, true});
+		return;
+	}
+	it->permanent = true;
+	it->cooldown = 0;
 }
 
 bool IslandManager::merge_retry_blocked(int body_index) {
@@ -379,7 +391,7 @@ bool IslandManager::merge_retry_blocked(int body_index) {
 			++it;
 			continue;
 		}
-		if (it->cooldown > 0) return true;
+		if (it->cooldown > 0 || it->permanent) return true;
 		bool still_full = false;
 		for (const ve::IVec3 &region : it->blocked_regions) {
 			if (world_->edit_log()->op_count(region) >= ve::kMaxRegionOps) {
@@ -700,9 +712,12 @@ void IslandManager::start_merges() {
 		int out = world_->volumes().allocate();
 		// At the 64-body cap every volume slot belongs to a live body, so there is no second
 		// slot to resample into. Reuse the body's own birth slot instead: the worker already
-		// receives a copy of `source`, and land_resample() keeps a second copy so a fully
-		// rejected paste can restore the live body's volume. This is a deliberate improvement
-		// over the brief's allocate-a-second-slot approach (documented in the task report).
+		// receives a copy of `source`, and land_resample() keeps a second copy so a failed
+		// store/pin or fully rejected paste can restore the live body's volume. land_resample()
+		// preflights the exact paste regions under the edit mutex before writing the slot, so
+		// a partially accepted paste can never corrupt the birth slot. This is a deliberate
+		// improvement over the brief's allocate-a-second-slot approach (documented in the task
+		// report).
 		if (out < 0 && !world_->volumes().pinned(b->info().volume_slot))
 			out = b->info().volume_slot;
 		if (out < 0) {
@@ -776,61 +791,108 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 		}
 		return;
 	}
-	// Store, PIN and upload BEFORE the op reaches the log: once an op names a slot the
-	// slot can never be reused, and the two GPU mirrors must already hold the bytes or a
-	// brick regenerated this frame would read an empty slot. If either store or pin fails,
-	// the out-slot is not referenced by any edit and can be released; when the out-slot is
-	// the body's own birth slot, restore the original source bytes instead so the live body
-	// keeps its volume.
-	const bool stored = world_->volumes().store(m.out_slot, r.data);
-	if (!stored || !world_->volumes().pin(m.out_slot)) {
-		if (reuses_birth_slot) {
-			if (stored) world_->volumes().store(m.out_slot, m.source);
-		} else {
-			world_->volumes().release(m.out_slot);
-		}
-		refused_++;
-		return;
+	// Compute the exact region set the resample's volume-add will touch. The paste must be
+	// fully accepted before we despawn, and it must be fully accepted before we overwrite a
+	// reused birth slot. The resample result is already available here, so unlike a carve we
+	// can check the actual op rather than a conservative AABB.
+	std::vector<ve::IVec3> paste_regions;
+	{
+		ve::IVec3 rlo, rhi;
+		ve::op_region_range(r.op, &rlo, &rhi);
+		for (int z = rlo.z; z <= rhi.z; z++)
+			for (int y = rlo.y; y <= rhi.y; y++)
+				for (int x = rlo.x; x <= rhi.x; x++) {
+					const ve::IVec3 region{x, y, z};
+					if (!world_->edit_log()->bounds().contains_region(region)) continue;
+					if (std::find(paste_regions.begin(), paste_regions.end(), region) ==
+							paste_regions.end())
+						paste_regions.push_back(region);
+				}
 	}
-	world_->queue_field_volume_upload(m.out_slot, r.data);
 
-	// Spec §5 step 4: "stamped back as a CSG paste-op ... Rubble permanently accumulates".
-	// A rejected paste means the field did NOT take the rock back. The body must remain a
-	// body so the carved hole still has something in it; the pinned out-slot is left
-	// reserved (it may be referenced by regions that did accept the paste). If NO region
-	// accepted the paste, the pin was never referenced by an op, so discard the uploads we
-	// queued for it, unpin, and release it (or restore the live body's birth volume when the
-	// out-slot was that same slot); otherwise it would leak forever because release() refuses
-	// pinned slots.
-	const auto release_rejected_out_slot = [&]() {
-		world_->discard_field_volume_upload(m.out_slot);
-		world_->volumes().unpin(m.out_slot);
-		if (reuses_birth_slot) {
-			world_->volumes().store(m.out_slot, m.source);
-		} else {
-			world_->volumes().release(m.out_slot);
-		}
-	};
 	const Transform3D rest = bodies_[m.body_index]->transform();
-	const ve::EditLog::AppendResult paste = world_->append_edit(r.op);
-	if (!paste.rejected.empty()) {
-		if (paste.touched.empty()) release_rejected_out_slot();
-		note_merge_rejected(m.body_index, paste);
-		refused_++;
-		return;
+
+	// Store, PIN, upload and append under ONE edit_mutex_ hold. The preflight below verifies
+	// every region the paste will touch has room for the op; because append_edit_locked runs
+	// under the same lock, no tool-thread edit can fill a region between the check and the
+	// append. A paste that passes preflight is therefore guaranteed to be fully accepted --
+	// which is what makes reusing the body's own birth slot safe. If we cannot guarantee
+	// that, we leave the birth slot untouched and back off.
+	{
+		std::lock_guard<std::mutex> lock(world_->edit_mutex());
+		ve::EditLog::AppendResult preflight;
+		for (const ve::IVec3 &region : paste_regions)
+			if (world_->edit_log()->op_count(region) >= ve::kMaxRegionOps)
+				preflight.rejected.push_back(region);
+		if (!preflight.rejected.empty()) {
+			// No store or pin happened, so a reused birth slot still holds the body's
+			// original volume. A separately allocated out-slot is unreferenced and can be
+			// released.
+			if (!reuses_birth_slot) world_->volumes().release(m.out_slot);
+			note_merge_rejected(m.body_index, preflight);
+			refused_++;
+			return;
+		}
+
+		// Store, PIN and upload BEFORE the op reaches the log: once an op names a slot the
+		// slot can never be reused, and the two GPU mirrors must already hold the bytes or a
+		// brick regenerated this frame would read an empty slot. If either store or pin fails,
+		// the out-slot is not referenced by any edit and can be released; when the out-slot is
+		// the body's own birth slot, restore the original source bytes instead so the live body
+		// keeps its volume.
+		const bool stored = world_->volumes().store(m.out_slot, r.data);
+		if (!stored || !world_->volumes().pin(m.out_slot)) {
+			if (reuses_birth_slot) {
+				if (stored) world_->volumes().store(m.out_slot, m.source);
+			} else {
+				world_->volumes().release(m.out_slot);
+			}
+			refused_++;
+			return;
+		}
+		world_->queue_field_volume_upload(m.out_slot, r.data);
+
+		// Spec §5 step 4: "stamped back as a CSG paste-op ... Rubble permanently accumulates".
+		// A rejected paste means the field did NOT take the rock back. The body must remain a
+		// body so the carved hole still has something in it. Never despawn unless the accepted
+		// paste actually covers every region of the rest volume.
+		const ve::EditLog::AppendResult paste = world_->append_edit_locked(r.op);
+		const bool paste_covers = paste.rejected.empty() && !paste_regions.empty() &&
+				!paste.touched.empty() &&
+				std::all_of(paste_regions.begin(), paste_regions.end(),
+						[&](const ve::IVec3 &region) {
+							return std::find(paste.touched.begin(), paste.touched.end(), region) !=
+									paste.touched.end();
+						});
+		if (!paste_covers) {
+			// Defensive: preflight plus the same-lock append should make this unreachable. A
+			// fully rejected paste (nothing touched) never referenced the slot, so discard the
+			// uploads, unpin, and restore/release it. A partially accepted paste is the
+			// corruption case this preflight exists to prevent: when the out-slot is the
+			// body's own birth slot it is now pinned by accepted ops and cannot be restored,
+			// so keep the body alive and permanently stop re-merging it rather than resample
+			// from a world-aligned slot using the original birth lattice.
+			if (paste.touched.empty()) {
+				world_->discard_field_volume_upload(m.out_slot);
+				world_->volumes().unpin(m.out_slot);
+				if (reuses_birth_slot) {
+					world_->volumes().store(m.out_slot, m.source);
+				} else {
+					world_->volumes().release(m.out_slot);
+				}
+			} else if (reuses_birth_slot) {
+				block_merge_permanently(m.body_index);
+			}
+			note_merge_rejected(m.body_index, paste);
+			refused_++;
+			return;
+		}
+
+		last_merge_xz_[0] = rest.origin.x;
+		last_merge_xz_[1] = rest.origin.z;
+		despawn(m.body_index);
+		islands_merged_++;
 	}
-	if (paste.touched.empty()) {
-		// Defensive: an out-of-bounds/edge-case paste added no terrain anywhere. Keep the
-		// body alive and release the unreferenced pinned out-slot; never despawn into a hole.
-		release_rejected_out_slot();
-		note_merge_rejected(m.body_index, paste);
-		refused_++;
-		return;
-	}
-	last_merge_xz_[0] = rest.origin.x;
-	last_merge_xz_[1] = rest.origin.z;
-	despawn(m.body_index);
-	islands_merged_++;
 }
 
 void IslandManager::publish_descriptors() {
@@ -965,7 +1027,7 @@ void IslandManager::despawn(int index) {
 
 Dictionary IslandManager::stats() {
 	Dictionary d;
-	int live_bodies = 0, live_islands = 0, live_debris = 0;
+	int live_bodies = 0, live_islands = 0, live_debris = 0, sleeping_bodies = 0;
 	float lowest = 1e30f;
 	for (IslandBody *b : bodies_) {
 		if (!b || !b->live()) continue;
@@ -973,11 +1035,13 @@ Dictionary IslandManager::stats() {
 		if (b->info().debris) live_debris++;
 		else live_islands++;
 		lowest = std::min(lowest, static_cast<float>(b->transform().origin.y));
+		if (b->asleep_seconds() > 0.0f) sleeping_bodies++;
 	}
 	d["live_bodies"] = live_bodies;
 	d["live_islands"] = live_islands;
 	d["live_debris"] = live_debris;
 	d["lowest_body_y"] = live_bodies > 0 ? lowest : 0.0f;
+	d["sleeping_bodies"] = sleeping_bodies;
 	d["islands_spawned"] = islands_spawned_;
 	d["debris_spawned"] = debris_spawned_;
 	d["islands_merged"] = islands_merged_;
@@ -1004,5 +1068,7 @@ Dictionary IslandManager::stats() {
 		if (h.hit) ground = h.pos[1];
 	}
 	d["ground_y"] = ground;
+	d["last_merge_x"] = last_merge_xz_[0];
+	d["last_merge_z"] = last_merge_xz_[1];
 	return d;
 }

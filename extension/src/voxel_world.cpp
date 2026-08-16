@@ -333,8 +333,14 @@ void VoxelWorld::ensure_physics_initialized() {
 	colliders_ = new ColliderStreamer();
 	colliders_->initialize(chunks_, edit_log_, &edit_mutex_, mesh_, max_collider_chunks_);
 	colliders_->set_shape_builds_per_frame(shape_builds_per_frame_);
-	island_manager_ = new IslandManager();
-	island_manager_->initialize(this);
+	// Publish the manager under edit_mutex_: append_edit_locked() can be called from a tool
+	// thread and reads island_manager_ while holding that lock, so creation must not expose a
+	// half-initialized pointer to it.
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		island_manager_ = new IslandManager();
+		island_manager_->initialize(this);
+	}
 	physics_ready_ = true;
 }
 
@@ -343,8 +349,17 @@ void VoxelWorld::teardown_physics() {
 	for (IslandBody *b : test_bodies_) delete b;
 	test_bodies_.clear();
 	// The manager owns the real island bodies; tear it down before the mesher's worker and
-	// the colliders so its volume-slot bookkeeping still has a live VolumeSet to ask.
-	if (island_manager_) { island_manager_->teardown(); delete island_manager_; island_manager_ = nullptr; }
+	// the colliders so its volume-slot bookkeeping still has a live VolumeSet to ask. Hold
+	// edit_mutex_ while deleting/null it: a tool thread may already be inside
+	// append_edit_locked() reading island_manager_ to call note_edit().
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		if (island_manager_) {
+			island_manager_->teardown();
+			delete island_manager_;
+			island_manager_ = nullptr;
+		}
+	}
 	physics_bubble_centers_.clear();
 	// Drop any uploads/descriptors the previous manager queued before the GPU pools are torn
 	// down. If physics is re-initialized, stale queue entries must not be drained into the
