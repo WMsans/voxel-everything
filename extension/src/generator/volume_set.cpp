@@ -150,6 +150,12 @@ bool VolumeSet::pin(int slot) {
 	return true;
 }
 
+bool VolumeSet::unpin(int slot) {
+	if (slot < 0 || slot >= kMaxVolumes || !slots_[slot].pinned) return false;
+	slots_[slot].pinned = false;
+	return true;
+}
+
 bool VolumeSet::pinned(int slot) const {
 	return slot >= 0 && slot < kMaxVolumes && slots_[slot].pinned;
 }

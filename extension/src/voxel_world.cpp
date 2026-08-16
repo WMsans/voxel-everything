@@ -82,6 +82,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_set_merge_sleep_seconds", "v"), &VoxelWorld::debug_set_merge_sleep_seconds);
 	ClassDB::bind_method(D_METHOD("debug_set_max_dynamic_bodies", "v"), &VoxelWorld::debug_set_max_dynamic_bodies);
 	ClassDB::bind_method(D_METHOD("debug_set_atlas_slot_used", "slot", "used"), &VoxelWorld::debug_set_atlas_slot_used);
+	ClassDB::bind_method(D_METHOD("debug_set_fail_next_spawn", "fail"), &VoxelWorld::debug_set_fail_next_spawn);
 	ClassDB::bind_method(D_METHOD("debug_body_of_chunk", "chunk"), &VoxelWorld::debug_body_of_chunk);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
@@ -254,8 +255,11 @@ ve::EditLog::AppendResult VoxelWorld::append_edit(const ve::EditOp &op) {
 	// Connectivity's half of the fan-out. Runs under the append lock; the manager's
 	// pending-window queue is guarded by its own windows_mutex_ (note_edit may be called
 	// from a tool thread), and the seq bump above lets the window know which readback is
-	// "new enough" to act on.
-	if (island_manager_) island_manager_->note_edit(op, edit_seq_.load(std::memory_order_relaxed));
+	// "new enough" to act on. A fully rejected op changed no field state, so it must not
+	// enqueue a window: doing so would re-label the same component and retry the rejected
+	// edit forever.
+	if (island_manager_ && !r.touched.empty())
+		island_manager_->note_edit(op, edit_seq_.load(std::memory_order_relaxed));
 	// Collision's half of the fan-out (spec §5: "Fan-out: raymarch set, physics remesh queue,
 	// LoD chain, connectivity"). Queued rather than applied, because this may run on any
 	// thread that owns a tool while ChunkResidency belongs to the main one; physics_tick
@@ -488,6 +492,11 @@ void VoxelWorld::debug_set_max_dynamic_bodies(int v) {
 void VoxelWorld::debug_set_atlas_slot_used(int slot, bool used) {
 	ensure_physics_initialized();
 	if (island_manager_) island_manager_->debug_set_atlas_slot_used(slot, used);
+}
+
+void VoxelWorld::debug_set_fail_next_spawn(bool fail) {
+	ensure_physics_initialized();
+	if (island_manager_) island_manager_->debug_set_fail_next_spawn(fail);
 }
 
 RID VoxelWorld::debug_body_of_chunk(Vector3i chunk) {

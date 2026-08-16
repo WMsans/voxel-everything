@@ -10,6 +10,7 @@
 #include "physics/island_body.h"
 #include "render/island_atlas.h"
 #include "render/island_extract_pass.h"
+#include "world/edit_log.h"
 
 namespace godot {
 
@@ -58,6 +59,7 @@ public:
 		atlas_used_[static_cast<size_t>(slot)] = used ? 1 : 0;
 		if (used) slot_high_water_ = std::max(slot_high_water_, slot + 1);
 	}
+	void debug_set_fail_next_spawn(bool fail) { debug_fail_next_spawn_ = fail; }
 	// Not const: the ground probe takes the edit lock.
 	Dictionary stats();
 
@@ -86,6 +88,11 @@ private:
 		int body_index = -1;
 		int out_slot = -1;
 	};
+	struct MergeRetry {
+		int body_index = -1;
+		int cooldown = 0;
+		std::vector<ve::IVec3> blocked_regions; // paste regions still at the op cap
+	};
 
 	bool window_is_fresh(const PendingWindow &w) const;
 	int run_connectivity(const PendingWindow &w);
@@ -93,6 +100,9 @@ private:
 	void land_resample(const IslandExtractResult &r);
 	void publish_descriptors();
 	void start_merges();
+	void queue_retry_window(const PendingWindow &w);
+	void note_merge_rejected(int body_index, const ve::EditLog::AppendResult &paste);
+	bool merge_retry_blocked(int body_index);
 	int live_body_count() const;
 	int free_atlas_slot() const;
 	void despawn(int index);
@@ -103,6 +113,7 @@ private:
 	std::deque<PendingWindow> windows_;
 	std::vector<InFlight> in_flight_;
 	std::vector<Merging> merging_;
+	std::vector<MergeRetry> merge_retries_;
 	// A SLOT POOL, not a list: Merging::body_index outlives a frame, so a despawn nulls its
 	// entry and the next spawn reuses it. Erasing would renumber every body after it and
 	// silently re-merge the wrong one.
@@ -122,6 +133,7 @@ private:
 	int debris_spawned_ = 0;
 	int islands_merged_ = 0;
 	int refused_ = 0; // components left attached because a pool was full
+	bool debug_fail_next_spawn_ = false;
 	float last_ms_ = 0.0f;
 };
 

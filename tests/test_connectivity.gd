@@ -336,3 +336,96 @@ func test_atlas_slot_full_refusal_retries_after_a_slot_frees(timeout := 180000) 
 		"the retried island did not become a body: %s" % st).is_greater(0)
 	assert_int(st["pending_windows"]).override_failure_message(
 		"the retried window was never drained: %s" % st).is_equal(0)
+
+func test_fully_rejected_op_does_not_enqueue_connectivity_window(timeout := 120000) -> void:
+	var w := make_world()
+	var t := tool_of(w)
+	build_pillar(w, t)
+	var top := Vector3(PILLAR_X, PILLAR_BASE + 4.0, PILLAR_Z)
+	assert_bool(solid_at(w, top)).override_failure_message(
+		"the pillar was never built").is_true()
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	# Submit the extraction but do not let the result land yet; then fill the region so the
+	# carve is rejected in every touched region. The rejected carve must NOT enqueue another
+	# connectivity window for the same unchanged component.
+	w.debug_stream_frame(CENTER)
+	w.debug_physics_frame(CENTER)
+	w.debug_island_frame(1.0 / 60.0, CENTER)
+	fill_region_ops(w, t, top)
+	step(w, 120)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["islands_spawned"]).override_failure_message(
+		"a rejected carve still spawned a body: %s" % st).is_equal(0)
+	assert_int(st["live_bodies"]).override_failure_message(
+		"a rejected carve created a body in a field that still has the rock: %s" % st).is_equal(0)
+	assert_int(st["pending_windows"]).override_failure_message(
+		"a fully rejected carve enqueued a connectivity retry window: %s" % st).is_equal(0)
+	assert_bool(solid_at(w, top)).override_failure_message(
+		"a rejected carve left a field hole with no body: %s" % st).is_true()
+
+func test_rejected_remerge_paste_does_not_leak_pinned_slots_or_retry_every_frame(timeout := 180000) -> void:
+	var w := make_world()
+	w.debug_set_merge_sleep_seconds(999.0) # keep the body from merging before the region is full
+	var t := tool_of(w)
+	build_pillar(w, t)
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	step(w, 180)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["live_bodies"]).override_failure_message(
+		"the severed top never became a body: %s" % st).is_greater(0)
+	# Fill every region the rest-volume AABB can touch, then allow re-merge. The paste must be
+	# rejected everywhere, so no op references the pinned out-slot. It must be released, and
+	# the body must not be retried every frame while the regions stay full.
+	for y in [PILLAR_BASE - 4.0, PILLAR_BASE - 2.0, PILLAR_BASE, PILLAR_BASE + 2.0]:
+		fill_region_ops(w, t, Vector3(PILLAR_X, y, PILLAR_Z))
+	var volume_before: int = w.debug_island_stats()["volume_live"]
+	var refused_before: int = w.debug_island_stats()["refused"]
+	w.debug_set_merge_sleep_seconds(0.2)
+	for i in range(600):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		if st["refused"] > refused_before or st["islands_merged"] > 0:
+			break
+	assert_int(st["refused"]).override_failure_message(
+		"the rejected re-merge paste was never attempted: %s" % st).is_greater(refused_before)
+	assert_int(st["islands_merged"]).override_failure_message(
+		"a rejected re-merge paste still despawned the body: %s" % st).is_equal(0)
+	assert_int(st["live_bodies"]).override_failure_message(
+		"a rejected re-merge paste destroyed the body and left a hole: %s" % st).is_greater(0)
+	assert_int(st["volume_live"]).override_failure_message(
+		"a fully rejected re-merge paste leaked pinned volume slots: %s" % st).is_equal(volume_before)
+	assert_int(st["refused"]).override_failure_message(
+		"a fully rejected re-merge paste retried every frame: %s" % st).is_less(refused_before + 10)
+
+func test_spawn_failure_restores_field_with_no_body(timeout := 120000) -> void:
+	var w := make_world()
+	var t := tool_of(w)
+	build_pillar(w, t)
+	var top := Vector3(PILLAR_X, PILLAR_BASE + 4.0, PILLAR_Z)
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	# Submit the extraction, then force the next spawn to fail before its result lands. Stop
+	# as soon as the refusal is recorded, before any follow-up connectivity window can spawn
+	# the component again, and verify the failed spawn left the field restored, not a hole.
+	w.debug_stream_frame(CENTER)
+	w.debug_physics_frame(CENTER)
+	w.debug_island_frame(1.0 / 60.0, CENTER)
+	var refused_before: int = w.debug_island_stats()["refused"]
+	w.debug_set_fail_next_spawn(true)
+	var st: Dictionary = w.debug_island_stats()
+	for i in range(120):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		if st["refused"] > refused_before:
+			break
+	assert_int(st["refused"]).override_failure_message(
+		"spawn failure was not recorded as a refusal: %s" % st).is_greater(refused_before)
+	assert_int(st["islands_spawned"]).override_failure_message(
+		"a failed spawn was still counted as spawned: %s" % st).is_equal(0)
+	assert_int(st["live_bodies"]).override_failure_message(
+		"a failed spawn left a body behind: %s" % st).is_equal(0)
+	assert_bool(solid_at(w, top)).override_failure_message(
+		"spawn failure left a field hole with no body: %s" % st).is_true()

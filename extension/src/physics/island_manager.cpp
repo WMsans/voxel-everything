@@ -24,6 +24,10 @@ constexpr int kMaxWindowWaitFrames = 30;
 // because a pool is full. This is a backoff, not a guarantee: the run_frame capacity gate
 // also keeps a genuinely full pool from relabelling every frame.
 constexpr int kRetryCooldownFrames = 30;
+// Frames to skip a sleeping body after its re-merge paste was rejected. The body is only
+// reconsidered once the blocked regions actually have room again; this cooldown prevents a
+// per-frame resample/pin/append cycle while the region op lists stay full.
+constexpr int kMergeRetryCooldownFrames = 30;
 // Extractions submitted per frame. Each is ~1-2 ms on the worker; two keeps a big collapse
 // resolving inside a few frames without starving collision meshing.
 constexpr int kExtractsPerFrame = 2;
@@ -86,6 +90,7 @@ void IslandManager::teardown() {
 	for (const Merging &m : merging_)
 		if (world_) world_->volumes().release(m.out_slot);
 	merging_.clear();
+	merge_retries_.clear();
 	{
 		std::lock_guard<std::mutex> lock(windows_mutex_);
 		windows_.clear();
@@ -266,6 +271,59 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 	return submitted;
 }
 
+void IslandManager::queue_retry_window(const PendingWindow &w) {
+	std::lock_guard<std::mutex> lock(windows_mutex_);
+	PendingWindow retry = w;
+	retry.retry_cooldown = kRetryCooldownFrames;
+	// Several extractions from one connectivity window can land in the same frame. If all of
+	// them hit a full atlas before any carve lands, they must not each push another copy of
+	// the same originating window: that would only cause redundant connectivity runs.
+	for (const PendingWindow &e : windows_) {
+		if (e.seq == retry.seq && e.lo == retry.lo && e.hi == retry.hi) return;
+	}
+	windows_.push_back(retry);
+}
+
+void IslandManager::note_merge_rejected(int body_index, const ve::EditLog::AppendResult &paste) {
+	auto it = std::find_if(merge_retries_.begin(), merge_retries_.end(),
+			[&](const MergeRetry &r) { return r.body_index == body_index; });
+	if (it == merge_retries_.end()) {
+		merge_retries_.push_back(MergeRetry{body_index, kMergeRetryCooldownFrames, paste.rejected});
+		return;
+	}
+	it->cooldown = kMergeRetryCooldownFrames;
+	for (const ve::IVec3 &region : paste.rejected)
+		if (std::find(it->blocked_regions.begin(), it->blocked_regions.end(), region) ==
+				it->blocked_regions.end())
+			it->blocked_regions.push_back(region);
+}
+
+bool IslandManager::merge_retry_blocked(int body_index) {
+	for (auto it = merge_retries_.begin(); it != merge_retries_.end();) {
+		if (it->body_index != body_index) {
+			++it;
+			continue;
+		}
+		if (it->cooldown > 0) return true;
+		bool still_full = false;
+		for (const ve::IVec3 &region : it->blocked_regions) {
+			if (world_->edit_log()->op_count(region) >= ve::kMaxRegionOps) {
+				still_full = true;
+				break;
+			}
+		}
+		if (still_full) {
+			// The region that rejected the paste is still full; keep this body out of
+			// start_merges() instead of burning a resample/pin/append attempt every frame.
+			it->cooldown = kMergeRetryCooldownFrames;
+			return true;
+		}
+		it = merge_retries_.erase(it);
+		return false;
+	}
+	return false;
+}
+
 void IslandManager::land_extraction(const IslandExtractResult &r) {
 	auto it = std::find_if(in_flight_.begin(), in_flight_.end(),
 			[&r](const InFlight &f) { return f.id == r.id; });
@@ -290,12 +348,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 			// slot later frees.
 			refused_++;
 			world_->volumes().release(f.volume_slot);
-			{
-				std::lock_guard<std::mutex> lock(windows_mutex_);
-				PendingWindow retry = f.window;
-				retry.retry_cooldown = kRetryCooldownFrames;
-				windows_.push_back(retry);
-			}
+			queue_retry_window(f.window);
 			return;
 		}
 		atlas_used_[static_cast<size_t>(atlas_slot)] = 1;
@@ -392,10 +445,27 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 
 	IslandBody *b = new IslandBody();
 	const Ref<World3D> w3 = world_->get_world_3d();
-	if (!b->spawn(w3.is_valid() ? w3->get_space() : RID(),
-				w3.is_valid() ? w3->get_scenario() : RID(), info, &r.data)) {
+	const bool spawn_failed = debug_fail_next_spawn_ || !b->spawn(w3.is_valid() ? w3->get_space() : RID(),
+			w3.is_valid() ? w3->get_scenario() : RID(), info, &r.data);
+	debug_fail_next_spawn_ = false;
+	if (spawn_failed) {
 		delete b;
 		if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
+		// Nothing was carved (e.g. an out-of-bounds edge case), so there is no hole to
+		// restore; the stored birth slot is unreferenced and can be released.
+		if (carved_regions.empty()) {
+			world_->volumes().release(f.volume_slot);
+			refused_++;
+			return;
+		}
+		const auto restore_covers_carved = [&](const ve::EditLog::AppendResult &restore) {
+			if (!restore.rejected.empty() || restore.touched.empty()) return false;
+			for (const ve::IVec3 &region : carved_regions)
+				if (std::find(restore.touched.begin(), restore.touched.end(), region) ==
+						restore.touched.end())
+					return false;
+			return true;
+		};
 		// Restore the terrain. The slot is stored and becomes pinned by the volume add, so
 		// it is intentionally NOT released here. After the store() check above, pin() cannot
 		// fail unless an internal invariant is broken; if it ever does, do NOT release the
@@ -404,10 +474,10 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 			world_->queue_field_volume_upload(f.volume_slot, r.data);
 			const ve::EditLog::AppendResult restore =
 					world_->append_edit(ve::make_volume_add(f.volume_slot, f.origin, f.voxel, f.dim));
-			if (!restore.rejected.empty()) {
+			if (!restore_covers_carved(restore)) {
 				UtilityFunctions::printerr(
-						"IslandManager: FATAL: restore volume-add rejected after spawn failure; "
-						"aborting rather than leaving a hole in the field");
+						"IslandManager: FATAL: restore volume-add rejected or did not cover every carved "
+						"region after spawn failure; aborting rather than leaving a hole in the field");
 				std::abort();
 			}
 			// The field has the rock back; make the occupancy grid agree so a later
@@ -436,10 +506,10 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 			world_->queue_field_volume_upload(restore_slot, r.data);
 			const ve::EditLog::AppendResult restore =
 					world_->append_edit(ve::make_volume_add(restore_slot, f.origin, f.voxel, f.dim));
-			if (!restore.rejected.empty()) {
+			if (!restore_covers_carved(restore)) {
 				UtilityFunctions::printerr(
-						"IslandManager: FATAL: restore volume-add rejected after spawn failure; "
-						"aborting rather than leaving a hole in the field");
+						"IslandManager: FATAL: restore volume-add rejected or did not cover every carved "
+						"region after spawn failure; aborting rather than leaving a hole in the field");
 				std::abort();
 			}
 			// The field has the rock back; make the occupancy grid agree so a later
@@ -477,6 +547,8 @@ void IslandManager::start_merges() {
 		if (std::any_of(merging_.begin(), merging_.end(),
 					[&](const Merging &m) { return m.body_index == static_cast<int>(i); }))
 			continue;
+		if (merge_retry_blocked(static_cast<int>(i)))
+			continue; // a rejected paste is still blocking this body
 		const Transform3D xf = b->transform();
 		const float xz[2] = {xf.origin.x, xf.origin.z};
 		const ve::RayHit ground = world_->analytic_raycast_down(xz);
@@ -541,10 +613,17 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 	// Spec §5 step 4: "stamped back as a CSG paste-op ... Rubble permanently accumulates".
 	// A rejected paste means the field did NOT take the rock back. The body must remain a
 	// body so the carved hole still has something in it; the pinned out-slot is left
-	// reserved (it may be referenced by regions that did accept the paste).
+	// reserved (it may be referenced by regions that did accept the paste). If NO region
+	// accepted the paste, the pin was never referenced by an op, so unpin and release it;
+	// otherwise it would leak forever because release() refuses pinned slots.
 	const Transform3D rest = bodies_[m.body_index]->transform();
 	const ve::EditLog::AppendResult paste = world_->append_edit(r.op);
 	if (!paste.rejected.empty()) {
+		if (paste.touched.empty()) {
+			world_->volumes().unpin(m.out_slot);
+			world_->volumes().release(m.out_slot);
+		}
+		note_merge_rejected(m.body_index, paste);
 		refused_++;
 		return;
 	}
@@ -591,6 +670,8 @@ int IslandManager::run_frame(float dt, const Vector3 &center) {
 			b->tick(dt);
 			b->sync_render();
 		}
+	for (MergeRetry &r : merge_retries_)
+		if (r.cooldown > 0) r.cooldown--;
 	publish_descriptors();
 
 	// 2. Results.
@@ -674,6 +755,9 @@ void IslandManager::despawn(int index) {
 	world_->volumes().release(b->info().volume_slot);
 	delete b;
 	bodies_[index] = nullptr; // a hole, not an erase: Merging::body_index must stay valid
+	merge_retries_.erase(std::remove_if(merge_retries_.begin(), merge_retries_.end(),
+					[&](const MergeRetry &r) { return r.body_index == index; }),
+			merge_retries_.end());
 }
 
 Dictionary IslandManager::stats() {
@@ -701,6 +785,7 @@ Dictionary IslandManager::stats() {
 		d["pending_windows"] = static_cast<int>(windows_.size());
 	}
 	d["in_flight"] = static_cast<int>(in_flight_.size());
+	d["volume_live"] = world_ ? world_->volumes().live_count() : 0;
 	d["manager_ms"] = last_ms_;
 	// Where the ground is under the last body to fall, so a test can say "the rubble is
 	// standing on it" without knowing the terrain's shape. ve::raycast reads the same field

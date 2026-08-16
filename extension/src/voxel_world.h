@@ -217,6 +217,9 @@ public:
 	// Test hook: mark/unmark an island-atlas slot as used so a small test can fill the
 	// 32-slot ceiling without spawning 32 real islands.
 	void debug_set_atlas_slot_used(int slot, bool used);
+	// Test hook: make the next island spawn fail so the spawn-failure restore path can be
+	// exercised without depending on a Jolt failure mode.
+	void debug_set_fail_next_spawn(bool fail);
 
 	// Tool entry point (VoxelEditTool, Task 14). Main thread; takes edit_mutex_.
 	ve::EditLog::AppendResult append_edit(const ve::EditOp &op);

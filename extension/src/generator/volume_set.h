@@ -127,6 +127,11 @@ public:
 	// and does nothing when the slot has no stored volume (free, or reserved/allocated
 	// but still empty).
 	bool pin(int slot);
+	// Reverses pin() when the EditOp that was about to name this slot was rejected in
+	// every region, so no live op references it. A slot pinned by an op that DID reach
+	// the log must stay pinned forever; callers are responsible for only unpinning when
+	// they can prove no reference exists.
+	bool unpin(int slot);
 	bool pinned(int slot) const;
 
 	bool has(int slot) const override;
