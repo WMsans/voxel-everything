@@ -5,6 +5,9 @@ extends Node
 #   --benchmark-move   the player flies forward continuously, so regions and collision
 #                      chunks stream in for the whole run.
 #   --benchmark-edit   the player is frozen and the edit tool fires every frame.
+#   --benchmark-island the player is frozen and the drill severs an overhang every second,
+#                      so connectivity, extraction, spawning and re-merging all run under
+#                      the frame timer.
 #
 # The last two are the cases players actually complain about, and an AVERAGE hides them:
 # a run that is 8 ms most of the time and 50 ms whenever a batch lands reads as "fine".
@@ -27,10 +30,12 @@ var _world: VoxelWorld
 var _tool: VoxelEditTool
 var _cam: Camera3D
 var _edit_phase := 0.0
+var _island_timer := 0.0
+var _island_built := false
 
 func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
-	for m in ["--benchmark-move", "--benchmark-edit", "--benchmark"]:
+	for m in ["--benchmark-move", "--benchmark-edit", "--benchmark-island", "--benchmark"]:
 		if m in args:
 			_mode = m
 			break
@@ -46,7 +51,7 @@ func _ready() -> void:
 	_player.global_transform = Transform3D(Basis.IDENTITY, Vector3(24, 63.2, 24))
 	_cam.transform = Transform3D(Basis.looking_at(Vector3(6, -10, 6).normalized()),
 		Vector3(0, 0.7, 0))
-	if _mode == "--benchmark-edit":
+	if _mode == "--benchmark-edit" or _mode == "--benchmark-island":
 		_tool = ClassDB.instantiate("VoxelEditTool")
 		_world.add_child(_tool)
 
@@ -61,6 +66,8 @@ func _process(delta: float) -> void:
 		_player.global_position += Vector3(0.7, 0.0, 0.7).normalized() * 25.0 * delta
 	elif _mode == "--benchmark-edit" and _frames > WARMUP:
 		_fire_edit()
+	elif _mode == "--benchmark-island" and _frames > WARMUP:
+		_island_cycle(delta)
 
 	if _frames <= WARMUP:
 		return # let the first regions land before sampling
@@ -95,6 +102,24 @@ func _fire_edit() -> void:
 	if not hit["hit"]:
 		return
 	_tool.apply_sphere_subtract(hit["pos"], 3.0)
+
+func _island_cycle(delta: float) -> void:
+	# Build a pillar, wait for it to stream in, drill through its middle, repeat. Each cycle
+	# puts one connectivity run, one extraction, one spawn and (a couple of seconds later)
+	# one re-merge inside the sampled window.
+	_island_timer += delta
+	var base := _player.global_position + Vector3(6.0, -4.0, 6.0)
+	if not _island_built:
+		for i in range(5):
+			_tool.apply_sphere_add(base + Vector3(0, 1.0 * i, 0), 1.2, 4)
+		_island_built = true
+		_island_timer = 0.0
+		return
+	if _island_timer < 1.0:
+		return
+	_tool.apply_sphere_subtract(base + Vector3(0, 2.0, 0), 1.6)
+	_island_built = false
+	_island_timer = 0.0
 
 func _percentile(sorted: PackedFloat32Array, p: float) -> float:
 	if sorted.is_empty():
@@ -139,5 +164,10 @@ func _report() -> void:
 	print("BENCH chunks=%d pending=%d bodies=%d failures=%d build_ms=%.2f collect_ms=%.2f" % [
 		ph.get("chunks_resident", -1), ph.get("chunks_pending", -1), ph.get("bodies", -1),
 		ph.get("failures", -1), ph.get("build_ms", 0.0), ph.get("collect_ms", 0.0)])
+	var isl: Dictionary = _world.debug_island_stats()
+	print("BENCH islands=%d debris=%d spawned=%d merged=%d refused=%d cx_runs=%d" % [
+		isl.get("live_islands", -1), isl.get("live_debris", -1),
+		isl.get("islands_spawned", -1), isl.get("islands_merged", -1),
+		isl.get("refused", -1), isl.get("connectivity_runs", -1)])
 	if avg > TARGET_MS:
 		push_warning("BENCH: frame budget exceeded (target %.1fms)" % TARGET_MS)

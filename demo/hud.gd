@@ -21,6 +21,7 @@ func _process(_delta: float) -> void:
 			st.get("resident_regions", 0), st.get("frame_edits", 0),
 			st.get("overflow_ever", 0)]
 	var p := ""
+	var isl := ""
 	if _world:
 		var ph: Dictionary = _world.debug_physics_stats()
 		# build_ms is the Jolt BVH build for the last chunk; it is the one physics number
@@ -29,4 +30,11 @@ func _process(_delta: float) -> void:
 		p = "  |  chunks %d (+%d)  bodies %d  build %.1fms" % [
 			ph.get("chunks_resident", 0), ph.get("chunks_pending", 0),
 			ph.get("bodies", 0), ph.get("build_ms", 0.0)]
-	text = "%d fps  (%.1f ms)  |  %s%s" % [fps, ms, s, p]
+		var st: Dictionary = _world.debug_island_stats()
+		# islands/debris are what is in the air right now; spawned/merged are the running
+		# totals, so a demo recording can be checked afterwards for whether the loop closed.
+		isl = "  |  isl %d dbr %d (+%d/-%d)  cx %d  %.1fms" % [
+			st.get("live_islands", 0), st.get("live_debris", 0),
+			st.get("islands_spawned", 0), st.get("islands_merged", 0),
+			st.get("connectivity_runs", 0), st.get("manager_ms", 0.0)]
+	text = "%d fps  (%.1f ms)  |  %s%s%s" % [fps, ms, s, p, isl]

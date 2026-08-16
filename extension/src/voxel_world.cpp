@@ -448,6 +448,7 @@ Dictionary VoxelWorld::debug_perf_stats() {
 	d["phys_submit_ms"] = colliders_ ? colliders_->last_submit_ms() : 0.0f;
 	d["stream_total_ms"] = streamer_ ? streamer_->last_total_ms() : 0.0f;
 	d["stream_readback_ms"] = streamer_ ? streamer_->last_readback_ms() : 0.0f;
+	d["island_ms"] = island_manager_ ? island_manager_->last_ms() : 0.0f;
 	return d;
 }
 
