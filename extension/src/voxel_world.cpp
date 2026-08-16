@@ -98,6 +98,9 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_frame_counters"), &VoxelWorld::debug_frame_counters);
 	ClassDB::bind_method(D_METHOD("debug_op_pool"), &VoxelWorld::debug_op_pool);
 	ClassDB::bind_method(D_METHOD("debug_op_counts"), &VoxelWorld::debug_op_counts);
+	ClassDB::bind_method(D_METHOD("debug_occupancy_state", "cell"), &VoxelWorld::debug_occupancy_state);
+	ClassDB::bind_method(D_METHOD("debug_cell_state", "cell"), &VoxelWorld::debug_cell_state);
+	ClassDB::bind_method(D_METHOD("debug_occupancy_stats", "center"), &VoxelWorld::debug_occupancy_stats);
 	ClassDB::bind_method(D_METHOD("debug_stream_frame", "cam"), &VoxelWorld::debug_stream_frame);
 	ClassDB::bind_method(D_METHOD("debug_stream_stats"), &VoxelWorld::debug_stream_stats);
 	ClassDB::bind_method(D_METHOD("debug_slot_of_region", "region"), &VoxelWorld::debug_slot_of_region);
@@ -125,6 +128,9 @@ void VoxelWorld::_ready() {
 }
 
 void VoxelWorld::_process(double) {
+	// Unconditional: the grid must keep filling even with physics disabled, because the
+	// island manager (Task 13) and the debug hooks both read it.
+	drain_occupancy();
 	if (!physics_enabled_ || physics_center_path_.is_empty()) return;
 	Node3D *anchor = Object::cast_to<Node3D>(get_node_or_null(physics_center_path_));
 	if (!anchor) return;
@@ -194,7 +200,7 @@ void VoxelWorld::ensure_initialized() {
 	}
 	streamer_ = new WorldStreamer();
 	streamer_->initialize(residency_, edit_log_, &edit_mutex_, &pending_edits_, atlas_,
-			region_pass_, gen_pass_);
+			region_pass_, gen_pass_, &occupancy_mutex_, &occupancy_inbox_, &edit_seq_);
 	raymarch_pass_ = new RaymarchPass();
 	raymarch_pass_->initialize(device);
 	composite_pass_ = new CompositePass();
@@ -203,6 +209,7 @@ void VoxelWorld::ensure_initialized() {
 }
 
 ve::EditLog::AppendResult VoxelWorld::append_edit(const ve::EditOp &op) {
+	edit_seq_.fetch_add(1, std::memory_order_relaxed);
 	std::lock_guard<std::mutex> lock(edit_mutex_);
 	if (!edit_log_) return {};
 	ve::EditLog::AppendResult r = edit_log_->append(op);
@@ -999,6 +1006,43 @@ RID VoxelWorld::debug_frame_counters() const { return atlas_ ? atlas_->frame_cou
 RID VoxelWorld::debug_op_pool() const { return atlas_ ? atlas_->op_pool() : RID(); }
 RID VoxelWorld::debug_op_counts() const { return atlas_ ? atlas_->op_counts() : RID(); }
 
+void VoxelWorld::drain_occupancy() {
+	std::vector<OccupancyBlock> blocks;
+	{
+		std::lock_guard<std::mutex> lock(occupancy_mutex_);
+		blocks.swap(occupancy_inbox_);
+	}
+	for (const OccupancyBlock &b : blocks)
+		occupancy_.set_block(b.region, b.bytes.data(), b.seq);
+}
+
+int VoxelWorld::debug_occupancy_state(Vector3i cell) {
+	drain_occupancy(); // tests step the streamer by hand and never run _process
+	return static_cast<int>(occupancy_.state({cell.x, cell.y, cell.z}));
+}
+
+int VoxelWorld::debug_cell_state(Vector3i cell) {
+	if (!edit_log_) return static_cast<int>(ve::kCellUnknown);
+	const ve::IVec3 c{cell.x, cell.y, cell.z};
+	ve::AnalyticGenerator gen;
+	std::lock_guard<std::mutex> lock(edit_mutex_);
+	const std::vector<ve::EditOp> &ops = edit_log_->ops(ve::WorldBounds::region_of_brick(c));
+	return static_cast<int>(ve::cell_state_field(gen, ops.data(),
+			static_cast<int>(ops.size()), c, &volumes_));
+}
+
+Dictionary VoxelWorld::debug_occupancy_stats(Vector3 center) {
+	drain_occupancy();
+	Dictionary d;
+	d["regions"] = occupancy_.region_count();
+	d["edit_seq"] = static_cast<int64_t>(edit_seq());
+	// The block covering the streaming centre, so a test can tell "the grid has been told
+	// about this edit" from "some other region's block arrived".
+	const ve::IVec3 r = ve::WorldBounds::region_of_point(center.x, center.y, center.z);
+	d["seq_at_center"] = static_cast<int64_t>(occupancy_.block_seq(r));
+	return d;
+}
+
 int VoxelWorld::debug_stream_frame(Vector3 cam) {
 	ensure_initialized();
 	RenderingDevice *device = rd();
@@ -1007,6 +1051,7 @@ int VoxelWorld::debug_stream_frame(Vector3 cam) {
 	device->submit();
 	device->sync();
 	overflow_seen_ |= static_cast<int>(atlas_->read_overflow(device));
+	drain_occupancy();
 	return actions;
 }
 

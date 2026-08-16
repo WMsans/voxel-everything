@@ -56,7 +56,8 @@ using namespace godot;
 
 void WorldStreamer::initialize(ve::RegionResidency *residency, ve::EditLog *edit_log,
 		std::mutex *edit_mutex, std::vector<PendingEdit> *pending, GpuAtlas *atlas,
-		RegionPass *region_pass, BrickGenPass *brick_gen) {
+		RegionPass *region_pass, BrickGenPass *brick_gen, std::mutex *occ_mutex,
+		std::vector<OccupancyBlock> *occ_inbox, std::atomic<int64_t> *edit_seq) {
 	residency_ = residency;
 	edit_log_ = edit_log;
 	edit_mutex_ = edit_mutex;
@@ -64,9 +65,13 @@ void WorldStreamer::initialize(ve::RegionResidency *residency, ve::EditLog *edit
 	atlas_ = atlas;
 	region_pass_ = region_pass;
 	brick_gen_ = brick_gen;
+	occ_mutex_ = occ_mutex;
+	occ_inbox_ = occ_inbox;
+	edit_seq_ = edit_seq;
 	overflow_read_.instantiate();
 	free_read_.instantiate();
 	costs_read_.instantiate();
+	for (OccupancyRead &r : occ_reads_) r.read.instantiate();
 	// The atlas starts with every slot free and nothing marked, so these are the true values
 	// until the first readings land — and they keep cost_by_slot non-null from frame zero,
 	// which is what tells RegionResidency the atlas is a priced pool at all.
@@ -76,6 +81,46 @@ void WorldStreamer::initialize(ve::RegionResidency *residency, ve::EditLog *edit
 	committed_base_ = 0;
 	region_slot_costs_.assign(
 			static_cast<size_t>(atlas_ ? atlas_->config().max_region_slots : 0), 0);
+}
+
+void WorldStreamer::note_marked(ve::IVec3 region) {
+	for (const OccupancyBlock &b : occ_pending_)
+		if (b.region == region) return; // one request per region per frame is enough
+	OccupancyBlock b;
+	b.region = region;
+	b.seq = edit_seq_ ? edit_seq_->load(std::memory_order_relaxed) : 0;
+	occ_pending_.push_back(std::move(b));
+}
+
+void WorldStreamer::pump_occupancy(RenderingDevice *rd) {
+	if (!atlas_ || !occ_inbox_ || !occ_mutex_) return;
+	// 1. Harvest whatever landed. take_fresh() is true exactly once per arrival.
+	for (OccupancyRead &r : occ_reads_) {
+		if (!r.active || !r.read->take_fresh()) continue;
+		r.active = false;
+		if (r.read->data().size() < ve::kOccupancyBlockBytes) continue; // short read: drop it
+		OccupancyBlock b;
+		b.region = r.region;
+		b.seq = r.seq;
+		b.bytes.assign(r.read->data().ptr(),
+				r.read->data().ptr() + ve::kOccupancyBlockBytes);
+		std::lock_guard<std::mutex> lock(*occ_mutex_);
+		occ_inbox_->push_back(std::move(b));
+	}
+	// 2. Issue what fits. A region that has since been evicted is skipped: its slot now
+	//    describes somewhere else, and region_free has already cleared it.
+	for (OccupancyRead &r : occ_reads_) {
+		if (r.active || occ_pending_.empty()) continue;
+		const OccupancyBlock want = occ_pending_.front();
+		occ_pending_.erase(occ_pending_.begin());
+		const int slot = residency_->slot_of(want.region);
+		if (slot < 0) continue;
+		r.region = want.region;
+		r.seq = want.seq;
+		r.active = r.read->request(rd, atlas_->region_occupancy(),
+				static_cast<uint32_t>(slot) * GpuAtlas::occupancy_block_bytes(),
+				GpuAtlas::occupancy_block_bytes());
+	}
 }
 
 int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) {
@@ -97,6 +142,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		last_total_ms_ = ms_since(t_start);
 		return 0;
 	}
+	pump_occupancy(rd);
 
 	// The counters are read ASYNCHRONOUSLY: consume whatever a previous frame's request has
 	// delivered, then post the next one. The synchronous form blocks the GPU until the copy
@@ -331,6 +377,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 				lj.region.z * ve::kRegionBricks};
 		const ve::IVec3 hi{lo.x + 31, lo.y + 31, lo.z + 31};
 		region_pass_->mark(rd, list, lj.region, lj.slot, lo, hi, lj.op_count, false);
+		note_marked(lj.region);
 		any = true;
 	}
 	for (const auto &j : edit_jobs) {
@@ -339,6 +386,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		// phase when two edits share bricks (the race the phase split exists to avoid).
 		rd->compute_list_add_barrier(list);
 		region_pass_->mark(rd, list, j.region, j.slot, j.lo, j.hi, j.op_count, true);
+		note_marked(j.region);
 		any = true;
 	}
 	// Overflow recovery: re-mark the regions marked LAST frame with force_regen so the
@@ -359,6 +407,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 			const ve::IVec3 hi{lo.x + 31, lo.y + 31, lo.z + 31};
 			rd->compute_list_add_barrier(list);
 			region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true);
+			note_marked(region);
 			any = true;
 		}
 	}
@@ -385,6 +434,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		const ve::IVec3 hi{lo.x + 31, lo.y + 31, lo.z + 31};
 		rd->compute_list_add_barrier(list);
 		region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true);
+		note_marked(region);
 		any = true;
 		repairs++;
 	}

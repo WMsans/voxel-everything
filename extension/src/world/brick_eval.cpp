@@ -69,16 +69,16 @@ void spread_materials(uint16_t *mat, const Brick &b, const Generator &gen,
 
 } // namespace
 
-Sample eval_field(const Generator &gen, const EditOp *ops, int op_count,
-		float x, float y, float z, const VolumeStore *volumes) {
-	return apply_ops(gen.sample(x, y, z), ops, op_count, x, y, z, volumes);
-}
+namespace {
 
-bool brick_has_surface(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,
-		const VolumeStore *volumes) {
+// The 3^3 activation probe, reduced. Both brick_has_surface and cell_state_field read it,
+// and shaders/brick_mark.comp.glsl computes exactly this once per brick and uses it twice.
+void brick_probe(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,
+		const VolumeStore *volumes, float *mn, float *mx) {
 	float bo[3];
 	brick_world_origin(brick, bo);
-	float mn = 1e30f, mx = -1e30f;
+	*mn = 1e30f;
+	*mx = -1e30f;
 	for (int sz = 0; sz < 3; sz++)
 		for (int sy = 0; sy < 3; sy++)
 			for (int sx = 0; sx < 3; sx++) {
@@ -86,10 +86,31 @@ bool brick_has_surface(const Generator &gen, const EditOp *ops, int op_count, IV
 						bo[0] + sx * (kBrickVoxels / 2) * kVoxelSize,
 						bo[1] + sy * (kBrickVoxels / 2) * kVoxelSize,
 						bo[2] + sz * (kBrickVoxels / 2) * kVoxelSize, volumes).sdf;
-				mn = std::min(mn, d);
-				mx = std::max(mx, d);
+				*mn = std::min(*mn, d);
+				*mx = std::max(*mx, d);
 			}
+}
+
+} // namespace
+
+Sample eval_field(const Generator &gen, const EditOp *ops, int op_count,
+		float x, float y, float z, const VolumeStore *volumes) {
+	return apply_ops(gen.sample(x, y, z), ops, op_count, x, y, z, volumes);
+}
+
+bool brick_has_surface(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,
+		const VolumeStore *volumes) {
+	float mn = 0.0f, mx = 0.0f;
+	brick_probe(gen, ops, op_count, brick, volumes, &mn, &mx);
 	return mn < kActivationPad && mx > -kActivationPad;
+}
+
+CellState cell_state_field(const Generator &gen, const EditOp *ops, int op_count, IVec3 cell,
+		const VolumeStore *volumes) {
+	float mn = 0.0f, mx = 0.0f;
+	brick_probe(gen, ops, op_count, cell, volumes, &mn, &mx);
+	if (mn > 0.0f) return kCellAir;
+	return mx <= 0.0f ? kCellFull : kCellSolid;
 }
 
 void eval_brick(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,

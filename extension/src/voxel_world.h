@@ -10,9 +10,11 @@
 #include <godot_cpp/variant/rid.hpp>
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/vector2.hpp>
+#include <atomic>
 #include <mutex>
 #include <utility>
 #include <vector>
+#include "connectivity/occupancy.h"
 #include "generator/volume_set.h"
 #include "mesh/chunk_residency.h"
 #include "world/edit_log.h"
@@ -34,6 +36,13 @@ class ColliderStreamer;
 struct PendingEdit {
 	ve::EditOp op;
 	ve::EditLog::AppendResult result;
+};
+
+// One region's occupancy block on its way from the render thread to the main thread's grid.
+struct OccupancyBlock {
+	ve::IVec3 region{};
+	int64_t seq = 0; // the world's edit sequence as of the mark that produced it
+	std::vector<uint8_t> bytes; // ve::kOccupancyBlockBytes
 };
 
 class VoxelWorld : public Node3D {
@@ -71,6 +80,16 @@ class VoxelWorld : public Node3D {
 	std::mutex edit_mutex_;                   // guards edit_log_ + pending_edits_
 	std::vector<PendingEdit> pending_edits_;  // appended by tools, drained by the streamer
 	int overflow_seen_ = 0;                   // sticky OR of frame overflow bits (tests)
+
+	ve::OccupancyGrid occupancy_;              // main thread only
+	std::mutex occupancy_mutex_;               // guards occupancy_inbox_
+	std::vector<OccupancyBlock> occupancy_inbox_;
+	// Monotonic; bumped by every accepted edit. The streamer stamps each occupancy readback
+	// with it so IslandManager (Task 13) can tell whether a window's cells are new enough to
+	// act on, rather than running connectivity against a picture of the world from before
+	// the blast.
+	std::atomic<int64_t> edit_seq_{0};
+	void drain_occupancy();                    // inbox -> grid
 
 	// The mesher runs on its own thread and owns its local RenderingDevice there; see
 	// MeshService. Nothing on the main thread touches that device.
@@ -172,6 +191,13 @@ public:
 	RID debug_frame_counters() const;
 	RID debug_op_pool() const;
 	RID debug_op_counts() const;
+
+	// --- Task 8 hooks ---
+	ve::OccupancyGrid &occupancy() { return occupancy_; }
+	int64_t edit_seq() const { return edit_seq_.load(std::memory_order_relaxed); }
+	int debug_occupancy_state(Vector3i cell);
+	int debug_cell_state(Vector3i cell);
+	Dictionary debug_occupancy_stats(Vector3 center);
 
 	// --- Task 12 hooks ---
 	Color debug_raymarch_pixel(Vector3 origin, Vector3 dir);

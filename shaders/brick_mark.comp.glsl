@@ -24,6 +24,28 @@ layout(set = 0, binding = 5, std430) writeonly buffer Jobs { ivec4 v[]; } jobs;
 // back — most far regions are pure air and hold nothing, so a distance-picked eviction
 // funded nothing and the free list slid to zero (see WorldStreamer::run_frame).
 layout(set = 0, binding = 6, std430) buffer RegionSlotCounts { int n[]; } region_counts;
+// Spec §5's occupancy grid, two bits per brick, indexed by REGION SLOT exactly as the region
+// tables are. The streamer reads a region's 8 KB block back asynchronously and folds it into
+// ve::OccupancyGrid at the region's COORDINATE, so eviction can recycle the slot freely.
+//
+// Byte layout: cell i occupies bits (i & 15) * 2 of word (i >> 4), which on little-endian
+// memory is exactly ve::OccupancyGrid's "cell i in byte i >> 2, shift (i & 3) * 2".
+layout(set = 0, binding = 9, std430) buffer RegionOccupancy { uint w[]; } occupancy;
+const int OCC_WORDS_PER_REGION = REGION_BRICK_COUNT / 16; // 2048
+
+const uint CELL_AIR = 1u;
+const uint CELL_SOLID = 2u;
+const uint CELL_FULL = 3u;
+
+void write_occupancy(int rslot, int bi, uint state) {
+	int word = rslot * OCC_WORDS_PER_REGION + (bi >> 4);
+	uint shift = (uint(bi) & 15u) * 2u;
+	// Two atomics rather than one CAS loop: nothing on the GPU ever READS this buffer, and
+	// no two threads in a dispatch touch the same cell, so the only requirement is that the
+	// other fifteen cells sharing the word survive.
+	atomicAnd(occupancy.w[word], ~(3u << shift));
+	atomicOr(occupancy.w[word], (state & 3u) << shift);
+}
 
 layout(push_constant, std430) uniform Push {
 	ivec4 region; // xyz = global region coord (may be negative), w = region slot
@@ -36,10 +58,11 @@ layout(push_constant, std430) uniform Push {
 // between samples; a brick counts as empty only when all 27 probes clear zero by this much.
 const float ACTIVATION_PAD = 0.15;
 
-// Mirror of ve::brick_has_surface (extension/src/world/brick_eval.cpp).
-bool brick_has_surface(ivec3 brick, uint op_base, uint op_count) {
+// Mirror of ve::brick_probe (extension/src/world/brick_eval.cpp).
+void brick_probe(ivec3 brick, uint op_base, uint op_count, out float mn, out float mx) {
 	vec3 bo = vec3(brick) * BRICK_SIZE;
-	float mn = 1e30, mx = -1e30;
+	mn = 1e30;
+	mx = -1e30;
 	for (int sz = 0; sz < 3; sz++)
 		for (int sy = 0; sy < 3; sy++)
 			for (int sx = 0; sx < 3; sx++) {
@@ -50,7 +73,6 @@ bool brick_has_surface(ivec3 brick, uint op_base, uint op_count) {
 				mn = min(mn, sdf);
 				mx = max(mx, sdf);
 			}
-	return mn < ACTIVATION_PAD && mx > -ACTIVATION_PAD;
 }
 
 void main() {
@@ -70,9 +92,15 @@ void main() {
 
 	uint op_base = uint(rslot) * MAX_REGION_OPS;
 	uint op_count = uint(pc.cfg.x);
-	// `active` is a GLSL reserved word (spec Appendix A); the plan's text used it as a
-	// variable name, which glslang rejects. Renamed to has_surface — no semantic change.
-	bool has_surface = brick_has_surface(brick, op_base, op_count);
+	float probe_mn, probe_mx;
+	brick_probe(brick, op_base, op_count, probe_mn, probe_mx);
+	// `active` is a GLSL reserved word (M2 errata 5); this local is has_surface.
+	bool has_surface = probe_mn < ACTIVATION_PAD && probe_mx > -ACTIVATION_PAD;
+	// Occupancy is written in the ALLOCATE phase only: both phases scan the same range, so
+	// one write per brick per mark is enough and the release phase returns early for most.
+	if (pc.cfg.y == 1)
+		write_occupancy(rslot, bi,
+				probe_mn > 0.0 ? CELL_AIR : (probe_mx <= 0.0 ? CELL_FULL : CELL_SOLID));
 
 	if (pc.cfg.y == 0) {
 		// Release phase. Kept in its own dispatch: a push at index free_count and a pop at

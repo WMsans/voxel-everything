@@ -1,4 +1,5 @@
 #pragma once
+#include "connectivity/occupancy.h"
 #include "generator/edit_ops.h"
 #include "generator/generator.h"
 #include "world/brick.h"
@@ -22,6 +23,12 @@ Sample eval_field(const Generator &gen, const EditOp *ops, int op_count,
 // Coarse residency probe. Mirrored exactly by shaders/brick_mark.comp.glsl — a brick is
 // resident iff this returns true, on both sides.
 bool brick_has_surface(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,
+		const VolumeStore *volumes = nullptr);
+
+// The occupancy classification shaders/brick_mark.comp.glsl writes, as a pure function: the
+// same 3^3 probe brick_has_surface uses, reduced to spec §5's two bits. Never returns
+// kCellUnknown -- the field always answers; only the GRID has a "nobody looked" state.
+CellState cell_state_field(const Generator &gen, const EditOp *ops, int op_count, IVec3 cell,
 		const VolumeStore *volumes = nullptr);
 
 // Full brick contents at L0. This is BOTH the path WorldData walks and the CPU reference

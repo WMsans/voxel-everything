@@ -13,6 +13,8 @@ layout(set = 0, binding = 2, std430) buffer Counters {
 // Mirror of brick_mark.comp.glsl's per-region slot tally. An eviction returns the whole
 // region, so the count goes to zero rather than being decremented brick by brick.
 layout(set = 0, binding = 3, std430) buffer RegionSlotCounts { int n[]; } region_counts;
+layout(set = 0, binding = 4, std430) buffer RegionOccupancy { uint w[]; } occupancy;
+const int OCC_WORDS_PER_REGION = REGION_BRICK_COUNT / 16; // 2048
 
 layout(push_constant, std430) uniform Push {
 	ivec4 cfg; // x = region slot
@@ -24,6 +26,10 @@ void main() {
 	// A plain store, not an atomic: nothing else in this dispatch touches the tally, and the
 	// streamer barriers between the free pass and any mark that could.
 	if (i == 0) region_counts.n[pc.cfg.x] = 0;
+	// Back to kCellUnknown. The slot is about to describe a different region, and a leftover
+	// bit would answer for a cell in a place it was never probed. The CPU-side grid keeps
+	// the OLD region's block -- it is persistent by coordinate, not by slot.
+	if (i < OCC_WORDS_PER_REGION) occupancy.w[pc.cfg.x * OCC_WORDS_PER_REGION + i] = 0u;
 	if (i >= REGION_BRICK_COUNT) return;
 	int idx = pc.cfg.x * REGION_BRICK_COUNT + i;
 	int slot = region_tables.slot[idx];

@@ -1,5 +1,6 @@
 #pragma once
 #include <godot_cpp/classes/rendering_device.hpp>
+#include <atomic>
 #include <mutex>
 #include <vector>
 #include "generator/generator.h"
@@ -12,7 +13,8 @@
 
 namespace godot {
 
-struct PendingEdit; // defined in voxel_world.h; here only the pointer type is needed
+struct PendingEdit;      // defined in voxel_world.h; here only the pointer type is needed
+struct OccupancyBlock;   // defined in voxel_world.h; here only the pointer type is needed
 
 // Drives one frame of world maintenance on the render thread: residency loads/evictions,
 // edit fan-out, one compute list holding every mark + the indirect generation dispatch.
@@ -21,7 +23,14 @@ class WorldStreamer {
 public:
 	void initialize(ve::RegionResidency *residency, ve::EditLog *edit_log,
 			std::mutex *edit_mutex, std::vector<PendingEdit> *pending, GpuAtlas *atlas,
-			RegionPass *region_pass, BrickGenPass *brick_gen);
+			RegionPass *region_pass, BrickGenPass *brick_gen, std::mutex *occ_mutex,
+			std::vector<OccupancyBlock> *occ_inbox, std::atomic<int64_t> *edit_seq);
+
+	// Eight reads in flight. buffer_get_data_async costs the frame that asks nothing, but
+	// the bytes turn up a few frames later, so the only way to shorten the delay between an
+	// edit and its occupancy is to have several outstanding at once. Eight covers the region
+	// fan-out of the demo's largest blast with one request each.
+	static constexpr int kOccupancyReads = 8;
 
 	// Returns the number of actions taken (loads + evicts + edit-mark jobs). Records ONE
 	// compute list; the caller submits. buffer_update calls happen before the list opens.
@@ -65,6 +74,26 @@ private:
 	// for as long as the region stays resident; this queue is what heals it once slots are
 	// available again. Drained a couple of regions per frame — a repair, not a stampede.
 	std::vector<ve::IVec3> repair_queue_;
+	struct OccupancyRead {
+		Ref<AsyncBufferRead> read;
+		ve::IVec3 region{};
+		int64_t seq = 0;
+		bool active = false;
+	};
+	// Regions marked LAST frame, waiting for a free ring slot. Requests are issued at the
+	// top of run_frame, before any compute list opens: buffer_get_data_async is a
+	// device-level command under the same ordering rule as buffer_update (M2 Task 12), so a
+	// request issued now returns the state as of the previous frame's mark -- which is
+	// exactly what these entries describe.
+	std::vector<OccupancyBlock> occ_pending_;  // region + seq only; bytes filled on arrival
+	OccupancyRead occ_reads_[kOccupancyReads];
+	std::mutex *occ_mutex_ = nullptr;
+	std::vector<OccupancyBlock> *occ_inbox_ = nullptr;
+	std::atomic<int64_t> *edit_seq_ = nullptr;
+
+	void note_marked(ve::IVec3 region);
+	void pump_occupancy(RenderingDevice *rd);
+
 	float last_edit_center_[3] = {0.0f, 0.0f, 0.0f};
 	float last_edit_radius_ = 0.0f;
 	int last_edit_type_ = 0;

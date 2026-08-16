@@ -1,4 +1,5 @@
 #include "connectivity/occupancy.h"
+#include "world/brick_eval.h"
 #include <doctest/doctest.h>
 #include <vector>
 
@@ -93,4 +94,33 @@ TEST_CASE("a re-stored block replaces the old contents and never leaks the old s
 	g.clear();
 	CHECK(g.region_count() == 0);
 	CHECK(g.state({32, 0, 32}) == kCellUnknown);
+}
+
+TEST_CASE("cell_state_field classifies air, surface and interior") {
+	AnalyticGenerator gen;
+	// The surface at x, z ~ 8 m sits near y = 54 m, i.e. cell y ~ 67.
+	CHECK(cell_state_field(gen, nullptr, 0, {10, 100, 10}) == kCellAir);   // y = 80 m
+	CHECK(cell_state_field(gen, nullptr, 0, {10, 20, 10}) == kCellFull);   // y = 16 m
+	// Somewhere in between there is a cell the surface crosses.
+	bool saw_surface = false;
+	for (int y = 55; y < 80 && !saw_surface; y++)
+		saw_surface = cell_state_field(gen, nullptr, 0, {10, y, 10}) == kCellSolid;
+	CHECK(saw_surface);
+	// Never kCellUnknown: the field always has an answer, and only the GRID has "nobody
+	// looked". Anything else would let a probed cell masquerade as an anchor.
+	for (int y = 0; y < 120; y++)
+		CHECK(cell_state_field(gen, nullptr, 0, {10, y, 10}) != kCellUnknown);
+}
+
+TEST_CASE("an op that empties a cell moves it from full to air") {
+	AnalyticGenerator gen;
+	const IVec3 cell{10, 20, 10};
+	CHECK(cell_state_field(gen, nullptr, 0, cell) == kCellFull);
+	EditOp cut{};
+	cut.type = kOpSphereSubtract;
+	cut.pos[0] = 8.4f;
+	cut.pos[1] = 16.4f;
+	cut.pos[2] = 8.4f;
+	cut.radius = 3.0f; // comfortably swallows the 0.8 m cell and its probe lattice
+	CHECK(cell_state_field(gen, &cut, 1, cell) == kCellAir);
 }

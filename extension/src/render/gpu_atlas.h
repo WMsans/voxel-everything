@@ -2,6 +2,7 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <vector>
+#include "connectivity/occupancy.h"
 #include "generator/edit_ops.h"
 #include "render/volume_pool.h"
 #include "world/brick_mip.h"
@@ -54,6 +55,12 @@ public:
 	RID op_pool() const { return op_pool_; }
 	RID op_counts() const { return op_counts_; }
 	RID region_slot_counts() const { return region_slot_counts_; }
+	RID region_occupancy() const { return region_occupancy_; }
+	// Bytes per region slot, and the offset of one slot's block. Mirrors
+	// ve::kOccupancyBlockBytes; the static_assert in gpu_atlas.cpp pins them together.
+	static uint32_t occupancy_block_bytes() {
+		return static_cast<uint32_t>(ve::kOccupancyBlockBytes);
+	}
 	VolumePool &volumes() { return volumes_; }
 	const VolumePool &volumes() const { return volumes_; }
 
@@ -81,6 +88,7 @@ private:
 	RID mips_[ve::kMipLevels];
 	RID region_map_, region_tables_, free_list_, counters_, frame_, dispatch_args_;
 	RID jobs_, op_pool_, op_counts_, region_slot_counts_;
+	RID region_occupancy_;
 	VolumePool volumes_;
 };
 
