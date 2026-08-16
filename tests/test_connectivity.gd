@@ -55,6 +55,15 @@ func fill_region_ops(w: VoxelWorld, t: VoxelEditTool, at: Vector3, count := 256)
 	for i in range(count):
 		t.apply_sphere_paint(at, 0.1, 4)
 
+# A small valid volume for filling the VolumeSet pool through the committed-upload test hook.
+# dim=2 is the smallest VolumeSet accepts, so filling 63 slots costs almost nothing.
+func dummy_volume_bytes(dim: int) -> PackedByteArray:
+	var n := dim * dim * dim
+	var a := PackedByteArray()
+	a.resize(n)
+	a.fill(128)
+	return a
+
 # One frame of everything: streaming (which fills the occupancy grid), collider maintenance
 # and the island manager, in the order VoxelWorld::_process runs them.
 func step(w: VoxelWorld, frames: int, center: Vector3 = CENTER) -> void:
@@ -365,6 +374,80 @@ func test_atlas_full_remainder_window_gets_retry_backoff(timeout := 180000) -> v
 	assert_int(st["connectivity_runs"]).override_failure_message(
 		"atlas-full remainder was relabelled without a retry cooldown: %s" % st).is_less(10)
 
+func test_overlapping_edit_keeps_remainder_identity_for_retry_backoff(timeout := 180000) -> void:
+	var w := make_world()
+	for i in range(32):
+		w.debug_set_atlas_slot_used(i, true)
+	var t := tool_of(w)
+	# 3 m spacing keeps the pillars separate while their cut windows still overlap, so one
+	# connectivity window labels all of them and the first pass re-queues a remainder.
+	var xs := [PILLAR_X - 6.0, PILLAR_X - 3.0, PILLAR_X, PILLAR_X + 3.0, PILLAR_X + 6.0]
+	for x in xs:
+		build_pillar(w, t, x)
+	for x in xs:
+		t.apply_sphere_subtract(Vector3(x, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	# Run island frames until the first connectivity pass submits extractions and leaves the
+	# unsubmitted tail as a remainder window, then stop immediately before those extractions
+	# land on a later frame.
+	var st: Dictionary = {}
+	for i in range(120):
+		w.debug_stream_frame(CENTER)
+		w.debug_physics_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		if st["in_flight"] > 0:
+			break
+	assert_int(st["in_flight"]).override_failure_message(
+		"the first connectivity pass did not submit extractions: %s" % st).is_greater(0)
+	assert_int(st["pending_windows"]).override_failure_message(
+		"the first connectivity pass did not leave a remainder: %s" % st).is_greater(0)
+	var runs_before: int = st["connectivity_runs"]
+	# A new edit overlapping that queued remainder merges into it, mutating lo/hi/seq. The
+	# in-flight extractions still carry the old window identity; matching by stable id must
+	# apply the atlas-full retry backoff to the merged window rather than pushing a duplicate.
+	t.apply_sphere_subtract(Vector3(PILLAR_X + 0.2, PILLAR_BASE + 2.2, PILLAR_Z), 1.2)
+	step(w, 120)
+	st = w.debug_island_stats()
+	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
+		"an island spawned despite every atlas slot being full: %s" % st).is_equal(0)
+	assert_int(st["pending_windows"]).override_failure_message(
+		"the atlas-full refusal lost the merged window: %s" % st).is_greater(0)
+	assert_int(st["connectivity_runs"] - runs_before).override_failure_message(
+		"the merged remainder lost its identity and was relabelled without backoff: %s" % st
+		).is_less(10)
+
+func test_sleeping_body_can_remerge_when_volume_pool_is_full(timeout := 180000) -> void:
+	var w := make_world()
+	w.debug_set_merge_sleep_seconds(999.0) # keep the body from merging before the pool is full
+	var t := tool_of(w)
+	build_pillar(w, t)
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	step(w, 180)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["live_bodies"]).override_failure_message(
+		"the severed top never became a body: %s" % st).is_greater(0)
+	# Fill every remaining volume slot with pinned dummy volumes. The body owns one slot, so
+	# allocate() can no longer find a second slot; start_merges must fall back to reusing the
+	# body's own birth slot or the 64-body cap becomes a permanent merge deadlock.
+	for slot in range(1, 64):
+		w.debug_queue_committed_field_volume_upload(
+				slot, dummy_volume_bytes(2), dummy_volume_bytes(2), 2)
+	st = w.debug_island_stats()
+	assert_int(st["volume_live"]).override_failure_message(
+		"the volume pool was not filled: %s" % st).is_equal(64)
+	var merged_before: int = st["islands_merged"]
+	w.debug_set_merge_sleep_seconds(0.2)
+	for i in range(1200):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		if st["islands_merged"] > merged_before:
+			break
+	assert_int(st["islands_merged"]).override_failure_message(
+		"a sleeping body could not re-merge with the volume pool full: %s" % st
+		).is_greater(merged_before)
+
 func test_permanently_unavailable_extraction_does_not_relabel_remainder(timeout := 120000) -> void:
 	var w := make_world()
 	w.debug_set_extraction_available(false)
@@ -525,6 +608,7 @@ func test_rejected_remerge_paste_does_not_leak_pinned_slots_or_retry_every_frame
 		fill_region_ops(w, t, Vector3(PILLAR_X, y, PILLAR_Z))
 	var volume_before: int = w.debug_island_stats()["volume_live"]
 	var refused_before: int = w.debug_island_stats()["refused"]
+	var field_uploads_before: int = w.debug_field_volume_upload_count()
 	w.debug_set_merge_sleep_seconds(0.2)
 	for i in range(600):
 		await get_tree().physics_frame
@@ -541,6 +625,12 @@ func test_rejected_remerge_paste_does_not_leak_pinned_slots_or_retry_every_frame
 		"a rejected re-merge paste destroyed the body and left a hole: %s" % st).is_greater(0)
 	assert_int(st["volume_live"]).override_failure_message(
 		"a fully rejected re-merge paste leaked pinned volume slots: %s" % st).is_equal(volume_before)
+	# The rejected paste queued a field-volume upload before append_edit rejected it. That
+	# stale upload must be discarded before the debug frame drains the queue; otherwise it is
+	# handed to the GPU and can later overwrite a reused slot.
+	assert_int(w.debug_field_volume_upload_count()).override_failure_message(
+		"a fully rejected re-merge paste still uploaded stale bytes for the released slot: %s"
+		% st).is_equal(field_uploads_before)
 	assert_int(st["refused"]).override_failure_message(
 		"a fully rejected re-merge paste retried every frame: %s" % st).is_less(refused_before + 10)
 

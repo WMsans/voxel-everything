@@ -120,6 +120,7 @@ class VoxelWorld : public Node3D {
 	std::vector<IslandSlotDesc> island_descs_;
 	bool island_descs_dirty_ = false;
 	std::vector<float> physics_bubble_centers_;
+	std::atomic<int> debug_field_volume_upload_count_{0};
 	bool physics_ready_ = false;
 	std::vector<std::pair<ve::IVec3, ve::IVec3>> pending_dirty_; // guarded by edit_mutex_
 	// A hand-driven body pool for tests. Task 13's IslandManager owns the real one and
@@ -199,6 +200,11 @@ public:
 	MeshService *mesh_service() { return mesh_; }
 	void queue_island_upload(int slot, const ve::VolumeData &d);
 	void queue_field_volume_upload(int slot, const ve::VolumeData &d);
+	// Removes a queued field-volume upload for `slot` (render handoff and worker pending
+	// queue). Used when a re-merge paste is fully rejected before the uploads drain: the
+	// slot is released (or restored to the body's birth volume), so its stale bytes must not
+	// land in a later reused volume.
+	void discard_field_volume_upload(int slot);
 	void publish_island_descriptors(const std::vector<IslandSlotDesc> &d);
 	void set_physics_bubbles(const std::vector<IslandBody *> &bodies);
 	// A downward ve::raycast at (xz[0], xz[1]) from above the world, on the analytic field
@@ -213,6 +219,10 @@ public:
 	// Test hooks for teardown/reinit: let a test queue stale island GPU handoffs and observe
 	// that teardown_physics() clears them before the next physics lifetime starts.
 	int debug_island_pending_uploads();
+	// Test hook: how many field-volume uploads have actually been handed to the GPU since
+	// this VoxelWorld was created. A fully rejected re-merge paste must not increment this
+	// even though queue_field_volume_upload ran before append_edit.
+	int debug_field_volume_upload_count() const;
 	int debug_island_descriptors_pending();
 	// Test hook: slots the current MeshService has accepted through submit_volume since it
 	// started. Verifies pinned volumes are replayed into a new worker after physics re-init.

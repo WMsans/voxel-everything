@@ -80,6 +80,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_island_frame", "dt", "center"), &VoxelWorld::debug_island_frame);
 	ClassDB::bind_method(D_METHOD("debug_island_stats"), &VoxelWorld::debug_island_stats);
 	ClassDB::bind_method(D_METHOD("debug_island_pending_uploads"), &VoxelWorld::debug_island_pending_uploads);
+	ClassDB::bind_method(D_METHOD("debug_field_volume_upload_count"), &VoxelWorld::debug_field_volume_upload_count);
 	ClassDB::bind_method(D_METHOD("debug_island_descriptors_pending"), &VoxelWorld::debug_island_descriptors_pending);
 	ClassDB::bind_method(D_METHOD("debug_mesh_volume_slots"), &VoxelWorld::debug_mesh_volume_slots);
 	ClassDB::bind_method(D_METHOD("debug_queue_test_island_upload", "slot", "sdf", "mat", "dim"),
@@ -440,6 +441,19 @@ void VoxelWorld::queue_field_volume_upload(int slot, const ve::VolumeData &d) {
 	if (mesh_) mesh_->submit_volume(slot, d);
 }
 
+void VoxelWorld::discard_field_volume_upload(int slot) {
+	{
+		std::lock_guard<std::mutex> lock(island_mutex_);
+		island_uploads_.erase(
+				std::remove_if(island_uploads_.begin(), island_uploads_.end(),
+						[slot](const IslandUpload &u) {
+							return !u.to_island_atlas && u.slot == slot;
+						}),
+				island_uploads_.end());
+	}
+	if (mesh_) mesh_->discard_pending_volume_upload(slot);
+}
+
 void VoxelWorld::publish_island_descriptors(const std::vector<IslandSlotDesc> &d) {
 	std::lock_guard<std::mutex> lock(island_mutex_);
 	island_descs_ = d;
@@ -490,6 +504,9 @@ int VoxelWorld::drain_island_uploads(RenderingDevice *device) {
 			if (atlas_ && !atlas_->volumes().upload(device, u.slot, u.data))
 				UtilityFunctions::printerr("VoxelWorld: field volume upload failed for slot ",
 						u.slot);
+			// Count attempts, not successes: a stale rejected-paste upload that reaches the
+			// GPU is the bug this hook exists to detect, even if the upload call itself failed.
+			debug_field_volume_upload_count_.fetch_add(1, std::memory_order_relaxed);
 		}
 	}
 	if (dirty && islands_)
@@ -500,6 +517,10 @@ int VoxelWorld::drain_island_uploads(RenderingDevice *device) {
 int VoxelWorld::debug_island_pending_uploads() {
 	std::lock_guard<std::mutex> lock(island_mutex_);
 	return static_cast<int>(island_uploads_.size());
+}
+
+int VoxelWorld::debug_field_volume_upload_count() const {
+	return debug_field_volume_upload_count_.load(std::memory_order_relaxed);
 }
 
 int VoxelWorld::debug_island_descriptors_pending() {

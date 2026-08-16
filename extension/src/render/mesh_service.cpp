@@ -2,6 +2,7 @@
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/core/memory.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
+#include <algorithm>
 #include <utility>
 
 using namespace godot;
@@ -118,6 +119,13 @@ bool MeshService::submit_volume(int slot, ve::VolumeData data) {
 	}
 	cv_.notify_one();
 	return true;
+}
+
+void MeshService::discard_pending_volume_upload(int slot) {
+	std::lock_guard<std::mutex> lock(mu_);
+	pending_volumes_.erase(std::remove_if(pending_volumes_.begin(), pending_volumes_.end(),
+								  [slot](const VolumeUpload &u) { return u.slot == slot; }),
+			pending_volumes_.end());
 }
 
 std::vector<int> MeshService::debug_submitted_volume_slots() const {

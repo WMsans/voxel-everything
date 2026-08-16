@@ -78,6 +78,11 @@ public:
 	// thread's ve::VolumeSet is authoritative; this keeps the mesher's field evaluation --
 	// and therefore collision against pasted rubble -- in step with it.
 	bool submit_volume(int slot, ve::VolumeData data);
+	// Removes any still-pending worker upload for `slot`. Used when a re-merge paste is
+	// fully rejected and the out-slot is released/reused before the worker has drained the
+	// stale bytes; already-applied uploads are harmless because a later upload for a reused
+	// field-referenced slot is always queued before the op that names it reaches the log.
+	void discard_pending_volume_upload(int slot);
 	// Test hook: report the slots this MeshService accepted through submit_volume since it
 	// was started. Used by teardown/reinit tests to verify pinned volumes are replayed into
 	// the new worker.

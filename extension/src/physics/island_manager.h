@@ -68,6 +68,10 @@ public:
 
 private:
 	struct PendingWindow {
+		// Stable across overlapping-edit merges. note_edit() may expand an existing window
+		// (mutating lo/hi/seq), but InFlight and retry/failure bookkeeping copy the window
+		// before that happens, so they must match by this id rather than by the mutable AABB.
+		int64_t id = 0;
 		ve::IVec3 lo{}, hi{}; // inclusive cell AABB the edit could have loosened
 		int64_t seq = 0;
 		int waited = 0;
@@ -91,6 +95,10 @@ private:
 	struct Merging {
 		int body_index = -1;
 		int out_slot = -1;
+		// Original birth volume when re-merge reuses the body's own slot. If the paste is
+		// fully rejected the slot must be restored to these bytes so the live body keeps its
+		// volume; otherwise the slot can be released as before.
+		ve::VolumeData source;
 	};
 	struct MergeRetry {
 		int body_index = -1;
@@ -128,6 +136,7 @@ private:
 	ve::ComponentConfig comp_cfg_;
 	ve::ContactRefineConfig refine_cfg_;
 	int next_id_ = 1;
+	int64_t next_window_id_ = 1;
 	int slot_high_water_ = 0;
 	int max_dynamic_bodies_ = kMaxDynamicBodies;
 	float merge_sleep_s_ = 2.0f; // spec §5: "Body sleeps ~2s -> re-merge"

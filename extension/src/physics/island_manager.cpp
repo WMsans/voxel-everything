@@ -72,6 +72,7 @@ void IslandManager::initialize(VoxelWorld *world) {
 	world_ = world;
 	atlas_used_.assign(kMaxIslands, 0);
 	next_id_ = 1;
+	next_window_id_ = 1;
 	slot_high_water_ = 0;
 	connectivity_runs_ = 0;
 	islands_spawned_ = 0;
@@ -109,6 +110,7 @@ void IslandManager::note_edit(const ve::EditOp &op, int64_t seq) {
 	float lo[3], hi[3];
 	ve::op_world_aabb(op, lo, hi);
 	PendingWindow w;
+	w.id = next_window_id_++;
 	const auto cell = [](float v) {
 		return static_cast<int>(std::floor(v / ve::kOccupancyCellSize));
 	};
@@ -292,7 +294,7 @@ void IslandManager::queue_retry_window(const PendingWindow &w) {
 	// them hit a full atlas before any carve lands, they must not each push another copy of
 	// the same originating window: that would only cause redundant connectivity runs.
 	for (PendingWindow &e : windows_) {
-		if (e.seq == retry.seq && e.lo == retry.lo && e.hi == retry.hi) {
+		if (e.id == retry.id) {
 			// A remainder window is already queued without a cooldown (it is simply the
 			// unsubmitted tail of an earlier connectivity pass). If one of its extractions
 			// lands against a full atlas, the retry backoff must be applied to that existing
@@ -307,7 +309,7 @@ void IslandManager::queue_retry_window(const PendingWindow &w) {
 void IslandManager::note_extract_failure(const PendingWindow &w) {
 	std::lock_guard<std::mutex> lock(windows_mutex_);
 	for (auto it = windows_.begin(); it != windows_.end(); ++it) {
-		if (it->seq != w.seq || it->lo != w.lo || it->hi != w.hi) continue;
+		if (it->id != w.id) continue;
 		it->extract_failures++;
 		if (it->extract_failures >= kMaxExtractFailuresPerWindow) {
 			// A full submitted batch has failed repeatedly; the pass is not going to recover
@@ -325,7 +327,7 @@ void IslandManager::note_extract_failure(const PendingWindow &w) {
 void IslandManager::note_extract_success(const PendingWindow &w) {
 	std::lock_guard<std::mutex> lock(windows_mutex_);
 	for (PendingWindow &e : windows_) {
-		if (e.seq == w.seq && e.lo == w.lo && e.hi == w.hi) {
+		if (e.id == w.id) {
 			e.extract_failures = 0;
 			return;
 		}
@@ -673,7 +675,14 @@ void IslandManager::start_merges() {
 			continue; // still in the air: do not paste floating terrain
 		const ve::VolumeData *src = world_->volumes().get(b->info().volume_slot);
 		if (!src) continue;
-		const int out = world_->volumes().allocate();
+		int out = world_->volumes().allocate();
+		// At the 64-body cap every volume slot belongs to a live body, so there is no second
+		// slot to resample into. Reuse the body's own birth slot instead: the worker already
+		// receives a copy of `source`, and land_resample() keeps a second copy so a fully
+		// rejected paste can restore the live body's volume. This is a deliberate improvement
+		// over the brief's allocate-a-second-slot approach (documented in the task report).
+		if (out < 0 && !world_->volumes().pinned(b->info().volume_slot))
+			out = b->info().volume_slot;
 		if (out < 0) {
 			// Fail-soft (see the plan's Deliberate Deferrals): the body stays a body. It is
 			// still collidable and still drawn; it just never becomes terrain.
@@ -682,6 +691,7 @@ void IslandManager::start_merges() {
 						"IslandManager: volume pool full; sleeping islands stay as bodies");
 			continue;
 		}
+		const bool reuses_birth_slot = out == b->info().volume_slot;
 
 		IslandExtractJob job;
 		job.kind = kResampleVolume;
@@ -699,7 +709,11 @@ void IslandManager::start_merges() {
 		job.rest_origin[1] = xf.origin.y;
 		job.rest_origin[2] = xf.origin.z;
 		job.out_slot = out;
-		merging_.push_back(Merging{static_cast<int>(i), out});
+		Merging m;
+		m.body_index = static_cast<int>(i);
+		m.out_slot = out;
+		if (reuses_birth_slot) m.source = *src;
+		merging_.push_back(std::move(m));
 		jobs.push_back(std::move(job));
 		break; // one re-merge in flight at a time: the paste changes the field under the rest
 	}
@@ -712,9 +726,14 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 	merging_.erase(merging_.begin());
 	const bool invalid_body = m.body_index < 0 || m.body_index >= static_cast<int>(bodies_.size()) ||
 			!bodies_[m.body_index];
+	const bool reuses_birth_slot =
+			!invalid_body && m.out_slot == bodies_[m.body_index]->info().volume_slot;
 	if (r.failed || debug_fail_next_resample_ || invalid_body) {
 		debug_fail_next_resample_ = false;
-		world_->volumes().release(m.out_slot);
+		// A failed resample never stored into the out-slot. When that slot is the live
+		// body's birth slot it must stay allocated; only a separately allocated out-slot is
+		// released.
+		if (!reuses_birth_slot) world_->volumes().release(m.out_slot);
 		if (!invalid_body) {
 			// A failed resample is not a paste rejection, but it must still back off: without
 			// a merge-retry entry the same body would be resubmitted every frame.
@@ -726,10 +745,16 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 	// Store, PIN and upload BEFORE the op reaches the log: once an op names a slot the
 	// slot can never be reused, and the two GPU mirrors must already hold the bytes or a
 	// brick regenerated this frame would read an empty slot. If either store or pin fails,
-	// the out-slot is not referenced by any edit and can be released; the body stays a body.
-	if (!world_->volumes().store(m.out_slot, r.data) ||
-			!world_->volumes().pin(m.out_slot)) {
-		world_->volumes().release(m.out_slot);
+	// the out-slot is not referenced by any edit and can be released; when the out-slot is
+	// the body's own birth slot, restore the original source bytes instead so the live body
+	// keeps its volume.
+	const bool stored = world_->volumes().store(m.out_slot, r.data);
+	if (!stored || !world_->volumes().pin(m.out_slot)) {
+		if (reuses_birth_slot) {
+			if (stored) world_->volumes().store(m.out_slot, m.source);
+		} else {
+			world_->volumes().release(m.out_slot);
+		}
 		refused_++;
 		return;
 	}
@@ -739,15 +764,23 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 	// A rejected paste means the field did NOT take the rock back. The body must remain a
 	// body so the carved hole still has something in it; the pinned out-slot is left
 	// reserved (it may be referenced by regions that did accept the paste). If NO region
-	// accepted the paste, the pin was never referenced by an op, so unpin and release it;
-	// otherwise it would leak forever because release() refuses pinned slots.
+	// accepted the paste, the pin was never referenced by an op, so discard the uploads we
+	// queued for it, unpin, and release it (or restore the live body's birth volume when the
+	// out-slot was that same slot); otherwise it would leak forever because release() refuses
+	// pinned slots.
+	const auto release_rejected_out_slot = [&]() {
+		world_->discard_field_volume_upload(m.out_slot);
+		world_->volumes().unpin(m.out_slot);
+		if (reuses_birth_slot) {
+			world_->volumes().store(m.out_slot, m.source);
+		} else {
+			world_->volumes().release(m.out_slot);
+		}
+	};
 	const Transform3D rest = bodies_[m.body_index]->transform();
 	const ve::EditLog::AppendResult paste = world_->append_edit(r.op);
 	if (!paste.rejected.empty()) {
-		if (paste.touched.empty()) {
-			world_->volumes().unpin(m.out_slot);
-			world_->volumes().release(m.out_slot);
-		}
+		if (paste.touched.empty()) release_rejected_out_slot();
 		note_merge_rejected(m.body_index, paste);
 		refused_++;
 		return;
@@ -755,8 +788,7 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 	if (paste.touched.empty()) {
 		// Defensive: an out-of-bounds/edge-case paste added no terrain anywhere. Keep the
 		// body alive and release the unreferenced pinned out-slot; never despawn into a hole.
-		world_->volumes().unpin(m.out_slot);
-		world_->volumes().release(m.out_slot);
+		release_rejected_out_slot();
 		note_merge_rejected(m.body_index, paste);
 		refused_++;
 		return;
@@ -884,9 +916,12 @@ void IslandManager::despawn(int index) {
 		// the raymarcher reading the bytes; they are left in place because nothing reads a
 		// slot whose descriptor says dim 0.
 	}
-	// The BIRTH volume is never pinned -- no op in the edit log ever named it -- so releasing
-	// it is safe. The RESTED volume the paste created is pinned and stays for ever.
-	world_->volumes().release(b->info().volume_slot);
+	// The BIRTH volume is normally never pinned -- no op in the edit log ever named it -- so
+	// releasing it is safe. When re-merge reused the birth slot as the rested volume, the
+	// paste op now pins it and it must stay for ever; release() would refuse it anyway, but
+	// do not even try to free a slot the field owns.
+	if (!world_->volumes().pinned(b->info().volume_slot))
+		world_->volumes().release(b->info().volume_slot);
 	delete b;
 	bodies_[index] = nullptr; // a hole, not an erase: Merging::body_index must stay valid
 	merge_retries_.erase(std::remove_if(merge_retries_.begin(), merge_retries_.end(),
