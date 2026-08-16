@@ -81,6 +81,8 @@ void IslandAtlas::teardown() {
 	desc_ = RID();
 	fallback_mask_ = RID();
 	rd_ = nullptr;
+	live_count_ = 0;
+	for (bool &live : slot_live_) live = false;
 }
 
 bool IslandAtlas::upload(RenderingDevice *rd, int slot, const ve::VolumeData &data) {
@@ -105,6 +107,8 @@ void IslandAtlas::upload_descriptors(RenderingDevice *rd, const IslandSlotDesc *
 	b.fill(0);
 	float *f = reinterpret_cast<float *>(b.ptrw());
 	int32_t *i = reinterpret_cast<int32_t *>(b.ptrw());
+	live_count_ = 0;
+	for (bool &live : slot_live_) live = false;
 	for (int s = 0; s < std::min(count, kMaxIslands); s++) {
 		const IslandSlotDesc &d = descs[s];
 		const int base = s * 32; // 32 floats per descriptor
@@ -123,6 +127,8 @@ void IslandAtlas::upload_descriptors(RenderingDevice *rd, const IslandSlotDesc *
 		i[base + 17] = 0;
 		i[base + 18] = 0;
 		i[base + 19] = 0;
+		slot_live_[s] = d.live;
+		if (d.live) live_count_++;
 		for (int a = 0; a < 3; a++) {
 			f[base + 20 + a] = d.aabb_lo[a];
 			f[base + 24 + a] = d.aabb_hi[a];
@@ -133,6 +139,9 @@ void IslandAtlas::upload_descriptors(RenderingDevice *rd, const IslandSlotDesc *
 
 void IslandAtlas::clear_slot(RenderingDevice *rd, int slot) {
 	if (!rd || !is_valid() || slot < 0 || slot >= kMaxIslands) return;
+	const bool was_live = slot_live_[slot];
+	slot_live_[slot] = false;
+	if (was_live) live_count_--;
 	PackedByteArray b;
 	b.resize(kDescBytes);
 	b.fill(0);

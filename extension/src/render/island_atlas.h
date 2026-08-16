@@ -51,6 +51,9 @@ public:
 	RID desc_buffer() const { return desc_; }
 	// A one-entry all-ones tile mask, bound whenever the cull pass has not produced one.
 	RID fallback_mask() const { return fallback_mask_; }
+	// Number of slots whose descriptor currently says live. This is a population count, not
+	// a high-water mark; VoxelWorld::island_slot_count() is the latter.
+	int live_count() const { return live_count_; }
 
 	// Device-level: record before compute_list_begin.
 	bool upload(RenderingDevice *rd, int slot, const ve::VolumeData &data);
@@ -63,6 +66,8 @@ private:
 	RenderingDevice *rd_ = nullptr;
 	VolumePool volumes_;
 	RID mip_, desc_, fallback_mask_;
+	int live_count_ = 0;
+	bool slot_live_[kMaxIslands] = {};
 };
 
 } // namespace godot
