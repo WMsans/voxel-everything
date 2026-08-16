@@ -3,11 +3,11 @@
 #include "mesh/box_merge.h"
 #include "render/mesh_service.h"
 #include <godot_cpp/classes/world3d.hpp>
+#include <godot_cpp/core/error_macros.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstdlib>
 
 using namespace godot;
 
@@ -282,7 +282,19 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 	}
 	// Permanent failures (unmergeable shape, unplannable lattice, etc.) are deliberately
 	// dropped: no amount of retrying will make them progress.
-	if (!jobs.empty()) world_->mesh_service()->submit_extracts(std::move(jobs));
+	if (!jobs.empty() && !world_->mesh_service()->submit_extracts(std::move(jobs))) {
+		// A rejected submit must not strand the InFlight entries we just pushed: no result
+		// will ever arrive for them, so they would leak volume slots and the run_frame gate
+		// would disable connectivity forever. Mirror start_merges() by rolling the entries
+		// back and keeping the originating window alive for a later retry.
+		for (int i = 0; i < submitted; i++) {
+			const InFlight &f = in_flight_.back();
+			world_->volumes().release(f.volume_slot);
+			in_flight_.pop_back();
+		}
+		queue_retry_window(pw);
+		return 0;
+	}
 	return submitted;
 }
 
@@ -521,8 +533,11 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 
 		// Spawn a body after a successful carve, restoring the field when the spawn cannot
 		// complete. Returns the live body on success, or nullptr when the piece was restored /
-		// left attached. On the last-resort path (restore also fails) it logs and returns
-		// nullptr without aborting: release builds must never hard-crash in a fail-soft path.
+		// left attached. If a restore was only partial, the edit log may already reference the
+		// birth volume, so a later successful spawn must leave that slot pinned forever. If the
+		// last-resort retry also fails, the no-hole invariant is violated and the process is
+		// stopped rather than returning with carved cells uncovered.
+		bool restore_referenced_slot = false;
 		auto spawn_or_restore = [&]() -> IslandBody * {
 			IslandSpawn info;
 			info.volume_slot = f.volume_slot;
@@ -545,7 +560,10 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 					atlas_used_[static_cast<size_t>(atlas_slot)] = 1;
 					slot_high_water_ = std::max(slot_high_water_, atlas_slot + 1);
 				}
-				world_->volumes().unpin(f.volume_slot);
+				// A live body's birth volume is normally unpinned. If a carve-rejection restore
+				// or the spawn-failure restore already appended a volume-add naming this slot,
+				// it must stay pinned forever no matter what body later claims the slot.
+				if (!restore_referenced_slot) world_->volumes().unpin(f.volume_slot);
 				return body;
 			}
 
@@ -574,7 +592,10 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 			const ve::EditLog::AppendResult restore =
 					world_->append_edit_locked(ve::make_volume_add(f.volume_slot, f.origin,
 							f.voxel, f.dim));
-			if (restore_covers_carved(restore)) {
+			if (!restore.touched.empty()) restore_referenced_slot = true;
+			const bool forced_restore_failure = debug_fail_next_restore_;
+			debug_fail_next_restore_ = false;
+			if (!forced_restore_failure && restore_covers_carved(restore)) {
 				// The field has the rock back; make the occupancy grid agree so a later
 				// connectivity/anchoring pass does not see a phantom air pocket.
 				for (const ve::CellBox &box : f.boxes)
@@ -587,10 +608,9 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 				return nullptr;
 			}
 
-			// Last-resort fail-soft: try spawning once more. The first failure may have been a
-			// one-shot debug/transient failure; if this also fails, do not abort. The pinned
-			// slot stays allocated and the queued upload remains as a best-effort no-hole
-			// recovery, which is safer than a release-build hard crash.
+			// Last-resort: try spawning once more. The first failure may have been a one-shot
+			// debug/transient failure. If the retry succeeds, the body fills the hole; if the
+			// restore touched any region, the slot is already referenced and stays pinned.
 			IslandBody *retry = new IslandBody();
 			const bool retry_failed = debug_fail_next_spawn_ ||
 					!retry->spawn(w3.is_valid() ? w3->get_space() : RID(),
@@ -601,16 +621,17 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 					atlas_used_[static_cast<size_t>(atlas_slot)] = 1;
 					slot_high_water_ = std::max(slot_high_water_, atlas_slot + 1);
 				}
-				world_->volumes().unpin(f.volume_slot);
+				if (!restore_referenced_slot) world_->volumes().unpin(f.volume_slot);
 				return retry;
 			}
 			delete retry;
-			refused_++;
 			UtilityFunctions::printerr(
 					"IslandManager: restore volume-add rejected or did not cover every carved "
-					"region and a retry spawn also failed; leaving the pinned birth volume "
-					"allocated as last-resort fail-soft");
-			return nullptr;
+					"region and a retry spawn also failed; a carved hole has neither a body nor "
+					"the rock back");
+			CRASH_NOW_MSG(
+					"IslandManager: no-hole invariant violated after carve (restore incomplete "
+					"and retry spawn failed); preflight + edit-mutex hold make this unreachable");
 		};
 
 		if (carve_rejected) {
@@ -634,6 +655,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 			const ve::EditLog::AppendResult restore =
 					world_->append_edit_locked(ve::make_volume_add(f.volume_slot, f.origin,
 							f.voxel, f.dim));
+			if (!restore.touched.empty()) restore_referenced_slot = true;
 			bool restored_all_carved = !restore.touched.empty();
 			for (const ve::IVec3 &region : carved_regions)
 				if (std::find(restore.touched.begin(), restore.touched.end(), region) ==
@@ -1009,6 +1031,11 @@ Dictionary IslandManager::stats() {
 	}
 	d["in_flight"] = static_cast<int>(in_flight_.size());
 	d["volume_live"] = world_ ? world_->volumes().live_count() : 0;
+	int volume_pinned = 0;
+	if (world_)
+		for (int i = 0; i < ve::kMaxVolumes; i++)
+			if (world_->volumes().pinned(i)) volume_pinned++;
+	d["volume_pinned"] = volume_pinned;
 	d["manager_ms"] = last_ms_;
 	// Where the ground is under the last body to fall, so a test can say "the rubble is
 	// standing on it" without knowing the terrain's shape. ve::raycast reads the same field

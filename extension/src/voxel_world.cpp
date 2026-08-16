@@ -93,10 +93,13 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::debug_set_extraction_available);
 	ClassDB::bind_method(D_METHOD("debug_set_fail_extractions", "v"),
 			&VoxelWorld::debug_set_fail_extractions);
+	ClassDB::bind_method(D_METHOD("debug_set_fail_extract_submit", "v"),
+			&VoxelWorld::debug_set_fail_extract_submit);
 	ClassDB::bind_method(D_METHOD("debug_set_merge_sleep_seconds", "v"), &VoxelWorld::debug_set_merge_sleep_seconds);
 	ClassDB::bind_method(D_METHOD("debug_set_max_dynamic_bodies", "v"), &VoxelWorld::debug_set_max_dynamic_bodies);
 	ClassDB::bind_method(D_METHOD("debug_set_atlas_slot_used", "slot", "used"), &VoxelWorld::debug_set_atlas_slot_used);
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_spawn", "fail"), &VoxelWorld::debug_set_fail_next_spawn);
+	ClassDB::bind_method(D_METHOD("debug_set_fail_next_restore", "fail"), &VoxelWorld::debug_set_fail_next_restore);
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_resample", "fail"), &VoxelWorld::debug_set_fail_next_resample);
 	ClassDB::bind_method(D_METHOD("debug_body_of_chunk", "chunk"), &VoxelWorld::debug_body_of_chunk);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
@@ -609,6 +612,11 @@ void VoxelWorld::debug_set_fail_extractions(bool v) {
 	if (mesh_) mesh_->debug_set_fail_extractions(v);
 }
 
+void VoxelWorld::debug_set_fail_extract_submit(bool v) {
+	ensure_physics_initialized();
+	if (mesh_) mesh_->debug_set_fail_extract_submit(v);
+}
+
 int VoxelWorld::debug_island_frame(float dt, Vector3 center) {
 	ensure_initialized();
 	ensure_physics_initialized();
@@ -651,6 +659,11 @@ void VoxelWorld::debug_set_atlas_slot_used(int slot, bool used) {
 void VoxelWorld::debug_set_fail_next_spawn(bool fail) {
 	ensure_physics_initialized();
 	if (island_manager_) island_manager_->debug_set_fail_next_spawn(fail);
+}
+
+void VoxelWorld::debug_set_fail_next_restore(bool fail) {
+	ensure_physics_initialized();
+	if (island_manager_) island_manager_->debug_set_fail_next_restore(fail);
 }
 
 void VoxelWorld::debug_set_fail_next_resample(bool fail) {

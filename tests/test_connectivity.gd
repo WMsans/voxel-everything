@@ -733,3 +733,74 @@ func test_spawn_failure_restores_field_with_no_body(timeout := 120000) -> void:
 		"a failed spawn left a body behind: %s" % st).is_equal(0)
 	assert_bool(solid_at(w, top)).override_failure_message(
 		"spawn failure left a field hole with no body: %s" % st).is_true()
+
+func test_rejected_extract_submit_rolls_back_in_flight_and_recovers(timeout := 180000) -> void:
+	var w := make_world()
+	var t := tool_of(w)
+	build_pillar(w, t)
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	var runs_before: int = w.debug_island_stats()["connectivity_runs"]
+	# Force submit_extracts() to reject the batch even though the worker is idle. The manager
+	# must roll back the InFlight entries it pushed and release their volume slots, then keep
+	# the window alive so connectivity can succeed once the hook is cleared.
+	w.debug_set_fail_extract_submit(true)
+	var st: Dictionary = w.debug_island_stats()
+	for i in range(120):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_physics_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		if st["connectivity_runs"] > runs_before:
+			break
+	assert_int(st["connectivity_runs"]).override_failure_message(
+		"rejected-submit connectivity never ran: %s" % st).is_greater(runs_before)
+	assert_int(st["in_flight"]).override_failure_message(
+		"rejected extract submit stranded in-flight entries: %s" % st).is_equal(0)
+	assert_int(st["volume_live"]).override_failure_message(
+		"rejected extract submit leaked volume slots: %s" % st).is_equal(0)
+	assert_int(st["pending_windows"]).override_failure_message(
+		"rejected extract submit did not keep the window alive: %s" % st).is_greater(0)
+	# Once submits are accepted again, the same edit must still produce an island.
+	w.debug_set_fail_extract_submit(false)
+	for i in range(240):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_physics_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		if st["islands_spawned"] > 0:
+			break
+	assert_int(st["islands_spawned"]).override_failure_message(
+		"rejected extract submit permanently lost the edit: %s" % st).is_greater(0)
+	assert_int(st["in_flight"]).override_failure_message(
+		"post-recovery extraction stranded in-flight entries: %s" % st).is_equal(0)
+
+func test_partial_restore_retry_spawn_keeps_pinned_birth_volume(timeout := 180000) -> void:
+	var w := make_world()
+	var t := tool_of(w)
+	build_pillar(w, t)
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	# Submit the extraction, then force the first spawn to fail AND make the restore appear to
+	# not cover every carved region. The one-shot spawn hook lets the last-resort retry
+	# succeed; because the restore volume-add was accepted (touched non-empty), the birth slot
+	# is referenced by the edit log and must remain pinned.
+	w.debug_stream_frame(CENTER)
+	w.debug_physics_frame(CENTER)
+	w.debug_island_frame(1.0 / 60.0, CENTER)
+	w.debug_set_fail_next_spawn(true)
+	w.debug_set_fail_next_restore(true)
+	var st: Dictionary = w.debug_island_stats()
+	for i in range(120):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		if st["live_bodies"] > 0:
+			break
+	assert_int(st["live_bodies"]).override_failure_message(
+		"last-resort retry spawn never produced a body: %s" % st).is_greater(0)
+	assert_int(st["islands_spawned"]).override_failure_message(
+		"last-resort retry body was not counted as spawned: %s" % st).is_greater(0)
+	assert_int(st["volume_pinned"]).override_failure_message(
+		"partial restore referenced the birth volume but it was unpinned: %s" % st).is_greater(0)

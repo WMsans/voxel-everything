@@ -85,6 +85,7 @@ int MeshService::collect(std::vector<MeshResult> *out) {
 
 bool MeshService::submit_extracts(std::vector<IslandExtractJob> jobs) {
 	if (jobs.empty() || !is_valid()) return false;
+	if (fail_extract_submit_.load(std::memory_order_acquire)) return false;
 	{
 		std::lock_guard<std::mutex> lock(mu_);
 		if (stopping_ || !pending_extract_.empty() ||

@@ -73,6 +73,11 @@ public:
 	void debug_set_fail_extractions(bool v) {
 		fail_extracts_.store(v, std::memory_order_release);
 	}
+	// Test hook: make submit_extracts() reject a batch even when the worker is idle, so the
+	// island manager's rollback path can be exercised deterministically.
+	void debug_set_fail_extract_submit(bool v) {
+		fail_extract_submit_.store(v, std::memory_order_release);
+	}
 
 	// Copies one stored volume into THIS device's pool, on the worker thread. The main
 	// thread's ve::VolumeSet is authoritative; this keeps the mesher's field evaluation --
@@ -118,6 +123,7 @@ private:
 	std::atomic<bool> extract_busy_{false};
 	std::atomic<bool> extract_available_{false};
 	std::atomic<bool> fail_extracts_{false};
+	std::atomic<bool> fail_extract_submit_{false};
 	const std::function<void(MeshPass &)> *sync_fn_ = nullptr;
 	bool sync_pending_ = false;
 	bool started_ = false;   // startup attempt has settled (ready_ is then meaningful)

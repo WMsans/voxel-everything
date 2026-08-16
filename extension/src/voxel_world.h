@@ -240,6 +240,9 @@ public:
 	void debug_set_extraction_available(bool v);
 	// Test hook: force field extractions to fail even when the worker pass exists.
 	void debug_set_fail_extractions(bool v);
+	// Test hook: make the mesher reject extraction submits even when it is idle, so the
+	// island manager's submit rollback path can be exercised deterministically.
+	void debug_set_fail_extract_submit(bool v);
 	void debug_set_merge_sleep_seconds(float v);
 	// Test hook: lower the dynamic-body guardrail so a small test can prove slot-pool holes
 	// after merges do not count against the cap.
@@ -250,6 +253,9 @@ public:
 	// Test hook: make the next island spawn fail so the spawn-failure restore path can be
 	// exercised without depending on a Jolt failure mode.
 	void debug_set_fail_next_spawn(bool fail);
+	// Test hook: make the next spawn-failure restore appear not to cover every carved region,
+	// exercising the last-resort retry path without depending on an op-cap race.
+	void debug_set_fail_next_restore(bool fail);
 	// Test hook: make the next re-merge resample fail so the resample backoff path can be
 	// exercised without depending on a worker-side failure mode.
 	void debug_set_fail_next_resample(bool fail);
