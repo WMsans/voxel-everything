@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 
 using namespace godot;
 
@@ -19,6 +20,10 @@ using Clock = std::chrono::steady_clock;
 // the mark, so a large blast's fan-out lands within a handful of frames; thirty is a
 // generous ceiling that keeps a stalled readback from silently disabling destruction.
 constexpr int kMaxWindowWaitFrames = 30;
+// Frames to cool down after a connectivity pass labels components but cannot submit any
+// because a pool is full. This is a backoff, not a guarantee: the run_frame capacity gate
+// also keeps a genuinely full pool from relabelling every frame.
+constexpr int kRetryCooldownFrames = 30;
 // Extractions submitted per frame. Each is ~1-2 ms on the worker; two keeps a big collapse
 // resolving inside a few frames without starving collision meshing.
 constexpr int kExtractsPerFrame = 2;
@@ -173,11 +178,13 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 	ve::label_islands(r, comp_cfg_, &comps);
 
 	int submitted = 0;
+	bool transient_refusal = false;
 	std::vector<IslandExtractJob> jobs;
 	for (const ve::IslandComponent &c : comps) {
 		if (submitted >= kExtractsPerFrame) break;
 		if (live_body_count() + static_cast<int>(in_flight_.size()) >= max_dynamic_bodies_) {
 			refused_++;
+			transient_refusal = true;
 			break;
 		}
 
@@ -201,7 +208,11 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 			continue;
 		}
 		const int slot = world_->volumes().allocate();
-		if (slot < 0) { refused_++; continue; } // pool full: leave it attached
+		if (slot < 0) {
+			refused_++;
+			transient_refusal = true;
+			continue; // pool full: leave it attached
+		}
 		{
 			std::lock_guard<std::mutex> lock(world_->edit_mutex());
 			job.ops = world_->edit_log()->ops(ve::WorldBounds::region_of_brick(c.lo));
@@ -235,12 +246,21 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 	// A blast can label more loose components than kExtractsPerFrame (or than the body cap
 	// has room for). Re-queue the same window so the next connectivity pass -- gated on no
 	// in-flight extractions -- continues with the remainder once the current batch has been
-	// carved. Only re-queue when at least one job was submitted: otherwise there is no
-	// in-flight progress to wait for and the pass would spin forever on a full pool.
+	// carved.
 	if (submitted > 0 && submitted < static_cast<int>(comps.size())) {
 		std::lock_guard<std::mutex> lock(windows_mutex_);
 		windows_.push_back(pw);
+	} else if (submitted == 0 && transient_refusal) {
+		// Zero-progress but transiently refused (body cap or volume pool full): keep the
+		// window queued with a cooldown. A genuinely full pool would otherwise relabel every
+		// frame; the run_frame capacity gate below also skips while there is no room.
+		std::lock_guard<std::mutex> lock(windows_mutex_);
+		PendingWindow retry = pw;
+		retry.retry_cooldown = kRetryCooldownFrames;
+		windows_.push_back(retry);
 	}
+	// Permanent failures (unmergeable shape, unplannable lattice, etc.) are deliberately
+	// dropped: no amount of retrying will make them progress.
 	if (!jobs.empty()) world_->mesh_service()->submit_extracts(std::move(jobs));
 	return submitted;
 }
@@ -330,21 +350,33 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 							world_->occupancy().set_cell(
 									{x, y, z}, ve::kCellSolid, world_->edit_seq());
 		} else {
-			UtilityFunctions::printerr(
-					"IslandManager: body spawn failed and the restore volume could not be pinned; "
-					"leaving the slot allocated rather than releasing a hole");
-			// Invalidate the carve in the occupancy grid instead of leaving a stale "air"
-			// that disagrees with the restored field. Unknown cells are treated as solid by
-			// connectivity, so this errs toward keeping the piece attached.
+			// The original slot is not referenced by any edit (it was only stored for the
+			// body), so it can be released and re-stored as a fresh pinned restore volume.
+			// Releasing first guarantees the allocate below has a free slot even if the pool
+			// was full. This branch should be unreachable: after store() succeeded above,
+			// pin() cannot fail unless an internal invariant is broken.
+			world_->volumes().release(f.volume_slot);
+			const int restore_slot = world_->volumes().allocate();
+			if (restore_slot < 0 || !world_->volumes().store(restore_slot, r.data) ||
+					!world_->volumes().pin(restore_slot)) {
+				UtilityFunctions::printerr(
+						"IslandManager: FATAL: cannot restore a carved island after spawn failure; "
+						"aborting rather than leaving a hole in the field");
+				std::abort();
+			}
+			world_->queue_field_volume_upload(restore_slot, r.data);
+			world_->append_edit(ve::make_volume_add(restore_slot, f.origin, f.voxel, f.dim));
+			// The field has the rock back; make the occupancy grid agree so a later
+			// connectivity/anchoring pass does not see a phantom air pocket.
 			for (const ve::CellBox &box : f.boxes)
 				for (int z = box.lo.z; z <= box.hi.z; z++)
 					for (int y = box.lo.y; y <= box.hi.y; y++)
 						for (int x = box.lo.x; x <= box.hi.x; x++)
 							world_->occupancy().set_cell(
-									{x, y, z}, ve::kCellUnknown, world_->edit_seq());
+									{x, y, z}, ve::kCellSolid, world_->edit_seq());
 		}
 		refused_++;
-		return; // no hole: the carve stands but the volume add put the rock back
+		return; // no hole: the carve stands and either volume add put the rock back
 	}
 	// Reuse a hole left by a despawn; append only when there is none.
 	{
@@ -492,7 +524,17 @@ int IslandManager::run_frame(float dt, const Vector3 &center) {
 		if (!windows_.empty() && in_flight_.empty() &&
 				!world_->mesh_service()->extracts_busy()) {
 			w = windows_.front();
-			if (window_is_fresh(w) || w.waited >= kMaxWindowWaitFrames) {
+			if (w.retry_cooldown > 0) {
+				// Backoff after a transient full-pool refusal; let the cooldown tick down
+				// before relabelling.
+				windows_.front().retry_cooldown--;
+			} else if (live_body_count() + static_cast<int>(in_flight_.size()) >=
+							max_dynamic_bodies_ ||
+					world_->volumes().live_count() >= ve::kMaxVolumes) {
+				// No body or volume capacity: keep the window queued instead of popping it
+				// and losing the edit. Retrying is harmless here because the gate above is a
+				// cheap counter check, not a connectivity relabel.
+			} else if (window_is_fresh(w) || w.waited >= kMaxWindowWaitFrames) {
 				windows_.pop_front();
 				if (!window_is_fresh(w))
 					UtilityFunctions::print_verbose(
@@ -520,7 +562,7 @@ int IslandManager::run_frame(float dt, const Vector3 &center) {
 int IslandManager::live_body_count() const {
 	int n = 0;
 	for (const IslandBody *b : bodies_)
-		if (b) n++;
+		if (b && b->live()) n++;
 	return n;
 }
 

@@ -250,9 +250,10 @@ ve::EditLog::AppendResult VoxelWorld::append_edit(const ve::EditOp &op) {
 				") — spec §8 fail-soft");
 	}
 	pending_edits_.push_back({op, r});
-	// Connectivity's half of the fan-out. Runs under the append lock but touches only the
-	// manager's main-thread state; it is deliberately after the seq bump so the window knows
-	// which readback is "new enough" to act on.
+	// Connectivity's half of the fan-out. Runs under the append lock; the manager's
+	// pending-window queue is guarded by its own windows_mutex_ (note_edit may be called
+	// from a tool thread), and the seq bump above lets the window know which readback is
+	// "new enough" to act on.
 	if (island_manager_) island_manager_->note_edit(op, edit_seq_.load(std::memory_order_relaxed));
 	// Collision's half of the fan-out (spec §5: "Fan-out: raymarch set, physics remesh queue,
 	// LoD chain, connectivity"). Queued rather than applied, because this may run on any
@@ -477,6 +478,9 @@ void VoxelWorld::debug_set_merge_sleep_seconds(float v) {
 
 void VoxelWorld::debug_set_max_dynamic_bodies(int v) {
 	ensure_physics_initialized();
+	// Clamp before forwarding: a test hook should be able to lower the guardrail but not
+	// silently disable it with an absurd value.
+	v = v < 1 ? 1 : (v > kMaxDynamicBodies ? kMaxDynamicBodies : v);
 	if (island_manager_) island_manager_->debug_set_max_dynamic_bodies(v);
 }
 

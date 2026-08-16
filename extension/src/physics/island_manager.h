@@ -46,7 +46,11 @@ public:
 	int slot_high_water() const { return slot_high_water_; }
 	float last_ms() const { return last_ms_; }
 	void set_merge_sleep_seconds(float v) { merge_sleep_s_ = v; }
-	void debug_set_max_dynamic_bodies(int v) { max_dynamic_bodies_ = v; }
+	void debug_set_max_dynamic_bodies(int v) {
+		// Test hook: keep the guardrail sane. Clamping (rather than rejecting) keeps tests
+		// that pass an absurd value from silently disabling the body cap.
+		max_dynamic_bodies_ = v < 1 ? 1 : (v > kMaxDynamicBodies ? kMaxDynamicBodies : v);
+	}
 	// Not const: the ground probe takes the edit lock.
 	Dictionary stats();
 
@@ -55,6 +59,7 @@ private:
 		ve::IVec3 lo{}, hi{}; // inclusive cell AABB the edit could have loosened
 		int64_t seq = 0;
 		int waited = 0;
+		int retry_cooldown = 0; // frames to skip after a transient full-pool refusal
 		float impulse_from[3] = {0, 0, 0}; // the edit's centre, for the radial kick
 		float impulse_scale = 0.0f;
 	};

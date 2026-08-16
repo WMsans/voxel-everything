@@ -211,8 +211,41 @@ func test_body_pool_holes_after_merges_do_not_count_against_the_cap(timeout := 1
 
 	# A fresh island must still be allowed even though the slot pool has three holes in it.
 	build_pillar(w, t, PILLAR_X + 8.0)
+	var before: Dictionary = w.debug_island_stats()
+	var before_spawned: int = before["islands_spawned"] + before["debris_spawned"]
 	t.apply_sphere_subtract(Vector3(PILLAR_X + 8.0, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 240)
 	var st: Dictionary = w.debug_island_stats()
 	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
-		"a later island was refused after merges freed the body slots: %s" % st).is_greater(0)
+		"a later island was refused after merges freed the body slots: %s" % st).is_greater(
+		before_spawned)
+
+
+func test_full_body_cap_keeps_window_queued_until_capacity_frees(timeout := 180000) -> void:
+	var w := make_world()
+	w.debug_set_merge_sleep_seconds(0.2)
+	w.debug_set_max_dynamic_bodies(1)
+	var t := tool_of(w)
+	var xs := [PILLAR_X - 4.0, PILLAR_X]
+	for x in xs:
+		build_pillar(w, t, x)
+	for x in xs:
+		t.apply_sphere_subtract(Vector3(x, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	step(w, 120)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["live_bodies"]).override_failure_message(
+		"the cap was not hit by the first component: %s" % st).is_equal(1)
+	assert_int(st["pending_windows"]).override_failure_message(
+		"the second component was dropped instead of staying queued: %s" % st).is_greater(0)
+
+	# Let the first body merge back. Once the cap frees, the queued window must drain and
+	# spawn the second component; dropping it would leave the second piece attached forever.
+	for i in range(1800):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		if st["islands_spawned"] + st["debris_spawned"] >= 2:
+			break
+	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
+		"the queued second component never spawned after capacity freed: %s" % st).is_greater_equal(2)
