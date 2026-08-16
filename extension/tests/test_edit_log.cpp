@@ -23,6 +23,28 @@ TEST_CASE("an op lands in every region it touches, and only those") {
 	CHECK(log.region_count() == 2);
 }
 
+TEST_CASE("collect_ops_for_aabb gathers ops from every region a component straddles") {
+	ve::EditLog log(bounds());
+	// The region boundary is at 25.6 m (brick 32). A two-cell component covering bricks
+	// 31..32 spans [24.8, 26.4) m: it is smaller than a region, but its op list must come
+	// from both regions.
+	log.append(sphere(24.8f, 1.0f, 1.0f, 0.5f)); // region 0 only, intersects
+	log.append(sphere(26.2f, 1.0f, 1.0f, 0.1f)); // region 1 only, intersects
+	log.append(sphere(25.6f, 1.0f, 1.0f, 0.5f)); // straddles: stored in both, deduplicated
+	log.append(sphere(30.0f, 1.0f, 1.0f, 0.2f)); // region 1 only, does not intersect
+	const float lo[3] = {24.8f, 0.0f, 0.0f};
+	const float hi[3] = {26.4f, 2.0f, 2.0f};
+	std::vector<ve::EditOp> ops;
+	ve::collect_ops_for_aabb(log, lo, hi, &ops);
+	REQUIRE(ops.size() == 3);
+	CHECK(std::any_of(ops.begin(), ops.end(),
+			[](const ve::EditOp &op) { return op.pos[0] == doctest::Approx(24.8f); }));
+	CHECK(std::any_of(ops.begin(), ops.end(),
+			[](const ve::EditOp &op) { return op.pos[0] == doctest::Approx(25.6f); }));
+	CHECK(std::any_of(ops.begin(), ops.end(),
+			[](const ve::EditOp &op) { return op.pos[0] == doctest::Approx(26.2f); }));
+}
+
 TEST_CASE("ops outside the world bounds are dropped, not stored") {
 	ve::EditLog log(bounds());
 	const auto r = log.append(sphere(-100.0f, 0.0f, 0.0f, 1.0f));

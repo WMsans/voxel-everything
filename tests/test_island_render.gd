@@ -278,7 +278,9 @@ func test_a_camera_just_outside_the_near_epsilon_still_marks_every_tile(timeout 
 
 func test_teardown_physics_clears_stale_island_handoffs(timeout := 60000) -> void:
 	var w := make_world()
-	var dim := 2
+	# The island atlas worker upload path is fixed at 64^3; use the real dim so this hook
+	# still exercises the queue/teardown path rather than being rejected up front.
+	const dim := 64
 	var n := dim * dim * dim
 	var sdf := PackedByteArray()
 	sdf.resize(n)

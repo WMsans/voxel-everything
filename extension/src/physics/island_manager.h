@@ -116,6 +116,12 @@ private:
 		float voxel = 0.0f;
 		int dim = 0;
 		float impulse[3] = {0, 0, 0};
+		// The ops captured for this component at submit time, and the world AABB they were
+		// collected from. land_extraction() recomputes the current ops for the same AABB; if
+		// a newer edit changed them, the extraction is stale and must not be carved.
+		std::vector<ve::EditOp> ops;
+		float aabb_lo[3] = {0, 0, 0};
+		float aabb_hi[3] = {0, 0, 0};
 		// The window this extraction came from, kept so a late refusal (e.g. all island
 		// atlas slots full at landing) can re-queue the originating edit.
 		PendingWindow window;
@@ -127,6 +133,10 @@ private:
 		// fully rejected the slot must be restored to these bytes so the live body keeps its
 		// volume; otherwise the slot can be released as before.
 		ve::VolumeData source;
+		// The rest pose the resample was submitted from. land_resample() refuses to paste if
+		// the body has woken or moved since, so a stale paste can never land at the old pose
+		// while the live body disappears from the new one.
+		Transform3D submitted_transform;
 	};
 	struct MergeRetry {
 		int body_index = -1;

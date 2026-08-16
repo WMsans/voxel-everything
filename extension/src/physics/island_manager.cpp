@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 
 using namespace godot;
 
@@ -42,6 +43,18 @@ constexpr float kDebrisVolumeM3 = 0.2f;
 // surface, so a few metres of clearance covers the largest component without letting a
 // floating sleeper paste rubble into the sky (which would immediately be re-extracted).
 constexpr float kMergeGroundClearanceM = 2.0f;
+// Tolerance for treating a sleeping body's current transform as the same rest pose it was
+// resampled from. A sleeping body may still jitter by fractions of a millimetre; anything at
+// or above a centimetre (or a visibly changed basis) means the resample is stale.
+constexpr float kMergePosePositionEps = 0.01f;
+constexpr float kMergePoseBasisEps = 0.02f;
+
+bool same_rest_pose(const Transform3D &a, const Transform3D &b) {
+	if (a.origin.distance_to(b.origin) > kMergePosePositionEps) return false;
+	for (int i = 0; i < 3; i++)
+		if (a.basis[i].distance_to(b.basis[i]) > kMergePoseBasisEps) return false;
+	return true;
+}
 
 // The residency's view of the world field, for ve::refine_anchoring. The lock is taken per
 // call rather than held, exactly as ColliderStreamer::LogProbe does, so an edit landing
@@ -124,13 +137,17 @@ void IslandManager::note_edit(const ve::EditOp &op, int64_t seq) {
 		w.impulse_scale = op.radius;
 	}
 
-	// Merge into an overlapping window rather than queueing a second one: spec §5 wants ONE
+	// Merge into every overlapping window rather than queueing a second one: spec §5 wants ONE
 	// connectivity run per frame however many blasts landed, and two windows over the same
-	// rubble would label the same component twice.
+	// rubble would label the same component twice. A single edit can overlap several existing
+	// windows (for example when it bridges two previously disjoint pending edits), so all of
+	// them absorb it.
+	bool merged = false;
 	for (PendingWindow &e : windows_) {
 		const bool overlap = e.lo.x <= w.hi.x && e.hi.x >= w.lo.x && e.lo.y <= w.hi.y &&
 				e.hi.y >= w.lo.y && e.lo.z <= w.hi.z && e.hi.z >= w.lo.z;
 		if (!overlap) continue;
+		merged = true;
 		e.lo = {std::min(e.lo.x, w.lo.x), std::min(e.lo.y, w.lo.y), std::min(e.lo.z, w.lo.z)};
 		e.hi = {std::max(e.hi.x, w.hi.x), std::max(e.hi.y, w.hi.y), std::max(e.hi.z, w.hi.z)};
 		e.seq = std::max(e.seq, w.seq);
@@ -138,9 +155,8 @@ void IslandManager::note_edit(const ve::EditOp &op, int64_t seq) {
 			e.impulse_scale = w.impulse_scale;
 			for (int a = 0; a < 3; a++) e.impulse_from[a] = w.impulse_from[a];
 		}
-		return;
 	}
-	windows_.push_back(w);
+	if (!merged) windows_.push_back(w);
 }
 
 bool IslandManager::window_is_fresh(const PendingWindow &w) const {
@@ -235,7 +251,12 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 		}
 		{
 			std::lock_guard<std::mutex> lock(world_->edit_mutex());
-			job.ops = world_->edit_log()->ops(ve::WorldBounds::region_of_brick(c.lo));
+			if (!world_->edit_log()) {
+				world_->volumes().release(slot);
+				refused_++;
+				continue;
+			}
+			ve::collect_ops_for_aabb(*world_->edit_log(), wlo, whi, &job.ops);
 		}
 
 		InFlight f;
@@ -245,7 +266,12 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 		f.voxel = job.voxel;
 		f.dim = job.dim;
 		f.window = pw;
-		for (int a = 0; a < 3; a++) f.origin[a] = job.origin[a];
+		f.ops = job.ops;
+		for (int a = 0; a < 3; a++) {
+			f.origin[a] = job.origin[a];
+			f.aabb_lo[a] = wlo[a];
+			f.aabb_hi[a] = whi[a];
+		}
 		if (pw.impulse_scale > 0.0f) {
 			// Away from the blast, falling off with distance, scaled by the blast radius.
 			const float cx = 0.5f * (wlo[0] + whi[0]);
@@ -426,6 +452,34 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 	// A successful extraction is progress on this window; reset any prior failure streak so
 	// only persistently failing batches accumulate toward dropping the remainder.
 	note_extract_success(f.window);
+
+	// The extraction was computed from the field as of submit time. If a newer edit (including
+	// another carve from the same batch) has changed any op that can influence this component's
+	// AABB, the volume in hand is stale: carving it into the current field would remove matter
+	// using a shape that no longer matches the field. Fail soft instead -- release the slot,
+	// back off the originating window, and leave the component attached. The edit that made it
+	// stale already queued its own window, so connectivity will revisit this piece.
+	{
+		std::lock_guard<std::mutex> lock(world_->edit_mutex());
+		if (!world_->edit_log()) {
+			world_->volumes().release(f.volume_slot);
+			refused_++;
+			return;
+		}
+		std::vector<ve::EditOp> current_ops;
+		ve::collect_ops_for_aabb(*world_->edit_log(), f.aabb_lo, f.aabb_hi, &current_ops);
+		const bool stale = current_ops.size() != f.ops.size() ||
+				!std::equal(current_ops.begin(), current_ops.end(), f.ops.begin(),
+						[](const ve::EditOp &a, const ve::EditOp &b) {
+							return std::memcmp(&a, &b, sizeof(ve::EditOp)) == 0;
+						});
+		if (stale) {
+			world_->volumes().release(f.volume_slot);
+			queue_retry_window(f.window);
+			refused_++;
+			return; // stale extraction: no carve, the component stays attached
+		}
+	}
 
 	const float solid_m3 = static_cast<float>(r.data.solid_voxels) * f.voxel * f.voxel * f.voxel;
 	const bool debris = solid_m3 < kDebrisVolumeM3;
@@ -750,6 +804,7 @@ void IslandManager::start_merges() {
 		Merging m;
 		m.body_index = static_cast<int>(i);
 		m.out_slot = out;
+		m.submitted_transform = xf;
 		if (reuses_birth_slot) m.source = *src;
 		merging_.push_back(std::move(m));
 		jobs.push_back(std::move(job));
@@ -775,7 +830,7 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 	const Merging m = merging_.front();
 	merging_.erase(merging_.begin());
 	const bool invalid_body = m.body_index < 0 || m.body_index >= static_cast<int>(bodies_.size()) ||
-			!bodies_[m.body_index];
+			!bodies_[m.body_index] || !bodies_[m.body_index]->live();
 	const bool reuses_birth_slot =
 			!invalid_body && m.out_slot == bodies_[m.body_index]->info().volume_slot;
 	if (r.failed || debug_fail_next_resample_ || invalid_body) {
@@ -792,6 +847,19 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 		}
 		return;
 	}
+
+	// The resample was submitted from a captured rest pose. If the body woke or moved while
+	// the worker was busy, pasting the old pose and despawning the body from its current pose
+	// would leave a ghost: the live body disappears from where it is, and terrain appears at
+	// where it was. Keep the body alive and back off instead.
+	if (bodies_[m.body_index]->asleep_seconds() <= 0.0f ||
+			!same_rest_pose(bodies_[m.body_index]->transform(), m.submitted_transform)) {
+		if (!reuses_birth_slot) world_->volumes().release(m.out_slot);
+		note_merge_rejected(m.body_index, ve::EditLog::AppendResult{});
+		refused_++;
+		return; // stale rest pose: no paste, no despawn, the body stays a body
+	}
+
 	// Compute the exact region set the resample's volume-add will touch. The paste must be
 	// fully accepted before we despawn, and it must be fully accepted before we overwrite a
 	// reused birth slot. The resample result is already available here, so unlike a carve we

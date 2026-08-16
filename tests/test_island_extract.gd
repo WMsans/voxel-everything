@@ -76,3 +76,21 @@ func test_an_edit_inside_the_component_reaches_the_extraction(timeout := 60000) 
 	var after := check_extract(w, Vector3i(10, 20, 20), Vector3i(11, 20, 20), "after")
 	assert_int(after["gpu_solid"]).is_less(before["gpu_solid"])
 	assert_int(after["gpu_solid"]).is_greater(0)
+
+func test_a_component_crossing_a_region_boundary_sees_ops_from_both_regions(timeout := 60000) -> void:
+	var w := make_world()
+	# Bricks 31 and 32 straddle the region boundary at brick 32 (25.6 m). The component is
+	# only two cells, smaller than a region, but its extraction must collect op lists from
+	# both sides of that boundary.
+	var before := check_extract(w, Vector3i(31, 20, 20), Vector3i(32, 20, 20), "cross-before")
+	var tool: VoxelEditTool = ClassDB.instantiate("VoxelEditTool")
+	w.add_child(tool)
+	# A small subtract entirely inside region 1 (x > 25.6 m) and inside the component's
+	# second cell. With the old one-region capture the extraction looked only at region 0 and
+	# would not see this op at all.
+	tool.apply_sphere_subtract(Vector3(26.2, 16.8, 16.8), 0.2)
+	var after := check_extract(w, Vector3i(31, 20, 20), Vector3i(32, 20, 20), "cross-after")
+	assert_int(after["gpu_solid"]).override_failure_message(
+		"a region-1 subtract did not reach a component that straddles the boundary"
+		).is_less(before["gpu_solid"])
+	assert_int(after["gpu_solid"]).is_greater(0)

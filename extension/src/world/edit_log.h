@@ -1,6 +1,9 @@
 #pragma once
 #include "generator/edit_ops.h"
 #include "world/region.h"
+#include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <map>
 #include <vector>
 
@@ -43,5 +46,56 @@ private:
 	WorldBounds bounds_;
 	std::map<Key, std::vector<EditOp>> lists_;
 };
+
+// Collects every region op that can influence a world-space AABB, for use when an extraction
+// or differential probe evaluates one component. A component can straddle a region boundary
+// even when it is smaller than a region, so the caller cannot assume one region's op list is
+// enough. Ops are appended to every region they touch (with the same activation/voxel pad the
+// append path uses); this helper gathers all overlapping regions' lists, keeps only ops whose
+// own world AABB touches the queried AABB (plus a small pad, so boundary-touching ops are
+// not dropped), and deduplicates identical 32-byte ops across region lists.
+inline void collect_ops_for_aabb(const EditLog &log, const float lo[3], const float hi[3],
+		std::vector<EditOp> *out) {
+	out->clear();
+	if (!lo || !hi || lo[0] > hi[0] || lo[1] > hi[1] || lo[2] > hi[2]) return;
+
+	constexpr float kPad = kActivationPad + kVoxelSize;
+	constexpr float kInvRegion = 1.0f / kRegionSize;
+	int rlo_a[3] = {0, 0, 0}, rhi_a[3] = {0, 0, 0};
+	for (int a = 0; a < 3; a++) {
+		const float qlo = lo[a] - kPad;
+		const float qhi = hi[a] + kPad;
+		rlo_a[a] = static_cast<int>(std::floor(qlo * kInvRegion));
+		rhi_a[a] = static_cast<int>(std::ceil(qhi * kInvRegion)) - 1;
+		if (rhi_a[a] < rlo_a[a]) return;
+	}
+	const ve::IVec3 rlo{rlo_a[0], rlo_a[1], rlo_a[2]};
+	const ve::IVec3 rhi{rhi_a[0], rhi_a[1], rhi_a[2]};
+
+	const auto intersects = [&](const EditOp &op) {
+		float olo[3], ohi[3];
+		op_world_aabb(op, olo, ohi);
+		for (int a = 0; a < 3; a++) {
+			if (ohi[a] < lo[a] - kPad || olo[a] > hi[a] + kPad) return false;
+		}
+		return true;
+	};
+	const auto already_have = [&](const EditOp &op) {
+		return std::find_if(out->begin(), out->end(), [&](const EditOp &e) {
+			return std::memcmp(&e, &op, sizeof(EditOp)) == 0;
+		}) != out->end();
+	};
+
+	for (int z = rlo.z; z <= rhi.z; z++)
+		for (int y = rlo.y; y <= rhi.y; y++)
+			for (int x = rlo.x; x <= rhi.x; x++) {
+				const ve::IVec3 region{x, y, z};
+				if (!log.bounds().contains_region(region)) continue;
+				for (const EditOp &op : log.ops(region)) {
+					if (!intersects(op) || already_have(op)) continue;
+					out->push_back(op);
+				}
+			}
+}
 
 } // namespace ve

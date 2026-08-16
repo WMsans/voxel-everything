@@ -22,6 +22,7 @@ bool MeshService::start(const MeshPassConfig &cfg) {
 		busy_.store(false, std::memory_order_release);
 		extract_busy_.store(false, std::memory_order_release);
 		extract_available_.store(false, std::memory_order_release);
+		fail_extract_submit_.store(false, std::memory_order_release);
 	}
 	thread_ = std::thread([this] { run(); });
 	std::unique_lock<std::mutex> lock(mu_);
@@ -56,6 +57,7 @@ void MeshService::stop() {
 	extract_busy_.store(false, std::memory_order_release);
 	extract_available_.store(false, std::memory_order_release);
 	fail_extracts_.store(false, std::memory_order_release);
+	fail_extract_submit_.store(false, std::memory_order_release);
 }
 
 bool MeshService::submit(std::vector<MeshRequest> requests) {

@@ -80,6 +80,13 @@ uint volume_mat_byte(int i) {
 // add material through the union the op performs.
 void sample_field_volume(int slot, vec3 origin, float voxel, int dim, vec3 p,
 		out float sdf, out uint mat) {
+	// A malformed/corrupt op must never drive an out-of-bounds SSBO read or a divide by
+	// zero. Fail soft: contribute nothing to the union.
+	if (slot < 0 || slot >= 64 || dim < 2 || dim > 64 || voxel <= 0.0) {
+		sdf = 1e30;
+		mat = 0u;
+		return;
+	}
 	float span = float(dim - 1) * voxel;
 	vec3 lo = origin, hi = origin + vec3(span);
 	float outside = op_box_sdf(lo, hi, p);

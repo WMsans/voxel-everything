@@ -116,7 +116,11 @@ bool IslandExtractPass::extract(const IslandExtractJob &job, IslandExtractResult
 	if (!is_valid() || job.dim < 2 || job.dim > ve::kIslandDim || job.voxel <= 0.0f)
 		return false;
 	const int box_count = std::min(static_cast<int>(job.boxes.size()), ve::kMaxIslandBoxes);
-	const int op_count = std::min(static_cast<int>(job.ops.size()), ve::kMaxRegionOps);
+	// A partial op list would evaluate the wrong field and could carve a shape that does not
+	// match the component. Fail the extraction rather than silently clamping to the GPU pool
+	// capacity.
+	const int op_count = static_cast<int>(job.ops.size());
+	if (op_count > ve::kMaxRegionOps) return false;
 
 	// Device-level commands, all before compute_list_begin (M2 Task 12's ordering rule).
 	rd_->buffer_update(counts_, 0, 16, zeroed(16));

@@ -582,8 +582,11 @@ PackedInt32Array VoxelWorld::debug_mesh_volume_slots() {
 
 void VoxelWorld::debug_queue_test_island_upload(int slot, const PackedByteArray &sdf,
 		const PackedByteArray &mat, int dim) {
-	if (slot < 0 || slot >= kMaxIslands || dim < 2 || dim > ve::kIslandDim) {
-		UtilityFunctions::printerr("debug_queue_test_island_upload: invalid slot or dim");
+	if (slot < 0 || slot >= kMaxIslands || dim != ve::kIslandDim) {
+		UtilityFunctions::printerr(
+				"debug_queue_test_island_upload: invalid slot or dim (island atlas upload "
+				"requires dim == ",
+				ve::kIslandDim);
 		return;
 	}
 	const int64_t n = static_cast<int64_t>(dim) * dim * dim;
@@ -962,10 +965,7 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 	{
 		std::lock_guard<std::mutex> lock(edit_mutex_);
 		if (!edit_log_) return false;
-		// One region's list: a component never spans regions, because Task 3's extent bound
-		// (5.6 m) is a fifth of a region and the manager splits any that would.
-		job->ops = edit_log_->ops(ve::WorldBounds::region_of_brick(
-				{cells[0].x, cells[0].y, cells[0].z}));
+		ve::collect_ops_for_aabb(*edit_log_, wlo, whi, &job->ops);
 	}
 
 	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
@@ -1022,9 +1022,7 @@ Dictionary VoxelWorld::debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_c
 	job.dim = ve::kIslandDim;
 	{
 		std::lock_guard<std::mutex> lock(edit_mutex_);
-		// One region's list: a component never spans regions, because Task 3's extent bound
-		// (5.6 m) is a fifth of a region and the manager splits any that would.
-		job.ops = edit_log_->ops(ve::WorldBounds::region_of_brick(lo));
+		ve::collect_ops_for_aabb(*edit_log_, wlo, whi, &job.ops);
 	}
 
 	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
