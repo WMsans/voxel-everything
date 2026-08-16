@@ -125,3 +125,54 @@ func test_an_empty_chunk_costs_no_body_and_is_not_retried(timeout := 60000) -> v
 	for i in range(20):
 		assert_int(w.debug_physics_frame(CENTER)).is_equal(0)
 	w.free()
+
+# Spec section 6 asks for "a ~64 m radius around the player + SMALL bubbles around active
+# bodies". ColliderStreamer used to hand ve::ChunkResidency::update a null radius array,
+# which gives EVERY island body the player's full ball. That is not just extra chunks: the
+# residency scan visits one ball per centre and measures each visited chunk against every
+# centre, so the plan grows with the square of the live body count (0.8 ms at one centre,
+# 37 ms at 64 on a development machine) and the chunk pool fills with rubble's surroundings
+# instead of the ground under the player. This pins a bubble to its own radius.
+#
+# Residency, not bodies: what the bubble decides is which chunks are PLANNED, and that is
+# one step ahead of the meshing this suite's other tests wait on.
+func test_a_body_bubble_streams_its_own_small_ball_not_the_players(timeout := 90000) -> void:
+	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	w.use_local_device = true
+	w.physics_enabled = false
+	w.world_origin_bricks = Vector3i(0, -64, 0)
+	w.world_size_regions = Vector3i(8, 5, 8)
+	w.physics_radius_m = 25.0
+	w.physics_bubble_radius_m = 6.4 # one chunk: a bubble costs a handful, not a ball
+	w.max_collider_chunks = 512     # room for both balls, so the cap cannot mask the bug
+	w.mesh_jobs_per_frame = 2
+	w.shape_builds_per_frame = 4
+	add_child(w)
+	_worlds.append(w)
+	assert_bool(w.debug_init_physics()).is_true()
+
+	settle(w, CENTER)
+	var alone: int = w.debug_physics_stats()["chunks_resident"]
+	assert_int(alone).override_failure_message(
+		"the player's own ball streamed nothing").is_greater(8)
+
+	# A body far outside the player's own 25 m ball, so everything it adds is its bubble.
+	var body := CENTER + Vector3(80.0, 0.0, 0.0)
+	w.debug_set_physics_bubbles(PackedVector3Array([body]))
+	settle(w, CENTER)
+	var withb: int = w.debug_physics_stats()["chunks_resident"]
+
+	# It plans SOMETHING: a body with no colliders under it would fall through the world.
+	assert_int(withb).override_failure_message(
+		"the body's bubble planned no chunks at all").is_greater(alone)
+	# ...but a bubble is not a second player ball. With the null-radius bug this lands at
+	# roughly 2 x alone; a 6.4 m bubble can only reach a handful of chunks.
+	assert_int(withb - alone).override_failure_message(
+		"a %.1f m body bubble added %d chunks on top of the player's %d -- it is being given the player's radius"
+		% [w.physics_bubble_radius_m, withb - alone, alone]).is_less(alone / 2)
+
+	# Dropping the body gives its chunks back.
+	w.debug_set_physics_bubbles(PackedVector3Array())
+	settle(w, CENTER)
+	assert_int(w.debug_physics_stats()["chunks_resident"]).is_less_equal(alone)
+	w.free()

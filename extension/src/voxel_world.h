@@ -7,6 +7,7 @@
 #include <godot_cpp/variant/node_path.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
+#include <godot_cpp/variant/packed_vector3_array.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/vector2.hpp>
@@ -67,6 +68,10 @@ class VoxelWorld : public Node3D {
 	bool physics_enabled_ = true;
 	NodePath physics_center_path_;
 	float physics_radius_m_ = 64.0f;
+	// Spec §6's "small bubbles around active bodies". Kept well under physics_radius_m_:
+	// see ColliderStreamer::set_body_bubble_radius_m for why a body-sized bubble is not a
+	// nicety but the difference between a linear and a quadratic collision plan.
+	float physics_bubble_radius_m_ = 12.0f;
 	int max_collider_chunks_ = 1280;
 	int mesh_jobs_per_frame_ = 2;
 	int shape_builds_per_frame_ = 2;
@@ -172,6 +177,8 @@ public:
 	NodePath get_physics_center_path() const { return physics_center_path_; }
 	void set_physics_radius_m(float v) { physics_radius_m_ = v; }
 	float get_physics_radius_m() const { return physics_radius_m_; }
+	void set_physics_bubble_radius_m(float v);
+	float get_physics_bubble_radius_m() const { return physics_bubble_radius_m_; }
 	void set_max_collider_chunks(int v) { max_collider_chunks_ = v; }
 	int get_max_collider_chunks() const { return max_collider_chunks_; }
 	void set_mesh_jobs_per_frame(int v) { mesh_jobs_per_frame_ = v; }
@@ -332,6 +339,9 @@ public:
 	void debug_teardown_physics();
 	Dictionary debug_mesh_lattice_diff(Vector3i chunk);
 	int debug_physics_frame(Vector3 center);
+	// Test hook: stand in for the island manager's live bodies, so the bubble policy can be
+	// exercised without spawning (and waiting on) real islands.
+	void debug_set_physics_bubbles(const PackedVector3Array &centers);
 	Dictionary debug_physics_stats();
 	// Per-phase frame timings for the two streaming paths. Diagnostic only: the HUD and the
 	// benchmark read it to say WHERE a frame went, rather than that it was slow.

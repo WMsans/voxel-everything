@@ -32,6 +32,17 @@ public:
 	void teardown();
 	void set_space(RID space);
 	void set_shape_builds_per_frame(int v) { max_builds_per_frame_ = v; }
+	// Spec §6 asks for "a ~64 m radius around the player + SMALL bubbles around active
+	// bodies". The bubble only has to reach the ground a body is about to land on, and its
+	// cost is not local: ve::ChunkResidency::update scans one ball per centre and takes the
+	// distance to EVERY centre for each chunk it visits, so a full-size bubble per body makes
+	// the plan quadratic in the live body count (measured: 0.8 ms at one centre, 37 ms at
+	// 64) and fills the chunk pool with rubble's surroundings instead of the player's.
+	//
+	// The floor on the radius is the lead time a falling body needs: the bubble travels with
+	// it, so 12 m at terminal-ish speed is ~0.4 s to mesh the ground below, which the
+	// two-chunks-a-frame budget covers several times over.
+	void set_body_bubble_radius_m(float v) { bubble_radius_m_ = v; }
 	// Wall-clock ceiling for step 2 of run_frame. The first build of a frame always runs, so
 	// this bounds the queue drain rate, not one chunk's cost.
 	void set_shape_build_budget_ms(float v) { build_budget_ms_ = v; }
@@ -82,6 +93,7 @@ private:
 	std::vector<char> in_space_;
 	std::deque<MeshResult> inbox_; // collected, not yet turned into shapes
 	int max_builds_per_frame_ = 2;
+	float bubble_radius_m_ = 12.0f;
 	float build_budget_ms_ = 4.0f;
 	int active_bodies_ = 0;
 	int builds_last_frame_ = 0;

@@ -297,19 +297,29 @@ int ColliderStreamer::run_frame(float cx, float cy, float cz, const float *extra
 	// 3. Plan. No new work while a batch is in flight or results are still queued — the
 	//    mesher holds one batch at a time, and a chunk planned now would only be dropped.
 	std::vector<float> centers;
-	centers.reserve(3 * (1 + std::max(0, extra_count)));
+	std::vector<float> radii;
+	const int bubbles = std::max(0, extra_count);
+	centers.reserve(3 * (1 + bubbles));
+	radii.reserve(1 + bubbles);
 	centers.push_back(cx);
 	centers.push_back(cy);
 	centers.push_back(cz);
-	if (extra_centers && extra_count > 0)
-		centers.insert(centers.end(), extra_centers, extra_centers + extra_count * 3);
+	// The player's ball is the configured radius; a body's is a SMALL bubble (see
+	// set_body_bubble_radius_m). Passing nullptr here — which is what this call used to do —
+	// gives every island body the player's full ball, and the plan cost then grows with the
+	// square of the live body count.
+	radii.push_back(chunks_->config().radius_m);
+	if (extra_centers && bubbles > 0) {
+		centers.insert(centers.end(), extra_centers, extra_centers + bubbles * 3);
+		radii.insert(radii.end(), static_cast<size_t>(bubbles), bubble_radius_m_);
+	}
 	LogProbe probe;
 	probe.gen = &gen_;
 	probe.log = edit_log_;
 	probe.mu = edit_mutex_;
 	const int build_cap = (mesh_->busy() || !inbox_.empty()) ? 0 : -1;
 	const Clock::time_point t_plan = Clock::now();
-	const ve::ChunkPlan plan = chunks_->update(centers.data(), nullptr,
+	const ve::ChunkPlan plan = chunks_->update(centers.data(), radii.data(),
 			static_cast<int>(centers.size() / 3), probe, build_cap);
 	last_plan_ms_ = ms_since(t_plan);
 	for (const auto &e : plan.releases) {

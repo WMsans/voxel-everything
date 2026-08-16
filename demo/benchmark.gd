@@ -46,6 +46,10 @@ func _ready() -> void:
 		return
 	if _mode == "--benchmark-island":
 		_target_frames = ISLAND_FRAMES
+	# Without this the harness measures the DISPLAY, not the engine: a compositor that hands
+	# an unfocused window one frame callback in eight reports a 133 ms frame and a 7 fps
+	# "regression" that no code change can move.
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 
 	_player = get_parent().get_node("Player")
 	_world = get_parent().get_node("VoxelWorld")

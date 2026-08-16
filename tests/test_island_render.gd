@@ -338,3 +338,57 @@ func test_teardown_physics_preserves_committed_field_volume_uploads(timeout := 6
 	assert_bool(worker_slots.has(0)).override_failure_message(
 		"new MeshService did not receive the pinned-volume replay: %s" % worker_slots
 		).is_true()
+
+# Regression for the freed-island magenta artifact. An island's material lattice only ever
+# held a material where the field was SOLID, but every consumer reads it with nearest-sample
+# rounding (island_material_at, sample_field_volume), so a hit point resolves to a sample on
+# the AIR side of the surface about half the time and shaded as material_albedo(0) = error
+# magenta. Extraction now projects near-surface air samples onto the surface, exactly as
+# ve::spread_materials does for a brick.
+#
+# The component has to STRADDLE the terrain surface: a fully underground lump is bounded
+# only by its own cell-box faces, and plan_island_lattice centres those on half-lattice
+# coordinates where the nearest-sample rounding happens to land inside every time. The cell
+# row is found by raycast rather than hard-coded, because the hills decide where it is.
+#
+# A fan of probes rather than one ray: the artifact is per-sample, so a single ray can miss
+# it by luck while half the surface is magenta.
+func is_magenta(c: Color) -> bool:
+	# material_albedo(0) is (1, 0, 1) scaled by a lambert term in [0.25, 1]: green is exactly
+	# zero. No real material shades below rock's 0.42 * 0.25 = 0.105.
+	return c.g < 0.05 and c.r > 0.2
+
+func test_no_ray_across_a_freed_island_resolves_to_error_magenta(timeout := 90000) -> void:
+	var w := make_world()
+	var ground: Dictionary = w.debug_raycast(Vector3(20.4, 90.0, 20.4), Vector3(0, -1, 0))
+	assert_bool(ground["hit"]).override_failure_message(
+		"could not find the terrain surface to cut the island out of").is_true()
+	var top := int(floor((ground["pos"] as Vector3).y / 0.8))
+	# Two cell rows spanning the surface, so the island's own top face IS terrain.
+	var lo := Vector3i(25, top - 1, 25)
+	var hi := Vector3i(26, top, 26)
+
+	var d: Dictionary = w.debug_place_test_island(0, lo, hi, Vector3(0.0, 30.0, 0.0))
+	assert_bool(d.get("ok", false)).override_failure_message(str(d)).is_true()
+	assert_int(d["solid"]).override_failure_message(
+		"the component came out empty, so there is no surface to shade").is_greater(0)
+	var centre: Vector3 = d["world_center"]
+
+	var hits := 0
+	var magenta := 0
+	for iz in range(10):
+		for ix in range(10):
+			var off := Vector3((ix - 4.5) * 0.16, 6.0, (iz - 4.5) * 0.16)
+			var probe: Dictionary = w.debug_raymarch_probe(centre + off, Vector3(0, -1, 0))
+			if not probe["hit"]:
+				continue
+			if (probe["pos"] as Vector3).y < centre.y - 3.0:
+				continue # went past the island and hit the terrain 30 m below
+			hits += 1
+			if is_magenta(probe["color"]):
+				magenta += 1
+	assert_int(hits).override_failure_message(
+		"no ray in the fan hit the island at all").is_greater(20)
+	assert_int(magenta).override_failure_message(
+		"%d of %d island hits shaded as error magenta (material 0)" % [magenta, hits]
+		).is_equal(0)

@@ -749,3 +749,52 @@ TEST_CASE("the volume min-max mip bounds every sample in its cell") {
 				CHECK(mip[ci + 1] == mx);
 			}
 }
+
+TEST_CASE("every air sample beside the island's surface carries a material") {
+	// The raymarch reads an island's material with NEAREST-sample rounding
+	// (island_material_at in shaders/raymarch.comp.glsl, sample_volume_lattice here), so a
+	// hit point rounds to whichever lattice sample is closest -- which is on the AIR side of
+	// the surface about half the time. If those samples hold material 0 the shader resolves
+	// material_albedo(0) = error magenta, which is what a freed island used to render as.
+	// ve::spread_materials gives the brick atlas the same guarantee; this is its island half.
+	AnalyticGenerator gen;
+	// Cells straddling the terrain surface at (20, 20), so the volume holds a real crossing
+	// rather than being uniformly solid.
+	const std::vector<CellBox> boxes{CellBox{{24, 62, 24}, {25, 63, 25}}};
+	const std::vector<float> aabbs = flat_aabbs(boxes);
+	float lo[3], hi[3];
+	boxes[0].world_aabb(lo, hi);
+	float voxel = 0.0f;
+	float origin[3] = {0, 0, 0};
+	REQUIRE(plan_island_lattice(lo, hi, kIslandDim, &voxel, origin));
+
+	VolumeData v;
+	extract_island_volume(gen, nullptr, 0, nullptr, origin, voxel, kIslandDim, aabbs.data(),
+			1, &v);
+	REQUIRE(v.solid_voxels > 0);
+
+	const int d = v.dim;
+	int crossings = 0;
+	int blank = 0;
+	for (int z = 0; z < d; z++)
+		for (int y = 0; y < d; y++)
+			for (int x = 0; x < d; x++) {
+				const int i = VolumeSet::voxel_index(d, x, y, z);
+				if (decode_sdf(v.sdf[i]) <= 0.0f) continue; // solid samples already have one
+				const int neighbours[6][3] = {{x - 1, y, z}, {x + 1, y, z}, {x, y - 1, z},
+						{x, y + 1, z}, {x, y, z - 1}, {x, y, z + 1}};
+				bool beside_surface = false;
+				for (const auto &n : neighbours) {
+					if (n[0] < 0 || n[1] < 0 || n[2] < 0 || n[0] >= d || n[1] >= d ||
+							n[2] >= d)
+						continue;
+					if (decode_sdf(v.sdf[VolumeSet::voxel_index(d, n[0], n[1], n[2])]) <= 0.0f)
+						beside_surface = true;
+				}
+				if (!beside_surface) continue;
+				crossings++;
+				if (v.mat[i] == 0) blank++;
+			}
+	CHECK(crossings > 0);
+	CHECK(blank == 0);
+}

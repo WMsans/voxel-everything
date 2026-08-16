@@ -273,25 +273,61 @@ void extract_island_volume(const Generator &gen, const EditOp *ops, int op_count
 	out->mat.assign(static_cast<size_t>(dim) * dim * dim, 0);
 	out->solid_voxels = 0;
 
+	// The island IS the solid field intersected with the union of its cells, so the mask is
+	// a CSG intersection: max(field, min over boxes).
+	const auto masked = [&](const float p[3], uint16_t *material) {
+		const Sample s = eval_field(gen, ops, op_count, p[0], p[1], p[2], volumes);
+		float bu = 1e30f;
+		for (int b = 0; b < box_count; b++)
+			bu = std::min(bu, box_sdf(&box_aabbs[static_cast<size_t>(b) * 6 + 0],
+							 &box_aabbs[static_cast<size_t>(b) * 6 + 3], p[0], p[1], p[2]));
+		if (material) *material = s.material;
+		return std::max(s.sdf, bu);
+	};
+
+	// The same rule ve::spread_materials applies to a brick, applied to a lattice: an AIR
+	// sample within this far of the surface is projected onto it and given the material it
+	// lands on. Both the shader and sample_volume_lattice read an island's material with
+	// NEAREST-sample rounding, so a hit point resolves to a sample on the air side of the
+	// surface about half the time; without the projection those samples read material 0 and
+	// the raymarch shades them material_albedo(0) = error magenta.
+	const float project_range = 2.0f * voxel;
+
 	for (int z = 0; z < dim; z++)
 		for (int y = 0; y < dim; y++)
 			for (int x = 0; x < dim; x++) {
 				const float p[3] = {origin[0] + x * voxel, origin[1] + y * voxel,
 						origin[2] + z * voxel};
-				Sample s = eval_field(gen, ops, op_count, p[0], p[1], p[2], volumes);
-				// The island IS the solid field intersected with the union of its cells, so
-				// the mask is a CSG intersection: max(field, min over boxes).
-				float bu = 1e30f;
-				for (int b = 0; b < box_count; b++)
-					bu = std::min(bu, box_sdf(&box_aabbs[static_cast<size_t>(b) * 6 + 0],
-									 &box_aabbs[static_cast<size_t>(b) * 6 + 3],
-									 p[0], p[1], p[2]));
-				s.sdf = std::max(s.sdf, bu);
-				if (s.sdf > 0.0f) s.material = 0;
+				uint16_t material = 0;
+				const float d = masked(p, &material);
+				if (d > 0.0f) material = 0;
+				if (material == 0 && d <= project_range) {
+					// Central difference of the MASKED field, so a sample outside a box face
+					// projects back through that face rather than along the terrain's own
+					// gradient. The 2 * voxel divisor cancels in the normalise; it is kept so
+					// shaders/island_extract.comp.glsl can do the identical arithmetic.
+					float g[3];
+					for (int a = 0; a < 3; a++) {
+						float lo[3] = {p[0], p[1], p[2]}, hi[3] = {p[0], p[1], p[2]};
+						lo[a] -= voxel;
+						hi[a] += voxel;
+						g[a] = (masked(hi, nullptr) - masked(lo, nullptr)) / (2.0f * voxel);
+					}
+					const float len = std::sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
+					// The stored SDF is uint8-quantised, so a single step can fall short of
+					// the surface; lengthen it and retry, exactly as spread_materials does.
+					for (float over = 0.5f; over <= 2.5f && material == 0 && len > 0.0f;
+							over += 1.0f) {
+						const float t = d + over * voxel;
+						material = eval_field(gen, ops, op_count, p[0] - g[0] / len * t,
+								p[1] - g[1] / len * t, p[2] - g[2] / len * t, volumes)
+										   .material;
+					}
+				}
 				const int i = VolumeSet::voxel_index(dim, x, y, z);
-				out->sdf[i] = encode_sdf(s.sdf);
-				out->mat[i] = static_cast<uint8_t>(s.material > 255 ? 255 : s.material);
-				if (s.sdf <= 0.0f) out->solid_voxels++;
+				out->sdf[i] = encode_sdf(d);
+				out->mat[i] = static_cast<uint8_t>(material > 255 ? 255 : material);
+				if (d <= 0.0f) out->solid_voxels++;
 			}
 }
 

@@ -25,25 +25,61 @@ layout(push_constant, std430) uniform Push {
 	ivec4 params;      // x = dim, y = op count, z = box count, w = unused
 } pc;
 
+// Mirror of ve::extract_island_volume's `masked` lambda: the island IS the solid field
+// intersected with the union of its 0.8 m cells, which is max(field, min over boxes). A
+// component with no boxes extracts to nothing, which is the correct answer and not a
+// special case.
+float masked_field(vec3 p, out uint mat) {
+	float sdf;
+	eval_field(p, 0u, uint(pc.params.y), sdf, mat);
+	float bu = 1e30;
+	for (int i = 0; i < pc.params.z; i++)
+		bu = min(bu, op_box_sdf(boxes.v[i * 2 + 0].xyz, boxes.v[i * 2 + 1].xyz, p));
+	return max(sdf, bu);
+}
+
 void main() {
 	ivec3 l = ivec3(gl_GlobalInvocationID);
 	int dim = pc.params.x;
 	if (any(greaterThanEqual(l, ivec3(dim)))) return;
-	vec3 p = pc.origin_voxel.xyz + vec3(l) * pc.origin_voxel.w;
+	float voxel = pc.origin_voxel.w;
+	vec3 p = pc.origin_voxel.xyz + vec3(l) * voxel;
 
-	float sdf;
 	uint mat;
-	eval_field(p, 0u, uint(pc.params.y), sdf, mat);
-
-	// Mirror of ve::extract_island_volume: the island IS the solid field intersected with
-	// the union of its 0.8 m cells, which is max(field, min over boxes). A component with no
-	// boxes extracts to nothing, which is the correct answer and not a special case.
-	float bu = 1e30;
-	for (int i = 0; i < pc.params.z; i++)
-		bu = min(bu, op_box_sdf(boxes.v[i * 2 + 0].xyz, boxes.v[i * 2 + 1].xyz, p));
-	sdf = max(sdf, bu);
+	float sdf = masked_field(p, mat);
 	if (sdf > 0.0) mat = 0u;
 	if (sdf <= 0.0) atomicAdd(counts.solid, 1u);
+
+	// The same projection ve::spread_materials gives a brick (brick_gen.comp.glsl phase 2),
+	// applied to a lattice: an AIR sample within project_range of the surface is pushed onto
+	// it and given the material it lands on. Both this shader's consumers read an island's
+	// material with NEAREST-sample rounding (island_material_at in raymarch.comp.glsl,
+	// sample_field_volume in field.glslh), so a hit point resolves to a sample on the air
+	// side of the surface about half the time; without this those samples read material 0
+	// and shade as material_albedo(0) = error magenta.
+	float project_range = 2.0 * voxel;
+	if (mat == 0u && sdf <= project_range) {
+		// Central difference of the MASKED field, so a sample outside a box face projects
+		// back through that face rather than along the terrain's own gradient. The 2 * voxel
+		// divisor cancels in the normalise; it is kept so the CPU reference can do the
+		// identical arithmetic.
+		uint ignored;
+		vec3 ex = vec3(voxel, 0.0, 0.0);
+		vec3 ey = vec3(0.0, voxel, 0.0);
+		vec3 ez = vec3(0.0, 0.0, voxel);
+		vec3 g = vec3(
+			masked_field(p + ex, ignored) - masked_field(p - ex, ignored),
+			masked_field(p + ey, ignored) - masked_field(p - ey, ignored),
+			masked_field(p + ez, ignored) - masked_field(p - ez, ignored)) / (2.0 * voxel);
+		float len = length(g);
+		// The stored SDF is uint8-quantised, so a single step can fall short of the surface;
+		// lengthen it and retry, exactly as spread_materials does.
+		for (float over = 0.5; over <= 2.5 && mat == 0u && len > 0.0; over += 1.0) {
+			float t = sdf + over * voxel;
+			float ignored_sdf;
+			eval_field(p - g / len * t, 0u, uint(pc.params.y), ignored_sdf, mat);
+		}
+	}
 
 	out_vol.v[l.x + l.y * dim + l.z * dim * dim] =
 			(min(mat, 255u) << 8) | encode_sdf_byte(sdf);

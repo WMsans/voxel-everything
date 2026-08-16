@@ -56,6 +56,8 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_physics_center_path"), &VoxelWorld::get_physics_center_path);
 	ClassDB::bind_method(D_METHOD("set_physics_radius_m", "v"), &VoxelWorld::set_physics_radius_m);
 	ClassDB::bind_method(D_METHOD("get_physics_radius_m"), &VoxelWorld::get_physics_radius_m);
+	ClassDB::bind_method(D_METHOD("set_physics_bubble_radius_m", "v"), &VoxelWorld::set_physics_bubble_radius_m);
+	ClassDB::bind_method(D_METHOD("get_physics_bubble_radius_m"), &VoxelWorld::get_physics_bubble_radius_m);
 	ClassDB::bind_method(D_METHOD("set_max_collider_chunks", "v"), &VoxelWorld::set_max_collider_chunks);
 	ClassDB::bind_method(D_METHOD("get_max_collider_chunks"), &VoxelWorld::get_max_collider_chunks);
 	ClassDB::bind_method(D_METHOD("set_mesh_jobs_per_frame", "v"), &VoxelWorld::set_mesh_jobs_per_frame);
@@ -75,6 +77,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_mesh_submit", "chunks"), &VoxelWorld::debug_mesh_submit);
 	ClassDB::bind_method(D_METHOD("debug_mesh_collect"), &VoxelWorld::debug_mesh_collect);
 	ClassDB::bind_method(D_METHOD("debug_physics_frame", "center"), &VoxelWorld::debug_physics_frame);
+	ClassDB::bind_method(D_METHOD("debug_set_physics_bubbles", "centers"), &VoxelWorld::debug_set_physics_bubbles);
 	ClassDB::bind_method(D_METHOD("debug_physics_stats"), &VoxelWorld::debug_physics_stats);
 	ClassDB::bind_method(D_METHOD("debug_perf_stats"), &VoxelWorld::debug_perf_stats);
 	ClassDB::bind_method(D_METHOD("debug_island_frame", "dt", "center"), &VoxelWorld::debug_island_frame);
@@ -162,6 +165,7 @@ void VoxelWorld::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "physics_enabled"), "set_physics_enabled", "get_physics_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "physics_center_path"), "set_physics_center_path", "get_physics_center_path");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "physics_radius_m"), "set_physics_radius_m", "get_physics_radius_m");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "physics_bubble_radius_m"), "set_physics_bubble_radius_m", "get_physics_bubble_radius_m");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_collider_chunks"), "set_max_collider_chunks", "get_max_collider_chunks");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "mesh_jobs_per_frame"), "set_mesh_jobs_per_frame", "get_mesh_jobs_per_frame");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "shape_builds_per_frame"), "set_shape_builds_per_frame", "get_shape_builds_per_frame");
@@ -354,6 +358,7 @@ void VoxelWorld::ensure_physics_initialized() {
 	colliders_ = new ColliderStreamer();
 	colliders_->initialize(chunks_, edit_log_, &edit_mutex_, mesh_, max_collider_chunks_);
 	colliders_->set_shape_builds_per_frame(shape_builds_per_frame_);
+	colliders_->set_body_bubble_radius_m(physics_bubble_radius_m_);
 	// Publish the manager under edit_mutex_: append_edit_locked() can be called from a tool
 	// thread and reads island_manager_ while holding that lock, so creation must not expose a
 	// half-initialized pointer to it. Also take island_mutex_ (edit_mutex_ -> island_mutex_
@@ -457,6 +462,25 @@ Dictionary VoxelWorld::debug_perf_stats() {
 int VoxelWorld::debug_physics_frame(Vector3 center) {
 	ensure_physics_initialized();
 	return physics_tick(center);
+}
+
+void VoxelWorld::set_physics_bubble_radius_m(float v) {
+	physics_bubble_radius_m_ = v;
+	// Applies live: a test (and the editor's inspector) can change the bubble after physics
+	// has already been initialized.
+	if (colliders_) colliders_->set_body_bubble_radius_m(v);
+}
+
+void VoxelWorld::debug_set_physics_bubbles(const PackedVector3Array &centers) {
+	std::vector<float> flat;
+	flat.reserve(static_cast<size_t>(centers.size()) * 3);
+	for (int i = 0; i < centers.size(); i++) {
+		const Vector3 c = centers[i];
+		flat.push_back(c.x);
+		flat.push_back(c.y);
+		flat.push_back(c.z);
+	}
+	physics_bubble_centers_.swap(flat);
 }
 
 Dictionary VoxelWorld::debug_physics_stats() {
