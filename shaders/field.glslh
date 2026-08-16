@@ -24,7 +24,7 @@ const float SURFACE_Y = 51.2;
 // ve::EditOp is 32 bytes; storing two uvec4 per op and unpacking by hand keeps the mirror
 // exact, because a std430 struct with a vec3 member would silently pad to 48.
 //   uvec4 a = { type, material, pos.x, pos.y }
-//   uvec4 b = { pos.z, radius, pad, pad }
+//   uvec4 b = { pos.z, radius, aux0, aux1 }
 layout(set = 0, binding = FIELD_OP_POOL_BINDING, std430) readonly buffer FieldOpPool {
 	uvec4 v[];
 } field_op_pool;

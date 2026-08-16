@@ -697,6 +697,18 @@ String VoxelWorld::debug_load_shader(const String &res_path) const {
 
 void VoxelWorld::debug_store_volume(int slot, const PackedByteArray &sdf,
 		const PackedByteArray &mat, int dim) {
+	// Debug-only hook: validate the inputs the CPU's production paths guarantee, so a
+	// broken test or console call fails loudly instead of aliasing pool memory.
+	if (slot < 0 || slot >= ve::kMaxVolumes) {
+		UtilityFunctions::printerr("debug_store_volume: slot ", slot, " out of range [0, ",
+				ve::kMaxVolumes, ")");
+		return;
+	}
+	if (dim > ve::kIslandDim) {
+		UtilityFunctions::printerr("debug_store_volume: dim ", dim, " exceeds ve::kIslandDim (",
+				ve::kIslandDim, ")");
+		return;
+	}
 	if (dim < 2) {
 		UtilityFunctions::printerr("debug_store_volume: dim must be at least 2, got ", dim);
 		return;

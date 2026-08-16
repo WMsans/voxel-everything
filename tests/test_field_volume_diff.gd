@@ -214,11 +214,12 @@ func test_a_carve_then_paste_chain_matches() -> void:
 	ops.append_array(volume_op(0))
 	compare(ops, 3, "carve+paste")
 
-func test_a_volume_op_naming_an_empty_slot_changes_nothing() -> void:
-	# Fail-soft (spec section 8), and the one place the two sides could legitimately differ:
-	# the CPU skips the op because the slot is empty, so the GPU must too. It does because
-	# the manager never lets an op reach the log without its slot pinned -- this test pins
-	# the CONTRACT by giving both sides an all-air volume and requiring they agree.
+func test_a_volume_op_naming_an_all_air_slot_agrees() -> void:
+	# Fail-soft (spec section 8): an all-air sentinel stored in a pinned slot is the intended
+	# mechanism for a slot that has not received real data. The production invariant is that
+	# the manager never lets an op reach the log without its slot pinned, so this test pins
+	# that contract by giving both sides an all-air volume and requiring they agree. It does
+	# NOT exercise the CPU empty-slot skip path -- that path is unreachable through the log.
 	var sdf := PackedByteArray()
 	var mat := PackedByteArray()
 	sdf.resize(VDIM * VDIM * VDIM)

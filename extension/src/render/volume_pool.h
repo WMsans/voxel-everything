@@ -15,7 +15,15 @@ namespace godot {
 // device's, MeshPass owns the mesher worker's.
 class VolumePool {
 public:
+	VolumePool() = default;
 	~VolumePool();
+
+	// RIDs are owned and freed by teardown(). A copied or moved instance would free the
+	// same RIDs twice, so both operations are deleted to keep that impossible.
+	VolumePool(const VolumePool &) = delete;
+	VolumePool &operator=(const VolumePool &) = delete;
+	VolumePool(VolumePool &&) = delete;
+	VolumePool &operator=(VolumePool &&) = delete;
 
 	bool initialize(RenderingDevice *rd, int slots, int dim);
 	void teardown();
