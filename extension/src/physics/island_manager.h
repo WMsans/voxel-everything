@@ -51,6 +51,13 @@ public:
 		// that pass an absurd value from silently disabling the body cap.
 		max_dynamic_bodies_ = v < 1 ? 1 : (v > kMaxDynamicBodies ? kMaxDynamicBodies : v);
 	}
+	void debug_set_atlas_slot_used(int slot, bool used) {
+		// Test hook for the 32-island atlas ceiling. Out-of-range slots are ignored; used
+		// may only be set for slots the manager can actually hand out.
+		if (slot < 0 || slot >= kMaxIslands) return;
+		atlas_used_[static_cast<size_t>(slot)] = used ? 1 : 0;
+		if (used) slot_high_water_ = std::max(slot_high_water_, slot + 1);
+	}
 	// Not const: the ground probe takes the edit lock.
 	Dictionary stats();
 
@@ -71,6 +78,9 @@ private:
 		float voxel = 0.0f;
 		int dim = 0;
 		float impulse[3] = {0, 0, 0};
+		// The window this extraction came from, kept so a late refusal (e.g. all island
+		// atlas slots full at landing) can re-queue the originating edit.
+		PendingWindow window;
 	};
 	struct Merging {
 		int body_index = -1;

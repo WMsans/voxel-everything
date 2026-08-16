@@ -47,6 +47,13 @@ func tool_of(w: VoxelWorld) -> VoxelEditTool:
 	w.add_child(t)
 	return t
 
+# Fill the edit-log region containing `at` to kMaxRegionOps (256). Paint ops consume region
+# capacity without changing the SDF, which lets a test force append_edit rejection on the
+# carve/paste that follows without disturbing the terrain shape.
+func fill_region_ops(w: VoxelWorld, t: VoxelEditTool, at: Vector3) -> void:
+	for i in range(256):
+		t.apply_sphere_paint(at, 0.1, 4)
+
 # One frame of everything: streaming (which fills the occupancy grid), collider maintenance
 # and the island manager, in the order VoxelWorld::_process runs them.
 func step(w: VoxelWorld, frames: int, center: Vector3 = CENTER) -> void:
@@ -249,3 +256,83 @@ func test_full_body_cap_keeps_window_queued_until_capacity_frees(timeout := 1800
 			break
 	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
 		"the queued second component never spawned after capacity freed: %s" % st).is_greater_equal(2)
+
+func test_rejected_remerge_paste_keeps_the_body_alive(timeout := 180000) -> void:
+	var w := make_world()
+	w.debug_set_merge_sleep_seconds(999.0) # keep the body from merging before the region is full
+	var t := tool_of(w)
+	build_pillar(w, t)
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	step(w, 180)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["live_bodies"]).override_failure_message(
+		"the severed top never became a body: %s" % st).is_greater(0)
+	# Fill the region where the body will rest, then allow re-merge. The paste volume-add is
+	# rejected; the body must stay a body and the merge counter must not advance.
+	fill_region_ops(w, t, Vector3(PILLAR_X, PILLAR_BASE, PILLAR_Z))
+	w.debug_set_merge_sleep_seconds(0.2)
+	for i in range(600):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		if st["islands_merged"] > 0:
+			break
+	assert_int(st["islands_merged"]).override_failure_message(
+		"a rejected re-merge paste still despawned the body: %s" % st).is_equal(0)
+	assert_int(st["live_bodies"]).override_failure_message(
+		"a rejected re-merge paste destroyed the body and left a hole: %s" % st).is_greater(0)
+
+func test_rejected_carve_keeps_component_attached(timeout := 120000) -> void:
+	var w := make_world()
+	var t := tool_of(w)
+	build_pillar(w, t)
+	var top := Vector3(PILLAR_X, PILLAR_BASE + 4.0, PILLAR_Z)
+	assert_bool(solid_at(w, top)).override_failure_message(
+		"the pillar was never built").is_true()
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	# Run one island frame so connectivity labels the top and submits the extraction, but do
+	# NOT let the extraction result land yet; then fill the region so the carve is rejected.
+	w.debug_stream_frame(CENTER)
+	w.debug_physics_frame(CENTER)
+	w.debug_island_frame(1.0 / 60.0, CENTER)
+	fill_region_ops(w, t, top)
+	step(w, 240)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["islands_spawned"]).override_failure_message(
+		"a rejected carve still spawned a body: %s" % st).is_equal(0)
+	assert_int(st["live_bodies"]).override_failure_message(
+		"a rejected carve created a body in a field that still has the rock: %s" % st).is_equal(0)
+	assert_bool(solid_at(w, top)).override_failure_message(
+		"a rejected carve left a field hole with no body: %s" % st).is_true()
+
+func test_atlas_slot_full_refusal_retries_after_a_slot_frees(timeout := 180000) -> void:
+	var w := make_world()
+	for i in range(32):
+		w.debug_set_atlas_slot_used(i, true)
+	var t := tool_of(w)
+	build_pillar(w, t)
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	step(w, 240)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["islands_spawned"]).override_failure_message(
+		"an island spawned despite every atlas slot being full: %s" % st).is_equal(0)
+	assert_int(st["pending_windows"]).override_failure_message(
+		"the atlas-full refusal dropped the originating window: %s" % st).is_greater(0)
+	# Free one slot; the re-queued window must retry and eventually spawn the island.
+	w.debug_set_atlas_slot_used(0, false)
+	for i in range(600):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.debug_island_stats()
+		# The carve itself enqueues a follow-up connectivity window; wait for that too so the
+		# re-queued atlas window has provably been consumed.
+		if st["islands_spawned"] > 0 and st["pending_windows"] == 0:
+			break
+	assert_int(st["islands_spawned"]).override_failure_message(
+		"the atlas-full refusal was never retried after a slot freed: %s" % st).is_greater(0)
+	assert_int(st["live_bodies"]).override_failure_message(
+		"the retried island did not become a body: %s" % st).is_greater(0)
+	assert_int(st["pending_windows"]).override_failure_message(
+		"the retried window was never drained: %s" % st).is_equal(0)

@@ -224,6 +224,7 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 		f.volume_slot = slot;
 		f.voxel = job.voxel;
 		f.dim = job.dim;
+		f.window = pw;
 		for (int a = 0; a < 3; a++) f.origin[a] = job.origin[a];
 		if (pw.impulse_scale > 0.0f) {
 			// Away from the blast, falling off with distance, scaled by the blast radius.
@@ -283,9 +284,18 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		atlas_slot = free_atlas_slot();
 		if (atlas_slot < 0) {
 			// Spec §5's "<=32 island bodies (oldest sleepers merge early)". Nothing is
-			// carved yet, so refusing costs only that this piece stays put for now.
+			// carved yet, so refusing costs only that this piece stays put for now. Unlike
+			// refusals before submission, the originating window has already been popped by
+			// the time we learn the atlas is full, so re-queue it or the edit is lost when a
+			// slot later frees.
 			refused_++;
 			world_->volumes().release(f.volume_slot);
+			{
+				std::lock_guard<std::mutex> lock(windows_mutex_);
+				PendingWindow retry = f.window;
+				retry.retry_cooldown = kRetryCooldownFrames;
+				windows_.push_back(retry);
+			}
 			return;
 		}
 		atlas_used_[static_cast<size_t>(atlas_slot)] = 1;
@@ -302,8 +312,60 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 	// 1. Carve (spec §5 step 1). The boxes tile the component exactly, so this removes the
 	//    material that just became a body and nothing else. Ordered AFTER the extraction so
 	//    the volume holds the rock rather than the hole.
-	for (const ve::CellBox &box : f.boxes)
-		world_->append_edit(ve::make_box_subtract(box.lo, box.hi));
+	bool carve_rejected = false;
+	std::vector<ve::IVec3> carved_regions;
+	for (const ve::CellBox &box : f.boxes) {
+		const ve::EditLog::AppendResult carve = world_->append_edit(ve::make_box_subtract(box.lo, box.hi));
+		for (const ve::IVec3 &region : carve.touched) carved_regions.push_back(region);
+		if (!carve.rejected.empty()) {
+			carve_rejected = true;
+			break;
+		}
+	}
+	if (carve_rejected) {
+		// A region's op list was full: the carve was rejected (possibly after some boxes
+		// were already removed). Do NOT spawn a body into a field that still contains the
+		// rock. Restore any accepted carve with a pinned volume add and keep the component
+		// attached. Full regions that rejected the carve were never carved, so a volume add
+		// rejected there is harmless; every region that WAS carved must accept the restore.
+		if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
+		if (carved_regions.empty()) {
+			world_->volumes().release(f.volume_slot);
+			refused_++;
+			return; // nothing was carved: the component simply stays attached
+		}
+		if (!world_->volumes().pin(f.volume_slot)) {
+			UtilityFunctions::printerr(
+					"IslandManager: FATAL: cannot pin carved island for restore after carve rejection; "
+					"aborting rather than leaving a hole in the field");
+			std::abort();
+		}
+		world_->queue_field_volume_upload(f.volume_slot, r.data);
+		const ve::EditLog::AppendResult restore =
+				world_->append_edit(ve::make_volume_add(f.volume_slot, f.origin, f.voxel, f.dim));
+		bool restored_all_carved = !restore.touched.empty();
+		for (const ve::IVec3 &region : carved_regions)
+			if (std::find(restore.touched.begin(), restore.touched.end(), region) ==
+					restore.touched.end())
+				restored_all_carved = false;
+		if (!restored_all_carved) {
+			UtilityFunctions::printerr(
+					"IslandManager: FATAL: cannot restore an accepted carve after carve rejection; "
+					"aborting rather than leaving a hole in the field");
+			std::abort();
+		}
+		// The field has the rock back everywhere that was carved; the regions that rejected
+		// the carve were never carved and already read solid.
+		for (const ve::CellBox &box : f.boxes)
+			for (int z = box.lo.z; z <= box.hi.z; z++)
+				for (int y = box.lo.y; y <= box.hi.y; y++)
+					for (int x = box.lo.x; x <= box.hi.x; x++)
+						world_->occupancy().set_cell(
+								{x, y, z}, ve::kCellSolid, world_->edit_seq());
+		refused_++;
+		return; // no hole: the component is back in the field, not a body
+	}
+
 	// 2. Tell the occupancy grid straight away. The GPU readback that would say the same
 	//    thing is several frames out, and until it lands the next connectivity run would
 	//    find this component all over again and carve it twice.
@@ -340,7 +402,14 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		// slot into the carved hole -- keep the piece attached instead.
 		if (world_->volumes().pin(f.volume_slot)) {
 			world_->queue_field_volume_upload(f.volume_slot, r.data);
-			world_->append_edit(ve::make_volume_add(f.volume_slot, f.origin, f.voxel, f.dim));
+			const ve::EditLog::AppendResult restore =
+					world_->append_edit(ve::make_volume_add(f.volume_slot, f.origin, f.voxel, f.dim));
+			if (!restore.rejected.empty()) {
+				UtilityFunctions::printerr(
+						"IslandManager: FATAL: restore volume-add rejected after spawn failure; "
+						"aborting rather than leaving a hole in the field");
+				std::abort();
+			}
 			// The field has the rock back; make the occupancy grid agree so a later
 			// connectivity/anchoring pass does not see a phantom air pocket.
 			for (const ve::CellBox &box : f.boxes)
@@ -365,7 +434,14 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 				std::abort();
 			}
 			world_->queue_field_volume_upload(restore_slot, r.data);
-			world_->append_edit(ve::make_volume_add(restore_slot, f.origin, f.voxel, f.dim));
+			const ve::EditLog::AppendResult restore =
+					world_->append_edit(ve::make_volume_add(restore_slot, f.origin, f.voxel, f.dim));
+			if (!restore.rejected.empty()) {
+				UtilityFunctions::printerr(
+						"IslandManager: FATAL: restore volume-add rejected after spawn failure; "
+						"aborting rather than leaving a hole in the field");
+				std::abort();
+			}
 			// The field has the rock back; make the occupancy grid agree so a later
 			// connectivity/anchoring pass does not see a phantom air pocket.
 			for (const ve::CellBox &box : f.boxes)
@@ -452,16 +528,28 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 	}
 	// Store, PIN and upload BEFORE the op reaches the log: once an op names a slot the
 	// slot can never be reused, and the two GPU mirrors must already hold the bytes or a
-	// brick regenerated this frame would read an empty slot.
-	world_->volumes().store(m.out_slot, r.data);
-	world_->volumes().pin(m.out_slot);
+	// brick regenerated this frame would read an empty slot. If either store or pin fails,
+	// the out-slot is not referenced by any edit and can be released; the body stays a body.
+	if (!world_->volumes().store(m.out_slot, r.data) ||
+			!world_->volumes().pin(m.out_slot)) {
+		world_->volumes().release(m.out_slot);
+		refused_++;
+		return;
+	}
 	world_->queue_field_volume_upload(m.out_slot, r.data);
 
 	// Spec §5 step 4: "stamped back as a CSG paste-op ... Rubble permanently accumulates".
+	// A rejected paste means the field did NOT take the rock back. The body must remain a
+	// body so the carved hole still has something in it; the pinned out-slot is left
+	// reserved (it may be referenced by regions that did accept the paste).
 	const Transform3D rest = bodies_[m.body_index]->transform();
+	const ve::EditLog::AppendResult paste = world_->append_edit(r.op);
+	if (!paste.rejected.empty()) {
+		refused_++;
+		return;
+	}
 	last_merge_xz_[0] = rest.origin.x;
 	last_merge_xz_[1] = rest.origin.z;
-	world_->append_edit(r.op);
 	despawn(m.body_index);
 	islands_merged_++;
 }

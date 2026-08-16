@@ -81,6 +81,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_island_stats"), &VoxelWorld::debug_island_stats);
 	ClassDB::bind_method(D_METHOD("debug_set_merge_sleep_seconds", "v"), &VoxelWorld::debug_set_merge_sleep_seconds);
 	ClassDB::bind_method(D_METHOD("debug_set_max_dynamic_bodies", "v"), &VoxelWorld::debug_set_max_dynamic_bodies);
+	ClassDB::bind_method(D_METHOD("debug_set_atlas_slot_used", "slot", "used"), &VoxelWorld::debug_set_atlas_slot_used);
 	ClassDB::bind_method(D_METHOD("debug_body_of_chunk", "chunk"), &VoxelWorld::debug_body_of_chunk);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
@@ -482,6 +483,11 @@ void VoxelWorld::debug_set_max_dynamic_bodies(int v) {
 	// silently disable it with an absurd value.
 	v = v < 1 ? 1 : (v > kMaxDynamicBodies ? kMaxDynamicBodies : v);
 	if (island_manager_) island_manager_->debug_set_max_dynamic_bodies(v);
+}
+
+void VoxelWorld::debug_set_atlas_slot_used(int slot, bool used) {
+	ensure_physics_initialized();
+	if (island_manager_) island_manager_->debug_set_atlas_slot_used(slot, used);
 }
 
 RID VoxelWorld::debug_body_of_chunk(Vector3i chunk) {

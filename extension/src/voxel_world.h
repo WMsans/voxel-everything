@@ -214,6 +214,9 @@ public:
 	// Test hook: lower the dynamic-body guardrail so a small test can prove slot-pool holes
 	// after merges do not count against the cap.
 	void debug_set_max_dynamic_bodies(int v);
+	// Test hook: mark/unmark an island-atlas slot as used so a small test can fill the
+	// 32-slot ceiling without spawning 32 real islands.
+	void debug_set_atlas_slot_used(int slot, bool used);
 
 	// Tool entry point (VoxelEditTool, Task 14). Main thread; takes edit_mutex_.
 	ve::EditLog::AppendResult append_edit(const ve::EditOp &op);
