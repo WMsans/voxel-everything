@@ -535,8 +535,9 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		// complete. Returns the live body on success, or nullptr when the piece was restored /
 		// left attached. If a restore was only partial, the edit log may already reference the
 		// birth volume, so a later successful spawn must leave that slot pinned forever. If the
-		// last-resort retry also fails, the no-hole invariant is violated and the process is
-		// stopped rather than returning with carved cells uncovered.
+		// last-resort retry also fails, the no-hole invariant is violated: debug builds trap on
+		// that impossible state, while release builds stay fail-soft and return nullptr without
+		// releasing or unpinning the birth volume.
 		bool restore_referenced_slot = false;
 		auto spawn_or_restore = [&]() -> IslandBody * {
 			IslandSpawn info;
@@ -625,13 +626,23 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 				return retry;
 			}
 			delete retry;
+			// This last-resort failure is structurally impossible under the restore-headroom
+			// preflight plus the single edit-mutex hold, and release builds cannot reach it
+			// through the fail-injection hooks (they are compiled out). Keep a debug-only
+			// invariant trap so dev builds catch the impossible state; release builds stay
+			// fail-soft: log, keep the pinned birth volume allocated, do not unpin any slot
+			// the edit log may reference, and return without claiming a body.
 			UtilityFunctions::printerr(
-					"IslandManager: restore volume-add rejected or did not cover every carved "
-					"region and a retry spawn also failed; a carved hole has neither a body nor "
-					"the rock back");
-			CRASH_NOW_MSG(
 					"IslandManager: no-hole invariant violated after carve (restore incomplete "
-					"and retry spawn failed); preflight + edit-mutex hold make this unreachable");
+					"and retry spawn failed); keeping the pinned birth volume allocated and "
+					"returning without a body");
+#ifdef DEBUG_ENABLED
+			DEV_ASSERT(false && "IslandManager no-hole invariant violated after carve "
+					"(restore incomplete and retry spawn failed)");
+#else
+			refused_++;
+#endif
+			return nullptr;
 		};
 
 		if (carve_rejected) {

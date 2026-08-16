@@ -59,6 +59,7 @@ public:
 		atlas_used_[static_cast<size_t>(slot)] = used ? 1 : 0;
 		if (used) slot_high_water_ = std::max(slot_high_water_, slot + 1);
 	}
+#ifdef DEBUG_ENABLED
 	void debug_set_fail_next_spawn(bool fail) { debug_fail_next_spawn_ = fail; }
 	// Test hook: make the next spawn-failure restore appear not to cover every carved region,
 	// exercising the last-resort retry path without depending on an op-cap race.
@@ -66,6 +67,13 @@ public:
 	// Test hook: make the next re-merge resample fail so the resample backoff path can be
 	// exercised without depending on a worker-side failure mode.
 	void debug_set_fail_next_resample(bool fail) { debug_fail_next_resample_ = fail; }
+#else
+	// Fail-injection hooks are debug-only: release builds must not be able to drive the
+	// island manager into the structurally-impossible no-hole restore branch.
+	void debug_set_fail_next_spawn(bool fail) { (void)fail; }
+	void debug_set_fail_next_restore(bool fail) { (void)fail; }
+	void debug_set_fail_next_resample(bool fail) { (void)fail; }
+#endif
 	// Not const: the ground probe takes the edit lock.
 	Dictionary stats();
 
