@@ -387,6 +387,10 @@ public:
 	// --- Task 6 hooks ---
 	bool debug_mesh_submit(Array chunks);
 	Array debug_mesh_collect();
+
+	// --- M5 Task 10 LoD queue hooks ---
+	bool debug_lod_submit(Array jobs);
+	Array debug_lod_collect();
 };
 
 } // namespace godot

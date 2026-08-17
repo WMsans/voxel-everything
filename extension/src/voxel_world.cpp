@@ -84,6 +84,8 @@ void VoxelWorld::_bind_methods() {
 			"width", "height"), &VoxelWorld::debug_island_tile_mask);
 	ClassDB::bind_method(D_METHOD("debug_mesh_submit", "chunks"), &VoxelWorld::debug_mesh_submit);
 	ClassDB::bind_method(D_METHOD("debug_mesh_collect"), &VoxelWorld::debug_mesh_collect);
+	ClassDB::bind_method(D_METHOD("debug_lod_submit", "jobs"), &VoxelWorld::debug_lod_submit);
+	ClassDB::bind_method(D_METHOD("debug_lod_collect"), &VoxelWorld::debug_lod_collect);
 	ClassDB::bind_method(D_METHOD("debug_physics_frame", "center"), &VoxelWorld::debug_physics_frame);
 	ClassDB::bind_method(D_METHOD("debug_set_physics_bubbles", "centers"), &VoxelWorld::debug_set_physics_bubbles);
 	ClassDB::bind_method(D_METHOD("debug_physics_stats"), &VoxelWorld::debug_physics_stats);
@@ -1617,6 +1619,43 @@ Array VoxelWorld::debug_mesh_collect() {
 		d["vertices"] = static_cast<int>(r.positions.size() / 3);
 		d["triangles"] = static_cast<int>(r.indices.size() / 3);
 		d["overflow"] = r.overflow;
+		out.push_back(d);
+	}
+	return out;
+}
+
+bool VoxelWorld::debug_lod_submit(Array jobs) {
+	ensure_physics_initialized();
+	if (!physics_ready_ || !mesh_) return false;
+	std::vector<LodBuildJob> lod_jobs;
+	lod_jobs.reserve(static_cast<size_t>(jobs.size()));
+	for (int i = 0; i < jobs.size(); i++) {
+		const Array pair = jobs[i];
+		if (pair.size() < 2) continue;
+		const int level = pair[0];
+		const Vector3i v = pair[1];
+		const ve::IVec3 c{v.x, v.y, v.z};
+		LodBuildJob job;
+		job.level = level;
+		job.coord = c;
+		gather_lod_ops(level, c, &job.ops);
+		lod_jobs.push_back(std::move(job));
+	}
+	return mesh_->submit_lod(std::move(lod_jobs));
+}
+
+Array VoxelWorld::debug_lod_collect() {
+	Array out;
+	if (!physics_ready_ || !mesh_) return out;
+	std::vector<LodBuildResult> results;
+	mesh_->collect_lod(&results);
+	for (const LodBuildResult &r : results) {
+		Dictionary d;
+		d["level"] = r.level;
+		d["coord"] = Vector3i(r.coord.x, r.coord.y, r.coord.z);
+		d["quads"] = static_cast<int>(r.quads.size());
+		d["overflow"] = r.overflow;
+		d["failed"] = r.failed;
 		out.push_back(d);
 	}
 	return out;
