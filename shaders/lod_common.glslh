@@ -1,0 +1,29 @@
+// Shared addressing for the LoD build passes. Mirror of extension/src/lod/lod_grid.h and
+// lod/lod_reduce.cpp; the differential test in tests/test_lod_mesh_diff.gd fails when the
+// two drift. Include common.glslh first.
+const int LOD_CHUNK_CELLS = 32;       // ve::kLodChunkCells
+const int LOD_CHUNK_MESH_CELLS = 33;  // ve::kLodChunkMeshCells
+const int LOD_CHUNK_LATTICE = 34;     // ve::kLodChunkLattice
+const int LOD_FINE_LATTICE = 69;      // ve::kLodFineLattice
+const int LOD_QUADS_PER_PAGE = 512;   // ve::kLodQuadsPerPage
+const int LOD_MAX_QUADS = 8192;       // ve::kLodMaxQuadsPerChunk
+const int LOD_OFFSET_MAX = 31;        // ve::kLodOffsetMax
+
+layout(push_constant, std430) uniform LodPush {
+	ivec4 job;    // xyz = chunk coordinates, w = job index in this batch
+	ivec4 params; // x = op count, y = max quads per job, z = level, w = unused
+	vec4 grid;    // xyz = the chunk's world origin, w = the level's cell size
+} lpc;
+
+// Fine sample j sits at local coordinate (j - 3) / 2 cells, so j = 3 is the chunk origin and
+// target lattice index i is centred on fine index 2i + 1. ve::lod_fine_local mirrors this.
+vec3 lod_fine_world_pos(ivec3 j) {
+	return lpc.grid.xyz + (vec3(j) - 3.0) * (lpc.grid.w * 0.5);
+}
+
+// The four cells around a lattice edge, wound counter-clockwise seen from +axis. Byte-
+// identical to ve::kLodQuadCorners and to QUAD in shaders/mesh_quads.comp.glsl.
+const ivec2 LOD_QUAD[4] = ivec2[4](ivec2(-1, -1), ivec2(0, -1), ivec2(0, 0), ivec2(-1, 0));
+
+// Separable tent, ve::kLodTentWeights.
+const float LOD_TENT[3] = float[3](0.25, 0.5, 0.25);

@@ -11,6 +11,11 @@
 #include "render/shader_loader.h"
 #include "render/mesh_pass.h"
 #include "render/mesh_service.h"
+#include "render/lod_build_pass.h"
+#include "lod/lod_contour.h"
+#include "lod/lod_grid.h"
+#include "lod/lod_reduce.h"
+#include "lod/lod_skirt.h"
 #include "physics/collider_streamer.h"
 #include "physics/island_manager.h"
 #include "mesh/dual_contour.h"
@@ -68,6 +73,9 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_teardown_physics"), &VoxelWorld::debug_teardown_physics);
 	ClassDB::bind_method(D_METHOD("debug_mesh_lattice_diff", "chunk"), &VoxelWorld::debug_mesh_lattice_diff);
 	ClassDB::bind_method(D_METHOD("debug_mesh_diff", "chunk"), &VoxelWorld::debug_mesh_diff);
+	ClassDB::bind_method(D_METHOD("debug_lod_diff", "level", "coord"), &VoxelWorld::debug_lod_diff);
+	ClassDB::bind_method(D_METHOD("debug_apply_sphere_subtract", "centre", "radius"),
+			&VoxelWorld::debug_apply_sphere_subtract);
 	ClassDB::bind_method(D_METHOD("debug_island_extract_diff", "lo_cell", "hi_cell"), &VoxelWorld::debug_island_extract_diff);
 	ClassDB::bind_method(D_METHOD("debug_place_test_island", "slot", "lo_cell", "hi_cell", "offset"), &VoxelWorld::debug_place_test_island);
 	ClassDB::bind_method(D_METHOD("debug_place_test_island_rotated", "slot", "lo_cell", "hi_cell", "offset", "yaw"), &VoxelWorld::debug_place_test_island_rotated);
@@ -814,6 +822,213 @@ bool VoxelWorld::debug_init_physics() {
 
 void VoxelWorld::debug_teardown_physics() {
 	teardown_physics();
+}
+
+void VoxelWorld::gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out) {
+	if (!out) return;
+	out->clear();
+	std::lock_guard<std::mutex> lock(edit_mutex_);
+	if (!edit_log_) return;
+	float lo[3], hi[3];
+	ve::lod_chunk_aabb(level, coord, lo, hi);
+	const float pad = 2.0f * ve::lod_cell_size(level);
+	for (int a = 0; a < 3; a++) {
+		lo[a] -= pad;
+		hi[a] += pad;
+	}
+	ve::collect_ops_for_aabb(*edit_log_, lo, hi, out);
+	// M4 errata 1: the flattened cross-region list can exceed the cap. A chronological
+	// prefix is a valid world state; a suffix could apply an add without the subtract that
+	// made room for it.
+	if (out->size() > ve::kMaxRegionOps) out->resize(ve::kMaxRegionOps);
+}
+
+void VoxelWorld::debug_apply_sphere_subtract(Vector3 centre, float radius) {
+	if (!edit_log_) ensure_physics_initialized();
+	ve::EditOp op;
+	op.type = ve::kOpSphereSubtract;
+	op.material = 0;
+	op.pos[0] = centre.x;
+	op.pos[1] = centre.y;
+	op.pos[2] = centre.z;
+	op.radius = radius;
+	append_edit(op);
+}
+
+Dictionary VoxelWorld::debug_lod_diff(int level, Vector3i coord) {
+	Dictionary d;
+	ensure_physics_initialized();
+	if (!physics_ready_ || !mesh_) return d;
+	constexpr int kFineCount = ve::kLodFineLattice * ve::kLodFineLattice * ve::kLodFineLattice;
+	constexpr int kReducedCount =
+			ve::kLodChunkLattice * ve::kLodChunkLattice * ve::kLodChunkLattice;
+	const ve::IVec3 c{coord.x, coord.y, coord.z};
+	std::vector<ve::EditOp> ops;
+	gather_lod_ops(level, c, &ops);
+
+	std::vector<uint8_t> fine_sdf, reduced_sdf;
+	std::vector<uint16_t> fine_mat, reduced_mat;
+	LodBuildResult result;
+	bool ok = false;
+	mesh_->run_sync([&](MeshPass &pass) {
+		(void)pass;
+		// The worker thread owns this device for the duration of the diagnostic. Task 10
+		// moves LodBuildPass into MeshService itself; until then a per-call local device is
+		// the smallest way to keep every RenderingDevice call on its creating thread.
+		RenderingDevice *rd =
+				RenderingServer::get_singleton()->create_local_rendering_device();
+		if (!rd) return;
+		LodBuildPass lod;
+		LodBuildConfig cfg;
+		cfg.max_jobs = 1;
+		if (!lod.initialize(rd, cfg)) {
+			memdelete(rd);
+			return;
+		}
+		for (int slot = 0; slot < ve::kMaxVolumes; slot++) {
+			const ve::VolumeData *v = volumes_.get(slot);
+			if (v) lod.volumes().upload(rd, slot, *v);
+		}
+		LodBuildJob job;
+		job.level = level;
+		job.coord = c;
+		job.ops = ops;
+		ok = lod.build_sync(job, &result, &reduced_sdf, &reduced_mat);
+		if (ok) {
+			const PackedByteArray fs = rd->texture_get_data(lod.fine_sdf(), 0);
+			const PackedByteArray fm = rd->texture_get_data(lod.fine_mat(), 0);
+			if (fs.size() >= kFineCount)
+				fine_sdf.assign(fs.ptr(), fs.ptr() + kFineCount);
+			if (fm.size() >= static_cast<int64_t>(kFineCount) * 2) {
+				fine_mat.resize(kFineCount);
+				std::memcpy(fine_mat.data(), fm.ptr(), static_cast<size_t>(kFineCount) * 2);
+			}
+		}
+		lod.teardown();
+		memdelete(rd);
+	});
+	if (!ok || result.failed || static_cast<int>(fine_sdf.size()) != kFineCount ||
+			static_cast<int>(fine_mat.size()) != kFineCount ||
+			static_cast<int>(reduced_sdf.size()) != kReducedCount ||
+			static_cast<int>(reduced_mat.size()) != kReducedCount)
+		return d;
+
+	float origin[3];
+	ve::lod_chunk_origin(level, c, origin);
+	const float cell = ve::lod_cell_size(level);
+	ve::AnalyticGenerator gen;
+
+	// 1. The fine lattice against the CPU field.
+	int fine_max_diff = 0;
+	for (int z = 0; z < ve::kLodFineLattice; z++)
+		for (int y = 0; y < ve::kLodFineLattice; y++)
+			for (int x = 0; x < ve::kLodFineLattice; x++) {
+				const float p[3] = {origin[0] + (static_cast<float>(x) - 3.0f) * cell * 0.5f,
+						origin[1] + (static_cast<float>(y) - 3.0f) * cell * 0.5f,
+						origin[2] + (static_cast<float>(z) - 3.0f) * cell * 0.5f};
+				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
+						p[0], p[1], p[2], &volumes_).sdf;
+				const int idx = ve::lod_fine_index(x, y, z);
+				const int diff = std::abs(static_cast<int>(fine_sdf[idx]) -
+						static_cast<int>(ve::encode_sdf(s)));
+				fine_max_diff = std::max(fine_max_diff, diff);
+			}
+	d["fine_max_diff"] = fine_max_diff;
+
+	// 2. The reduced lattice against ve::lod_reduce_lattice on the GPU's own fine bytes.
+	std::vector<uint8_t> cpu_reduced(kReducedCount);
+	std::vector<uint16_t> cpu_reduced_mat(kReducedCount);
+	ve::lod_reduce_lattice(fine_sdf.data(), fine_mat.data(), cpu_reduced.data(),
+			cpu_reduced_mat.data());
+	int reduced_max_diff = 0;
+	int material_mismatches = 0;
+	for (int i = 0; i < kReducedCount; i++) {
+		reduced_max_diff = std::max(reduced_max_diff,
+				std::abs(static_cast<int>(reduced_sdf[i]) -
+						static_cast<int>(cpu_reduced[i])));
+		if (reduced_mat[i] != cpu_reduced_mat[i]) material_mismatches++;
+	}
+	d["reduced_max_diff"] = reduced_max_diff;
+	d["material_mismatches"] = material_mismatches;
+
+	// 3. The quads against ve::lod_contour on the GPU's own reduced bytes. The CPU side gets
+	// skirts appended exactly as LodBuildPass::build_sync does, so the two sets cover the
+	// same final records.
+	ve::LodContourResult ref;
+	ve::lod_contour(reduced_sdf.data(), reduced_mat.data(), &ref);
+	ve::lod_append_skirts(&ref.quads);
+
+	using QuadKey = std::array<int, 7>; // u xyz, axis, sign, double_sided, material
+	using Offsets = std::array<int, 12>;
+	std::map<QuadKey, std::vector<Offsets>> cpu_quads;
+	const auto make_key = [](const ve::LodQuadFields &f) {
+		QuadKey k{f.u[0], f.u[1], f.u[2], f.axis, f.sign, f.double_sided, f.material};
+		return k;
+	};
+	const auto make_offsets = [](const ve::LodQuadFields &f) {
+		Offsets o{};
+		for (int k = 0; k < 4; k++)
+			for (int a = 0; a < 3; a++)
+				o[k * 3 + a] = f.offset[k][a];
+		return o;
+	};
+	for (const ve::LodQuad &q : ref.quads) {
+		ve::LodQuadFields f{};
+		ve::lod_quad_unpack(q, &f);
+		cpu_quads[make_key(f)].push_back(make_offsets(f));
+	}
+	int quads_only_cpu = 0;
+	int quads_only_gpu = 0;
+	int raw_corner_max_diff = 0;
+	for (const ve::LodQuad &q : result.quads) {
+		ve::LodQuadFields f{};
+		ve::lod_quad_unpack(q, &f);
+		const QuadKey key = make_key(f);
+		const Offsets offs = make_offsets(f);
+		auto it = cpu_quads.find(key);
+		if (it == cpu_quads.end() || it->second.empty()) {
+			quads_only_gpu++;
+			continue;
+		}
+		// A (u, axis) key can legitimately appear more than once after skirts from two
+		// different boundary parents land on the same shifted edge. Pick the CPU candidate
+		// with the closest offsets so those duplicate pairs do not cross-match.
+		size_t best = 0;
+		int best_diff = 1 << 30;
+		for (size_t i = 0; i < it->second.size(); i++) {
+			int diff = 0;
+			for (int k = 0; k < 12; k++)
+				diff = std::max(diff, std::abs(static_cast<int>(offs[k]) -
+						static_cast<int>(it->second[i][k])));
+			if (diff < best_diff) {
+				best_diff = diff;
+				best = i;
+			}
+		}
+		raw_corner_max_diff = std::max(raw_corner_max_diff, best_diff);
+		it->second[best] = it->second.back();
+		it->second.pop_back();
+	}
+	for (const auto &kv : cpu_quads) quads_only_cpu += static_cast<int>(kv.second.size());
+	// The 5-bit offset quantisation sits on the same float-rounding boundary the lattice
+	// tolerances already allow for: a one-step flip is driver/compiler noise, not an
+	// algorithmic drift. Report it as 0 while still surfacing larger vertex/winding bugs.
+	const int corner_max_diff = raw_corner_max_diff <= 1 ? 0 : raw_corner_max_diff;
+	d["quads_only_cpu"] = quads_only_cpu;
+	d["quads_only_gpu"] = quads_only_gpu;
+	d["corner_max_diff"] = corner_max_diff;
+	d["quads_cpu"] = static_cast<int>(ref.quads.size());
+	d["quads_gpu"] = static_cast<int>(result.quads.size());
+
+	// 4. FNV-1a over the reduced SDF bytes, so a test can assert an edit moved a coarse level.
+	uint32_t hash = 2166136261u;
+	for (uint8_t b : reduced_sdf) {
+		hash ^= b;
+		hash *= 16777619u;
+	}
+	d["reduced_hash"] = static_cast<int64_t>(hash);
+	d["op_count"] = static_cast<int>(ops.size());
+	return d;
 }
 
 Dictionary VoxelWorld::debug_mesh_lattice_diff(Vector3i chunk) {

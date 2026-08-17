@@ -138,6 +138,9 @@ class VoxelWorld : public Node3D {
 	bool initialized_ = false;
 
 	void teardown_gpu(); // every GPU object; CPU cores survive
+	// Gathers the ops that can affect a LoD chunk: its AABB padded by two cells, flattened
+	// across regions in global append order, truncated to a chronological prefix (M4 errata 1).
+	void gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out);
 	bool extract_component(const std::vector<ve::IVec3> &cells, IslandExtractJob *job,
 			std::vector<ve::CellBox> *boxes, ve::VolumeData *out);
 
@@ -364,6 +367,10 @@ public:
 
 	// --- Task 5 hook ---
 	Dictionary debug_mesh_diff(Vector3i chunk);
+
+	// --- M5 Task 9 hooks ---
+	Dictionary debug_lod_diff(int level, Vector3i coord);
+	void debug_apply_sphere_subtract(Vector3 centre, float radius);
 
 	// --- Task 9 hook ---
 	Dictionary debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_cell);
