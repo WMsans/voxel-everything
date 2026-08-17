@@ -57,6 +57,16 @@ public:
 
 	int active_bodies() const { return active_bodies_; }
 	int builds_last_frame() const { return builds_last_frame_; }
+	// Diagnostic only: per-slot generation counter bumped on every build_shape call, and the
+	// residency state of a chunk, so a test can ask whether a chunk's collider ever got
+	// rebuilt after a given edit. `state` is the ChunkResidency slot_state char, -1 when the
+	// chunk is not resident.
+	int build_count_of_chunk(ve::IVec3 c) const;
+	int chunk_state(ve::IVec3 c) const;
+	bool chunk_in_flight(ve::IVec3 c) const;
+	// Diagnostic only: op count of the most recent build SUBMITTED for the chunk's slot, so a
+	// stale collider can be tied to the exact op list its mesh was built from.
+	int last_submit_op_count(ve::IVec3 c) const;
 	int failures() const { return failures_; }
 	int queued_results() const { return static_cast<int>(inbox_.size()); }
 	float last_build_ms() const { return last_build_ms_; }
@@ -91,6 +101,8 @@ private:
 	std::vector<RID> bodies_;
 	std::vector<RID> shapes_;
 	std::vector<char> in_space_;
+	std::vector<int> build_counts_;
+	std::vector<int> last_submit_ops_;
 	std::deque<MeshResult> inbox_; // collected, not yet turned into shapes
 	int max_builds_per_frame_ = 2;
 	float bubble_radius_m_ = 12.0f;

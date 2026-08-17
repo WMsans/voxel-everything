@@ -45,7 +45,7 @@ void unpack_extent3(uint32_t v, int *nx, int *ny, int *nz) {
 	*nz = static_cast<int>((v >> 20) & 0x3FFu);
 }
 
-EditOp make_box_subtract(IVec3 lo_cell, IVec3 hi_cell) {
+EditOp make_box_subtract(IVec3 lo_cell, IVec3 hi_cell, float margin) {
 	// The cell range is inclusive; an inverted range used to collapse into a silent
 	// one-cell box via pack_extent3's clamp. Normalise instead so the op still names the
 	// same set of cells whichever order the caller passed them in.
@@ -59,6 +59,10 @@ EditOp make_box_subtract(IVec3 lo_cell, IVec3 hi_cell) {
 	op.pos[2] = static_cast<float>(lo_cell.z) * kOccupancyCellSize;
 	op.aux[0] = pack_extent3(hi_cell.x - lo_cell.x + 1, hi_cell.y - lo_cell.y + 1,
 			hi_cell.z - lo_cell.z + 1);
+	// The clearance margin rides in the otherwise-unused radius word and is applied only
+	// by the field evaluators (apply_op here, shaders/field.glslh's OP_BOX_SUBTRACT). It
+	// must stay out of op_world_aabb: see the header comment.
+	op.radius = margin > 0.0f ? margin : 0.0f;
 	return op;
 }
 
@@ -151,6 +155,15 @@ Sample apply_op(Sample s, const EditOp &op, float x, float y, float z,
 		case kOpBoxSubtract: {
 			float lo[3], hi[3];
 			op_world_aabb(op, lo, hi);
+			// The clearance margin expands the carved box inside the evaluator only: without
+			// it the cell-aligned faces of an island carve read as the exact SDF == 0, which
+			// cell-aligned samplers (mesh lattice, brick lattice, occupancy probe) turn into
+			// phantom walls inside the carved region. Mirrored in shaders/field.glslh.
+			const float m = op.radius > 0.0f ? op.radius : 0.0f;
+			for (int a = 0; a < 3; a++) {
+				lo[a] -= m;
+				hi[a] += m;
+			}
 			const float bd = box_sdf(lo, hi, x, y, z);
 			if (-bd > s.sdf) {
 				s.sdf = -bd;

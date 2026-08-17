@@ -67,6 +67,10 @@ public:
 	void note_discarded(IVec3 chunk); // result landed after eviction/displacement: clear in-flight only
 
 	int slot_of(IVec3 chunk) const;
+	// Diagnostic only: the chunk's residency State, or -1 when not resident, and whether an
+	// outstanding build exists for it. Used by tests diagnosing stale colliders.
+	int slot_state_of(IVec3 chunk) const;
+	bool build_in_flight(IVec3 chunk) const;
 	IVec3 chunk_of_slot(int slot) const;
 	bool slot_resident(int slot) const;
 	int resident_count() const { return static_cast<int>(by_chunk_.size()); }

@@ -273,6 +273,11 @@ public:
 	void debug_wake_island_body(int index);
 	// Test hook: offset and wake a live island body, for the stale-rest-pose regression.
 	void debug_offset_island_body(int index, Vector3 offset);
+	// Diagnostic: full physics-server state of a live island body plus a downward motion
+	// query, for diagnosing islands that do not fall.
+	Dictionary debug_island_body_info(int index);
+	// Diagnostic: residency/build state of a collision chunk, for diagnosing stale colliders.
+	Dictionary debug_chunk_collider_info(Vector3i chunk);
 
 	// Tool entry point (VoxelEditTool, Task 14). Main thread; takes edit_mutex_.
 	ve::EditLog::AppendResult append_edit(const ve::EditOp &op);

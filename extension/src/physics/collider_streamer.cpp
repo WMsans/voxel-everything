@@ -55,6 +55,8 @@ void ColliderStreamer::initialize(ve::ChunkResidency *chunks, ve::EditLog *edit_
 	bodies_.assign(static_cast<size_t>(std::max(0, max_slots)), RID());
 	shapes_.assign(static_cast<size_t>(std::max(0, max_slots)), RID());
 	in_space_.assign(static_cast<size_t>(std::max(0, max_slots)), 0);
+	build_counts_.assign(static_cast<size_t>(std::max(0, max_slots)), 0);
+	last_submit_ops_.assign(static_cast<size_t>(std::max(0, max_slots)), -1);
 }
 
 void ColliderStreamer::teardown() {
@@ -101,9 +103,34 @@ RID ColliderStreamer::body_of_slot(int slot) const {
 	return slot >= 0 && slot < static_cast<int>(bodies_.size()) ? bodies_[slot] : RID();
 }
 
+int ColliderStreamer::build_count_of_chunk(ve::IVec3 c) const {
+	if (!chunks_) return -1;
+	const int slot = chunks_->slot_of(c);
+	return slot >= 0 && slot < static_cast<int>(build_counts_.size()) ? build_counts_[slot] : -1;
+}
+
+int ColliderStreamer::chunk_state(ve::IVec3 c) const {
+	if (!chunks_) return -1;
+	return chunks_->slot_state_of(c);
+}
+
+bool ColliderStreamer::chunk_in_flight(ve::IVec3 c) const {
+	if (!chunks_) return false;
+	return chunks_->build_in_flight(c);
+}
+
+int ColliderStreamer::last_submit_op_count(ve::IVec3 c) const {
+	if (!chunks_) return -1;
+	const int slot = chunks_->slot_of(c);
+	return slot >= 0 && slot < static_cast<int>(last_submit_ops_.size())
+			? last_submit_ops_[static_cast<size_t>(slot)]
+			: -1;
+}
+
 ColliderStreamer::BuildOutcome ColliderStreamer::build_shape(int slot, const MeshResult &r) {
 	PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
 	if (!ps || slot < 0 || slot >= static_cast<int>(bodies_.size())) return kFailed;
+	build_counts_[static_cast<size_t>(slot)]++;
 	const Clock::time_point t_faces = Clock::now();
 	const int verts = static_cast<int>(r.positions.size() / 3);
 
@@ -336,8 +363,11 @@ int ColliderStreamer::run_frame(float cx, float cy, float cz, const float *extra
 		requests.reserve(plan.builds.size());
 		{
 			std::lock_guard<std::mutex> lock(*edit_mutex_);
-			for (const auto &e : plan.builds)
+			for (const auto &e : plan.builds) {
 				requests.push_back({e.chunk, edit_log_->ops(ve::region_of_chunk(e.chunk))});
+				last_submit_ops_[static_cast<size_t>(e.slot)] =
+						static_cast<int>(requests.back().ops.size());
+			}
 		}
 		const int n = static_cast<int>(requests.size());
 		if (mesh_->submit(std::move(requests))) {

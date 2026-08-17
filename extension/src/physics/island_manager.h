@@ -90,6 +90,9 @@ public:
 	// Test hook: wake an island body after a re-merge resample has been submitted, so the
 	// stale-rest-pose guard can be exercised deterministically.
 	void debug_wake_body(int index);
+	// Diagnostic: the body's full physics-server state plus a downward motion query, for
+	// diagnosing islands that do not fall.
+	Dictionary debug_body_info(int index);
 	// Test hook: offset a live island body and wake it, again for deterministic stale-pose
 	// tests. Moving is stronger than waking alone: Jolt may put a motionless body back to
 	// sleep before the next poll, but a changed transform always trips the stale guard.

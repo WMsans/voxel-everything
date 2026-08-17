@@ -104,6 +104,49 @@ TEST_CASE("a box subtract removes exactly the cells it names") {
 	CHECK(eval_field(gen, &op, 1, 8.4f, 15.6f, 8.4f).sdf < 0.0f);
 }
 
+TEST_CASE("a box subtract without a margin leaves SDF == 0 on its cell faces") {
+	// The failure mode this documents (and the margined carve below fixes): wherever the
+	// removed matter was solid, the CSG difference can only force the field UP TO 0 at a
+	// cell-aligned box face. Every cell-aligned sampler -- the 0.1 m chunk-mesh lattice, the
+	// 5 cm brick lattice, the 0.4 m occupancy probe -- contains those planes, reads the
+	// exact 0 as solid, and builds a razor wall standing inside the carved region: the
+	// "sliver" a freshly freed island then wedges against.
+	AnalyticGenerator gen;
+	// Deep underground, so the base field is solid everywhere in the test region.
+	const EditOp op = make_box_subtract({10, 20, 10}, {11, 20, 10});
+	CHECK(eval_field(gen, nullptr, 0, 8.0f, 16.4f, 8.4f).sdf < 0.0f);
+	// On the box's own face planes: exactly zero, not air.
+	CHECK(eval_field(gen, &op, 1, 8.0f, 16.4f, 8.4f).sdf == doctest::Approx(0.0f));
+	CHECK(eval_field(gen, &op, 1, 9.6f, 16.4f, 8.4f).sdf == doctest::Approx(0.0f));
+	CHECK(eval_field(gen, &op, 1, 8.4f, 16.0f, 8.4f).sdf == doctest::Approx(0.0f));
+	// The matter on the anchored side starts AT the plane: no clearance at all.
+	CHECK(eval_field(gen, &op, 1, 7.99f, 16.4f, 8.4f).sdf < 0.0f);
+}
+
+TEST_CASE("a margined box subtract leaves air, not a zero plane, at its cell faces") {
+	AnalyticGenerator gen;
+	const EditOp op = make_box_subtract({10, 20, 10}, {11, 20, 10}, 0.02f);
+	// The op's bookkeeping AABB must NOT grow with the margin: connectivity's cell-exact
+	// semantics (freshness overlap tests, region ranges) are unchanged.
+	float lo[3], hi[3];
+	op_world_aabb(op, lo, hi);
+	CHECK(lo[0] == doctest::Approx(8.0f));
+	CHECK(hi[0] == doctest::Approx(9.6f));
+	CHECK(lo[1] == doctest::Approx(16.0f));
+	// Exactly on the original face planes the field now reads AIR, so no cell-aligned
+	// sampler can alias a phantom wall into the mesh.
+	CHECK(eval_field(gen, &op, 1, 8.0f, 16.4f, 8.4f).sdf > 0.0f);
+	CHECK(eval_field(gen, &op, 1, 9.6f, 16.4f, 8.4f).sdf > 0.0f);
+	CHECK(eval_field(gen, &op, 1, 8.4f, 16.0f, 8.4f).sdf > 0.0f);
+	// The clearance reaches exactly the margin and no further: the shell is air, the
+	// anchored matter beyond it is untouched.
+	CHECK(eval_field(gen, &op, 1, 7.99f, 16.4f, 8.4f).sdf > 0.0f);  // inside the shell
+	CHECK(eval_field(gen, &op, 1, 7.97f, 16.4f, 8.4f).sdf < 0.0f);  // beyond it: intact
+	// The interior is still fully carved, and still carries no material.
+	CHECK(eval_field(gen, &op, 1, 8.4f, 16.4f, 8.4f).sdf > 0.0f);
+	CHECK(eval_field(gen, &op, 1, 8.4f, 16.4f, 8.4f).material == 0);
+}
+
 TEST_CASE("a box subtract's re-mark ranges cover every cell it can flip") {
 	const EditOp op = make_box_subtract({10, 20, 10}, {11, 20, 10});
 	IVec3 lo{}, hi{};

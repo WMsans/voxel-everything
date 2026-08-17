@@ -112,7 +112,9 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_set_empty_next_extraction", "v"), &VoxelWorld::debug_set_empty_next_extraction);
 	ClassDB::bind_method(D_METHOD("debug_wake_island_body", "index"), &VoxelWorld::debug_wake_island_body);
 	ClassDB::bind_method(D_METHOD("debug_offset_island_body", "index", "offset"), &VoxelWorld::debug_offset_island_body);
+	ClassDB::bind_method(D_METHOD("debug_island_body_info", "index"), &VoxelWorld::debug_island_body_info);
 	ClassDB::bind_method(D_METHOD("debug_body_of_chunk", "chunk"), &VoxelWorld::debug_body_of_chunk);
+	ClassDB::bind_method(D_METHOD("debug_chunk_collider_info", "chunk"), &VoxelWorld::debug_chunk_collider_info);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_pixel", "origin", "dir"), &VoxelWorld::debug_raymarch_pixel);
@@ -778,9 +780,31 @@ void VoxelWorld::debug_offset_island_body(int index, Vector3 offset) {
 	if (island_manager_) island_manager_->debug_offset_body(index, offset);
 }
 
+Dictionary VoxelWorld::debug_island_body_info(int index) {
+	ensure_physics_initialized();
+#ifdef DEBUG_ENABLED
+	if (island_manager_) return island_manager_->debug_body_info(index);
+#else
+	(void)index;
+#endif
+	return Dictionary();
+}
+
 RID VoxelWorld::debug_body_of_chunk(Vector3i chunk) {
 	if (!chunks_ || !colliders_) return RID();
 	return colliders_->body_of_slot(chunks_->slot_of({chunk.x, chunk.y, chunk.z}));
+}
+
+Dictionary VoxelWorld::debug_chunk_collider_info(Vector3i chunk) {
+	Dictionary d;
+	if (!chunks_ || !colliders_) return d;
+	const ve::IVec3 c{chunk.x, chunk.y, chunk.z};
+	d["slot"] = chunks_->slot_of(c);
+	d["state"] = colliders_->chunk_state(c);
+	d["in_flight"] = colliders_->chunk_in_flight(c);
+	d["build_count"] = colliders_->build_count_of_chunk(c);
+	d["last_ops"] = colliders_->last_submit_op_count(c);
+	return d;
 }
 
 bool VoxelWorld::debug_init_physics() {

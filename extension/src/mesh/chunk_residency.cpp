@@ -20,6 +20,15 @@ int ChunkResidency::slot_of(IVec3 c) const {
 	return it == by_chunk_.end() ? -1 : it->second;
 }
 
+int ChunkResidency::slot_state_of(IVec3 chunk) const {
+	const int slot = slot_of(chunk);
+	return slot >= 0 ? static_cast<int>(slot_state_[static_cast<size_t>(slot)]) : -1;
+}
+
+bool ChunkResidency::build_in_flight(IVec3 chunk) const {
+	return in_flight_.find(key(chunk)) != in_flight_.end();
+}
+
 IVec3 ChunkResidency::chunk_of_slot(int slot) const {
 	return slot >= 0 && slot < cfg_.max_chunks ? slot_chunk_[slot] : IVec3{};
 }

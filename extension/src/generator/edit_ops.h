@@ -24,8 +24,12 @@ enum EditOpType : uint32_t {
 //
 // Field meanings are per type. `aux` is the two words that used to be padding:
 //   sphere*:       pos = centre, radius = radius, material = material, aux unused
-//   kOpBoxSubtract: pos = the box's minimum corner (always cell-aligned), radius unused,
-//                   aux[0] = pack_extent3(cells on x, y, z), aux[1] unused
+//   kOpBoxSubtract: pos = the box's minimum corner (always cell-aligned), aux[0] =
+//                   pack_extent3(cells on x, y, z), aux[1] unused; radius carries an
+//                   optional CLEARANCE MARGIN (0 for a plain op): the field evaluator
+//                   expands the carved box by it, so the cell-aligned faces of an island
+//                   carve read as air instead of the exact SDF == 0 a cell-boundary CSG
+//                   difference otherwise leaves behind. See make_box_subtract.
 //   kOpVolumeAdd:  pos = the lattice's world origin, radius = the voxel pitch,
 //                  aux[0] = volume slot, aux[1] = lattice dimension, material unused
 struct EditOp {
@@ -68,7 +72,16 @@ Sample apply_ops(Sample s, const EditOp *ops, int count, float x, float y, float
 uint32_t pack_extent3(int nx, int ny, int nz);
 void unpack_extent3(uint32_t v, int *nx, int *ny, int *nz);
 
-EditOp make_box_subtract(IVec3 lo_cell, IVec3 hi_cell); // inclusive 0.8 m cells
+// Inclusive 0.8 m cells. `margin` (metres) expands the carved box ONLY inside the field
+// evaluator: a cell-aligned CSG difference can force the field no further than SDF == 0
+// at its faces, and every cell-aligned sampler (the 0.1 m chunk-mesh lattice, the 5 cm
+// brick lattice, the 0.4 m occupancy probe) contains those planes and reads the exact 0
+// as solid -- a razor-thin phantom wall standing inside the carved region, which a freshly
+// freed island then wedges against. A small positive margin turns those faces into air.
+// The op's world AABB deliberately does NOT see the margin: connectivity's cell-exact
+// bookkeeping (component freshness, region ranges, re-mark coverage) is unchanged, and the
+// existing pads (kActivationPad + kVoxelSize, or 2 mesh cells) already cover it.
+EditOp make_box_subtract(IVec3 lo_cell, IVec3 hi_cell, float margin = 0.0f);
 EditOp make_volume_add(int slot, const float origin[3], float voxel, int dim);
 
 // The op's own world AABB, before any padding. For a sphere this is centre +/- radius; for

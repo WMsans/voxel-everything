@@ -124,6 +124,82 @@ func test_the_island_body_falls_and_the_bodies_are_capped(timeout := 120000) -> 
 	assert_int(st["live_bodies"]).is_less_equal(64)
 	assert_int(st["live_islands"]).is_less_equal(32)
 
+func test_the_carve_leaves_no_zero_planes_in_the_static_field(timeout := 180000) -> void:
+	# Regression for the reported "pillar top sticks on slivers" bug. A cell-aligned box
+	# carve used to leave SDF == 0 exactly on its cell faces wherever the removed matter was
+	# solid: a CSG difference can only force the field UP TO 0 there. Every cell-aligned
+	# sampler -- the 0.1 m chunk-mesh lattice, the 5 cm brick lattice, the 0.4 m occupancy
+	# probe -- contains those planes, reads the exact 0 as solid, and builds a razor wall
+	# standing inside the carved region. The walls are the "slivers": they poke into the
+	# island's box compound and the island vice-clamps on them instead of falling. The carve
+	# must therefore eat a small clearance past its cells: the field AT a carve face, and a
+	# centimetre beyond it, has to be air.
+	var w := make_world()
+	w.debug_set_merge_sleep_seconds(999.0)
+	var t := tool_of(w)
+	build_pillar(w, t)
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	step(w, 240)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["islands_spawned"]).override_failure_message("no island: %s" % st).is_greater(0)
+	var carved: PackedInt32Array = st["carved_boxes"]
+	assert_int(carved.size() / 6).is_greater(0)
+	# For every carve box, sample the OUTER skin of the box union: 1 cm beyond each face
+	# plane (outside the named cells) and 1 cm inside it. Both must be air; the inside one
+	# always was, the outside one is where the phantom wall used to start.
+	var bad := 0
+	var checked := 0
+	for i in range(0, carved.size(), 6):
+		var lo := Vector3(carved[i], carved[i + 1], carved[i + 2]) * 0.8
+		var hi := Vector3(carved[i + 3] + 1, carved[i + 4] + 1, carved[i + 5] + 1) * 0.8
+		for d in range(6):
+			var n := Vector3((-1.0 if d == 0 else (1.0 if d == 1 else 0.0)),
+				(-1.0 if d == 2 else (1.0 if d == 3 else 0.0)),
+				(-1.0 if d == 4 else (1.0 if d == 5 else 0.0)))
+			for su in range(4):
+				for sv in range(4):
+					var fu := (su + 0.5) / 4.0
+					var fv := (sv + 0.5) / 4.0
+					var p := Vector3.ZERO
+					if d <= 1:
+						p = Vector3(lo.x if d == 0 else hi.x, lerpf(lo.y, hi.y, fu), lerpf(lo.z, hi.z, fv))
+					elif d <= 3:
+						p = Vector3(lerpf(lo.x, hi.x, fu), lo.y if d == 2 else hi.y, lerpf(lo.z, hi.z, fv))
+					else:
+						p = Vector3(lerpf(lo.x, hi.x, fu), lerpf(lo.y, hi.y, fv), lo.z if d == 4 else hi.z)
+					checked += 1
+					if w.debug_field_sdf(p + n * 0.01) < 0.0:
+						bad += 1
+					if w.debug_field_sdf(p - n * 0.01) < 0.0:
+						bad += 1
+	prints("carve-face clearance probe: %d/%d samples solid" % [bad, checked * 2])
+	assert_int(bad).override_failure_message(
+		"solid matter starts at the carve faces: the zero-plane slivers are still there").is_equal(0)
+
+func test_a_dense_sphere_cut_pillar_top_falls_clear_of_the_cut(timeout := 180000) -> void:
+	# The reported case, end to end: a dense stack cut by a big sphere frees the top, and the
+	# top must fall clear of the cut instead of clamping onto the carve-boundary slivers a
+	# few centimetres below its birth pose.
+	var w := make_world()
+	w.debug_set_merge_sleep_seconds(999.0)
+	var t := tool_of(w)
+	for i in range(8):
+		t.apply_sphere_add(Vector3(PILLAR_X, PILLAR_BASE + 1.4 * i, PILLAR_Z), 2.1, 4)
+	step(w, 120)
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 4.9, PILLAR_Z), 3.0)
+	step(w, 120)
+	var st: Dictionary = w.debug_island_stats()
+	assert_int(st["live_islands"]).override_failure_message(
+		"the severed dense pillar top never became a body: %s" % st).is_equal(1)
+	var y0: float = st["lowest_body_y"]
+	for i in range(240):
+		await get_tree().physics_frame
+		w.debug_stream_frame(CENTER)
+		w.debug_physics_frame(CENTER)
+		w.debug_island_frame(1.0 / 60.0, CENTER)
+	assert_float(w.debug_island_stats()["lowest_body_y"]).override_failure_message(
+		"the severed pillar top is stuck on the carve-boundary slivers").is_less(y0 - 1.0)
+
 func test_a_rested_island_merges_back_into_the_terrain(timeout := 180000) -> void:
 	var w := make_world()
 	# Hold the body out of start_merges() until we have observed it sleeping for several

@@ -3,6 +3,8 @@
 #include "mesh/box_merge.h"
 #include "render/mesh_service.h"
 #include <godot_cpp/classes/world3d.hpp>
+#include <godot_cpp/classes/physics_test_motion_parameters3d.hpp>
+#include <godot_cpp/classes/physics_test_motion_result3d.hpp>
 #include <godot_cpp/core/error_macros.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
@@ -45,10 +47,21 @@ constexpr int kMergeRetryCooldownFrames = 30;
 constexpr int kExtractsPerFrame = 2;
 // Spec §5: "components <~0.2 m^3 become plain mesh debris (not raymarch targets)".
 constexpr float kDebrisVolumeM3 = 0.2f;
+// Every island carve (and crumble) expands its boxes by this much inside the field
+// evaluator. A cell-aligned CSG difference leaves SDF == 0 exactly on its faces, and
+// every cell-aligned sampler -- the 0.1 m chunk-mesh lattice, the 5 cm brick lattice, the
+// 0.4 m occupancy probe -- reads that exact 0 as solid: a razor-thin phantom wall standing
+// inside the carved region. Those walls are the "slivers" a freed island wedged against
+// (it spawned flush against them and slept mid-air for ever), and they are also what kept
+// carved cells reading solid to the next connectivity pass. Two centimetres is far below
+// the 5 cm render lattice, so the planes read as air everywhere while the island's own
+// collision boxes and the connectivity bookkeeping stay cell-exact.
+constexpr float kCarveClearanceM = 0.02f;
 // A sleeping body is only re-merged once it is actually resting on the terrain, not while
-// it is still airborne. The body origin sits roughly half a body-height above the contact
-// surface, so a few metres of clearance covers the largest component without letting a
-// floating sleeper paste rubble into the sky (which would immediately be re-extracted).
+// it is still airborne. The gate compares the compound's lowest box corner with the
+// highest terrain hit under its XZ footprint (start_merges), so a few metres of clearance
+// covers uneven ground without letting a floating sleeper paste rubble into the sky
+// (which would immediately be re-extracted).
 constexpr float kMergeGroundClearanceM = 2.0f;
 // Tolerance for treating a sleeping body's current transform as the same rest pose it was
 // resampled from. A sleeping body may still jitter by fractions of a millimetre; anything at
@@ -513,7 +526,7 @@ bool IslandManager::crumble_component(const InFlight &f) {
 	std::vector<int> ops_here;
 	for (const ve::CellBox &box : f.boxes) {
 		ve::IVec3 rlo, rhi;
-		ve::op_region_range(ve::make_box_subtract(box.lo, box.hi), &rlo, &rhi);
+		ve::op_region_range(ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM), &rlo, &rhi);
 		for (int z = rlo.z; z <= rhi.z; z++)
 			for (int y = rlo.y; y <= rhi.y; y++)
 				for (int x = rlo.x; x <= rhi.x; x++) {
@@ -536,7 +549,8 @@ bool IslandManager::crumble_component(const InFlight &f) {
 	// cannot loosen anything that was not loose already, and a window per crumble would put
 	// the connectivity pass back into the loop this function exists to break.
 	for (const ve::CellBox &box : f.boxes)
-		world_->append_edit_locked(ve::make_box_subtract(box.lo, box.hi), false);
+		world_->append_edit_locked(
+				ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM), false);
 	// Tell the occupancy grid straight away, exactly as the spawning carve does: the GPU
 	// readback that would say the same thing is several frames out, and until it lands the
 	// next connectivity run would label this component all over again.
@@ -643,7 +657,8 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		};
 		for (const ve::CellBox &box : f.boxes) {
 			ve::IVec3 rlo, rhi;
-			ve::op_region_range(ve::make_box_subtract(box.lo, box.hi), &rlo, &rhi);
+			ve::op_region_range(ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM),
+					&rlo, &rhi);
 			for (int z = rlo.z; z <= rhi.z; z++)
 				for (int y = rlo.y; y <= rhi.y; y++)
 					for (int x = rlo.x; x <= rhi.x; x++)
@@ -664,7 +679,8 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 			int carve_ops_here = 0;
 			for (const ve::CellBox &box : f.boxes) {
 				ve::IVec3 brlo, brhi;
-				ve::op_region_range(ve::make_box_subtract(box.lo, box.hi), &brlo, &brhi);
+				ve::op_region_range(ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM),
+						&brlo, &brhi);
 				if (region.x >= brlo.x && region.x <= brhi.x &&
 						region.y >= brlo.y && region.y <= brhi.y &&
 						region.z >= brlo.z && region.z <= brhi.z)
@@ -805,8 +821,8 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		bool carve_rejected = false;
 		std::vector<ve::IVec3> carved_regions;
 		for (const ve::CellBox &box : f.boxes) {
-			const ve::EditLog::AppendResult carve =
-					world_->append_edit_locked(ve::make_box_subtract(box.lo, box.hi));
+			const ve::EditLog::AppendResult carve = world_->append_edit_locked(
+					ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM));
 			for (const ve::IVec3 &region : carve.touched) carved_regions.push_back(region);
 			if (debug_fail_next_carve_) {
 				debug_fail_next_carve_ = false;
@@ -941,9 +957,44 @@ void IslandManager::start_merges() {
 		if (merge_retry_blocked(static_cast<int>(i)))
 			continue; // a rejected paste is still blocking this body
 		const Transform3D xf = b->transform();
-		const float xz[2] = {xf.origin.x, xf.origin.z};
-		const ve::RayHit ground = world_->analytic_raycast_down(xz);
-		if (!ground.hit || xf.origin.y > ground.pos[1] + kMergeGroundClearanceM)
+		// Ground contact is measured under the compound, not at the body origin. A wide body
+		// resting on a crater rim reads as airborne when only the origin's xz is probed: the
+		// centre probe lands in the dish BELOW the rim its boxes actually rest on (the island
+		// sleeps at COM ~2.3 m over the centre probe and the merge never starts). Take the
+		// compound's lowest box corner against the HIGHEST terrain hit under its XZ footprint.
+		float com[3] = {0, 0, 0};
+		float box_volume = 0.0f;
+		ve::box_compound_mass(b->info().boxes.data(),
+				static_cast<int>(b->info().boxes.size()), com, &box_volume);
+		float bottom = 1e30f;
+		float fp_lo_x = 1e30f, fp_lo_z = 1e30f, fp_hi_x = -1e30f, fp_hi_z = -1e30f;
+		for (const ve::CellBox &box : b->info().boxes) {
+			float lo[3], hi[3];
+			box.world_aabb(lo, hi);
+			for (int c8 = 0; c8 < 8; c8++) {
+				const Vector3 local((c8 & 1) ? hi[0] - com[0] : lo[0] - com[0],
+						(c8 & 2) ? hi[1] - com[1] : lo[1] - com[1],
+						(c8 & 4) ? hi[2] - com[2] : lo[2] - com[2]);
+				const Vector3 w = xf.xform(local);
+				bottom = std::min(bottom, static_cast<float>(w.y));
+				fp_lo_x = std::min(fp_lo_x, static_cast<float>(w.x));
+				fp_hi_x = std::max(fp_hi_x, static_cast<float>(w.x));
+				fp_lo_z = std::min(fp_lo_z, static_cast<float>(w.z));
+				fp_hi_z = std::max(fp_hi_z, static_cast<float>(w.z));
+			}
+		}
+		const float probes[5][2] = {{xf.origin.x, xf.origin.z},
+				{fp_lo_x, fp_lo_z}, {fp_lo_x, fp_hi_z}, {fp_hi_x, fp_lo_z}, {fp_hi_x, fp_hi_z}};
+		float best_ground = -1e30f;
+		bool any_ground = false;
+		for (const float(&p)[2] : probes) {
+			const ve::RayHit g = world_->analytic_raycast_down(p);
+			if (g.hit) {
+				any_ground = true;
+				best_ground = std::max(best_ground, g.pos[1]);
+			}
+		}
+		if (!any_ground || bottom > best_ground + kMergeGroundClearanceM)
 			continue; // still in the air: do not paste floating terrain
 		const ve::VolumeData *src = world_->volumes().get(b->info().volume_slot);
 		if (!src) continue;
@@ -1285,6 +1336,56 @@ void IslandManager::debug_wake_body(int index) {
 	PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
 	if (!ps) return;
 	ps->body_set_state(bodies_[index]->body(), PhysicsServer3D::BODY_STATE_SLEEPING, false);
+}
+
+Dictionary IslandManager::debug_body_info(int index) {
+	Dictionary d;
+	if (index < 0 || index >= static_cast<int>(bodies_.size()) || !bodies_[index] ||
+			!bodies_[index]->live())
+		return d;
+	PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
+	if (!ps) return d;
+	RID b = bodies_[index]->body();
+	d["sleeping"] = static_cast<bool>(
+			ps->body_get_state(b, PhysicsServer3D::BODY_STATE_SLEEPING));
+	d["velocity"] = ps->body_get_state(b, PhysicsServer3D::BODY_STATE_LINEAR_VELOCITY);
+	d["mass"] = static_cast<float>(ps->body_get_param(b, PhysicsServer3D::BODY_PARAM_MASS));
+	d["gravity_scale"] = static_cast<float>(
+			ps->body_get_param(b, PhysicsServer3D::BODY_PARAM_GRAVITY_SCALE));
+	d["mode"] = static_cast<int>(ps->body_get_mode(b));
+	d["layer"] = static_cast<int>(ps->body_get_collision_layer(b));
+	d["shapes"] = bodies_[index]->shape_count();
+	// A 0.5 m downward motion query against the body's own space: the direct answer to
+	// "is there anything under it at all?"
+	Ref<PhysicsTestMotionParameters3D> p;
+	p.instantiate();
+	p->set_from(bodies_[index]->transform());
+	p->set_motion(Vector3(0, -0.5, 0));
+	Ref<PhysicsTestMotionResult3D> r;
+	r.instantiate();
+	const bool hit = ps->body_test_motion(b, p, r);
+	d["down_hit"] = hit;
+	if (hit) {
+		d["down_hit_point"] = r->get_collision_point();
+		d["down_hit_normal"] = r->get_collision_normal();
+		d["down_travel"] = r->get_travel();
+		d["down_hit_rid"] = r->get_collider_rid();
+	}
+	// Also probe +x: the down query's hit point suggested a wall on the body's left.
+	Ref<PhysicsTestMotionParameters3D> p2;
+	p2.instantiate();
+	p2->set_from(bodies_[index]->transform());
+	p2->set_motion(Vector3(-0.5, 0, 0));
+	Ref<PhysicsTestMotionResult3D> r2;
+	r2.instantiate();
+	const bool hit2 = ps->body_test_motion(b, p2, r2);
+	d["left_hit"] = hit2;
+	if (hit2) {
+		d["left_hit_point"] = r2->get_collision_point();
+		d["left_hit_normal"] = r2->get_collision_normal();
+		d["left_hit_rid"] = r2->get_collider_rid();
+	}
+	return d;
 }
 
 void IslandManager::debug_offset_body(int index, const Vector3 &offset) {

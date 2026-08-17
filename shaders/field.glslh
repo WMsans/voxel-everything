@@ -126,10 +126,16 @@ void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat) {
 	float radius = uintBitsToFloat(b.y);
 
 	if (type == OP_BOX_SUBTRACT) {
-		// aux[0] packs the cell extent as 3 x 10 bits (ve::pack_extent3).
+		// aux[0] packs the cell extent as 3 x 10 bits (ve::pack_extent3). `radius` carries
+		// ve's clearance margin (0 for a plain op): it expands the carved box inside the
+		// evaluator only, so the cell-aligned faces of an island carve read as air instead
+		// of the exact SDF == 0 a cell-boundary CSG difference leaves behind -- which the
+		// cell-aligned lattices (brick, mesh, occupancy) would otherwise mesh as phantom
+		// walls inside the carved region. Mirror of ve::apply_op's kOpBoxSubtract.
 		vec3 n = vec3(float(b.z & 0x3FFu), float((b.z >> 10) & 0x3FFu),
 		              float((b.z >> 20) & 0x3FFu));
-		float bd = op_box_sdf(c, c + n * OCCUPANCY_CELL_SIZE, p);
+		float m = max(radius, 0.0);
+		float bd = op_box_sdf(c - vec3(m), c + n * OCCUPANCY_CELL_SIZE + vec3(m), p);
 		if (-bd > sdf) { sdf = -bd; if (sdf > 0.0) mat = 0u; }
 		return;
 	}
