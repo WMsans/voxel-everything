@@ -211,10 +211,11 @@ TEST_CASE("an edit re-requests a chunk without un-drawing it") {
 	CHECK(re_requested);
 }
 
-// The VoxelWorld upload-refusal path must re-affirm a resident node as Ready with its old
-// page list instead of marking it failed; otherwise the old pages are hidden even though
-// they are still valid GPU data. This simulates that branch at the tree level.
-TEST_CASE("a refused rebuild with resident pages keeps the old pages drawable") {
+// The VoxelWorld upload-refusal path must re-affirm a resident node as Ready-with-dirty
+// with its old page list instead of marking it failed or clearing dirty: the old pages stay
+// drawable AND the node is re-requested next frame so the refused rebuild is retried. This
+// simulates that branch at the tree level.
+TEST_CASE("a refused rebuild with resident pages stays drawable and is retried") {
 	ve::LodTreeConfig cfg;
 	cfg.bounds = demo_bounds();
 	ve::LodTree t(cfg);
@@ -237,18 +238,57 @@ TEST_CASE("a refused rebuild with resident pages keeps the old pages drawable") 
 		if (q.level == d.level && q.coord == d.coord) re_requested = true;
 	REQUIRE(re_requested);
 
-	// VoxelWorld keeps the old resident pages and re-affirms Ready with them.
-	t.note_ready(d.level, d.coord, d.page_first, d.page_count);
+	// VoxelWorld keeps the old resident pages and re-affirms Ready while leaving dirty set.
+	t.note_ready_dirty(d.level, d.coord);
+	CHECK(t.state_of(d.level, d.coord) == ve::kLodReady);
 
 	ve::LodWalkResult after;
 	t.walk(c, &occ, 33u, &after);
+	// Still drawable with the old page range...
 	bool still_drawn = false;
 	for (const ve::LodDrawItem &draw : after.draws)
 		if (draw.level == d.level && draw.coord == d.coord &&
 				draw.page_first == d.page_first && draw.page_count == d.page_count)
 			still_drawn = true;
 	CHECK(still_drawn);
+	// ...and still dirty, so the walk asks for the rebuild again.
+	bool retried = false;
+	for (const ve::LodBuildRequest &q : after.requests)
+		if (q.level == d.level && q.coord == d.coord) retried = true;
+	CHECK(retried);
 }
+
+// Direct unit test for the ready-with-dirty transition used by a refused rebuild.
+TEST_CASE("note_ready_dirty keeps old pages drawable and dirty for retry") {
+	ve::LodTreeConfig cfg;
+	cfg.bounds = demo_bounds();
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	settle(&t, c, &occ, 30);
+	ve::LodWalkResult before;
+	t.walk(c, &occ, 31u, &before);
+	REQUIRE(!before.draws.empty());
+	const ve::LodDrawItem d = before.draws[0];
+
+	// A non-dirty ready node becomes ready-with-dirty and keeps its existing page range.
+	t.note_ready_dirty(d.level, d.coord);
+	CHECK(t.state_of(d.level, d.coord) == ve::kLodReady);
+
+	ve::LodWalkResult after;
+	t.walk(c, &occ, 32u, &after);
+	bool still_drawn = false;
+	for (const ve::LodDrawItem &draw : after.draws)
+		if (draw.level == d.level && draw.coord == d.coord &&
+				draw.page_first == d.page_first && draw.page_count == d.page_count)
+			still_drawn = true;
+	CHECK(still_drawn);
+	bool re_requested = false;
+	for (const ve::LodBuildRequest &q : after.requests)
+		if (q.level == d.level && q.coord == d.coord) re_requested = true;
+	CHECK(re_requested);
+}
+
 
 TEST_CASE("requests are capped and ordered largest first") {
 	ve::LodTreeConfig cfg;

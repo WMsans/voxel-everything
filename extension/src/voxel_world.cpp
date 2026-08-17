@@ -904,14 +904,15 @@ void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ)
 			std::vector<int> pages;
 			if (!lod_pool_->upload(r.level, r.coord, r.quads, &pages)) {
 				// Refused, not half-funded. If the chunk already has resident pages, keep
-				// drawing them: stale beats missing. Re-affirm Ready with the old page list
-				// so the node stays drawable; a node with no old pages still fails and is
-				// re-requested next frame.
+				// drawing them: stale beats missing. Re-affirm Ready-with-dirty using the old
+				// page list so the node stays drawable AND is re-requested next frame; a node
+				// with no old pages still fails and is re-requested next frame.
 				const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
 				const auto old_it = lod_pages_of_.find(key);
 				if (old_it != lod_pages_of_.end()) {
-					lod_tree_->note_ready(r.level, r.coord, old_it->second.front(),
-							int(old_it->second.size()));
+					lod_tree_->note_ready_dirty(r.level, r.coord);
+					// Keep the old page list in lod_pages_of_: it remains the node's drawable
+					// pages until a later upload succeeds and replaces them.
 				} else {
 					lod_tree_->note_failed(r.level, r.coord);
 				}

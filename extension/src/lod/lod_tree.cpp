@@ -171,6 +171,18 @@ void LodTree::note_ready(int level, IVec3 c, int page_first, int page_count) {
 	n.last_marked = last_walk_frame_;
 }
 
+void LodTree::note_ready_dirty(int level, IVec3 c) {
+	// Stale pages stay drawable while a rebuild is refused and must be retried. Unlike
+	// note_ready, this transition keeps dirty=true (so the next walk re-requests the node)
+	// and leaves the existing page_first/page_count untouched (so the old pages keep
+	// drawing until the retry succeeds). Mark it as resident so eviction does not reclaim
+	// the old pages while the retry is pending.
+	Node &n = nodes_[key(level, c)];
+	n.state = kLodReady;
+	n.dirty = true;
+	n.last_marked = last_walk_frame_;
+}
+
 void LodTree::note_empty(int level, IVec3 c) {
 	Node &n = nodes_[key(level, c)];
 	n.state = kLodEmpty;

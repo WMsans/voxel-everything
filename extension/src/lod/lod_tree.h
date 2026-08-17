@@ -83,6 +83,10 @@ public:
 
 	void note_building(int level, IVec3 c);
 	void note_ready(int level, IVec3 c, int page_first, int page_count);
+	// Stale pages stay drawable while a rebuild is refused and must be retried:
+	// this is like note_ready but keeps the node's existing page range AND leaves
+	// dirty=true, so the next walk still re-requests it.
+	void note_ready_dirty(int level, IVec3 c);
 	void note_empty(int level, IVec3 c);
 	void note_failed(int level, IVec3 c);
 
