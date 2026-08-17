@@ -1,7 +1,6 @@
 #include "lod/lod_skirt.h"
 #include "lod/lod_contour.h"
 #include "lod/lod_grid.h"
-#include <algorithm>
 
 namespace ve {
 
@@ -29,11 +28,19 @@ int lod_append_skirts(std::vector<LodQuad> *quads) {
 		// The curtain shares the parent's four cells and its material; it is displaced along
 		// -normal by shifting the owned edge coordinate by kLodSkirtCells. Perpendicular
 		// offsets are unchanged, so the curtain is exactly kLodSkirtCells deep.
+		//
+		// The edge coordinate is packed in 5 bits ([0, 31]). At the two extreme chunk
+		// boundaries the two-cell shift would leave that range (e.g. sign==1 at u==0 or
+		// sign==0 at u==31). Clamp there instead of wrapping around, accepting a partial-depth
+		// curtain on those outermost quads.
 		LodQuadFields s = f;
 		s.double_sided = 1;
 		const int axis = f.axis % 3;
 		const int delta = f.sign ? -kLodSkirtCells : kLodSkirtCells;
-		s.u[axis] = static_cast<uint8_t>(static_cast<int>(f.u[axis]) + delta);
+		int shifted = static_cast<int>(f.u[axis]) + delta;
+		if (shifted < 0) shifted = 0;
+		if (shifted > kLodChunkCells - 1) shifted = kLodChunkCells - 1;
+		s.u[axis] = static_cast<uint8_t>(shifted);
 
 		LodQuad a{};
 		lod_quad_pack(s, &a);
