@@ -827,6 +827,9 @@ Dictionary VoxelWorld::debug_mesh_lattice_diff(Vector3i chunk) {
 		ops = edit_log_->ops(ve::region_of_chunk(c));
 	}
 	MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
+	ve::chunk_world_origin(c, job.origin);
+	job.cell_size = ve::kChunkCellSize;
+	job.lattice = ve::kChunkLattice;
 	std::vector<uint8_t> gpu;
 	bool ok = false;
 	mesh_->run_sync([&](MeshPass &pass) { ok = pass.run_field_sync(job, &gpu); });
@@ -869,7 +872,10 @@ Dictionary VoxelWorld::debug_mesh_diff(Vector3i chunk) {
 		std::lock_guard<std::mutex> lock(edit_mutex_);
 		ops = edit_log_->ops(ve::region_of_chunk(c));
 	}
-	const MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
+	MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
+	ve::chunk_world_origin(c, job.origin);
+	job.cell_size = ve::kChunkCellSize;
+	job.lattice = ve::kChunkLattice;
 	MeshResult gpu;
 	std::vector<uint8_t> lattice;
 	std::vector<int32_t> gpu_cells;
