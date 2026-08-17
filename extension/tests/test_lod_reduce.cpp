@@ -92,7 +92,10 @@ TEST_CASE("a dent and a bump of equal size survive equally") {
 
 	// Sample the reduced field where the bump and the dent landed, against the undisturbed
 	// column between them. The two deviations must have equal magnitude and opposite sign.
-	const int by = 10;
+	// Row 1 keeps every fine y tap used by these output columns inside +/-kSdfRange; sampling
+	// a higher row (e.g. 10) would clamp the SDF to the +0.64 m extreme and hide a min/max
+	// reduction behind identical encoded values.
+	const int by = 1;
 	const float base = ve::decode_sdf(os[ve::lod_lattice_index(15, by, 15)]);
 	const float bump = ve::decode_sdf(os[ve::lod_lattice_index(10, by, 10)]);
 	const float dent = ve::decode_sdf(os[ve::lod_lattice_index(20, by, 20)]);

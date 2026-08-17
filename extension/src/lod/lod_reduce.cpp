@@ -1,8 +1,6 @@
 #include "lod/lod_reduce.h"
 #include "lod/lod_grid.h"
 #include "world/brick.h"
-#include <algorithm>
-#include <vector>
 
 namespace ve {
 
