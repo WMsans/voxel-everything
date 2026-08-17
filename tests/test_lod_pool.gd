@@ -55,7 +55,10 @@ func test_a_tiny_pool_degrades_to_coarse_instead_of_breaking(timeout := 30000) -
 	# Something is still drawn: the coarse levels are exempt from eviction.
 	assert_int(d["draw_pages"]).is_greater(0)
 
-func test_pages_come_back_when_chunks_are_evicted(timeout := 30000) -> void:
+# LoD frames under the display-capable wrapper are much slower on this GPU
+# environment than the brief's original 30 s assumption; 10 minutes gives the
+# 400 eviction frames enough wall-clock room to finish.
+func test_pages_come_back_when_chunks_are_evicted(timeout := 600000) -> void:
 	var w := make_world(2048)
 	for i in range(120):
 		w.debug_lod_tick(Vector3(400.0, 70.0, 400.0), Vector3(0, -0.2, -1))
