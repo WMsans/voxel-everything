@@ -73,17 +73,30 @@ func test_sphere_add_places_material_4_in_open_sky() -> void:
 	# above the blob: its top is sunlit (a ray from below would see the ambient-lit
 	# underside at 0.25x albedo — too dim for a useful colour assertion).
 	var eye := Vector3(40, 75.0, 40)
-	var before: Color = w.debug_raymarch_pixel(eye, Vector3(0, -1, 0))
-	assert_bool(before.r < 0.52 and before.g > 0.05).is_true() # distant terrain below
+	var before: Dictionary = w.debug_raymarch_probe(eye, Vector3(0, -1, 0))
+	assert_bool(before["hit"]).is_true() # distant terrain below
+	var before_color: Color = before["color"]
+	assert_bool(before_color.r < 0.52 and before_color.g > 0.05).is_true()
 
 	var r: Dictionary = tool.apply_sphere_add(Vector3(40, 68.2, 40), 1.5, 4)
 	assert_array(r["rejected"]).is_empty()
 	for i in range(10):
 		w.debug_stream_frame(CAM)
 
-	# Material 4's albedo (0.62, 0.60, 0.66) is the only one with b > r.
-	var c: Color = w.debug_raymarch_pixel(eye, Vector3(0, -1, 0))
-	assert_bool(c.b > c.r and c.r > 0.35).is_true()
+	# Material 4 is now the textured breakstone, not the old flat fill (0.62, 0.60, 0.66).
+	# Re-baselined for M5: assert the add is visible (the ray stops on the blob high above
+	# the terrain), is not error magenta, and changes the shaded pixel from the terrain below.
+	var after: Dictionary = w.debug_raymarch_probe(eye, Vector3(0, -1, 0))
+	assert_bool(after["hit"]).override_failure_message(
+		"the ray no longer hit after adding material 4").is_true()
+	assert_float(after["pos"].y).override_failure_message(
+		"the sphere add did not place a visible blob in open sky").is_greater(before["pos"].y + 10.0)
+	var c: Color = after["color"]
+	assert_bool(c.g > 0.05).override_failure_message(
+		"the material 4 blob shaded error magenta").is_true()
+	var diff := absf(c.r - before_color.r) + absf(c.g - before_color.g) + absf(c.b - before_color.b)
+	assert_float(diff).override_failure_message(
+		"the material 4 blob is not visibly different from the terrain below").is_greater(0.02)
 
 func test_paint_recolours_grass_to_rock_without_moving_the_surface() -> void:
 	var w := make_world()
@@ -102,15 +115,29 @@ func test_paint_recolours_grass_to_rock_without_moving_the_surface() -> void:
 			break
 	assert_bool(found).is_true()
 
-	var before: Color = w.debug_raymarch_pixel(Vector3(hp.x, hp.y + 1.0, hp.z), Vector3(0, -1, 0))
-	assert_bool(before.g > before.r).is_true() # grass is green-dominant
+	# Re-baselined for M5: textured grass/rock no longer have stable flat-albedo colour
+	# dominance, so assert the paint changes the shaded pixel and keeps the surface in place.
+	var eye := Vector3(hp.x, hp.y + 1.0, hp.z)
+	var before: Dictionary = w.debug_raymarch_probe(eye, Vector3(0, -1, 0))
+	assert_bool(before["hit"]).override_failure_message(
+		"the pre-paint ray missed the grass").is_true()
+	var before_color: Color = before["color"]
+	assert_bool(before_color.g > 0.05).override_failure_message(
+		"the pre-paint grass shaded error magenta").is_true()
 	var r: Dictionary = tool.apply_sphere_paint(hp, 1.5, 2) # rock
 	assert_array(r["rejected"]).is_empty()
 	for i in range(10):
 		w.debug_stream_frame(CAM)
 
-	var after: Color = w.debug_raymarch_pixel(Vector3(hp.x, hp.y + 1.0, hp.z), Vector3(0, -1, 0))
-	assert_bool(after.r > after.g).is_true() # rock (0.45, 0.42, 0.40) is red-leaning
+	var after: Dictionary = w.debug_raymarch_probe(eye, Vector3(0, -1, 0))
+	assert_bool(after["hit"]).override_failure_message(
+		"the post-paint ray missed the surface").is_true()
+	var after_color: Color = after["color"]
+	assert_bool(after_color.g > 0.05).override_failure_message(
+		"the painted rock shaded error magenta").is_true()
+	var diff := absf(after_color.r - before_color.r) + absf(after_color.g - before_color.g) + absf(after_color.b - before_color.b)
+	assert_float(diff).override_failure_message(
+		"painting material 2 did not visibly change the pixel colour").is_greater(0.02)
 	# The surface must not have moved: same ray, same hit depth to a centimetre.
 	var depth: Dictionary = w.debug_raycast(Vector3(hp.x, hp.y + 1.0, hp.z), Vector3(0, -1, 0))
 	assert_float(depth["pos"].y).is_equal_approx(hp.y, 0.01)
