@@ -99,14 +99,17 @@ void lod_contour(const uint8_t *lattice, const uint16_t *material, LodContourRes
 					// mirrorable in one line of GLSL.
 					f.material = material[lod_lattice_index(sa ? L[0] : Lb[0], sa ? L[1] : Lb[1],
 							sa ? L[2] : Lb[2])];
-					// Store the corners in the canonical kLodQuadCorners order. The packed
-					// record's corner k is tied to that table by lod_quad_corner_cell, so
-					// any permutation here would move a cell's offset into a different
-					// corner's cell and corrupt the geometry. The sign bit remains in the
-					// record for consumers that need the solid->air direction.
+					// Store the corners ALREADY WOUND. (axis, b, c) is a right-handed cycle,
+					// so c0..c3 wind counter-clockwise seen from +axis; solid -> air along
+					// +axis puts the air on the +axis side, which is the side the normal must
+					// face. The reversed case stores (c0, c3, c2, c1), whose two triangles
+					// are exactly ve::dual_contour's tri_rev pair.
+					const int order_fwd[4] = {0, 1, 2, 3};
+					const int order_rev[4] = {0, 3, 2, 1};
+					const int *order = sa ? order_fwd : order_rev;
 					for (int k = 0; k < 4; k++)
 						for (int a = 0; a < 3; a++)
-							f.offset[k][a] = frac[ci[k] * 3 + a];
+							f.offset[k][a] = frac[ci[order[k]] * 3 + a];
 					LodQuad q{};
 					lod_quad_pack(f, &q);
 					out->quads.push_back(q);

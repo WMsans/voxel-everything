@@ -123,6 +123,41 @@ TEST_CASE("stored corner order already winds toward the air") {
 	}
 }
 
+// The reversed sign is the case Task 4 stores with order_rev = {0, 3, 2, 1}. With solid on
+// the +y side, every emitted quad must be sign == 0 and its first triangle must face down
+// toward the air. This would fail with a non-sign-aware decoder because slot 1 would be
+// interpreted as canonical corner 1 instead of canonical corner 3.
+TEST_CASE("reversed contour quads wind toward the air") {
+	const int n = ve::kLodChunkLattice;
+	std::vector<uint8_t> l(size_t(n) * n * n);
+	for (int z = 0; z < n; z++)
+		for (int y = 0; y < n; y++)
+			for (int x = 0; x < n; x++)
+				l[ve::lod_lattice_index(x, y, z)] =
+						ve::encode_sdf((10.0f - float(y - 1)) * 0.4f);
+	std::vector<uint16_t> m(l.size(), 2);
+	ve::LodContourResult r;
+	ve::lod_contour(l.data(), m.data(), &r);
+	const float cell = ve::lod_cell_size(0);
+	const float origin[3] = {0.0f, 0.0f, 0.0f};
+	REQUIRE(!r.quads.empty());
+	for (const ve::LodQuad &q : r.quads) {
+		ve::LodQuadFields f{};
+		ve::lod_quad_unpack(q, &f);
+		CHECK(f.sign == 0);
+		float p[3][3];
+		for (int k = 0; k < 3; k++) ve::lod_quad_corner_pos(f, k, origin, cell, p[k]);
+		const float a[3] = {p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]};
+		const float b[3] = {p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]};
+		const float nx = a[1] * b[2] - a[2] * b[1];
+		const float ny = a[2] * b[0] - a[0] * b[2];
+		const float nz = a[0] * b[1] - a[1] * b[0];
+		(void)nx; (void)nz;
+		// The plane's solid half is above, so every normal must point down.
+		CHECK(ny < 0.0f);
+	}
+}
+
 TEST_CASE("the cap is reported rather than exceeded") {
 	const int n = ve::kLodChunkLattice;
 	std::vector<uint8_t> l(size_t(n) * n * n);

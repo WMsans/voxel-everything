@@ -45,11 +45,14 @@ void lod_quad_unpack(const LodQuad &q, LodQuadFields *out);
 uint8_t lod_quantise_offset(float frac);
 
 // Mesh-cell array coordinate of corner k. The four differ by -1/0 in the two axes
-// perpendicular to `axis` and share their coordinate along it.
+// perpendicular to `axis` and share their coordinate along it. Decoding is sign-aware:
+// sign == 1 uses kLodQuadCorners[k], while sign == 0 (the pre-wound reversed case) uses
+// kLodQuadCorners[order_rev[k]] with order_rev = {0, 3, 2, 1}.
 void lod_quad_corner_cell(const LodQuadFields &f, int k, int m[3]);
 
 // World position of corner k: origin + (m - 1 + frac) * cell, the mesher's own formula
-// (shaders/mesh_cells.comp.glsl and ve::dual_contour agree on it).
+// (shaders/mesh_cells.comp.glsl and ve::dual_contour agree on it). The offset comes from
+// the stored (pre-wound) slot f.offset[k]; only the cell lookup is sign-aware.
 void lod_quad_corner_pos(const LodQuadFields &f, int k, const float origin[3], float cell,
 		float out[3]);
 

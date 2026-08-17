@@ -68,23 +68,41 @@ uint8_t lod_quantise_offset(float frac) {
 	return static_cast<uint8_t>(std::floor(c * float(kLodOffsetMax) + 0.5f));
 }
 
+namespace {
+
+// The stored order for a reversed quad: corner k of the packed record holds the offset of
+// canonical corner kLodQuadCorners[order_rev[k]]. Task 4 stores negative-sign quads with this
+// permutation so they are already wound toward air; the decoder must undo it to reach the
+// canonical cell table.
+constexpr int kLodQuadOrderRev[4] = {0, 3, 2, 1};
+
+} // namespace
+
 void lod_quad_corner_cell(const LodQuadFields &f, int k, int m[3]) {
 	const int axis = f.axis % 3;
 	const int b = (axis + 1) % 3;
 	const int c = (axis + 2) % 3;
+	const int kk = k & 3;
+	// Sign-aware decoding: the packed corner offsets are ALREADY WOUND toward air. For
+	// sign == 1 (solid below), corner k is the canonical corner k. For sign == 0 (reversed),
+	// corner k holds the offset of canonical corner order_rev[k] = {0, 3, 2, 1}.
+	const int canonical = (f.sign == 0) ? kLodQuadOrderRev[kk] : kk;
 	m[0] = f.u[0] + 1;
 	m[1] = f.u[1] + 1;
 	m[2] = f.u[2] + 1;
-	m[b] += kLodQuadCorners[k & 3][0];
-	m[c] += kLodQuadCorners[k & 3][1];
+	m[b] += kLodQuadCorners[canonical][0];
+	m[c] += kLodQuadCorners[canonical][1];
 }
 
 void lod_quad_corner_pos(const LodQuadFields &f, int k, const float origin[3], float cell,
 		float out[3]) {
 	int m[3];
 	lod_quad_corner_cell(f, k, m);
+	const int kk = k & 3;
+	// The quantised offset remains in the stored (pre-wound) order; only the cell lookup is
+	// remapped by the sign-aware corner decoder above.
 	for (int a = 0; a < 3; a++) {
-		const float frac = static_cast<float>(f.offset[k & 3][a]) / static_cast<float>(kLodOffsetMax);
+		const float frac = static_cast<float>(f.offset[kk][a]) / static_cast<float>(kLodOffsetMax);
 		out[a] = origin[a] + (static_cast<float>(m[a]) - 1.0f + frac) * cell;
 	}
 }

@@ -118,6 +118,44 @@ TEST_CASE("corner positions match the mesher formula within the quantiser") {
 	}
 }
 
+// Pre-wound reversed quads (sign == 0) store corner k's offset in order_rev order:
+// offset slot k belongs to canonical cell kLodQuadCorners[order_rev[k]]. A non-sign-aware
+// decoder would decode slot k against kLodQuadCorners[k] and produce the wrong cells.
+TEST_CASE("sign-aware decoder maps reversed quads through order_rev") {
+	const int order_rev[4] = {0, 3, 2, 1};
+	const float origin[3] = {1.0f, -2.0f, 3.0f};
+	const float cell = ve::lod_cell_size(0);
+	for (int axis = 0; axis < 3; axis++) {
+		ve::LodQuadFields f{};
+		f.axis = static_cast<uint8_t>(axis);
+		f.u[0] = 4; f.u[1] = 7; f.u[2] = 9;
+		f.sign = 0;
+		for (int k = 0; k < 4; k++)
+			for (int a = 0; a < 3; a++)
+				f.offset[k][a] = static_cast<uint8_t>(1 + k * 3 + a);
+
+		const int L[3] = {f.u[0] + 1, f.u[1] + 1, f.u[2] + 1};
+		const int b = (axis + 1) % 3;
+		const int c = (axis + 2) % 3;
+		for (int k = 0; k < 4; k++) {
+			int m[3];
+			ve::lod_quad_corner_cell(f, k, m);
+			int want[3] = {L[0], L[1], L[2]};
+			want[b] += ve::kLodQuadCorners[order_rev[k]][0];
+			want[c] += ve::kLodQuadCorners[order_rev[k]][1];
+			for (int a = 0; a < 3; a++) CHECK(m[a] == want[a]);
+
+			float p[3];
+			ve::lod_quad_corner_pos(f, k, origin, cell, p);
+			for (int a = 0; a < 3; a++) {
+				const float frac = float(f.offset[k][a]) / float(ve::kLodOffsetMax);
+				const float want_pos = origin[a] + (float(want[a]) - 1.0f + frac) * cell;
+				CHECK(p[a] == want_pos);
+			}
+		}
+	}
+}
+
 // The quantiser's worst case is half a step, and a step is 1/31 of a cell. Spec section 3.1
 // claims 1/32 of a cell "at every level"; this pins the real bound so the claim cannot rot.
 TEST_CASE("quantisation error is under one thirty-second of a cell") {
