@@ -166,6 +166,9 @@ void LodTree::note_ready(int level, IVec3 c, int page_first, int page_count) {
 	n.dirty = false;
 	n.page_first = page_first;
 	n.page_count = page_count;
+	// A freshly ready child may still be waiting for its siblings before it is visited;
+	// mark it now so the sibling gate cannot let age eviction recycle it first.
+	n.last_marked = last_walk_frame_;
 }
 
 void LodTree::note_empty(int level, IVec3 c) {
@@ -201,6 +204,9 @@ void LodTree::request(int level, IVec3 c, float area, LodWalkResult *out) {
 	if (n.state == kLodBuilding) return;
 	if (n.state == kLodEmpty) return;
 	if (n.state == kLodReady && !n.dirty) return;
+	// A request is itself a residency touch: speculative child requests are not visited
+	// until all siblings are ready, so without this mark they could be evicted first.
+	n.last_marked = last_walk_frame_;
 	out->requests.push_back(LodBuildRequest{level, c, area});
 }
 
@@ -260,6 +266,7 @@ void LodTree::walk(const LodCamera &cam, const LodOcclusion *occ, uint32_t frame
 		LodWalkResult *out) {
 	out->draws.clear();
 	out->requests.clear();
+	last_walk_frame_ = frame;
 	lod_frustum_planes(cam.view_proj, planes_);
 	last_cam_pos_[0] = cam.pos[0];
 	last_cam_pos_[1] = cam.pos[1];

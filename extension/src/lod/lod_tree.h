@@ -129,6 +129,7 @@ private:
 	std::map<Key, Node> nodes_;
 	float planes_[6][4] = {};  // scratch, rebuilt per walk
 	float last_cam_pos_[3] = {}; // scratch, rebuilt per walk; read by request()
+	uint32_t last_walk_frame_ = 0; // current walk frame; marks request/ready residency
 };
 
 // Exposed for testing: the six frustum planes of a view-projection, and Voxy's exact

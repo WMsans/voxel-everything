@@ -34,12 +34,14 @@ struct AllOccluded : ve::LodOcclusion {
 // Drives a tree to a steady state by answering every request as a ready chunk.
 void settle(ve::LodTree *t, const ve::LodCamera &c, const ve::LodOcclusion *occ, int frames) {
 	ve::LodWalkResult r;
-	for (int f = 1; ; f++) {
+	for (int f = 1; f <= 10000; f++) {
 		t->walk(c, occ, uint32_t(f), &r);
 		for (const ve::LodBuildRequest &q : r.requests)
 			t->note_ready(q.level, q.coord, 1, 1);
 		if (r.requests.empty() && f >= frames) break;
 	}
+	// Fail instead of hanging if a regression leaves requests never draining.
+	REQUIRE(r.requests.empty());
 }
 
 } // namespace
