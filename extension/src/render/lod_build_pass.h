@@ -11,7 +11,7 @@
 namespace godot {
 
 struct LodBuildConfig {
-	int max_jobs = 1; // chunks per batch
+	int max_jobs = 8; // chunks per batch; default allows multi-job batches without trapping callers
 };
 
 struct LodBuildJob {
