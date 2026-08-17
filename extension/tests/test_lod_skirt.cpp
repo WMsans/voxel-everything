@@ -47,18 +47,66 @@ TEST_CASE("skirt quads are marked double sided and come in opposite-wound pairs"
 	const size_t surface = r.quads.size();
 	ve::lod_append_skirts(&r.quads);
 	REQUIRE(r.quads.size() > surface);
+	const int order_rev[4] = {0, 3, 2, 1};
+	const float origin[3] = {0.0f, 0.0f, 0.0f};
+	const float cell = ve::lod_cell_size(0);
 	for (size_t i = surface; i < r.quads.size(); i += 2) {
 		ve::LodQuadFields a{}, b{};
 		ve::lod_quad_unpack(r.quads[i], &a);
 		ve::lod_quad_unpack(r.quads[i + 1], &b);
 		CHECK(a.double_sided == 1);
 		CHECK(b.double_sided == 1);
+		CHECK(b.sign == (a.sign ^ 1));
 		// The pair is the same geometry wound the other way: corners 1 and 3 swap.
 		for (int x = 0; x < 3; x++) {
 			CHECK(b.offset[0][x] == a.offset[0][x]);
 			CHECK(b.offset[1][x] == a.offset[3][x]);
 			CHECK(b.offset[2][x] == a.offset[2][x]);
 			CHECK(b.offset[3][x] == a.offset[1][x]);
+		}
+		// Decode both quads: under the sign-aware decoder the reversed copy lands on the
+		// same four world positions in the opposite order.
+		for (int k = 0; k < 4; k++) {
+			float pa[3], pb[3];
+			ve::lod_quad_corner_pos(a, order_rev[k], origin, cell, pa);
+			ve::lod_quad_corner_pos(b, k, origin, cell, pb);
+			for (int x = 0; x < 3; x++) CHECK(pb[x] == doctest::Approx(pa[x]));
+		}
+	}
+}
+
+TEST_CASE("skirt quads are two cells deep along the negative normal") {
+	const float origin[3] = {0.0f, 0.0f, 0.0f};
+	const float cell = ve::lod_cell_size(0);
+	for (int sign = 0; sign <= 1; sign++) {
+		for (int axis = 0; axis < 3; axis++) {
+			ve::LodQuadFields f{};
+			f.u[0] = 10; f.u[1] = 10; f.u[2] = 10;
+			f.u[(axis + 1) % 3] = 0; // boundary on a perpendicular axis, normal axis interior
+			f.axis = static_cast<uint8_t>(axis);
+			f.sign = static_cast<uint8_t>(sign);
+			f.material = 7;
+			for (int k = 0; k < 4; k++)
+				for (int a = 0; a < 3; a++)
+					f.offset[k][a] = static_cast<uint8_t>((k * 3 + a) * 3 % (ve::kLodOffsetMax + 1));
+			ve::LodQuad q{};
+			ve::lod_quad_pack(f, &q);
+			std::vector<ve::LodQuad> quads{q};
+			ve::lod_append_skirts(&quads);
+			REQUIRE(quads.size() == 3);
+			ve::LodQuadFields s{};
+			ve::lod_quad_unpack(quads[1], &s);
+			CHECK(s.double_sided == 1);
+			CHECK(s.material == f.material);
+			const int delta = sign ? -ve::kLodSkirtCells : ve::kLodSkirtCells;
+			for (int k = 0; k < 4; k++) {
+				float parent[3], skirt[3];
+				ve::lod_quad_corner_pos(f, k, origin, cell, parent);
+				ve::lod_quad_corner_pos(s, k, origin, cell, skirt);
+				CHECK(skirt[axis] == doctest::Approx(parent[axis] + delta * cell));
+				for (int a = 0; a < 3; a++)
+					if (a != axis) CHECK(skirt[a] == doctest::Approx(parent[a]));
+			}
 		}
 	}
 }

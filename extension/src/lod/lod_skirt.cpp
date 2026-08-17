@@ -27,14 +27,13 @@ int lod_append_skirts(std::vector<LodQuad> *quads) {
 		if (!is_boundary(f)) continue;
 
 		// The curtain shares the parent's four cells and its material; it is displaced along
-		// -normal by pushing every corner offset toward the solid side of the owned edge.
-		// Because the offsets are cell-relative, "kLodSkirtCells along -normal" is exactly
-		// "clamp the offset on the edge axis to the far end of the solid side".
+		// -normal by shifting the owned edge coordinate by kLodSkirtCells. Perpendicular
+		// offsets are unchanged, so the curtain is exactly kLodSkirtCells deep.
 		LodQuadFields s = f;
 		s.double_sided = 1;
 		const int axis = f.axis % 3;
-		const uint8_t pushed = f.sign ? uint8_t(0) : uint8_t(kLodOffsetMax);
-		for (int k = 0; k < 4; k++) s.offset[k][axis] = pushed;
+		const int delta = f.sign ? -kLodSkirtCells : kLodSkirtCells;
+		s.u[axis] = static_cast<uint8_t>(static_cast<int>(f.u[axis]) + delta);
 
 		LodQuad a{};
 		lod_quad_pack(s, &a);
@@ -43,6 +42,7 @@ int lod_append_skirts(std::vector<LodQuad> *quads) {
 		if (int(quads->size()) >= kLodMaxQuadsPerChunk) break;
 
 		LodQuadFields flipped = s;
+		flipped.sign = static_cast<uint8_t>(s.sign ^ 1);
 		for (int x = 0; x < 3; x++) {
 			flipped.offset[1][x] = s.offset[3][x];
 			flipped.offset[3][x] = s.offset[1][x];
