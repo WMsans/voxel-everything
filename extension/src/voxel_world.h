@@ -29,6 +29,7 @@
 namespace godot {
 
 class GpuAtlas;
+class MaterialAtlas;
 class RegionPass;
 class BrickGenPass;
 class RaymarchPass;
@@ -77,6 +78,7 @@ class VoxelWorld : public Node3D {
 	int shape_builds_per_frame_ = 2;
 
 	GpuAtlas *atlas_ = nullptr;
+	MaterialAtlas *materials_ = nullptr;
 	IslandAtlas *islands_ = nullptr;
 	int island_slots_ = 0; // high-water mark, not a population; guarded by island_mutex_
 	IslandCullPass *island_cull_ = nullptr;
@@ -192,6 +194,7 @@ public:
 	ve::WorldBounds world_bounds() const;
 
 	GpuAtlas *atlas() { return atlas_; }
+	MaterialAtlas *material_atlas() { return materials_; }
 	IslandAtlas *islands() { return islands_; }
 	// High-water mark, not a population: the shader masks off bits at or above it and then
 	// tests each remaining slot's descriptor for dim >= 2, so a dead slot below the mark
@@ -336,6 +339,9 @@ public:
 	// --- Task 12 hooks ---
 	Color debug_raymarch_pixel(Vector3 origin, Vector3 dir);
 	Dictionary debug_raymarch_probe(Vector3 origin, Vector3 dir);
+	// --- M5 Task 11 hooks ---
+	Dictionary debug_material_atlas_stats();
+	Color debug_material_probe(int mat, Vector3 p, Vector3 n);
 	int debug_stream_frame(Vector3 cam);
 	Dictionary debug_stream_stats();
 	int debug_slot_of_region(Vector3i region) const;

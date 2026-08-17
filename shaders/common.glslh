@@ -36,7 +36,7 @@ uint encode_sdf_byte(float d) {
 // ve::encode_sdf(d).
 float quantise_sdf(float d) { return float(encode_sdf_byte(d)) / 255.0; }
 
-vec3 material_albedo(uint mat_id) {
+vec3 flat_material_albedo(uint mat_id) {
 	switch (mat_id) {
 		case 1: return vec3(0.36, 0.55, 0.22); // grass
 		case 2: return vec3(0.45, 0.42, 0.40); // rock
@@ -50,3 +50,51 @@ vec3 sky_color(vec3 dir) {
 	float t = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
 	return mix(vec3(0.55, 0.45, 0.35), vec3(0.25, 0.45, 0.85), t);
 }
+
+// One world tile every 2 m. Mips then do the distance work for free: at 2 km a 2 m tile is
+// sub-pixel and resolves to the top mip's average, which is what makes the far field look
+// right with no bake at all (spec section 5).
+const float MATERIAL_UV_SCALE = 0.5;
+
+// The includer must declare these before including, at bindings it owns:
+//   layout(set = ?, binding = ?) uniform sampler2DArray material_albedo;
+//   layout(set = ?, binding = ?) uniform sampler2DArray material_surface_tex;
+// and define MATERIAL_LAYERS to the array's layer count.
+#ifdef MATERIAL_LAYERS
+
+// Triplanar with EXPLICIT gradients. The raymarcher is a compute shader and has no
+// dFdx/dFdy, so it supplies gradients from ray differentials while the LoD fragment shader
+// supplies dFdx(wpos)/dFdy(wpos). Without this the near field either aliases or over-blurs
+// and the seam becomes a visible sharpness step -- the one artefact this whole approach
+// exists to avoid.
+//
+// Returns albedo in rgb and height in a. Material 0 is air; anything without a layer shades
+// error magenta, matching flat_material_albedo()'s default.
+vec4 material_surface(uint mat, vec3 p, vec3 n, vec3 ddx, vec3 ddy) {
+	int layer = int(mat) - 1;
+	if (layer < 0 || layer >= MATERIAL_LAYERS) return vec4(1.0, 0.0, 1.0, 0.0);
+	vec3 an = abs(n);
+	vec3 w = an / max(an.x + an.y + an.z, 1e-5);
+	float s = MATERIAL_UV_SCALE;
+	vec4 cx = textureGrad(material_albedo, vec3(p.zy * s, float(layer)), ddx.zy * s, ddy.zy * s);
+	vec4 cy = textureGrad(material_albedo, vec3(p.xz * s, float(layer)), ddx.xz * s, ddy.xz * s);
+	vec4 cz = textureGrad(material_albedo, vec3(p.xy * s, float(layer)), ddx.xy * s, ddy.xy * s);
+	return cx * w.x + cy * w.y + cz * w.z;
+}
+
+// The lighting that was inlined in raymarch.comp.glsl until M5. Both fields call it, so M6
+// replaces the lighting in ONE place instead of two.
+vec3 shade_terrain(vec4 surf, vec3 n, vec3 wpos) {
+	vec3 sun = normalize(vec3(0.6, 0.8, 0.3));
+	float lam = max(dot(n, sun), 0.0);
+	return surf.rgb * (0.25 + 0.75 * lam);
+}
+
+// A 4x4 Bayer threshold in [0, 1). Task 16 uses it in opposite directions on the two fields,
+// so the two masks are exact complements. It lives here for the same reason the shading
+// does: there must be exactly one of it.
+float bayer4(ivec2 px) {
+	const int M[16] = int[16](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
+	return float(M[(px.y & 3) * 4 + (px.x & 3)]) / 16.0;
+}
+#endif

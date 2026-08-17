@@ -1,5 +1,6 @@
 #include "voxel_world.h"
 #include "render/gpu_atlas.h"
+#include "render/material_atlas.h"
 #include "render/camera_params.h"
 #include "render/island_atlas.h"
 #include "render/island_cull_pass.h"
@@ -129,6 +130,8 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_pixel", "origin", "dir"), &VoxelWorld::debug_raymarch_pixel);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_probe", "origin", "dir"), &VoxelWorld::debug_raymarch_probe);
+	ClassDB::bind_method(D_METHOD("debug_material_atlas_stats"), &VoxelWorld::debug_material_atlas_stats);
+	ClassDB::bind_method(D_METHOD("debug_material_probe", "mat", "p", "n"), &VoxelWorld::debug_material_probe);
 	ClassDB::bind_method(D_METHOD("debug_sdf_atlas"), &VoxelWorld::debug_sdf_atlas);
 	ClassDB::bind_method(D_METHOD("debug_local_rd"), &VoxelWorld::debug_local_rd);
 	ClassDB::bind_method(D_METHOD("debug_load_shader", "res_path"), &VoxelWorld::debug_load_shader);
@@ -211,6 +214,7 @@ void VoxelWorld::teardown_gpu() {
 	// passes and the atlas pool: RaymarchPass's uniform set references island buffers too.
 	if (composite_pass_) { delete composite_pass_; composite_pass_ = nullptr; }
 	if (raymarch_pass_) { delete raymarch_pass_; raymarch_pass_ = nullptr; }
+	if (materials_) { delete materials_; materials_ = nullptr; }
 	if (gen_pass_) { delete gen_pass_; gen_pass_ = nullptr; }
 	if (region_pass_) { delete region_pass_; region_pass_ = nullptr; }
 	if (streamer_) { delete streamer_; streamer_ = nullptr; }
@@ -268,6 +272,8 @@ void VoxelWorld::ensure_initialized() {
 	if (!region_pass_->initialize(device, *atlas_)) { teardown_gpu(); return; }
 	gen_pass_ = new BrickGenPass();
 	if (!gen_pass_->initialize(device, *atlas_)) { teardown_gpu(); return; }
+	materials_ = new MaterialAtlas();
+	if (!materials_->initialize(device)) { teardown_gpu(); return; }
 	if (!edit_log_) edit_log_ = new ve::EditLog(world_bounds());
 	if (!residency_) {
 		ve::ResidencyConfig rcfg;
@@ -281,6 +287,7 @@ void VoxelWorld::ensure_initialized() {
 			region_pass_, gen_pass_, &occupancy_mutex_, &occupancy_inbox_, &edit_seq_);
 	raymarch_pass_ = new RaymarchPass();
 	raymarch_pass_->initialize(device);
+	raymarch_pass_->set_materials(*materials_);
 	composite_pass_ = new CompositePass();
 	composite_pass_->initialize(device);
 	initialized_ = true;
@@ -1676,7 +1683,8 @@ static float half_to_float(uint16_t v) {
 Color VoxelWorld::debug_raymarch_pixel(Vector3 origin, Vector3 dir) {
 	ensure_initialized();
 	RenderingDevice *device = rd();
-	if (!initialized_ || !device || !atlas_ || !raymarch_pass_) return Color(1, 0, 1);
+	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_)
+		return Color(1, 0, 1);
 	ve::CameraParams cam = ve::CameraParams::looking_at(
 			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
 	const ve::WorldBounds wb = world_bounds();
@@ -1688,7 +1696,8 @@ Color VoxelWorld::debug_raymarch_pixel(Vector3 origin, Vector3 dir) {
 	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
 	cam.atlas_bricks[2] = atlas_bricks_.z;
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1, kNoEdit))
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1,
+			kNoEdit))
 		return Color(1, 0, 1);
 	device->submit();
 	device->sync();
@@ -1703,7 +1712,7 @@ Dictionary VoxelWorld::debug_raymarch_probe(Vector3 origin, Vector3 dir) {
 	d["hit"] = false;
 	ensure_initialized();
 	RenderingDevice *device = rd();
-	if (!initialized_ || !device || !atlas_ || !raymarch_pass_) return d;
+	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_) return d;
 	ve::CameraParams cam = ve::CameraParams::looking_at(
 			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
 	const ve::WorldBounds wb = world_bounds();
@@ -1715,7 +1724,8 @@ Dictionary VoxelWorld::debug_raymarch_probe(Vector3 origin, Vector3 dir) {
 	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
 	cam.atlas_bricks[2] = atlas_bricks_.z;
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1, kNoEdit)) return d;
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1,
+			kNoEdit)) return d;
 	device->submit();
 	device->sync();
 	const PackedByteArray hp = device->texture_get_data(raymarch_pass_->hitpos_texture(), 0);
@@ -1827,6 +1837,51 @@ Vector2 VoxelWorld::debug_eval_field(Vector3 p, const PackedByteArray &ops, int 
 	}
 	const ve::Sample s = ve::eval_field(gen, ptr, op_count, p.x, p.y, p.z, &volumes_);
 	return Vector2(s.sdf, static_cast<float>(s.material));
+}
+
+Dictionary VoxelWorld::debug_material_atlas_stats() {
+	Dictionary d;
+	if (!materials_ || !materials_->is_valid()) return d;
+	d["layers"] = materials_->layer_count();
+	d["width"] = kMaterialTextureSize;
+	d["height"] = kMaterialTextureSize;
+	d["mipmaps"] = kMaterialMipmaps;
+	d["albedo_valid"] = materials_->albedo_array().is_valid();
+	d["surface_valid"] = materials_->surface_array().is_valid();
+	return d;
+}
+
+Color VoxelWorld::debug_material_probe(int mat, Vector3 p, Vector3 n) {
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_)
+		return Color(1, 0, 1);
+	ve::CameraParams cam = ve::CameraParams::looking_at(
+			p.x, p.y, p.z, n.x, n.y, n.z, 0, 1, 0);
+	// pc.params.w is the debug-probe flag in raymarch.comp.glsl; cam_pos and cam_fwd carry
+	// the sample point and normal.
+	cam.params[0] = 0.0f;
+	cam.params[1] = 0.0f;
+	cam.params[2] = 0.0f;
+	cam.params[3] = static_cast<float>(mat);
+	const ve::WorldBounds wb = world_bounds();
+	const ve::IVec3 ro = wb.origin_regions();
+	cam.dims[0] = world_size_regions_.x; cam.dims[1] = world_size_regions_.y;
+	cam.dims[2] = world_size_regions_.z;
+	cam.dims[3] = island_slot_count();
+	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
+	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
+	cam.atlas_bricks[2] = atlas_bricks_.z;
+	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1,
+			kNoEdit))
+		return Color(1, 0, 1);
+	device->submit();
+	device->sync();
+	const PackedByteArray data = device->texture_get_data(raymarch_pass_->color_texture(), 0);
+	if (data.size() < 8) return Color(1, 0, 1);
+	const uint16_t *h = reinterpret_cast<const uint16_t *>(data.ptr());
+	return Color(half_to_float(h[0]), half_to_float(h[1]), half_to_float(h[2]), 1.0);
 }
 
 bool VoxelWorld::debug_init_atlas() {
