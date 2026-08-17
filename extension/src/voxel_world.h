@@ -12,11 +12,13 @@
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/vector2.hpp>
 #include <atomic>
+#include <map>
 #include <mutex>
 #include <utility>
 #include <vector>
 #include "connectivity/occupancy.h"
 #include "generator/volume_set.h"
+#include "lod/lod_tree.h"
 #include "mesh/chunk_residency.h"
 #include "physics/island_body.h"
 #include "physics/island_manager.h"
@@ -37,6 +39,7 @@ class CompositePass;
 class WorldStreamer;
 class MeshService;
 class ColliderStreamer;
+class LodPool;
 class IslandAtlas;
 class IslandCullPass;
 struct IslandExtractJob;
@@ -135,6 +138,30 @@ class VoxelWorld : public Node3D {
 	std::vector<IslandBody *> test_bodies_;
 	float last_physics_tick_ms_ = 0.0f; // diagnostic; see debug_perf_stats
 
+	// --- M5 LoD state (Task 12) ---
+	int max_lod_pages_ = 32768;
+	int lod_builds_per_frame_ = 8;
+	// A chunk key is (level, coord); IVec3 has no operator< so the map key is explicit.
+	struct LodKey {
+		int level = 0;
+		int x = 0;
+		int y = 0;
+		int z = 0;
+		bool operator<(const LodKey &o) const {
+			if (level != o.level) return level < o.level;
+			if (z != o.z) return z < o.z;
+			if (y != o.y) return y < o.y;
+			return x < o.x;
+		}
+	};
+	ve::LodTree *lod_tree_ = nullptr;
+	LodPool *lod_pool_ = nullptr;
+	uint32_t lod_frame_ = 0;
+	ve::LodWalkResult lod_walk_;
+	std::map<LodKey, std::vector<int>> lod_pages_of_;
+	int lod_pressure_ = 0;
+	void ensure_lod(); // lazy: creates/initializes lod_tree_ + lod_pool_ on first use
+
 	RenderingDevice *main_rd_ = nullptr;
 	RenderingDevice *local_rd_ = nullptr; // owned when use_local_device_
 	bool initialized_ = false;
@@ -190,6 +217,11 @@ public:
 	int get_mesh_jobs_per_frame() const { return mesh_jobs_per_frame_; }
 	void set_shape_builds_per_frame(int v) { shape_builds_per_frame_ = v; }
 	int get_shape_builds_per_frame() const { return shape_builds_per_frame_; }
+	void set_max_lod_pages(int v) { max_lod_pages_ = v; }
+	int get_max_lod_pages() const { return max_lod_pages_; }
+	void set_lod_builds_per_frame(int v) { lod_builds_per_frame_ = v; }
+	int get_lod_builds_per_frame() const { return lod_builds_per_frame_; }
+	void lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ);
 	RenderingDevice *rd() const;
 	ve::WorldBounds world_bounds() const;
 
@@ -397,6 +429,9 @@ public:
 	// --- M5 Task 10 LoD queue hooks ---
 	bool debug_lod_submit(Array jobs);
 	Array debug_lod_collect();
+	// --- M5 Task 12 LoD tick hooks ---
+	void debug_lod_tick(Vector3 pos, Vector3 fwd);
+	Dictionary debug_lod_stats();
 };
 
 } // namespace godot

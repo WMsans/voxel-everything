@@ -13,6 +13,7 @@
 #include "render/mesh_pass.h"
 #include "render/mesh_service.h"
 #include "render/lod_build_pass.h"
+#include "render/lod_pool.h"
 #include "lod/lod_contour.h"
 #include "lod/lod_grid.h"
 #include "lod/lod_reduce.h"
@@ -70,6 +71,12 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_mesh_jobs_per_frame"), &VoxelWorld::get_mesh_jobs_per_frame);
 	ClassDB::bind_method(D_METHOD("set_shape_builds_per_frame", "v"), &VoxelWorld::set_shape_builds_per_frame);
 	ClassDB::bind_method(D_METHOD("get_shape_builds_per_frame"), &VoxelWorld::get_shape_builds_per_frame);
+	ClassDB::bind_method(D_METHOD("set_max_lod_pages", "v"), &VoxelWorld::set_max_lod_pages);
+	ClassDB::bind_method(D_METHOD("get_max_lod_pages"), &VoxelWorld::get_max_lod_pages);
+	ClassDB::bind_method(D_METHOD("set_lod_builds_per_frame", "v"), &VoxelWorld::set_lod_builds_per_frame);
+	ClassDB::bind_method(D_METHOD("get_lod_builds_per_frame"), &VoxelWorld::get_lod_builds_per_frame);
+	ClassDB::bind_method(D_METHOD("debug_lod_tick", "pos", "fwd"), &VoxelWorld::debug_lod_tick);
+	ClassDB::bind_method(D_METHOD("debug_lod_stats"), &VoxelWorld::debug_lod_stats);
 	ClassDB::bind_method(D_METHOD("debug_init_physics"), &VoxelWorld::debug_init_physics);
 	ClassDB::bind_method(D_METHOD("debug_teardown_physics"), &VoxelWorld::debug_teardown_physics);
 	ClassDB::bind_method(D_METHOD("debug_mesh_lattice_diff", "chunk"), &VoxelWorld::debug_mesh_lattice_diff);
@@ -186,6 +193,8 @@ void VoxelWorld::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_collider_chunks"), "set_max_collider_chunks", "get_max_collider_chunks");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "mesh_jobs_per_frame"), "set_mesh_jobs_per_frame", "get_mesh_jobs_per_frame");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "shape_builds_per_frame"), "set_shape_builds_per_frame", "get_shape_builds_per_frame");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_lod_pages"), "set_max_lod_pages", "get_max_lod_pages");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_builds_per_frame"), "set_lod_builds_per_frame", "get_lod_builds_per_frame");
 }
 
 void VoxelWorld::_ready() {
@@ -228,6 +237,11 @@ void VoxelWorld::teardown_gpu() {
 		island_slots_ = 0;
 	}
 	if (atlas_) { delete atlas_; atlas_ = nullptr; }
+	// The tree holds page indices the pool is about to free, and a stale index would be
+	// handed to the next chunk. Pool first, then tree, then the page map.
+	if (lod_pool_) lod_pool_->teardown();
+	if (lod_tree_) lod_tree_->clear();
+	lod_pages_of_.clear();
 	initialized_ = false;
 }
 
@@ -238,6 +252,15 @@ void VoxelWorld::_exit_tree() {
 	if (edit_log_) { delete edit_log_; edit_log_ = nullptr; }
 	pending_edits_.clear();
 	overflow_seen_ = 0;
+	if (lod_pool_) {
+		delete lod_pool_;
+		lod_pool_ = nullptr;
+	}
+	if (lod_tree_) {
+		delete lod_tree_;
+		lod_tree_ = nullptr;
+	}
+	lod_pages_of_.clear();
 	if (local_rd_) {
 		memdelete(local_rd_);
 		local_rd_ = nullptr;
@@ -850,6 +873,114 @@ void VoxelWorld::gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::Edit
 	// prefix is a valid world state; a suffix could apply an add without the subtract that
 	// made room for it.
 	if (out->size() > ve::kMaxRegionOps) out->resize(ve::kMaxRegionOps);
+}
+
+void VoxelWorld::ensure_lod() {
+	if (lod_tree_ && lod_pool_ && lod_pool_->page_count() > 0) return;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!device) return;
+	if (!lod_tree_) {
+		ve::LodTreeConfig cfg;
+		cfg.bounds = world_bounds();
+		lod_tree_ = new ve::LodTree(cfg);
+	}
+	if (!lod_pool_) lod_pool_ = new LodPool();
+	if (lod_pool_->page_count() == 0 && !lod_pool_->initialize(device, max_lod_pages_))
+		UtilityFunctions::printerr("VoxelWorld: LodPool initialize failed");
+}
+
+void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
+	ensure_lod();
+	if (!lod_tree_ || !lod_pool_) return;
+	lod_tree_->walk(cam, occ, ++lod_frame_, &lod_walk_);
+
+	// Results first: a page that arrives this frame should be drawable this frame.
+	std::vector<LodBuildResult> done;
+	if (mesh_ && mesh_->collect_lod(&done) > 0) {
+		for (LodBuildResult &r : done) {
+			if (r.failed) { lod_tree_->note_failed(r.level, r.coord); continue; }
+			if (r.quads.empty()) { lod_tree_->note_empty(r.level, r.coord); continue; }
+			std::vector<int> pages;
+			if (!lod_pool_->upload(r.level, r.coord, r.quads, &pages)) {
+				// Refused, not half-funded: ask the tree for pages and retry next frame.
+				lod_tree_->note_failed(r.level, r.coord);
+				lod_pressure_ = ve::lod_pages_for_quads(int(r.quads.size()));
+				continue;
+			}
+			// A rebuild replaces the old page list. Release the stale pages only once the
+			// new pages are allocated and uploaded, so a refused rebuild keeps the old pages
+			// drawing; after this point the tree points at the new list.
+			const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
+			const auto old_it = lod_pages_of_.find(key);
+			if (old_it != lod_pages_of_.end()) {
+				lod_pool_->release(old_it->second);
+				lod_pages_of_.erase(old_it);
+			}
+			lod_tree_->note_ready(r.level, r.coord, pages.front(), int(pages.size()));
+			lod_pages_of_[key] = std::move(pages);
+		}
+	}
+
+	// Then evictions, so the budget below sees the pages they returned.
+	std::vector<ve::LodDrawItem> evicted;
+	lod_tree_->collect_evictions(lod_frame_, lod_pressure_, &evicted);
+	lod_pressure_ = 0;
+	for (const ve::LodDrawItem &e : evicted) {
+		const LodKey key{e.level, e.coord.x, e.coord.y, e.coord.z};
+		const auto it = lod_pages_of_.find(key);
+		if (it == lod_pages_of_.end()) continue;
+		lod_pool_->release(it->second);
+		lod_pages_of_.erase(it);
+	}
+
+	// Then this frame's builds, priority order, one batch.
+	if (mesh_ && !mesh_->lod_busy()) {
+		const int take = std::min<int>(lod_builds_per_frame_, int(lod_walk_.requests.size()));
+		std::vector<LodBuildJob> batch;
+		batch.reserve(size_t(take));
+		for (int i = 0; i < take; i++) {
+			const ve::LodBuildRequest &q = lod_walk_.requests[size_t(i)];
+			LodBuildJob j;
+			j.level = q.level;
+			j.coord = q.coord;
+			gather_lod_ops(q.level, q.coord, &j.ops);
+			batch.push_back(std::move(j));
+		}
+		// Mark building only for the jobs that were actually ACCEPTED, and only the ones in
+		// the batch: marking a request the submit refused would leave a node permanently in
+		// kLodBuilding, and request() skips those, so it would never be built again.
+		if (!batch.empty() && mesh_->submit_lod(std::move(batch)))
+			for (int i = 0; i < take; i++)
+				lod_tree_->note_building(lod_walk_.requests[size_t(i)].level,
+						lod_walk_.requests[size_t(i)].coord);
+	}
+}
+
+void VoxelWorld::debug_lod_tick(Vector3 pos, Vector3 fwd) {
+	const float p[3] = {pos.x, pos.y, pos.z};
+	const float f[3] = {fwd.x, fwd.y, fwd.z};
+	const float up[3] = {0.0f, 1.0f, 0.0f};
+	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, 1.2217f,
+			16.0f / 9.0f, 0.1f, 8000.0f, 2560, 1440);
+	lod_tick(cam, nullptr);
+}
+
+Dictionary VoxelWorld::debug_lod_stats() {
+	ensure_lod();
+	Dictionary d;
+	d["pages_total"] = lod_pool_ ? lod_pool_->page_count() : 0;
+	d["pages_free"] = lod_pool_ ? lod_pool_->free_pages() : 0;
+	d["pages_used"] = (lod_pool_ ? lod_pool_->page_count() : 0) -
+			(lod_pool_ ? lod_pool_->free_pages() : 0);
+	d["chunks_resident"] = static_cast<int>(lod_pages_of_.size());
+	int draw_pages = 0;
+	for (const ve::LodDrawItem &item : lod_walk_.draws)
+		draw_pages += item.page_count;
+	d["draw_pages"] = draw_pages;
+	d["partial_allocations"] = 0; // LodArena::alloc is all-or-nothing, so none can exist
+	d["builds_in_flight"] = mesh_ && mesh_->lod_busy() ? 1 : 0;
+	return d;
 }
 
 void VoxelWorld::debug_apply_sphere_subtract(Vector3 centre, float radius) {
