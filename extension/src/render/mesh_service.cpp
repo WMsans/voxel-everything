@@ -7,6 +7,10 @@
 
 using namespace godot;
 
+// LoD chunks per GPU batch. Task 12 plans to submit up to lod_builds_per_frame (default 8)
+// jobs per frame, so the pass must be configured to accept that many in a single batch.
+constexpr int kLodMaxJobsPerBatch = 8;
+
 MeshService::~MeshService() {
 	stop();
 }
@@ -221,6 +225,7 @@ void MeshService::run() {
 		}
 		lod_ = new LodBuildPass();
 		LodBuildConfig lod_cfg;
+		lod_cfg.max_jobs = kLodMaxJobsPerBatch;
 		if (lod_->initialize(rd, lod_cfg)) {
 			lod_available_.store(true, std::memory_order_release);
 		} else {

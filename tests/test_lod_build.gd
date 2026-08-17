@@ -50,6 +50,25 @@ func test_an_air_chunk_comes_back_empty(timeout := 20000) -> void:
 	assert_int(got.size()).is_equal(1)
 	assert_int(got[0]["quads"]).is_equal(0)
 
+func test_multi_job_batch_returns_all_results(timeout := 20000) -> void:
+	var w := make_world()
+	# Both chunks straddle the surface, and they are submitted together in one plural batch.
+	assert_bool(w.debug_lod_submit([[0, Vector3i(2, 4, 2)], [0, Vector3i(3, 4, 2)]])).is_true()
+	var got: Array = []
+	for i in range(300):
+		got = w.debug_lod_collect()
+		if got.size() >= 2:
+			break
+		await get_tree().process_frame
+	assert_int(got.size()).override_failure_message(
+		"the multi-job LoD batch never came back complete").is_equal(2)
+	assert_vector(got[0]["coord"]).is_equal(Vector3i(2, 4, 2))
+	assert_vector(got[1]["coord"]).is_equal(Vector3i(3, 4, 2))
+	for r in got:
+		assert_int(r["quads"]).override_failure_message(
+			"a multi-job LoD batch dropped or emptied a chunk").is_greater(0)
+		assert_bool(r["failed"]).is_false()
+
 func test_a_batch_is_refused_while_one_is_in_flight() -> void:
 	var w := make_world()
 	assert_bool(w.debug_lod_submit([[0, Vector3i(2, 4, 2)]])).is_true()
