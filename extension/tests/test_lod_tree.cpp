@@ -211,6 +211,45 @@ TEST_CASE("an edit re-requests a chunk without un-drawing it") {
 	CHECK(re_requested);
 }
 
+// The VoxelWorld upload-refusal path must re-affirm a resident node as Ready with its old
+// page list instead of marking it failed; otherwise the old pages are hidden even though
+// they are still valid GPU data. This simulates that branch at the tree level.
+TEST_CASE("a refused rebuild with resident pages keeps the old pages drawable") {
+	ve::LodTreeConfig cfg;
+	cfg.bounds = demo_bounds();
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	settle(&t, c, &occ, 30);
+	ve::LodWalkResult before;
+	t.walk(c, &occ, 31u, &before);
+	REQUIRE(!before.draws.empty());
+	const ve::LodDrawItem d = before.draws[0];
+
+	float lo[3], hi[3];
+	ve::lod_chunk_aabb(d.level, d.coord, lo, hi);
+	t.mark_dirty(lo, hi);
+	ve::LodWalkResult requested;
+	t.walk(c, &occ, 32u, &requested);
+	// The dirty node was re-requested; in VoxelWorld the upload for this rebuild is refused.
+	bool re_requested = false;
+	for (const ve::LodBuildRequest &q : requested.requests)
+		if (q.level == d.level && q.coord == d.coord) re_requested = true;
+	REQUIRE(re_requested);
+
+	// VoxelWorld keeps the old resident pages and re-affirms Ready with them.
+	t.note_ready(d.level, d.coord, d.page_first, d.page_count);
+
+	ve::LodWalkResult after;
+	t.walk(c, &occ, 33u, &after);
+	bool still_drawn = false;
+	for (const ve::LodDrawItem &draw : after.draws)
+		if (draw.level == d.level && draw.coord == d.coord &&
+				draw.page_first == d.page_first && draw.page_count == d.page_count)
+			still_drawn = true;
+	CHECK(still_drawn);
+}
+
 TEST_CASE("requests are capped and ordered largest first") {
 	ve::LodTreeConfig cfg;
 	cfg.bounds = demo_bounds();

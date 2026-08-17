@@ -903,9 +903,21 @@ void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ)
 			if (r.quads.empty()) { lod_tree_->note_empty(r.level, r.coord); continue; }
 			std::vector<int> pages;
 			if (!lod_pool_->upload(r.level, r.coord, r.quads, &pages)) {
-				// Refused, not half-funded: ask the tree for pages and retry next frame.
-				lod_tree_->note_failed(r.level, r.coord);
-				lod_pressure_ = ve::lod_pages_for_quads(int(r.quads.size()));
+				// Refused, not half-funded. If the chunk already has resident pages, keep
+				// drawing them: stale beats missing. Re-affirm Ready with the old page list
+				// so the node stays drawable; a node with no old pages still fails and is
+				// re-requested next frame.
+				const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
+				const auto old_it = lod_pages_of_.find(key);
+				if (old_it != lod_pages_of_.end()) {
+					lod_tree_->note_ready(r.level, r.coord, old_it->second.front(),
+							int(old_it->second.size()));
+				} else {
+					lod_tree_->note_failed(r.level, r.coord);
+				}
+				// Accumulate across refusals in this frame so evictions recover enough pages
+				// for every refused rebuild, not just the last one.
+				lod_pressure_ += ve::lod_pages_for_quads(int(r.quads.size()));
 				continue;
 			}
 			// A rebuild replaces the old page list. Release the stale pages only once the
