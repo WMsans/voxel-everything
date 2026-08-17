@@ -12,11 +12,6 @@ layout(set = 0, binding = 1, std430) readonly buffer Cells { int v[]; } cells;
 layout(set = 0, binding = 2, std430) writeonly buffer Tris { uint v[]; } tris;
 layout(set = 0, binding = 3, std430) buffer Counts { uint v[]; } counts;
 
-layout(push_constant, std430) uniform Push {
-	ivec4 chunk;
-	ivec4 params;
-} pc;
-
 // The four cells around a lattice edge, as offsets in the two axes perpendicular to it,
 // counter-clockwise seen from +axis; mirror of kQuad in dual_contour.cpp.
 const ivec2 QUAD[4] = ivec2[4](ivec2(-1, -1), ivec2(0, -1), ivec2(0, 0), ivec2(-1, 0));
@@ -32,7 +27,7 @@ void emit(uint job, int a, int b, int c) {
 
 void main() {
 	ivec3 u = ivec3(gl_GlobalInvocationID);
-	if (any(greaterThanEqual(u, ivec3(CHUNK_CELLS)))) return;
+	if (any(greaterThanEqual(u, ivec3(chunk_cells())))) return;
 	// This chunk owns the edges whose four cells it holds: local coordinate u in
 	// [0, CHUNK_CELLS), lattice index u + 1. Every edge in the world is emitted by exactly
 	// one chunk, so chunk borders have neither cracks nor duplicated triangles.

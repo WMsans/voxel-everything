@@ -288,8 +288,16 @@ void MeshService::run() {
 		// Point the jobs at the ops this batch owns; `batch` outlives the call.
 		std::vector<MeshJob> jobs;
 		jobs.reserve(batch.size());
-		for (const MeshRequest &r : batch)
-			jobs.push_back({r.chunk, r.ops.data(), static_cast<int>(r.ops.size())});
+		for (const MeshRequest &r : batch) {
+			MeshJob job;
+			job.chunk = r.chunk;
+			job.ops = r.ops.data();
+			job.op_count = static_cast<int>(r.ops.size());
+			ve::chunk_world_origin(r.chunk, job.origin);
+			job.cell_size = ve::kChunkCellSize;
+			job.lattice = ve::kChunkLattice;
+			jobs.push_back(job);
+		}
 
 		std::vector<MeshResult> out;
 		if (pass.submit(jobs.data(), static_cast<int>(jobs.size()))) {

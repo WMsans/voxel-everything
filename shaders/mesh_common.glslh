@@ -1,20 +1,29 @@
-// Chunk lattice addressing, shared by the three collision-meshing passes so they can never
-// disagree. Mirror of extension/src/mesh/mesh_chunk.h and ve::dual_contour's conventions:
-// lattice array index i holds the sample at local coordinate i - 1, mesh-cell array index m
-// holds the cell at local coordinate m - 1, and cell m's corners are lattice m and m + 1.
-// The one-cell overlap below the origin is what lets a chunk close the quads on its minimum
+// Chunk lattice addressing, shared by the meshing passes so they can never disagree.
+// Mirror of extension/src/mesh/mesh_chunk.h and ve::dual_contour's conventions: lattice
+// array index i holds the sample at local coordinate i - 1, mesh-cell array index m holds
+// the cell at local coordinate m - 1, and cell m's corners are lattice m and m + 1. The
+// one-cell overlap below the origin is what lets a chunk close the quads on its minimum
 // faces without reading a neighbouring chunk's lattice. Include common.glslh first.
+//
+// The lattice size, cell pitch and world origin arrive in the PUSH CONSTANT rather than as
+// constants, so one mesher serves the 0.1 m collision lattice and every LoD level. The block
+// is declared here, not in each shader, so there is exactly one layout.
+layout(push_constant, std430) uniform Push {
+	ivec4 chunk;  // xyz = chunk coordinates (job identity only), w = job index in this batch
+	ivec4 params; // x = op count, y = max verts per job, z = max tris per job, w = lattice dim
+	vec4 grid;    // xyz = the chunk's world origin, w = cell size in metres
+} pc;
 
-const int CHUNK_CELLS = 64;         // ve::kChunkCells
-const int CHUNK_MESH_CELLS = 65;    // ve::kChunkMeshCells
-const int CHUNK_LATTICE = 66;       // ve::kChunkLattice
-const float CHUNK_CELL_SIZE = 0.1;  // ve::kChunkCellSize
-const float CHUNK_SIZE = 6.4;       // ve::kChunkSize
+int chunk_lattice() { return pc.params.w; }
+int chunk_mesh_cells() { return pc.params.w - 1; }
+int chunk_cells() { return pc.params.w - 2; }
+float chunk_cell_size() { return pc.grid.w; }
 
-vec3 lattice_world_pos(ivec3 chunk, ivec3 l) {
-	return vec3(chunk) * CHUNK_SIZE + (vec3(l) - 1.0) * CHUNK_CELL_SIZE;
+vec3 lattice_world_pos(ivec3 l) {
+	return pc.grid.xyz + (vec3(l) - 1.0) * pc.grid.w;
 }
 
 int mesh_cell_index(ivec3 m) {
-	return m.x + m.y * CHUNK_MESH_CELLS + m.z * CHUNK_MESH_CELLS * CHUNK_MESH_CELLS;
+	int n = chunk_mesh_cells();
+	return m.x + m.y * n + m.z * n * n;
 }
