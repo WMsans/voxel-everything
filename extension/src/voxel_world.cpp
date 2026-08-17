@@ -899,8 +899,34 @@ void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ)
 	std::vector<LodBuildResult> done;
 	if (mesh_ && mesh_->collect_lod(&done) > 0) {
 		for (LodBuildResult &r : done) {
-			if (r.failed) { lod_tree_->note_failed(r.level, r.coord); continue; }
-			if (r.quads.empty()) { lod_tree_->note_empty(r.level, r.coord); continue; }
+			if (r.failed) {
+				const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
+				const auto old_it = lod_pages_of_.find(key);
+				if (old_it != lod_pages_of_.end()) {
+					// Stale beats missing: a failed rebuild keeps the old pages drawable and
+					// is re-affirmed Ready-with-dirty so the next walk retries it. Do not
+					// release the old pages and do not mark the node failed (that would
+					// un-draw it).
+					lod_tree_->note_ready_dirty(r.level, r.coord);
+					lod_pressure_ += ve::lod_pages_for_quads(int(r.quads.size()));
+				} else {
+					lod_tree_->note_failed(r.level, r.coord);
+				}
+				continue;
+			}
+			if (r.quads.empty()) {
+				// The chunk is legitimately empty now. Release any old pages before telling
+				// the tree, otherwise the tree stops drawing/requesting it while the stale
+				// GPU pages stay allocated forever.
+				const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
+				const auto old_it = lod_pages_of_.find(key);
+				if (old_it != lod_pages_of_.end()) {
+					lod_pool_->release(old_it->second);
+					lod_pages_of_.erase(old_it);
+				}
+				lod_tree_->note_empty(r.level, r.coord);
+				continue;
+			}
 			std::vector<int> pages;
 			if (!lod_pool_->upload(r.level, r.coord, r.quads, &pages)) {
 				// Refused, not half-funded. If the chunk already has resident pages, keep
@@ -949,7 +975,10 @@ void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ)
 
 	// Then this frame's builds, priority order, one batch.
 	if (mesh_ && !mesh_->lod_busy()) {
-		const int take = std::min<int>(lod_builds_per_frame_, int(lod_walk_.requests.size()));
+		// MeshService's LodBuildPass currently supports at most 8 LoD jobs per batch.
+		// lod_builds_per_frame_ is user-facing and may be higher; submit_lod would reject
+		// anything above the mesher's cap, so clamp the actual batch take here.
+		const int take = std::min<int>({lod_builds_per_frame_, int(lod_walk_.requests.size()), 8});
 		std::vector<LodBuildJob> batch;
 		batch.reserve(size_t(take));
 		for (int i = 0; i < take; i++) {

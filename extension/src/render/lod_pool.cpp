@@ -130,7 +130,7 @@ bool LodPool::upload(int level, ve::IVec3 coord, const std::vector<ve::LodQuad> 
 	ve::lod_chunk_origin(level, coord, origin);
 	const float cell = ve::lod_cell_size(level);
 
-	// Chunk record: two vec4 = (origin.xyz, cell), (level, flags, pad, pad).
+	// Chunk record: two vec4 = (origin.xyz, cell), (uint level, uint flags, uint pad, uint pad).
 	PackedByteArray chunk_bytes;
 	chunk_bytes.resize(32);
 	float *rec = reinterpret_cast<float *>(chunk_bytes.ptrw());
@@ -138,10 +138,13 @@ bool LodPool::upload(int level, ve::IVec3 coord, const std::vector<ve::LodQuad> 
 	rec[1] = origin[1];
 	rec[2] = origin[2];
 	rec[3] = cell;
-	rec[4] = static_cast<float>(level);
-	rec[5] = 0.0f; // flags
-	rec[6] = 0.0f;
-	rec[7] = 0.0f;
+	// The second vec4 is integer data; write it through a uint32 view so the shader's
+	// `uint level` reads the actual level, not a float bit pattern.
+	uint32_t *meta = reinterpret_cast<uint32_t *>(chunk_bytes.ptrw()) + 4;
+	meta[0] = static_cast<uint32_t>(level);
+	meta[1] = 0u; // flags
+	meta[2] = 0u; // pad
+	meta[3] = 0u; // pad
 	rd_->buffer_update(chunks_, static_cast<uint32_t>(chunk_slot) * 32, 32, chunk_bytes);
 
 	PackedByteArray word;

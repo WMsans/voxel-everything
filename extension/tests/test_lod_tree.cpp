@@ -258,7 +258,7 @@ TEST_CASE("a refused rebuild with resident pages stays drawable and is retried")
 	CHECK(retried);
 }
 
-// Direct unit test for the ready-with-dirty transition used by a refused rebuild.
+// Direct unit test for the ready-with-dirty transition used by a refused/failed rebuild.
 TEST_CASE("note_ready_dirty keeps old pages drawable and dirty for retry") {
 	ve::LodTreeConfig cfg;
 	cfg.bounds = demo_bounds();
@@ -289,6 +289,35 @@ TEST_CASE("note_ready_dirty keeps old pages drawable and dirty for retry") {
 	CHECK(re_requested);
 }
 
+// VoxelWorld releases a resident chunk's old pages before calling note_empty. The tree-side
+// contract of that path is: the node leaves the draw list, its page range is cleared, and it
+// is never re-requested (empty is a terminal answer).
+TEST_CASE("an empty result after a resident chunk stops drawing it and clears the page range") {
+	ve::LodTreeConfig cfg;
+	cfg.bounds = demo_bounds();
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	settle(&t, c, &occ, 30);
+	ve::LodWalkResult before;
+	t.walk(c, &occ, 31u, &before);
+	REQUIRE(!before.draws.empty());
+	const ve::LodDrawItem d = before.draws[0];
+
+	t.note_empty(d.level, d.coord);
+	CHECK(t.state_of(d.level, d.coord) == ve::kLodEmpty);
+
+	ve::LodWalkResult after;
+	t.walk(c, &occ, 32u, &after);
+	bool still_drawn = false;
+	for (const ve::LodDrawItem &draw : after.draws)
+		if (draw.level == d.level && draw.coord == d.coord) still_drawn = true;
+	CHECK(!still_drawn);
+	for (const ve::LodBuildRequest &q : after.requests) {
+		const bool re_requested_empty = q.level == d.level && q.coord == d.coord;
+		CHECK_FALSE(re_requested_empty);
+	}
+}
 
 TEST_CASE("requests are capped and ordered largest first") {
 	ve::LodTreeConfig cfg;
