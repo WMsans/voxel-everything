@@ -334,7 +334,12 @@ void VoxelWorld::ensure_initialized() {
 	lod_raster_pass_ = new LodRasterPass();
 	lod_raster_pass_->initialize(device);
 	hiz_pass_ = new HizPass();
-	if (!hiz_pass_->initialize(device)) { teardown_gpu(); return; }
+	if (!hiz_pass_->initialize(device)) {
+		UtilityFunctions::printerr("VoxelWorld: HiZ initialization failed; continuing without "
+				"occlusion (safe fail-soft: always visible)");
+		delete hiz_pass_;
+		hiz_pass_ = nullptr;
+	}
 	initialized_ = true;
 }
 
