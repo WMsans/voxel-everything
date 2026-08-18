@@ -6,6 +6,7 @@
 #include "render/island_cull_pass.h"
 #include "render/raymarch_pass.h"
 #include "render/composite_pass.h"
+#include "render/gbuffer.h"
 #include "render/region_pass.h"
 #include "render/brick_gen_pass.h"
 #include "render/world_streamer.h"
@@ -100,6 +101,8 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_seam_probe", "pos", "fwd", "w", "h", "skip_lod"),
 			&VoxelWorld::debug_seam_probe, DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("debug_hiz_stats"), &VoxelWorld::debug_hiz_stats);
+	ClassDB::bind_method(D_METHOD("debug_gbuffer_stats", "w", "h"),
+			&VoxelWorld::debug_gbuffer_stats);
 	ClassDB::bind_method(D_METHOD("debug_hiz_probe_synthetic", "far_value", "near_value"),
 			&VoxelWorld::debug_hiz_probe_synthetic);
 	ClassDB::bind_method(D_METHOD("debug_hiz_occluded", "lo", "hi", "depth"),
@@ -326,6 +329,7 @@ void VoxelWorld::teardown_gpu() {
 	// texture cascades to referencing sets (M1's documented order). Islands sit between
 	// passes and the atlas pool: RaymarchPass's uniform set references island buffers too.
 	if (composite_pass_) { delete composite_pass_; composite_pass_ = nullptr; }
+	if (gbuffer_) { delete gbuffer_; gbuffer_ = nullptr; }
 	if (raymarch_pass_) { delete raymarch_pass_; raymarch_pass_ = nullptr; }
 	if (lod_raster_pass_) { delete lod_raster_pass_; lod_raster_pass_ = nullptr; }
 	if (lod_cull_pass_) { delete lod_cull_pass_; lod_cull_pass_ = nullptr; }
@@ -423,6 +427,7 @@ void VoxelWorld::ensure_initialized() {
 	raymarch_pass_->set_materials(*materials_);
 	composite_pass_ = new CompositePass();
 	composite_pass_->initialize(device);
+	gbuffer_ = new GBuffer();
 	lod_raster_pass_ = new LodRasterPass();
 	lod_raster_pass_->initialize(device);
 	lod_cull_pass_ = new LodCullPass();
@@ -1752,6 +1757,34 @@ Dictionary VoxelWorld::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 	d["culled"] = culled;
 	d["page_frustum_culled"] = page_frustum_culled;
 	d["slot_frustum_culled"] = slot_frustum_culled;
+	return d;
+}
+
+Dictionary VoxelWorld::debug_gbuffer_stats(int w, int h) {
+	Dictionary d;
+	d["valid"] = false;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !gbuffer_) return d;
+	// The probe path: no RenderSceneBuffersRD exists outside a render callback, so this
+	// exercises the owned branch. Everything else about the object is identical.
+	if (!gbuffer_->ensure(device, nullptr, Vector2i(w, h))) {
+		d["reallocations"] = gbuffer_->reallocations();
+		return d;
+	}
+	d["valid"] = gbuffer_->is_valid();
+	d["width"] = gbuffer_->size().x;
+	d["height"] = gbuffer_->size().y;
+	d["half_width"] = gbuffer_->half_size().x;
+	d["half_height"] = gbuffer_->half_size().y;
+	d["albedo_valid"] = gbuffer_->albedo().is_valid();
+	d["surface_valid"] = gbuffer_->surface().is_valid();
+	d["depth_valid"] = gbuffer_->depth().is_valid();
+	d["lit_valid"] = gbuffer_->lit().is_valid();
+	d["history_valid"] = gbuffer_->history().is_valid();
+	d["albedo_id"] = static_cast<int64_t>(gbuffer_->albedo().get_id());
+	d["depth_id"] = static_cast<int64_t>(gbuffer_->depth().get_id());
+	d["reallocations"] = gbuffer_->reallocations();
 	return d;
 }
 

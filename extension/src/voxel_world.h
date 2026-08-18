@@ -45,6 +45,7 @@ class LodPool;
 class LodRasterPass;
 class LodCullPass;
 class HizPass;
+class GBuffer;
 class IslandAtlas;
 class IslandCullPass;
 struct IslandExtractJob;
@@ -97,6 +98,7 @@ class VoxelWorld : public Node3D {
 	LodRasterPass *lod_raster_pass_ = nullptr;
 	LodCullPass *lod_cull_pass_ = nullptr;
 	HizPass *hiz_pass_ = nullptr;
+	GBuffer *gbuffer_ = nullptr;
 	// CPU cores outlive the GPU objects: a re-init re-streams the same world, edits
 	// included. This is also what a future save/reload will do (saves ARE the edit log).
 	ve::EditLog *edit_log_ = nullptr;
@@ -269,6 +271,7 @@ public:
 	LodRasterPass *lod_raster_pass() { return lod_raster_pass_; }
 	LodCullPass *lod_cull_pass() { return lod_cull_pass_; }
 	HizPass *hiz_pass() { return hiz_pass_; }
+	GBuffer *gbuffer() { return gbuffer_; }
 	std::mutex &edit_mutex() { return edit_mutex_; }
 	MeshService *mesh_service() { return mesh_; }
 	void queue_island_upload(int slot, const ve::VolumeData &d);
@@ -478,6 +481,7 @@ public:
 	Dictionary debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, bool skip_lod = false);
 	// --- M5 Task 14 HiZ hooks ---
 	Dictionary debug_hiz_stats();
+	Dictionary debug_gbuffer_stats(int w, int h);
 	Dictionary debug_hiz_probe_synthetic(float far_value, float near_value);
 	bool debug_hiz_occluded(Vector2 lo, Vector2 hi, float depth);
 	// --- M5 Task 15 LoD cull hooks ---
