@@ -15,15 +15,6 @@
 
 using namespace godot;
 
-// shaders/mesh_common.glslh hard-codes these same numbers (GLSL cannot include the header),
-// and a mismatch would not fail anywhere — it would silently mesh the wrong volume. Pin them
-// here so changing the chunk size breaks the BUILD, with the file that must follow named.
-static_assert(ve::kChunkCells == 64, "update CHUNK_CELLS in shaders/mesh_common.glslh");
-static_assert(ve::kChunkMeshCells == 65, "update CHUNK_MESH_CELLS in shaders/mesh_common.glslh");
-static_assert(ve::kChunkLattice == 66, "update CHUNK_LATTICE in shaders/mesh_common.glslh");
-static_assert(ve::kChunkSize == 6.4f, "update CHUNK_SIZE in shaders/mesh_common.glslh");
-static_assert(ve::kChunkCellSize == 0.1f, "update CHUNK_CELL_SIZE in shaders/mesh_common.glslh");
-
 namespace {
 
 Ref<RDUniform> storage(int binding, RID rid) {
@@ -112,9 +103,9 @@ bool MeshPass::initialize(RenderingDevice *rd, const MeshPassConfig &cfg) {
 		f.instantiate();
 		f->set_texture_type(RenderingDevice::TEXTURE_TYPE_3D);
 		f->set_format(RenderingDevice::DATA_FORMAT_R8_UNORM);
-		f->set_width(ve::kChunkLattice);
-		f->set_height(ve::kChunkLattice);
-		f->set_depth(ve::kChunkLattice);
+		f->set_width(cfg_.max_lattice);
+		f->set_height(cfg_.max_lattice);
+		f->set_depth(cfg_.max_lattice);
 		f->set_mipmaps(1);
 		// STORAGE for the field pass to write and the mesher passes to read;
 		// CAN_COPY_FROM so the differential test can read the lattice back.
@@ -124,8 +115,10 @@ bool MeshPass::initialize(RenderingDevice *rd, const MeshPassConfig &cfg) {
 		v.instantiate();
 		lattice_ = rd->texture_create(f, v, TypedArray<PackedByteArray>());
 	}
-	cells_ = rd->storage_buffer_create(static_cast<uint32_t>(ve::kChunkCellCount) * 4,
-			zeroed(static_cast<int64_t>(ve::kChunkCellCount) * 4));
+	const int64_t max_cells = static_cast<int64_t>(cfg_.max_lattice - 1) *
+			(cfg_.max_lattice - 1) * (cfg_.max_lattice - 1);
+	cells_ = rd->storage_buffer_create(static_cast<uint32_t>(max_cells) * 4,
+			zeroed(max_cells * 4));
 	verts_ = rd->storage_buffer_create(
 			static_cast<uint32_t>(cfg_.max_jobs) * cfg_.max_verts * 12,
 			zeroed(static_cast<int64_t>(cfg_.max_jobs) * cfg_.max_verts * 12));
@@ -222,10 +215,10 @@ bool MeshPass::upload_volume(int slot, const ve::VolumeData &data) {
 	return rd_ && !in_flight_ && volumes_.upload(rd_, slot, data);
 }
 
-// The same 32-byte block for all three passes, so one helper serves them all.
+// The same 48-byte block for all three passes, so one helper serves them all.
 void MeshPass::push(int64_t list, const MeshJob &job, int job_index) {
 	PackedByteArray pc;
-	pc.resize(32);
+	pc.resize(48);
 	int32_t *p = reinterpret_cast<int32_t *>(pc.ptrw());
 	p[0] = job.chunk.x;
 	p[1] = job.chunk.y;
@@ -234,7 +227,12 @@ void MeshPass::push(int64_t list, const MeshJob &job, int job_index) {
 	p[4] = sanitized_op_count(job);
 	p[5] = cfg_.max_verts;
 	p[6] = cfg_.max_tris;
-	p[7] = 0;
+	p[7] = job.lattice;
+	float *f = reinterpret_cast<float *>(pc.ptrw());
+	f[8] = job.origin[0];
+	f[9] = job.origin[1];
+	f[10] = job.origin[2];
+	f[11] = job.cell_size;
 	rd_->compute_list_set_push_constant(list, pc, pc.size());
 }
 
@@ -242,7 +240,7 @@ void MeshPass::record_field(int64_t list, const MeshJob &job, int job_index) {
 	rd_->compute_list_bind_compute_pipeline(list, field_pipeline_);
 	rd_->compute_list_bind_uniform_set(list, field_uset_, 0);
 	push(list, job, job_index);
-	const int g = groups(ve::kChunkLattice);
+	const int g = groups(job.lattice);
 	rd_->compute_list_dispatch(list, g, g, g);
 }
 
@@ -266,7 +264,7 @@ void MeshPass::record_cells(int64_t list, const MeshJob &job, int job_index) {
 	rd_->compute_list_bind_compute_pipeline(list, cells_pipeline_);
 	rd_->compute_list_bind_uniform_set(list, cells_uset_, 0);
 	push(list, job, job_index);
-	const int g = groups(ve::kChunkMeshCells);
+	const int g = groups(job.lattice - 1);
 	rd_->compute_list_dispatch(list, g, g, g);
 }
 
@@ -274,7 +272,7 @@ void MeshPass::record_quads(int64_t list, const MeshJob &job, int job_index) {
 	rd_->compute_list_bind_compute_pipeline(list, quads_pipeline_);
 	rd_->compute_list_bind_uniform_set(list, quads_uset_, 0);
 	push(list, job, job_index);
-	const int g = groups(ve::kChunkCells);
+	const int g = groups(job.lattice - 2);
 	rd_->compute_list_dispatch(list, g, g, g);
 }
 

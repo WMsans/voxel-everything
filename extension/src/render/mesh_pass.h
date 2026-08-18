@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <vector>
 #include "generator/edit_ops.h"
+#include "mesh/mesh_chunk.h"
 #include "render/volume_pool.h"
 #include "world/region.h"
 
@@ -13,12 +14,20 @@ struct MeshPassConfig {
 	int max_jobs = 2;      // chunks per batch
 	int max_verts = 16384; // a fully covered 6.4 m chunk holds ~4 100
 	int max_tris = 32768;  // ...and ~8 200 triangles; edits can carve well past that
+	// Buffers are sized for the largest lattice any consumer will ask for, so one pass can
+	// serve both the collision chunk and (Task 9) a LoD chunk without reallocating.
+	int max_lattice = ve::kChunkLattice;
 };
 
 struct MeshJob {
 	ve::IVec3 chunk{};
 	const ve::EditOp *ops = nullptr; // the chunk's region's op list; copied at submit
 	int op_count = 0;
+	// Where and how finely to sample. Defaulted to the collision chunk so every existing
+	// caller is unchanged; MeshService::submit fills them from ve::chunk_world_origin.
+	float origin[3] = {0.0f, 0.0f, 0.0f};
+	float cell_size = ve::kChunkCellSize;
+	int lattice = ve::kChunkLattice;
 };
 
 struct MeshResult {

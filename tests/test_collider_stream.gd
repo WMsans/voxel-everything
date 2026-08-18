@@ -24,7 +24,10 @@ func make_world() -> VoxelWorld:
 	w.world_origin_bricks = Vector3i(0, -64, 0)
 	w.world_size_regions = Vector3i(8, 5, 8)
 	w.physics_radius_m = 25.0        # a handful of chunks, not the shipping 160
-	w.max_collider_chunks = 64
+	# A 25 m ball holds ~163 of today's 6.4 m chunks, where it held a fifth of that when a
+	# chunk was 12.8 m. 64 slots can no longer cover it, and a pool that is permanently full
+	# tests eviction churn rather than what these tests are about.
+	w.max_collider_chunks = 512
 	w.mesh_jobs_per_frame = 2
 	w.shape_builds_per_frame = 4
 	add_child(w)
@@ -32,14 +35,24 @@ func make_world() -> VoxelWorld:
 	assert_bool(w.debug_init_physics()).is_true()
 	return w
 
-# Settled means several consecutive frames with nothing to do: one quiet frame is only the
-# gap between submitting a batch and collecting it.
-func settle(w: VoxelWorld, center: Vector3, frames := 400) -> void:
+# Settled means the streamer owes nothing: no resident chunk still waiting for a collider and
+# no meshed result waiting to become a shape.
+#
+# It used to mean "several consecutive frames that took no action", which stopped being true
+# when the mesher moved onto its own thread: run_frame returns 0 on every frame it spends
+# WAITING for the worker, so the old helper declared victory after five frames with 163 chunks
+# pending and not a single body built, and every assertion downstream of it was measuring an
+# empty world. Frames are cheap (this drains in ~1300 of them, well under a second), so the
+# budget is a ceiling on a stuck run rather than a target.
+func settle(w: VoxelWorld, center: Vector3, frames := 6000) -> bool:
 	var quiet := 0
 	for i in range(frames):
-		quiet = quiet + 1 if w.debug_physics_frame(center) == 0 else 0
+		w.debug_physics_frame(center)
+		var st := w.debug_physics_stats()
+		quiet = quiet + 1 if st["chunks_pending"] == 0 and st["queued"] == 0 else 0
 		if quiet >= 4:
-			return
+			return true
+	return false
 
 func ray(from: Vector3, to: Vector3) -> Dictionary:
 	var state := get_tree().root.world_3d.direct_space_state
@@ -77,7 +90,7 @@ func test_colliders_appear_around_the_player(timeout := 60000) -> void:
 	assert_int(st["bodies"]).is_greater(3)
 	assert_int(st["failures"]).is_equal(0)
 	# Every resident chunk is inside the radius, so the pool never filled up here.
-	assert_int(st["chunks_resident"]).is_less_equal(64)
+	assert_int(st["chunks_resident"]).is_less(512)
 	w.free()
 
 func test_a_physics_ray_lands_on_the_analytic_surface(timeout := 60000) -> void:

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://distgfjctev12"
+path="res://.godot/imported/lod_frac.comp.glsl-87957da396613455f76dd33db4d8f868.res"
+
+[deps]
+
+source_file="res://shaders/lod_frac.comp.glsl"
+dest_files=["res://.godot/imported/lod_frac.comp.glsl-87957da396613455f76dd33db4d8f868.res"]
+
+[params]
+

@@ -48,4 +48,39 @@ public:
 	int32_t as_i32(int64_t index = 0) const;
 };
 
+// One outstanding RenderingDevice::texture_get_data_async, plus the last bytes it returned.
+//
+// Same contract as AsyncBufferRead: the asynchronous form costs nothing on the frame that
+// asks; the bytes turn up a few frames later. Callers must treat what they read as stale by
+// that delay — HizPass rebuilds its CPU occlusion grid from the latest arrival.
+//
+// Internal: registered only so callable_mp can name the handler. Nothing scripts this.
+class AsyncTextureRead : public RefCounted {
+	GDCLASS(AsyncTextureRead, RefCounted)
+
+	PackedByteArray data_;
+	bool pending_ = false;
+	bool has_data_ = false;
+	bool fresh_ = false;
+
+protected:
+	static void _bind_methods();
+
+public:
+	void _on_data(const PackedByteArray &data);
+
+	// Issues a read unless one is already outstanding. Returns true if one went out.
+	bool request(RenderingDevice *rd, const RID &texture);
+	bool pending() const { return pending_; }
+	bool has_data() const { return has_data_; }
+	// True once per arrival, so a caller can rebase its bookkeeping exactly when the value
+	// it is holding changes rather than every frame.
+	bool take_fresh() {
+		const bool f = fresh_;
+		fresh_ = false;
+		return f;
+	}
+	const PackedByteArray &data() const { return data_; }
+};
+
 } // namespace godot

@@ -1,6 +1,7 @@
 #include "render/raymarch_pass.h"
 #include "render/gpu_atlas.h"
 #include "render/island_atlas.h"
+#include "render/material_atlas.h"
 #include "render/shader_loader.h"
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rd_sampler_state.hpp>
@@ -56,6 +57,18 @@ void RaymarchPass::initialize(RenderingDevice *rd) {
 	}
 }
 
+void RaymarchPass::set_materials(const MaterialAtlas &materials) {
+	material_albedo_ = materials.albedo_array();
+	material_surface_ = materials.surface_array();
+	material_sampler_ = materials.sampler();
+	// The uniform set caches these RIDs; drop it so the next render rebuilds with the new
+	// arrays. This is called once before the first render, so the invalidation is a no-op.
+	if (uset_.is_valid()) {
+		rd_->free_rid(uset_);
+		uset_ = RID();
+	}
+}
+
 void RaymarchPass::teardown() {
 	if (!rd_) return;
 	// Free order matters on Godot 4.7.1's RenderingDevice: freeing a texture (or shader)
@@ -68,6 +81,9 @@ void RaymarchPass::teardown() {
 		*r = RID();
 	}
 	uset_mask_ = RID();
+	material_albedo_ = RID();
+	material_surface_ = RID();
+	material_sampler_ = RID();
 	rd_ = nullptr;
 }
 
@@ -97,8 +113,8 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 	width_ = w;
 	height_ = h;
 
-	Ref<RDUniform> u[18];
-	for (int i = 0; i < 18; i++) u[i].instantiate();
+	Ref<RDUniform> u[20];
+	for (int i = 0; i < 20; i++) u[i].instantiate();
 	u[0]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
 	u[0]->set_binding(0); u[0]->add_id(color_);
 	u[1]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
@@ -125,8 +141,15 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 		u[i]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
 		u[i]->set_binding(i); u[i]->add_id(island_bufs[i - 13]);
 	}
+	// 18-19: the shared material arrays (set by set_materials()).
+	const RID material_samplers[2] = {material_albedo_, material_surface_};
+	for (int i = 18; i <= 19; i++) {
+		u[i]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
+		u[i]->set_binding(i); u[i]->add_id(material_sampler_);
+		u[i]->add_id(material_samplers[i - 18]);
+	}
 	Array uset_args;
-	for (int i = 0; i < 18; i++) uset_args.push_back(u[i]);
+	for (int i = 0; i < 20; i++) uset_args.push_back(u[i]);
 	uset_ = rd->uniform_set_create(uset_args, shader_, 0);
 }
 

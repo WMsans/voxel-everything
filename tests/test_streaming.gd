@@ -345,13 +345,23 @@ func test_job_overflow_recovers_via_force_regen() -> void:
 	assert_int(slotted).override_failure_message(
 		"no surface bricks hold slots after the overflowed mark").is_greater(0)
 
-	# Frame 2: the streamer saw the overflow bit and force-regens the regions it marked
-	# last frame. The jobs it enqueued ARE the bricks regenerated this frame — diff one
-	# against the CPU reference.
-	w.debug_stream_frame(Vector3(20, 56.2, 20))
-	var jobs := w.debug_jobs()
+	# The recovery frame: the streamer sees the overflow bit and force-regens the regions it
+	# marked, so the dropped bricks are re-enqueued. The jobs it enqueues ARE the bricks
+	# regenerated that frame — diff one against the CPU reference.
+	#
+	# NOT "the next frame". The counter readback is asynchronous now (the synchronous form
+	# stalled every frame on the generation work the last one queued, 39.6 ms at worst), so
+	# the overflow word the streamer acts on is a few frames old and the frame straight after
+	# the overflow enqueues nothing at all. Measured here, recovery lands on the second frame;
+	# the loop waits for it rather than hardcoding either number.
+	var jobs := PackedInt32Array()
+	for i in range(30):
+		w.debug_stream_frame(Vector3(20, 56.2, 20))
+		jobs = w.debug_jobs()
+		if jobs.size() >= 8:
+			break
 	assert_int(jobs.size()).override_failure_message(
-		"recovery frame enqueued no jobs").is_greater_equal(8)
+		"no recovery frame ever enqueued jobs after the overflow").is_greater_equal(8)
 	var n := jobs.size() / 8
 	assert_int(n).is_greater(0)
 	var d: Dictionary = w.debug_brick_diff(

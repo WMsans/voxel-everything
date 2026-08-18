@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bxacbqh2ojs1f"
+path="res://.godot/imported/lod_quads.comp.glsl-7f7a6bf817347848b4e4830f329e854e.res"
+
+[deps]
+
+source_file="res://shaders/lod_quads.comp.glsl"
+dest_files=["res://.godot/imported/lod_quads.comp.glsl-7f7a6bf817347848b4e4830f329e854e.res"]
+
+[params]
+

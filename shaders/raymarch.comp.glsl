@@ -1,6 +1,12 @@
 #[compute]
 #version 460
 
+#define MATERIAL_LAYERS 16
+// The material arrays live at the end of set 0. They must be declared before common.glslh
+// so material_surface() can see them; the include defines the shared shading functions.
+layout(set = 0, binding = 18) uniform sampler2DArray material_albedo;
+layout(set = 0, binding = 19) uniform sampler2DArray material_surface_tex;
+
 #include "common.glslh"
 #include "brick_layout.glslh"
 
@@ -407,16 +413,30 @@ void main() {
 		march_island(i, ro, rd, best);
 	}
 
+	// Debug material probe: a 1x1 dispatch calls material_surface() directly with zero
+	// gradients. pc.params.w is otherwise unused, so >0 is the probe flag; cam_pos is the
+	// world point and cam_fwd the surface normal.
+	if (pc.params.w > 0.0) {
+		vec4 surf = material_surface(uint(pc.params.w), pc.cam_pos.xyz,
+				normalize(pc.cam_fwd.xyz), vec3(0.0), vec3(0.0));
+		imageStore(out_color, px, vec4(surf.rgb, 1.0));
+		imageStore(out_hitpos, px, vec4(pc.cam_pos.xyz, 1.0));
+		return;
+	}
+
 	// One shading path for both (spec §3: "islands shade/shadow/reflect exactly like static
 	// terrain"). M6 replaces this with the deferred cel stack; the point is that there is
 	// exactly one of it.
 	vec3 color = sky_color(rd);
 	vec4 hitpos = vec4(0.0);
 	if (best.hit) {
-		vec3 alb = material_albedo(best.mat);
-		vec3 sun = normalize(vec3(0.6, 0.8, 0.3));
-		float lam = max(dot(best.n, sun), 0.0);
-		color = alb * (0.25 + 0.75 * lam);
+		// The pixel's world footprint at the hit: the ray direction's screen derivative
+		// scaled by distance. tan_x/tan_y and the target size are already in the push
+		// constant, so this costs two multiplies and no extra state.
+		vec3 ddx = pc.cam_right.xyz * (2.0 * pc.params.x / float(size.x)) * best.t;
+		vec3 ddy = pc.cam_up.xyz * (2.0 * pc.params.y / float(size.y)) * best.t;
+		vec4 surf = material_surface(best.mat, best.p, best.n, ddx, ddy);
+		color = shade_terrain(surf, best.n, best.p);
 		hitpos = vec4(best.p, 1.0);
 	}
 
@@ -424,8 +444,8 @@ void main() {
 			length(best.p - edits.center.xyz) < edits.params.x) {
 		uint t = uint(edits.params.y);
 		vec3 tint = t == 0u ? vec3(1.0, 0.55, 0.1)
-		          : t == 1u ? material_albedo(4u)
-		          : material_albedo(uint(edits.params.z));
+		          : t == 1u ? flat_material_albedo(4u)
+		          : flat_material_albedo(uint(edits.params.z));
 		color = mix(color, tint, 0.45);
 	}
 

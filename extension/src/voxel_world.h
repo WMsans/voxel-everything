@@ -12,11 +12,14 @@
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/vector2.hpp>
 #include <atomic>
+#include <map>
 #include <mutex>
+#include <set>
 #include <utility>
 #include <vector>
 #include "connectivity/occupancy.h"
 #include "generator/volume_set.h"
+#include "lod/lod_tree.h"
 #include "mesh/chunk_residency.h"
 #include "physics/island_body.h"
 #include "physics/island_manager.h"
@@ -29,6 +32,7 @@
 namespace godot {
 
 class GpuAtlas;
+class MaterialAtlas;
 class RegionPass;
 class BrickGenPass;
 class RaymarchPass;
@@ -36,6 +40,10 @@ class CompositePass;
 class WorldStreamer;
 class MeshService;
 class ColliderStreamer;
+class LodPool;
+class LodRasterPass;
+class LodCullPass;
+class HizPass;
 class IslandAtlas;
 class IslandCullPass;
 struct IslandExtractJob;
@@ -77,6 +85,7 @@ class VoxelWorld : public Node3D {
 	int shape_builds_per_frame_ = 2;
 
 	GpuAtlas *atlas_ = nullptr;
+	MaterialAtlas *materials_ = nullptr;
 	IslandAtlas *islands_ = nullptr;
 	int island_slots_ = 0; // high-water mark, not a population; guarded by island_mutex_
 	IslandCullPass *island_cull_ = nullptr;
@@ -84,6 +93,9 @@ class VoxelWorld : public Node3D {
 	BrickGenPass *gen_pass_ = nullptr;
 	RaymarchPass *raymarch_pass_ = nullptr;
 	CompositePass *composite_pass_ = nullptr;
+	LodRasterPass *lod_raster_pass_ = nullptr;
+	LodCullPass *lod_cull_pass_ = nullptr;
+	HizPass *hiz_pass_ = nullptr;
 	// CPU cores outlive the GPU objects: a re-init re-streams the same world, edits
 	// included. This is also what a future save/reload will do (saves ARE the edit log).
 	ve::EditLog *edit_log_ = nullptr;
@@ -133,11 +145,36 @@ class VoxelWorld : public Node3D {
 	std::vector<IslandBody *> test_bodies_;
 	float last_physics_tick_ms_ = 0.0f; // diagnostic; see debug_perf_stats
 
+	// --- M5 LoD state (Task 12) ---
+	int max_lod_pages_ = 32768;
+	int lod_builds_per_frame_ = 8;
+	// Guards lod_tree_, lod_walk_, lod_pages_of_, lod_page_quads_, and lod_pool_ state
+	// between the render thread (lod_tick) and main/tool threads (mark_dirty, debug stats).
+	// Lock order is edit_mutex_ -> lod_mutex_: lod_tick never holds lod_mutex_ while it calls
+	// gather_lod_ops (which takes edit_mutex_), so append_edit_locked can safely take
+	// lod_mutex_ while already holding edit_mutex_.
+	std::mutex lod_mutex_;
+	using LodKey = ve::LodKey;
+	ve::LodTree *lod_tree_ = nullptr;
+	LodPool *lod_pool_ = nullptr;
+	uint32_t lod_frame_ = 0;
+	ve::LodWalkResult lod_walk_;
+	std::map<LodKey, std::vector<int>> lod_pages_of_;
+	std::map<int, int> lod_page_quads_; // page -> number of quads stored in that page
+	std::set<LodKey> lod_overflow_logged_; // once-per-chunk overflow diagnostics
+	int lod_pressure_ = 0;
+	void ensure_lod(); // lazy: creates/initializes lod_tree_ + lod_pool_ on first use
+	// Assumes lod_mutex_ is held; emits the real page list for the current lod_walk_.
+	void prepare_lod_raster_locked();
+
 	RenderingDevice *main_rd_ = nullptr;
 	RenderingDevice *local_rd_ = nullptr; // owned when use_local_device_
 	bool initialized_ = false;
 
 	void teardown_gpu(); // every GPU object; CPU cores survive
+	// Gathers the ops that can affect a LoD chunk: its AABB padded by two cells, flattened
+	// across regions in global append order, truncated to a chronological prefix (M4 errata 1).
+	void gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out);
 	bool extract_component(const std::vector<ve::IVec3> &cells, IslandExtractJob *job,
 			std::vector<ve::CellBox> *boxes, ve::VolumeData *out);
 
@@ -185,10 +222,18 @@ public:
 	int get_mesh_jobs_per_frame() const { return mesh_jobs_per_frame_; }
 	void set_shape_builds_per_frame(int v) { shape_builds_per_frame_ = v; }
 	int get_shape_builds_per_frame() const { return shape_builds_per_frame_; }
+	void set_max_lod_pages(int v) { max_lod_pages_ = v; }
+	int get_max_lod_pages() const { return max_lod_pages_; }
+	void set_lod_builds_per_frame(int v) { lod_builds_per_frame_ = v; }
+	int get_lod_builds_per_frame() const { return lod_builds_per_frame_; }
+	void lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ);
+	// Push the current lod_walk_ page list (with per-page quad counts) into the raster pass.
+	void prepare_lod_raster();
 	RenderingDevice *rd() const;
 	ve::WorldBounds world_bounds() const;
 
 	GpuAtlas *atlas() { return atlas_; }
+	MaterialAtlas *material_atlas() { return materials_; }
 	IslandAtlas *islands() { return islands_; }
 	// High-water mark, not a population: the shader masks off bits at or above it and then
 	// tests each remaining slot's descriptor for dim >= 2, so a dead slot below the mark
@@ -201,6 +246,10 @@ public:
 	RaymarchPass *raymarch_pass() { return raymarch_pass_; }
 	IslandCullPass *island_cull() { return island_cull_; }
 	CompositePass *composite_pass() { return composite_pass_; }
+	LodPool *lod_pool() { return lod_pool_; }
+	LodRasterPass *lod_raster_pass() { return lod_raster_pass_; }
+	LodCullPass *lod_cull_pass() { return lod_cull_pass_; }
+	HizPass *hiz_pass() { return hiz_pass_; }
 	std::mutex &edit_mutex() { return edit_mutex_; }
 	MeshService *mesh_service() { return mesh_; }
 	void queue_island_upload(int slot, const ve::VolumeData &d);
@@ -333,6 +382,9 @@ public:
 	// --- Task 12 hooks ---
 	Color debug_raymarch_pixel(Vector3 origin, Vector3 dir);
 	Dictionary debug_raymarch_probe(Vector3 origin, Vector3 dir);
+	// --- M5 Task 11 hooks ---
+	Dictionary debug_material_atlas_stats();
+	Color debug_material_probe(int mat, Vector3 p, Vector3 n);
 	int debug_stream_frame(Vector3 cam);
 	Dictionary debug_stream_stats();
 	int debug_slot_of_region(Vector3i region) const;
@@ -365,6 +417,10 @@ public:
 	// --- Task 5 hook ---
 	Dictionary debug_mesh_diff(Vector3i chunk);
 
+	// --- M5 Task 9 hooks ---
+	Dictionary debug_lod_diff(int level, Vector3i coord);
+	void debug_apply_sphere_subtract(Vector3 centre, float radius);
+
 	// --- Task 9 hook ---
 	Dictionary debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_cell);
 
@@ -380,6 +436,25 @@ public:
 	// --- Task 6 hooks ---
 	bool debug_mesh_submit(Array chunks);
 	Array debug_mesh_collect();
+
+	// --- M5 Task 10 LoD queue hooks ---
+	bool debug_lod_submit(Array jobs);
+	Array debug_lod_collect();
+	// --- M5 Task 12 LoD tick hooks ---
+	void debug_lod_tick(Vector3 pos, Vector3 fwd);
+	Dictionary debug_lod_stats();
+	// --- M5 Task 13 LoD render hooks ---
+	Dictionary debug_lod_render_probe(Vector3 pos, Vector3 fwd, int w, int h);
+	Dictionary debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, int w, int h,
+			bool cull);
+	// --- M5 Task 16 seam hooks ---
+	Dictionary debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, bool skip_lod = false);
+	// --- M5 Task 14 HiZ hooks ---
+	Dictionary debug_hiz_stats();
+	Dictionary debug_hiz_probe_synthetic(float far_value, float near_value);
+	bool debug_hiz_occluded(Vector2 lo, Vector2 hi, float depth);
+	// --- M5 Task 15 LoD cull hooks ---
+	Dictionary debug_lod_cull_probe(Vector3 pos, Vector3 fwd);
 };
 
 } // namespace godot

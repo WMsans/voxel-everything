@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://djb1d3w6gxn3u"
+path="res://.godot/imported/lod_field.comp.glsl-4a80a5ef515a2e39ce209b06fc9cfe28.res"
+
+[deps]
+
+source_file="res://shaders/lod_field.comp.glsl"
+dest_files=["res://.godot/imported/lod_field.comp.glsl-4a80a5ef515a2e39ce209b06fc9cfe28.res"]
+
+[params]
+

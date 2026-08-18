@@ -8,6 +8,7 @@
 #include <vector>
 #include "generator/edit_ops.h"
 #include "render/island_extract_pass.h"
+#include "render/lod_build_pass.h"
 #include "render/mesh_pass.h"
 #include "world/region.h"
 
@@ -62,6 +63,17 @@ public:
 	// no-progress condition rather than re-queueing work that can only fail.
 	bool extraction_available() const {
 		return extract_available_.load(std::memory_order_acquire);
+	}
+
+	// LoD builds share the worker thread in a third queue, behind colliders: a missing far
+	// chunk is a coarse horizon, a missing collider is a hole the player falls through.
+	bool submit_lod(std::vector<LodBuildJob> jobs);
+	// True while a LoD batch is queued or being built.
+	bool lod_busy() const { return lod_busy_.load(std::memory_order_acquire); }
+	int collect_lod(std::vector<LodBuildResult> *out);
+	// True when the worker has a live LodBuildPass.
+	bool lod_available() const {
+		return lod_available_.load(std::memory_order_acquire);
 	}
 #ifdef DEBUG_ENABLED
 	// Test hook: force the availability flag so the engine suite can simulate a permanently
@@ -126,6 +138,9 @@ private:
 	IslandExtractPass *extract_ = nullptr;         // worker thread only
 	std::vector<IslandExtractJob> pending_extract_;
 	std::vector<IslandExtractResult> extract_results_;
+	LodBuildPass *lod_ = nullptr;                  // worker thread only
+	std::vector<LodBuildJob> pending_lod_;
+	std::vector<LodBuildResult> lod_results_;
 	std::vector<VolumeUpload> pending_volumes_;
 #ifdef DEBUG_ENABLED
 	// Debug-only: accepted volume upload slots, used by debug_submitted_volume_slots().
@@ -136,6 +151,8 @@ private:
 	std::atomic<bool> extract_available_{false};
 	std::atomic<bool> fail_extracts_{false};
 	std::atomic<bool> fail_extract_submit_{false};
+	std::atomic<bool> lod_busy_{false};
+	std::atomic<bool> lod_available_{false};
 	const std::function<void(MeshPass &)> *sync_fn_ = nullptr;
 	bool sync_pending_ = false;
 	bool started_ = false;   // startup attempt has settled (ready_ is then meaningful)

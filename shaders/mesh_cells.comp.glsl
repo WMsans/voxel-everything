@@ -14,11 +14,6 @@ layout(set = 0, binding = 2, std430) writeonly buffer Verts { float v[]; } verts
 // vert count, tri count, overflow bits, pad — four uints per job.
 layout(set = 0, binding = 3, std430) buffer Counts { uint v[]; } counts;
 
-layout(push_constant, std430) uniform Push {
-	ivec4 chunk;  // xyz = chunk coordinates, w = job index in this batch
-	ivec4 params; // x = op count, y = max verts per job, z = max tris per job, w = unused
-} pc;
-
 // Cell corners indexed by (x | y<<1 | z<<2); mirror of kCorner in dual_contour.cpp.
 const ivec3 CORNER[8] = ivec3[8](ivec3(0, 0, 0), ivec3(1, 0, 0), ivec3(0, 1, 0), ivec3(1, 1, 0),
 		ivec3(0, 0, 1), ivec3(1, 0, 1), ivec3(0, 1, 1), ivec3(1, 1, 1));
@@ -29,7 +24,7 @@ const ivec2 EDGE[12] = ivec2[12](ivec2(0, 1), ivec2(2, 3), ivec2(4, 5), ivec2(6,
 
 void main() {
 	ivec3 m = ivec3(gl_GlobalInvocationID);
-	if (any(greaterThanEqual(m, ivec3(CHUNK_MESH_CELLS)))) return;
+	if (any(greaterThanEqual(m, ivec3(chunk_mesh_cells())))) return;
 	int ci = mesh_cell_index(m);
 	uint job = uint(pc.chunk.w);
 
@@ -58,8 +53,7 @@ void main() {
 		cells.v[ci] = -1;
 		return;
 	}
-	vec3 p = vec3(pc.chunk.xyz) * CHUNK_SIZE +
-			(vec3(m) - 1.0 + acc / float(n)) * CHUNK_CELL_SIZE;
+	vec3 p = pc.grid.xyz + (vec3(m) - 1.0 + acc / float(n)) * pc.grid.w;
 	uint base = (job * uint(pc.params.y) + idx) * 3u;
 	verts.v[base + 0u] = p.x;
 	verts.v[base + 1u] = p.y;

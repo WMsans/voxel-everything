@@ -7,6 +7,10 @@
 
 using namespace godot;
 
+// LoD chunks per GPU batch. Task 12 plans to submit up to lod_builds_per_frame (default 8)
+// jobs per frame, so the pass must be configured to accept that many in a single batch.
+constexpr int kLodMaxJobsPerBatch = 8;
+
 MeshService::~MeshService() {
 	stop();
 }
@@ -23,6 +27,8 @@ bool MeshService::start(const MeshPassConfig &cfg) {
 		extract_busy_.store(false, std::memory_order_release);
 		extract_available_.store(false, std::memory_order_release);
 		fail_extract_submit_.store(false, std::memory_order_release);
+		lod_busy_.store(false, std::memory_order_release);
+		lod_available_.store(false, std::memory_order_release);
 	}
 	thread_ = std::thread([this] { run(); });
 	std::unique_lock<std::mutex> lock(mu_);
@@ -48,6 +54,8 @@ void MeshService::stop() {
 	results_.clear();
 	pending_extract_.clear();
 	extract_results_.clear();
+	pending_lod_.clear();
+	lod_results_.clear();
 	pending_volumes_.clear();
 #ifdef DEBUG_ENABLED
 	submitted_volume_slots_.clear();
@@ -58,6 +66,8 @@ void MeshService::stop() {
 	extract_available_.store(false, std::memory_order_release);
 	fail_extracts_.store(false, std::memory_order_release);
 	fail_extract_submit_.store(false, std::memory_order_release);
+	lod_busy_.store(false, std::memory_order_release);
+	lod_available_.store(false, std::memory_order_release);
 }
 
 bool MeshService::submit(std::vector<MeshRequest> requests) {
@@ -114,6 +124,31 @@ int MeshService::collect_extracts(std::vector<IslandExtractResult> *out) {
 	return n;
 }
 
+bool MeshService::submit_lod(std::vector<LodBuildJob> jobs) {
+	if (jobs.empty() || !is_valid()) return false;
+	{
+		std::lock_guard<std::mutex> lock(mu_);
+		if (stopping_ || !pending_lod_.empty() || lod_busy_.load(std::memory_order_acquire))
+			return false;
+		pending_lod_ = std::move(jobs);
+		lod_busy_.store(true, std::memory_order_release);
+	}
+	cv_.notify_one();
+	return true;
+}
+
+int MeshService::collect_lod(std::vector<LodBuildResult> *out) {
+	std::vector<LodBuildResult> got;
+	{
+		std::lock_guard<std::mutex> lock(mu_);
+		got.swap(lod_results_);
+	}
+	const int n = static_cast<int>(got.size());
+	if (out)
+		for (LodBuildResult &r : got) out->push_back(std::move(r));
+	return n;
+}
+
 bool MeshService::submit_volume(int slot, ve::VolumeData data) {
 	if (!is_valid() || !data.valid()) return false;
 	{
@@ -148,13 +183,14 @@ bool MeshService::run_sync(const std::function<void(MeshPass &)> &fn) {
 	if (!is_valid()) return false;
 	std::unique_lock<std::mutex> lock(mu_);
 	if (stopping_) return false;
-	// One at a time, and never while a batch, an extraction, or a queued volume upload is
-	// running: the diagnostic hooks share the pass's single lattice and cell map with the
-	// streaming path, and volume uploads must land before a diagnostic sees the field.
+	// One at a time, and never while a batch, an extraction, a LoD build, or a queued volume
+	// upload is running: the diagnostic hooks share the passes' single lattice/cell maps with
+	// the streaming path, and volume uploads must land before a diagnostic sees the field.
 	done_cv_.wait(lock, [this] {
 		return stopping_ || (!sync_pending_ && !busy_.load(std::memory_order_acquire) &&
-				!extract_busy_.load(std::memory_order_acquire) && pending_extract_.empty() &&
-				pending_volumes_.empty());
+				!extract_busy_.load(std::memory_order_acquire) &&
+				!lod_busy_.load(std::memory_order_acquire) && pending_extract_.empty() &&
+				pending_lod_.empty() && pending_volumes_.empty());
 	});
 	if (stopping_) return false;
 	sync_fn_ = &fn;
@@ -187,6 +223,18 @@ void MeshService::run() {
 			// Not fatal: collision meshing still works, and IslandManager drops connectivity
 			// work it knows can never make progress.
 		}
+		lod_ = new LodBuildPass();
+		LodBuildConfig lod_cfg;
+		lod_cfg.max_jobs = kLodMaxJobsPerBatch;
+		if (lod_->initialize(rd, lod_cfg)) {
+			lod_available_.store(true, std::memory_order_release);
+		} else {
+			UtilityFunctions::printerr("MeshService: LoD builds unavailable");
+			delete lod_;
+			lod_ = nullptr;
+			// Not fatal: collision meshing still works, and the far-field LoD chain simply
+			// cannot submit work.
+		}
 	}
 	{
 		std::lock_guard<std::mutex> lock(mu_);
@@ -204,12 +252,13 @@ void MeshService::run() {
 		std::vector<VolumeUpload> volumes_to_upload;
 		std::vector<IslandExtractJob> extracts;
 		std::vector<MeshRequest> batch;
+		std::vector<LodBuildJob> lod_jobs;
 		const std::function<void(MeshPass &)> *sync_fn = nullptr;
 		{
 			std::unique_lock<std::mutex> lock(mu_);
 			cv_.wait(lock, [this] {
 				return stopping_ || sync_pending_ || !pending_volumes_.empty() ||
-						!pending_extract_.empty() || !pending_.empty();
+						!pending_extract_.empty() || !pending_.empty() || !pending_lod_.empty();
 			});
 			if (stopping_) break;
 			if (sync_pending_) {
@@ -218,8 +267,10 @@ void MeshService::run() {
 				volumes_to_upload.swap(pending_volumes_);
 			} else if (!pending_extract_.empty()) {
 				extracts.swap(pending_extract_);
-			} else {
+			} else if (!pending_.empty()) {
 				batch.swap(pending_);
+			} else if (!pending_lod_.empty()) {
+				lod_jobs.swap(pending_lod_);
 			}
 		}
 
@@ -238,6 +289,9 @@ void MeshService::run() {
 			for (const VolumeUpload &vu : volumes_to_upload) {
 				if (!pass.upload_volume(vu.slot, vu.data))
 					UtilityFunctions::printerr("MeshService: volume upload failed for slot ",
+							vu.slot);
+				if (lod_ && !lod_->volumes().upload(rd, vu.slot, vu.data))
+					UtilityFunctions::printerr("MeshService: LoD volume upload failed for slot ",
 							vu.slot);
 			}
 			// run_sync waits on pending_volumes_ going empty as well as on its own turn.
@@ -288,8 +342,16 @@ void MeshService::run() {
 		// Point the jobs at the ops this batch owns; `batch` outlives the call.
 		std::vector<MeshJob> jobs;
 		jobs.reserve(batch.size());
-		for (const MeshRequest &r : batch)
-			jobs.push_back({r.chunk, r.ops.data(), static_cast<int>(r.ops.size())});
+		for (const MeshRequest &r : batch) {
+			MeshJob job;
+			job.chunk = r.chunk;
+			job.ops = r.ops.data();
+			job.op_count = static_cast<int>(r.ops.size());
+			ve::chunk_world_origin(r.chunk, job.origin);
+			job.cell_size = ve::kChunkCellSize;
+			job.lattice = ve::kChunkLattice;
+			jobs.push_back(job);
+		}
 
 		std::vector<MeshResult> out;
 		if (pass.submit(jobs.data(), static_cast<int>(jobs.size()))) {
@@ -312,11 +374,39 @@ void MeshService::run() {
 		}
 		// run_sync waits on busy_ going false as well as on its own turn.
 		done_cv_.notify_all();
+
+		if (!lod_jobs.empty()) {
+			std::vector<LodBuildResult> lod_out;
+			if (lod_ && lod_->submit(lod_jobs.data(), static_cast<int>(lod_jobs.size()))) {
+				lod_->collect(&lod_out);
+			} else {
+				// Report a failure per job rather than dropping the batch: the caller clears
+				// its in-flight markers from the results, so a silent drop would strand them.
+				for (const LodBuildJob &job : lod_jobs) {
+					LodBuildResult f;
+					f.level = job.level;
+					f.coord = job.coord;
+					f.failed = true;
+					lod_out.push_back(std::move(f));
+				}
+			}
+			{
+				std::lock_guard<std::mutex> lock(mu_);
+				for (LodBuildResult &r : lod_out) lod_results_.push_back(std::move(r));
+				lod_busy_.store(false, std::memory_order_release);
+			}
+			// run_sync waits on lod_busy_ going false as well as on its own turn.
+			done_cv_.notify_all();
+		}
 	}
 
 	if (extract_) {
 		delete extract_;
 		extract_ = nullptr;
+	}
+	if (lod_) {
+		delete lod_;
+		lod_ = nullptr;
 	}
 	pass.teardown();
 	memdelete(rd);

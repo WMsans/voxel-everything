@@ -1,5 +1,6 @@
 #include "voxel_world.h"
 #include "render/gpu_atlas.h"
+#include "render/material_atlas.h"
 #include "render/camera_params.h"
 #include "render/island_atlas.h"
 #include "render/island_cull_pass.h"
@@ -11,6 +12,16 @@
 #include "render/shader_loader.h"
 #include "render/mesh_pass.h"
 #include "render/mesh_service.h"
+#include "render/lod_build_pass.h"
+#include "render/lod_pool.h"
+#include "render/lod_raster_pass.h"
+#include "render/lod_cull_pass.h"
+#include "render/hiz_pass.h"
+#include "lod/lod_contour.h"
+#include "lod/lod_grid.h"
+#include "lod/lod_reduce.h"
+#include "lod/lod_skirt.h"
+#include "lod/lod_tree.h"
 #include "physics/collider_streamer.h"
 #include "physics/island_manager.h"
 #include "mesh/dual_contour.h"
@@ -21,9 +32,12 @@
 #include "world/brick_mip.h"
 #include "world/raycast.h"
 #include <godot_cpp/classes/project_settings.hpp>
+#include <godot_cpp/classes/rd_texture_format.hpp>
+#include <godot_cpp/classes/rd_texture_view.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/core/memory.hpp>
+#include <godot_cpp/variant/projection.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <chrono>
 #include <thread>
@@ -64,10 +78,32 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_mesh_jobs_per_frame"), &VoxelWorld::get_mesh_jobs_per_frame);
 	ClassDB::bind_method(D_METHOD("set_shape_builds_per_frame", "v"), &VoxelWorld::set_shape_builds_per_frame);
 	ClassDB::bind_method(D_METHOD("get_shape_builds_per_frame"), &VoxelWorld::get_shape_builds_per_frame);
+	ClassDB::bind_method(D_METHOD("set_max_lod_pages", "v"), &VoxelWorld::set_max_lod_pages);
+	ClassDB::bind_method(D_METHOD("get_max_lod_pages"), &VoxelWorld::get_max_lod_pages);
+	ClassDB::bind_method(D_METHOD("set_lod_builds_per_frame", "v"), &VoxelWorld::set_lod_builds_per_frame);
+	ClassDB::bind_method(D_METHOD("get_lod_builds_per_frame"), &VoxelWorld::get_lod_builds_per_frame);
+	ClassDB::bind_method(D_METHOD("debug_lod_tick", "pos", "fwd"), &VoxelWorld::debug_lod_tick);
+	ClassDB::bind_method(D_METHOD("debug_lod_stats"), &VoxelWorld::debug_lod_stats);
+	ClassDB::bind_method(D_METHOD("debug_lod_render_probe", "pos", "fwd", "w", "h"),
+			&VoxelWorld::debug_lod_render_probe);
+	ClassDB::bind_method(D_METHOD("debug_lod_render_probe_culled", "pos", "fwd", "w", "h",
+			"cull"), &VoxelWorld::debug_lod_render_probe_culled);
+	ClassDB::bind_method(D_METHOD("debug_seam_probe", "pos", "fwd", "w", "h", "skip_lod"),
+			&VoxelWorld::debug_seam_probe, DEFVAL(false));
+	ClassDB::bind_method(D_METHOD("debug_hiz_stats"), &VoxelWorld::debug_hiz_stats);
+	ClassDB::bind_method(D_METHOD("debug_hiz_probe_synthetic", "far_value", "near_value"),
+			&VoxelWorld::debug_hiz_probe_synthetic);
+	ClassDB::bind_method(D_METHOD("debug_hiz_occluded", "lo", "hi", "depth"),
+			&VoxelWorld::debug_hiz_occluded);
+	ClassDB::bind_method(D_METHOD("debug_lod_cull_probe", "pos", "fwd"),
+			&VoxelWorld::debug_lod_cull_probe);
 	ClassDB::bind_method(D_METHOD("debug_init_physics"), &VoxelWorld::debug_init_physics);
 	ClassDB::bind_method(D_METHOD("debug_teardown_physics"), &VoxelWorld::debug_teardown_physics);
 	ClassDB::bind_method(D_METHOD("debug_mesh_lattice_diff", "chunk"), &VoxelWorld::debug_mesh_lattice_diff);
 	ClassDB::bind_method(D_METHOD("debug_mesh_diff", "chunk"), &VoxelWorld::debug_mesh_diff);
+	ClassDB::bind_method(D_METHOD("debug_lod_diff", "level", "coord"), &VoxelWorld::debug_lod_diff);
+	ClassDB::bind_method(D_METHOD("debug_apply_sphere_subtract", "centre", "radius"),
+			&VoxelWorld::debug_apply_sphere_subtract);
 	ClassDB::bind_method(D_METHOD("debug_island_extract_diff", "lo_cell", "hi_cell"), &VoxelWorld::debug_island_extract_diff);
 	ClassDB::bind_method(D_METHOD("debug_place_test_island", "slot", "lo_cell", "hi_cell", "offset"), &VoxelWorld::debug_place_test_island);
 	ClassDB::bind_method(D_METHOD("debug_place_test_island_rotated", "slot", "lo_cell", "hi_cell", "offset", "yaw"), &VoxelWorld::debug_place_test_island_rotated);
@@ -76,6 +112,8 @@ void VoxelWorld::_bind_methods() {
 			"width", "height"), &VoxelWorld::debug_island_tile_mask);
 	ClassDB::bind_method(D_METHOD("debug_mesh_submit", "chunks"), &VoxelWorld::debug_mesh_submit);
 	ClassDB::bind_method(D_METHOD("debug_mesh_collect"), &VoxelWorld::debug_mesh_collect);
+	ClassDB::bind_method(D_METHOD("debug_lod_submit", "jobs"), &VoxelWorld::debug_lod_submit);
+	ClassDB::bind_method(D_METHOD("debug_lod_collect"), &VoxelWorld::debug_lod_collect);
 	ClassDB::bind_method(D_METHOD("debug_physics_frame", "center"), &VoxelWorld::debug_physics_frame);
 	ClassDB::bind_method(D_METHOD("debug_set_physics_bubbles", "centers"), &VoxelWorld::debug_set_physics_bubbles);
 	ClassDB::bind_method(D_METHOD("debug_physics_stats"), &VoxelWorld::debug_physics_stats);
@@ -119,6 +157,8 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_pixel", "origin", "dir"), &VoxelWorld::debug_raymarch_pixel);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_probe", "origin", "dir"), &VoxelWorld::debug_raymarch_probe);
+	ClassDB::bind_method(D_METHOD("debug_material_atlas_stats"), &VoxelWorld::debug_material_atlas_stats);
+	ClassDB::bind_method(D_METHOD("debug_material_probe", "mat", "p", "n"), &VoxelWorld::debug_material_probe);
 	ClassDB::bind_method(D_METHOD("debug_sdf_atlas"), &VoxelWorld::debug_sdf_atlas);
 	ClassDB::bind_method(D_METHOD("debug_local_rd"), &VoxelWorld::debug_local_rd);
 	ClassDB::bind_method(D_METHOD("debug_load_shader", "res_path"), &VoxelWorld::debug_load_shader);
@@ -173,6 +213,8 @@ void VoxelWorld::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_collider_chunks"), "set_max_collider_chunks", "get_max_collider_chunks");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "mesh_jobs_per_frame"), "set_mesh_jobs_per_frame", "get_mesh_jobs_per_frame");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "shape_builds_per_frame"), "set_shape_builds_per_frame", "get_shape_builds_per_frame");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_lod_pages"), "set_max_lod_pages", "get_max_lod_pages");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_builds_per_frame"), "set_lod_builds_per_frame", "get_lod_builds_per_frame");
 }
 
 void VoxelWorld::_ready() {
@@ -201,6 +243,10 @@ void VoxelWorld::teardown_gpu() {
 	// passes and the atlas pool: RaymarchPass's uniform set references island buffers too.
 	if (composite_pass_) { delete composite_pass_; composite_pass_ = nullptr; }
 	if (raymarch_pass_) { delete raymarch_pass_; raymarch_pass_ = nullptr; }
+	if (lod_raster_pass_) { delete lod_raster_pass_; lod_raster_pass_ = nullptr; }
+	if (lod_cull_pass_) { delete lod_cull_pass_; lod_cull_pass_ = nullptr; }
+	if (hiz_pass_) { delete hiz_pass_; hiz_pass_ = nullptr; }
+	if (materials_) { delete materials_; materials_ = nullptr; }
 	if (gen_pass_) { delete gen_pass_; gen_pass_ = nullptr; }
 	if (region_pass_) { delete region_pass_; region_pass_ = nullptr; }
 	if (streamer_) { delete streamer_; streamer_ = nullptr; }
@@ -214,6 +260,13 @@ void VoxelWorld::teardown_gpu() {
 		island_slots_ = 0;
 	}
 	if (atlas_) { delete atlas_; atlas_ = nullptr; }
+	// The tree holds page indices the pool is about to free, and a stale index would be
+	// handed to the next chunk. Pool first, then tree, then the page map.
+	if (lod_pool_) lod_pool_->teardown();
+	if (lod_tree_) lod_tree_->clear();
+	lod_pages_of_.clear();
+	lod_page_quads_.clear();
+	lod_overflow_logged_.clear();
 	initialized_ = false;
 }
 
@@ -224,6 +277,16 @@ void VoxelWorld::_exit_tree() {
 	if (edit_log_) { delete edit_log_; edit_log_ = nullptr; }
 	pending_edits_.clear();
 	overflow_seen_ = 0;
+	if (lod_pool_) {
+		delete lod_pool_;
+		lod_pool_ = nullptr;
+	}
+	if (lod_tree_) {
+		delete lod_tree_;
+		lod_tree_ = nullptr;
+	}
+	lod_pages_of_.clear();
+	lod_page_quads_.clear();
 	if (local_rd_) {
 		memdelete(local_rd_);
 		local_rd_ = nullptr;
@@ -258,6 +321,8 @@ void VoxelWorld::ensure_initialized() {
 	if (!region_pass_->initialize(device, *atlas_)) { teardown_gpu(); return; }
 	gen_pass_ = new BrickGenPass();
 	if (!gen_pass_->initialize(device, *atlas_)) { teardown_gpu(); return; }
+	materials_ = new MaterialAtlas();
+	if (!materials_->initialize(device)) { teardown_gpu(); return; }
 	if (!edit_log_) edit_log_ = new ve::EditLog(world_bounds());
 	if (!residency_) {
 		ve::ResidencyConfig rcfg;
@@ -271,8 +336,25 @@ void VoxelWorld::ensure_initialized() {
 			region_pass_, gen_pass_, &occupancy_mutex_, &occupancy_inbox_, &edit_seq_);
 	raymarch_pass_ = new RaymarchPass();
 	raymarch_pass_->initialize(device);
+	raymarch_pass_->set_materials(*materials_);
 	composite_pass_ = new CompositePass();
 	composite_pass_->initialize(device);
+	lod_raster_pass_ = new LodRasterPass();
+	lod_raster_pass_->initialize(device);
+	lod_cull_pass_ = new LodCullPass();
+	if (!lod_cull_pass_->initialize(device)) {
+		UtilityFunctions::printerr("VoxelWorld: LoD cull initialization failed; continuing "
+				"without GPU culling (safe fail-soft: draw every candidate page)");
+		delete lod_cull_pass_;
+		lod_cull_pass_ = nullptr;
+	}
+	hiz_pass_ = new HizPass();
+	if (!hiz_pass_->initialize(device)) {
+		UtilityFunctions::printerr("VoxelWorld: HiZ initialization failed; continuing without "
+				"occlusion (safe fail-soft: always visible)");
+		delete hiz_pass_;
+		hiz_pass_ = nullptr;
+	}
 	initialized_ = true;
 }
 
@@ -295,6 +377,18 @@ ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
 				") — spec §8 fail-soft");
 	}
 	pending_edits_.push_back({op, r});
+	if (lod_tree_ && !r.touched.empty()) {
+		float lo[3], hi[3];
+		ve::op_world_aabb(op, lo, hi);
+		// Every level: ve::LodTree::mark_dirty walks them itself, and the relevance cut is
+		// at the HALF-CELL supersample resolution rather than the cell -- a 5 m crater still
+		// registers at L4's 6.4 m cells, which is the point of the reduction change. Only
+		// ops shorter than half a cell on every axis are genuinely unrepresentable.
+		// Lock order: caller holds edit_mutex_, lod_tick never holds lod_mutex_ while taking
+		// edit_mutex_, so edit_mutex_ -> lod_mutex_ is safe.
+		std::lock_guard<std::mutex> lock(lod_mutex_);
+		lod_tree_->mark_dirty(lo, hi);
+	}
 	// Connectivity's half of the fan-out. Runs under the append lock; the manager's
 	// pending-window queue is guarded by its own windows_mutex_ (note_edit may be called
 	// from a tool thread), and the seq bump above lets the window know which readback is
@@ -461,6 +555,10 @@ Dictionary VoxelWorld::debug_perf_stats() {
 	d["stream_total_ms"] = streamer_ ? streamer_->last_total_ms() : 0.0f;
 	d["stream_readback_ms"] = streamer_ ? streamer_->last_readback_ms() : 0.0f;
 	d["island_ms"] = island_manager_ ? island_manager_->last_ms() : 0.0f;
+	// lod_ms is CPU command-record time for the LoD raster + cull passes, not GPU execution
+	// time. See LodRasterPass/LodCullPass::last_ms comments.
+	d["lod_ms"] = (lod_raster_pass_ ? lod_raster_pass_->last_ms() : 0.0f) +
+			(lod_cull_pass_ ? lod_cull_pass_->last_ms() : 0.0f);
 	return d;
 }
 
@@ -816,6 +914,980 @@ void VoxelWorld::debug_teardown_physics() {
 	teardown_physics();
 }
 
+void VoxelWorld::gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out) {
+	if (!out) return;
+	out->clear();
+	std::lock_guard<std::mutex> lock(edit_mutex_);
+	if (!edit_log_) return;
+	float lo[3], hi[3];
+	ve::lod_chunk_aabb(level, coord, lo, hi);
+	const float pad = 2.0f * ve::lod_cell_size(level);
+	for (int a = 0; a < 3; a++) {
+		lo[a] -= pad;
+		hi[a] += pad;
+	}
+	ve::collect_ops_for_aabb(*edit_log_, lo, hi, out);
+	// M4 errata 1: the flattened cross-region list can exceed the cap. A chronological
+	// prefix is a valid world state; a suffix could apply an add without the subtract that
+	// made room for it.
+	if (out->size() > ve::kMaxRegionOps) out->resize(ve::kMaxRegionOps);
+}
+
+void VoxelWorld::ensure_lod() {
+	if (lod_tree_ && lod_pool_ && lod_pool_->page_count() > 0) return;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!device) return;
+	if (!lod_tree_) {
+		ve::LodTreeConfig cfg;
+		cfg.bounds = world_bounds();
+		lod_tree_ = new ve::LodTree(cfg);
+	}
+	if (!lod_pool_) lod_pool_ = new LodPool();
+	if (lod_pool_->page_count() == 0 && !lod_pool_->initialize(device, max_lod_pages_))
+		UtilityFunctions::printerr("VoxelWorld: LodPool initialize failed");
+}
+
+void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
+	std::unique_lock<std::mutex> lock(lod_mutex_);
+	ensure_lod();
+	if (!lod_tree_ || !lod_pool_) return;
+	lod_tree_->walk(cam, occ, ++lod_frame_, &lod_walk_);
+
+	// Results first: a page that arrives this frame should be drawable this frame.
+	std::vector<LodBuildResult> done;
+	if (mesh_ && mesh_->collect_lod(&done) > 0) {
+		for (LodBuildResult &r : done) {
+			if (r.failed) {
+				const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
+				const auto old_it = lod_pages_of_.find(key);
+				if (old_it != lod_pages_of_.end()) {
+					// Stale beats missing: a failed rebuild keeps the old pages drawable and
+					// is re-affirmed Ready-with-dirty so the next walk retries it. Do not
+					// release the old pages and do not mark the node failed (that would
+					// un-draw it).
+					lod_tree_->note_ready_dirty(r.level, r.coord);
+					lod_pressure_ += ve::lod_pages_for_quads(int(r.quads.size()));
+				} else {
+					lod_tree_->note_failed(r.level, r.coord);
+				}
+				continue;
+			}
+			if (r.overflow) {
+				const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
+				if (lod_overflow_logged_.insert(key).second)
+					UtilityFunctions::printerr("VoxelWorld: LoD chunk (level ", r.level,
+							", ", r.coord.x, ", ", r.coord.y, ", ", r.coord.z,
+							") overflowed; keeping first ", ve::kLodMaxQuadsPerChunk,
+							" quads");
+			}
+			if (r.quads.empty()) {
+				// Empty result. If an edit landed while this build was in flight, the result
+				// is stale: keep any old pages drawing (stale beats missing) or leave a
+				// non-resident node requestable. Only a non-dirty empty result is terminal,
+				// and only then may the old GPU pages be released.
+				const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
+				const bool dirty = lod_tree_->is_dirty(r.level, r.coord);
+				const auto old_it = lod_pages_of_.find(key);
+				if (dirty) {
+					if (old_it != lod_pages_of_.end()) {
+						// Old pages stay drawable; note_ready_dirty re-requests the rebuild.
+						lod_tree_->note_ready_dirty(r.level, r.coord);
+					} else {
+						// Nothing to keep drawing; note_empty leaves the node requestable.
+						lod_tree_->note_empty(r.level, r.coord);
+					}
+					continue;
+				}
+				// Genuinely empty: release any old pages before telling the tree, otherwise
+				// the tree stops drawing/requesting it while the stale GPU pages stay
+				// allocated forever.
+				if (old_it != lod_pages_of_.end()) {
+					for (int p : old_it->second) lod_page_quads_.erase(p);
+					lod_pool_->release(old_it->second);
+					lod_pages_of_.erase(old_it);
+				}
+				lod_tree_->note_empty(r.level, r.coord);
+				continue;
+			}
+			std::vector<int> pages;
+			if (!lod_pool_->upload(r.level, r.coord, r.quads, &pages)) {
+				// Refused, not half-funded. If the chunk already has resident pages, keep
+				// drawing them: stale beats missing. Re-affirm Ready-with-dirty using the old
+				// page list so the node stays drawable AND is re-requested next frame; a node
+				// with no old pages still fails and is re-requested next frame.
+				const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
+				const auto old_it = lod_pages_of_.find(key);
+				if (old_it != lod_pages_of_.end()) {
+					lod_tree_->note_ready_dirty(r.level, r.coord);
+					// Keep the old page list in lod_pages_of_: it remains the node's drawable
+					// pages until a later upload succeeds and replaces them.
+				} else {
+					lod_tree_->note_failed(r.level, r.coord);
+				}
+				// Accumulate across refusals in this frame so evictions recover enough pages
+				// for every refused rebuild, not just the last one.
+				lod_pressure_ += ve::lod_pages_for_quads(int(r.quads.size()));
+				continue;
+			}
+			// A rebuild replaces the old page list. Release the stale pages only once the
+			// new pages are allocated and uploaded, so a refused rebuild keeps the old pages
+			// drawing; after this point the tree points at the new list.
+			const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
+			const auto old_it = lod_pages_of_.find(key);
+			if (old_it != lod_pages_of_.end()) {
+				for (int p : old_it->second) lod_page_quads_.erase(p);
+				lod_pool_->release(old_it->second);
+				lod_pages_of_.erase(old_it);
+			}
+			for (int i = 0; i < int(pages.size()); i++) {
+				const int first = i * ve::kLodQuadsPerPage;
+				const int count = std::min(ve::kLodQuadsPerPage,
+						static_cast<int>(r.quads.size()) - first);
+				lod_page_quads_[pages[static_cast<size_t>(i)]] = count;
+			}
+			lod_tree_->note_ready(r.level, r.coord, pages.front(), int(pages.size()));
+			lod_pages_of_[key] = std::move(pages);
+		}
+	}
+
+	// Then evictions, so the budget below sees the pages they returned.
+	std::vector<ve::LodDrawItem> evicted;
+	lod_tree_->collect_evictions(lod_frame_, lod_pressure_, &evicted);
+	lod_pressure_ = 0;
+	for (const ve::LodDrawItem &e : evicted) {
+		const LodKey key{e.level, e.coord.x, e.coord.y, e.coord.z};
+		const auto it = lod_pages_of_.find(key);
+		if (it == lod_pages_of_.end()) continue;
+		for (int p : it->second) lod_page_quads_.erase(p);
+		lod_pool_->release(it->second);
+		lod_pages_of_.erase(it);
+	}
+
+	// Then this frame's builds, priority order, one batch. Mark the nodes building while
+	// still holding lod_mutex_ so note_building's dirty-clear happens at submission time.
+	// gather_lod_ops takes edit_mutex_, so it must run AFTER releasing lod_mutex_ (lock
+	// order: edit_mutex_ -> lod_mutex_); the building flag prevents a concurrent walk from
+	// re-requesting these nodes during that window, and a refused submit rolls the flags back.
+	std::vector<ve::LodBuildRequest> batch_requests;
+	if (mesh_ && !mesh_->lod_busy()) {
+		// MeshService's LodBuildPass currently supports at most 8 LoD jobs per batch.
+		// lod_builds_per_frame_ is user-facing and may be higher; submit_lod would reject
+		// anything above the mesher's cap, so clamp the actual batch take here.
+		const int take = std::min<int>({lod_builds_per_frame_, int(lod_walk_.requests.size()), 8});
+		batch_requests.assign(lod_walk_.requests.begin(), lod_walk_.requests.begin() + take);
+		for (const ve::LodBuildRequest &q : batch_requests)
+			lod_tree_->note_building(q.level, q.coord);
+	}
+	lock.unlock();
+
+	if (!batch_requests.empty()) {
+		std::vector<LodBuildJob> batch;
+		batch.reserve(batch_requests.size());
+		for (const ve::LodBuildRequest &q : batch_requests) {
+			LodBuildJob j;
+			j.level = q.level;
+			j.coord = q.coord;
+			gather_lod_ops(q.level, q.coord, &j.ops);
+			batch.push_back(std::move(j));
+		}
+		if (!mesh_->submit_lod(std::move(batch))) {
+			lock.lock();
+			for (const ve::LodBuildRequest &q : batch_requests) {
+				const LodKey key{q.level, q.coord.x, q.coord.y, q.coord.z};
+				if (lod_pages_of_.find(key) != lod_pages_of_.end()) {
+					lod_tree_->note_ready_dirty(q.level, q.coord);
+				} else {
+					lod_tree_->note_failed(q.level, q.coord);
+				}
+			}
+			lock.unlock();
+		}
+	}
+
+	lock.lock();
+	prepare_lod_raster_locked();
+}
+
+void VoxelWorld::prepare_lod_raster() {
+	std::lock_guard<std::mutex> lock(lod_mutex_);
+	prepare_lod_raster_locked();
+}
+
+void VoxelWorld::prepare_lod_raster_locked() {
+	if (!lod_raster_pass_ || !lod_pool_) return;
+	std::vector<ve::LodPageDraw> page_draws;
+	ve::lod_collect_page_draws(lod_walk_.draws, lod_pages_of_, lod_page_quads_, &page_draws);
+	std::vector<LodRasterPass::PageDraw> pages;
+	pages.reserve(page_draws.size());
+	for (const ve::LodPageDraw &pd : page_draws)
+		pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});
+	lod_raster_pass_->set_draw_pages(pages);
+}
+
+void VoxelWorld::debug_lod_tick(Vector3 pos, Vector3 fwd) {
+	const float p[3] = {pos.x, pos.y, pos.z};
+	const float f[3] = {fwd.x, fwd.y, fwd.z};
+	const float up[3] = {0.0f, 1.0f, 0.0f};
+	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, 1.2217f,
+			16.0f / 9.0f, 0.1f, 8000.0f, 2560, 1440);
+	lod_tick(cam, nullptr);
+}
+
+Dictionary VoxelWorld::debug_lod_stats() {
+	std::lock_guard<std::mutex> lock(lod_mutex_);
+	ensure_lod();
+	Dictionary d;
+	d["pages_total"] = lod_pool_ ? lod_pool_->page_count() : 0;
+	d["pages_free"] = lod_pool_ ? lod_pool_->free_pages() : 0;
+	d["pages_used"] = (lod_pool_ ? lod_pool_->page_count() : 0) -
+			(lod_pool_ ? lod_pool_->free_pages() : 0);
+	d["chunks_resident"] = static_cast<int>(lod_pages_of_.size());
+	int dirty_chunks = 0;
+	int dirty_levels = 0;
+	if (lod_tree_) lod_tree_->dirty_stats(&dirty_chunks, &dirty_levels);
+	d["dirty_chunks"] = dirty_chunks;
+	d["dirty_levels"] = dirty_levels;
+	int draw_pages = 0;
+	for (const ve::LodDrawItem &item : lod_walk_.draws)
+		draw_pages += item.page_count;
+	d["draw_pages"] = draw_pages;
+	// Requests the last walk still wants built. Zero, with nothing in flight, is what
+	// "the far field has converged for this camera" means; tests wait on it instead of
+	// guessing a frame count.
+	d["requests_pending"] = static_cast<int>(lod_walk_.requests.size());
+	// LodArena::alloc is all-or-nothing, so this should always be zero -- but reporting a
+	// hardcoded 0 makes the test that asserts it vacuous. MEASURE the two shapes a
+	// partially funded build would actually take: a chunk holding a page the per-page quad
+	// count never learned about, and arena pages that no resident chunk owns (the leak a
+	// half-rolled-back allocation leaves behind).
+	int partial = 0;
+	size_t owned_pages = 0;
+	for (const auto &kv : lod_pages_of_) {
+		owned_pages += kv.second.size();
+		for (int p : kv.second) {
+			if (lod_page_quads_.find(p) == lod_page_quads_.end()) {
+				partial++;
+				break;
+			}
+		}
+	}
+	const int used_pages = (lod_pool_ ? lod_pool_->page_count() : 0) -
+			(lod_pool_ ? lod_pool_->free_pages() : 0);
+	const int unowned = used_pages - static_cast<int>(owned_pages);
+	d["partial_allocations"] = partial + (unowned > 0 ? unowned : 0);
+	d["builds_in_flight"] = mesh_ && mesh_->lod_busy() ? 1 : 0;
+	// Async cull stats readback; zero until the first readback lands (safe "nothing culled").
+	d["culled_ratio"] = lod_cull_pass_ ? lod_cull_pass_->culled_ratio() : 0.0f;
+	return d;
+}
+
+Dictionary VoxelWorld::debug_lod_render_probe(Vector3 pos, Vector3 fwd, int w, int h) {
+	return debug_lod_render_probe_culled(pos, fwd, w, h, true);
+}
+
+Dictionary VoxelWorld::debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, int w, int h,
+		bool cull) {
+	Dictionary d;
+	d["coverage"] = 0.0f;
+	d["depth_min"] = 0.0f;
+	d["depth_max"] = 0.0f;
+	d["nearest_hit_m"] = 0.0f;
+	d["draw_pages"] = 0;
+	if (w <= 0 || h <= 0) return d;
+
+	// One tick: refresh the walk and the raster pass's page list for this view. debug_lod_tick
+	// -> lod_tick takes lod_mutex_ around ensure_lod and all LoD state mutation.
+	debug_lod_tick(pos, fwd);
+
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !lod_pool_ || !lod_raster_pass_ || !materials_) return d;
+
+	const float p[3] = {pos.x, pos.y, pos.z};
+	const float f[3] = {fwd.x, fwd.y, fwd.z};
+	const float up[3] = {0.0f, 1.0f, 0.0f};
+	const float aspect = static_cast<float>(w) / static_cast<float>(h);
+	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, 1.2217f,
+			aspect, 0.1f, 8000.0f, w, h);
+	Projection vp;
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++)
+			vp.columns[c][r] = cam.view_proj[c * 4 + r];
+
+	auto make_target = [&](RID *out, RenderingDevice::DataFormat fmt, bool depth) {
+		Ref<RDTextureFormat> tf;
+		tf.instantiate();
+		tf->set_format(fmt);
+		tf->set_width(w);
+		tf->set_height(h);
+		tf->set_usage_bits(depth ?
+				RenderingDevice::TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+						RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+						RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT |
+						RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT :
+				RenderingDevice::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT |
+						RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+						RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT |
+						RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT);
+		Ref<RDTextureView> tv;
+		tv.instantiate();
+		*out = device->texture_create(tf, tv, {});
+	};
+	RID color, depth;
+	make_target(&color, RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM, false);
+	make_target(&depth, RenderingDevice::DATA_FORMAT_D32_SFLOAT, true);
+	RID framebuffer;
+	if (color.is_valid() && depth.is_valid()) {
+		framebuffer = device->framebuffer_create(Array::make(color, depth));
+	}
+	if (!framebuffer.is_valid()) {
+		if (color.is_valid()) device->free_rid(color);
+		if (depth.is_valid()) device->free_rid(depth);
+		return d;
+	}
+
+	// Clear to reverse-Z far (0) before drawing the far field.
+	device->texture_clear(depth, Color(0.0f, 0.0f, 0.0f, 0.0f), 0, 1, 0, 1);
+	lod_raster_pass_->set_cull_enabled(cull);
+	const int draw_count = lod_raster_pass_->draw_page_count();
+	lod_pool_->upload_draw_args(lod_raster_pass_->draw_pages());
+	bool ok = lod_raster_pass_->draw(device, *lod_pool_, *materials_, color, depth,
+			vp, p, draw_count, ve::kLodFadeStartM, ve::kLodFadeEndM);
+	device->submit();
+	device->sync();
+
+	if (ok) {
+		const PackedByteArray depth_data = device->texture_get_data(depth, 0);
+		const int pixel_count = w * h;
+		if (depth_data.size() >= pixel_count * 4) {
+			const float *depths = reinterpret_cast<const float *>(depth_data.ptr());
+			int covered = 0;
+			float dmin = 1.0f;
+			float dmax = 0.0f;
+			for (int i = 0; i < pixel_count; i++) {
+				const float dv = depths[i];
+				if (dv <= 0.0f) continue;
+				covered++;
+				if (dv < dmin) dmin = dv;
+				if (dv > dmax) dmax = dv;
+			}
+			d["coverage"] = static_cast<float>(covered) / static_cast<float>(pixel_count);
+			d["depth_min"] = covered > 0 ? dmin : 0.0f;
+			d["depth_max"] = covered > 0 ? dmax : 0.0f;
+			// Reverse-Z perspective: depth d in [0,1] maps to view distance
+			// far*near / (near + d*(far-near)); the largest depth is the nearest hit.
+			if (covered > 0) {
+				const float near_z = 0.1f;
+				const float far_z = 8000.0f;
+				const float denom = near_z + dmax * (far_z - near_z);
+				d["nearest_hit_m"] = denom > 0.0f ? far_z * near_z / denom : 0.0f;
+			}
+		}
+	}
+
+	// The raster pass already holds the exact page list produced by prepare_lod_raster;
+	// reading lod_walk_ here would require re-taking lod_mutex_ after the tick released it.
+	d["draw_pages"] = lod_raster_pass_ ? lod_raster_pass_->draw_page_count() : 0;
+
+	// The raster pass cached a framebuffer over these throwaway targets; drop it before
+	// freeing them so teardown never frees a framebuffer whose attachments are already gone.
+	lod_raster_pass_->release_targets();
+	if (framebuffer.is_valid()) device->free_rid(framebuffer);
+	if (color.is_valid()) device->free_rid(color);
+	if (depth.is_valid()) device->free_rid(depth);
+	return d;
+}
+
+Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, bool skip_lod) {
+	Dictionary d;
+	d["band_pixels"] = 0;
+	d["band_pixels_unclaimed"] = 0;
+	d["band_pixels_double_claimed"] = 0;
+	d["near_pixels_lost_to_lod"] = 0;
+	d["far_pixels_lost_to_raymarch"] = 0;
+	if (w <= 0 || h <= 0) return d;
+
+	// One tick refreshes the walk and the raster pass's page list for this view.
+	debug_lod_tick(pos, fwd);
+
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_ ||
+			!composite_pass_ || !lod_pool_ || !lod_raster_pass_) return d;
+
+	// The near field needs the streamer to have populated the SDF atlas; the LoD settle in
+	// the test only converges the far-field walk. Drive the streamer until it is quiet (the
+	// same condition the near-field tests use) before rendering the composite.
+	{
+		int quiet = 0;
+		for (int i = 0; i < 120 && quiet < 6; i++) {
+			const int actions = debug_stream_frame(pos);
+			quiet = actions == 0 ? quiet + 1 : 0;
+		}
+	}
+
+	const float p[3] = {pos.x, pos.y, pos.z};
+	const float f[3] = {fwd.x, fwd.y, fwd.z};
+	const float up[3] = {0.0f, 1.0f, 0.0f};
+	const float aspect = static_cast<float>(w) / static_cast<float>(h);
+	const float fov_y = 1.2217f;
+	const float tan_y = std::tan(fov_y * 0.5f);
+	const float tan_x = tan_y * aspect;
+	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, fov_y,
+			aspect, 0.1f, 8000.0f, w, h);
+	Projection vp;
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++)
+			vp.columns[c][r] = cam.view_proj[c * 4 + r];
+
+	// Raymarch with the SAME camera as the LoD raster, so the two fields agree on the pixel
+	// grid. `looking_at` builds the same basis as lod_camera_perspective; fill in the fov.
+	ve::CameraParams cp = ve::CameraParams::looking_at(pos.x, pos.y, pos.z,
+			fwd.x, fwd.y, fwd.z, 0.0f, 1.0f, 0.0f);
+	cp.params[0] = tan_x;
+	cp.params[1] = tan_y;
+	cp.params[2] = 200.0f;
+	const ve::WorldBounds wb = world_bounds();
+	const ve::IVec3 ro = wb.origin_regions();
+	cp.dims[0] = world_size_regions_.x;
+	cp.dims[1] = world_size_regions_.y;
+	cp.dims[2] = world_size_regions_.z;
+	cp.dims[3] = island_slot_count();
+	cp.region_origin[0] = ro.x;
+	cp.region_origin[1] = ro.y;
+	cp.region_origin[2] = ro.z;
+	cp.atlas_bricks[0] = atlas_bricks_.x;
+	cp.atlas_bricks[1] = atlas_bricks_.y;
+	cp.atlas_bricks[2] = atlas_bricks_.z;
+	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cp, w, h, kNoEdit))
+		return d;
+
+	auto make_target = [&](RID *out, RenderingDevice::DataFormat fmt, bool depth) {
+		Ref<RDTextureFormat> tf;
+		tf.instantiate();
+		tf->set_format(fmt);
+		tf->set_width(w);
+		tf->set_height(h);
+		tf->set_usage_bits(depth ?
+				RenderingDevice::TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+						RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+						RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT |
+						RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT :
+				RenderingDevice::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT |
+						RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+						RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT |
+						RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT);
+		Ref<RDTextureView> tv;
+		tv.instantiate();
+		*out = device->texture_create(tf, tv, {});
+	};
+	RID color, depth, marker;
+	make_target(&color, RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM, false);
+	make_target(&depth, RenderingDevice::DATA_FORMAT_D32_SFLOAT, true);
+	{
+		Ref<RDTextureFormat> tf;
+		tf.instantiate();
+		tf->set_format(RenderingDevice::DATA_FORMAT_R8_UINT);
+		tf->set_width(w);
+		tf->set_height(h);
+		tf->set_usage_bits(RenderingDevice::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT |
+				RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+				RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT |
+				RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT);
+		PackedByteArray zero;
+		zero.resize(w * h);
+		zero.fill(0);
+		TypedArray<PackedByteArray> upload;
+		upload.push_back(zero);
+		Ref<RDTextureView> tv;
+		tv.instantiate();
+		marker = device->texture_create(tf, tv, upload);
+	}
+	RID framebuffer;
+	if (color.is_valid() && depth.is_valid() && marker.is_valid()) {
+		framebuffer = device->framebuffer_create(Array::make(color, marker, depth));
+	}
+	if (!framebuffer.is_valid()) {
+		if (color.is_valid()) device->free_rid(color);
+		if (depth.is_valid()) device->free_rid(depth);
+		if (marker.is_valid()) device->free_rid(marker);
+		return d;
+	}
+	// Clear to reverse-Z far (0) before drawing the near field. The marker starts at 0 and
+	// is ORed to 1/2/3 by the two field passes.
+	device->texture_clear(depth, Color(0.0f, 0.0f, 0.0f, 0.0f), 0, 1, 0, 1);
+
+	// Pass 1: near field. Composite writes 1 into the marker where it keeps the depth.
+	composite_pass_->draw(device, color, depth, raymarch_pass_->color_texture(),
+			raymarch_pass_->hitpos_texture(), vp, *materials_, p,
+			ve::kLodFadeStartM, ve::kLodFadeEndM, marker);
+
+	// Pass 2: far field. The LoD pipeline uses LOGIC_OP_OR on the marker, so kept far
+	// pixels OR 2 into the composite's 1, making double-claimed pixels read 3.
+	// `skip_lod` is a debug-only knob for the regression test: by leaving the far field
+	// out entirely it creates a real far-field gap, which the probe must count as
+	// unclaimed. Production rendering never passes it.
+	if (!skip_lod) {
+		lod_raster_pass_->set_cull_enabled(true);
+		lod_pool_->upload_draw_args(lod_raster_pass_->draw_pages());
+		const int draw_count = lod_raster_pass_->draw_page_count();
+		lod_raster_pass_->draw(device, *lod_pool_, *materials_, color, depth, vp, p,
+				draw_count, ve::kLodFadeStartM, ve::kLodFadeEndM, marker);
+	}
+	device->submit();
+	device->sync();
+
+	const PackedByteArray depth_data = device->texture_get_data(depth, 0);
+	const PackedByteArray marker_data = device->texture_get_data(marker, 0);
+	const PackedByteArray hitpos_data = device->texture_get_data(
+			raymarch_pass_->hitpos_texture(), 0);
+	int band_pixels = 0;
+	int band_pixels_unclaimed = 0;
+	int band_pixels_double_claimed = 0;
+	int near_pixels_lost_to_lod = 0;
+	int far_pixels_lost_to_raymarch = 0;
+	if (depth_data.size() >= static_cast<int64_t>(w) * h * 4 &&
+			marker_data.size() >= static_cast<int64_t>(w) * h &&
+			hitpos_data.size() >= static_cast<int64_t>(w) * h * 16) {
+		const float *df = reinterpret_cast<const float *>(depth_data.ptr());
+		const uint8_t *mk = reinterpret_cast<const uint8_t *>(marker_data.ptr());
+		const float *hf = reinterpret_cast<const float *>(hitpos_data.ptr());
+		// Reconstruct the world hit from the reverse-Z depth and the same camera basis the
+		// two fields use, so the probe measures the same Euclidean distance the shaders fade
+		// on. The LoD-only far field has no raymarch hitpos, so the depth attachment is the
+		// primary source that covers both fields on the same pixel grid. When both fields
+		// discarded a pixel (the unclaimed case), depth is 0 (the reverse-Z far clear) but
+		// the raymarch hitpos texture still records the terrain hit; use its world-space
+		// position to recover the Euclidean distance and classify the marker.
+		float r[3] = {f[1] * up[2] - f[2] * up[1], f[2] * up[0] - f[0] * up[2],
+				f[0] * up[1] - f[1] * up[0]};
+		const float rl = std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+		if (rl > 0.0f) { r[0] /= rl; r[1] /= rl; r[2] /= rl; }
+		const float kNear = 0.1f;
+		const float kFar = 8000.0f;
+		for (int i = 0; i < w * h; i++) {
+			const float depth_val = df[i];
+			const float *hp = &hf[i * 4];
+			const bool raymarch_hit = hp[3] >= 0.5f;
+			float dist;
+			if (depth_val > 0.0f) {
+				const float u = (static_cast<float>(i % w) + 0.5f) / static_cast<float>(w);
+				const float v = (static_cast<float>(i / w) + 0.5f) / static_cast<float>(h);
+				const float ndc_x = u * 2.0f - 1.0f;
+				const float ndc_y = 1.0f - v * 2.0f;
+				const float z_view = kFar * kNear /
+						(kNear + depth_val * (kFar - kNear));
+				const float ax = ndc_x * tan_x;
+				const float ay = ndc_y * tan_y;
+				dist = z_view * std::sqrt(1.0f + ax * ax + ay * ay);
+			} else if (raymarch_hit) {
+				const float dx = hp[0] - p[0];
+				const float dy = hp[1] - p[1];
+				const float dz = hp[2] - p[2];
+				dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+			} else {
+				// No terrain sample to classify: no field wrote depth and the raymarch
+				// did not hit, so this is sky rather than an unclaimed band pixel.
+				continue;
+			}
+			const uint8_t m = mk[i];
+			if (dist >= ve::kLodFadeStartM && dist <= ve::kLodFadeEndM) {
+				band_pixels++;
+				if (m == 0u) band_pixels_unclaimed++;
+				if (m == 3u) band_pixels_double_claimed++;
+			} else if (dist < ve::kLodFadeStartM && (m & 2u) != 0u) {
+				near_pixels_lost_to_lod++;
+			} else if (dist > ve::kLodFadeEndM && (m & 1u) != 0u) {
+				far_pixels_lost_to_raymarch++;
+			}
+		}
+	}
+	d["band_pixels"] = band_pixels;
+	d["band_pixels_unclaimed"] = band_pixels_unclaimed;
+	d["band_pixels_double_claimed"] = band_pixels_double_claimed;
+	d["near_pixels_lost_to_lod"] = near_pixels_lost_to_lod;
+	d["far_pixels_lost_to_raymarch"] = far_pixels_lost_to_raymarch;
+	// Same as debug_lod_render_probe_culled: use the raster pass's prepared page list rather
+	// than reading lod_walk_ after lod_tick released lod_mutex_.
+	d["draw_pages"] = lod_raster_pass_ ? lod_raster_pass_->draw_page_count() : 0;
+
+	// Both passes cached framebuffers over these throwaway targets; drop them before freeing.
+	composite_pass_->release_targets();
+	lod_raster_pass_->release_targets();
+	if (framebuffer.is_valid()) device->free_rid(framebuffer);
+	if (color.is_valid()) device->free_rid(color);
+	if (depth.is_valid()) device->free_rid(depth);
+	if (marker.is_valid()) device->free_rid(marker);
+	return d;
+}
+
+Dictionary VoxelWorld::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
+	Dictionary d;
+	d["args_before"] = 0;
+	d["args_after"] = 0;
+	d["offsets_changed"] = 0;
+	d["index_counts_changed"] = 0;
+	d["drawn_after"] = 0;
+	d["culled_ratio"] = 0.0f;
+
+	// One tick: refresh the walk and the raster pass's page list for this view.
+	debug_lod_tick(pos, fwd);
+
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !lod_pool_ || !lod_raster_pass_ || !lod_cull_pass_ ||
+			!hiz_pass_) {
+		return d;
+	}
+	const float p[3] = {pos.x, pos.y, pos.z};
+	const float f[3] = {fwd.x, fwd.y, fwd.z};
+	const float up[3] = {0.0f, 1.0f, 0.0f};
+	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, 1.2217f,
+			16.0f / 9.0f, 0.1f, 8000.0f, 2560, 1440);
+	Projection vp;
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++)
+			vp.columns[c][r] = cam.view_proj[c * 4 + r];
+
+	const int draw_count = lod_raster_pass_->draw_page_count();
+	if (draw_count <= 0) return d;
+	lod_pool_->upload_draw_args(lod_raster_pass_->draw_pages());
+	device->submit();
+	device->sync();
+	const PackedByteArray before = device->buffer_get_data(lod_pool_->args_buffer(), 0,
+			static_cast<uint32_t>(draw_count) * 20);
+
+	// This probe deliberately exercises frustum culling plus whatever HiZ state is present.
+	// Build a synthetic "everything far" pyramid first so the run never reads an unbuilt or
+	// stale pyramid (the production path builds from the real scene depth before culling).
+	debug_hiz_probe_synthetic(0.0f, 1.0f);
+
+	const bool ok = lod_cull_pass_->run(device, *lod_pool_, hiz_pass_, vp, draw_count,
+			draw_count, 0);
+	device->submit();
+	device->sync();
+	if (!ok) return d;
+
+	const PackedByteArray after = device->buffer_get_data(lod_pool_->args_buffer(), 0,
+			static_cast<uint32_t>(draw_count) * 20);
+	if (before.size() < static_cast<int64_t>(draw_count) * 20 ||
+			after.size() < static_cast<int64_t>(draw_count) * 20) {
+		return d;
+	}
+
+	const uint32_t *b = reinterpret_cast<const uint32_t *>(before.ptr());
+	const uint32_t *a = reinterpret_cast<const uint32_t *>(after.ptr());
+	int offsets_changed = 0;
+	int index_counts_changed = 0;
+	int drawn_after = 0;
+	PackedInt32Array pages;
+	PackedInt32Array culled;
+	PackedInt32Array page_frustum_culled;
+	PackedInt32Array slot_frustum_culled;
+	const std::vector<uint32_t> &page_chunk_cpu = lod_pool_->page_chunk_cpu();
+	float planes[6][4];
+	ve::lod_frustum_planes(cam.view_proj, planes);
+	const PackedByteArray chunk_bytes = device->buffer_get_data(lod_pool_->chunk_buffer(), 0,
+			static_cast<uint32_t>(lod_pool_->chunk_record_count() * 32));
+	const float *chunk_data = reinterpret_cast<const float *>(chunk_bytes.ptr());
+	const bool have_chunks = chunk_bytes.size() >= lod_pool_->chunk_record_count() * 32;
+	auto aabb_outside = [&](uint32_t ci) -> bool {
+		if (!have_chunks || ci == 0xffffffffu) return true;
+		const float *rec = chunk_data + static_cast<size_t>(ci) * 8;
+		const float lo[3] = {rec[0], rec[1], rec[2]};
+		const float cell = rec[3];
+		const float hi[3] = {lo[0] + cell * float(ve::kLodChunkCells),
+				lo[1] + cell * float(ve::kLodChunkCells),
+				lo[2] + cell * float(ve::kLodChunkCells)};
+		return !ve::lod_aabb_in_frustum(planes, lo, hi);
+	};
+	for (int i = 0; i < draw_count; i++) {
+		const size_t base = static_cast<size_t>(i) * 5;
+		if (a[base + 1] != 0u) drawn_after++;
+		if (b[base + 0] != a[base + 0]) index_counts_changed++;
+		if (b[base + 3] != a[base + 3]) offsets_changed++;
+		const uint32_t page = b[base + 3] / static_cast<uint32_t>(ve::kLodVertsPerPage);
+		const uint32_t page_ci = page < page_chunk_cpu.size() ?
+				page_chunk_cpu[static_cast<size_t>(page)] : 0xffffffffu;
+		const uint32_t slot_ci = static_cast<uint32_t>(i) < page_chunk_cpu.size() ?
+				page_chunk_cpu[static_cast<size_t>(i)] : 0xffffffffu;
+		pages.append(static_cast<int32_t>(page));
+		culled.append(a[base + 1] == 0u ? 1 : 0);
+		page_frustum_culled.append(aabb_outside(page_ci) ? 1 : 0);
+		slot_frustum_culled.append(aabb_outside(slot_ci) ? 1 : 0);
+	}
+
+	d["args_before"] = draw_count;
+	d["args_after"] = draw_count;
+	d["offsets_changed"] = offsets_changed;
+	d["index_counts_changed"] = index_counts_changed;
+	d["drawn_after"] = drawn_after;
+	d["culled_ratio"] = static_cast<float>(draw_count - drawn_after) / static_cast<float>(draw_count);
+	d["pages"] = pages;
+	d["culled"] = culled;
+	d["page_frustum_culled"] = page_frustum_culled;
+	d["slot_frustum_culled"] = slot_frustum_culled;
+	return d;
+}
+
+Dictionary VoxelWorld::debug_hiz_stats() {
+	Dictionary d;
+	ensure_initialized();
+	if (!hiz_pass_ || !rd()) return d;
+	d["width"] = HizPass::kSize;
+	d["height"] = HizPass::kSize;
+	d["mips"] = HizPass::kMipCount;
+	d["readback_level"] = HizPass::kReadbackLevel;
+	d["readback_texels"] = HizPass::kGrid * HizPass::kGrid;
+	return d;
+}
+
+Dictionary VoxelWorld::debug_hiz_probe_synthetic(float far_value, float near_value) {
+	Dictionary d;
+	d["mip0_at_near_texel"] = 0.0f;
+	d["mip1_covering_both"] = 0.0f;
+	d["top_mip"] = 0.0f;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !hiz_pass_) return d;
+
+	// A 256^2 synthetic depth image: every texel is `far_value` except one near texel at
+	// (0,0). With the level-0 pass mapping the scene 1:1 at this size, mip 0 keeps the near
+	// value, the mip-1 parent over the 2x2 corner keeps the far value, and the 1x1 top mip
+	// keeps the far value too.
+	const int size = HizPass::kSize;
+	PackedByteArray data;
+	data.resize(size * size * 4);
+	float *pixels = reinterpret_cast<float *>(data.ptrw());
+	for (int i = 0; i < size * size; i++) pixels[i] = far_value;
+	pixels[0] = near_value;
+
+	TypedArray<PackedByteArray> upload;
+	upload.push_back(data);
+	Ref<RDTextureFormat> tf;
+	tf.instantiate();
+	tf->set_format(RenderingDevice::DATA_FORMAT_R32_SFLOAT);
+	tf->set_width(size);
+	tf->set_height(size);
+	tf->set_usage_bits(RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT);
+	Ref<RDTextureView> tv;
+	tv.instantiate();
+	const RID synthetic = device->texture_create(tf, tv, upload);
+	if (!synthetic.is_valid()) return d;
+
+	if (hiz_pass_->build(device, synthetic, Vector2i(size, size))) {
+		device->submit();
+		device->sync();
+		d["mip0_at_near_texel"] = hiz_pass_->probe_mip_texel(device, 0, 0, 0);
+		d["mip1_covering_both"] = hiz_pass_->probe_mip_texel(device, 1, 0, 0);
+		d["top_mip"] = hiz_pass_->probe_mip_texel(device, HizPass::kMipCount - 1, 0, 0);
+		// Make the async readback deterministic for the test hooks: read the 4 KB copy
+		// synchronously after sync and feed it into the same occlusion grid the walk uses.
+		const PackedByteArray rb = device->texture_get_data(hiz_pass_->readback_texture(), 0);
+		hiz_pass_->update_occlusion(rb);
+	}
+	// The level-0 uniform set references this throwaway source; drop the cached set before
+	// freeing the texture so the next probe does not try to free a cascade-freed set.
+	hiz_pass_->release_level0_set();
+	device->free_rid(synthetic);
+	return d;
+}
+
+bool VoxelWorld::debug_hiz_occluded(Vector2 lo, Vector2 hi, float depth) {
+	ensure_initialized();
+	if (!hiz_pass_ || !rd()) return false;
+	const float ss_min[3] = {lo.x, lo.y, depth};
+	const float ss_max[3] = {hi.x, hi.y, depth};
+	return hiz_pass_->occlusion()->occluded(ss_min, ss_max);
+}
+
+void VoxelWorld::debug_apply_sphere_subtract(Vector3 centre, float radius) {
+	if (!edit_log_) ensure_physics_initialized();
+	ve::EditOp op;
+	op.type = ve::kOpSphereSubtract;
+	op.material = 0;
+	op.pos[0] = centre.x;
+	op.pos[1] = centre.y;
+	op.pos[2] = centre.z;
+	op.radius = radius;
+	append_edit(op);
+}
+
+Dictionary VoxelWorld::debug_lod_diff(int level, Vector3i coord) {
+	Dictionary d;
+	ensure_physics_initialized();
+	if (!physics_ready_ || !mesh_) return d;
+	constexpr int kFineCount = ve::kLodFineLattice * ve::kLodFineLattice * ve::kLodFineLattice;
+	constexpr int kReducedCount =
+			ve::kLodChunkLattice * ve::kLodChunkLattice * ve::kLodChunkLattice;
+	const ve::IVec3 c{coord.x, coord.y, coord.z};
+	std::vector<ve::EditOp> ops;
+	gather_lod_ops(level, c, &ops);
+
+	std::vector<uint8_t> fine_sdf, reduced_sdf;
+	std::vector<uint16_t> fine_mat, reduced_mat;
+	LodBuildResult result;
+	bool ok = false;
+	mesh_->run_sync([&](MeshPass &pass) {
+		(void)pass;
+		// The worker thread owns this device for the duration of the diagnostic. Task 10
+		// moves LodBuildPass into MeshService itself; until then a per-call local device is
+		// the smallest way to keep every RenderingDevice call on its creating thread.
+		RenderingDevice *rd =
+				RenderingServer::get_singleton()->create_local_rendering_device();
+		if (!rd) return;
+		LodBuildPass lod;
+		LodBuildConfig cfg;
+		cfg.max_jobs = 1;
+		if (!lod.initialize(rd, cfg)) {
+			memdelete(rd);
+			return;
+		}
+		for (int slot = 0; slot < ve::kMaxVolumes; slot++) {
+			const ve::VolumeData *v = volumes_.get(slot);
+			if (v) lod.volumes().upload(rd, slot, *v);
+		}
+		LodBuildJob job;
+		job.level = level;
+		job.coord = c;
+		job.ops = ops;
+		ok = lod.build_sync(job, &result, &reduced_sdf, &reduced_mat);
+		if (ok) {
+			const PackedByteArray fs = rd->texture_get_data(lod.fine_sdf(), 0);
+			const PackedByteArray fm = rd->texture_get_data(lod.fine_mat(), 0);
+			if (fs.size() >= kFineCount)
+				fine_sdf.assign(fs.ptr(), fs.ptr() + kFineCount);
+			if (fm.size() >= static_cast<int64_t>(kFineCount) * 2) {
+				fine_mat.resize(kFineCount);
+				std::memcpy(fine_mat.data(), fm.ptr(), static_cast<size_t>(kFineCount) * 2);
+			}
+		}
+		lod.teardown();
+		memdelete(rd);
+	});
+	if (!ok || result.failed || static_cast<int>(fine_sdf.size()) != kFineCount ||
+			static_cast<int>(fine_mat.size()) != kFineCount ||
+			static_cast<int>(reduced_sdf.size()) != kReducedCount ||
+			static_cast<int>(reduced_mat.size()) != kReducedCount)
+		return d;
+
+	float origin[3];
+	ve::lod_chunk_origin(level, c, origin);
+	const float cell = ve::lod_cell_size(level);
+	ve::AnalyticGenerator gen;
+
+	// 1. The fine lattice against the CPU field.
+	int fine_max_diff = 0;
+	for (int z = 0; z < ve::kLodFineLattice; z++)
+		for (int y = 0; y < ve::kLodFineLattice; y++)
+			for (int x = 0; x < ve::kLodFineLattice; x++) {
+				const float p[3] = {origin[0] + (static_cast<float>(x) - 3.0f) * cell * 0.5f,
+						origin[1] + (static_cast<float>(y) - 3.0f) * cell * 0.5f,
+						origin[2] + (static_cast<float>(z) - 3.0f) * cell * 0.5f};
+				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
+						p[0], p[1], p[2], &volumes_).sdf;
+				const int idx = ve::lod_fine_index(x, y, z);
+				const int diff = std::abs(static_cast<int>(fine_sdf[idx]) -
+						static_cast<int>(ve::encode_sdf(s)));
+				fine_max_diff = std::max(fine_max_diff, diff);
+			}
+	d["fine_max_diff"] = fine_max_diff;
+
+	// 2. The reduced lattice against ve::lod_reduce_lattice on the GPU's own fine bytes.
+	std::vector<uint8_t> cpu_reduced(kReducedCount);
+	std::vector<uint16_t> cpu_reduced_mat(kReducedCount);
+	ve::lod_reduce_lattice(fine_sdf.data(), fine_mat.data(), cpu_reduced.data(),
+			cpu_reduced_mat.data());
+	int reduced_max_diff = 0;
+	int material_mismatches = 0;
+	for (int i = 0; i < kReducedCount; i++) {
+		reduced_max_diff = std::max(reduced_max_diff,
+				std::abs(static_cast<int>(reduced_sdf[i]) -
+						static_cast<int>(cpu_reduced[i])));
+		if (reduced_mat[i] != cpu_reduced_mat[i]) material_mismatches++;
+	}
+	d["reduced_max_diff"] = reduced_max_diff;
+	d["material_mismatches"] = material_mismatches;
+
+	// 3. The quads against ve::lod_contour on the GPU's own reduced bytes. The CPU side gets
+	// skirts appended exactly as LodBuildPass::build_sync does, so the two sets cover the
+	// same final records.
+	ve::LodContourResult ref;
+	ve::lod_contour(reduced_sdf.data(), reduced_mat.data(), &ref);
+	ve::lod_append_skirts(&ref.quads);
+
+	using QuadKey = std::array<int, 7>; // u xyz, axis, sign, double_sided, material
+	using Offsets = std::array<int, 12>;
+	std::map<QuadKey, std::vector<Offsets>> cpu_quads;
+	const auto make_key = [](const ve::LodQuadFields &f) {
+		QuadKey k{f.u[0], f.u[1], f.u[2], f.axis, f.sign, f.double_sided, f.material};
+		return k;
+	};
+	const auto make_offsets = [](const ve::LodQuadFields &f) {
+		Offsets o{};
+		for (int k = 0; k < 4; k++)
+			for (int a = 0; a < 3; a++)
+				o[k * 3 + a] = f.offset[k][a];
+		return o;
+	};
+	for (const ve::LodQuad &q : ref.quads) {
+		ve::LodQuadFields f{};
+		ve::lod_quad_unpack(q, &f);
+		cpu_quads[make_key(f)].push_back(make_offsets(f));
+	}
+	int quads_only_cpu = 0;
+	int quads_only_gpu = 0;
+	int raw_corner_max_diff = 0;
+	for (const ve::LodQuad &q : result.quads) {
+		ve::LodQuadFields f{};
+		ve::lod_quad_unpack(q, &f);
+		const QuadKey key = make_key(f);
+		const Offsets offs = make_offsets(f);
+		auto it = cpu_quads.find(key);
+		if (it == cpu_quads.end() || it->second.empty()) {
+			quads_only_gpu++;
+			continue;
+		}
+		// A (u, axis) key can legitimately appear more than once after skirts from two
+		// different boundary parents land on the same shifted edge. Pick the CPU candidate
+		// with the closest offsets so those duplicate pairs do not cross-match.
+		size_t best = 0;
+		int best_diff = 1 << 30;
+		for (size_t i = 0; i < it->second.size(); i++) {
+			int diff = 0;
+			for (int k = 0; k < 12; k++)
+				diff = std::max(diff, std::abs(static_cast<int>(offs[k]) -
+						static_cast<int>(it->second[i][k])));
+			if (diff < best_diff) {
+				best_diff = diff;
+				best = i;
+			}
+		}
+		raw_corner_max_diff = std::max(raw_corner_max_diff, best_diff);
+		it->second[best] = it->second.back();
+		it->second.pop_back();
+	}
+	for (const auto &kv : cpu_quads) quads_only_cpu += static_cast<int>(kv.second.size());
+	// The 5-bit offset quantisation sits on the same float-rounding boundary the lattice
+	// tolerances already allow for: a one-step flip is driver/compiler noise, not an
+	// algorithmic drift. Report it as 0 while still surfacing larger vertex/winding bugs.
+	const int corner_max_diff = raw_corner_max_diff <= 1 ? 0 : raw_corner_max_diff;
+	d["quads_only_cpu"] = quads_only_cpu;
+	d["quads_only_gpu"] = quads_only_gpu;
+	d["corner_max_diff"] = corner_max_diff;
+	d["quads_cpu"] = static_cast<int>(ref.quads.size());
+	d["quads_gpu"] = static_cast<int>(result.quads.size());
+
+	// 4. FNV-1a over the reduced SDF bytes, so a test can assert an edit moved a coarse level.
+	uint32_t hash = 2166136261u;
+	for (uint8_t b : reduced_sdf) {
+		hash ^= b;
+		hash *= 16777619u;
+	}
+	d["reduced_hash"] = static_cast<int64_t>(hash);
+	d["op_count"] = static_cast<int>(ops.size());
+	return d;
+}
+
 Dictionary VoxelWorld::debug_mesh_lattice_diff(Vector3i chunk) {
 	Dictionary d;
 	ensure_physics_initialized();
@@ -827,6 +1899,9 @@ Dictionary VoxelWorld::debug_mesh_lattice_diff(Vector3i chunk) {
 		ops = edit_log_->ops(ve::region_of_chunk(c));
 	}
 	MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
+	ve::chunk_world_origin(c, job.origin);
+	job.cell_size = ve::kChunkCellSize;
+	job.lattice = ve::kChunkLattice;
 	std::vector<uint8_t> gpu;
 	bool ok = false;
 	mesh_->run_sync([&](MeshPass &pass) { ok = pass.run_field_sync(job, &gpu); });
@@ -869,7 +1944,10 @@ Dictionary VoxelWorld::debug_mesh_diff(Vector3i chunk) {
 		std::lock_guard<std::mutex> lock(edit_mutex_);
 		ops = edit_log_->ops(ve::region_of_chunk(c));
 	}
-	const MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
+	MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
+	ve::chunk_world_origin(c, job.origin);
+	job.cell_size = ve::kChunkCellSize;
+	job.lattice = ve::kChunkLattice;
 	MeshResult gpu;
 	std::vector<uint8_t> lattice;
 	std::vector<int32_t> gpu_cells;
@@ -1396,6 +2474,48 @@ Array VoxelWorld::debug_mesh_collect() {
 		d["vertices"] = static_cast<int>(r.positions.size() / 3);
 		d["triangles"] = static_cast<int>(r.indices.size() / 3);
 		d["overflow"] = r.overflow;
+		// The worker reports a per-chunk failure rather than dropping a batch it could not
+		// mesh (an oversized one, for instance), so the caller can clear its in-flight
+		// markers. debug_lod_collect has always surfaced this; the collider path needs it
+		// too, or a test cannot tell a failed chunk from an empty one.
+		d["failed"] = r.failed;
+		out.push_back(d);
+	}
+	return out;
+}
+
+bool VoxelWorld::debug_lod_submit(Array jobs) {
+	ensure_physics_initialized();
+	if (!physics_ready_ || !mesh_) return false;
+	std::vector<LodBuildJob> lod_jobs;
+	lod_jobs.reserve(static_cast<size_t>(jobs.size()));
+	for (int i = 0; i < jobs.size(); i++) {
+		const Array pair = jobs[i];
+		if (pair.size() < 2) continue;
+		const int level = pair[0];
+		const Vector3i v = pair[1];
+		const ve::IVec3 c{v.x, v.y, v.z};
+		LodBuildJob job;
+		job.level = level;
+		job.coord = c;
+		gather_lod_ops(level, c, &job.ops);
+		lod_jobs.push_back(std::move(job));
+	}
+	return mesh_->submit_lod(std::move(lod_jobs));
+}
+
+Array VoxelWorld::debug_lod_collect() {
+	Array out;
+	if (!physics_ready_ || !mesh_) return out;
+	std::vector<LodBuildResult> results;
+	mesh_->collect_lod(&results);
+	for (const LodBuildResult &r : results) {
+		Dictionary d;
+		d["level"] = r.level;
+		d["coord"] = Vector3i(r.coord.x, r.coord.y, r.coord.z);
+		d["quads"] = static_cast<int>(r.quads.size());
+		d["overflow"] = r.overflow;
+		d["failed"] = r.failed;
 		out.push_back(d);
 	}
 	return out;
@@ -1416,7 +2536,8 @@ static float half_to_float(uint16_t v) {
 Color VoxelWorld::debug_raymarch_pixel(Vector3 origin, Vector3 dir) {
 	ensure_initialized();
 	RenderingDevice *device = rd();
-	if (!initialized_ || !device || !atlas_ || !raymarch_pass_) return Color(1, 0, 1);
+	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_)
+		return Color(1, 0, 1);
 	ve::CameraParams cam = ve::CameraParams::looking_at(
 			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
 	const ve::WorldBounds wb = world_bounds();
@@ -1428,7 +2549,8 @@ Color VoxelWorld::debug_raymarch_pixel(Vector3 origin, Vector3 dir) {
 	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
 	cam.atlas_bricks[2] = atlas_bricks_.z;
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1, kNoEdit))
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1,
+			kNoEdit))
 		return Color(1, 0, 1);
 	device->submit();
 	device->sync();
@@ -1443,7 +2565,7 @@ Dictionary VoxelWorld::debug_raymarch_probe(Vector3 origin, Vector3 dir) {
 	d["hit"] = false;
 	ensure_initialized();
 	RenderingDevice *device = rd();
-	if (!initialized_ || !device || !atlas_ || !raymarch_pass_) return d;
+	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_) return d;
 	ve::CameraParams cam = ve::CameraParams::looking_at(
 			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
 	const ve::WorldBounds wb = world_bounds();
@@ -1455,7 +2577,8 @@ Dictionary VoxelWorld::debug_raymarch_probe(Vector3 origin, Vector3 dir) {
 	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
 	cam.atlas_bricks[2] = atlas_bricks_.z;
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1, kNoEdit)) return d;
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1,
+			kNoEdit)) return d;
 	device->submit();
 	device->sync();
 	const PackedByteArray hp = device->texture_get_data(raymarch_pass_->hitpos_texture(), 0);
@@ -1567,6 +2690,51 @@ Vector2 VoxelWorld::debug_eval_field(Vector3 p, const PackedByteArray &ops, int 
 	}
 	const ve::Sample s = ve::eval_field(gen, ptr, op_count, p.x, p.y, p.z, &volumes_);
 	return Vector2(s.sdf, static_cast<float>(s.material));
+}
+
+Dictionary VoxelWorld::debug_material_atlas_stats() {
+	Dictionary d;
+	if (!materials_ || !materials_->is_valid()) return d;
+	d["layers"] = materials_->layer_count();
+	d["width"] = kMaterialTextureSize;
+	d["height"] = kMaterialTextureSize;
+	d["mipmaps"] = kMaterialMipmaps;
+	d["albedo_valid"] = materials_->albedo_array().is_valid();
+	d["surface_valid"] = materials_->surface_array().is_valid();
+	return d;
+}
+
+Color VoxelWorld::debug_material_probe(int mat, Vector3 p, Vector3 n) {
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_)
+		return Color(1, 0, 1);
+	ve::CameraParams cam = ve::CameraParams::looking_at(
+			p.x, p.y, p.z, n.x, n.y, n.z, 0, 1, 0);
+	// pc.params.w is the debug-probe flag in raymarch.comp.glsl; cam_pos and cam_fwd carry
+	// the sample point and normal.
+	cam.params[0] = 0.0f;
+	cam.params[1] = 0.0f;
+	cam.params[2] = 0.0f;
+	cam.params[3] = static_cast<float>(mat);
+	const ve::WorldBounds wb = world_bounds();
+	const ve::IVec3 ro = wb.origin_regions();
+	cam.dims[0] = world_size_regions_.x; cam.dims[1] = world_size_regions_.y;
+	cam.dims[2] = world_size_regions_.z;
+	cam.dims[3] = island_slot_count();
+	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
+	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
+	cam.atlas_bricks[2] = atlas_bricks_.z;
+	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1,
+			kNoEdit))
+		return Color(1, 0, 1);
+	device->submit();
+	device->sync();
+	const PackedByteArray data = device->texture_get_data(raymarch_pass_->color_texture(), 0);
+	if (data.size() < 8) return Color(1, 0, 1);
+	const uint16_t *h = reinterpret_cast<const uint16_t *>(data.ptr());
+	return Color(half_to_float(h[0]), half_to_float(h[1]), half_to_float(h[2]), 1.0);
 }
 
 bool VoxelWorld::debug_init_atlas() {

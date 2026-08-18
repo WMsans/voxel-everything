@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dnsdla18vqxjx"
+path="res://.godot/imported/lod.frag.glsl-bad0461ed431852f80cc3108d667741f.res"
+
+[deps]
+
+source_file="res://shaders/lod.frag.glsl"
+dest_files=["res://.godot/imported/lod.frag.glsl-bad0461ed431852f80cc3108d667741f.res"]
+
+[params]
+
