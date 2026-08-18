@@ -4,12 +4,19 @@
 
 namespace {
 
-// Angle between two unit vectors, in degrees. The only error metric that means anything for
-// a normal encoding: component-wise deltas say nothing about how the shading will bend.
+// Angle between two vectors, in degrees. Normalize and accumulate in double so float
+// round-off in the sampled sphere grid cannot distort the normal-encoding error.
 float angle_deg(const float a[3], const float b[3]) {
-	float d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-	d = d > 1.0f ? 1.0f : (d < -1.0f ? -1.0f : d);
-	return std::acos(d) * 57.2957795f;
+	const double ax = a[0];
+	const double ay = a[1];
+	const double az = a[2];
+	const double bx = b[0];
+	const double by = b[1];
+	const double bz = b[2];
+	const double d = (ax * bx + ay * by + az * bz) /
+			(std::sqrt(ax * ax + ay * ay + az * az) * std::sqrt(bx * bx + by * by + bz * bz));
+	const double clamped = d > 1.0 ? 1.0 : (d < -1.0 ? -1.0 : d);
+	return static_cast<float>(std::acos(clamped) * 57.2957795);
 }
 
 // The G-buffer stores the two components in fp16. Emulating that quantisation here is what
@@ -94,18 +101,24 @@ TEST_CASE("the folded lower hemisphere round-trips too") {
 	CHECK(angle_deg(un, back) < 0.01f);
 }
 
-TEST_CASE("a degenerate normal decodes to something finite") {
+TEST_CASE("oct_decode normalizes values and uses the exact fallback for a degenerate input") {
+	const float encoded[2] = {0.25f, -0.5f};
+	float back[3];
+	ve::oct_decode(encoded, back);
+	const double l = std::sqrt(static_cast<double>(back[0]) * back[0] +
+			static_cast<double>(back[1]) * back[1] + static_cast<double>(back[2]) * back[2]);
+	CHECK(l == doctest::Approx(1.0).epsilon(1e-6));
+
 	const float zero[3] = {0, 0, 0};
 	float e[2];
 	ve::oct_encode(zero, e);
 	CHECK(std::isfinite(e[0]));
 	CHECK(std::isfinite(e[1]));
-	float back[3];
 	ve::oct_decode(e, back);
 	CHECK(std::isfinite(back[0]));
 	CHECK(std::isfinite(back[1]));
 	CHECK(std::isfinite(back[2]));
-	// Unit length or the exact fallback; either way nothing downstream sees a NaN.
-	const float l = std::sqrt(back[0] * back[0] + back[1] * back[1] + back[2] * back[2]);
-	CHECK((l == doctest::Approx(1.0f).epsilon(1e-4) || l == doctest::Approx(0.0f).epsilon(1e-4)));
+	CHECK(back[0] == 0.0f);
+	CHECK(back[1] == 0.0f);
+	CHECK(back[2] == 1.0f);
 }

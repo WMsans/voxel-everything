@@ -46,9 +46,7 @@ void oct_decode(const float e[2], float out[3]) {
 		out[2] = 1.0f;
 		return;
 	}
-	// Keep the float result on the unit sphere's outward side. This tiny guard absorbs
-	// round-to-nearest dot-product loss when callers measure the returned unit vector.
-	const float inv = 1.0000005f / len;
+	const float inv = 1.0f / len;
 	out[0] = x * inv;
 	out[1] = y * inv;
 	out[2] = z * inv;
