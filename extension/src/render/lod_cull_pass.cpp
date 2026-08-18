@@ -1,4 +1,5 @@
 #include "render/lod_cull_pass.h"
+#include "lod/lod_contour.h"
 #include "render/hiz_pass.h"
 #include "render/lod_pool.h"
 #include "render/shader_loader.h"
@@ -10,6 +11,7 @@
 #include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 
@@ -82,6 +84,11 @@ bool LodCullPass::initialize(RenderingDevice *rd) {
 		teardown();
 		return false;
 	}
+	args_readback_.instantiate();
+	if (args_readback_.is_null()) {
+		teardown();
+		return false;
+	}
 	return true;
 }
 
@@ -104,9 +111,15 @@ void LodCullPass::teardown() {
 	uset_hiz_ = RID();
 	uset_stats_ = RID();
 	stats_readback_ = Ref<AsyncBufferRead>();
+	args_readback_ = Ref<AsyncBufferRead>();
+	first_pass_pages_.clear();
+	first_pass_pages_at_request_.clear();
+	last_visible_pages_.clear();
 	last_drawn_ = 0;
 	last_total_ = 0;
 	last_total_at_request_ = 0;
+	last_first_pass_count_at_request_ = 0;
+	last_remaining_count_at_request_ = 0;
 	rd_ = nullptr;
 }
 
@@ -158,17 +171,44 @@ bool LodCullPass::ensure_uniform_set(RenderingDevice *rd, LodPool &pool, HizPass
 	return true;
 }
 
+void LodCullPass::consume_args_readback() {
+	const PackedByteArray &data = args_readback_->data();
+	const int remaining_count = last_remaining_count_at_request_;
+	if (remaining_count <= 0 || data.size() < static_cast<int64_t>(remaining_count) * 20) {
+		return; // fail-soft: keep the previous visible set
+	}
+
+	std::vector<int> visible = first_pass_pages_at_request_;
+	const uint32_t *a = reinterpret_cast<const uint32_t *>(data.ptr());
+	for (int i = 0; i < remaining_count; i++) {
+		if (a[static_cast<size_t>(i) * 5u + 1u] != 0u) {
+			const uint32_t page = a[static_cast<size_t>(i) * 5u + 3u] /
+					static_cast<uint32_t>(ve::kLodVertsPerPage);
+			visible.push_back(static_cast<int>(page));
+		}
+	}
+	std::sort(visible.begin(), visible.end());
+	visible.erase(std::unique(visible.begin(), visible.end()), visible.end());
+	last_visible_pages_.swap(visible);
+}
+
 bool LodCullPass::run(RenderingDevice *rd, LodPool &pool, HizPass *hiz,
-		const Projection &view_proj, int page_count) {
+		const Projection &view_proj, int page_count, int total_page_count,
+		int first_pass_count) {
 	const auto t0 = std::chrono::steady_clock::now();
-	if (!rd || !rd_ || !pipeline_.is_valid() || !stats_readback_.is_valid()) return false;
+	if (!rd || !rd_ || !pipeline_.is_valid() || !stats_readback_.is_valid() ||
+			!args_readback_.is_valid()) {
+		return false;
+	}
 	if (page_count <= 0) return false;
 	if (!ensure_uniform_set(rd, pool, hiz)) return false;
 
 	if (stats_readback_->take_fresh()) {
 		last_drawn_ = stats_readback_->as_i32();
 		last_total_ = last_total_at_request_;
+		if (last_total_ > 0) last_drawn_ += last_first_pass_count_at_request_;
 	}
+	if (args_readback_->take_fresh()) consume_args_readback();
 
 	// Stats clear must be recorded before the compute list opens (device-level command).
 	PackedByteArray zero;
@@ -196,9 +236,21 @@ bool LodCullPass::run(RenderingDevice *rd, LodPool &pool, HizPass *hiz,
 	rd->compute_list_dispatch(list, (static_cast<uint32_t>(page_count) + 63u) / 64u, 1, 1);
 	rd->compute_list_end();
 
-	// Async stats readback for the HUD's culled ratio. Never synchronous. Record the page
-	// count paired with the request so a later readback is divided by the right total.
-	if (stats_readback_->request(rd, stats_, 0, 4)) last_total_at_request_ = page_count;
+	// Async stats readback for the HUD's culled ratio. Never synchronous. Record the whole
+	// candidate total and the first-pass count paired with the request so a later readback
+	// is divided by the right denominator.
+	if (stats_readback_->request(rd, stats_, 0, 4)) {
+		last_total_at_request_ = total_page_count;
+		last_first_pass_count_at_request_ = first_pass_count;
+	}
+	// Async args readback: the CPU learns which remaining pages survived the cull a few
+	// frames later. Paired with the first-pass page snapshot from the same request so
+	// last_visible_pages() is the exact union of that frame's two passes.
+	if (args_readback_->request(rd, pool.args_buffer(), 0,
+				static_cast<uint32_t>(page_count) * 20u)) {
+		first_pass_pages_at_request_ = first_pass_pages_;
+		last_remaining_count_at_request_ = page_count;
+	}
 	last_ms_ = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
 	return true;
 }

@@ -1518,7 +1518,8 @@ Dictionary VoxelWorld::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 	const PackedByteArray before = device->buffer_get_data(lod_pool_->args_buffer(), 0,
 			static_cast<uint32_t>(draw_count) * 20);
 
-	const bool ok = lod_cull_pass_->run(device, *lod_pool_, hiz_pass_, vp, draw_count);
+	const bool ok = lod_cull_pass_->run(device, *lod_pool_, hiz_pass_, vp, draw_count,
+			draw_count, 0);
 	device->submit();
 	device->sync();
 	if (!ok) return d;
