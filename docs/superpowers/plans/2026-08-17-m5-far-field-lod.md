@@ -56,7 +56,7 @@
 
 - **Build:** `./build.sh -j$(nproc)` (or `cd extension && scons -j$(nproc)`)
 - **Native tests:** `cd extension && scons test`
-- **gdUnit tests:** `./gdunit_tests.sh -a res://tests`, or `./gdunit_tests.sh` for everything. Add `-c` to see every failure — gdUnit4 aborts a suite at its FIRST one by default, so a plain run under-reports. Do **not** invoke `addons/gdUnit4/runtest.sh` directly: it resolves `--path` against the caller's directory, leaves vsync on (which costs ~590 ms per `await process_frame` and made the LoD suites take minutes), and reports success when it discovers no tests at all. See errata 5.
+- **gdUnit tests:** `./gdunit_tests.sh -a res://tests`, or `./gdunit_tests.sh` for everything. Add `-c` to see every failure — gdUnit4 aborts a suite at its FIRST one by default, so a plain run under-reports. Do **not** invoke `addons/gdUnit4/runtest.sh` directly: it resolves `--path` against the caller's directory and reports success when it discovers no tests at all. The repo runner keeps vsync enabled intentionally (see errata 6).
 - **Demo:** `godot --path /home/jeremy/Development/Godot/voxel-everything demo/main.tscn`
 - gdUnit tests that await must declare the timeout argument: `func test_x(timeout := 10000) -> void:`
 - Every gdUnit suite creating a `VoxelWorld` registers it in `_worlds` and frees it in `after_test()` (M3 errata 2).
@@ -4028,7 +4028,7 @@ func make_world() -> VoxelWorld:
 # The walk descends only into a node whose eight children are all resident, so the far field
 # converges over HUNDREDS of ticks and at a rate set by build throughput, not by frame count.
 # Wait on the condition (errata 6): the fixed counts this plan first used were tuned to a
-# vsync-throttled 590 ms frame and settle nothing now that the runner disables vsync.
+# fixed frame counts were tuned to the old occluded 590 ms vsync frame and settle nothing on the current runner, which keeps vsync enabled intentionally (gdunit_tests.sh) at a normal display rate.
 # requests_pending comes from the walk that ran BEFORE this tick collected its results, so it
 # dips to zero for a tick or two while a batch lands -- the streak is what makes it mean
 # "converged" rather than "between batches". Measured: ~350-400 ticks, so the budget is margin.
@@ -4454,7 +4454,7 @@ func make_world() -> VoxelWorld:
 # The walk descends only into a node whose eight children are all resident, so the far field
 # converges over HUNDREDS of ticks and at a rate set by build throughput, not by frame count.
 # Wait on the condition (errata 6): the fixed counts this plan first used were tuned to a
-# vsync-throttled 590 ms frame and settle nothing now that the runner disables vsync.
+# fixed frame counts were tuned to the old occluded 590 ms vsync frame and settle nothing on the current runner, which keeps vsync enabled intentionally (gdunit_tests.sh) at a normal display rate.
 # requests_pending comes from the walk that ran BEFORE this tick collected its results, so it
 # dips to zero for a tick or two while a batch lands -- the streak is what makes it mean
 # "converged" rather than "between batches". Measured: ~350-400 ticks, so the budget is margin.
@@ -4613,12 +4613,14 @@ Add `debug_lod_cull_probe(pos, fwd)`, which snapshots the args buffer before and
 
 - [ ] **Step 5: Give the far field a measured cost**
 
-Nothing times the LoD passes yet, and Task 18's HUD and benchmark both read one. Add GPU-side
-timing to `LodRasterPass` and `LodCullPass` in the style the other passes already use
-(`WorldStreamer::last_total_ms`, `ColliderStreamer::last_build_ms`), and surface it from
-`VoxelWorld::debug_perf_stats()` as `lod_ms` (raster + cull) alongside the existing
-`stream_total_ms` / `island_ms`. Report `culled_ratio` from the cull's async stats readback in
-`debug_lod_stats()` so the HUD reads it from the same place as the rest of the LoD numbers.
+Nothing times the LoD passes yet, and Task 18's HUD and benchmark both read one. Add CPU
+command-record timing to `LodRasterPass` and `LodCullPass` in the style the other passes
+already use (`WorldStreamer::last_total_ms`, `ColliderStreamer::last_build_ms`), and surface
+it from `VoxelWorld::debug_perf_stats()` as `lod_ms` (raster + cull) alongside the existing
+`stream_total_ms` / `island_ms`. This is NOT GPU execution time; it is the std::chrono cost of
+recording the command lists (see errata 15). Report `culled_ratio` from the cull's async stats
+readback in `debug_lod_stats()` so the HUD reads it from the same place as the rest of the LoD
+numbers.
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
@@ -4677,7 +4679,7 @@ func make_world() -> VoxelWorld:
 # The walk descends only into a node whose eight children are all resident, so the far field
 # converges over HUNDREDS of ticks and at a rate set by build throughput, not by frame count.
 # Wait on the condition (errata 6): the fixed counts this plan first used were tuned to a
-# vsync-throttled 590 ms frame and settle nothing now that the runner disables vsync.
+# fixed frame counts were tuned to the old occluded 590 ms vsync frame and settle nothing on the current runner, which keeps vsync enabled intentionally (gdunit_tests.sh) at a normal display rate.
 # requests_pending comes from the walk that ran BEFORE this tick collected its results, so it
 # dips to zero for a tick or two while a batch lands -- the streak is what makes it mean
 # "converged" rather than "between batches". Measured: ~350-400 ticks, so the budget is margin.
@@ -4840,7 +4842,7 @@ func make_world() -> VoxelWorld:
 # The walk descends only into a node whose eight children are all resident, so the far field
 # converges over HUNDREDS of ticks and at a rate set by build throughput, not by frame count.
 # Wait on the condition (errata 6): the fixed counts this plan first used were tuned to a
-# vsync-throttled 590 ms frame and settle nothing now that the runner disables vsync.
+# fixed frame counts were tuned to the old occluded 590 ms vsync frame and settle nothing on the current runner, which keeps vsync enabled intentionally (gdunit_tests.sh) at a normal display rate.
 # requests_pending comes from the walk that ran BEFORE this tick collected its results, so it
 # dips to zero for a tick or two while a batch lands -- the streak is what makes it mean
 # "converged" rather than "between batches". Measured: ~350-400 ticks, so the budget is margin.
@@ -4987,7 +4989,7 @@ Spec §10. The plan's triggers are decided by measurement, not pre-emptively, an
 
 - [ ] **Step 1: Add the LoD line to the HUD**
 
-`demo/hud.gd` reads `debug_lod_stats()` each frame and shows: resident chunks, pages used/total, draw pages, culled %, builds in flight, dirty chunks, and the LoD pass's GPU milliseconds from `debug_perf_stats()`. Every one of those exists by the time this task runs: Task 12 gives the page and residency counters, Task 15 Step 5 adds `lod_ms` and `culled_ratio`, Task 17 Step 5 adds `dirty_chunks`.
+`demo/hud.gd` reads `debug_lod_stats()` each frame and shows: resident chunks, pages used/total, draw pages, culled %, builds in flight, dirty chunks, and the LoD pass's CPU command-record milliseconds from `debug_perf_stats()`. Every one of those exists by the time this task runs: Task 12 gives the page and residency counters, Task 15 Step 5 adds `lod_ms` and `culled_ratio`, Task 17 Step 5 adds `dirty_chunks`.
 
 - [ ] **Step 2: Extend the benchmark**
 
@@ -5054,7 +5056,7 @@ M5 is done when all of the following hold:
 
 5. **The gdUnit runner is `./gdunit_tests.sh`, and it had four bugs of its own.** Every "Run:" line in this plan used `addons/gdUnit4/runtest.sh` directly. Do not: that wrapper runs `godot --path .` relative to the **caller's** directory, so it only worked from the repo root, and it passes `-d --remote-debug tcp://127.0.0.1:0`, whose invalid port printed two `ERROR` lines on every run. The wrapper script also (a) documented a comma-separated `-a` that gdUnit4 does not support — it takes one path and may be repeated, so `-a a.gd,b.gd` matched nothing and **exited 0 having run zero tests**; (b) swallowed a missing `-a` value, silently widening to the whole suite; (c) launched a second headless Godot for `GdUnitCopyLog.gd`, which only ever wrote a "No logging available!" placeholder. All fixed in `73a2522`. Also note **gdUnit4 aborts a suite at its first failure by default** — pass `-c` when you want the true failure count; a plain run under-reports it badly (121 tests reported versus 160 actually present).
 
-6. **A fixed frame count settles nothing — wait on the condition.** Every settle in this plan was written as `for i in range(250)`, which was only ever long enough because the suite's window is normally unfocused and occluded and vsync made a single `await get_tree().process_frame` cost **~590 ms**: 60 empty frames that did no work at all took 35.4 s, and `test_lod_pool.gd` took 8m36s of which the LoD work itself was under a second. The runner now passes `--disable-vsync` (`73a2522`), a frame costs ~0.5 ms, and the same 250 frames settle almost nothing. Suites now tick until `debug_lod_stats()` reports `requests_pending == 0 and builds_in_flight == 0` for a streak of 8 ticks, with a wide tick budget as the ceiling. The streak is required: `requests_pending` reflects the walk that ran BEFORE this tick collected its results, so a single sample reads zero while a batch is landing and "converges" with zero chunks resident. Measured convergence is ~350–400 ticks; eviction fires between far-tick 300 and 400, matching `kLodEvictFrames`. `debug_lod_stats()` gained `requests_pending` for this, and `partial_allocations` stopped being a hardcoded `0` — it now measures the two shapes a half-funded build would leave, so the assertion on it can actually fail. All four LoD suites: ~9 minutes and a crash, down to 13 s and 16/16 stable.
+6. **A fixed frame count settles nothing — wait on the condition.** Every settle in this plan was written as `for i in range(250)`, which was only ever long enough because the suite's window is normally unfocused and occluded and vsync made a single `await get_tree().process_frame` cost **~590 ms**: 60 empty frames that did no work at all took 35.4 s, and `test_lod_pool.gd` took 8m36s of which the LoD work itself was under a second. The repo runner deliberately **keeps vsync enabled** (user requirement, `gdunit_tests.sh`; `73a2522` had briefly disabled it, making a frame cost ~0.5 ms), so the same 250 frames settle almost nothing. Suites now tick until `debug_lod_stats()` reports `requests_pending == 0 and builds_in_flight == 0` for a streak of 8 ticks, with a wide tick budget as the ceiling. The streak is required: `requests_pending` reflects the walk that ran BEFORE this tick collected its results, so a single sample reads zero while a batch is landing and "converges" with zero chunks resident. Measured convergence is ~350–400 ticks; eviction fires between far-tick 300 and 400, matching `kLodEvictFrames`. `debug_lod_stats()` gained `requests_pending` for this, and `partial_allocations` stopped being a hardcoded `0` — it now measures the two shapes a half-funded build would leave, so the assertion on it can actually fail. All four LoD suites: ~9 minutes and a crash, down to 13 s and 16/16 stable.
 
 7. **Task 8's generalisation is not used by the LoD path — there are two meshers, not one.** The plan's architecture paragraph says the mesher is "M3's, generalised … so there is one mesher and one CPU reference". Task 8 did land: `mesh_common.glslh` takes origin, cell size and lattice dimension from the push constant. But Task 9 then wrote its own `lod_field.comp.glsl` **and** `lod_frac.comp.glsl`, and every `MeshJob` in the GPU path still passes `ve::kChunkCellSize` / `ve::kChunkLattice` — so the generalisation is never exercised at LoD scale. `lod_frac` is individually justified (it emits packed 5-bit cell fractions rather than world positions, which is what the 12-byte record carries, so GPU and `ve::lod_contour` quantise the same number the same way), but the consequence is two GPU cell-vertex shaders with duplicated `CORNER`/`EDGE` tables and two CPU references. Each side is pinned by its own differential test and nothing is currently wrong; the tables can nonetheless drift, and no test would catch it because no chunk is ever meshed both ways.
 
@@ -5075,3 +5077,5 @@ M5 is done when all of the following hold:
 13. **Task 18 Trigger 3 not measurable: material blur at arm's length is a visual judgement and the same demo crash blocks it.** The 512²-read softness under the player cannot be assessed without an interactive view, so no blur verdict is recorded.
 
 14. **Task 18 Trigger 4 not tripped: the default LoD pool reaches the world edge.** The demo world is 64×8×64 regions = 1638.4 m on x/z; the LoD level table has 8 levels (0–7) and the root level L7 is drawn by design (pinned by `extension/tests/test_lod_tree.cpp` `root_drawn`). Benchmarks used only p50 ≈ 2.9k / p99 ≈ 4.9k of the default 32768 pages, so `max_lod_pages` is nowhere near exhausted. A 4 km horizon is not a property of this 1.64 km demo world, so the "range short of the world edge" condition does not arise. Farthest level actually drawn: L7 (`kLodLevels - 1`), from the level table/native test; `debug_lod_stats` does not expose a per-level draw counter.
+
+15. **`lod_ms` is CPU command-record time, not GPU execution time.** `LodRasterPass::last_ms()` and `LodCullPass::last_ms()` wrap command recording in `std::chrono::steady_clock`; they do not include GPU dispatch/execution or readback latency. `VoxelWorld::debug_perf_stats()` reports their sum as `lod_ms`, so the benchmark's `lod_ms_p50/p99` must be read as "CPU time spent recording LoD commands", not as GPU frame cost. The code comments in both passes state this explicitly.

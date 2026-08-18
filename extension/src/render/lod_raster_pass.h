@@ -34,6 +34,8 @@ public:
 	// colour/depth targets, so the pass never holds a framebuffer pointing at freed textures.
 	void release_targets();
 	int draw_page_count() const { return static_cast<int>(draw_pages_.size()); }
+	// CPU command-record time only: std::chrono around draw()'s command recording, not GPU
+	// execution time. VoxelWorld::debug_perf_stats() reports this as lod_ms.
 	float last_ms() const { return last_ms_; }
 
 	bool draw(RenderingDevice *rd, LodPool &pool, MaterialAtlas &materials,

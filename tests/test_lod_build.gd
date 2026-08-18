@@ -4,9 +4,9 @@ var _worlds: Array = []
 
 # debug_lod_collect() never blocks (unlike debug_mesh_collect(), which waits for its batch),
 # so every test here polls for its results. The budget is a ceiling on a FAILING run, not a
-# target: a landing batch breaks the loop on the first frame it is ready, and a frame costs
-# well under a millisecond now that the runner disables vsync. It used to be 300, which was
-# minutes of slack only because each frame was blocking on an occluded swapchain.
+# target: a landing batch breaks the loop on the first frame it is ready. The runner keeps
+# vsync enabled intentionally (gdunit_tests.sh), so an awaited frame is display-throttled
+# (~16.7 ms at 60 Hz) rather than the ~0.5 ms it was during the --disable-vsync experiment.
 const POLL_FRAMES := 4000
 
 func after_test() -> void:

@@ -51,6 +51,8 @@ public:
 	float culled_ratio() const {
 		return last_total_ > 0 ? 1.0f - static_cast<float>(last_drawn_) / static_cast<float>(last_total_) : 0.0f;
 	}
+	// CPU command-record time only: std::chrono around run()'s command recording, not GPU
+	// execution time. VoxelWorld::debug_perf_stats() reports this as lod_ms.
 	float last_ms() const { return last_ms_; }
 
 private:

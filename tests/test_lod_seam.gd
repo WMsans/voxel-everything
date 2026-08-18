@@ -24,8 +24,9 @@ func make_world(residency_radius := 96.0) -> VoxelWorld:
 
 # The walk descends only into a node whose eight children are all resident, so the far field
 # converges over HUNDREDS of ticks and at a rate set by build throughput, not by frame count.
-# Wait on the condition (errata 6): the fixed counts this plan first used were tuned to a
-# vsync-throttled 590 ms frame and settle nothing now that the runner disables vsync.
+# Wait on the condition (errata 6): fixed frame counts were tuned to the old occluded
+# 590 ms vsync frame and settle nothing on the current runner, which keeps vsync enabled
+# intentionally (gdunit_tests.sh) at a normal display rate.
 # requests_pending comes from the walk that ran BEFORE this tick collected its results, so it
 # dips to zero for a tick or two while a batch lands -- the streak is what makes it mean
 # "converged" rather than "between batches". Measured: ~350-400 ticks, so the budget is margin.
