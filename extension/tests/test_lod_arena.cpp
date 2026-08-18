@@ -14,6 +14,14 @@ TEST_CASE("pages needed rounds up and honours the cap") {
 	CHECK(ve::lod_pages_for_quads(ve::kLodMaxQuadsPerChunk * 4) == ve::kLodMaxPagesPerChunk);
 }
 
+TEST_CASE("an allocation larger than the per-chunk page cap is refused") {
+	ve::LodArena a(ve::kLodMaxPagesPerChunk + 1);
+	std::vector<int> p;
+	CHECK_FALSE(a.alloc(ve::kLodMaxPagesPerChunk + 1, &p));
+	CHECK(p.empty());
+	CHECK(a.free_pages() == ve::kLodMaxPagesPerChunk + 1);
+}
+
 TEST_CASE("allocations are distinct and accounted") {
 	ve::LodArena a(8);
 	CHECK(a.capacity() == 8);

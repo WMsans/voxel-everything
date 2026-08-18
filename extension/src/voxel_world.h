@@ -14,6 +14,7 @@
 #include <atomic>
 #include <map>
 #include <mutex>
+#include <set>
 #include <utility>
 #include <vector>
 #include "connectivity/occupancy.h"
@@ -166,6 +167,7 @@ class VoxelWorld : public Node3D {
 	ve::LodWalkResult lod_walk_;
 	std::map<LodKey, std::vector<int>> lod_pages_of_;
 	std::map<int, int> lod_page_quads_; // page -> number of quads stored in that page
+	std::set<LodKey> lod_overflow_logged_; // once-per-chunk overflow diagnostics
 	int lod_pressure_ = 0;
 	void ensure_lod(); // lazy: creates/initializes lod_tree_ + lod_pool_ on first use
 

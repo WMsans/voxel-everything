@@ -115,7 +115,8 @@ bool LodPool::upload(int level, ve::IVec3 coord, const std::vector<ve::LodQuad> 
 		std::vector<int> *pages_out) {
 	if (!rd_ || !quads_.is_valid() || quads.empty() || !pages_out) return false;
 	const int pages_needed = ve::lod_pages_for_quads(static_cast<int>(quads.size()));
-	if (pages_needed <= 0 || pages_needed > arena_.free_pages()) return false;
+	if (pages_needed <= 0 || pages_needed > ve::kLodMaxPagesPerChunk) return false;
+	if (pages_needed > arena_.free_pages()) return false;
 
 	const int chunk_slot = allocate_chunk_slot();
 	if (chunk_slot < 0) return false;

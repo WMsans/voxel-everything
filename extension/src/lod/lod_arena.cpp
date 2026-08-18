@@ -27,6 +27,9 @@ bool LodArena::alloc(int pages, std::vector<int> *out) {
 	if (!out) return false;
 	out->clear();
 	if (pages <= 0) return true;
+	// A single chunk is capped at kLodMaxPagesPerChunk (spec section 3.3). The pool can be
+	// larger than that, but no one allocation may exceed the per-chunk cap.
+	if (pages > kLodMaxPagesPerChunk) return false;
 	if (pages > free_pages()) return false;
 	out->reserve(size_t(pages));
 	for (int i = 0; i < pages; i++) {

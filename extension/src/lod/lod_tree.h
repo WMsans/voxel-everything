@@ -100,6 +100,8 @@ public:
 	void collect_evictions(uint32_t frame, int want_pages, std::vector<LodDrawItem> *out);
 
 	int state_of(int level, IVec3 c) const;
+	// Reports how many nodes are dirty and how many distinct levels they occupy.
+	void dirty_stats(int *chunks, int *levels) const;
 	int node_count() const { return static_cast<int>(nodes_.size()); }
 	void clear();
 	const LodTreeConfig &config() const { return cfg_; }

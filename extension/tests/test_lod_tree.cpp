@@ -336,6 +336,22 @@ TEST_CASE("requests are capped and ordered largest first") {
 	}
 }
 
+TEST_CASE("an op smaller than half a cell does not dirty that level") {
+	ve::LodTreeConfig cfg;
+	cfg.bounds = demo_bounds();
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	settle(&t, c, &occ, 30);
+	// A 0.5 m drill. Half of L4's 6.4 m cell is 3.2 m, so it cannot move a sample there.
+	const float lo[3] = {800.0f, 51.0f, 700.0f};
+	const float hi[3] = {800.5f, 51.5f, 700.5f};
+	t.mark_dirty(lo, hi);
+	ve::LodWalkResult r;
+	t.walk(c, &occ, 31u, &r);
+	for (const ve::LodBuildRequest &q : r.requests) CHECK(q.level <= 1);
+}
+
 // A chunk entirely inside the near field is discarded by the fragment shader on every pixel,
 // so building it burns pages to draw nothing (spec section 6.4).
 TEST_CASE("chunks entirely inside the fade start are never requested") {

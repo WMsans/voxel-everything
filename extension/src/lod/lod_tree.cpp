@@ -299,6 +299,15 @@ void LodTree::walk(const LodCamera &cam, const LodOcclusion *occ, uint32_t frame
 				if (a.coord.y != b.coord.y) return a.coord.y < b.coord.y;
 				return a.coord.x < b.coord.x;
 			});
+	// Edits mark nodes at every level they touch, including levels the current cut does not
+	// visit. Re-request every dirty node so a rebuild is not deferred until the camera
+	// happens to refine that deep -- the edit must reach the far field now.
+	for (const auto &kv : nodes_) {
+		if (!kv.second.dirty) continue;
+		const IVec3 c{kv.first.x, kv.first.y, kv.first.z};
+		request(kv.first.level, c, 0.0f, out);
+	}
+
 	// De-duplicate: a node can be requested both as a dirty draw and as a parent's child.
 	auto last = std::unique(out->requests.begin(), out->requests.end(),
 			[](const LodBuildRequest &a, const LodBuildRequest &b) {
@@ -314,7 +323,11 @@ void LodTree::mark_dirty(const float lo[3], const float hi[3]) {
 	probe.type = kOpSphereSubtract;
 	for (int a = 0; a < 3; a++) probe.pos[a] = 0.5f * (lo[a] + hi[a]);
 	probe.radius = 0.5f * std::max(std::max(hi[0] - lo[0], hi[1] - lo[1]), hi[2] - lo[2]);
+	const float longest = std::max(std::max(hi[0] - lo[0], hi[1] - lo[1]), hi[2] - lo[2]);
 	for (int level = 0; level < kLodLevels; level++) {
+		// The reduced lattice samples every half cell, so an edit shorter than half a cell
+		// on every axis cannot move a sample at this level and needs no rebuild.
+		if (longest < 0.5f * lod_cell_size(level)) continue;
 		IVec3 clo{}, chi{};
 		op_lod_chunk_range(probe, level, &clo, &chi);
 		for (int z = clo.z; z <= chi.z; z++)
@@ -326,6 +339,21 @@ void LodTree::mark_dirty(const float lo[3], const float hi[3]) {
 					if (it->second.state == kLodEmpty) it->second.state = kLodUnknown;
 					it->second.dirty = true;
 				}
+	}
+}
+
+void LodTree::dirty_stats(int *chunks, int *levels) const {
+	if (!chunks || !levels) return;
+	*chunks = 0;
+	*levels = 0;
+	bool seen[kLodLevels] = {};
+	for (const auto &kv : nodes_) {
+		if (!kv.second.dirty) continue;
+		(*chunks)++;
+		if (!seen[kv.first.level]) {
+			seen[kv.first.level] = true;
+			(*levels)++;
+		}
 	}
 }
 

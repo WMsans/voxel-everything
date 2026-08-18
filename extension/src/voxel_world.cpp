@@ -266,6 +266,7 @@ void VoxelWorld::teardown_gpu() {
 	if (lod_tree_) lod_tree_->clear();
 	lod_pages_of_.clear();
 	lod_page_quads_.clear();
+	lod_overflow_logged_.clear();
 	initialized_ = false;
 }
 
@@ -376,6 +377,15 @@ ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
 				") — spec §8 fail-soft");
 	}
 	pending_edits_.push_back({op, r});
+	if (lod_tree_ && !r.touched.empty()) {
+		float lo[3], hi[3];
+		ve::op_world_aabb(op, lo, hi);
+		// Every level: ve::LodTree::mark_dirty walks them itself, and the relevance cut is
+		// at the HALF-CELL supersample resolution rather than the cell -- a 5 m crater still
+		// registers at L4's 6.4 m cells, which is the point of the reduction change. Only
+		// ops shorter than half a cell on every axis are genuinely unrepresentable.
+		lod_tree_->mark_dirty(lo, hi);
+	}
 	// Connectivity's half of the fan-out. Runs under the append lock; the manager's
 	// pending-window queue is guarded by its own windows_mutex_ (note_edit may be called
 	// from a tool thread), and the seq bump above lets the window know which readback is
@@ -957,6 +967,14 @@ void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ)
 				}
 				continue;
 			}
+			if (r.overflow) {
+				const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
+				if (lod_overflow_logged_.insert(key).second)
+					UtilityFunctions::printerr("VoxelWorld: LoD chunk (level ", r.level,
+							", ", r.coord.x, ", ", r.coord.y, ", ", r.coord.z,
+							") overflowed; keeping first ", ve::kLodMaxQuadsPerChunk,
+							" quads");
+			}
 			if (r.quads.empty()) {
 				// The chunk is legitimately empty now. Release any old pages before telling
 				// the tree, otherwise the tree stops drawing/requesting it while the stale
@@ -1086,6 +1104,11 @@ Dictionary VoxelWorld::debug_lod_stats() {
 	d["pages_used"] = (lod_pool_ ? lod_pool_->page_count() : 0) -
 			(lod_pool_ ? lod_pool_->free_pages() : 0);
 	d["chunks_resident"] = static_cast<int>(lod_pages_of_.size());
+	int dirty_chunks = 0;
+	int dirty_levels = 0;
+	if (lod_tree_) lod_tree_->dirty_stats(&dirty_chunks, &dirty_levels);
+	d["dirty_chunks"] = dirty_chunks;
+	d["dirty_levels"] = dirty_levels;
 	int draw_pages = 0;
 	for (const ve::LodDrawItem &item : lod_walk_.draws)
 		draw_pages += item.page_count;
