@@ -66,10 +66,17 @@ LodCamera lod_camera_perspective(const float pos[3], const float fwd[3], const f
 	v[15] = 1.0f;
 
 	// REVERSE-Z perspective: z maps near -> 1, far -> 0 (M1 errata 2).
+	//
+	// The Y IS FLIPPED, because Godot 4.7's scene projection flips it (columns[1][1] < 0,
+	// see RaymarchCompositor::_render_callback) and this matrix exists to let a test state
+	// the SAME camera the engine hands production. A flip mirrors clip space, which reverses
+	// every triangle's screen-space winding -- so without it the raster's front-face setting
+	// measures one way here and means the opposite on screen, and CULL_BACK removes exactly
+	// the surfaces the viewer can see.
 	const float t = 1.0f / std::tan(fov_y_rad * 0.5f);
 	float p[16] = {};
 	p[0] = t / aspect;
-	p[5] = t;
+	p[5] = -t;
 	p[10] = z_near / (z_far - z_near);
 	p[11] = -1.0f;
 	p[14] = (z_far * z_near) / (z_far - z_near);

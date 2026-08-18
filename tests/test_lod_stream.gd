@@ -74,9 +74,13 @@ func test_a_far_edit_is_visible_in_the_far_field(timeout := 60000) -> void:
 	w.debug_apply_sphere_subtract(Vector3(400.0, 55.0, 250.0), 20.0)
 	await settle(w, pos, fwd)
 	var after := w.debug_lod_render_probe(pos, fwd, 256, 144)
-	# A 20 m crater 150 m away must change what the far field draws.
-	assert_float(absf(after["coverage"] - before["coverage"])).override_failure_message(
-		"a 20 m crater at 150 m changed nothing in the far field").is_greater(0.001)
+	# A 20 m crater 150 m away must change what the far field draws. Measure the DEPTH image,
+	# not the silhouette: the seam now sits where the near field's bricks actually stop
+	# (ve::lod_fade_band), so the far field reaches much closer and a crater has more far
+	# field behind it -- it swaps one surface for another instead of punching through to sky,
+	# and total coverage barely moves (measured: 2.7e-5) while the depths plainly change.
+	assert_float(absf(after["depth_sum"] - before["depth_sum"])).override_failure_message(
+		"a 20 m crater at 150 m changed nothing in the far field").is_greater(0.0)
 
 func test_teardown_and_reinit_leave_no_pages_behind(timeout := 40000) -> void:
 	var w := make_world()

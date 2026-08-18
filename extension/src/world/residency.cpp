@@ -116,6 +116,11 @@ ResidencyPlan RegionResidency::update(float cx, float cy, float cz, const AtlasB
 		return a.region.x < b.region.x;
 	});
 
+	// The nearest region that is NOT resident is exactly where the near field's data stops
+	// being complete: everything closer has already been loaded, because this list is walked
+	// nearest-first and a load is only refused once the atlas is full. The seam reads it.
+	complete_radius_m_ = cands.empty() ? cfg_.radius_m : cands.front().dist;
+
 	// 3. Load the nearest candidates, releasing the furthest residents until the atlas can
 	//    pay for each load. The releases go into the same frame's compute list BEFORE the
 	//    load marks that claim slots, so what a release gives back is available to the load

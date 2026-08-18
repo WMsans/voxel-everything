@@ -136,6 +136,9 @@ public:
 	int node_count() const { return static_cast<int>(nodes_.size()); }
 	void clear();
 	const LodTreeConfig &config() const { return cfg_; }
+	// The seam follows the near field's measured reach (ve::lod_fade_band), so the build
+	// gate has to move with it: chunks the fragment shader would now keep must be built.
+	void set_fade_start_m(float v) { cfg_.fade_start_m = v; }
 
 private:
 	struct Key {

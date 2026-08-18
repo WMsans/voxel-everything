@@ -442,7 +442,15 @@ public:
 	Array debug_lod_collect();
 	// --- M5 Task 12 LoD tick hooks ---
 	void debug_lod_tick(Vector3 pos, Vector3 fwd);
+	// The near/far seam for this frame, derived from how far the near field's brick data is
+	// actually complete. One source of truth: the composite, the LoD raster and the LoD
+	// build gate must all fade at the same two distances or the band belongs to no field.
+	void lod_fade_band(float *fade_start, float *fade_end) const;
+
 	Dictionary debug_lod_stats();
+	// x = fade start, y = fade end: the seam this frame, for tests that must not bake in a
+	// distance the near field may not be able to pay for.
+	Vector2 debug_lod_fade_band();
 	// --- M5 Task 13 LoD render hooks ---
 	Dictionary debug_lod_render_probe(Vector3 pos, Vector3 fwd, int w, int h);
 	Dictionary debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, int w, int h,

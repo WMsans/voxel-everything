@@ -65,7 +65,10 @@ private:
 	std::vector<PageDraw> draw_pages_;
 	float last_ms_ = 0.0f;
 	bool cull_enabled_ = true;
-	bool front_face_clockwise_ = true; // measured by test_backface_culling_does_not_remove_visible_ground
+	// The scene projection flips Y, which mirrors clip space and reverses screen-space
+	// winding, so the pre-wound quads present COUNTER-clockwise front faces. Measured by
+	// test_backface_culling_does_not_remove_visible_ground.
+	bool front_face_clockwise_ = false;
 };
 
 } // namespace godot

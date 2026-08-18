@@ -95,4 +95,20 @@ void op_lod_chunk_range(const EditOp &op, int level, IVec3 *lo, IVec3 *hi) {
 	*hi = lod_chunk_of_point(level, p1[0], p1[1], p1[2]);
 }
 
+void lod_fade_band(float reach_m, float *fade_start, float *fade_end) {
+	float end = kLodFadeEndM;
+	if (reach_m > 0.0f) {
+		const float usable = reach_m * kLodSeamMarginM;
+		const float stepped = std::floor(usable / kLodSeamStepM) * kLodSeamStepM;
+		end = std::min(end, stepped);
+	}
+	end = std::max(end, kLodFadeMinEndM);
+	// Keep the band's shape: the spec's 120/150 fades over the last fifth of the range.
+	// (Widening it instead was measured and did not reduce the residual unclaimed pixels,
+	// so the residue is not the two fields' dither thresholds drifting apart.)
+	const float start = end * (kLodFadeStartM / kLodFadeEndM);
+	if (fade_start) *fade_start = start;
+	if (fade_end) *fade_end = end;
+}
+
 } // namespace ve

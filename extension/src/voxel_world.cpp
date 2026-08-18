@@ -84,6 +84,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_lod_builds_per_frame"), &VoxelWorld::get_lod_builds_per_frame);
 	ClassDB::bind_method(D_METHOD("debug_lod_tick", "pos", "fwd"), &VoxelWorld::debug_lod_tick);
 	ClassDB::bind_method(D_METHOD("debug_lod_stats"), &VoxelWorld::debug_lod_stats);
+	ClassDB::bind_method(D_METHOD("debug_lod_fade_band"), &VoxelWorld::debug_lod_fade_band);
 	ClassDB::bind_method(D_METHOD("debug_lod_render_probe", "pos", "fwd", "w", "h"),
 			&VoxelWorld::debug_lod_render_probe);
 	ClassDB::bind_method(D_METHOD("debug_lod_render_probe_culled", "pos", "fwd", "w", "h",
@@ -948,10 +949,29 @@ void VoxelWorld::ensure_lod() {
 		UtilityFunctions::printerr("VoxelWorld: LodPool initialize failed");
 }
 
+void VoxelWorld::lod_fade_band(float *fade_start, float *fade_end) const {
+	// Until the streamer has run a frame there is nothing measured, and before the first
+	// regions land the measurement is "complete out to 0 m" -- both would swing the seam.
+	// Fall back to the CONFIGURED radius there: the seam then starts where the near field
+	// intends to reach and only tightens if the atlas cannot fund it, instead of jumping
+	// once streaming begins and stranding the chunks the walk built under the old band.
+	float reach = residency_ ? residency_->complete_radius_m() : 0.0f;
+	if (reach <= 0.0f) reach = residency_radius_m_;
+	ve::lod_fade_band(reach, fade_start, fade_end);
+}
+
 void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 	std::unique_lock<std::mutex> lock(lod_mutex_);
 	ensure_lod();
 	if (!lod_tree_ || !lod_pool_) return;
+	// The gate that decides which chunks are worth building has to agree with the fragment
+	// shader about where the far field starts, or it refuses to build exactly the chunks the
+	// near field can no longer cover.
+	{
+		float fs = ve::kLodFadeStartM;
+		lod_fade_band(&fs, nullptr);
+		lod_tree_->set_fade_start_m(fs);
+	}
 	lod_tree_->walk(cam, occ, ++lod_frame_, &lod_walk_);
 
 	// Results first: a page that arrives this frame should be drawable this frame.
@@ -1182,6 +1202,13 @@ Dictionary VoxelWorld::debug_lod_stats() {
 	return d;
 }
 
+Vector2 VoxelWorld::debug_lod_fade_band() {
+	float start = ve::kLodFadeStartM;
+	float end = ve::kLodFadeEndM;
+	lod_fade_band(&start, &end);
+	return Vector2(start, end);
+}
+
 Dictionary VoxelWorld::debug_lod_render_probe(Vector3 pos, Vector3 fwd, int w, int h) {
 	return debug_lod_render_probe_culled(pos, fwd, w, h, true);
 }
@@ -1194,6 +1221,7 @@ Dictionary VoxelWorld::debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, i
 	d["depth_max"] = 0.0f;
 	d["nearest_hit_m"] = 0.0f;
 	d["draw_pages"] = 0;
+	d["depth_sum"] = 0.0;
 	if (w <= 0 || h <= 0) return d;
 
 	// One tick: refresh the walk and the raster pass's page list for this view. debug_lod_tick
@@ -1251,8 +1279,11 @@ Dictionary VoxelWorld::debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, i
 	lod_raster_pass_->set_cull_enabled(cull);
 	const int draw_count = lod_raster_pass_->draw_page_count();
 	lod_pool_->upload_draw_args(lod_raster_pass_->draw_pages());
+	float probe_start = ve::kLodFadeStartM;
+	float probe_end = ve::kLodFadeEndM;
+	lod_fade_band(&probe_start, &probe_end);
 	bool ok = lod_raster_pass_->draw(device, *lod_pool_, *materials_, color, depth,
-			vp, p, draw_count, ve::kLodFadeStartM, ve::kLodFadeEndM);
+			vp, p, draw_count, probe_start, probe_end);
 	device->submit();
 	device->sync();
 
@@ -1264,13 +1295,20 @@ Dictionary VoxelWorld::debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, i
 			int covered = 0;
 			float dmin = 1.0f;
 			float dmax = 0.0f;
+			// Coverage alone cannot see a change that swaps one surface for another behind
+			// it -- a crater in ground that has more ground behind it keeps every pixel
+			// covered. Accumulate the depths too, so a test can ask whether the far field's
+			// IMAGE changed rather than only whether its silhouette did.
+			double depth_sum = 0.0;
 			for (int i = 0; i < pixel_count; i++) {
 				const float dv = depths[i];
 				if (dv <= 0.0f) continue;
 				covered++;
+				depth_sum += static_cast<double>(dv);
 				if (dv < dmin) dmin = dv;
 				if (dv > dmax) dmax = dv;
 			}
+			d["depth_sum"] = depth_sum;
 			d["coverage"] = static_cast<float>(covered) / static_cast<float>(pixel_count);
 			d["depth_min"] = covered > 0 ? dmin : 0.0f;
 			d["depth_max"] = covered > 0 ? dmax : 0.0f;
@@ -1418,9 +1456,14 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 	device->texture_clear(depth, Color(0.0f, 0.0f, 0.0f, 0.0f), 0, 1, 0, 1);
 
 	// Pass 1: near field. Composite writes 1 into the marker where it keeps the depth.
+	// The probe must fade where the production path fades, or it measures a band neither
+	// shader is using and reports a seam that is not there.
+	float probe_fade_start = ve::kLodFadeStartM;
+	float probe_fade_end = ve::kLodFadeEndM;
+	lod_fade_band(&probe_fade_start, &probe_fade_end);
 	composite_pass_->draw(device, color, depth, raymarch_pass_->color_texture(),
 			raymarch_pass_->hitpos_texture(), vp, *materials_, p,
-			ve::kLodFadeStartM, ve::kLodFadeEndM, marker);
+			probe_fade_start, probe_fade_end, marker);
 
 	// Pass 2: far field. The LoD pipeline uses LOGIC_OP_OR on the marker, so kept far
 	// pixels OR 2 into the composite's 1, making double-claimed pixels read 3.
@@ -1432,7 +1475,7 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 		lod_pool_->upload_draw_args(lod_raster_pass_->draw_pages());
 		const int draw_count = lod_raster_pass_->draw_page_count();
 		lod_raster_pass_->draw(device, *lod_pool_, *materials_, color, depth, vp, p,
-				draw_count, ve::kLodFadeStartM, ve::kLodFadeEndM, marker);
+				draw_count, probe_fade_start, probe_fade_end, marker);
 	}
 	device->submit();
 	device->sync();
@@ -1491,13 +1534,13 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 				continue;
 			}
 			const uint8_t m = mk[i];
-			if (dist >= ve::kLodFadeStartM && dist <= ve::kLodFadeEndM) {
+			if (dist >= probe_fade_start && dist <= probe_fade_end) {
 				band_pixels++;
 				if (m == 0u) band_pixels_unclaimed++;
 				if (m == 3u) band_pixels_double_claimed++;
-			} else if (dist < ve::kLodFadeStartM && (m & 2u) != 0u) {
+			} else if (dist < probe_fade_start && (m & 2u) != 0u) {
 				near_pixels_lost_to_lod++;
-			} else if (dist > ve::kLodFadeEndM && (m & 1u) != 0u) {
+			} else if (dist > probe_fade_end && (m & 1u) != 0u) {
 				far_pixels_lost_to_raymarch++;
 			}
 		}

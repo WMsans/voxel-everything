@@ -76,10 +76,16 @@ func test_depth_is_written_so_the_near_field_can_occlude(timeout := 60000) -> vo
 func test_nothing_is_drawn_inside_the_near_field(timeout := 60000) -> void:
 	var w: VoxelWorld = await settled_world()
 	var r := w.debug_lod_render_probe(POS, FWD.normalized(), 256, 200)
-	# Spec section 6.4: a chunk entirely inside the fade start is never even built.
+	# Spec section 6.4: a chunk entirely inside the fade start is never even built. The fade
+	# start is not the spec's 120 m any more -- it follows how far the near field's bricks
+	# actually reach (ve::lod_fade_band), so ask for it rather than baking in a distance the
+	# atlas may not be able to fund. A chunk STRADDLING the start is built, and its near
+	# corner is legitimately inside it, so the bar is the same fraction of the start the
+	# original 100/120 allowed.
+	var band := w.debug_lod_fade_band()
 	assert_float(r["nearest_hit_m"]).override_failure_message(
-		"the far field drew geometry at %.1f m, inside the 120 m fade start" % r["nearest_hit_m"]
-		).is_greater_equal(100.0)
+		"the far field drew geometry at %.1f m, inside the %.1f m fade start"
+		% [r["nearest_hit_m"], band.x]).is_greater_equal(band.x * (100.0 / 120.0))
 
 func test_backface_culling_does_not_remove_visible_ground(timeout := 60000) -> void:
 	var w: VoxelWorld = await settled_world()

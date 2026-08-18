@@ -94,6 +94,15 @@ public:
 	// Distance from a point to the region's world AABB; 0 inside.
 	static float region_distance(IVec3 region, float cx, float cy, float cz);
 
+	// How far the near field's brick data is actually COMPLETE, as of the last update():
+	// the distance to the nearest in-bounds, in-radius region that is not resident, or
+	// radius_m when every one of them is. Loads go nearest-first and stop when the atlas
+	// cannot pay for the next one, so beyond this radius the raymarcher reads absent bricks
+	// as empty space and returns sky. The near/far seam has to sit INSIDE it or the band
+	// between belongs to neither field (M5 errata: the LoD design assumed a 0-150 m near
+	// field, but the 65536-slot atlas funds barely half of the configured 96 m ball).
+	float complete_radius_m() const { return complete_radius_m_; }
+
 private:
 	struct Key {
 		int x, y, z;
@@ -112,6 +121,7 @@ private:
 	std::vector<IVec3> slot_region_; // slot -> region (valid where slot_used_)
 	std::vector<char> slot_used_;
 	std::vector<int> free_slots_;
+	float complete_radius_m_ = 0.0f;
 };
 
 } // namespace ve

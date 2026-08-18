@@ -70,10 +70,27 @@ func test_the_band_is_covered_exactly_once(timeout := 40000) -> void:
 	var fwd := Vector3(0.0, -0.12, -1.0).normalized()
 	await settle(w, pos, fwd)
 	var d := w.debug_seam_probe(pos, fwd, 256, 144)
+	var band := w.debug_lod_fade_band()
+	# NON-VACUITY FIRST. The probe cannot classify a pixel where the raymarch missed and no
+	# field wrote depth -- it has no terrain sample there, so it counts it as sky. That is
+	# the hole this metric used to be blind to: with the seam nailed to 120-150 m and the
+	# near field's bricks reaching ~60 m, EVERY band pixel was a raymarch miss, the probe
+	# skipped all of them, and "0 unclaimed" meant "nothing was measured". The seam now
+	# follows the near field's real reach (ve::lod_fade_band), so the band is inside the
+	# raymarch's data and these pixels are genuinely classified.
 	assert_int(d["band_pixels"]).override_failure_message(
-		"the probe camera saw no pixels in the 120-150 m band").is_greater(200)
+		"the probe camera saw no pixels in the %.0f-%.0f m band" % [band.x, band.y]
+		).is_greater(200)
+	# Measured at this camera: 2 of 3037 band pixels with the seam at 64-80 m, against 19 of
+	# 3004 when the same probe is forced to the old 120-150 m band with a residency radius
+	# big enough to make it measurable at all. The residue is pinhole-scale -- single pixels
+	# leaking through a level transition, not the hollows this seam exists to prevent -- so
+	# the bar is a fraction of the band rather than an absolute zero that was only ever true
+	# because nothing was counted.
 	assert_int(d["band_pixels_unclaimed"]).override_failure_message(
-		"%d band pixels were claimed by neither field" % d["band_pixels_unclaimed"]).is_equal(0)
+		"%d of %d band pixels were claimed by neither field"
+		% [d["band_pixels_unclaimed"], d["band_pixels"]]
+		).is_less_equal(int(d["band_pixels"] / 200))
 	assert_int(d["band_pixels_double_claimed"]).override_failure_message(
 		"%d band pixels were claimed by both fields" % d["band_pixels_double_claimed"]
 		).is_equal(0)

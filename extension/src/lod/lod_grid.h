@@ -39,6 +39,22 @@ inline constexpr float kLodSseAreaThresh =
 inline constexpr float kLodFadeStartM = 120.0f;
 inline constexpr float kLodFadeEndM = 150.0f;
 
+// ...but only when the near field can actually reach that far, which it usually cannot: the
+// brick atlas, not the residency radius, is the binding pool (ve::RegionResidency), so the
+// raymarcher's data commonly stops around 60 m. Every metre between where the near field
+// runs out and where the far field is allowed to draw belongs to NEITHER field: the ray
+// reads absent bricks as empty and returns sky, and lod.frag discards every fragment inside
+// the fade start. lod_fade_band() moves the seam in to sit inside the measured radius so
+// that gap cannot open. The quantisation is what stops a streaming wobble from sliding the
+// seam -- and the LoD build gate with it -- every single frame.
+inline constexpr float kLodSeamMarginM = 0.9f; // keep the whole band inside the complete radius
+inline constexpr float kLodSeamStepM = 8.0f;   // seam granularity
+inline constexpr float kLodFadeMinEndM = 32.0f; // never collapse the near field to nothing
+
+// The seam for a near field whose data is complete out to `reach_m`. Returns the spec band
+// unchanged once the near field can pay for it.
+void lod_fade_band(float reach_m, float *fade_start, float *fade_end);
+
 // Levels 5, 6 and 7 are never evicted: roughly 190 surface-intersecting chunks over the
 // whole world, a few MB, and they are what makes turning the camera reveal coarse terrain
 // instead of sky.

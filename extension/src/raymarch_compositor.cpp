@@ -129,9 +129,16 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	// the same RIDs the engine's own framebuffers use when MSAA is disabled (verified against
 	// render_forward_clustered.cpp), so the composite writes into the actual scene buffers.
 	const float cam_pos[3] = {cam.origin.x, cam.origin.y, cam.origin.z};
+	// Both fields fade at the SAME two distances, and those distances follow how far the
+	// near field's bricks actually reach this frame -- not the spec's 120/150, which assumes
+	// an atlas three times this one. Read once here so the composite and every far-field
+	// draw below cannot disagree within a frame.
+	float fade_start = ve::kLodFadeStartM;
+	float fade_end = ve::kLodFadeEndM;
+	world->lod_fade_band(&fade_start, &fade_end);
 	cmp->draw(rd, rsb->get_color_texture(), rsb->get_depth_texture(),
 			rmp->color_texture(), rmp->hitpos_texture(), view_proj, *materials,
-			cam_pos, ve::kLodFadeStartM, ve::kLodFadeEndM);
+			cam_pos, fade_start, fade_end);
 
 	// Far field: after the composite the scene depth holds exact near-field occluders. Build
 	// the HiZ pyramid from it for the GPU cull (Task 15) and the coarse async readback for the
@@ -165,7 +172,7 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 			world->lod_pool()->upload_draw_args(lod_raster->draw_pages());
 			lod_raster->draw(rd, *world->lod_pool(), *materials,
 					rsb->get_color_texture(), rsb->get_depth_texture(), view_proj, cam_pos,
-					lod_raster->draw_page_count(), ve::kLodFadeStartM, ve::kLodFadeEndM);
+					lod_raster->draw_page_count(), fade_start, fade_end);
 		} else {
 			// Temporal second phase (spec 7.5): draw last frame's visible set first, rebuild
 			// HiZ with those far-field depth writes, then cull and draw the remainder.
@@ -196,7 +203,7 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 				world->lod_pool()->upload_draw_args(first_pass_draw);
 				lod_raster->draw(rd, *world->lod_pool(), *materials,
 						rsb->get_color_texture(), rsb->get_depth_texture(), view_proj,
-						cam_pos, first_pass_count, ve::kLodFadeStartM, ve::kLodFadeEndM);
+						cam_pos, first_pass_count, fade_start, fade_end);
 				// The second build includes the first pass's far-field depth, so the cull of
 				// the remainder can see far occluders that the near-field-only pyramid missed.
 				// With no remaining pass there is nothing to cull, so skip the extra rebuild.
@@ -222,7 +229,7 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 				}
 				lod_raster->draw(rd, *world->lod_pool(), *materials,
 						rsb->get_color_texture(), rsb->get_depth_texture(), view_proj,
-						cam_pos, remaining_count, ve::kLodFadeStartM, ve::kLodFadeEndM);
+						cam_pos, remaining_count, fade_start, fade_end);
 			} else {
 				// No remaining pass means no async args readback will refresh the visible
 				// set. Record exactly what this frame's first pass drew, including an empty
