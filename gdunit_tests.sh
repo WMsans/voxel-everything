@@ -135,16 +135,11 @@ if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ]; then
 fi
 
 # --- vsync ------------------------------------------------------------------
-# MEASURED, not assumed: with vsync on, this suite's window is normally
-# unfocused and occluded, so the compositor throttles its presents and a single
-# `await get_tree().process_frame` costs ~590 ms instead of ~0.5 ms. Tests that
-# step the world frame by frame (the LoD suites step it hundreds of times) then
-# spend all their wall clock in the swapchain: test_lod_pool.gd took 8m36s, of
-# which the LoD work itself was under a second. Presentation timing changes
-# nothing any test asserts on, so the runner always turns it off.
-godot_flags=(--path "$ROOT" --disable-vsync)
+# Keep vsync enabled: this project's tests run against a real display, and
+# user requirement is that the runner does not force --disable-vsync.
+godot_flags=(--path "$ROOT")
 
-echo "==> Running gdUnit4 against a real display (GPU rendering enabled, vsync off)"
+echo "==> Running gdUnit4 against a real display (GPU rendering enabled, vsync on)"
 echo "    godot_binary: $godot_binary"
 echo "    tests:        ${test_paths[*]}"
 
