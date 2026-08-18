@@ -404,6 +404,7 @@ public:
 	// --- Task 12 hooks ---
 	Color debug_raymarch_pixel(Vector3 origin, Vector3 dir);
 	Dictionary debug_raymarch_probe(Vector3 origin, Vector3 dir);
+	Dictionary debug_raymarch_gbuffer(Vector3 origin, Vector3 dir);
 	// --- M5 Task 11 hooks ---
 	Dictionary debug_material_atlas_stats();
 	Color debug_material_probe(int mat, Vector3 p, Vector3 n);

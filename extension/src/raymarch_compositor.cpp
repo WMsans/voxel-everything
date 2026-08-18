@@ -10,6 +10,7 @@
 #include "render/island_cull_pass.h"
 #include "render/raymarch_pass.h"
 #include "render/world_streamer.h"
+#include "shade/beauty_settings.h"
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/render_scene_buffers_rd.hpp>
 #include <godot_cpp/classes/render_scene_data.hpp>
@@ -19,6 +20,7 @@
 #include <godot_cpp/variant/projection.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <vector>
 
 using namespace godot;
@@ -85,6 +87,8 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	cp.region_origin[3] = 0; // Task 11 sets the cull grid
 	const Vector3i ab = world->get_atlas_bricks();
 	cp.atlas_bricks[0] = ab.x; cp.atlas_bricks[1] = ab.y; cp.atlas_bricks[2] = ab.z;
+	const uint32_t beauty_flags = ve::pack_flags(world->beauty_settings());
+	std::memcpy(&cp.cam_pos[3], &beauty_flags, sizeof(float));
 
 	// Volumes before anything that evaluates the field: an op naming a slot may already be
 	// in the edit log, and the streamer is about to regenerate the bricks that read it.
@@ -137,7 +141,7 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	float fade_end = ve::kLodFadeEndM;
 	world->lod_fade_band(&fade_start, &fade_end);
 	cmp->draw(rd, rsb->get_color_texture(), rsb->get_depth_texture(),
-			rmp->color_texture(), rmp->hitpos_texture(), view_proj, *materials,
+			rmp->albedo_texture(), rmp->hitpos_texture(), view_proj, *materials,
 			cam_pos, fade_start, fade_end);
 
 	// Far field: after the composite the scene depth holds exact near-field occluders. Build

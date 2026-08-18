@@ -32,6 +32,7 @@
 #include "world/brick_eval.h"
 #include "world/brick_mip.h"
 #include "world/raycast.h"
+#include "shade/oct.h"
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rd_texture_format.hpp>
 #include <godot_cpp/classes/rd_texture_view.hpp>
@@ -169,6 +170,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_pixel", "origin", "dir"), &VoxelWorld::debug_raymarch_pixel);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_probe", "origin", "dir"), &VoxelWorld::debug_raymarch_probe);
+	ClassDB::bind_method(D_METHOD("debug_raymarch_gbuffer", "origin", "dir"), &VoxelWorld::debug_raymarch_gbuffer);
 	ClassDB::bind_method(D_METHOD("debug_material_atlas_stats"), &VoxelWorld::debug_material_atlas_stats);
 	ClassDB::bind_method(D_METHOD("debug_material_probe", "mat", "p", "n"), &VoxelWorld::debug_material_probe);
 	ClassDB::bind_method(D_METHOD("debug_sdf_atlas"), &VoxelWorld::debug_sdf_atlas);
@@ -1549,7 +1551,7 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 	float probe_fade_start = ve::kLodFadeStartM;
 	float probe_fade_end = ve::kLodFadeEndM;
 	lod_fade_band(&probe_fade_start, &probe_fade_end);
-	composite_pass_->draw(device, color, depth, raymarch_pass_->color_texture(),
+	composite_pass_->draw(device, color, depth, raymarch_pass_->albedo_texture(),
 			raymarch_pass_->hitpos_texture(), vp, *materials_, p,
 			probe_fade_start, probe_fade_end, marker);
 
@@ -2707,16 +2709,22 @@ Color VoxelWorld::debug_raymarch_pixel(Vector3 origin, Vector3 dir) {
 	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
 	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
 	cam.atlas_bricks[2] = atlas_bricks_.z;
+	const uint32_t flags = ve::pack_flags(beauty_);
+	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1,
 			kNoEdit))
 		return Color(1, 0, 1);
 	device->submit();
 	device->sync();
-	const PackedByteArray data = device->texture_get_data(raymarch_pass_->color_texture(), 0);
-	if (data.size() < 8) return Color(1, 0, 1);
-	const uint16_t *h = reinterpret_cast<const uint16_t *>(data.ptr());
-	return Color(half_to_float(h[0]), half_to_float(h[1]), half_to_float(h[2]), 1.0);
+	const PackedByteArray data = device->texture_get_data(raymarch_pass_->albedo_texture(), 0);
+	const PackedByteArray hp = device->texture_get_data(raymarch_pass_->hitpos_texture(), 0);
+	if (data.size() < 4 || hp.size() < 16) return Color(1, 0, 1);
+	const uint8_t *b = data.ptr();
+	const float *hf = reinterpret_cast<const float *>(hp.ptr());
+	// Alpha stays the HIT FLAG, as every existing caller assumes -- the albedo image's own
+	// alpha is sun visibility and would read as "missed" for any shadowed pixel.
+	return Color(b[0] / 255.0f, b[1] / 255.0f, b[2] / 255.0f, hf[3]);
 }
 
 Dictionary VoxelWorld::debug_raymarch_probe(Vector3 origin, Vector3 dir) {
@@ -2735,17 +2743,19 @@ Dictionary VoxelWorld::debug_raymarch_probe(Vector3 origin, Vector3 dir) {
 	cam.region_origin[0] = rorig.x; cam.region_origin[1] = rorig.y; cam.region_origin[2] = rorig.z;
 	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
 	cam.atlas_bricks[2] = atlas_bricks_.z;
+	const uint32_t flags = ve::pack_flags(beauty_);
+	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1,
 			kNoEdit)) return d;
 	device->submit();
 	device->sync();
 	const PackedByteArray hp = device->texture_get_data(raymarch_pass_->hitpos_texture(), 0);
-	const PackedByteArray col = device->texture_get_data(raymarch_pass_->color_texture(), 0);
-	if (hp.size() < 16 || col.size() < 8) return d;
+	const PackedByteArray col = device->texture_get_data(raymarch_pass_->albedo_texture(), 0);
+	if (hp.size() < 16 || col.size() < 4) return d;
 	const float *hf = reinterpret_cast<const float *>(hp.ptr());
-	const uint16_t *h = reinterpret_cast<const uint16_t *>(col.ptr());
-	d["color"] = Color(half_to_float(h[0]), half_to_float(h[1]), half_to_float(h[2]), 1.0);
+	const uint8_t *b = col.ptr();
+	d["color"] = Color(b[0] / 255.0f, b[1] / 255.0f, b[2] / 255.0f, 1.0);
 	if (hf[3] < 0.5f) return d; // sky miss
 	d["hit"] = true;
 	d["pos"] = Vector3(hf[0], hf[1], hf[2]);
@@ -2787,6 +2797,48 @@ Dictionary VoxelWorld::debug_raymarch_probe(Vector3 origin, Vector3 dir) {
 				(cell.z * 8 + cz) * static_cast<int64_t>(w) * hh) * 2;
 		d["cell8_surface"] = m8[o] <= ve::kEncodedZero && m8[o + 1] >= ve::kEncodedZero;
 	}
+	return d;
+}
+
+Dictionary VoxelWorld::debug_raymarch_gbuffer(Vector3 origin, Vector3 dir) {
+	Dictionary d;
+	d["hit"] = false;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_) return d;
+	ve::CameraParams cam = ve::CameraParams::looking_at(
+			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
+	const ve::WorldBounds wb = world_bounds();
+	const ve::IVec3 ro = wb.origin_regions();
+	cam.dims[0] = world_size_regions_.x; cam.dims[1] = world_size_regions_.y;
+	cam.dims[2] = world_size_regions_.z;
+	cam.dims[3] = island_slot_count();
+	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
+	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
+	cam.atlas_bricks[2] = atlas_bricks_.z;
+	const uint32_t flags = ve::pack_flags(beauty_);
+	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
+	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1, kNoEdit)) return d;
+	device->submit();
+	device->sync();
+	const PackedByteArray ab = device->texture_get_data(raymarch_pass_->albedo_texture(), 0);
+	const PackedByteArray sf = device->texture_get_data(raymarch_pass_->surface_texture(), 0);
+	const PackedByteArray hp = device->texture_get_data(raymarch_pass_->hitpos_texture(), 0);
+	if (ab.size() < 4 || sf.size() < 8 || hp.size() < 16) return d;
+	const uint8_t *a = ab.ptr();
+	const uint16_t *s = reinterpret_cast<const uint16_t *>(sf.ptr());
+	const float *h = reinterpret_cast<const float *>(hp.ptr());
+	d["albedo"] = Color(a[0] / 255.0f, a[1] / 255.0f, a[2] / 255.0f, 1.0f);
+	d["sun"] = a[3] / 255.0f;
+	const float e[2] = {half_to_float(s[0]), half_to_float(s[1])};
+	float n[3];
+	ve::oct_decode(e, n);
+	d["normal"] = Vector3(n[0], n[1], n[2]);
+	d["material"] = static_cast<int>(half_to_float(s[2]) + 0.5f);
+	d["gloss"] = half_to_float(s[3]);
+	d["hit"] = h[3] > 0.5f;
+	d["position"] = Vector3(h[0], h[1], h[2]);
 	return d;
 }
 
@@ -2890,10 +2942,10 @@ Color VoxelWorld::debug_material_probe(int mat, Vector3 p, Vector3 n) {
 		return Color(1, 0, 1);
 	device->submit();
 	device->sync();
-	const PackedByteArray data = device->texture_get_data(raymarch_pass_->color_texture(), 0);
-	if (data.size() < 8) return Color(1, 0, 1);
-	const uint16_t *h = reinterpret_cast<const uint16_t *>(data.ptr());
-	return Color(half_to_float(h[0]), half_to_float(h[1]), half_to_float(h[2]), 1.0);
+	const PackedByteArray data = device->texture_get_data(raymarch_pass_->albedo_texture(), 0);
+	if (data.size() < 4) return Color(1, 0, 1);
+	const uint8_t *b = data.ptr();
+	return Color(b[0] / 255.0f, b[1] / 255.0f, b[2] / 255.0f, 1.0);
 }
 
 bool VoxelWorld::debug_init_atlas() {

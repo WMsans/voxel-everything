@@ -24,7 +24,8 @@ public:
 			RID tile_mask, const ve::CameraParams &cam, int width, int height,
 			const float edit_state[6]);
 
-	RID color_texture() const { return color_; }
+	RID albedo_texture() const { return albedo_; }
+	RID surface_texture() const { return surface_; }
 	RID hitpos_texture() const { return hitpos_; }
 
 private:
@@ -37,7 +38,7 @@ private:
 	RID sampler_;     // shared NEAREST sampler, created once
 	RID edits_ubo_;   // 32-byte uniform buffer, updated every render
 	RID material_albedo_, material_surface_, material_sampler_;
-	RID color_, hitpos_, uset_, uset_mask_;
+	RID albedo_, surface_, hitpos_, uset_, uset_mask_;
 	int width_ = 0, height_ = 0;
 };
 

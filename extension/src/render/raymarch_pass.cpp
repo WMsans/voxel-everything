@@ -76,7 +76,7 @@ void RaymarchPass::teardown() {
 	// pipelines — so uset_ first, then pipeline_ before shader_, then the targets.
 	// uset_mask_ is only a cache key for an externally owned tile-mask RID (usually the
 	// IslandAtlas fallback mask); it must not be freed here.
-	for (RID *r : {&uset_, &pipeline_, &shader_, &color_, &hitpos_, &sampler_, &edits_ubo_}) {
+	for (RID *r : {&uset_, &pipeline_, &shader_, &albedo_, &surface_, &hitpos_, &sampler_, &edits_ubo_}) {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
@@ -103,20 +103,22 @@ RID RaymarchPass::make_target(RenderingDevice *rd, RenderingDevice::DataFormat f
 
 void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 		const IslandAtlas *islands, RID tile_mask, int w, int h) {
-	// Old uniform set references the old color/hitpos textures: free it before them.
+	// Old uniform set references the old G-buffer targets: free it before them.
 	if (uset_.is_valid()) rd->free_rid(uset_);
 	uset_ = RID();
-	if (color_.is_valid()) rd->free_rid(color_);
+	if (albedo_.is_valid()) rd->free_rid(albedo_);
+	if (surface_.is_valid()) rd->free_rid(surface_);
 	if (hitpos_.is_valid()) rd->free_rid(hitpos_);
-	color_ = make_target(rd, RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT, w, h);
+	albedo_ = make_target(rd, RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM, w, h);
+	surface_ = make_target(rd, RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT, w, h);
 	hitpos_ = make_target(rd, RenderingDevice::DATA_FORMAT_R32G32B32A32_SFLOAT, w, h);
 	width_ = w;
 	height_ = h;
 
-	Ref<RDUniform> u[20];
-	for (int i = 0; i < 20; i++) u[i].instantiate();
+	Ref<RDUniform> u[21];
+	for (int i = 0; i < 21; i++) u[i].instantiate();
 	u[0]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
-	u[0]->set_binding(0); u[0]->add_id(color_);
+	u[0]->set_binding(0); u[0]->add_id(albedo_);
 	u[1]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
 	u[1]->set_binding(1); u[1]->add_id(hitpos_);
 	const RID sampled[5] = {atlas.sdf_atlas(), atlas.mat_atlas(), atlas.mip_atlas(0),
@@ -148,8 +150,10 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 		u[i]->set_binding(i); u[i]->add_id(material_sampler_);
 		u[i]->add_id(material_samplers[i - 18]);
 	}
+	u[20]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
+	u[20]->set_binding(20); u[20]->add_id(surface_);
 	Array uset_args;
-	for (int i = 0; i < 20; i++) uset_args.push_back(u[i]);
+	for (int i = 0; i < 21; i++) uset_args.push_back(u[i]);
 	uset_ = rd->uniform_set_create(uset_args, shader_, 0);
 }
 
@@ -163,7 +167,8 @@ bool RaymarchPass::render(RenderingDevice *rd, const GpuAtlas &atlas,
 		rebuild_targets(rd, atlas, islands, mask, width, height);
 		uset_mask_ = mask;
 	}
-	if (!uset_.is_valid() || !color_.is_valid() || !edits_ubo_.is_valid()) return false;
+	if (!uset_.is_valid() || !albedo_.is_valid() || !surface_.is_valid() ||
+			!edits_ubo_.is_valid()) return false;
 
 	// Recorded before the compute list: buffer_update errors while a list is open, and the
 	// deferred update still lands before the dispatch at submit.
