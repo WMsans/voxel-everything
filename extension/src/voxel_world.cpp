@@ -229,8 +229,14 @@ void VoxelWorld::_bind_methods() {
 }
 
 void VoxelWorld::set_quality_tier(int v) {
+	std::lock_guard<std::mutex> lock(beauty_mutex_);
 	quality_tier_ = v < 0 ? 0 : (v > 3 ? 3 : v);
 	beauty_ = ve::settings_for_tier(static_cast<ve::QualityTier>(quality_tier_));
+}
+
+int VoxelWorld::get_quality_tier() const {
+	std::lock_guard<std::mutex> lock(beauty_mutex_);
+	return quality_tier_;
 }
 
 namespace {
@@ -249,6 +255,7 @@ bool *beauty_field(ve::BeautySettings &s, const String &name) {
 } // namespace
 
 void VoxelWorld::set_effect_enabled(const String &name, bool on) {
+	std::lock_guard<std::mutex> lock(beauty_mutex_);
 	bool *f = beauty_field(beauty_, name);
 	if (!f) return; // fail-soft: an unknown name in a debug menu is not a crash
 	*f = on;
@@ -256,27 +263,41 @@ void VoxelWorld::set_effect_enabled(const String &name, bool on) {
 }
 
 bool VoxelWorld::get_effect_enabled(const String &name) const {
+	std::lock_guard<std::mutex> lock(beauty_mutex_);
 	ve::BeautySettings copy = beauty_;
 	const bool *f = beauty_field(copy, name);
 	return f ? *f : false;
 }
 
+ve::BeautySettings VoxelWorld::beauty_settings() const {
+	std::lock_guard<std::mutex> lock(beauty_mutex_);
+	return beauty_;
+}
+
 Dictionary VoxelWorld::debug_beauty_settings() {
+	ve::BeautySettings beauty;
+	int quality_tier;
+	{
+		std::lock_guard<std::mutex> lock(beauty_mutex_);
+		beauty = beauty_;
+		quality_tier = quality_tier_;
+	}
+
 	Dictionary d;
-	d["ssgi"] = beauty_.ssgi;
-	d["ssr"] = beauty_.ssr;
-	d["contact_shadows"] = beauty_.contact_shadows;
-	d["outlines"] = beauty_.outlines;
-	d["sun_shadow_map"] = beauty_.sun_shadow_map;
-	d["glossy_sdf_rays"] = beauty_.glossy_sdf_rays;
-	d["raymarched_sun_shadow"] = beauty_.raymarched_sun_shadow;
-	d["ssgi_taps"] = beauty_.ssgi_taps;
-	d["ssr_steps"] = beauty_.ssr_steps;
-	d["contact_steps"] = beauty_.contact_steps;
-	d["outline_depth_threshold"] = beauty_.outline_depth_threshold;
-	d["outline_normal_threshold"] = beauty_.outline_normal_threshold;
-	d["tier"] = quality_tier_;
-	d["flags"] = static_cast<int>(ve::pack_flags(beauty_));
+	d["ssgi"] = beauty.ssgi;
+	d["ssr"] = beauty.ssr;
+	d["contact_shadows"] = beauty.contact_shadows;
+	d["outlines"] = beauty.outlines;
+	d["sun_shadow_map"] = beauty.sun_shadow_map;
+	d["glossy_sdf_rays"] = beauty.glossy_sdf_rays;
+	d["raymarched_sun_shadow"] = beauty.raymarched_sun_shadow;
+	d["ssgi_taps"] = beauty.ssgi_taps;
+	d["ssr_steps"] = beauty.ssr_steps;
+	d["contact_steps"] = beauty.contact_steps;
+	d["outline_depth_threshold"] = beauty.outline_depth_threshold;
+	d["outline_normal_threshold"] = beauty.outline_normal_threshold;
+	d["tier"] = quality_tier;
+	d["flags"] = static_cast<int>(ve::pack_flags(beauty));
 	return d;
 }
 

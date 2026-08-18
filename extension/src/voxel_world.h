@@ -166,6 +166,9 @@ class VoxelWorld : public Node3D {
 	int lod_pressure_ = 0;
 
 	// --- M6 beautification settings (Task 3) ---
+	// Setters run on the main thread; render callbacks take a value snapshot through
+	// beauty_settings() rather than retaining a reference to this mutable state.
+	mutable std::mutex beauty_mutex_;
 	int quality_tier_ = static_cast<int>(ve::QualityTier::kHigh);
 	ve::BeautySettings beauty_ = ve::settings_for_tier(ve::QualityTier::kHigh);
 
@@ -234,13 +237,12 @@ public:
 	int get_lod_builds_per_frame() const { return lod_builds_per_frame_; }
 
 	void set_quality_tier(int v);
-	int get_quality_tier() const { return quality_tier_; }
+	int get_quality_tier() const;
 	void set_effect_enabled(const String &name, bool on);
 	bool get_effect_enabled(const String &name) const;
-	// Read by every M6 pass on the render thread. Plain-old-data, written only from the
-	// main thread between frames, so no lock: a torn read would at worst use last frame's
-	// toggle for one frame, which is what a toggle looks like anyway.
-	const ve::BeautySettings &beauty_settings() const { return beauty_; }
+	// Returns an immutable value snapshot. Render callbacks must take this once per frame and
+	// pass the copy through their work; the mutex is never held during render work.
+	ve::BeautySettings beauty_settings() const;
 	Dictionary debug_beauty_settings();
 
 	void lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ);
