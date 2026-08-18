@@ -409,10 +409,6 @@ float terrain_sun_visibility(vec3 ro) {
 		if (shadow_slot < 0) return 1.0;
 		float d = world_sdf(q);
 		if (d < 0.004) return 0.0;
-		// The atlas stores an 8-bit SDF. A quantized sample can step over the exact
-		// threshold, so this near-zero fallback is the narrowly documented atlas
-		// equivalent; no material lookup is needed.
-		if (d < 0.1) return 0.0;
 		res = min(res, RAY_SHADOW_K * d / t);
 		t += clamp(d, 0.02, 1.0);
 	}
