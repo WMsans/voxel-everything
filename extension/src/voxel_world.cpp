@@ -384,6 +384,9 @@ ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
 		// at the HALF-CELL supersample resolution rather than the cell -- a 5 m crater still
 		// registers at L4's 6.4 m cells, which is the point of the reduction change. Only
 		// ops shorter than half a cell on every axis are genuinely unrepresentable.
+		// Lock order: caller holds edit_mutex_, lod_tick never holds lod_mutex_ while taking
+		// edit_mutex_, so edit_mutex_ -> lod_mutex_ is safe.
+		std::lock_guard<std::mutex> lock(lod_mutex_);
 		lod_tree_->mark_dirty(lo, hi);
 	}
 	// Connectivity's half of the fan-out. Runs under the append lock; the manager's
@@ -552,6 +555,8 @@ Dictionary VoxelWorld::debug_perf_stats() {
 	d["stream_total_ms"] = streamer_ ? streamer_->last_total_ms() : 0.0f;
 	d["stream_readback_ms"] = streamer_ ? streamer_->last_readback_ms() : 0.0f;
 	d["island_ms"] = island_manager_ ? island_manager_->last_ms() : 0.0f;
+	// lod_ms is CPU command-record time for the LoD raster + cull passes, not GPU execution
+	// time. See LodRasterPass/LodCullPass::last_ms comments.
 	d["lod_ms"] = (lod_raster_pass_ ? lod_raster_pass_->last_ms() : 0.0f) +
 			(lod_cull_pass_ ? lod_cull_pass_->last_ms() : 0.0f);
 	return d;
@@ -944,6 +949,7 @@ void VoxelWorld::ensure_lod() {
 }
 
 void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
+	std::unique_lock<std::mutex> lock(lod_mutex_);
 	ensure_lod();
 	if (!lod_tree_ || !lod_pool_) return;
 	lod_tree_->walk(cam, occ, ++lod_frame_, &lod_walk_);
@@ -1043,47 +1049,64 @@ void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ)
 		lod_pages_of_.erase(it);
 	}
 
-	// Then this frame's builds, priority order, one batch.
+	// Then this frame's builds, priority order, one batch. Mark the nodes building while
+	// still holding lod_mutex_ so note_building's dirty-clear happens at submission time.
+	// gather_lod_ops takes edit_mutex_, so it must run AFTER releasing lod_mutex_ (lock
+	// order: edit_mutex_ -> lod_mutex_); the building flag prevents a concurrent walk from
+	// re-requesting these nodes during that window, and a refused submit rolls the flags back.
+	std::vector<ve::LodBuildRequest> batch_requests;
 	if (mesh_ && !mesh_->lod_busy()) {
 		// MeshService's LodBuildPass currently supports at most 8 LoD jobs per batch.
 		// lod_builds_per_frame_ is user-facing and may be higher; submit_lod would reject
 		// anything above the mesher's cap, so clamp the actual batch take here.
 		const int take = std::min<int>({lod_builds_per_frame_, int(lod_walk_.requests.size()), 8});
+		batch_requests.assign(lod_walk_.requests.begin(), lod_walk_.requests.begin() + take);
+		for (const ve::LodBuildRequest &q : batch_requests)
+			lod_tree_->note_building(q.level, q.coord);
+	}
+	lock.unlock();
+
+	if (!batch_requests.empty()) {
 		std::vector<LodBuildJob> batch;
-		batch.reserve(size_t(take));
-		for (int i = 0; i < take; i++) {
-			const ve::LodBuildRequest &q = lod_walk_.requests[size_t(i)];
+		batch.reserve(batch_requests.size());
+		for (const ve::LodBuildRequest &q : batch_requests) {
 			LodBuildJob j;
 			j.level = q.level;
 			j.coord = q.coord;
 			gather_lod_ops(q.level, q.coord, &j.ops);
 			batch.push_back(std::move(j));
 		}
-		// Mark building only for the jobs that were actually ACCEPTED, and only the ones in
-		// the batch: marking a request the submit refused would leave a node permanently in
-		// kLodBuilding, and request() skips those, so it would never be built again.
-		if (!batch.empty() && mesh_->submit_lod(std::move(batch)))
-			for (int i = 0; i < take; i++)
-				lod_tree_->note_building(lod_walk_.requests[size_t(i)].level,
-						lod_walk_.requests[size_t(i)].coord);
+		if (!mesh_->submit_lod(std::move(batch))) {
+			lock.lock();
+			for (const ve::LodBuildRequest &q : batch_requests) {
+				const LodKey key{q.level, q.coord.x, q.coord.y, q.coord.z};
+				if (lod_pages_of_.find(key) != lod_pages_of_.end()) {
+					lod_tree_->note_ready_dirty(q.level, q.coord);
+				} else {
+					lod_tree_->note_failed(q.level, q.coord);
+				}
+			}
+			lock.unlock();
+		}
 	}
 
-	prepare_lod_raster();
+	lock.lock();
+	prepare_lod_raster_locked();
 }
 
 void VoxelWorld::prepare_lod_raster() {
+	std::lock_guard<std::mutex> lock(lod_mutex_);
+	prepare_lod_raster_locked();
+}
+
+void VoxelWorld::prepare_lod_raster_locked() {
 	if (!lod_raster_pass_ || !lod_pool_) return;
+	std::vector<ve::LodPageDraw> page_draws;
+	ve::lod_collect_page_draws(lod_walk_.draws, lod_pages_of_, lod_page_quads_, &page_draws);
 	std::vector<LodRasterPass::PageDraw> pages;
-	for (const ve::LodDrawItem &item : lod_walk_.draws) {
-		for (int p = item.page_first; p < item.page_first + item.page_count; p++) {
-			const auto it = lod_page_quads_.find(p);
-			if (it == lod_page_quads_.end()) continue;
-			LodRasterPass::PageDraw pd;
-			pd.page = p;
-			pd.quad_count = it->second;
-			pages.push_back(pd);
-		}
-	}
+	pages.reserve(page_draws.size());
+	for (const ve::LodPageDraw &pd : page_draws)
+		pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});
 	lod_raster_pass_->set_draw_pages(pages);
 }
 
@@ -1097,6 +1120,7 @@ void VoxelWorld::debug_lod_tick(Vector3 pos, Vector3 fwd) {
 }
 
 Dictionary VoxelWorld::debug_lod_stats() {
+	std::lock_guard<std::mutex> lock(lod_mutex_);
 	ensure_lod();
 	Dictionary d;
 	d["pages_total"] = lod_pool_ ? lod_pool_->page_count() : 0;
@@ -1156,12 +1180,13 @@ Dictionary VoxelWorld::debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, i
 	d["nearest_hit_m"] = 0.0f;
 	d["draw_pages"] = 0;
 	if (w <= 0 || h <= 0) return d;
-	ensure_lod();
+
+	// One tick: refresh the walk and the raster pass's page list for this view. debug_lod_tick
+	// -> lod_tick takes lod_mutex_ around ensure_lod and all LoD state mutation.
+	debug_lod_tick(pos, fwd);
+
 	RenderingDevice *device = rd();
 	if (!initialized_ || !device || !lod_pool_ || !lod_raster_pass_ || !materials_) return d;
-
-	// One tick: refresh the walk and the raster pass's page list for this view.
-	debug_lod_tick(pos, fwd);
 
 	const float p[3] = {pos.x, pos.y, pos.z};
 	const float f[3] = {fwd.x, fwd.y, fwd.z};
@@ -1245,10 +1270,9 @@ Dictionary VoxelWorld::debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, i
 		}
 	}
 
-	int draw_pages = 0;
-	for (const ve::LodDrawItem &item : lod_walk_.draws)
-		draw_pages += item.page_count;
-	d["draw_pages"] = draw_pages;
+	// The raster pass already holds the exact page list produced by prepare_lod_raster;
+	// reading lod_walk_ here would require re-taking lod_mutex_ after the tick released it.
+	d["draw_pages"] = lod_raster_pass_ ? lod_raster_pass_->draw_page_count() : 0;
 
 	// The raster pass cached a framebuffer over these throwaway targets; drop it before
 	// freeing them so teardown never frees a framebuffer whose attachments are already gone.
@@ -1267,13 +1291,13 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 	d["near_pixels_lost_to_lod"] = 0;
 	d["far_pixels_lost_to_raymarch"] = 0;
 	if (w <= 0 || h <= 0) return d;
-	ensure_lod();
-	RenderingDevice *device = rd();
-	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_ ||
-			!composite_pass_ || !lod_pool_ || !lod_raster_pass_) return d;
 
 	// One tick refreshes the walk and the raster pass's page list for this view.
 	debug_lod_tick(pos, fwd);
+
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_ ||
+			!composite_pass_ || !lod_pool_ || !lod_raster_pass_) return d;
 
 	// The near field needs the streamer to have populated the SDF atlas; the LoD settle in
 	// the test only converges the far-field walk. Drive the streamer until it is quiet (the
@@ -1468,10 +1492,9 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 	d["band_pixels_double_claimed"] = band_pixels_double_claimed;
 	d["near_pixels_lost_to_lod"] = near_pixels_lost_to_lod;
 	d["far_pixels_lost_to_raymarch"] = far_pixels_lost_to_raymarch;
-	int draw_pages = 0;
-	for (const ve::LodDrawItem &item : lod_walk_.draws)
-		draw_pages += item.page_count;
-	d["draw_pages"] = draw_pages;
+	// Same as debug_lod_render_probe_culled: use the raster pass's prepared page list rather
+	// than reading lod_walk_ after lod_tick released lod_mutex_.
+	d["draw_pages"] = lod_raster_pass_ ? lod_raster_pass_->draw_page_count() : 0;
 
 	// Both passes cached framebuffers over these throwaway targets; drop them before freeing.
 	composite_pass_->release_targets();
@@ -1491,15 +1514,15 @@ Dictionary VoxelWorld::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 	d["index_counts_changed"] = 0;
 	d["drawn_after"] = 0;
 	d["culled_ratio"] = 0.0f;
-	ensure_lod();
+
+	// One tick: refresh the walk and the raster pass's page list for this view.
+	debug_lod_tick(pos, fwd);
+
 	RenderingDevice *device = rd();
 	if (!initialized_ || !device || !lod_pool_ || !lod_raster_pass_ || !lod_cull_pass_ ||
 			!hiz_pass_) {
 		return d;
 	}
-
-	// One tick: refresh the walk and the raster pass's page list for this view.
-	debug_lod_tick(pos, fwd);
 	const float p[3] = {pos.x, pos.y, pos.z};
 	const float f[3] = {fwd.x, fwd.y, fwd.z};
 	const float up[3] = {0.0f, 1.0f, 0.0f};
@@ -1517,6 +1540,11 @@ Dictionary VoxelWorld::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 	device->sync();
 	const PackedByteArray before = device->buffer_get_data(lod_pool_->args_buffer(), 0,
 			static_cast<uint32_t>(draw_count) * 20);
+
+	// This probe deliberately exercises frustum culling plus whatever HiZ state is present.
+	// Build a synthetic "everything far" pyramid first so the run never reads an unbuilt or
+	// stale pyramid (the production path builds from the real scene depth before culling).
+	debug_hiz_probe_synthetic(0.0f, 1.0f);
 
 	const bool ok = lod_cull_pass_->run(device, *lod_pool_, hiz_pass_, vp, draw_count,
 			draw_count, 0);

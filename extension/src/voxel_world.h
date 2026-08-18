@@ -148,19 +148,13 @@ class VoxelWorld : public Node3D {
 	// --- M5 LoD state (Task 12) ---
 	int max_lod_pages_ = 32768;
 	int lod_builds_per_frame_ = 8;
-	// A chunk key is (level, coord); IVec3 has no operator< so the map key is explicit.
-	struct LodKey {
-		int level = 0;
-		int x = 0;
-		int y = 0;
-		int z = 0;
-		bool operator<(const LodKey &o) const {
-			if (level != o.level) return level < o.level;
-			if (z != o.z) return z < o.z;
-			if (y != o.y) return y < o.y;
-			return x < o.x;
-		}
-	};
+	// Guards lod_tree_, lod_walk_, lod_pages_of_, lod_page_quads_, and lod_pool_ state
+	// between the render thread (lod_tick) and main/tool threads (mark_dirty, debug stats).
+	// Lock order is edit_mutex_ -> lod_mutex_: lod_tick never holds lod_mutex_ while it calls
+	// gather_lod_ops (which takes edit_mutex_), so append_edit_locked can safely take
+	// lod_mutex_ while already holding edit_mutex_.
+	std::mutex lod_mutex_;
+	using LodKey = ve::LodKey;
 	ve::LodTree *lod_tree_ = nullptr;
 	LodPool *lod_pool_ = nullptr;
 	uint32_t lod_frame_ = 0;
@@ -170,6 +164,8 @@ class VoxelWorld : public Node3D {
 	std::set<LodKey> lod_overflow_logged_; // once-per-chunk overflow diagnostics
 	int lod_pressure_ = 0;
 	void ensure_lod(); // lazy: creates/initializes lod_tree_ + lod_pool_ on first use
+	// Assumes lod_mutex_ is held; emits the real page list for the current lod_walk_.
+	void prepare_lod_raster_locked();
 
 	RenderingDevice *main_rd_ = nullptr;
 	RenderingDevice *local_rd_ = nullptr; // owned when use_local_device_
