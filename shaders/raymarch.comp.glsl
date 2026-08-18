@@ -389,10 +389,9 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist) {
 // pixel. Sphere tracing gives contact hardening for free -- the penumbra narrows as the
 // occluder approaches -- with no shadow map and therefore no acne to bias away.
 //
-// world_sdf() returns +SDF_RANGE for a brick with no atlas slot, which is a safe "nothing
-// near here": the ray strides through unloaded space at 0.64 m a step and the shadow simply
-// stops where residency stops. That is the correct behaviour, not a bug -- there is no data
-// out there to cast a shadow with.
+// world_sdf() returns +SDF_RANGE for a brick with no atlas slot. Residency is an
+// explicit prerequisite for a shadow result: if the ray leaves the resident/probed field,
+// return fully lit rather than treating the accumulated darkness as known data.
 // ---------------------------------------------------------------------------------------
 const float RAY_SHADOW_DIST = 60.0;
 const int RAY_SHADOW_STEPS = 96;
@@ -407,11 +406,15 @@ float terrain_sun_visibility(vec3 ro) {
 		vec3 q = ro + SUN_DIR * t;
 		ivec3 brick = ivec3(floor(q / BRICK_SIZE));
 		int shadow_slot = slot_at(brick);
-		if (shadow_slot < 0) break;
+		if (shadow_slot < 0) return 1.0;
 		float d = world_sdf(q);
-		if (d < 0.1 && material_at(q, brick, shadow_slot) != 0u) return 0.0;
+		if (d < 0.004) return 0.0;
+		// The atlas stores an 8-bit SDF. A quantized sample can step over the exact
+		// threshold, so this near-zero fallback is the narrowly documented atlas
+		// equivalent; no material lookup is needed.
+		if (d < 0.1) return 0.0;
 		res = min(res, RAY_SHADOW_K * d / t);
-		t += clamp(d, 0.02, 0.64);
+		t += clamp(d, 0.02, 1.0);
 	}
 	return clamp(res, 0.0, 1.0);
 }

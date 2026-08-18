@@ -96,8 +96,8 @@ func test_the_sun_ray_shadows_the_inside_of_the_cave() -> void:
 			break
 	# Straight down inside the cave mouth: the floor there is under 5 m of overhang.
 	var dark: Dictionary = w.debug_raymarch_gbuffer(Vector3(30.0, 50.0, 30.0), Vector3(0, -1, 0))
-	if dark["hit"]:
-		assert_float(dark["sun"]).is_less(lit["sun"])
+	assert_bool(dark["hit"]).is_true()
+	assert_float(dark["sun"]).is_less(lit["sun"])
 
 func test_turning_the_sun_ray_off_makes_everything_fully_lit() -> void:
 	var w := make_world()
