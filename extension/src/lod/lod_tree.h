@@ -52,6 +52,33 @@ struct LodDrawItem {
 	int page_count = 0;
 };
 
+// A chunk key used by the page map. IVec3 has no operator<, so the map key is explicit.
+struct LodKey {
+	int level = 0;
+	int x = 0;
+	int y = 0;
+	int z = 0;
+	bool operator<(const LodKey &o) const {
+		if (level != o.level) return level < o.level;
+		if (z != o.z) return z < o.z;
+		if (y != o.y) return y < o.y;
+		return x < o.x;
+	}
+};
+
+// One indirect draw command for one arena page. The raster pass consumes these.
+struct LodPageDraw {
+	int page = -1;
+	int quad_count = 0;
+};
+
+// Emits one LodPageDraw per actual page in `pages_of` for each draw item. The tree's
+// page_first/page_count fields are kept for eviction/tests but are NOT used here: LodArena can
+// hand a chunk non-contiguous pages, and only the real page list says what to draw.
+void lod_collect_page_draws(const std::vector<LodDrawItem> &draws,
+		const std::map<LodKey, std::vector<int>> &pages_of,
+		const std::map<int, int> &page_quads, std::vector<LodPageDraw> *out);
+
 struct LodBuildRequest {
 	int level = 0;
 	IVec3 coord{};
@@ -118,6 +145,7 @@ private:
 	};
 	struct Node {
 		uint8_t state = kLodUnknown;
+		bool building = false; // a build is in flight; ready nodes keep drawing old pages
 		bool dirty = false;
 		int page_first = -1;
 		int page_count = 0;

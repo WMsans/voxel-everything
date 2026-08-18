@@ -23,6 +23,23 @@ void normalize3(float v[3]) {
 
 } // namespace
 
+void lod_collect_page_draws(const std::vector<LodDrawItem> &draws,
+		const std::map<LodKey, std::vector<int>> &pages_of,
+		const std::map<int, int> &page_quads, std::vector<LodPageDraw> *out) {
+	if (!out) return;
+	out->clear();
+	for (const LodDrawItem &item : draws) {
+		const LodKey key{item.level, item.coord.x, item.coord.y, item.coord.z};
+		const auto pages_it = pages_of.find(key);
+		if (pages_it == pages_of.end()) continue;
+		for (int p : pages_it->second) {
+			const auto quads_it = page_quads.find(p);
+			if (quads_it == page_quads.end()) continue;
+			out->push_back(LodPageDraw{p, quads_it->second});
+		}
+	}
+}
+
 LodCamera lod_camera_perspective(const float pos[3], const float fwd[3], const float up[3],
 		float fov_y_rad, float aspect, float z_near, float z_far, int vw, int vh) {
 	LodCamera c;
@@ -157,13 +174,26 @@ int LodTree::state_of(int level, IVec3 c) const {
 }
 
 void LodTree::note_building(int level, IVec3 c) {
-	nodes_[key(level, c)].state = kLodBuilding;
+	Node &n = nodes_[key(level, c)];
+	n.building = true;
+	// The in-flight build is for the state as of submission; clear any dirty that the walk
+	// observed. Edits that land AFTER this call re-set dirty and are preserved by note_ready.
+	n.dirty = false;
+	// A ready node stays ready so it keeps drawing its old pages (stale beats missing). A
+	// non-ready node stays non-drawable; kLodBuilding remains a convenient marker for that.
+	if (n.state != kLodReady) n.state = kLodBuilding;
 }
 
 void LodTree::note_ready(int level, IVec3 c, int page_first, int page_count) {
 	Node &n = nodes_[key(level, c)];
+	const bool was_building = n.building;
+	n.building = false;
 	n.state = kLodReady;
-	n.dirty = false;
+	// Clear dirty only when this was not an in-flight build. note_building already cleared it
+	// at submission; if an edit re-set it while the build was in flight, note_ready must keep
+	// it so the next walk rebuilds again. Direct note_ready callers (tests/settle helpers)
+	// still get the old unconditional-clear behaviour.
+	if (!was_building) n.dirty = false;
 	n.page_first = page_first;
 	n.page_count = page_count;
 	// A freshly ready child may still be waiting for its siblings before it is visited;
@@ -178,6 +208,7 @@ void LodTree::note_ready_dirty(int level, IVec3 c) {
 	// drawing until the retry succeeds). Mark it as resident so eviction does not reclaim
 	// the old pages while the retry is pending.
 	Node &n = nodes_[key(level, c)];
+	n.building = false;
 	n.state = kLodReady;
 	n.dirty = true;
 	n.last_marked = last_walk_frame_;
@@ -185,6 +216,7 @@ void LodTree::note_ready_dirty(int level, IVec3 c) {
 
 void LodTree::note_empty(int level, IVec3 c) {
 	Node &n = nodes_[key(level, c)];
+	n.building = false;
 	n.state = kLodEmpty;
 	n.dirty = false;
 	n.page_first = -1;
@@ -192,7 +224,9 @@ void LodTree::note_empty(int level, IVec3 c) {
 }
 
 void LodTree::note_failed(int level, IVec3 c) {
-	nodes_[key(level, c)].state = kLodFailed;
+	Node &n = nodes_[key(level, c)];
+	n.building = false;
+	n.state = kLodFailed;
 }
 
 bool LodTree::children_ready(int level, IVec3 c) const {
@@ -214,6 +248,7 @@ void LodTree::request(int level, IVec3 c, float area, LodWalkResult *out,
 	// Never build what the fragment shader would discard on every pixel (spec section 6.4).
 	if (lod_chunk_far_distance(level, c, last_cam_pos_) < cfg_.fade_start_m) return;
 	Node &n = nodes_[key(level, c)];
+	if (n.building) return;
 	if (n.state == kLodBuilding) return;
 	if (n.state == kLodEmpty) return;
 	if (n.state == kLodReady && !n.dirty) return;
@@ -377,6 +412,7 @@ void LodTree::collect_evictions(uint32_t frame, int want_pages, std::vector<LodD
 	std::vector<Cand> cands;
 	for (const auto &kv : nodes_) {
 		if (kv.first.level >= cfg_.resident_level_from) continue;
+		if (kv.second.building) continue;
 		if (kv.second.state == kLodBuilding) continue;
 		const uint32_t age = frame >= kv.second.last_marked ? frame - kv.second.last_marked : 0u;
 		cands.push_back(Cand{kv.first, age, kv.second.page_count, kv.second.page_first});

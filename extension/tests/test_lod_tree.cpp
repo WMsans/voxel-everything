@@ -520,3 +520,100 @@ TEST_CASE("a building node is not re-requested") {
 	t.walk(c, &occ, 2u, &r);
 	CHECK(r.requests.empty());
 }
+
+// Critical 2: a ready chunk with a rebuild in flight keeps its state kLodReady and keeps
+// drawing its old page range. The build-in-flight bit is separate from drawability.
+TEST_CASE("a ready node stays drawable while a rebuild is in flight") {
+	ve::LodTreeConfig cfg;
+	cfg.bounds = demo_bounds();
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	settle(&t, c, &occ, 30);
+	ve::LodWalkResult before;
+	t.walk(c, &occ, 31u, &before);
+	REQUIRE(!before.draws.empty());
+	const ve::LodDrawItem d = before.draws[0];
+
+	t.note_building(d.level, d.coord);
+	CHECK(t.state_of(d.level, d.coord) == ve::kLodReady);
+
+	ve::LodWalkResult after;
+	t.walk(c, &occ, 32u, &after);
+	bool still_drawn = false;
+	for (const ve::LodDrawItem &draw : after.draws)
+		if (draw.level == d.level && draw.coord == d.coord &&
+				draw.page_first == d.page_first && draw.page_count == d.page_count)
+			still_drawn = true;
+	CHECK(still_drawn);
+	for (const ve::LodBuildRequest &q : after.requests) {
+		const bool re_requested = q.level == d.level && q.coord == d.coord;
+		CHECK_FALSE(re_requested);
+	}
+}
+
+// Critical 3: an edit that arrives after note_building (which clears dirty at submission)
+// must survive note_ready, so the next walk re-requests the node instead of dropping the edit.
+TEST_CASE("an edit during an in-flight build survives note_ready") {
+	ve::LodTreeConfig cfg;
+	cfg.bounds = demo_bounds();
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	settle(&t, c, &occ, 30);
+	ve::LodWalkResult before;
+	t.walk(c, &occ, 31u, &before);
+	REQUIRE(!before.draws.empty());
+	const ve::LodDrawItem d = before.draws[0];
+
+	float lo[3], hi[3];
+	ve::lod_chunk_aabb(d.level, d.coord, lo, hi);
+	t.mark_dirty(lo, hi);
+	ve::LodWalkResult requested;
+	t.walk(c, &occ, 32u, &requested);
+	REQUIRE(!requested.requests.empty());
+
+	// The build is submitted: note_building clears the dirty that the request above observed.
+	t.note_building(d.level, d.coord);
+	// The edit lands while the build is in flight.
+	t.mark_dirty(lo, hi);
+	// The stale result comes back: it must NOT clear the re-set dirty flag.
+	t.note_ready(d.level, d.coord, d.page_first, d.page_count);
+
+	int dirty_chunks = 0;
+	int dirty_levels = 0;
+	t.dirty_stats(&dirty_chunks, &dirty_levels);
+	CHECK(dirty_chunks > 0);
+
+	ve::LodWalkResult after;
+	t.walk(c, &occ, 33u, &after);
+	bool re_requested = false;
+	for (const ve::LodBuildRequest &q : after.requests)
+		if (q.level == d.level && q.coord == d.coord) re_requested = true;
+	CHECK(re_requested);
+}
+
+// Critical 1: the draw-list builder must use the chunk's actual page list, not the
+// page_first/page_count fields (which can be stale/non-contiguous after arena reuse).
+TEST_CASE("page draws are emitted from the actual non-contiguous page list") {
+	const ve::LodKey key{3, 10, 20, 30};
+	std::map<ve::LodKey, std::vector<int>> pages_of;
+	pages_of[key] = {7, 2, 99};
+	std::map<int, int> page_quads;
+	page_quads[7] = 5;
+	page_quads[2] = 8;
+	page_quads[99] = 3;
+
+	std::vector<ve::LodDrawItem> draws;
+	draws.push_back(ve::LodDrawItem{3, {10, 20, 30}, 7, 3});
+	std::vector<ve::LodPageDraw> out;
+	ve::lod_collect_page_draws(draws, pages_of, page_quads, &out);
+
+	REQUIRE(out.size() == 3);
+	CHECK(out[0].page == 7);
+	CHECK(out[0].quad_count == 5);
+	CHECK(out[1].page == 2);
+	CHECK(out[1].quad_count == 8);
+	CHECK(out[2].page == 99);
+	CHECK(out[2].quad_count == 3);
+}
