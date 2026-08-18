@@ -1977,6 +1977,11 @@ Array VoxelWorld::debug_mesh_collect() {
 		d["vertices"] = static_cast<int>(r.positions.size() / 3);
 		d["triangles"] = static_cast<int>(r.indices.size() / 3);
 		d["overflow"] = r.overflow;
+		// The worker reports a per-chunk failure rather than dropping a batch it could not
+		// mesh (an oversized one, for instance), so the caller can clear its in-flight
+		// markers. debug_lod_collect has always surfaced this; the collider path needs it
+		// too, or a test cannot tell a failed chunk from an empty one.
+		d["failed"] = r.failed;
 		out.push_back(d);
 	}
 	return out;
