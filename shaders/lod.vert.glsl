@@ -16,7 +16,8 @@ layout(set = 0, binding = 2, std430) readonly buffer Chunks { vec4 v[]; } chunks
 
 layout(push_constant, std430) uniform Push {
 	mat4 view_proj;
-	vec4 cam; // xyz = camera position, w = unused
+	vec4 cam;  // xyz = camera position, w = fade start
+	vec4 fade; // x = fade end, yzw unused
 } pc;
 
 layout(location = 0) out vec3 v_wpos;

@@ -38,25 +38,28 @@ public:
 
 	bool draw(RenderingDevice *rd, LodPool &pool, MaterialAtlas &materials,
 			RID dst_color, RID dst_depth, const Projection &view_proj,
-			const float cam_pos[3], int draw_count);
+			const float cam_pos[3], int draw_count,
+			float fade_start, float fade_end, RID marker = RID());
 
 private:
-	bool ensure_pipeline(RenderingDevice *rd, RID dst_color, RID dst_depth);
-	bool ensure_uniform_set(RenderingDevice *rd, LodPool &pool, MaterialAtlas &materials);
+	bool ensure_pipeline(RenderingDevice *rd, RID dst_color, RID dst_depth, RID marker);
+	bool ensure_uniform_set(RenderingDevice *rd, LodPool &pool, MaterialAtlas &materials,
+			RID shader);
 	bool ensure_index_array(RenderingDevice *rd, LodPool &pool);
 	RID active_pipeline() const;
 
 	RenderingDevice *rd_ = nullptr;
-	RID shader_;
+	RID shader_, shader_marker_;
 	RID pipeline_cull_off_;
 	RID pipeline_cull_ccw_;
 	RID pipeline_cull_cw_;
-	RID uset_;
+	RID uset_, uset_shader_;
 	RID uset_quads_, uset_page_chunk_, uset_chunks_;
 	RID uset_albedo_, uset_surface_, uset_sampler_;
 	RID index_array_, index_array_buffer_;
 	int64_t fb_format_ = 0;
-	RID framebuffer_, fb_color_, fb_depth_;
+	bool pipeline_marker_ = false;
+	RID framebuffer_, fb_color_, fb_depth_, fb_marker_;
 	std::vector<PageDraw> draw_pages_;
 	float last_ms_ = 0.0f;
 	bool cull_enabled_ = true;

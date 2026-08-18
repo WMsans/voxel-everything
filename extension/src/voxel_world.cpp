@@ -88,6 +88,8 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::debug_lod_render_probe);
 	ClassDB::bind_method(D_METHOD("debug_lod_render_probe_culled", "pos", "fwd", "w", "h",
 			"cull"), &VoxelWorld::debug_lod_render_probe_culled);
+	ClassDB::bind_method(D_METHOD("debug_seam_probe", "pos", "fwd", "w", "h"),
+			&VoxelWorld::debug_seam_probe);
 	ClassDB::bind_method(D_METHOD("debug_hiz_stats"), &VoxelWorld::debug_hiz_stats);
 	ClassDB::bind_method(D_METHOD("debug_hiz_probe_synthetic", "far_value", "near_value"),
 			&VoxelWorld::debug_hiz_probe_synthetic);
@@ -1187,7 +1189,7 @@ Dictionary VoxelWorld::debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, i
 	const int draw_count = lod_raster_pass_->draw_page_count();
 	lod_pool_->upload_draw_args(lod_raster_pass_->draw_pages());
 	bool ok = lod_raster_pass_->draw(device, *lod_pool_, *materials_, color, depth,
-			vp, p, draw_count);
+			vp, p, draw_count, ve::kLodFadeStartM, ve::kLodFadeEndM);
 	device->submit();
 	device->sync();
 
@@ -1231,6 +1233,205 @@ Dictionary VoxelWorld::debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, i
 	if (framebuffer.is_valid()) device->free_rid(framebuffer);
 	if (color.is_valid()) device->free_rid(color);
 	if (depth.is_valid()) device->free_rid(depth);
+	return d;
+}
+
+Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h) {
+	Dictionary d;
+	d["band_pixels"] = 0;
+	d["band_pixels_unclaimed"] = 0;
+	d["band_pixels_double_claimed"] = 0;
+	d["near_pixels_lost_to_lod"] = 0;
+	d["far_pixels_lost_to_raymarch"] = 0;
+	if (w <= 0 || h <= 0) return d;
+	ensure_lod();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_ ||
+			!composite_pass_ || !lod_pool_ || !lod_raster_pass_) return d;
+
+	// One tick refreshes the walk and the raster pass's page list for this view.
+	debug_lod_tick(pos, fwd);
+
+	// The near field needs the streamer to have populated the SDF atlas; the LoD settle in
+	// the test only converges the far-field walk. Drive the streamer until it is quiet (the
+	// same condition the near-field tests use) before rendering the composite.
+	{
+		int quiet = 0;
+		for (int i = 0; i < 120 && quiet < 6; i++) {
+			const int actions = debug_stream_frame(pos);
+			quiet = actions == 0 ? quiet + 1 : 0;
+		}
+	}
+
+	const float p[3] = {pos.x, pos.y, pos.z};
+	const float f[3] = {fwd.x, fwd.y, fwd.z};
+	const float up[3] = {0.0f, 1.0f, 0.0f};
+	const float aspect = static_cast<float>(w) / static_cast<float>(h);
+	const float fov_y = 1.2217f;
+	const float tan_y = std::tan(fov_y * 0.5f);
+	const float tan_x = tan_y * aspect;
+	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, fov_y,
+			aspect, 0.1f, 8000.0f, w, h);
+	Projection vp;
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++)
+			vp.columns[c][r] = cam.view_proj[c * 4 + r];
+
+	// Raymarch with the SAME camera as the LoD raster, so the two fields agree on the pixel
+	// grid. `looking_at` builds the same basis as lod_camera_perspective; fill in the fov.
+	ve::CameraParams cp = ve::CameraParams::looking_at(pos.x, pos.y, pos.z,
+			fwd.x, fwd.y, fwd.z, 0.0f, 1.0f, 0.0f);
+	cp.params[0] = tan_x;
+	cp.params[1] = tan_y;
+	cp.params[2] = 200.0f;
+	const ve::WorldBounds wb = world_bounds();
+	const ve::IVec3 ro = wb.origin_regions();
+	cp.dims[0] = world_size_regions_.x;
+	cp.dims[1] = world_size_regions_.y;
+	cp.dims[2] = world_size_regions_.z;
+	cp.dims[3] = island_slot_count();
+	cp.region_origin[0] = ro.x;
+	cp.region_origin[1] = ro.y;
+	cp.region_origin[2] = ro.z;
+	cp.atlas_bricks[0] = atlas_bricks_.x;
+	cp.atlas_bricks[1] = atlas_bricks_.y;
+	cp.atlas_bricks[2] = atlas_bricks_.z;
+	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cp, w, h, kNoEdit))
+		return d;
+
+	auto make_target = [&](RID *out, RenderingDevice::DataFormat fmt, bool depth) {
+		Ref<RDTextureFormat> tf;
+		tf.instantiate();
+		tf->set_format(fmt);
+		tf->set_width(w);
+		tf->set_height(h);
+		tf->set_usage_bits(depth ?
+				RenderingDevice::TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+						RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+						RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT |
+						RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT :
+				RenderingDevice::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT |
+						RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+						RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT |
+						RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT);
+		Ref<RDTextureView> tv;
+		tv.instantiate();
+		*out = device->texture_create(tf, tv, {});
+	};
+	RID color, depth, marker;
+	make_target(&color, RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM, false);
+	make_target(&depth, RenderingDevice::DATA_FORMAT_D32_SFLOAT, true);
+	{
+		Ref<RDTextureFormat> tf;
+		tf.instantiate();
+		tf->set_format(RenderingDevice::DATA_FORMAT_R8_UINT);
+		tf->set_width(w);
+		tf->set_height(h);
+		tf->set_usage_bits(RenderingDevice::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT |
+				RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+				RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT |
+				RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT);
+		PackedByteArray zero;
+		zero.resize(w * h);
+		zero.fill(0);
+		TypedArray<PackedByteArray> upload;
+		upload.push_back(zero);
+		Ref<RDTextureView> tv;
+		tv.instantiate();
+		marker = device->texture_create(tf, tv, upload);
+	}
+	RID framebuffer;
+	if (color.is_valid() && depth.is_valid() && marker.is_valid()) {
+		framebuffer = device->framebuffer_create(Array::make(color, marker, depth));
+	}
+	if (!framebuffer.is_valid()) {
+		if (color.is_valid()) device->free_rid(color);
+		if (depth.is_valid()) device->free_rid(depth);
+		if (marker.is_valid()) device->free_rid(marker);
+		return d;
+	}
+	// Clear to reverse-Z far (0) before drawing the near field. The marker starts at 0 and
+	// is ORed to 1/2/3 by the two field passes.
+	device->texture_clear(depth, Color(0.0f, 0.0f, 0.0f, 0.0f), 0, 1, 0, 1);
+
+	// Pass 1: near field. Composite writes 1 into the marker where it keeps the depth.
+	composite_pass_->draw(device, color, depth, raymarch_pass_->color_texture(),
+			raymarch_pass_->hitpos_texture(), vp, *materials_, p,
+			ve::kLodFadeStartM, ve::kLodFadeEndM, marker);
+
+	// Pass 2: far field. The LoD pipeline uses LOGIC_OP_OR on the marker, so kept far
+	// pixels OR 2 into the composite's 1, making double-claimed pixels read 3.
+	lod_raster_pass_->set_cull_enabled(true);
+	lod_pool_->upload_draw_args(lod_raster_pass_->draw_pages());
+	const int draw_count = lod_raster_pass_->draw_page_count();
+	lod_raster_pass_->draw(device, *lod_pool_, *materials_, color, depth, vp, p,
+			draw_count, ve::kLodFadeStartM, ve::kLodFadeEndM, marker);
+	device->submit();
+	device->sync();
+
+	const PackedByteArray depth_data = device->texture_get_data(depth, 0);
+	const PackedByteArray marker_data = device->texture_get_data(marker, 0);
+	int band_pixels = 0;
+	int band_pixels_unclaimed = 0;
+	int band_pixels_double_claimed = 0;
+	int near_pixels_lost_to_lod = 0;
+	int far_pixels_lost_to_raymarch = 0;
+	if (depth_data.size() >= static_cast<int64_t>(w) * h * 4 &&
+			marker_data.size() >= static_cast<int64_t>(w) * h) {
+		const float *df = reinterpret_cast<const float *>(depth_data.ptr());
+		const uint8_t *mk = reinterpret_cast<const uint8_t *>(marker_data.ptr());
+		// Reconstruct the world hit from the reverse-Z depth and the same camera basis the
+		// two fields use, so the probe measures the same Euclidean distance the shaders fade
+		// on. The LoD-only far field has no raymarch hitpos, so the depth attachment is the
+		// one source that covers both fields on the same pixel grid.
+		float r[3] = {f[1] * up[2] - f[2] * up[1], f[2] * up[0] - f[0] * up[2],
+				f[0] * up[1] - f[1] * up[0]};
+		const float rl = std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+		if (rl > 0.0f) { r[0] /= rl; r[1] /= rl; r[2] /= rl; }
+		const float kNear = 0.1f;
+		const float kFar = 8000.0f;
+		for (int i = 0; i < w * h; i++) {
+			const float depth_val = df[i];
+			if (depth_val <= 0.0f) continue;
+			const float u = (static_cast<float>(i % w) + 0.5f) / static_cast<float>(w);
+			const float v = (static_cast<float>(i / w) + 0.5f) / static_cast<float>(h);
+			const float ndc_x = u * 2.0f - 1.0f;
+			const float ndc_y = 1.0f - v * 2.0f;
+			const float z_view = kFar * kNear /
+					(kNear + depth_val * (kFar - kNear));
+			const float ax = ndc_x * tan_x;
+			const float ay = ndc_y * tan_y;
+			const float dist = z_view * std::sqrt(1.0f + ax * ax + ay * ay);
+			const uint8_t m = mk[i];
+			if (dist >= ve::kLodFadeStartM && dist <= ve::kLodFadeEndM) {
+				band_pixels++;
+				if (m == 0u) band_pixels_unclaimed++;
+				if (m == 3u) band_pixels_double_claimed++;
+			} else if (dist < ve::kLodFadeStartM && (m & 2u) != 0u) {
+				near_pixels_lost_to_lod++;
+			} else if (dist > ve::kLodFadeEndM && (m & 1u) != 0u) {
+				far_pixels_lost_to_raymarch++;
+			}
+		}
+	}
+	d["band_pixels"] = band_pixels;
+	d["band_pixels_unclaimed"] = band_pixels_unclaimed;
+	d["band_pixels_double_claimed"] = band_pixels_double_claimed;
+	d["near_pixels_lost_to_lod"] = near_pixels_lost_to_lod;
+	d["far_pixels_lost_to_raymarch"] = far_pixels_lost_to_raymarch;
+	int draw_pages = 0;
+	for (const ve::LodDrawItem &item : lod_walk_.draws)
+		draw_pages += item.page_count;
+	d["draw_pages"] = draw_pages;
+
+	// Both passes cached framebuffers over these throwaway targets; drop them before freeing.
+	composite_pass_->release_targets();
+	lod_raster_pass_->release_targets();
+	if (framebuffer.is_valid()) device->free_rid(framebuffer);
+	if (color.is_valid()) device->free_rid(color);
+	if (depth.is_valid()) device->free_rid(depth);
+	if (marker.is_valid()) device->free_rid(marker);
 	return d;
 }
 

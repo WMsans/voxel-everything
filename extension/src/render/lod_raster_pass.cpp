@@ -25,32 +25,45 @@ LodRasterPass::~LodRasterPass() {
 
 void LodRasterPass::initialize(RenderingDevice *rd) {
 	rd_ = rd;
-	auto load_stage = [&](const char *file, RenderingDevice::ShaderStage stage, Ref<RDShaderSource> &src) -> bool {
+	auto load_stage = [&](const char *file, RenderingDevice::ShaderStage stage,
+			Ref<RDShaderSource> &src, bool marker) -> bool {
 		std::string err;
 		const String path = ProjectSettings::get_singleton()->globalize_path(String("res://shaders/") + file);
 		const String inc = ProjectSettings::get_singleton()->globalize_path("res://shaders");
-		const std::string code = ve::strip_shader_annotations(
+		std::string code = ve::strip_shader_annotations(
 				ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err));
 		if (code.empty()) {
 			UtilityFunctions::printerr("LodRasterPass: ", err.c_str());
 			return false;
 		}
+		if (marker) {
+			// Same production/debug split as CompositePass: the marker output is compiled
+			// only for the seam-probe shader variant, so production pipelines keep exactly
+			// one fragment output and match the scene framebuffer's color mask.
+			const size_t version_end = code.find('\n', code.find("#version"));
+			if (version_end != std::string::npos)
+				code.insert(version_end + 1, "#define SEAM_MARKER 1\n");
+		}
 		src->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
 		src->set_stage_source(stage, String(code.c_str()));
 		return true;
 	};
-	Ref<RDShaderSource> src;
-	src.instantiate();
-	if (!load_stage("lod.vert.glsl", RenderingDevice::SHADER_STAGE_VERTEX, src)) return;
-	if (!load_stage("lod.frag.glsl", RenderingDevice::SHADER_STAGE_FRAGMENT, src)) return;
-	Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(src);
-	const String compile_err = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_VERTEX) +
-			spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_FRAGMENT);
-	if (!compile_err.is_empty()) {
-		UtilityFunctions::printerr("LodRasterPass: ", compile_err);
-		return;
-	}
-	shader_ = rd->shader_create_from_spirv(spirv);
+	auto make_shader = [&](bool marker) -> RID {
+		Ref<RDShaderSource> src;
+		src.instantiate();
+		if (!load_stage("lod.vert.glsl", RenderingDevice::SHADER_STAGE_VERTEX, src, marker)) return RID();
+		if (!load_stage("lod.frag.glsl", RenderingDevice::SHADER_STAGE_FRAGMENT, src, marker)) return RID();
+		Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(src);
+		const String compile_err = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_VERTEX) +
+				spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_FRAGMENT);
+		if (!compile_err.is_empty()) {
+			UtilityFunctions::printerr("LodRasterPass: ", compile_err);
+			return RID();
+		}
+		return rd->shader_create_from_spirv(spirv);
+	};
+	shader_ = make_shader(false);
+	shader_marker_ = make_shader(true);
 }
 
 void LodRasterPass::teardown() {
@@ -58,10 +71,11 @@ void LodRasterPass::teardown() {
 	// Same cascade order as CompositePass: uniform set references the shader, and freeing
 	// the shader tears down its pipelines, so free the set first, then pipelines/shader.
 	for (RID *r : {&uset_, &index_array_, &pipeline_cull_off_, &pipeline_cull_ccw_,
-				&pipeline_cull_cw_, &shader_, &framebuffer_}) {
+				&pipeline_cull_cw_, &shader_, &shader_marker_, &framebuffer_}) {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
+	uset_shader_ = RID();
 	uset_quads_ = RID();
 	uset_page_chunk_ = RID();
 	uset_chunks_ = RID();
@@ -69,6 +83,7 @@ void LodRasterPass::teardown() {
 	uset_surface_ = RID();
 	uset_sampler_ = RID();
 	index_array_buffer_ = RID();
+	fb_marker_ = RID();
 	draw_pages_.clear();
 	rd_ = nullptr;
 }
@@ -78,27 +93,41 @@ void LodRasterPass::release_targets() {
 	framebuffer_ = RID();
 	fb_color_ = RID();
 	fb_depth_ = RID();
+	fb_marker_ = RID();
 }
 
 void LodRasterPass::set_draw_pages(const std::vector<PageDraw> &pages) {
 	draw_pages_ = pages;
 }
 
-bool LodRasterPass::ensure_pipeline(RenderingDevice *rd, RID dst_color, RID dst_depth) {
+bool LodRasterPass::ensure_pipeline(RenderingDevice *rd, RID dst_color, RID dst_depth, RID marker) {
+	const bool want_marker = marker.is_valid();
+	const RID shader = want_marker ? shader_marker_ : shader_;
+	if (!shader.is_valid()) return false;
 	if (pipeline_cull_off_.is_valid() && pipeline_cull_ccw_.is_valid() &&
 			pipeline_cull_cw_.is_valid() && framebuffer_.is_valid() &&
-			dst_color == fb_color_ && dst_depth == fb_depth_) {
+			dst_color == fb_color_ && dst_depth == fb_depth_ && marker == fb_marker_ &&
+			pipeline_marker_ == want_marker) {
 		return true;
 	}
 	if (framebuffer_.is_valid()) rd->free_rid(framebuffer_);
-	framebuffer_ = rd->framebuffer_create(Array::make(dst_color, dst_depth));
+	const Array attachments = want_marker ?
+			Array::make(dst_color, marker, dst_depth) : Array::make(dst_color, dst_depth);
+	framebuffer_ = rd->framebuffer_create(attachments);
 	fb_color_ = dst_color;
 	fb_depth_ = dst_depth;
+	fb_marker_ = marker;
 	if (!framebuffer_.is_valid()) return false;
 	fb_format_ = rd->framebuffer_get_format(framebuffer_);
 
 	if (!pipeline_cull_off_.is_valid() || !pipeline_cull_ccw_.is_valid() ||
-			!pipeline_cull_cw_.is_valid()) {
+			!pipeline_cull_cw_.is_valid() || pipeline_marker_ != want_marker) {
+		if (pipeline_cull_off_.is_valid()) rd->free_rid(pipeline_cull_off_);
+		if (pipeline_cull_ccw_.is_valid()) rd->free_rid(pipeline_cull_ccw_);
+		if (pipeline_cull_cw_.is_valid()) rd->free_rid(pipeline_cull_cw_);
+		pipeline_cull_off_ = RID();
+		pipeline_cull_ccw_ = RID();
+		pipeline_cull_cw_ = RID();
 		auto make_pipeline = [&](RenderingDevice::PolygonCullMode cull,
 				RenderingDevice::PolygonFrontFace front) -> RID {
 			Ref<RDPipelineRasterizationState> rs;
@@ -120,10 +149,22 @@ bool LodRasterPass::ensure_pipeline(RenderingDevice *rd, RID dst_color, RID dst_
 			att->set_enable_blend(false);
 			Ref<RDPipelineColorBlendState> cb;
 			cb.instantiate();
-			cb->set_attachments(Array::make(att));
+			if (want_marker) {
+				Ref<RDPipelineColorBlendStateAttachment> att_marker;
+				att_marker.instantiate();
+				att_marker->set_enable_blend(false);
+				cb->set_attachments(Array::make(att, att_marker));
+				// Debug seam probe: the LoD marker (2) must OR into the composite marker
+				// (1) so double-claimed band pixels read 3. This is debug-only; production
+				// pipelines have no marker attachment and keep blending disabled.
+				cb->set_enable_logic_op(true);
+				cb->set_logic_op(RenderingDevice::LOGIC_OP_OR);
+			} else {
+				cb->set_attachments(Array::make(att));
+			}
 			// Pull-only pipeline: no vertex array, so the vertex format must be INVALID_ID
 			// (an empty vertex format is valid but expects vertices and ERR_FAILs).
-			return rd->render_pipeline_create(shader_, fb_format_, RenderingDevice::INVALID_ID,
+			return rd->render_pipeline_create(shader, fb_format_, RenderingDevice::INVALID_ID,
 					RenderingDevice::RENDER_PRIMITIVE_TRIANGLES, rs, ms, ds, cb);
 		};
 		pipeline_cull_off_ = make_pipeline(RenderingDevice::POLYGON_CULL_DISABLED,
@@ -132,19 +173,22 @@ bool LodRasterPass::ensure_pipeline(RenderingDevice *rd, RID dst_color, RID dst_
 				RenderingDevice::POLYGON_FRONT_FACE_COUNTER_CLOCKWISE);
 		pipeline_cull_cw_ = make_pipeline(RenderingDevice::POLYGON_CULL_BACK,
 				RenderingDevice::POLYGON_FRONT_FACE_CLOCKWISE);
+		pipeline_marker_ = want_marker;
 	}
 	return pipeline_cull_off_.is_valid() && pipeline_cull_ccw_.is_valid() &&
 			pipeline_cull_cw_.is_valid();
 }
 
-bool LodRasterPass::ensure_uniform_set(RenderingDevice *rd, LodPool &pool, MaterialAtlas &materials) {
+bool LodRasterPass::ensure_uniform_set(RenderingDevice *rd, LodPool &pool, MaterialAtlas &materials,
+		RID shader) {
 	const RID quads = pool.quad_buffer();
 	const RID page_chunk = pool.page_chunk_buffer();
 	const RID chunks = pool.chunk_buffer();
 	const RID albedo = materials.albedo_array();
 	const RID surface = materials.surface_array();
 	const RID sampler = materials.sampler();
-	if (uset_.is_valid() && quads == uset_quads_ && page_chunk == uset_page_chunk_ &&
+	if (uset_.is_valid() && uset_shader_ == shader &&
+			quads == uset_quads_ && page_chunk == uset_page_chunk_ &&
 			chunks == uset_chunks_ && albedo == uset_albedo_ && surface == uset_surface_ &&
 			sampler == uset_sampler_) {
 		return true;
@@ -178,8 +222,9 @@ bool LodRasterPass::ensure_uniform_set(RenderingDevice *rd, LodPool &pool, Mater
 	u4->set_binding(4);
 	u4->add_id(sampler);
 	u4->add_id(surface);
-	uset_ = rd->uniform_set_create(Array::make(u0, u1, u2, u3, u4), shader_, 0);
+	uset_ = rd->uniform_set_create(Array::make(u0, u1, u2, u3, u4), shader, 0);
 	if (uset_.is_valid()) {
+		uset_shader_ = shader;
 		uset_quads_ = quads;
 		uset_page_chunk_ = page_chunk;
 		uset_chunks_ = chunks;
@@ -207,12 +252,13 @@ bool LodRasterPass::ensure_index_array(RenderingDevice *rd, LodPool &pool) {
 
 bool LodRasterPass::draw(RenderingDevice *rd, LodPool &pool, MaterialAtlas &materials,
 		RID dst_color, RID dst_depth, const Projection &view_proj, const float cam_pos[3],
-		int draw_count) {
+		int draw_count, float fade_start, float fade_end, RID marker) {
 	const auto t0 = std::chrono::steady_clock::now();
-	if (!shader_.is_valid()) return false;
+	const RID shader = marker.is_valid() ? shader_marker_ : shader_;
+	if (!shader.is_valid()) return false;
 	if (draw_count <= 0 || draw_count > static_cast<int>(draw_pages_.size())) return false;
-	if (!ensure_pipeline(rd, dst_color, dst_depth)) return false;
-	if (!ensure_uniform_set(rd, pool, materials)) return false;
+	if (!ensure_pipeline(rd, dst_color, dst_depth, marker)) return false;
+	if (!ensure_uniform_set(rd, pool, materials, shader)) return false;
 	if (!ensure_index_array(rd, pool)) return false;
 
 	// The indirect args were uploaded by LodPool::upload_draw_args before the cull pass ran;
@@ -222,21 +268,21 @@ bool LodRasterPass::draw(RenderingDevice *rd, LodPool &pool, MaterialAtlas &mate
 	rd->draw_list_bind_uniform_set(dl, uset_, 0);
 	rd->draw_list_bind_index_array(dl, index_array_);
 	PackedByteArray pc;
-	pc.resize(80);
+	pc.resize(96);
 	{
 		float *f = reinterpret_cast<float *>(pc.ptrw());
 		for (int c = 0; c < 4; c++)
 			for (int r = 0; r < 4; r++)
 				f[c * 4 + r] = view_proj.columns[c][r]; // GLSL mat4 = column-major
 		// std430 push block: mat4 view_proj occupies floats 0..15 (bytes 0..63), so the
-		// vec4 cam that follows starts at float 16, NOT float 64. Indexing by the byte
-		// offset wrote 176 bytes past the end of this 80-byte array and corrupted the
-		// heap, which surfaced as an abort in a later free (glibc "corrupted size vs.
-		// prev_size") or a segfault inside vkDestroyDevice at teardown.
+		// vec4 cam that follows starts at float 16 and vec4 fade at float 20. Index by
+		// float, not byte (plan errata 3): byte indexing wrote past the end of the array
+		// and corrupted the heap in earlier tasks.
 		f[16] = cam_pos[0];
 		f[17] = cam_pos[1];
 		f[18] = cam_pos[2];
-		f[19] = 0.0f;
+		f[19] = fade_start;
+		f[20] = fade_end;
 	}
 	rd->draw_list_set_push_constant(dl, pc, pc.size());
 	rd->draw_list_draw_indirect(dl, true, pool.args_buffer(), 0, draw_count, 20);

@@ -93,7 +93,8 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	RaymarchPass *rmp = world->raymarch_pass();
 	GpuAtlas *atlas = world->atlas();
 	CompositePass *cmp = world->composite_pass();
-	if (!rmp || !atlas || !cmp) return;
+	MaterialAtlas *materials = world->material_atlas();
+	if (!rmp || !atlas || !cmp || !materials) return;
 
 	float edit_state[6] = {0, 0, 0, 0, 0, 0};
 	if (st && st->last_edit_radius() > 0.0f) {
@@ -125,8 +126,10 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	// (render_scene_buffers_rd.hpp) and return the non-MSAA internal color/depth textures —
 	// the same RIDs the engine's own framebuffers use when MSAA is disabled (verified against
 	// render_forward_clustered.cpp), so the composite writes into the actual scene buffers.
+	const float cam_pos[3] = {cam.origin.x, cam.origin.y, cam.origin.z};
 	cmp->draw(rd, rsb->get_color_texture(), rsb->get_depth_texture(),
-			rmp->color_texture(), rmp->hitpos_texture(), view_proj);
+			rmp->color_texture(), rmp->hitpos_texture(), view_proj, *materials,
+			cam_pos, ve::kLodFadeStartM, ve::kLodFadeEndM);
 
 	// Far field: after the composite the scene depth holds exact near-field occluders. Build
 	// the HiZ pyramid from it for the GPU cull (Task 15) and the coarse async readback for the
@@ -153,9 +156,8 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 		world->lod_pool()->upload_draw_args(lod_raster->draw_pages());
 		if (lod_cull) lod_cull->run(rd, *world->lod_pool(), hiz, view_proj,
 				lod_raster->draw_page_count());
-		const float cam_pos[3] = {cam.origin.x, cam.origin.y, cam.origin.z};
-		lod_raster->draw(rd, *world->lod_pool(), *world->material_atlas(),
+		lod_raster->draw(rd, *world->lod_pool(), *materials,
 				rsb->get_color_texture(), rsb->get_depth_texture(), view_proj, cam_pos,
-				lod_raster->draw_page_count());
+				lod_raster->draw_page_count(), ve::kLodFadeStartM, ve::kLodFadeEndM);
 	}
 }
