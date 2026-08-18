@@ -30,6 +30,9 @@ public:
 	// the stale remaining-pages readback when it arrives, forming last_visible_pages().
 	void set_first_pass_pages(const std::vector<int> &pages) { first_pass_pages_ = pages; }
 	const std::vector<int> &last_visible_pages() const { return last_visible_pages_; }
+	// Replaces last_visible_pages() directly. Used when the remaining pass is empty and no
+	// async args readback will arrive to refresh the visible set.
+	void set_last_visible_pages(const std::vector<int> &pages);
 
 	// Records the stats clear, one compute dispatch (one thread per candidate page), and
 	// async stats + args readbacks. `page_count` is the number of remaining pages in the

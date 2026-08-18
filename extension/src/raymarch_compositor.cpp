@@ -155,7 +155,7 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 		// Ordering: the indirect args upload (a device-level command) must precede the
 		// cull's compute list, and the cull's compute list must end before the raster's
 		// draw list opens. draw() only issues the indirect draw.
-		const bool two_phase = lod_cull && hiz && hiz->pyramid().is_valid();
+		const bool two_phase = lod_cull && lod_cull->is_valid() && hiz && hiz->pyramid().is_valid();
 		if (!two_phase) {
 			// Fallback: the pre-trigger single pass. No cull means every candidate draws.
 			world->lod_pool()->upload_draw_args(lod_raster->draw_pages());
@@ -206,6 +206,11 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 				lod_raster->draw(rd, *world->lod_pool(), *materials,
 						rsb->get_color_texture(), rsb->get_depth_texture(), view_proj,
 						cam_pos, remaining_count, ve::kLodFadeStartM, ve::kLodFadeEndM);
+			} else {
+				// No remaining pass means no async args readback will refresh the visible
+				// set. Record exactly what this frame's first pass drew, including an empty
+				// set when every candidate is new (first_pass_count == 0).
+				lod_cull->set_last_visible_pages(first_pass_pages);
 			}
 		}
 	}

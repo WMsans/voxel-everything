@@ -192,6 +192,14 @@ void LodCullPass::consume_args_readback() {
 	last_visible_pages_.swap(visible);
 }
 
+void LodCullPass::set_last_visible_pages(const std::vector<int> &pages) {
+	last_visible_pages_ = pages;
+	std::sort(last_visible_pages_.begin(), last_visible_pages_.end());
+	last_visible_pages_.erase(
+			std::unique(last_visible_pages_.begin(), last_visible_pages_.end()),
+			last_visible_pages_.end());
+}
+
 bool LodCullPass::run(RenderingDevice *rd, LodPool &pool, HizPass *hiz,
 		const Projection &view_proj, int page_count, int total_page_count,
 		int first_pass_count) {
@@ -245,10 +253,16 @@ bool LodCullPass::run(RenderingDevice *rd, LodPool &pool, HizPass *hiz,
 	}
 	// Async args readback: the CPU learns which remaining pages survived the cull a few
 	// frames later. Paired with the first-pass page snapshot from the same request so
-	// last_visible_pages() is the exact union of that frame's two passes.
+	// last_visible_pages() is the exact union of that frame's two passes. A zero
+	// first-pass count (debug probe / single-pass cull) must snapshot an empty first-pass
+	// list so stale first-pass pages from a normal temporal frame are not folded in.
 	if (args_readback_->request(rd, pool.args_buffer(), 0,
 				static_cast<uint32_t>(page_count) * 20u)) {
-		first_pass_pages_at_request_ = first_pass_pages_;
+		if (first_pass_count <= 0) {
+			first_pass_pages_at_request_.clear();
+		} else {
+			first_pass_pages_at_request_ = first_pass_pages_;
+		}
 		last_remaining_count_at_request_ = page_count;
 	}
 	last_ms_ = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
