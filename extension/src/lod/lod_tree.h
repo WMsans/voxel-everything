@@ -129,7 +129,8 @@ private:
 	void visit(int level, IVec3 c, const LodCamera &cam, const LodOcclusion *occ,
 			uint32_t frame, LodWalkResult *out);
 	bool children_ready(int level, IVec3 c) const;
-	void request(int level, IVec3 c, float area, LodWalkResult *out);
+	void request(int level, IVec3 c, float area, LodWalkResult *out,
+			bool touch_residency = true);
 
 	LodTreeConfig cfg_;
 	std::map<Key, Node> nodes_;

@@ -31,6 +31,36 @@ struct AllOccluded : ve::LodOcclusion {
 	bool occluded(const float[3], const float[3]) const override { return true; }
 };
 
+// Builds a single ready path from `root` to a level-0 target. Every sibling along the path
+// is empty, and the other root chunks are empty too, so the normal walk can descend to the
+// target without generating a flood of sibling requests; the target itself is left for the
+// caller to mark dirty.
+void make_ready_path(ve::LodTree *t, const ve::WorldBounds &bounds, const ve::IVec3 &root,
+		const ve::IVec3 &target) {
+	ve::IVec3 rlo, rhi;
+	ve::lod_root_range(bounds, &rlo, &rhi);
+	for (int z = rlo.z; z <= rhi.z; z++)
+		for (int y = rlo.y; y <= rhi.y; y++)
+			for (int x = rlo.x; x <= rhi.x; x++)
+				if (!(ve::IVec3{x, y, z} == root)) t->note_empty(ve::kLodLevels - 1, {x, y, z});
+
+	ve::IVec3 child = target;
+	for (int level = 0; level < ve::kLodLevels - 1; level++) {
+		const ve::IVec3 parent = ve::lod_parent(child);
+		const ve::IVec3 base = ve::lod_child_base(parent);
+		for (int k = 0; k < 8; k++) {
+			const ve::IVec3 s{base.x + (k & 1), base.y + ((k >> 1) & 1), base.z + ((k >> 2) & 1)};
+			if (s == child) {
+				t->note_ready(level, child, 1, 1);
+			} else {
+				t->note_empty(level, s);
+			}
+		}
+		child = parent;
+	}
+	t->note_ready(ve::kLodLevels - 1, root, 1, 1);
+}
+
 // Drives a tree to a steady state by answering every request as a ready chunk.
 void settle(ve::LodTree *t, const ve::LodCamera &c, const ve::LodOcclusion *occ, int frames) {
 	ve::LodWalkResult r;
@@ -209,6 +239,89 @@ TEST_CASE("an edit re-requests a chunk without un-drawing it") {
 	for (const ve::LodBuildRequest &q : after.requests)
 		if (q.level == d.level && q.coord == d.coord) re_requested = true;
 	CHECK(re_requested);
+}
+
+// The dirty sweep is gathered before the final sort/dedup. A dirty node that the normal walk
+// already requests must collapse to one entry, and the slot saved by that dedup must let an
+// off-screen dirty node survive the per-walk cap instead of being starved at the tail.
+TEST_CASE("dirty sweep requests are deduped before the cap and not starved") {
+	ve::LodTreeConfig cfg;
+	cfg.bounds = demo_bounds();
+	cfg.max_requests_per_walk = 2;
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+
+	// A ready path to a level-0 target 150 m in front of the camera: the normal walk visits
+	// and requests that target. A second dirty node off to the side is never visited by the
+	// normal walk, so only the dirty sweep asks for it.
+	const ve::IVec3 drawn_coord = ve::lod_chunk_of_point(0, 800.0f, 51.0f, 650.0f);
+	const ve::IVec3 root = ve::lod_chunk_of_point(ve::kLodLevels - 1, 800.0f, 51.0f, 650.0f);
+	make_ready_path(&t, cfg.bounds, root, drawn_coord);
+	t.note_ready_dirty(0, drawn_coord);
+
+	const int off_level = 2;
+	const ve::IVec3 off_coord = ve::lod_chunk_of_point(off_level, 0.0f, 51.0f, 0.0f);
+	t.note_ready(off_level, off_coord, 1, 1);
+	t.note_ready_dirty(off_level, off_coord);
+
+	ve::LodWalkResult r;
+	t.walk(c, &occ, 1u, &r);
+	REQUIRE(int(r.requests.size()) <= cfg.max_requests_per_walk);
+
+	// No (level, coord) appears more than once.
+	for (size_t i = 0; i < r.requests.size(); i++)
+		for (size_t j = i + 1; j < r.requests.size(); j++) {
+			const bool same_key = r.requests[i].level == r.requests[j].level &&
+					r.requests[i].coord == r.requests[j].coord;
+			CHECK_FALSE(same_key);
+		}
+
+	// The drawn dirty node is still re-requested, exactly once.
+	int drawn_count = 0;
+	for (const ve::LodBuildRequest &q : r.requests)
+		if (q.level == 0 && q.coord == drawn_coord) drawn_count++;
+	CHECK(drawn_count == 1);
+
+	// The off-screen dirty node is not starved by the duplicate occupying the cap slot.
+	bool off_requested = false;
+	for (const ve::LodBuildRequest &q : r.requests)
+		if (q.level == off_level && q.coord == off_coord) off_requested = true;
+	CHECK(off_requested);
+}
+
+// A dirty sweep request for a node outside the current walk must not count as a residency
+// touch. Otherwise an off-screen stale page would be pinned forever by being dirty, and arena
+// pressure could never evict it.
+TEST_CASE("dirty sweep requests do not mark off-screen nodes resident") {
+	ve::LodTreeConfig cfg;
+	cfg.bounds = demo_bounds();
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+
+	// Create a far, unvisited node and make it dirty. No root is ready, so the normal walk
+	// cannot descend to it; only the dirty sweep can request it.
+	const int level = 2;
+	const ve::IVec3 coord = ve::lod_chunk_of_point(level, 0.0f, 51.0f, 0.0f);
+	t.note_ready(level, coord, 1, 1);
+	t.note_ready_dirty(level, coord);
+
+	ve::LodWalkResult r;
+	t.walk(c, &occ, 1u, &r);
+	bool re_requested = false;
+	for (const ve::LodBuildRequest &q : r.requests)
+		if (q.level == level && q.coord == coord) re_requested = true;
+	REQUIRE(re_requested);
+
+	// The node is not visited by the normal walk, so a non-touching dirty sweep leaves its
+	// last_marked at frame 0. At frame 1 under pressure it is age 1 and evictable.
+	std::vector<ve::LodDrawItem> evicted;
+	t.collect_evictions(1u, 1, &evicted);
+	bool evicted_off_screen = false;
+	for (const ve::LodDrawItem &e : evicted)
+		if (e.level == level && e.coord == coord) evicted_off_screen = true;
+	CHECK(evicted_off_screen);
 }
 
 // The VoxelWorld upload-refusal path must re-affirm a resident node as Ready-with-dirty

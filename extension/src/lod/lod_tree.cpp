@@ -208,7 +208,8 @@ bool LodTree::children_ready(int level, IVec3 c) const {
 	return true;
 }
 
-void LodTree::request(int level, IVec3 c, float area, LodWalkResult *out) {
+void LodTree::request(int level, IVec3 c, float area, LodWalkResult *out,
+		bool touch_residency) {
 	if (!lod_chunk_in_bounds(cfg_.bounds, level, c)) return;
 	// Never build what the fragment shader would discard on every pixel (spec section 6.4).
 	if (lod_chunk_far_distance(level, c, last_cam_pos_) < cfg_.fade_start_m) return;
@@ -218,7 +219,9 @@ void LodTree::request(int level, IVec3 c, float area, LodWalkResult *out) {
 	if (n.state == kLodReady && !n.dirty) return;
 	// A request is itself a residency touch: speculative child requests are not visited
 	// until all siblings are ready, so without this mark they could be evicted first.
-	n.last_marked = last_walk_frame_;
+	// The dirty sweep must opt out: it re-requests off-screen stale nodes purely to rebuild
+	// them, and touching residency there would keep those stale pages resident forever.
+	if (touch_residency) n.last_marked = last_walk_frame_;
 	out->requests.push_back(LodBuildRequest{level, c, area});
 }
 
@@ -291,6 +294,17 @@ void LodTree::walk(const LodCamera &cam, const LodOcclusion *occ, uint32_t frame
 			for (int x = lo.x; x <= hi.x; x++)
 				visit(kLodLevels - 1, {x, y, z}, cam, occ, frame, out);
 
+	// Edits mark nodes at every level they touch, including levels the current cut does not
+	// visit. Consider every dirty node for re-request so a rebuild is not deferred until the
+	// camera happens to refine that deep -- the edit must reach the far field now. This is
+	// gathered BEFORE sorting/dedup so dirty requests participate in the same priority order
+	// and duplicate entries are removed before the per-walk cap can starve the tail.
+	for (const auto &kv : nodes_) {
+		if (!kv.second.dirty) continue;
+		const IVec3 c{kv.first.x, kv.first.y, kv.first.z};
+		request(kv.first.level, c, 0.0f, out, false);
+	}
+
 	std::sort(out->requests.begin(), out->requests.end(),
 			[](const LodBuildRequest &a, const LodBuildRequest &b) {
 				if (a.priority != b.priority) return a.priority > b.priority;
@@ -299,19 +313,14 @@ void LodTree::walk(const LodCamera &cam, const LodOcclusion *occ, uint32_t frame
 				if (a.coord.y != b.coord.y) return a.coord.y < b.coord.y;
 				return a.coord.x < b.coord.x;
 			});
-	// Edits mark nodes at every level they touch, including levels the current cut does not
-	// visit. Re-request every dirty node so a rebuild is not deferred until the camera
-	// happens to refine that deep -- the edit must reach the far field now.
-	for (const auto &kv : nodes_) {
-		if (!kv.second.dirty) continue;
-		const IVec3 c{kv.first.x, kv.first.y, kv.first.z};
-		request(kv.first.level, c, 0.0f, out);
-	}
 
-	// De-duplicate: a node can be requested both as a dirty draw and as a parent's child.
-	auto last = std::unique(out->requests.begin(), out->requests.end(),
-			[](const LodBuildRequest &a, const LodBuildRequest &b) {
-				return a.level == b.level && a.coord == b.coord;
+	// De-duplicate by (level, coord) preserving the highest-priority entry (the first after
+	// the sort above). std::unique is not enough: a dirty sweep duplicate can be separated
+	// from its normal-walk copy by requests of other priorities.
+	std::map<Key, bool> seen;
+	auto last = std::remove_if(out->requests.begin(), out->requests.end(),
+			[&](const LodBuildRequest &q) {
+				return !seen.emplace(Key{q.level, q.coord.x, q.coord.y, q.coord.z}, true).second;
 			});
 	out->requests.erase(last, out->requests.end());
 	if (int(out->requests.size()) > cfg_.max_requests_per_walk)

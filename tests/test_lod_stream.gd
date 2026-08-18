@@ -49,6 +49,9 @@ func test_an_edit_rebuilds_every_level_it_touches(timeout := 60000) -> void:
 	await settle(w, pos, fwd)
 	var before := w.debug_lod_stats()
 	w.debug_apply_sphere_subtract(Vector3(380.0, 55.0, 250.0), 8.0)
+	# Run one LoD tick so lod_walk_ reflects the post-edit walk; the stale-beats-missing
+	# assertion below is vacuous if it reads the pre-edit draw list.
+	w.debug_lod_tick(pos, fwd)
 	var d := w.debug_lod_stats()
 	assert_int(d["dirty_chunks"]).override_failure_message(
 		"an 8 m crater dirtied no LoD chunks").is_greater(0)
