@@ -2,6 +2,8 @@
 #include "voxel_world.h"
 #include "render/composite_pass.h"
 #include "render/gpu_atlas.h"
+#include "render/lod_raster_pass.h"
+#include "lod/lod_tree.h"
 #include "render/island_cull_pass.h"
 #include "render/raymarch_pass.h"
 #include "render/world_streamer.h"
@@ -122,4 +124,25 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	// render_forward_clustered.cpp), so the composite writes into the actual scene buffers.
 	cmp->draw(rd, rsb->get_color_texture(), rsb->get_depth_texture(),
 			rmp->color_texture(), rmp->hitpos_texture(), view_proj);
+
+	// Far field: after the composite the scene depth holds exact near-field occluders, so the
+	// LoD raster can depth-test against them (HiZ occlusion arrives in Task 14). The CPU walk
+	// is the candidate list; indirect args are rebuilt from it inside LodRasterPass::draw.
+	LodRasterPass *lod_raster = world->lod_raster_pass();
+	if (world->lod_pool() && lod_raster && world->material_atlas()) {
+		ve::LodCamera lod_cam;
+		for (int c = 0; c < 4; c++)
+			for (int r = 0; r < 4; r++)
+				lod_cam.view_proj[c * 4 + r] = view_proj.columns[c][r];
+		lod_cam.pos[0] = cam.origin.x;
+		lod_cam.pos[1] = cam.origin.y;
+		lod_cam.pos[2] = cam.origin.z;
+		lod_cam.viewport[0] = size.x;
+		lod_cam.viewport[1] = size.y;
+		world->lod_tick(lod_cam, nullptr);
+		const float cam_pos[3] = {cam.origin.x, cam.origin.y, cam.origin.z};
+		lod_raster->draw(rd, *world->lod_pool(), *world->material_atlas(),
+				rsb->get_color_texture(), rsb->get_depth_texture(), view_proj, cam_pos,
+				lod_raster->draw_page_count());
+	}
 }

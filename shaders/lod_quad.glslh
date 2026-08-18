@@ -1,0 +1,52 @@
+// The packed 12-byte quad record and its geometry, shared by the build passes and the
+// raster. Mirror of extension/src/lod/lod_quad.h and lod/lod_grid.h; the differential test
+// in tests/test_lod_mesh_diff.gd fails when the two drift. Include common.glslh first.
+const int LOD_CHUNK_CELLS = 32;       // ve::kLodChunkCells
+const int LOD_CHUNK_MESH_CELLS = 33;  // ve::kLodChunkMeshCells
+const int LOD_CHUNK_LATTICE = 34;     // ve::kLodChunkLattice
+const int LOD_FINE_LATTICE = 69;      // ve::kLodFineLattice
+const int LOD_QUADS_PER_PAGE = 512;   // ve::kLodQuadsPerPage
+const int LOD_PAGE_SHIFT = 9;         // log2(LOD_QUADS_PER_PAGE); page = quad >> this
+const int LOD_MAX_QUADS = 8192;       // ve::kLodMaxQuadsPerChunk
+const int LOD_OFFSET_MAX = 31;        // ve::kLodOffsetMax
+
+// The four cells around a lattice edge, wound counter-clockwise seen from +axis. Byte-
+// identical to ve::kLodQuadCorners and to QUAD in shaders/mesh_quads.comp.glsl.
+const ivec2 LOD_QUAD[4] = ivec2[4](ivec2(-1, -1), ivec2(0, -1), ivec2(0, 0), ivec2(-1, 0));
+
+// A field can straddle at most two of the three words (the widest is 16 bits), so two masked
+// reads always suffice. Mirror of bits_get in extension/src/lod/lod_quad.cpp.
+uint lod_bits_get(uvec3 w, int lo, int bits) {
+	uint mask = (bits >= 32) ? 0xFFFFFFFFu : ((1u << uint(bits)) - 1u);
+	int word = lo >> 5;
+	int shift = lo & 31;
+	uint v = (word == 0 ? w.x : (word == 1 ? w.y : w.z)) >> uint(shift);
+	int spill = shift + bits - 32;
+	if (spill > 0) {
+		uint hi = (word == 0 ? w.y : w.z);
+		v |= hi << uint(32 - shift);
+	}
+	return v & mask;
+}
+
+// World position of corner k: origin + (m - 1 + frac) * cell -- the mesher's own formula,
+// which ve::lod_quad_corner_pos and shaders/mesh_cells.comp.glsl both use. Decoding is
+// sign-aware exactly like ve::lod_quad_corner_cell: negative-sign quads are stored
+// pre-wound (0,3,2,1), so the CELL lookup maps through order_rev while the offset stays in
+// the stored (pre-wound) slot k.
+vec3 lod_corner_pos(uvec3 w, int k, vec3 origin, float cell) {
+	int axis = int(lod_bits_get(w, 15, 2));
+	int b = (axis + 1) % 3;
+	int c = (axis + 2) % 3;
+	int order_rev[4] = int[4](0, 3, 2, 1);
+	int kk = k & 3;
+	int canonical = lod_bits_get(w, 17, 1) == 0u ? order_rev[kk] : kk;
+	ivec3 m = ivec3(int(lod_bits_get(w, 0, 5)), int(lod_bits_get(w, 5, 5)),
+			int(lod_bits_get(w, 10, 5))) + 1;
+	m[b] += LOD_QUAD[canonical].x;
+	m[c] += LOD_QUAD[canonical].y;
+	vec3 frac = vec3(lod_bits_get(w, 18 + (kk * 3 + 0) * 5, 5),
+			lod_bits_get(w, 18 + (kk * 3 + 1) * 5, 5),
+			lod_bits_get(w, 18 + (kk * 3 + 2) * 5, 5)) / float(LOD_OFFSET_MAX);
+	return origin + (vec3(m) - 1.0 + frac) * cell;
+}

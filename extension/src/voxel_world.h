@@ -40,6 +40,7 @@ class WorldStreamer;
 class MeshService;
 class ColliderStreamer;
 class LodPool;
+class LodRasterPass;
 class IslandAtlas;
 class IslandCullPass;
 struct IslandExtractJob;
@@ -89,6 +90,7 @@ class VoxelWorld : public Node3D {
 	BrickGenPass *gen_pass_ = nullptr;
 	RaymarchPass *raymarch_pass_ = nullptr;
 	CompositePass *composite_pass_ = nullptr;
+	LodRasterPass *lod_raster_pass_ = nullptr;
 	// CPU cores outlive the GPU objects: a re-init re-streams the same world, edits
 	// included. This is also what a future save/reload will do (saves ARE the edit log).
 	ve::EditLog *edit_log_ = nullptr;
@@ -159,6 +161,7 @@ class VoxelWorld : public Node3D {
 	uint32_t lod_frame_ = 0;
 	ve::LodWalkResult lod_walk_;
 	std::map<LodKey, std::vector<int>> lod_pages_of_;
+	std::map<int, int> lod_page_quads_; // page -> number of quads stored in that page
 	int lod_pressure_ = 0;
 	void ensure_lod(); // lazy: creates/initializes lod_tree_ + lod_pool_ on first use
 
@@ -222,6 +225,8 @@ public:
 	void set_lod_builds_per_frame(int v) { lod_builds_per_frame_ = v; }
 	int get_lod_builds_per_frame() const { return lod_builds_per_frame_; }
 	void lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ);
+	// Push the current lod_walk_ page list (with per-page quad counts) into the raster pass.
+	void prepare_lod_raster();
 	RenderingDevice *rd() const;
 	ve::WorldBounds world_bounds() const;
 
@@ -239,6 +244,8 @@ public:
 	RaymarchPass *raymarch_pass() { return raymarch_pass_; }
 	IslandCullPass *island_cull() { return island_cull_; }
 	CompositePass *composite_pass() { return composite_pass_; }
+	LodPool *lod_pool() { return lod_pool_; }
+	LodRasterPass *lod_raster_pass() { return lod_raster_pass_; }
 	std::mutex &edit_mutex() { return edit_mutex_; }
 	MeshService *mesh_service() { return mesh_; }
 	void queue_island_upload(int slot, const ve::VolumeData &d);
@@ -432,6 +439,10 @@ public:
 	// --- M5 Task 12 LoD tick hooks ---
 	void debug_lod_tick(Vector3 pos, Vector3 fwd);
 	Dictionary debug_lod_stats();
+	// --- M5 Task 13 LoD render hooks ---
+	Dictionary debug_lod_render_probe(Vector3 pos, Vector3 fwd, int w, int h);
+	Dictionary debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, int w, int h,
+			bool cull);
 };
 
 } // namespace godot
