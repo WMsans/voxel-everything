@@ -593,6 +593,46 @@ TEST_CASE("an edit during an in-flight build survives note_ready") {
 	CHECK(re_requested);
 }
 
+// Remaining Critical: an edit that arrives after note_building must also survive a stale
+// note_empty (an empty build result from before the edit). Without this fix note_empty made
+// the node terminal kLodEmpty with dirty=false, permanently discarding the edit.
+TEST_CASE("an edit during an in-flight build survives stale note_empty") {
+	ve::LodTreeConfig cfg;
+	cfg.bounds = demo_bounds();
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	settle(&t, c, &occ, 30);
+	ve::LodWalkResult before;
+	t.walk(c, &occ, 31u, &before);
+	REQUIRE(!before.draws.empty());
+	const ve::LodDrawItem d = before.draws[0];
+
+	float lo[3], hi[3];
+	ve::lod_chunk_aabb(d.level, d.coord, lo, hi);
+	t.mark_dirty(lo, hi);
+	ve::LodWalkResult requested;
+	t.walk(c, &occ, 32u, &requested);
+	REQUIRE(!requested.requests.empty());
+
+	// The build is submitted: note_building clears the dirty that the request above observed.
+	t.note_building(d.level, d.coord);
+	// The edit lands while the build is in flight.
+	t.mark_dirty(lo, hi);
+	// The stale pre-edit build returns no geometry. It must leave the node requestable, not
+	// terminal-empty, so the next walk rebuilds with the edit included.
+	t.note_empty(d.level, d.coord);
+	CHECK(t.is_dirty(d.level, d.coord));
+	CHECK(t.state_of(d.level, d.coord) != ve::kLodEmpty);
+
+	ve::LodWalkResult after;
+	t.walk(c, &occ, 33u, &after);
+	bool re_requested = false;
+	for (const ve::LodBuildRequest &q : after.requests)
+		if (q.level == d.level && q.coord == d.coord) re_requested = true;
+	CHECK(re_requested);
+}
+
 // Critical 1: the draw-list builder must use the chunk's actual page list, not the
 // page_first/page_count fields (which can be stale/non-contiguous after arena reuse).
 TEST_CASE("page draws are emitted from the actual non-contiguous page list") {

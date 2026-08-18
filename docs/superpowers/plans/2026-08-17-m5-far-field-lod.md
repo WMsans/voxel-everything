@@ -4,7 +4,7 @@
 
 **Goal:** See the whole world — eight levels of surface-nets chunks, each 12 bytes per quad with no vertex buffer at all, streamed by a visibility-driven octree walk, culled against a HiZ built from the raymarched near field, drawn as one indirect multi-draw into Godot's scene framebuffer, and shaded through the *same* triplanar material function the raymarcher calls so the 150 m seam cannot show.
 
-**Status (updated at the end of Task 13):** Tasks **1–13 are complete** — their steps are ticked and each carries a `**Status: complete**` line naming the commits. Start at **Task 14**. Read the Errata at the bottom first: ten entries record where this plan's text has already met reality, and four of them (5, 6, 8, 9) change how the remaining tasks must be written. Native suites 254/254; gdUnit 160/160 across 30 suites.
+**Status (updated after the final review fixes):** Tasks **1–18 are complete** — their steps are ticked and each carries a `**Status: complete**` line naming the commits. The final review's Critical and Important fixes are complete (see `.superpowers/sdd/final-review-fixes-report.md`). Read the Errata at the bottom first: entries record where this plan's text has already met reality. Native suites 262/262; gdUnit 174/174 across 34 suites.
 
 **Architecture:** A LoD chunk is 32³ cells whose lattice is built by evaluating `G + ops` at **half** the level's cell size and tent-reducing 2:1 — a mip cascade computed inside one build job rather than accumulated through stored levels. The mesher is M3's, generalised from a compile-time pitch to an origin + cell size + lattice dimension in the push constant. *(That generalisation landed but the LoD build pass ended up not using it — see errata 7. There are two GPU cell-vertex shaders and two CPU references, each pinned by its own differential test.)* Geometry is a global arena of fixed 512-quad pages; a shared 6 KB index buffer plus `vertexOffset = page · 2048` lets the vertex shader recover `quad = gl_VertexIndex >> 2` and `page = quad >> 9`, which is how one indirect multi-draw addresses thousands of independently placed chunks without `gl_DrawID` or a non-zero `firstInstance` (Godot exposes neither). Selection, streaming and eviction are one pure-C++ octree walk against a projected-area threshold, an interface-injected occlusion test, and a page budget.
 
@@ -4240,7 +4240,7 @@ Spec §6.3 and §7.1. The near field already writes exact pre-opaque depth, so t
 **Interfaces:**
 - Produces: `godot::HizPass` with `bool initialize(RenderingDevice *)`, `void teardown()`, `bool build(RenderingDevice *, RID scene_depth, Vector2i scene_size)`, `RID pyramid() const`, `int mip_count() const`, `const ve::LodOcclusion *occlusion() const`; an internal `HizOcclusion : ve::LodOcclusion` reading the async 32² readback.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_hiz.gd`:
 
@@ -4304,12 +4304,12 @@ func test_an_absent_readback_never_occludes() -> void:
 	assert_bool(w.debug_hiz_occluded(Vector2(0.2, 0.2), Vector2(0.3, 0.3), 0.01)).is_false()
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `./gdunit_tests.sh -a res://tests/test_hiz.gd`
 Expected: FAIL — `Nonexistent function 'debug_hiz_stats'`.
 
-- [ ] **Step 3: Write `shaders/hiz.comp.glsl`**
+- [x] **Step 3: Write `shaders/hiz.comp.glsl`**
 
 ```glsl
 #[compute]
@@ -4356,7 +4356,7 @@ void main() {
 }
 ```
 
-- [ ] **Step 4: Write `HizPass`**
+- [x] **Step 4: Write `HizPass`**
 
 A single `R32_SFLOAT` 256×256 texture with 9 mips and per-mip texture *slices* to bind as the destination. `build` records nine dispatches; a mip's dispatch reads the previous mip through a `sampler2D` view of that slice.
 
@@ -4392,18 +4392,18 @@ bool HizOcclusion::occluded(const float ss_min[3], const float ss_max[3]) const 
 }
 ```
 
-- [ ] **Step 5: Wire it in and hand it to the walk**
+- [x] **Step 5: Wire it in and hand it to the walk**
 
 In `RaymarchCompositor::_render_callback`, between `cmp->draw(...)` and the LoD draw, call `hiz->build(rd, rsb->get_depth_texture(), size)`. Change the `lod_tick` call to pass `hiz->occlusion()` instead of `nullptr`.
 
 Add `debug_hiz_stats()`, `debug_hiz_probe_synthetic(float far_value, float near_value)` (uploads a synthetic depth image, runs the pyramid, reads three specific texels back) and `debug_hiz_occluded(Vector2 lo, Vector2 hi, float depth)`.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `./build.sh -j$(nproc)` then the gdUnit command from Step 2, then the full suite.
 Expected: PASS. `test_lod_pool.gd::test_ticking_streams_chunks_in` must still pass — occlusion may only delay builds, and its "no readback yet" answer is `false`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add shaders/hiz.comp.glsl extension/src/render/hiz_pass.h \
@@ -4423,7 +4423,7 @@ Spec §7.2. The CPU walk is already the candidate list, so this pass only ever *
 - Create: `tests/test_lod_cull.gd`
 - Modify: `extension/src/render/lod_raster_pass.cpp`, `extension/src/raymarch_compositor.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_lod_cull.gd`:
 
@@ -4509,12 +4509,12 @@ func test_the_reported_ratio_is_sane(timeout := 40000) -> void:
 	assert_float(d["culled_ratio"]).is_between(0.0, 1.0)
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `./gdunit_tests.sh -a res://tests/test_lod_cull.gd`
 Expected: FAIL — `Nonexistent function 'debug_lod_cull_probe'`.
 
-- [ ] **Step 3: Write `shaders/lod_cull.comp.glsl`**
+- [x] **Step 3: Write `shaders/lod_cull.comp.glsl`**
 
 ```glsl
 #[compute]
@@ -4601,7 +4601,7 @@ void main() {
 }
 ```
 
-- [ ] **Step 4: Move the indirect args out of the raster, then write `LodCullPass`**
+- [x] **Step 4: Move the indirect args out of the raster, then write `LodCullPass`**
 
 **Do this first or the cull is a no-op.** Task 13 built the indirect args *inside* `LodRasterPass::draw` — the `buffer_update(pool.args_buffer(), ...)` recorded just before `draw_list_begin`. The cull runs BEFORE the draw, so leaving it there means the raster rewrites every `instanceCount` the cull just zeroed and nothing is ever culled, with both tests in Step 1 passing vacuously because `args_after == args_before` either way. Move the args build to `LodPool::upload_draw_args(const std::vector<LodRasterPass::PageDraw> &)`, called from the compositor before the cull; `LodRasterPass::draw` then keeps only the `draw_list_*` calls and the `draw_count` it already takes.
 
@@ -4611,7 +4611,7 @@ In `RaymarchCompositor`, insert `cull->run(...)` between `hiz->build(...)` and `
 
 Add `debug_lod_cull_probe(pos, fwd)`, which snapshots the args buffer before and after the cull and reports `args_before`, `args_after`, `offsets_changed`, `index_counts_changed`, `drawn_after`, `culled_ratio`.
 
-- [ ] **Step 5: Give the far field a measured cost**
+- [x] **Step 5: Give the far field a measured cost**
 
 Nothing times the LoD passes yet, and Task 18's HUD and benchmark both read one. Add CPU
 command-record timing to `LodRasterPass` and `LodCullPass` in the style the other passes
@@ -4622,13 +4622,13 @@ recording the command lists (see errata 15). Report `culled_ratio` from the cull
 readback in `debug_lod_stats()` so the HUD reads it from the same place as the rest of the LoD
 numbers.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `./build.sh -j$(nproc)` then the gdUnit command from Step 2, then the full suite.
 Run: `godot --path . demo/main.tscn`
 Expected: PASS, and the frame time drops when facing terrain with a ridge in front of it.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add shaders/lod_cull.comp.glsl extension/src/render/lod_cull_pass.h \
@@ -4648,7 +4648,7 @@ Spec §7.4. Two complementary halves of one Bayer threshold, so every pixel in t
 - Modify: `shaders/composite.frag.glsl`, `shaders/lod.frag.glsl`, `extension/src/render/composite_pass.cpp`, `extension/src/render/lod_raster_pass.cpp`
 - Create: `tests/test_lod_seam.gd`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_lod_seam.gd`:
 
@@ -4724,12 +4724,12 @@ func test_the_near_field_owns_everything_before_the_band(timeout := 40000) -> vo
 	assert_int(d["far_pixels_lost_to_raymarch"]).is_equal(0)
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `./gdunit_tests.sh -a res://tests/test_lod_seam.gd`
 Expected: FAIL — `Nonexistent function 'debug_seam_probe'`.
 
-- [ ] **Step 3: Add the fade to `composite.frag.glsl`**
+- [x] **Step 3: Add the fade to `composite.frag.glsl`**
 
 ```glsl
 #[fragment]
@@ -4771,7 +4771,7 @@ void main() {
 
 `CompositePass::draw` grows its push constant from 64 to 96 bytes to carry the camera position and the two band distances, and binds the material arrays (it now includes `common.glslh`, which needs them declared).
 
-- [ ] **Step 4: Add the complementary half to `lod.frag.glsl`**
+- [x] **Step 4: Add the complementary half to `lod.frag.glsl`**
 
 ```glsl
 	float d = distance(v_wpos, pc.cam.xyz);
@@ -4782,17 +4782,17 @@ void main() {
 
 placed **before** the material sample, so a discarded fragment costs no texture work. `LodRasterPass`'s push constant already carries `cam`; add `fade`.
 
-- [ ] **Step 5: Add `debug_seam_probe`**
+- [x] **Step 5: Add `debug_seam_probe`**
 
 Renders both fields into one target with a stencil-free two-pass trick: run the composite writing a marker into an auxiliary `R8_UINT` target (1 = near field kept the pixel), then the LoD pass ORing 2 into the same target, then read it back. `band_pixels` counts texels whose distance is in [120, 150], `band_pixels_unclaimed` counts those still 0, `band_pixels_double_claimed` those equal to 3.
 
-- [ ] **Step 6: Run the tests and look at it**
+- [x] **Step 6: Run the tests and look at it**
 
 Run: `./build.sh -j$(nproc)` then the gdUnit command from Step 2, then the full suite.
 Run: `godot --path . demo/main.tscn`
 Expected: the 150 m edge is gone; the two fields dissolve into each other with no line, no sky gap and no z-fighting shimmer.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add shaders/composite.frag.glsl shaders/lod.frag.glsl \
@@ -4811,7 +4811,7 @@ Spec §6.5. Every level whose chunks an edit touches is re-requested; the drawn 
 - Modify: `extension/src/voxel_world.cpp` (`append_edit_locked`, `teardown_gpu`), `extension/src/render/lod_pool.cpp`
 - Create: `tests/test_lod_stream.gd`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_lod_stream.gd`:
 
@@ -4909,12 +4909,12 @@ func test_teardown_and_reinit_leave_no_pages_behind(timeout := 40000) -> void:
 	assert_int(w.debug_lod_stats()["pages_used"]).is_greater(0)
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `./gdunit_tests.sh -a res://tests/test_lod_stream.gd`
 Expected: FAIL — `dirty_chunks` missing from `debug_lod_stats`.
 
-- [ ] **Step 3: Dirty the tree on every accepted edit**
+- [x] **Step 3: Dirty the tree on every accepted edit**
 
 In `VoxelWorld::append_edit_locked`, after the edit log accepts the op:
 
@@ -4950,7 +4950,7 @@ TEST_CASE("an op smaller than half a cell does not dirty that level") {
 }
 ```
 
-- [ ] **Step 4: Close the page-accounting gaps**
+- [x] **Step 4: Close the page-accounting gaps**
 
 `VoxelWorld::teardown_gpu` must `lod_pool_->teardown()`, `lod_tree_->clear()` and clear `lod_pages_of_`, in that order — the tree holds page indices the pool is about to free, and a stale index would be handed to the next chunk. Follow `CompositePass::teardown`'s documented free order (uniform set → pipeline → shader → buffers): freeing a shader cascades to its pipelines, so a uniform set referencing it must go first. **Task 12 already did this**; verify rather than rewrite, and make the third test in Step 1 the proof.
 
@@ -4959,16 +4959,16 @@ Two invariants spec §3.3 states are not actually held by the code Task 9 and Ta
 - **The 16-page cap is unenforced.** `LodBuildPass::read_job` clamps the readback to `kLodMaxQuadsPerChunk`, then appends skirts *on top of the clamp*, and `LodPool::upload` only tests `pages_needed > arena_.free_pages()`. Add the `pages_needed > ve::kLodMaxPagesPerChunk` refusal, and cover it with a `test_lod_arena.cpp` case.
 - **An overflowing build never logs.** `LodBuildResult::overflow` is set and read by nobody. Log it once per chunk (not per frame — a chunk that overflows overflows every rebuild), per the engine spec's fail-soft policy.
 
-- [ ] **Step 5: Report the dirty counters**
+- [x] **Step 5: Report the dirty counters**
 
 Extend `debug_lod_stats()` with `dirty_chunks` (nodes with `dirty == true`) and `dirty_levels` (distinct levels among them). Add `LodTree::dirty_stats(int *chunks, int *levels) const`.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `./build.sh -j$(nproc) --test` then the full gdUnit suite.
 Expected: PASS, including `test_edit_pipeline.gd` and `test_collider_edits.gd` — an edit now does strictly more work and neither of those may regress.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add extension/src/lod/lod_tree.h extension/src/lod/lod_tree.cpp \
@@ -4987,20 +4987,20 @@ Spec §10. The plan's triggers are decided by measurement, not pre-emptively, an
 - Modify: `demo/hud.gd`, `demo/benchmark.gd`, `demo/main.tscn`
 - Modify: this plan (the Errata section)
 
-- [ ] **Step 1: Add the LoD line to the HUD**
+- [x] **Step 1: Add the LoD line to the HUD**
 
 `demo/hud.gd` reads `debug_lod_stats()` each frame and shows: resident chunks, pages used/total, draw pages, culled %, builds in flight, dirty chunks, and the LoD pass's CPU command-record milliseconds from `debug_perf_stats()`. Every one of those exists by the time this task runs: Task 12 gives the page and residency counters, Task 15 Step 5 adds `lod_ms` and `culled_ratio`, Task 17 Step 5 adds `dirty_chunks`.
 
-- [ ] **Step 2: Extend the benchmark**
+- [x] **Step 2: Extend the benchmark**
 
 `demo/benchmark.gd`'s scripted flythrough gains, per frame: `lod_ms`, `draw_pages`, `culled_ratio`, `chunks_resident`, `pages_used`, and a `BENCH` summary line reporting p50/p99 for each. Add a **second flythrough leg** that flies low along a valley floor with a ridge between the camera and the far basin — that is the case the near-field-only HiZ cannot cull, and it is what trigger 1 is measured on.
 
-- [ ] **Step 3: Measure**
+- [x] **Step 3: Measure**
 
 Run: `godot --path . demo/main.tscn --disable-vsync -- --benchmark`
 Record: LoD ms p50/p99, frame ms p50/p99, culled ratio on both legs, pages used at the default 32768, and the farthest level actually drawn.
 
-- [ ] **Step 4: Decide the four triggers and record the verdicts**
+- [x] **Step 4: Decide the four triggers and record the verdicts**
 
 | Trigger | Threshold | Action if tripped |
 |---|---|---|
@@ -5011,13 +5011,13 @@ Record: LoD ms p50/p99, frame ms p50/p99, culled ratio on both legs, pages used 
 
 Write each verdict — tripped or not, with the number that decided it — into this plan's **Errata**, and implement only the ones that tripped. Each implemented trigger gets its own commit.
 
-- [ ] **Step 5: Full-suite regression**
+- [x] **Step 5: Full-suite regression**
 
 Run: `./build.sh -j$(nproc) --test --verify`
 Run: `./gdunit_tests.sh -a res://tests`
 Expected: everything green.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add demo/hud.gd demo/benchmark.gd demo/main.tscn \

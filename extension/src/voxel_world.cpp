@@ -982,11 +982,26 @@ void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ)
 							" quads");
 			}
 			if (r.quads.empty()) {
-				// The chunk is legitimately empty now. Release any old pages before telling
-				// the tree, otherwise the tree stops drawing/requesting it while the stale
-				// GPU pages stay allocated forever.
+				// Empty result. If an edit landed while this build was in flight, the result
+				// is stale: keep any old pages drawing (stale beats missing) or leave a
+				// non-resident node requestable. Only a non-dirty empty result is terminal,
+				// and only then may the old GPU pages be released.
 				const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
+				const bool dirty = lod_tree_->is_dirty(r.level, r.coord);
 				const auto old_it = lod_pages_of_.find(key);
+				if (dirty) {
+					if (old_it != lod_pages_of_.end()) {
+						// Old pages stay drawable; note_ready_dirty re-requests the rebuild.
+						lod_tree_->note_ready_dirty(r.level, r.coord);
+					} else {
+						// Nothing to keep drawing; note_empty leaves the node requestable.
+						lod_tree_->note_empty(r.level, r.coord);
+					}
+					continue;
+				}
+				// Genuinely empty: release any old pages before telling the tree, otherwise
+				// the tree stops drawing/requesting it while the stale GPU pages stay
+				// allocated forever.
 				if (old_it != lod_pages_of_.end()) {
 					for (int p : old_it->second) lod_page_quads_.erase(p);
 					lod_pool_->release(old_it->second);

@@ -173,6 +173,11 @@ int LodTree::state_of(int level, IVec3 c) const {
 	return it == nodes_.end() ? -1 : int(it->second.state);
 }
 
+bool LodTree::is_dirty(int level, IVec3 c) const {
+	const auto it = nodes_.find(key(level, c));
+	return it != nodes_.end() && it->second.dirty;
+}
+
 void LodTree::note_building(int level, IVec3 c) {
 	Node &n = nodes_[key(level, c)];
 	n.building = true;
@@ -216,7 +221,17 @@ void LodTree::note_ready_dirty(int level, IVec3 c) {
 
 void LodTree::note_empty(int level, IVec3 c) {
 	Node &n = nodes_[key(level, c)];
+	const bool was_building = n.building;
 	n.building = false;
+	if (was_building && n.dirty) {
+		// A stale empty result from an in-flight build must not hide an edit that landed
+		// after note_building. Leave the node requestable and keep dirty so the next walk
+		// rebuilds with the edit included.
+		n.state = kLodUnknown;
+		n.page_first = -1;
+		n.page_count = 0;
+		return;
+	}
 	n.state = kLodEmpty;
 	n.dirty = false;
 	n.page_first = -1;
