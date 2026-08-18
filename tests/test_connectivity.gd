@@ -72,6 +72,20 @@ func step(w: VoxelWorld, frames: int, center: Vector3 = CENTER) -> void:
 		w.debug_physics_frame(center)
 		w.debug_island_frame(1.0 / 60.0, center)
 
+# Steps until no extraction is in flight. An extraction that has not landed yet has not been
+# refused yet either, so the window it came from is momentarily neither pending nor finished,
+# and reading pending_windows in that gap says nothing about whether a refusal kept it. On an
+# idle machine the extractions land well inside the fixed step() the atlas-full tests used to
+# rely on; under a full-suite run they do not, which is exactly when those tests flaked.
+func step_until_at_rest(w: VoxelWorld, frames := 600) -> Dictionary:
+	var st: Dictionary = w.debug_island_stats()
+	for i in range(frames):
+		if st["in_flight"] == 0:
+			return st
+		step(w, 1)
+		st = w.debug_island_stats()
+	return st
+
 func solid_at(w: VoxelWorld, p: Vector3) -> bool:
 	# A downward ray from just above the point: it hits at p if there is matter there.
 	var hit: Dictionary = w.debug_raycast(p + Vector3(0, 0.6, 0), Vector3(0, -1, 0))
@@ -318,6 +332,18 @@ func test_body_pool_holes_after_merges_do_not_count_against_the_cap(timeout := 1
 		t.apply_sphere_subtract(Vector3(x, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 240)
 	assert_int(w.debug_island_stats()["live_bodies"]).is_greater_equal(3)
+
+	# Take the baseline HERE, while the pool is full and visibly turning work away. The
+	# carves left remainder windows queued behind the cap, so there is already demand waiting
+	# for a slot -- which is what makes the hole test below meaningful, and why the demand
+	# must not be created after the merge: a queued window claims the freed slot within a few
+	# frames, so a pillar built afterwards would find the pool full again through no fault of
+	# the slot pool. (That is exactly what this test used to do, and it measured the refusal
+	# of its own late pillar rather than the hole it meant to test.)
+	var before: Dictionary = w.debug_island_stats()
+	var before_spawned: int = before["islands_spawned"] + before["debris_spawned"]
+	assert_int(before["refused_body_cap"]).override_failure_message(
+		"nothing was being refused, so a freed slot proves nothing: %s" % before).is_greater(0)
 	w.debug_set_merge_sleep_seconds(0.2)
 
 	# Let at least one body sleep and merge back, leaving a hole in the slot pool. We do not
@@ -335,15 +361,12 @@ func test_body_pool_holes_after_merges_do_not_count_against_the_cap(timeout := 1
 	assert_int(merged_stats["live_bodies"]).override_failure_message(
 		"live bodies stayed at the cap after the merge window: %s" % merged_stats).is_less(3)
 
-	# A fresh island must still be allowed even though the slot pool has three holes in it.
-	build_pillar(w, t, PILLAR_X + 8.0)
-	var before: Dictionary = w.debug_island_stats()
-	var before_spawned: int = before["islands_spawned"] + before["debris_spawned"]
-	t.apply_sphere_subtract(Vector3(PILLAR_X + 8.0, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	# The hole must be usable. With the old bodies_.size() check the pool reads "full" for
+	# ever once three bodies have existed, and the work queued above never gets in.
 	step(w, 240)
 	var st: Dictionary = w.debug_island_stats()
 	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
-		"a later island was refused after merges freed the body slots: %s" % st).is_greater(
+		"a merged-away body left a hole the pool never reused: %s" % st).is_greater(
 		before_spawned)
 
 
@@ -473,7 +496,9 @@ func test_atlas_full_remainder_window_gets_retry_backoff(timeout := 180000) -> v
 	for x in xs:
 		t.apply_sphere_subtract(Vector3(x, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 120)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = step_until_at_rest(w)
+	assert_int(st["in_flight"]).override_failure_message(
+		"extractions never landed, so the refusal has not happened yet: %s" % st).is_equal(0)
 	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
 		"an island spawned despite every atlas slot being full: %s" % st).is_equal(0)
 	assert_int(st["pending_windows"]).override_failure_message(
@@ -517,7 +542,9 @@ func test_overlapping_edit_keeps_remainder_identity_for_retry_backoff(timeout :=
 	# apply the atlas-full retry backoff to the merged window rather than pushing a duplicate.
 	t.apply_sphere_subtract(Vector3(PILLAR_X + 0.2, PILLAR_BASE + 2.2, PILLAR_Z), 1.2)
 	step(w, 120)
-	st = w.debug_island_stats()
+	st = step_until_at_rest(w)
+	assert_int(st["in_flight"]).override_failure_message(
+		"extractions never landed, so the refusal has not happened yet: %s" % st).is_equal(0)
 	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
 		"an island spawned despite every atlas slot being full: %s" % st).is_equal(0)
 	assert_int(st["pending_windows"]).override_failure_message(
