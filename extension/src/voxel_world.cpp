@@ -1060,7 +1060,30 @@ Dictionary VoxelWorld::debug_lod_stats() {
 	for (const ve::LodDrawItem &item : lod_walk_.draws)
 		draw_pages += item.page_count;
 	d["draw_pages"] = draw_pages;
-	d["partial_allocations"] = 0; // LodArena::alloc is all-or-nothing, so none can exist
+	// Requests the last walk still wants built. Zero, with nothing in flight, is what
+	// "the far field has converged for this camera" means; tests wait on it instead of
+	// guessing a frame count.
+	d["requests_pending"] = static_cast<int>(lod_walk_.requests.size());
+	// LodArena::alloc is all-or-nothing, so this should always be zero -- but reporting a
+	// hardcoded 0 makes the test that asserts it vacuous. MEASURE the two shapes a
+	// partially funded build would actually take: a chunk holding a page the per-page quad
+	// count never learned about, and arena pages that no resident chunk owns (the leak a
+	// half-rolled-back allocation leaves behind).
+	int partial = 0;
+	size_t owned_pages = 0;
+	for (const auto &kv : lod_pages_of_) {
+		owned_pages += kv.second.size();
+		for (int p : kv.second) {
+			if (lod_page_quads_.find(p) == lod_page_quads_.end()) {
+				partial++;
+				break;
+			}
+		}
+	}
+	const int used_pages = (lod_pool_ ? lod_pool_->page_count() : 0) -
+			(lod_pool_ ? lod_pool_->free_pages() : 0);
+	const int unowned = used_pages - static_cast<int>(owned_pages);
+	d["partial_allocations"] = partial + (unowned > 0 ? unowned : 0);
 	d["builds_in_flight"] = mesh_ && mesh_->lod_busy() ? 1 : 0;
 	return d;
 }
