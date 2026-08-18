@@ -2,6 +2,7 @@
 #include "voxel_world.h"
 #include "render/composite_pass.h"
 #include "render/gpu_atlas.h"
+#include "render/hiz_pass.h"
 #include "render/lod_raster_pass.h"
 #include "lod/lod_tree.h"
 #include "render/island_cull_pass.h"
@@ -125,9 +126,12 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	cmp->draw(rd, rsb->get_color_texture(), rsb->get_depth_texture(),
 			rmp->color_texture(), rmp->hitpos_texture(), view_proj);
 
-	// Far field: after the composite the scene depth holds exact near-field occluders, so the
-	// LoD raster can depth-test against them (HiZ occlusion arrives in Task 14). The CPU walk
-	// is the candidate list; indirect args are rebuilt from it inside LodRasterPass::draw.
+	// Far field: after the composite the scene depth holds exact near-field occluders. Build
+	// the HiZ pyramid from it for the GPU cull (Task 15) and the coarse async readback for the
+	// CPU walk, then draw the LoD raster against the same depth buffer. The CPU walk gets the
+	// occlusion interface: stale readback may delay a build, never hide a chunk.
+	HizPass *hiz = world->hiz_pass();
+	if (hiz) hiz->build(rd, rsb->get_depth_texture(), size);
 	LodRasterPass *lod_raster = world->lod_raster_pass();
 	if (world->lod_pool() && lod_raster && world->material_atlas()) {
 		ve::LodCamera lod_cam;
@@ -139,7 +143,7 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 		lod_cam.pos[2] = cam.origin.z;
 		lod_cam.viewport[0] = size.x;
 		lod_cam.viewport[1] = size.y;
-		world->lod_tick(lod_cam, nullptr);
+		world->lod_tick(lod_cam, hiz ? hiz->occlusion() : nullptr);
 		const float cam_pos[3] = {cam.origin.x, cam.origin.y, cam.origin.z};
 		lod_raster->draw(rd, *world->lod_pool(), *world->material_atlas(),
 				rsb->get_color_texture(), rsb->get_depth_texture(), view_proj, cam_pos,

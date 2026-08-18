@@ -13,6 +13,7 @@ void voxel_everything_initialize(ModuleInitializationLevel p_level) {
 	if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) return;
 	// Internal: it exists only so callable_mp can name its handler for the async readbacks.
 	GDREGISTER_INTERNAL_CLASS(AsyncBufferRead);
+	GDREGISTER_INTERNAL_CLASS(AsyncTextureRead);
 	GDREGISTER_CLASS(VoxelWorld);
 	GDREGISTER_CLASS(RaymarchCompositor);
 	GDREGISTER_CLASS(VoxelEditTool);

@@ -15,6 +15,7 @@
 #include "render/lod_build_pass.h"
 #include "render/lod_pool.h"
 #include "render/lod_raster_pass.h"
+#include "render/hiz_pass.h"
 #include "lod/lod_contour.h"
 #include "lod/lod_grid.h"
 #include "lod/lod_reduce.h"
@@ -85,6 +86,11 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::debug_lod_render_probe);
 	ClassDB::bind_method(D_METHOD("debug_lod_render_probe_culled", "pos", "fwd", "w", "h",
 			"cull"), &VoxelWorld::debug_lod_render_probe_culled);
+	ClassDB::bind_method(D_METHOD("debug_hiz_stats"), &VoxelWorld::debug_hiz_stats);
+	ClassDB::bind_method(D_METHOD("debug_hiz_probe_synthetic", "far_value", "near_value"),
+			&VoxelWorld::debug_hiz_probe_synthetic);
+	ClassDB::bind_method(D_METHOD("debug_hiz_occluded", "lo", "hi", "depth"),
+			&VoxelWorld::debug_hiz_occluded);
 	ClassDB::bind_method(D_METHOD("debug_init_physics"), &VoxelWorld::debug_init_physics);
 	ClassDB::bind_method(D_METHOD("debug_teardown_physics"), &VoxelWorld::debug_teardown_physics);
 	ClassDB::bind_method(D_METHOD("debug_mesh_lattice_diff", "chunk"), &VoxelWorld::debug_mesh_lattice_diff);
@@ -232,6 +238,7 @@ void VoxelWorld::teardown_gpu() {
 	if (composite_pass_) { delete composite_pass_; composite_pass_ = nullptr; }
 	if (raymarch_pass_) { delete raymarch_pass_; raymarch_pass_ = nullptr; }
 	if (lod_raster_pass_) { delete lod_raster_pass_; lod_raster_pass_ = nullptr; }
+	if (hiz_pass_) { delete hiz_pass_; hiz_pass_ = nullptr; }
 	if (materials_) { delete materials_; materials_ = nullptr; }
 	if (gen_pass_) { delete gen_pass_; gen_pass_ = nullptr; }
 	if (region_pass_) { delete region_pass_; region_pass_ = nullptr; }
@@ -326,6 +333,8 @@ void VoxelWorld::ensure_initialized() {
 	composite_pass_->initialize(device);
 	lod_raster_pass_ = new LodRasterPass();
 	lod_raster_pass_->initialize(device);
+	hiz_pass_ = new HizPass();
+	if (!hiz_pass_->initialize(device)) { teardown_gpu(); return; }
 	initialized_ = true;
 }
 
@@ -1201,6 +1210,77 @@ Dictionary VoxelWorld::debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, i
 	if (color.is_valid()) device->free_rid(color);
 	if (depth.is_valid()) device->free_rid(depth);
 	return d;
+}
+
+Dictionary VoxelWorld::debug_hiz_stats() {
+	Dictionary d;
+	ensure_initialized();
+	if (!hiz_pass_ || !rd()) return d;
+	d["width"] = HizPass::kSize;
+	d["height"] = HizPass::kSize;
+	d["mips"] = HizPass::kMipCount;
+	d["readback_level"] = HizPass::kReadbackLevel;
+	d["readback_texels"] = HizPass::kGrid * HizPass::kGrid;
+	return d;
+}
+
+Dictionary VoxelWorld::debug_hiz_probe_synthetic(float far_value, float near_value) {
+	Dictionary d;
+	d["mip0_at_near_texel"] = 0.0f;
+	d["mip1_covering_both"] = 0.0f;
+	d["top_mip"] = 0.0f;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !hiz_pass_) return d;
+
+	// A 256^2 synthetic depth image: every texel is `far_value` except one near texel at
+	// (0,0). With the level-0 pass mapping the scene 1:1 at this size, mip 0 keeps the near
+	// value, the mip-1 parent over the 2x2 corner keeps the far value, and the 1x1 top mip
+	// keeps the far value too.
+	const int size = HizPass::kSize;
+	PackedByteArray data;
+	data.resize(size * size * 4);
+	float *pixels = reinterpret_cast<float *>(data.ptrw());
+	for (int i = 0; i < size * size; i++) pixels[i] = far_value;
+	pixels[0] = near_value;
+
+	TypedArray<PackedByteArray> upload;
+	upload.push_back(data);
+	Ref<RDTextureFormat> tf;
+	tf.instantiate();
+	tf->set_format(RenderingDevice::DATA_FORMAT_R32_SFLOAT);
+	tf->set_width(size);
+	tf->set_height(size);
+	tf->set_usage_bits(RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT);
+	Ref<RDTextureView> tv;
+	tv.instantiate();
+	const RID synthetic = device->texture_create(tf, tv, upload);
+	if (!synthetic.is_valid()) return d;
+
+	if (hiz_pass_->build(device, synthetic, Vector2i(size, size))) {
+		device->submit();
+		device->sync();
+		d["mip0_at_near_texel"] = hiz_pass_->probe_mip_texel(device, 0, 0, 0);
+		d["mip1_covering_both"] = hiz_pass_->probe_mip_texel(device, 1, 0, 0);
+		d["top_mip"] = hiz_pass_->probe_mip_texel(device, HizPass::kMipCount - 1, 0, 0);
+		// Make the async readback deterministic for the test hooks: read the 4 KB copy
+		// synchronously after sync and feed it into the same occlusion grid the walk uses.
+		const PackedByteArray rb = device->texture_get_data(hiz_pass_->readback_texture(), 0);
+		hiz_pass_->update_occlusion(rb);
+	}
+	// The level-0 uniform set references this throwaway source; drop the cached set before
+	// freeing the texture so the next probe does not try to free a cascade-freed set.
+	hiz_pass_->release_level0_set();
+	device->free_rid(synthetic);
+	return d;
+}
+
+bool VoxelWorld::debug_hiz_occluded(Vector2 lo, Vector2 hi, float depth) {
+	ensure_initialized();
+	if (!hiz_pass_ || !rd()) return false;
+	const float ss_min[3] = {lo.x, lo.y, depth};
+	const float ss_max[3] = {hi.x, hi.y, depth};
+	return hiz_pass_->occlusion()->occluded(ss_min, ss_max);
 }
 
 void VoxelWorld::debug_apply_sphere_subtract(Vector3 centre, float radius) {

@@ -32,3 +32,22 @@ int32_t AsyncBufferRead::as_i32(int64_t index) const {
 	if (data_.size() < off + 4) return 0;
 	return *reinterpret_cast<const int32_t *>(data_.ptr() + off);
 }
+
+void AsyncTextureRead::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("_on_data", "data"), &AsyncTextureRead::_on_data);
+}
+
+void AsyncTextureRead::_on_data(const PackedByteArray &data) {
+	data_ = data;
+	pending_ = false;
+	has_data_ = true;
+	fresh_ = true;
+}
+
+bool AsyncTextureRead::request(RenderingDevice *rd, const RID &texture) {
+	if (pending_ || !rd || !texture.is_valid()) return false;
+	if (rd->texture_get_data_async(texture, 0, callable_mp(this, &AsyncTextureRead::_on_data)) != OK)
+		return false;
+	pending_ = true;
+	return true;
+}
