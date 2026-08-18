@@ -1,10 +1,12 @@
 # M5 Far-Field LoD Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** See the whole world — eight levels of surface-nets chunks, each 12 bytes per quad with no vertex buffer at all, streamed by a visibility-driven octree walk, culled against a HiZ built from the raymarched near field, drawn as one indirect multi-draw into Godot's scene framebuffer, and shaded through the *same* triplanar material function the raymarcher calls so the 150 m seam cannot show.
 
-**Architecture:** A LoD chunk is 32³ cells whose lattice is built by evaluating `G + ops` at **half** the level's cell size and tent-reducing 2:1 — a mip cascade computed inside one build job rather than accumulated through stored levels. The mesher is M3's, generalised from a compile-time pitch to an origin + cell size + lattice dimension in the push constant, so there is one mesher and one CPU reference. Geometry is a global arena of fixed 512-quad pages; a shared 6 KB index buffer plus `vertexOffset = page · 2048` lets the vertex shader recover `quad = gl_VertexIndex >> 2` and `page = quad >> 9`, which is how one indirect multi-draw addresses thousands of independently placed chunks without `gl_DrawID` or a non-zero `firstInstance` (Godot exposes neither). Selection, streaming and eviction are one pure-C++ octree walk against a projected-area threshold, an interface-injected occlusion test, and a page budget.
+**Status (updated at the end of Task 13):** Tasks **1–13 are complete** — their steps are ticked and each carries a `**Status: complete**` line naming the commits. Start at **Task 14**. Read the Errata at the bottom first: ten entries record where this plan's text has already met reality, and four of them (5, 6, 8, 9) change how the remaining tasks must be written. Native suites 254/254; gdUnit 160/160 across 30 suites.
+
+**Architecture:** A LoD chunk is 32³ cells whose lattice is built by evaluating `G + ops` at **half** the level's cell size and tent-reducing 2:1 — a mip cascade computed inside one build job rather than accumulated through stored levels. The mesher is M3's, generalised from a compile-time pitch to an origin + cell size + lattice dimension in the push constant. *(That generalisation landed but the LoD build pass ended up not using it — see errata 7. There are two GPU cell-vertex shaders and two CPU references, each pinned by its own differential test.)* Geometry is a global arena of fixed 512-quad pages; a shared 6 KB index buffer plus `vertexOffset = page · 2048` lets the vertex shader recover `quad = gl_VertexIndex >> 2` and `page = quad >> 9`, which is how one indirect multi-draw addresses thousands of independently placed chunks without `gl_DrawID` or a non-zero `firstInstance` (Godot exposes neither). Selection, streaming and eviction are one pure-C++ octree walk against a projected-area threshold, an interface-injected occlusion test, and a page budget.
 
 **Tech Stack:** Godot 4.7.1 (`/usr/bin/godot`), godot-cpp (pinned master, `api_version = "4.7"`), SCons, C++20, GLSL 460 (Vulkan), Jolt Physics, doctest 2.4.11 (native), gdUnit4 (in-engine), ImageMagick (`convert`, offline asset step only).
 
@@ -54,7 +56,7 @@
 
 - **Build:** `./build.sh -j$(nproc)` (or `cd extension && scons -j$(nproc)`)
 - **Native tests:** `cd extension && scons test`
-- **gdUnit tests:** `./addons/gdUnit4/runtest.sh --godot_binary /usr/bin/godot -a res://tests`
+- **gdUnit tests:** `./gdunit_tests.sh -a res://tests`, or `./gdunit_tests.sh` for everything. Add `-c` to see every failure — gdUnit4 aborts a suite at its FIRST one by default, so a plain run under-reports. Do **not** invoke `addons/gdUnit4/runtest.sh` directly: it resolves `--path` against the caller's directory, leaves vsync on (which costs ~590 ms per `await process_frame` and made the LoD suites take minutes), and reports success when it discovers no tests at all. See errata 5.
 - **Demo:** `godot --path /home/jeremy/Development/Godot/voxel-everything demo/main.tscn`
 - gdUnit tests that await must declare the timeout argument: `func test_x(timeout := 10000) -> void:`
 - Every gdUnit suite creating a `VoxelWorld` registers it in `_worlds` and frees it in `after_test()` (M3 errata 2).
@@ -151,6 +153,8 @@ demo/                      hud.gd, benchmark.gd, main.tscn MODIFIED      (Task 1
 
 ### Task 1: `lod/lod_grid` — the eight-level lattice
 
+**Status: complete** — `7606eb6`. Steps are ticked; read them for context, do not re-run them.
+
 The level table everything else hangs off: chunk size, chunk origin, which chunk contains a point, parent/child, projected-area threshold, which chunks an edit dirties, and the world's root range.
 
 **Files:**
@@ -162,7 +166,7 @@ The level table everything else hangs off: chunk size, chunk origin, which chunk
 - Consumes: `ve::IVec3`, `ve::WorldBounds`, `ve::floor_div`, `ve::kBrickSize`, `ve::kRegionSize` (`world/region.h`); `ve::EditOp`, `ve::op_world_aabb` (`generator/edit_ops.h`).
 - Produces: `ve::kLodLevels`, `ve::kLodChunkCells`, `ve::kLodChunkLattice`, `ve::kLodChunkMeshCells`, `ve::kLodFineLattice`, `ve::kLodBaseCell`, `ve::kLodTargetCellPx`, `ve::kLodSseAreaThresh`, `ve::kLodFadeStartM`, `ve::kLodFadeEndM`, `ve::kLodResidentLevelFrom`; `float ve::lod_cell_size(int)`, `float ve::lod_chunk_size(int)`, `ve::IVec3 ve::lod_chunk_of_point(int, float, float, float)`, `void ve::lod_chunk_origin(int, IVec3, float[3])`, `void ve::lod_chunk_aabb(int, IVec3, float[3], float[3])`, `ve::IVec3 ve::lod_parent(IVec3)`, `ve::IVec3 ve::lod_child_base(IVec3)`, `float ve::lod_chunk_distance(int, IVec3, const float[3])`, `float ve::lod_chunk_far_distance(int, IVec3, const float[3])`, `bool ve::lod_chunk_in_bounds(const WorldBounds &, int, IVec3)`, `void ve::lod_root_range(const WorldBounds &, IVec3 *, IVec3 *)`, `void ve::op_lod_chunk_range(const EditOp &, int, IVec3 *, IVec3 *)`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `extension/tests/test_lod_grid.cpp`:
 
@@ -289,12 +293,12 @@ TEST_CASE("root range covers the world bounds") {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd extension && scons test`
 Expected: FAIL — `lod/lod_grid.h: No such file or directory`.
 
-- [ ] **Step 3: Write the header**
+- [x] **Step 3: Write the header**
 
 Create `extension/src/lod/lod_grid.h`:
 
@@ -374,7 +378,7 @@ void op_lod_chunk_range(const EditOp &op, int level, IVec3 *lo, IVec3 *hi);
 } // namespace ve
 ```
 
-- [ ] **Step 4: Write the implementation**
+- [x] **Step 4: Write the implementation**
 
 Create `extension/src/lod/lod_grid.cpp`:
 
@@ -479,7 +483,7 @@ void op_lod_chunk_range(const EditOp &op, int level, IVec3 *lo, IVec3 *hi) {
 } // namespace ve
 ```
 
-- [ ] **Step 5: Add `lod/` to both builds**
+- [x] **Step 5: Add `lod/` to both builds**
 
 In `extension/SConstruct`, change the shared-library glob (line 7) — it already picks up `src/*/*.cpp`, so no change is needed there. Change `pure_sources` so the native test runner compiles the new directory:
 
@@ -489,17 +493,17 @@ pure_sources = (Glob("src/world/*.cpp") + Glob("src/generator/*.cpp") +
                 Glob("src/lod/*.cpp"))
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `cd extension && scons test`
 Expected: PASS, all `test_lod_grid.cpp` cases green, every previously passing case still green.
 
-- [ ] **Step 7: Build the extension to confirm `lod/` links**
+- [x] **Step 7: Build the extension to confirm `lod/` links**
 
 Run: `./build.sh -j$(nproc)`
 Expected: `==> Build OK`.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add extension/src/lod/lod_grid.h extension/src/lod/lod_grid.cpp \
@@ -511,6 +515,8 @@ git commit -m "feat: lod level table and chunk math"
 
 ### Task 2: `lod/lod_quad` — the 12-byte record
 
+**Status: complete** — `43d9917`, corrected by `b2fb767`. Steps are ticked; read them for context, do not re-run them.
+
 The whole memory argument lives here. A surface-nets quad's four vertices always lie in the four cells sharing one active lattice edge, and those four cells share their coordinate along the edge axis (`shaders/mesh_quads.comp.glsl:41-50`), so nothing needs an absolute coordinate.
 
 **Files:**
@@ -521,7 +527,7 @@ The whole memory argument lives here. A surface-nets quad's four vertices always
 - Consumes: `ve::kLodChunkCells`, `ve::lod_cell_size` (`lod/lod_grid.h`).
 - Produces: `ve::LodQuad` (12 bytes, `static_assert`), `ve::kLodQuadBytes`, `ve::kLodOffsetBits`, `ve::kLodOffsetMax`, `ve::kLodQuadCorners` (the `QUAD[4]` table); `void ve::lod_quad_pack(const LodQuadFields &, LodQuad *)`, `void ve::lod_quad_unpack(const LodQuad &, LodQuadFields *)`, `void ve::lod_quad_corner_cell(const LodQuadFields &, int, int m[3])`, `void ve::lod_quad_corner_pos(const LodQuadFields &, int, const float origin[3], float cell, float out[3])`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `extension/tests/test_lod_quad.cpp`:
 
@@ -663,12 +669,12 @@ TEST_CASE("quantisation error is under one thirty-second of a cell") {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd extension && scons test`
 Expected: FAIL — `lod/lod_quad.h: No such file or directory`.
 
-- [ ] **Step 3: Write the header**
+- [x] **Step 3: Write the header**
 
 Create `extension/src/lod/lod_quad.h`:
 
@@ -731,7 +737,7 @@ void lod_quad_corner_pos(const LodQuadFields &f, int k, const float origin[3], f
 } // namespace ve
 ```
 
-- [ ] **Step 4: Write the implementation**
+- [x] **Step 4: Write the implementation**
 
 Create `extension/src/lod/lod_quad.cpp`:
 
@@ -830,12 +836,12 @@ void lod_quad_corner_pos(const LodQuadFields &f, int k, const float origin[3], f
 } // namespace ve
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `cd extension && scons test`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add extension/src/lod/lod_quad.h extension/src/lod/lod_quad.cpp \
@@ -847,6 +853,8 @@ git commit -m "feat: twelve-byte lod quad record"
 
 ### Task 3: `lod/lod_reduce` — the mip cascade
 
+**Status: complete** — `7f00d1b`, test re-baselined in `87c4a87`. Steps are ticked; read them for context, do not re-run them.
+
 Spec §4. This is the task that replaces the engine spec's "no downsampling cascade anywhere". The rules are asymmetric on purpose: the SDF averages, the material votes.
 
 **Files:**
@@ -857,7 +865,7 @@ Spec §4. This is the task that replaces the engine spec's "no downsampling casc
 - Consumes: `ve::kLodChunkLattice`, `ve::kLodFineLattice` (`lod/lod_grid.h`); `ve::decode_sdf`, `ve::encode_sdf` (`world/brick.h`).
 - Produces: `ve::kLodTentWeights`, `int ve::lod_fine_index(int, int, int)`, `int ve::lod_lattice_index(int, int, int)`, `float ve::lod_fine_local(int j)`, `void ve::lod_reduce_lattice(const uint8_t *fine_sdf, const uint16_t *fine_mat, uint8_t *out_sdf, uint16_t *out_mat)`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `extension/tests/test_lod_reduce.cpp`:
 
@@ -1007,14 +1015,14 @@ TEST_CASE("air reduces to air") {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd extension && scons test`
 Expected: FAIL — `lod/lod_reduce.h: No such file or directory`.
 
 If `ve::kSdfRange` or `ve::encode_sdf` do not exist under those names, read `extension/src/world/brick.h` and use the names it actually declares; the test's only requirement is "one encoded step of slack".
 
-- [ ] **Step 3: Write the header**
+- [x] **Step 3: Write the header**
 
 Create `extension/src/lod/lod_reduce.h`:
 
@@ -1047,7 +1055,7 @@ void lod_reduce_lattice(const uint8_t *fine_sdf, const uint16_t *fine_mat, uint8
 } // namespace ve
 ```
 
-- [ ] **Step 4: Write the implementation**
+- [x] **Step 4: Write the implementation**
 
 Create `extension/src/lod/lod_reduce.cpp`:
 
@@ -1125,12 +1133,12 @@ void lod_reduce_lattice(const uint8_t *fine_sdf, const uint16_t *fine_mat, uint8
 } // namespace ve
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `cd extension && scons test`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add extension/src/lod/lod_reduce.h extension/src/lod/lod_reduce.cpp \
@@ -1142,6 +1150,8 @@ git commit -m "feat: half-cell tent reduction with material vote"
 
 ### Task 4: `lod/lod_contour` — the CPU reference mesher
 
+**Status: complete** — `33fc3bd`. Steps are ticked; read them for context, do not re-run them.
+
 The GPU quads pass needs something to be diffed against (engine spec §8's GPU differential testing). This is `ve::dual_contour` with packed quads instead of triangle indices, sharing its tables so the two can never disagree about winding.
 
 **Files:**
@@ -1152,7 +1162,7 @@ The GPU quads pass needs something to be diffed against (engine spec §8's GPU d
 - Consumes: `ve::LodQuad`, `ve::LodQuadFields`, `ve::lod_quantise_offset`, `ve::kLodQuadCorners` (`lod/lod_quad.h`); `ve::kLodChunkLattice`, `ve::kLodChunkMeshCells`, `ve::kLodChunkCells` (`lod/lod_grid.h`); `ve::decode_sdf` (`world/brick.h`).
 - Produces: `ve::LodContourResult`, `void ve::lod_contour(const uint8_t *lattice, const uint16_t *material, LodContourResult *out)`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `extension/tests/test_lod_contour.cpp`:
 
@@ -1297,12 +1307,12 @@ TEST_CASE("the cap is reported rather than exceeded") {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd extension && scons test`
 Expected: FAIL — `lod/lod_contour.h: No such file or directory`.
 
-- [ ] **Step 3: Write the header**
+- [x] **Step 3: Write the header**
 
 Create `extension/src/lod/lod_contour.h`:
 
@@ -1336,7 +1346,7 @@ void lod_contour(const uint8_t *lattice, const uint16_t *material, LodContourRes
 } // namespace ve
 ```
 
-- [ ] **Step 4: Write the implementation**
+- [x] **Step 4: Write the implementation**
 
 Create `extension/src/lod/lod_contour.cpp`:
 
@@ -1463,14 +1473,14 @@ void lod_contour(const uint8_t *lattice, const uint16_t *material, LodContourRes
 } // namespace ve
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `cd extension && scons test`
 Expected: PASS.
 
 If "stored corner order already winds toward the air" fails, the `order_rev` permutation is wrong — check it against `ve::dual_contour`'s `tri_rev = {q0, q2, q1, q0, q3, q2}`: with the index pattern `{0,1,2, 0,2,3}` the permutation `(q0, q3, q2, q1)` yields `(q0,q3,q2)` and `(q0,q2,q1)`, the same two triangles in the other order. Do not "fix" it by flipping the index buffer — Task 13 depends on that pattern being fixed.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add extension/src/lod/lod_contour.h extension/src/lod/lod_contour.cpp \
@@ -1482,6 +1492,8 @@ git commit -m "feat: cpu reference surface nets emitting packed lod quads"
 
 ### Task 5: `lod/lod_skirt` — the crack curtains
 
+**Status: complete** — `df18839`, corrected by `cc52dcc` and `0f7d7f2`. Steps are ticked; read them for context, do not re-run them.
+
 Engine spec §4: "Skirts on chunk borders hide inter-level cracks; no stitching meshes." A ratio of 2 bounds the mismatch at one coarse cell, so the curtain is two cells deep.
 
 **Files:**
@@ -1492,7 +1504,7 @@ Engine spec §4: "Skirts on chunk borders hide inter-level cracks; no stitching 
 - Consumes: `ve::LodQuad`, `ve::LodQuadFields`, `ve::lod_quad_corner_cell`, `ve::kLodQuadCorners` (`lod/lod_quad.h`); `ve::kLodChunkCells`, `ve::kLodMaxQuadsPerChunk` (`lod/lod_grid.h`, `lod/lod_contour.h`).
 - Produces: `ve::kLodSkirtCells`, `int ve::lod_append_skirts(std::vector<LodQuad> *quads)`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `extension/tests/test_lod_skirt.cpp`:
 
@@ -1582,12 +1594,12 @@ TEST_CASE("an empty chunk produces no skirts") {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd extension && scons test`
 Expected: FAIL — `lod/lod_skirt.h: No such file or directory`.
 
-- [ ] **Step 3: Write the header**
+- [x] **Step 3: Write the header**
 
 Create `extension/src/lod/lod_skirt.h`:
 
@@ -1616,7 +1628,7 @@ int lod_append_skirts(std::vector<LodQuad> *quads);
 } // namespace ve
 ```
 
-- [ ] **Step 4: Write the implementation**
+- [x] **Step 4: Write the implementation**
 
 Create `extension/src/lod/lod_skirt.cpp`:
 
@@ -1681,12 +1693,12 @@ int lod_append_skirts(std::vector<LodQuad> *quads) {
 } // namespace ve
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `cd extension && scons test`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add extension/src/lod/lod_skirt.h extension/src/lod/lod_skirt.cpp \
@@ -1698,6 +1710,8 @@ git commit -m "feat: two-sided boundary skirts for lod chunks"
 
 ### Task 6: `lod/lod_arena` — the page allocator
 
+**Status: complete** — `a94f5f8`. Steps are ticked; read them for context, do not re-run them.
+
 Spec §3.3. Draw granularity is the page, so pages need not be contiguous and this is a plain free list — but it must refuse a build it cannot fully fund (M3 errata 5's lesson: a partially funded load is worse than a refused one).
 
 **Files:**
@@ -1708,7 +1722,7 @@ Spec §3.3. Draw granularity is the page, so pages need not be contiguous and th
 - Consumes: `ve::kLodQuadsPerPage`, `ve::kLodMaxPagesPerChunk` (`lod/lod_contour.h`).
 - Produces: `ve::LodArena` with `explicit LodArena(int page_count)`, `bool alloc(int pages, std::vector<int> *out)`, `void release(const std::vector<int> &pages)`, `int free_pages() const`, `int used_pages() const`, `int capacity() const`, `void clear()`; `int ve::lod_pages_for_quads(int quads)`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `extension/tests/test_lod_arena.cpp`:
 
@@ -1811,12 +1825,12 @@ TEST_CASE("clear returns every page") {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd extension && scons test`
 Expected: FAIL — `lod/lod_arena.h: No such file or directory`.
 
-- [ ] **Step 3: Write the header**
+- [x] **Step 3: Write the header**
 
 Create `extension/src/lod/lod_arena.h`:
 
@@ -1855,7 +1869,7 @@ private:
 } // namespace ve
 ```
 
-- [ ] **Step 4: Write the implementation**
+- [x] **Step 4: Write the implementation**
 
 Create `extension/src/lod/lod_arena.cpp`:
 
@@ -1912,12 +1926,12 @@ void LodArena::release(const std::vector<int> &pages) {
 } // namespace ve
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `cd extension && scons test`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add extension/src/lod/lod_arena.h extension/src/lod/lod_arena.cpp \
@@ -1929,6 +1943,8 @@ git commit -m "feat: all-or-nothing lod page arena"
 
 ### Task 7: `lod/lod_tree` — the octree walk
 
+**Status: complete** — `f982210`, corrected by `e5e7224`. Steps are ticked; read them for context, do not re-run them.
+
 Spec §6. The largest pure task and the one that replaces distance-shell residency. Everything it needs from the GPU arrives through two injected interfaces, so the whole thing is unit-testable with a synthetic camera and a fake depth pyramid.
 
 **Files:**
@@ -1939,7 +1955,7 @@ Spec §6. The largest pure task and the one that replaces distance-shell residen
 - Consumes: everything from `lod/lod_grid.h`; `ve::WorldBounds`, `ve::IVec3` (`world/region.h`).
 - Produces: `ve::LodCamera`, `ve::lod_camera_perspective(...)`, `ve::LodOcclusion`, `ve::LodNodeState`, `ve::LodDrawItem`, `ve::LodBuildRequest`, `ve::LodWalkResult`, `ve::LodTreeConfig`, `ve::LodTree` with `walk`, `note_building`, `note_ready`, `note_empty`, `note_failed`, `mark_dirty`, `collect_evictions`, `state_of`, `node_count`, `clear`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `extension/tests/test_lod_tree.cpp`:
 
@@ -2228,12 +2244,12 @@ TEST_CASE("a building node is not re-requested") {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd extension && scons test`
 Expected: FAIL — `lod/lod_tree.h: No such file or directory`.
 
-- [ ] **Step 3: Write the header**
+- [x] **Step 3: Write the header**
 
 Create `extension/src/lod/lod_tree.h`:
 
@@ -2379,7 +2395,7 @@ float lod_projected_area(const LodCamera &cam, const float lo[3], const float hi
 } // namespace ve
 ```
 
-- [ ] **Step 4: Write the implementation**
+- [x] **Step 4: Write the implementation**
 
 Create `extension/src/lod/lod_tree.cpp`:
 
@@ -2734,14 +2750,14 @@ Add the private member the code above uses to `lod_tree.h`, next to `planes_`:
 	float last_cam_pos_[3] = {}; // scratch, rebuilt per walk; read by request()
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `cd extension && scons test`
 Expected: PASS.
 
 If "the emitted cut never overlaps" fails with an ancestor and descendant both drawn, the bug is in `visit`: the descend branch must `return` after recursing, never fall through to `out->draws.push_back`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add extension/src/lod/lod_tree.h extension/src/lod/lod_tree.cpp \
@@ -2753,6 +2769,8 @@ git commit -m "feat: visibility-driven lod octree walk"
 
 ### Task 8: generalise the mesher to an origin, a cell size, and a lattice dimension
 
+**Status: complete** — `fbcb87f`, corrected by `2066abb`. Steps are ticked; read them for context, do not re-run them.
+
 M3 wrote `ve::DcGrid` parameterised "so M5's LoD chunks can reuse the mesher at their own pitch" (`dual_contour.h:14`). The GPU side never was. This task moves the three compile-time constants in `shaders/mesh_common.glslh` into the push constant, which turns the M3 mesher into the M5 mesher. **The whole task is a refactor: M3's collision behaviour must be byte-identical afterwards, and its tests are the gate.**
 
 **Files:**
@@ -2763,13 +2781,13 @@ M3 wrote `ve::DcGrid` parameterised "so M5's LoD chunks can reuse the mesher at 
 - Consumes: `ve::kChunkLattice`, `ve::kChunkCellSize`, `ve::chunk_world_origin` (`mesh/mesh_chunk.h`).
 - Produces: `godot::MeshJob` gains `float origin[3]`, `float cell_size`, `int lattice`; `MeshPassConfig` gains `int max_lattice = ve::kChunkLattice` so buffers are sized for the largest consumer.
 
-- [ ] **Step 1: Record the baseline the refactor must preserve**
+- [x] **Step 1: Record the baseline the refactor must preserve**
 
-Run: `./addons/gdUnit4/runtest.sh --godot_binary /usr/bin/godot -a res://tests/test_mesh_diff.gd`
-Run: `./addons/gdUnit4/runtest.sh --godot_binary /usr/bin/godot -a res://tests/test_mesh_lattice.gd`
+Run: `./gdunit_tests.sh -a res://tests/test_mesh_diff.gd`
+Run: `./gdunit_tests.sh -a res://tests/test_mesh_lattice.gd`
 Expected: both PASS. Note the pass counts; they must be identical at Step 6.
 
-- [ ] **Step 2: Move the geometry into the push constant**
+- [x] **Step 2: Move the geometry into the push constant**
 
 Replace the whole of `shaders/mesh_common.glslh` with:
 
@@ -2805,7 +2823,7 @@ int mesh_cell_index(ivec3 m) {
 }
 ```
 
-- [ ] **Step 3: Update the three shaders**
+- [x] **Step 3: Update the three shaders**
 
 In `shaders/mesh_field.comp.glsl`, delete its own `layout(push_constant …) uniform Push { … } pc;` block and change the body to:
 
@@ -2839,7 +2857,7 @@ In `shaders/mesh_quads.comp.glsl`, delete its `Push` block and change the bounds
 
 **Do not touch anything else in these files.** In particular leave the `QUAD`, `CORNER` and `EDGE` tables and the winding branch exactly as they are — M3 errata 1 was expensive.
 
-- [ ] **Step 4: Widen the push constant and carry the geometry in `MeshJob`**
+- [x] **Step 4: Widen the push constant and carry the geometry in `MeshJob`**
 
 In `extension/src/render/mesh_pass.h`, add to `MeshJob`:
 
@@ -2892,7 +2910,7 @@ and in the three recorders replace `groups(ve::kChunkLattice)` / `groups(ve::kCh
 
 Size `lattice_` and `cells_` from `cfg_.max_lattice` rather than `ve::kChunkLattice` wherever `MeshPass::initialize` allocates them, and default any `MeshJob` the pass builds internally by filling `origin` with `ve::chunk_world_origin(job.chunk, job.origin)`.
 
-- [ ] **Step 5: Fill the new fields at every submit site**
+- [x] **Step 5: Fill the new fields at every submit site**
 
 In `extension/src/render/mesh_service.cpp`, wherever a `MeshRequest` becomes a `MeshJob`, add:
 
@@ -2904,13 +2922,13 @@ In `extension/src/render/mesh_service.cpp`, wherever a `MeshRequest` becomes a `
 
 Grep for every other construction site and do the same: `grep -rn "MeshJob" extension/src`.
 
-- [ ] **Step 6: Run the regression gate**
+- [x] **Step 6: Run the regression gate**
 
 Run: `./build.sh -j$(nproc) --test`
-Run: `./addons/gdUnit4/runtest.sh --godot_binary /usr/bin/godot -a res://tests`
+Run: `./gdunit_tests.sh -a res://tests`
 Expected: identical results to Step 1 — in particular `test_mesh_diff.gd`, `test_mesh_lattice.gd`, `test_collider_stream.gd` and `test_collider_edits.gd` all still PASS. This task adds no new behaviour; if any of them changed, the refactor is wrong.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add shaders/mesh_common.glslh shaders/mesh_field.comp.glsl shaders/mesh_cells.comp.glsl \
@@ -2922,6 +2940,8 @@ git commit -m "refactor: mesher takes origin, cell size and lattice from the pus
 ---
 
 ### Task 9: `LodBuildPass` — field, reduce, cells, quads on the worker device
+
+**Status: complete** — `5407c39`. Steps are ticked; read them for context, do not re-run them.
 
 Spec §4 and §6.4. Four dispatches on M3's worker `RenderingDevice`, and a GPU/CPU differential test against Tasks 3 and 4.
 
@@ -2935,7 +2955,7 @@ Spec §4 and §6.4. Four dispatches on M3's worker `RenderingDevice`, and a GPU/
 - Consumes: `ve::lod_chunk_origin`, `ve::lod_cell_size`, `ve::kLodFineLattice`, `ve::kLodChunkLattice` (`lod/lod_grid.h`); `ve::collect_ops_for_aabb`, `ve::kMaxRegionOps` (`world/edit_log.h`); `ve::lod_reduce_lattice` (`lod/lod_reduce.h`); `ve::lod_contour` (`lod/lod_contour.h`); `ve::lod_append_skirts` (`lod/lod_skirt.h`); `godot::MeshPass` internals for the shared cells pass.
 - Produces: `godot::LodBuildJob { int level; ve::IVec3 coord; std::vector<ve::EditOp> ops; }`, `godot::LodBuildResult { int level; ve::IVec3 coord; std::vector<ve::LodQuad> quads; bool overflow; bool failed; }`, `godot::LodBuildPass` with `initialize`, `teardown`, `is_valid`, `build_sync(const LodBuildJob &, LodBuildResult *, std::vector<uint8_t> *lattice, std::vector<uint16_t> *material)`, `submit`, `collect`.
 
-- [ ] **Step 1: Write the failing gdUnit differential test**
+- [x] **Step 1: Write the failing gdUnit differential test**
 
 Create `tests/test_lod_mesh_diff.gd`:
 
@@ -3022,12 +3042,12 @@ func test_an_edit_reaches_the_coarse_levels() -> void:
 		).is_not_equal(hash_before)
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
-Run: `./addons/gdUnit4/runtest.sh --godot_binary /usr/bin/godot -a res://tests/test_lod_mesh_diff.gd`
+Run: `./gdunit_tests.sh -a res://tests/test_lod_mesh_diff.gd`
 Expected: FAIL — `Invalid call. Nonexistent function 'debug_lod_diff'`.
 
-- [ ] **Step 3: Write `shaders/lod_field.comp.glsl`**
+- [x] **Step 3: Write `shaders/lod_field.comp.glsl`**
 
 ```glsl
 #[compute]
@@ -3061,7 +3081,7 @@ void main() {
 }
 ```
 
-- [ ] **Step 4: Write `shaders/lod_common.glslh`**
+- [x] **Step 4: Write `shaders/lod_common.glslh`**
 
 ```glsl
 // Shared addressing for the LoD build passes. Mirror of extension/src/lod/lod_grid.h and
@@ -3095,7 +3115,7 @@ const ivec2 LOD_QUAD[4] = ivec2[4](ivec2(-1, -1), ivec2(0, -1), ivec2(0, 0), ive
 const float LOD_TENT[3] = float[3](0.25, 0.5, 0.25);
 ```
 
-- [ ] **Step 5: Write `shaders/lod_reduce.comp.glsl`**
+- [x] **Step 5: Write `shaders/lod_reduce.comp.glsl`**
 
 ```glsl
 #[compute]
@@ -3156,7 +3176,7 @@ void main() {
 }
 ```
 
-- [ ] **Step 6: Write `shaders/lod_quads.comp.glsl`**
+- [x] **Step 6: Write `shaders/lod_quads.comp.glsl`**
 
 ```glsl
 #[compute]
@@ -3253,7 +3273,7 @@ void main() {
 }
 ```
 
-- [ ] **Step 7: Write `LodBuildPass`**
+- [x] **Step 7: Write `LodBuildPass`**
 
 Create `extension/src/render/lod_build_pass.h` and `.cpp`. The pass owns, on the worker `RenderingDevice`:
 
@@ -3322,7 +3342,7 @@ void main() {
 
 `LodBuildPass::build_sync` records the four dispatches, submits, syncs, reads back `counts_` and `quads_`, and appends `ve::lod_append_skirts` on the CPU. `submit`/`collect` mirror `MeshPass`'s one-batch-at-a-time contract.
 
-- [ ] **Step 8: Add the `debug_lod_diff` hook**
+- [x] **Step 8: Add the `debug_lod_diff` hook**
 
 In `VoxelWorld`, add `Dictionary debug_lod_diff(int level, Vector3i coord)` and `void debug_apply_sphere_subtract(Vector3 centre, float radius)`. `debug_lod_diff` runs on the worker thread through `MeshService::run_sync`, reads back the fine lattice, the reduced lattice and the quads, then on the CPU:
 
@@ -3333,15 +3353,15 @@ In `VoxelWorld`, add `Dictionary debug_lod_diff(int level, Vector3i coord)` and 
 
 Bind both to `_bind_methods`.
 
-- [ ] **Step 9: Run the differential test**
+- [x] **Step 9: Run the differential test**
 
 Run: `./build.sh -j$(nproc)`
-Run: `./addons/gdUnit4/runtest.sh --godot_binary /usr/bin/godot -a res://tests/test_lod_mesh_diff.gd`
+Run: `./gdunit_tests.sh -a res://tests/test_lod_mesh_diff.gd`
 Expected: PASS.
 
 If `quads_only_gpu` is non-zero and equals the count of quads whose `sign` is 0, the `order` permutation in `lod_quads.comp.glsl` disagrees with `ve::lod_contour`'s — they must both be `(0, 3, 2, 1)`.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add shaders/lod_common.glslh shaders/lod_field.comp.glsl shaders/lod_reduce.comp.glsl \
@@ -3355,6 +3375,8 @@ git commit -m "feat: gpu lod chunk build with half-cell reduction"
 
 ### Task 10: `MeshService` grows a LoD queue
 
+**Status: complete** — `1745ffc`, corrected by `a9d999a` and `b2c50fc`. Steps are ticked; read them for context, do not re-run them.
+
 The worker thread already owns a `RenderingDevice`, a `MeshPass` and an `IslandExtractPass`. LoD builds join them in a third queue: frequent, interruptible, and never allowed to starve a collider batch the player is about to walk on.
 
 **Files:**
@@ -3364,7 +3386,7 @@ The worker thread already owns a `RenderingDevice`, a `MeshPass` and an `IslandE
 **Interfaces:**
 - Produces: `bool MeshService::submit_lod(std::vector<LodBuildJob>)`, `bool MeshService::lod_busy() const`, `int MeshService::collect_lod(std::vector<LodBuildResult> *)`, `bool MeshService::lod_available() const`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_lod_build.gd`:
 
@@ -3445,25 +3467,25 @@ func test_collider_meshing_still_works_alongside(timeout := 20000) -> void:
 	assert_bool(mesh_done).override_failure_message("the collider queue starved").is_true()
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
-Run: `./addons/gdUnit4/runtest.sh --godot_binary /usr/bin/godot -a res://tests/test_lod_build.gd`
+Run: `./gdunit_tests.sh -a res://tests/test_lod_build.gd`
 Expected: FAIL — `Nonexistent function 'debug_lod_submit'`.
 
-- [ ] **Step 3: Add the queue to `MeshService`**
+- [x] **Step 3: Add the queue to `MeshService`**
 
 Mirror the extraction queue exactly (`mesh_service.h:66-80`): `pending_lod_`, `lod_results_`, `lod_busy_`, `lod_available_`, and a `LodBuildPass *lod_ = nullptr` created and destroyed inside `run()` on the worker thread — a `RenderingDevice` belongs to the thread that creates it. In `run()`'s loop, drain in this order: **volumes → extracts → colliders → LoD**. LoD is last because it is the only one whose staleness is invisible: a missing far chunk is a coarse horizon, a missing collider is a hole the player falls through.
 
-- [ ] **Step 4: Add the `VoxelWorld` hooks**
+- [x] **Step 4: Add the `VoxelWorld` hooks**
 
 `bool debug_lod_submit(Array jobs)` takes an array of `[level, Vector3i]` pairs, gathers each chunk's ops with `ve::collect_ops_for_aabb` over its padded AABB (truncated to a chronological prefix of `ve::kMaxRegionOps`), and forwards to `MeshService::submit_lod`. `Array debug_lod_collect()` returns one dictionary per result with `level`, `coord`, `quads` (count), `overflow`, `failed`.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `./build.sh -j$(nproc)` then the gdUnit command from Step 2.
 Expected: PASS. Also re-run the full suite — the worker thread now has a fourth responsibility and `test_mesh_stream.gd` / `test_island_extract.gd` are the regression gate.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add extension/src/render/mesh_service.h extension/src/render/mesh_service.cpp \
@@ -3474,6 +3496,8 @@ git commit -m "feat: lod build queue on the mesher worker thread"
 ---
 
 ### Task 11: material textures, shared by both fields
+
+**Status: complete** — `122988c`, test re-baselined in `7ec4528`. Steps are ticked; read them for context, do not re-run them.
 
 Spec §5. This is what replaces the deleted bakery, and it lands in **both** fields at once through one function in `common.glslh` — which is the entire reason that file exists (engine spec §8).
 
@@ -3486,7 +3510,7 @@ Spec §5. This is what replaces the deleted bakery, and it lands in **both** fie
 **Interfaces:**
 - Produces: `godot::MaterialAtlas` with `bool initialize(RenderingDevice *)`, `void teardown()`, `RID albedo_array() const`, `RID surface_array() const`, `RID sampler() const`, `int layer_count() const`; GLSL `vec4 material_surface(uint mat, vec3 wpos, vec3 n, vec3 ddx, vec3 ddy)` and `vec3 shade_terrain(vec4 surf, vec3 n, vec3 wpos)`.
 
-- [ ] **Step 1: Write the conversion script**
+- [x] **Step 1: Write the conversion script**
 
 Create `tools/convert_materials.sh`:
 
@@ -3532,7 +3556,7 @@ Create `assets/materials/.gdignore` (empty file). It stops Godot's importer touc
 Run: `chmod +x tools/convert_materials.sh && ./tools/convert_materials.sh`
 Expected: 20 PNGs under `assets/materials/`.
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 Create `tests/test_material_atlas.gd`:
 
@@ -3592,12 +3616,12 @@ func test_an_unknown_material_falls_back_to_flat_albedo() -> void:
 		"an out-of-range material id should shade error magenta, got %s" % c).is_true()
 ```
 
-- [ ] **Step 3: Run it to verify it fails**
+- [x] **Step 3: Run it to verify it fails**
 
-Run: `./addons/gdUnit4/runtest.sh --godot_binary /usr/bin/godot -a res://tests/test_material_atlas.gd`
+Run: `./gdunit_tests.sh -a res://tests/test_material_atlas.gd`
 Expected: FAIL — `Nonexistent function 'debug_material_atlas_stats'`.
 
-- [ ] **Step 4: Write `MaterialAtlas`**
+- [x] **Step 4: Write `MaterialAtlas`**
 
 **The layer count is fixed at 16.** `godot::kMaterialLayers = 16`, and every shader that samples the arrays writes `#define MATERIAL_LAYERS 16` before including `common.glslh`. A `#define` rather than a push-constant parameter is deliberate — it is a compile-time bound on an array index, which is what makes an out-of-range material id a cheap branch instead of undefined behaviour. `MaterialAtlas` therefore always allocates 16 layers and fills the ones with no source material with flat error magenta, so the constant and the texture can never disagree. Adding a fifth material means dropping it into `MATERIALS` in the script and bumping nothing.
 
@@ -3612,7 +3636,7 @@ The sampler is `SAMPLER_FILTER_LINEAR` with `mip_filter = LINEAR` and `repeat_u/
 
 `kMaterialNames` in the `.cpp` carries the same order the script uses, and a comment says so on both sides.
 
-- [ ] **Step 5: Add the shared shading functions**
+- [x] **Step 5: Add the shared shading functions**
 
 Append to `shaders/common.glslh`:
 
@@ -3666,7 +3690,7 @@ float bayer4(ivec2 px) {
 #endif
 ```
 
-- [ ] **Step 6: Give the raymarcher ray differentials**
+- [x] **Step 6: Give the raymarcher ray differentials**
 
 In `shaders/raymarch.comp.glsl`, declare the two array samplers and `MATERIAL_LAYERS` before the `common.glslh` include, then replace the shading block at the end of `main()`:
 
@@ -3687,18 +3711,18 @@ In `shaders/raymarch.comp.glsl`, declare the two array samplers and `MATERIAL_LA
 
 `RaymarchPass::render` gains the two array textures plus the sampler in its uniform set, and `VoxelWorld` owns the `MaterialAtlas` and passes it down. Add `Dictionary debug_material_atlas_stats()` and `Color debug_material_probe(int mat, Vector3 p, Vector3 n)` (a 1×1 dispatch that calls `material_surface` with zero gradients) for the test.
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 Run: `./build.sh -j$(nproc)` then
-`./addons/gdUnit4/runtest.sh --godot_binary /usr/bin/godot -a res://tests`
+`./gdunit_tests.sh -a res://tests`
 Expected: PASS. `test_raymarch_pixel.gd` and `test_raymarch_magenta.gd` assert specific colours and **will** need re-baselining — the near field is textured now. Re-baseline them by asserting the *hit/miss* structure and the magenta fallback rather than exact albedo, and note the change in the commit message.
 
-- [ ] **Step 8: Look at it**
+- [x] **Step 8: Look at it**
 
 Run: `godot --path . demo/main.tscn`
 Expected: the near-field terrain is textured rock/grass/dirt instead of flat colours, with no visible tiling seams and no shimmer when the camera moves. This is the first visible M5 change.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add tools/convert_materials.sh assets/materials extension/src/render/material_atlas.h \
@@ -3713,6 +3737,8 @@ git commit -m "feat: triplanar material textures shared by both fields"
 
 ### Task 12: `LodPool` and the `VoxelWorld` LoD tick
 
+**Status: complete** — `ababe6d`, corrected by `be88f82`, `2c3585f`, `d12086e`. Steps are ticked; read them for context, do not re-run them.
+
 The render-device side of the arena, and the loop that turns the walk's requests into builds and its results into pages.
 
 **Files:**
@@ -3723,7 +3749,7 @@ The render-device side of the arena, and the loop that turns the walk's requests
 **Interfaces:**
 - Produces: `godot::LodPool` with `bool initialize(RenderingDevice *, int max_pages)`, `void teardown()`, `bool upload(int level, ve::IVec3 coord, const std::vector<ve::LodQuad> &, std::vector<int> *pages_out)`, `void release(const std::vector<int> &pages)`, `RID quad_buffer()`, `RID index_buffer()`, `RID page_chunk_buffer()`, `RID chunk_buffer()`, `RID args_buffer()`, `int page_count() const`, `int free_pages() const`; `VoxelWorld` gains `set_max_lod_pages`, `set_lod_builds_per_frame`, `lod_tick(const ve::LodCamera &, const ve::LodOcclusion *)`, `Dictionary debug_lod_stats()`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_lod_pool.gd`:
 
@@ -3802,12 +3828,12 @@ func test_pages_come_back_when_chunks_are_evicted(timeout := 30000) -> void:
 		).is_less(used_near)
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
-Run: `./addons/gdUnit4/runtest.sh --godot_binary /usr/bin/godot -a res://tests/test_lod_pool.gd`
+Run: `./gdunit_tests.sh -a res://tests/test_lod_pool.gd`
 Expected: FAIL — `Invalid assignment of property 'max_lod_pages'`.
 
-- [ ] **Step 3: Write `LodPool`**
+- [x] **Step 3: Write `LodPool`**
 
 Buffers, all on the render device:
 
@@ -3822,7 +3848,7 @@ Buffers, all on the render device:
 
 `upload` calls `ve::LodArena::alloc`, refuses on failure (returning false with `pages_out` untouched), then `buffer_update`s each page's slice of `quads_` plus its `page_chunk_`/`page_quads_` entries and the chunk record. All of it is `buffer_update`, so it must be recorded **before** any list is opened (M2 Task 12's ordering).
 
-- [ ] **Step 4: Wire the tick into `VoxelWorld`**
+- [x] **Step 4: Wire the tick into `VoxelWorld`**
 
 Add the exported properties `max_lod_pages` (default 32768) and `lod_builds_per_frame` (default 8), the `ve::LodTree *lod_tree_`, the `LodPool *lod_pool_`, and:
 
@@ -3888,12 +3914,12 @@ void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ)
 
 Add `debug_lod_tick(Vector3 pos, Vector3 fwd)` (builds a `ve::LodCamera` with `lod_camera_perspective` and calls `lod_tick`) and `debug_lod_stats()` returning `pages_total`, `pages_free`, `pages_used`, `chunks_resident`, `draw_pages`, `partial_allocations`, `builds_in_flight`.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `./build.sh -j$(nproc)` then the gdUnit command from Step 2.
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add extension/src/render/lod_pool.h extension/src/render/lod_pool.cpp \
@@ -3904,6 +3930,8 @@ git commit -m "feat: lod page pool and the world's lod tick"
 ---
 
 ### Task 13: `LodRasterPass` — the far field on screen
+
+**Status: complete** — `52c9fb3`, corrected by `a2e0a63` and `c15a1ae`. Steps are ticked; read them for context, do not re-run them.
 
 Spec §7.1–7.3. One indirect multi-draw into Godot's scene framebuffer, pre-opaque, after the composite. Indirect args are built on the CPU here; Task 15 replaces that with a GPU pass that additionally culls.
 
@@ -3916,7 +3944,7 @@ Spec §7.1–7.3. One indirect multi-draw into Godot's scene framebuffer, pre-op
 **Interfaces:**
 - Produces: `godot::LodRasterPass` with `void initialize(RenderingDevice *)`, `void teardown()`, `bool draw(RenderingDevice *, LodPool &, MaterialAtlas &, RID dst_color, RID dst_depth, const Projection &view_proj, const float cam_pos[3], int draw_count)`; `VoxelWorld::debug_lod_render_probe(Vector3 pos, Vector3 fwd, int w, int h)`.
 
-- [ ] **Step 1: Split the shared GLSL out of `lod_common.glslh`**
+- [x] **Step 1: Split the shared GLSL out of `lod_common.glslh`**
 
 Create `shaders/lod_quad.glslh` holding everything the *raster* also needs, and delete those lines from `lod_common.glslh`, which now begins with an include of this file:
 
@@ -3969,7 +3997,7 @@ vec3 lod_corner_pos(uvec3 w, int k, vec3 origin, float cell) {
 }
 ```
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 Create `tests/test_lod_render.gd`:
 
@@ -3997,16 +4025,32 @@ func make_world() -> VoxelWorld:
 	assert_bool(w.debug_init_physics()).is_true()
 	return w
 
-func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3, frames: int) -> void:
-	for i in range(frames):
+# The walk descends only into a node whose eight children are all resident, so the far field
+# converges over HUNDREDS of ticks and at a rate set by build throughput, not by frame count.
+# Wait on the condition (errata 6): the fixed counts this plan first used were tuned to a
+# vsync-throttled 590 ms frame and settle nothing now that the runner disables vsync.
+# requests_pending comes from the walk that ran BEFORE this tick collected its results, so it
+# dips to zero for a tick or two while a batch lands -- the streak is what makes it mean
+# "converged" rather than "between batches". Measured: ~350-400 ticks, so the budget is margin.
+const SETTLE_BUDGET := 2500
+const QUIET_TICKS := 8
+
+func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> bool:
+	var quiet := 0
+	for i in range(SETTLE_BUDGET):
 		w.debug_lod_tick(pos, fwd)
 		await get_tree().process_frame
+		var d := w.debug_lod_stats()
+		quiet = quiet + 1 if d["requests_pending"] == 0 and d["builds_in_flight"] == 0 else 0
+		if quiet >= QUIET_TICKS:
+			return true
+	return false
 
 func test_the_far_field_covers_the_ground(timeout := 40000) -> void:
 	var w := make_world()
 	var pos := Vector3(400.0, 90.0, 400.0)
 	var fwd := Vector3(0.0, -0.35, -1.0).normalized()
-	await settle(w, pos, fwd, 250)
+	await settle(w, pos, fwd)
 	var r := w.debug_lod_render_probe(pos, fwd, 256, 144)
 	assert_int(r["draw_pages"]).override_failure_message(
 		"nothing was submitted to the draw: %s" % r).is_greater(0)
@@ -4018,7 +4062,7 @@ func test_depth_is_written_so_the_near_field_can_occlude(timeout := 40000) -> vo
 	var w := make_world()
 	var pos := Vector3(400.0, 90.0, 400.0)
 	var fwd := Vector3(0.0, -0.35, -1.0).normalized()
-	await settle(w, pos, fwd, 250)
+	await settle(w, pos, fwd)
 	var r := w.debug_lod_render_probe(pos, fwd, 256, 144)
 	# Reverse-Z: every covered pixel must hold a depth strictly between far (0) and near (1).
 	assert_float(r["depth_min"]).is_greater(0.0)
@@ -4029,7 +4073,7 @@ func test_nothing_is_drawn_inside_the_near_field(timeout := 40000) -> void:
 	var w := make_world()
 	var pos := Vector3(400.0, 90.0, 400.0)
 	var fwd := Vector3(0.0, -0.35, -1.0).normalized()
-	await settle(w, pos, fwd, 250)
+	await settle(w, pos, fwd)
 	var r := w.debug_lod_render_probe(pos, fwd, 256, 144)
 	# Spec section 6.4: a chunk entirely inside the fade start is never even built.
 	assert_float(r["nearest_hit_m"]).override_failure_message(
@@ -4040,7 +4084,7 @@ func test_backface_culling_does_not_remove_visible_ground(timeout := 40000) -> v
 	var w := make_world()
 	var pos := Vector3(400.0, 90.0, 400.0)
 	var fwd := Vector3(0.0, -0.35, -1.0).normalized()
-	await settle(w, pos, fwd, 250)
+	await settle(w, pos, fwd)
 	var off := w.debug_lod_render_probe_culled(pos, fwd, 256, 144, false)
 	var on := w.debug_lod_render_probe_culled(pos, fwd, 256, 144, true)
 	# M3 errata 1: this codebase's winding convention has already cost one bug, so the
@@ -4050,12 +4094,12 @@ func test_backface_culling_does_not_remove_visible_ground(timeout := 40000) -> v
 		% [off["coverage"], on["coverage"]]).is_greater(off["coverage"] * 0.95)
 ```
 
-- [ ] **Step 3: Run it to verify it fails**
+- [x] **Step 3: Run it to verify it fails**
 
-Run: `./addons/gdUnit4/runtest.sh --godot_binary /usr/bin/godot -a res://tests/test_lod_render.gd`
+Run: `./gdunit_tests.sh -a res://tests/test_lod_render.gd`
 Expected: FAIL — `Nonexistent function 'debug_lod_render_probe'`.
 
-- [ ] **Step 4: Write `shaders/lod.vert.glsl`**
+- [x] **Step 4: Write `shaders/lod.vert.glsl`**
 
 ```glsl
 #[vertex]
@@ -4109,7 +4153,7 @@ void main() {
 }
 ```
 
-- [ ] **Step 5: Write `shaders/lod.frag.glsl`**
+- [x] **Step 5: Write `shaders/lod.frag.glsl`**
 
 ```glsl
 #[fragment]
@@ -4139,7 +4183,7 @@ void main() {
 }
 ```
 
-- [ ] **Step 6: Write `LodRasterPass`**
+- [x] **Step 6: Write `LodRasterPass`**
 
 The pipeline mirrors `CompositePass::ensure_pipeline` (`extension/src/render/composite_pass.cpp:79-129`) with three deviations, each load-bearing:
 
@@ -4149,31 +4193,30 @@ The pipeline mirrors `CompositePass::ensure_pipeline` (`extension/src/render/com
 
 `draw` records `buffer_update` for the args (before opening the draw list — M2's ordering), then `draw_list_begin(framebuffer, DRAW_DEFAULT_ALL)`, binds the pipeline, uniform set and index array, sets the 80-byte push constant, and issues **one** `draw_list_draw_indirect(dl, true, args, 0, draw_count, 20)`.
 
-- [ ] **Step 7: Add the probe hooks and determine the front face**
+- [x] **Step 7: Add the probe hooks and determine the front face**
 
 `VoxelWorld::debug_lod_render_probe(pos, fwd, w, h)` creates a throwaway colour+depth target, runs `lod_tick` once, calls `LodRasterPass::draw`, reads both back, and returns `coverage` (fraction of pixels whose depth ≠ the cleared value), `depth_min`, `depth_max`, `nearest_hit_m` (from the largest reverse-Z depth) and `draw_pages`. `debug_lod_render_probe_culled(pos, fwd, w, h, cull)` is the same with culling forced off or on.
 
 Run the front-face experiment:
 
 ```bash
-./addons/gdUnit4/runtest.sh --godot_binary /usr/bin/godot \
-    -a res://tests/test_lod_render.gd
+./gdunit_tests.sh -a res://tests/test_lod_render.gd
 ```
 
 If `test_backface_culling_does_not_remove_visible_ground` fails, flip the pipeline's
 `set_front_face` between `POLYGON_FRONT_FACE_CLOCKWISE` and `POLYGON_FRONT_FACE_COUNTER_CLOCKWISE`, re-run, and **record the answer in this plan's Errata**. Do not "fix" it by changing the winding in `lod_contour.cpp`, `lod_quads.comp.glsl` or the index buffer — those three agree with `ve::dual_contour` and with Jolt, and Task 9's differential test is what holds them together.
 
-- [ ] **Step 8: Call it from the compositor**
+- [x] **Step 8: Call it from the compositor**
 
 In `RaymarchCompositor::_render_callback`, after `cmp->draw(...)`, build a `ve::LodCamera` from the scene data (`view_proj` from `proj * Projection(cam.affine_inverse())`, exactly as the composite already computes it), call `world->lod_tick(lod_cam, nullptr)` — the occlusion argument stays null until Task 14 — and then `lod_raster->draw(...)` into the same `rsb->get_color_texture()` / `rsb->get_depth_texture()` the composite just wrote.
 
-- [ ] **Step 9: Run the tests and look at it**
+- [x] **Step 9: Run the tests and look at it**
 
 Run: `./build.sh -j$(nproc)` then the gdUnit command from Step 3, then the full suite.
 Run: `godot --path . demo/main.tscn`
 Expected: terrain now extends past 150 m to the horizon instead of ending in sky. The seam at 150 m is a hard edge — Task 16 fixes that. Level changes pop — that is expected and is what the ratio of 2 makes tolerable.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add shaders/lod_quad.glslh shaders/lod_common.glslh shaders/lod.vert.glsl \
@@ -4192,7 +4235,7 @@ Spec §6.3 and §7.1. The near field already writes exact pre-opaque depth, so t
 **Files:**
 - Create: `shaders/hiz.comp.glsl`, `extension/src/render/hiz_pass.h`, `.cpp`
 - Create: `tests/test_hiz.gd`
-- Modify: `extension/src/raymarch_compositor.cpp`, `extension/src/voxel_world.h`, `.cpp`
+- Modify: `extension/src/render/async_readback.h`, `.cpp` (add `AsyncTextureRead`), `extension/src/register_types.cpp`, `extension/src/raymarch_compositor.cpp`, `extension/src/voxel_world.h`, `.cpp`
 
 **Interfaces:**
 - Produces: `godot::HizPass` with `bool initialize(RenderingDevice *)`, `void teardown()`, `bool build(RenderingDevice *, RID scene_depth, Vector2i scene_size)`, `RID pyramid() const`, `int mip_count() const`, `const ve::LodOcclusion *occlusion() const`; an internal `HizOcclusion : ve::LodOcclusion` reading the async 32² readback.
@@ -4263,7 +4306,7 @@ func test_an_absent_readback_never_occludes() -> void:
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `./addons/gdUnit4/runtest.sh --godot_binary /usr/bin/godot -a res://tests/test_hiz.gd`
+Run: `./gdunit_tests.sh -a res://tests/test_hiz.gd`
 Expected: FAIL — `Nonexistent function 'debug_hiz_stats'`.
 
 - [ ] **Step 3: Write `shaders/hiz.comp.glsl`**
@@ -4315,7 +4358,18 @@ void main() {
 
 - [ ] **Step 4: Write `HizPass`**
 
-A single `R32_SFLOAT` 256×256 texture with 9 mips and per-mip texture *slices* to bind as the destination. `build` records nine dispatches; a mip's dispatch reads the previous mip through a `sampler2D` view of that slice. Then it issues a `texture_get_data_async` for mip 3 (32² = 4 KB) into an `AsyncBufferRead`-style holder, reusing M3's double-buffering discipline so the render thread never stalls.
+A single `R32_SFLOAT` 256×256 texture with 9 mips and per-mip texture *slices* to bind as the destination. `build` records nine dispatches; a mip's dispatch reads the previous mip through a `sampler2D` view of that slice.
+
+**The 4 KB readback needs a copy first.** `RenderingDevice::texture_get_data_async(texture, layer, callback)` takes a **layer, not a mip** (`docs/api/renderingdevice.md:3744`), so asking it for the pyramid downloads the whole layer — ~349 KB with its mip chain, against spec §6.3's ~2 KB. Allocate a second, single-mip 32² `R32_SFLOAT` texture with `TEXTURE_USAGE_CAN_COPY_TO_BIT | TEXTURE_USAGE_CAN_COPY_FROM_BIT`, give the pyramid `TEXTURE_USAGE_CAN_COPY_FROM_BIT`, and after the ninth dispatch record
+
+```cpp
+rd->texture_copy(pyramid_, readback_, Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(32, 32, 1),
+        /*src_mipmap*/ 3, /*dst_mipmap*/ 0, /*src_layer*/ 0, /*dst_layer*/ 0);
+```
+
+then issue `texture_get_data_async(readback_, 0, ...)`, which is exactly 4 KB. Keeping ONE mipped pyramid for the GPU is what lets Task 15's cull do `texelFetch(hiz, p, ml)` at a level it picks per node; the 32² copy exists only for the CPU.
+
+**The holder is a new class, not `AsyncBufferRead`.** That one wraps `buffer_get_data_async` and takes a buffer RID. Add `AsyncTextureRead` beside it in `async_readback.h/.cpp` with the same shape — a `RefCounted` `GDCLASS` whose `_on_data` is named by `callable_mp`, plus `request()` / `take_fresh()` / `data()` — and register it with `GDREGISTER_INTERNAL_CLASS(AsyncTextureRead)` in `register_types.cpp`. That is the one file the File Structure above calls unchanged; this task is the exception (errata 8).
 
 `HizOcclusion::occluded(ss_min, ss_max)` implements the CPU test:
 
@@ -4397,10 +4451,26 @@ func make_world() -> VoxelWorld:
 	assert_bool(w.debug_init_physics()).is_true()
 	return w
 
-func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3, frames: int) -> void:
-	for i in range(frames):
+# The walk descends only into a node whose eight children are all resident, so the far field
+# converges over HUNDREDS of ticks and at a rate set by build throughput, not by frame count.
+# Wait on the condition (errata 6): the fixed counts this plan first used were tuned to a
+# vsync-throttled 590 ms frame and settle nothing now that the runner disables vsync.
+# requests_pending comes from the walk that ran BEFORE this tick collected its results, so it
+# dips to zero for a tick or two while a batch lands -- the streak is what makes it mean
+# "converged" rather than "between batches". Measured: ~350-400 ticks, so the budget is margin.
+const SETTLE_BUDGET := 2500
+const QUIET_TICKS := 8
+
+func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> bool:
+	var quiet := 0
+	for i in range(SETTLE_BUDGET):
 		w.debug_lod_tick(pos, fwd)
 		await get_tree().process_frame
+		var d := w.debug_lod_stats()
+		quiet = quiet + 1 if d["requests_pending"] == 0 and d["builds_in_flight"] == 0 else 0
+		if quiet >= QUIET_TICKS:
+			return true
+	return false
 
 # The cull only ever ZEROES instanceCount. It must never change a page's vertexOffset or its
 # index count, because those are what address the arena -- a cull that rewrote them would
@@ -4409,7 +4479,7 @@ func test_the_cull_only_removes(timeout := 40000) -> void:
 	var w := make_world()
 	var pos := Vector3(400.0, 90.0, 400.0)
 	var fwd := Vector3(0.0, -0.35, -1.0).normalized()
-	await settle(w, pos, fwd, 250)
+	await settle(w, pos, fwd)
 	var d := w.debug_lod_cull_probe(pos, fwd)
 	assert_int(d["args_before"]).is_greater(0)
 	assert_int(d["args_after"]).is_equal(d["args_before"])
@@ -4422,7 +4492,7 @@ func test_facing_away_culls_almost_everything(timeout := 40000) -> void:
 	var w := make_world()
 	var pos := Vector3(400.0, 90.0, 400.0)
 	var fwd := Vector3(0.0, -0.35, -1.0).normalized()
-	await settle(w, pos, fwd, 250)
+	await settle(w, pos, fwd)
 	var facing := w.debug_lod_cull_probe(pos, fwd)
 	# Same resident set, camera spun to face straight up into empty sky.
 	var away := w.debug_lod_cull_probe(pos, Vector3(0.0, 1.0, 0.0))
@@ -4434,14 +4504,14 @@ func test_the_reported_ratio_is_sane(timeout := 40000) -> void:
 	var w := make_world()
 	var pos := Vector3(400.0, 90.0, 400.0)
 	var fwd := Vector3(0.0, -0.35, -1.0).normalized()
-	await settle(w, pos, fwd, 250)
+	await settle(w, pos, fwd)
 	var d := w.debug_lod_cull_probe(pos, fwd)
 	assert_float(d["culled_ratio"]).is_between(0.0, 1.0)
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `./addons/gdUnit4/runtest.sh --godot_binary /usr/bin/godot -a res://tests/test_lod_cull.gd`
+Run: `./gdunit_tests.sh -a res://tests/test_lod_cull.gd`
 Expected: FAIL — `Nonexistent function 'debug_lod_cull_probe'`.
 
 - [ ] **Step 3: Write `shaders/lod_cull.comp.glsl`**
@@ -4531,21 +4601,32 @@ void main() {
 }
 ```
 
-- [ ] **Step 4: Write `LodCullPass` and wire it in**
+- [ ] **Step 4: Move the indirect args out of the raster, then write `LodCullPass`**
+
+**Do this first or the cull is a no-op.** Task 13 built the indirect args *inside* `LodRasterPass::draw` — the `buffer_update(pool.args_buffer(), ...)` recorded just before `draw_list_begin`. The cull runs BEFORE the draw, so leaving it there means the raster rewrites every `instanceCount` the cull just zeroed and nothing is ever culled, with both tests in Step 1 passing vacuously because `args_after == args_before` either way. Move the args build to `LodPool::upload_draw_args(const std::vector<LodRasterPass::PageDraw> &)`, called from the compositor before the cull; `LodRasterPass::draw` then keeps only the `draw_list_*` calls and the `draw_count` it already takes.
 
 `initialize` builds the pipeline; `run(rd, pool, hiz, view_proj, page_count)` clears `stats`, records the dispatch at `ceil(page_count / 64)`, and leaves the args buffer ready for the raster's `draw_list_draw_indirect`. The stats buffer is read back asynchronously for the HUD's culled ratio — never synchronously.
 
-In `RaymarchCompositor`, insert `cull->run(...)` between `hiz->build(...)` and `lod_raster->draw(...)`. **Ordering:** the args `buffer_update` `LodPool` issues must be recorded before the cull's `compute_list_begin`, and the cull's compute list must be ended before the raster's `draw_list_begin`.
+In `RaymarchCompositor`, insert `cull->run(...)` between `hiz->build(...)` and `lod_raster->draw(...)`. **Ordering:** the args `buffer_update` must be recorded before the cull's `compute_list_begin`, and the cull's compute list must be ended before the raster's `draw_list_begin`.
 
 Add `debug_lod_cull_probe(pos, fwd)`, which snapshots the args buffer before and after the cull and reports `args_before`, `args_after`, `offsets_changed`, `index_counts_changed`, `drawn_after`, `culled_ratio`.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [ ] **Step 5: Give the far field a measured cost**
+
+Nothing times the LoD passes yet, and Task 18's HUD and benchmark both read one. Add GPU-side
+timing to `LodRasterPass` and `LodCullPass` in the style the other passes already use
+(`WorldStreamer::last_total_ms`, `ColliderStreamer::last_build_ms`), and surface it from
+`VoxelWorld::debug_perf_stats()` as `lod_ms` (raster + cull) alongside the existing
+`stream_total_ms` / `island_ms`. Report `culled_ratio` from the cull's async stats readback in
+`debug_lod_stats()` so the HUD reads it from the same place as the rest of the LoD numbers.
+
+- [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `./build.sh -j$(nproc)` then the gdUnit command from Step 2, then the full suite.
 Run: `godot --path . demo/main.tscn`
 Expected: PASS, and the frame time drops when facing terrain with a ridge in front of it.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add shaders/lod_cull.comp.glsl extension/src/render/lod_cull_pass.h \
@@ -4593,6 +4674,27 @@ func make_world() -> VoxelWorld:
 	assert_bool(w.debug_init_physics()).is_true()
 	return w
 
+# The walk descends only into a node whose eight children are all resident, so the far field
+# converges over HUNDREDS of ticks and at a rate set by build throughput, not by frame count.
+# Wait on the condition (errata 6): the fixed counts this plan first used were tuned to a
+# vsync-throttled 590 ms frame and settle nothing now that the runner disables vsync.
+# requests_pending comes from the walk that ran BEFORE this tick collected its results, so it
+# dips to zero for a tick or two while a batch lands -- the streak is what makes it mean
+# "converged" rather than "between batches". Measured: ~350-400 ticks, so the budget is margin.
+const SETTLE_BUDGET := 2500
+const QUIET_TICKS := 8
+
+func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> bool:
+	var quiet := 0
+	for i in range(SETTLE_BUDGET):
+		w.debug_lod_tick(pos, fwd)
+		await get_tree().process_frame
+		var d := w.debug_lod_stats()
+		quiet = quiet + 1 if d["requests_pending"] == 0 and d["builds_in_flight"] == 0 else 0
+		if quiet >= QUIET_TICKS:
+			return true
+	return false
+
 # The two masks are exact complements on the same pixel grid, so no pixel in the band may be
 # claimed by both fields and none may be claimed by neither. A gap shows as sky through the
 # ground; an overlap shows as z-fighting.
@@ -4600,9 +4702,7 @@ func test_the_band_is_covered_exactly_once(timeout := 40000) -> void:
 	var w := make_world()
 	var pos := Vector3(400.0, 60.0, 400.0)
 	var fwd := Vector3(0.0, -0.12, -1.0).normalized()
-	for i in range(250):
-		w.debug_lod_tick(pos, fwd)
-		await get_tree().process_frame
+	await settle(w, pos, fwd)
 	var d := w.debug_seam_probe(pos, fwd, 256, 144)
 	assert_int(d["band_pixels"]).override_failure_message(
 		"the probe camera saw no pixels in the 120-150 m band").is_greater(200)
@@ -4616,9 +4716,7 @@ func test_the_near_field_owns_everything_before_the_band(timeout := 40000) -> vo
 	var w := make_world()
 	var pos := Vector3(400.0, 60.0, 400.0)
 	var fwd := Vector3(0.0, -0.12, -1.0).normalized()
-	for i in range(250):
-		w.debug_lod_tick(pos, fwd)
-		await get_tree().process_frame
+	await settle(w, pos, fwd)
 	var d := w.debug_seam_probe(pos, fwd, 256, 144)
 	assert_int(d["near_pixels_lost_to_lod"]).is_equal(0)
 	assert_int(d["far_pixels_lost_to_raymarch"]).is_equal(0)
@@ -4626,7 +4724,7 @@ func test_the_near_field_owns_everything_before_the_band(timeout := 40000) -> vo
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `./addons/gdUnit4/runtest.sh --godot_binary /usr/bin/godot -a res://tests/test_lod_seam.gd`
+Run: `./gdunit_tests.sh -a res://tests/test_lod_seam.gd`
 Expected: FAIL — `Nonexistent function 'debug_seam_probe'`.
 
 - [ ] **Step 3: Add the fade to `composite.frag.glsl`**
@@ -4739,16 +4837,32 @@ func make_world() -> VoxelWorld:
 	assert_bool(w.debug_init_physics()).is_true()
 	return w
 
-func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3, frames: int) -> void:
-	for i in range(frames):
+# The walk descends only into a node whose eight children are all resident, so the far field
+# converges over HUNDREDS of ticks and at a rate set by build throughput, not by frame count.
+# Wait on the condition (errata 6): the fixed counts this plan first used were tuned to a
+# vsync-throttled 590 ms frame and settle nothing now that the runner disables vsync.
+# requests_pending comes from the walk that ran BEFORE this tick collected its results, so it
+# dips to zero for a tick or two while a batch lands -- the streak is what makes it mean
+# "converged" rather than "between batches". Measured: ~350-400 ticks, so the budget is margin.
+const SETTLE_BUDGET := 2500
+const QUIET_TICKS := 8
+
+func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> bool:
+	var quiet := 0
+	for i in range(SETTLE_BUDGET):
 		w.debug_lod_tick(pos, fwd)
 		await get_tree().process_frame
+		var d := w.debug_lod_stats()
+		quiet = quiet + 1 if d["requests_pending"] == 0 and d["builds_in_flight"] == 0 else 0
+		if quiet >= QUIET_TICKS:
+			return true
+	return false
 
 func test_an_edit_rebuilds_every_level_it_touches(timeout := 60000) -> void:
 	var w := make_world()
 	var pos := Vector3(400.0, 90.0, 400.0)
 	var fwd := Vector3(0.0, -0.35, -1.0).normalized()
-	await settle(w, pos, fwd, 250)
+	await settle(w, pos, fwd)
 	var before := w.debug_lod_stats()
 	w.debug_apply_sphere_subtract(Vector3(380.0, 55.0, 300.0), 8.0)
 	var d := w.debug_lod_stats()
@@ -4759,7 +4873,7 @@ func test_an_edit_rebuilds_every_level_it_touches(timeout := 60000) -> void:
 		).is_greater_equal(4)
 	# Stale beats missing: nothing is un-drawn while the rebuild is queued.
 	assert_int(d["draw_pages"]).is_greater_equal(before["draw_pages"] * 0.9)
-	await settle(w, pos, fwd, 300)
+	await settle(w, pos, fwd)
 	assert_int(w.debug_lod_stats()["dirty_chunks"]).override_failure_message(
 		"the dirty chunks never finished rebuilding").is_equal(0)
 
@@ -4767,10 +4881,10 @@ func test_a_far_edit_is_visible_in_the_far_field(timeout := 60000) -> void:
 	var w := make_world()
 	var pos := Vector3(400.0, 90.0, 400.0)
 	var fwd := Vector3(0.0, -0.35, -1.0).normalized()
-	await settle(w, pos, fwd, 250)
+	await settle(w, pos, fwd)
 	var before := w.debug_lod_render_probe(pos, fwd, 256, 144)
 	w.debug_apply_sphere_subtract(Vector3(400.0, 55.0, 250.0), 20.0)
-	await settle(w, pos, fwd, 300)
+	await settle(w, pos, fwd)
 	var after := w.debug_lod_render_probe(pos, fwd, 256, 144)
 	# A 20 m crater 150 m away must change what the far field draws.
 	assert_float(absf(after["coverage"] - before["coverage"])).override_failure_message(
@@ -4780,7 +4894,7 @@ func test_teardown_and_reinit_leave_no_pages_behind(timeout := 40000) -> void:
 	var w := make_world()
 	var pos := Vector3(400.0, 90.0, 400.0)
 	var fwd := Vector3(0.0, -0.35, -1.0).normalized()
-	await settle(w, pos, fwd, 200)
+	await settle(w, pos, fwd)
 	assert_int(w.debug_lod_stats()["pages_used"]).is_greater(0)
 	w.debug_teardown_atlas()
 	assert_bool(w.debug_init_atlas()).is_true()
@@ -4789,13 +4903,13 @@ func test_teardown_and_reinit_leave_no_pages_behind(timeout := 40000) -> void:
 		"%d pages survived a teardown" % d["pages_used"]).is_equal(0)
 	assert_int(d["chunks_resident"]).is_equal(0)
 	# And it still streams afterwards.
-	await settle(w, pos, fwd, 200)
+	await settle(w, pos, fwd)
 	assert_int(w.debug_lod_stats()["pages_used"]).is_greater(0)
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `./addons/gdUnit4/runtest.sh --godot_binary /usr/bin/godot -a res://tests/test_lod_stream.gd`
+Run: `./gdunit_tests.sh -a res://tests/test_lod_stream.gd`
 Expected: FAIL — `dirty_chunks` missing from `debug_lod_stats`.
 
 - [ ] **Step 3: Dirty the tree on every accepted edit**
@@ -4834,9 +4948,14 @@ TEST_CASE("an op smaller than half a cell does not dirty that level") {
 }
 ```
 
-- [ ] **Step 4: Make teardown return every page**
+- [ ] **Step 4: Close the page-accounting gaps**
 
-`VoxelWorld::teardown_gpu` must `lod_pool_->teardown()`, `lod_tree_->clear()` and clear `lod_pages_of_`, in that order — the tree holds page indices the pool is about to free, and a stale index would be handed to the next chunk. Follow `CompositePass::teardown`'s documented free order (uniform set → pipeline → shader → buffers): freeing a shader cascades to its pipelines, so a uniform set referencing it must go first.
+`VoxelWorld::teardown_gpu` must `lod_pool_->teardown()`, `lod_tree_->clear()` and clear `lod_pages_of_`, in that order — the tree holds page indices the pool is about to free, and a stale index would be handed to the next chunk. Follow `CompositePass::teardown`'s documented free order (uniform set → pipeline → shader → buffers): freeing a shader cascades to its pipelines, so a uniform set referencing it must go first. **Task 12 already did this**; verify rather than rewrite, and make the third test in Step 1 the proof.
+
+Two invariants spec §3.3 states are not actually held by the code Task 9 and Task 12 shipped (errata 9), and this is the task that owns page accounting:
+
+- **The 16-page cap is unenforced.** `LodBuildPass::read_job` clamps the readback to `kLodMaxQuadsPerChunk`, then appends skirts *on top of the clamp*, and `LodPool::upload` only tests `pages_needed > arena_.free_pages()`. Add the `pages_needed > ve::kLodMaxPagesPerChunk` refusal, and cover it with a `test_lod_arena.cpp` case.
+- **An overflowing build never logs.** `LodBuildResult::overflow` is set and read by nobody. Log it once per chunk (not per frame — a chunk that overflows overflows every rebuild), per the engine spec's fail-soft policy.
 
 - [ ] **Step 5: Report the dirty counters**
 
@@ -4868,7 +4987,7 @@ Spec §10. The plan's triggers are decided by measurement, not pre-emptively, an
 
 - [ ] **Step 1: Add the LoD line to the HUD**
 
-`demo/hud.gd` reads `debug_lod_stats()` each frame and shows: resident chunks, pages used/total, draw pages, culled %, builds in flight, dirty chunks, and the LoD pass's GPU milliseconds from `debug_perf_stats()`.
+`demo/hud.gd` reads `debug_lod_stats()` each frame and shows: resident chunks, pages used/total, draw pages, culled %, builds in flight, dirty chunks, and the LoD pass's GPU milliseconds from `debug_perf_stats()`. Every one of those exists by the time this task runs: Task 12 gives the page and residency counters, Task 15 Step 5 adds `lod_ms` and `culled_ratio`, Task 17 Step 5 adds `dirty_chunks`.
 
 - [ ] **Step 2: Extend the benchmark**
 
@@ -4893,7 +5012,7 @@ Write each verdict — tripped or not, with the number that decided it — into 
 - [ ] **Step 5: Full-suite regression**
 
 Run: `./build.sh -j$(nproc) --test --verify`
-Run: `./addons/gdUnit4/runtest.sh --godot_binary /usr/bin/godot -a res://tests`
+Run: `./gdunit_tests.sh -a res://tests`
 Expected: everything green.
 
 - [ ] **Step 6: Commit**
@@ -4911,7 +5030,7 @@ git commit -m "feat: lod hud, benchmark legs, and the measured trigger verdicts"
 M5 is done when all of the following hold:
 
 1. `cd extension && scons test` — every native suite green, including the seven new `test_lod_*` suites.
-2. `./addons/gdUnit4/runtest.sh --godot_binary /usr/bin/godot -a res://tests` — every suite green, including the nine new ones, with no M1–M4 suite regressed.
+2. `./gdunit_tests.sh -c` — every suite green, including the nine new ones, with no M1–M4 suite regressed. Baseline at the end of Task 13: **160/160 across 30 suites**. Use `-c`: without it gdUnit4 stops each suite at its first failure and reports a fraction of the truth (errata 5).
 3. `godot --path . demo/main.tscn` shows terrain to the world edge with **no visible seam** at 150 m, textured consistently near and far.
 4. Flying does not pop holes: turning the camera reveals coarse terrain, never sky.
 5. A crater blasted at 300 m appears in the far field within a second, and one blasted at 2 km appears eventually.
@@ -4923,7 +5042,26 @@ M5 is done when all of the following hold:
 ## Errata (recorded during M5 implementation — corrections to the task text)
 
 <!-- Append numbered entries here as the plan meets reality, in the style of M1/M2/M3/M4.
-     Task 13 Step 7's front-face answer and Task 13 Step 6's indexed-vs-non-indexed indirect
-     draw outcome are both expected entries. So are Task 18's four trigger verdicts. -->
+     Task 18's four trigger verdicts are still expected. -->
+
+1. **Task 13 Step 6's indexed indirect draw works — spec §11's first risk is retired.** A pipeline created with `vertex_format = RenderingDevice::INVALID_ID`, a `draw_list_bind_index_array` over the shared 6 KB `uint16` buffer, and `draw_list_draw_indirect(dl, /*use_indices*/ true, args, 0, draw_count, 20)` all behave on Godot 4.7.1 against the NVIDIA Vulkan driver. The whole no-vertex-buffer design rested on this and it holds. The non-indexed fallback (`firstVertex = quad · 6`, `quad = gl_VertexIndex / 6`) was never needed and no longer has to be carried as a contingency.
+
+2. **Task 13 Step 7's front face is CLOCKWISE.** `POLYGON_CULL_BACK` with `POLYGON_FRONT_FACE_CLOCKWISE` is what keeps the ground visible; the counter-clockwise pipeline culls it away entirely. `LodRasterPass` builds all three pipelines (cull off, cull-back CCW, cull-back CW) and selects with `front_face_clockwise_ = true`, measured by `test_backface_culling_does_not_remove_visible_ground` rather than assumed. Per Step 7's instruction nothing in `lod_contour.cpp`, `lod_quads.comp.glsl` or the index buffer was touched: those three agree with `ve::dual_contour` and with Jolt, and Task 9's differential test is what holds them together.
+
+3. **The LoD raster push constant is 20 floats, and `cam` starts at float 16 — not float 64.** The std430 block is `mat4 view_proj` (floats 0–15, bytes 0–63) followed by `vec4 cam` (floats 16–19), 80 bytes total. `LodRasterPass::draw` first wrote the camera position at `f[64..67]`, i.e. byte offsets 256–271, **176 bytes past the end of the 80-byte `PackedByteArray`**. It corrupted the heap on every single draw: `test_lod_render.gd` reported all four tests PASSED and then aborted four runs in five, either as glibc `corrupted size vs. prev_size` or as a SIGSEGV inside `vkDestroyDevice` while the local `RenderingDevice` was being torn down — so the suite looked green while exiting 134. Fixed in `c15a1ae`. **Task 16 Step 4 adds `fade` to this same block**: index it by float, keep the array and `draw_list_set_push_constant`'s size argument in step, and stay under the 128-byte guarantee.
+
+4. **Task 13's shipped `tests/test_lod_render.gd` differs from Step 2's snippet.** The camera is `(100, 155, 204)` looking down at `(0, -0.35, -1)`, not `(400, 90, 400)`; one world is built and settled ONCE for the whole suite through `after()` instead of one per test; and the settle is condition-based (errata 6). The plan's version settled the same shared world four times over identical camera state, and its camera/coverage pair was not satisfiable as written. Coverage at the shipped camera is ~0.317 against the `> 0.25` threshold, `nearest_hit_m` ~101.7 m against `>= 100`.
+
+5. **The gdUnit runner is `./gdunit_tests.sh`, and it had four bugs of its own.** Every "Run:" line in this plan used `addons/gdUnit4/runtest.sh` directly. Do not: that wrapper runs `godot --path .` relative to the **caller's** directory, so it only worked from the repo root, and it passes `-d --remote-debug tcp://127.0.0.1:0`, whose invalid port printed two `ERROR` lines on every run. The wrapper script also (a) documented a comma-separated `-a` that gdUnit4 does not support — it takes one path and may be repeated, so `-a a.gd,b.gd` matched nothing and **exited 0 having run zero tests**; (b) swallowed a missing `-a` value, silently widening to the whole suite; (c) launched a second headless Godot for `GdUnitCopyLog.gd`, which only ever wrote a "No logging available!" placeholder. All fixed in `73a2522`. Also note **gdUnit4 aborts a suite at its first failure by default** — pass `-c` when you want the true failure count; a plain run under-reports it badly (121 tests reported versus 160 actually present).
+
+6. **A fixed frame count settles nothing — wait on the condition.** Every settle in this plan was written as `for i in range(250)`, which was only ever long enough because the suite's window is normally unfocused and occluded and vsync made a single `await get_tree().process_frame` cost **~590 ms**: 60 empty frames that did no work at all took 35.4 s, and `test_lod_pool.gd` took 8m36s of which the LoD work itself was under a second. The runner now passes `--disable-vsync` (`73a2522`), a frame costs ~0.5 ms, and the same 250 frames settle almost nothing. Suites now tick until `debug_lod_stats()` reports `requests_pending == 0 and builds_in_flight == 0` for a streak of 8 ticks, with a wide tick budget as the ceiling. The streak is required: `requests_pending` reflects the walk that ran BEFORE this tick collected its results, so a single sample reads zero while a batch is landing and "converges" with zero chunks resident. Measured convergence is ~350–400 ticks; eviction fires between far-tick 300 and 400, matching `kLodEvictFrames`. `debug_lod_stats()` gained `requests_pending` for this, and `partial_allocations` stopped being a hardcoded `0` — it now measures the two shapes a half-funded build would leave, so the assertion on it can actually fail. All four LoD suites: ~9 minutes and a crash, down to 13 s and 16/16 stable.
+
+7. **Task 8's generalisation is not used by the LoD path — there are two meshers, not one.** The plan's architecture paragraph says the mesher is "M3's, generalised … so there is one mesher and one CPU reference". Task 8 did land: `mesh_common.glslh` takes origin, cell size and lattice dimension from the push constant. But Task 9 then wrote its own `lod_field.comp.glsl` **and** `lod_frac.comp.glsl`, and every `MeshJob` in the GPU path still passes `ve::kChunkCellSize` / `ve::kChunkLattice` — so the generalisation is never exercised at LoD scale. `lod_frac` is individually justified (it emits packed 5-bit cell fractions rather than world positions, which is what the 12-byte record carries, so GPU and `ve::lod_contour` quantise the same number the same way), but the consequence is two GPU cell-vertex shaders with duplicated `CORNER`/`EDGE` tables and two CPU references. Each side is pinned by its own differential test and nothing is currently wrong; the tables can nonetheless drift, and no test would catch it because no chunk is ever meshed both ways.
+
+8. **`register_types.cpp` is unchanged for every task except 14.** The File Structure says "unchanged (no new script-visible classes)". Task 14's `AsyncTextureRead` is not script-visible either, but it is a `RefCounted` `GDCLASS` — `callable_mp` cannot name a handler on an unregistered class — so it needs `GDREGISTER_INTERNAL_CLASS`, exactly as `AsyncBufferRead` already does.
+
+9. **Two of spec §3.3's invariants are not held by the shipped code.** `LodBuildPass::read_job` clamps the readback to `ve::kLodMaxQuadsPerChunk` and then appends skirts *on top of the clamp*, while `LodPool::upload` tests only `pages_needed > arena_.free_pages()` — so nothing enforces the stated 16-page-per-chunk cap. And an overflowing build sets `LodBuildResult::overflow`, which no caller reads, so the "logs once" half of the fail-soft policy never happens. Neither is currently harmful (arena pages need not be contiguous), but both are stated invariants with nothing holding them. Folded into Task 17 Step 4, which owns page accounting.
+
+10. **The collider and mesh gdUnit suites were already red when M5 started, from `65486a0` on `main`.** Anyone running Task 8 Step 6's regression gate, or the full suite at any point in Tasks 9–13, would have seen seven suites failing for reasons that have nothing to do with this plan. That commit halved the collision chunk from 16 bricks (12.8 m) to 8 (6.4 m) — `kChunkCells` 128 → 64, lattice 130³ → 66³ — moved meshing onto a worker thread, and made the atlas counter readback asynchronous. It updated the C++ unit tests and missed the GDScript ones, which hardcoded the old chunk coordinates (so the mesher was handed solid rock and correctly returned nothing), counted "frames with no action" as settled (`ColliderStreamer::run_frame` returns 0 on every frame it spends *waiting*, so `settle()` gave up after five frames with 163 chunks pending and zero bodies), and assumed overflow recovery happened on the very next frame. Repaired in `99849bb`, `2d3e391`, `6ba311a`, `068a3dd`; the full suite is 160/160. Two contracts in `test_mesh_stream.gd` had genuinely changed with the async refactor and now pin the real ones: the inline diagnostic path no longer *refuses* while a batch is in flight (`MeshService::run_sync` waits its turn), and an oversized batch is not refused at submit but reported as a failure per chunk so the caller can clear its in-flight markers.
 
 
