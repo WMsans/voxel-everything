@@ -450,7 +450,7 @@ public:
 	Dictionary debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, int w, int h,
 			bool cull);
 	// --- M5 Task 16 seam hooks ---
-	Dictionary debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h);
+	Dictionary debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, bool skip_lod = false);
 	// --- M5 Task 14 HiZ hooks ---
 	Dictionary debug_hiz_stats();
 	Dictionary debug_hiz_probe_synthetic(float far_value, float near_value);

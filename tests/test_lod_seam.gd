@@ -8,13 +8,14 @@ func after_test() -> void:
 			w.free()
 	_worlds.clear()
 
-func make_world() -> VoxelWorld:
+func make_world(residency_radius := 96.0) -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.physics_enabled = false
 	w.world_origin_bricks = Vector3i(0, -64, 0)
 	w.world_size_regions = Vector3i(8, 5, 8)
 	w.max_lod_pages = 4096
+	w.residency_radius_m = residency_radius
 	add_child(w)
 	_worlds.append(w)
 	assert_bool(w.debug_init_atlas()).is_true()
@@ -38,6 +39,19 @@ func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> bool:
 		await get_tree().process_frame
 		var d := w.debug_lod_stats()
 		quiet = quiet + 1 if d["requests_pending"] == 0 and d["builds_in_flight"] == 0 else 0
+		if quiet >= QUIET_TICKS:
+			return true
+	return false
+
+# debug_seam_probe only runs 120 stream frames internally. The mutation test asks the
+# raymarch (near field) to see the 120-150 m band, which requires a larger residency radius;
+# drive the streamer to quiet first so the probe's internal budget is not the bottleneck.
+func settle_stream(w: VoxelWorld, pos: Vector3) -> bool:
+	var quiet := 0
+	for i in range(2000):
+		var actions := w.debug_stream_frame(pos)
+		await get_tree().process_frame
+		quiet = quiet + 1 if actions == 0 else 0
 		if quiet >= QUIET_TICKS:
 			return true
 	return false
@@ -71,3 +85,25 @@ func test_the_near_field_owns_everything_before_the_band(timeout := 40000) -> vo
 	var d := w.debug_seam_probe(pos, fwd, 256, 144)
 	assert_int(d["near_pixels_lost_to_lod"]).is_equal(0)
 	assert_int(d["far_pixels_lost_to_raymarch"]).is_equal(0)
+
+# Mutation check for the unclaimed metric. The normal seam test asserts
+# `band_pixels_unclaimed == 0`; without the hitpos fallback that assertion is vacuous
+# because depth==0 pixels were skipped before the marker was inspected. Skipping the LoD
+# pass creates a real far-field gap in the fade band: the near field still discards its
+# half of the Bayer mask, no LoD pixel fills those holes, and the probe must count them.
+# This camera is higher than the normal seam camera so the raymarch actually sees the
+# 120-150 m band (the low camera's band pixels are LoD-only), and the larger residency
+# radius makes the near-field SDF reach that band.
+func test_skipping_lod_counts_unclaimed_band_pixels(timeout := 60000) -> void:
+	var w := make_world(200.0)
+	var pos := Vector3(100.0, 120.0, 202.0)
+	var fwd := Vector3(0.0, -0.40, -1.0).normalized()
+	await settle(w, pos, fwd)
+	await settle_stream(w, pos)
+	var d := w.debug_seam_probe(pos, fwd, 256, 144, true)
+	assert_int(d["band_pixels"]).override_failure_message(
+		"mutation camera saw no band pixels with LoD skipped").is_greater(0)
+	assert_int(d["band_pixels_unclaimed"]).override_failure_message(
+		"skipping LoD should leave unclaimed band pixels, got %d" % d["band_pixels_unclaimed"]
+		).is_greater(0)
+	assert_int(d["band_pixels_double_claimed"]).is_equal(0)

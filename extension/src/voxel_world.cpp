@@ -88,8 +88,8 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::debug_lod_render_probe);
 	ClassDB::bind_method(D_METHOD("debug_lod_render_probe_culled", "pos", "fwd", "w", "h",
 			"cull"), &VoxelWorld::debug_lod_render_probe_culled);
-	ClassDB::bind_method(D_METHOD("debug_seam_probe", "pos", "fwd", "w", "h"),
-			&VoxelWorld::debug_seam_probe);
+	ClassDB::bind_method(D_METHOD("debug_seam_probe", "pos", "fwd", "w", "h", "skip_lod"),
+			&VoxelWorld::debug_seam_probe, DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("debug_hiz_stats"), &VoxelWorld::debug_hiz_stats);
 	ClassDB::bind_method(D_METHOD("debug_hiz_probe_synthetic", "far_value", "near_value"),
 			&VoxelWorld::debug_hiz_probe_synthetic);
@@ -1236,7 +1236,7 @@ Dictionary VoxelWorld::debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, i
 	return d;
 }
 
-Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h) {
+Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, bool skip_lod) {
 	Dictionary d;
 	d["band_pixels"] = 0;
 	d["band_pixels_unclaimed"] = 0;
@@ -1362,29 +1362,41 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h) 
 
 	// Pass 2: far field. The LoD pipeline uses LOGIC_OP_OR on the marker, so kept far
 	// pixels OR 2 into the composite's 1, making double-claimed pixels read 3.
-	lod_raster_pass_->set_cull_enabled(true);
-	lod_pool_->upload_draw_args(lod_raster_pass_->draw_pages());
-	const int draw_count = lod_raster_pass_->draw_page_count();
-	lod_raster_pass_->draw(device, *lod_pool_, *materials_, color, depth, vp, p,
-			draw_count, ve::kLodFadeStartM, ve::kLodFadeEndM, marker);
+	// `skip_lod` is a debug-only knob for the regression test: by leaving the far field
+	// out entirely it creates a real far-field gap, which the probe must count as
+	// unclaimed. Production rendering never passes it.
+	if (!skip_lod) {
+		lod_raster_pass_->set_cull_enabled(true);
+		lod_pool_->upload_draw_args(lod_raster_pass_->draw_pages());
+		const int draw_count = lod_raster_pass_->draw_page_count();
+		lod_raster_pass_->draw(device, *lod_pool_, *materials_, color, depth, vp, p,
+				draw_count, ve::kLodFadeStartM, ve::kLodFadeEndM, marker);
+	}
 	device->submit();
 	device->sync();
 
 	const PackedByteArray depth_data = device->texture_get_data(depth, 0);
 	const PackedByteArray marker_data = device->texture_get_data(marker, 0);
+	const PackedByteArray hitpos_data = device->texture_get_data(
+			raymarch_pass_->hitpos_texture(), 0);
 	int band_pixels = 0;
 	int band_pixels_unclaimed = 0;
 	int band_pixels_double_claimed = 0;
 	int near_pixels_lost_to_lod = 0;
 	int far_pixels_lost_to_raymarch = 0;
 	if (depth_data.size() >= static_cast<int64_t>(w) * h * 4 &&
-			marker_data.size() >= static_cast<int64_t>(w) * h) {
+			marker_data.size() >= static_cast<int64_t>(w) * h &&
+			hitpos_data.size() >= static_cast<int64_t>(w) * h * 16) {
 		const float *df = reinterpret_cast<const float *>(depth_data.ptr());
 		const uint8_t *mk = reinterpret_cast<const uint8_t *>(marker_data.ptr());
+		const float *hf = reinterpret_cast<const float *>(hitpos_data.ptr());
 		// Reconstruct the world hit from the reverse-Z depth and the same camera basis the
 		// two fields use, so the probe measures the same Euclidean distance the shaders fade
 		// on. The LoD-only far field has no raymarch hitpos, so the depth attachment is the
-		// one source that covers both fields on the same pixel grid.
+		// primary source that covers both fields on the same pixel grid. When both fields
+		// discarded a pixel (the unclaimed case), depth is 0 (the reverse-Z far clear) but
+		// the raymarch hitpos texture still records the terrain hit; use its world-space
+		// position to recover the Euclidean distance and classify the marker.
 		float r[3] = {f[1] * up[2] - f[2] * up[1], f[2] * up[0] - f[0] * up[2],
 				f[0] * up[1] - f[1] * up[0]};
 		const float rl = std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
@@ -1393,16 +1405,29 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h) 
 		const float kFar = 8000.0f;
 		for (int i = 0; i < w * h; i++) {
 			const float depth_val = df[i];
-			if (depth_val <= 0.0f) continue;
-			const float u = (static_cast<float>(i % w) + 0.5f) / static_cast<float>(w);
-			const float v = (static_cast<float>(i / w) + 0.5f) / static_cast<float>(h);
-			const float ndc_x = u * 2.0f - 1.0f;
-			const float ndc_y = 1.0f - v * 2.0f;
-			const float z_view = kFar * kNear /
-					(kNear + depth_val * (kFar - kNear));
-			const float ax = ndc_x * tan_x;
-			const float ay = ndc_y * tan_y;
-			const float dist = z_view * std::sqrt(1.0f + ax * ax + ay * ay);
+			const float *hp = &hf[i * 4];
+			const bool raymarch_hit = hp[3] >= 0.5f;
+			float dist;
+			if (depth_val > 0.0f) {
+				const float u = (static_cast<float>(i % w) + 0.5f) / static_cast<float>(w);
+				const float v = (static_cast<float>(i / w) + 0.5f) / static_cast<float>(h);
+				const float ndc_x = u * 2.0f - 1.0f;
+				const float ndc_y = 1.0f - v * 2.0f;
+				const float z_view = kFar * kNear /
+						(kNear + depth_val * (kFar - kNear));
+				const float ax = ndc_x * tan_x;
+				const float ay = ndc_y * tan_y;
+				dist = z_view * std::sqrt(1.0f + ax * ax + ay * ay);
+			} else if (raymarch_hit) {
+				const float dx = hp[0] - p[0];
+				const float dy = hp[1] - p[1];
+				const float dz = hp[2] - p[2];
+				dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+			} else {
+				// No terrain sample to classify: no field wrote depth and the raymarch
+				// did not hit, so this is sky rather than an unclaimed band pixel.
+				continue;
+			}
 			const uint8_t m = mk[i];
 			if (dist >= ve::kLodFadeStartM && dist <= ve::kLodFadeEndM) {
 				band_pixels++;
