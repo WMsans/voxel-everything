@@ -239,10 +239,15 @@ bool LodRasterPass::draw(RenderingDevice *rd, LodPool &pool, MaterialAtlas &mate
 		for (int c = 0; c < 4; c++)
 			for (int r = 0; r < 4; r++)
 				f[c * 4 + r] = view_proj.columns[c][r]; // GLSL mat4 = column-major
-		f[64] = cam_pos[0];
-		f[65] = cam_pos[1];
-		f[66] = cam_pos[2];
-		f[67] = 0.0f;
+		// std430 push block: mat4 view_proj occupies floats 0..15 (bytes 0..63), so the
+		// vec4 cam that follows starts at float 16, NOT float 64. Indexing by the byte
+		// offset wrote 176 bytes past the end of this 80-byte array and corrupted the
+		// heap, which surfaced as an abort in a later free (glibc "corrupted size vs.
+		// prev_size") or a segfault inside vkDestroyDevice at teardown.
+		f[16] = cam_pos[0];
+		f[17] = cam_pos[1];
+		f[18] = cam_pos[2];
+		f[19] = 0.0f;
 	}
 	rd->draw_list_set_push_constant(dl, pc, pc.size());
 	rd->draw_list_draw_indirect(dl, true, pool.args_buffer(), 0, draw_count, 20);
