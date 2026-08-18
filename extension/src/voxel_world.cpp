@@ -82,6 +82,14 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_max_lod_pages"), &VoxelWorld::get_max_lod_pages);
 	ClassDB::bind_method(D_METHOD("set_lod_builds_per_frame", "v"), &VoxelWorld::set_lod_builds_per_frame);
 	ClassDB::bind_method(D_METHOD("get_lod_builds_per_frame"), &VoxelWorld::get_lod_builds_per_frame);
+	ClassDB::bind_method(D_METHOD("set_quality_tier", "v"), &VoxelWorld::set_quality_tier);
+	ClassDB::bind_method(D_METHOD("get_quality_tier"), &VoxelWorld::get_quality_tier);
+	ClassDB::bind_method(D_METHOD("set_effect_enabled", "name", "on"),
+			&VoxelWorld::set_effect_enabled);
+	ClassDB::bind_method(D_METHOD("get_effect_enabled", "name"),
+			&VoxelWorld::get_effect_enabled);
+	ClassDB::bind_method(D_METHOD("debug_beauty_settings"),
+			&VoxelWorld::debug_beauty_settings);
 	ClassDB::bind_method(D_METHOD("debug_lod_tick", "pos", "fwd"), &VoxelWorld::debug_lod_tick);
 	ClassDB::bind_method(D_METHOD("debug_lod_stats"), &VoxelWorld::debug_lod_stats);
 	ClassDB::bind_method(D_METHOD("debug_lod_fade_band"), &VoxelWorld::debug_lod_fade_band);
@@ -216,6 +224,60 @@ void VoxelWorld::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "shape_builds_per_frame"), "set_shape_builds_per_frame", "get_shape_builds_per_frame");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_lod_pages"), "set_max_lod_pages", "get_max_lod_pages");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_builds_per_frame"), "set_lod_builds_per_frame", "get_lod_builds_per_frame");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "quality_tier", PROPERTY_HINT_ENUM,
+			"Off,Low,Medium,High"), "set_quality_tier", "get_quality_tier");
+}
+
+void VoxelWorld::set_quality_tier(int v) {
+	quality_tier_ = v < 0 ? 0 : (v > 3 ? 3 : v);
+	beauty_ = ve::settings_for_tier(static_cast<ve::QualityTier>(quality_tier_));
+}
+
+namespace {
+// One table, so the setter, the getter and the debug dictionary cannot disagree about what
+// an effect is called.
+bool *beauty_field(ve::BeautySettings &s, const String &name) {
+	if (name == "ssgi") return &s.ssgi;
+	if (name == "ssr") return &s.ssr;
+	if (name == "contact_shadows") return &s.contact_shadows;
+	if (name == "outlines") return &s.outlines;
+	if (name == "sun_shadow_map") return &s.sun_shadow_map;
+	if (name == "glossy_sdf_rays") return &s.glossy_sdf_rays;
+	if (name == "raymarched_sun_shadow") return &s.raymarched_sun_shadow;
+	return nullptr;
+}
+} // namespace
+
+void VoxelWorld::set_effect_enabled(const String &name, bool on) {
+	bool *f = beauty_field(beauty_, name);
+	if (!f) return; // fail-soft: an unknown name in a debug menu is not a crash
+	*f = on;
+	ve::clamp_settings(&beauty_);
+}
+
+bool VoxelWorld::get_effect_enabled(const String &name) const {
+	ve::BeautySettings copy = beauty_;
+	const bool *f = beauty_field(copy, name);
+	return f ? *f : false;
+}
+
+Dictionary VoxelWorld::debug_beauty_settings() {
+	Dictionary d;
+	d["ssgi"] = beauty_.ssgi;
+	d["ssr"] = beauty_.ssr;
+	d["contact_shadows"] = beauty_.contact_shadows;
+	d["outlines"] = beauty_.outlines;
+	d["sun_shadow_map"] = beauty_.sun_shadow_map;
+	d["glossy_sdf_rays"] = beauty_.glossy_sdf_rays;
+	d["raymarched_sun_shadow"] = beauty_.raymarched_sun_shadow;
+	d["ssgi_taps"] = beauty_.ssgi_taps;
+	d["ssr_steps"] = beauty_.ssr_steps;
+	d["contact_steps"] = beauty_.contact_steps;
+	d["outline_depth_threshold"] = beauty_.outline_depth_threshold;
+	d["outline_normal_threshold"] = beauty_.outline_normal_threshold;
+	d["tier"] = quality_tier_;
+	d["flags"] = static_cast<int>(ve::pack_flags(beauty_));
+	return d;
 }
 
 void VoxelWorld::_ready() {

@@ -24,6 +24,7 @@
 #include "physics/island_body.h"
 #include "physics/island_manager.h"
 #include "render/island_atlas.h"
+#include "shade/beauty_settings.h"
 #include "world/edit_log.h"
 #include "world/raycast.h"
 #include "world/region.h"
@@ -163,6 +164,11 @@ class VoxelWorld : public Node3D {
 	std::map<int, int> lod_page_quads_; // page -> number of quads stored in that page
 	std::set<LodKey> lod_overflow_logged_; // once-per-chunk overflow diagnostics
 	int lod_pressure_ = 0;
+
+	// --- M6 beautification settings (Task 3) ---
+	int quality_tier_ = static_cast<int>(ve::QualityTier::kHigh);
+	ve::BeautySettings beauty_ = ve::settings_for_tier(ve::QualityTier::kHigh);
+
 	void ensure_lod(); // lazy: creates/initializes lod_tree_ + lod_pool_ on first use
 	// Assumes lod_mutex_ is held; emits the real page list for the current lod_walk_.
 	void prepare_lod_raster_locked();
@@ -226,6 +232,17 @@ public:
 	int get_max_lod_pages() const { return max_lod_pages_; }
 	void set_lod_builds_per_frame(int v) { lod_builds_per_frame_ = v; }
 	int get_lod_builds_per_frame() const { return lod_builds_per_frame_; }
+
+	void set_quality_tier(int v);
+	int get_quality_tier() const { return quality_tier_; }
+	void set_effect_enabled(const String &name, bool on);
+	bool get_effect_enabled(const String &name) const;
+	// Read by every M6 pass on the render thread. Plain-old-data, written only from the
+	// main thread between frames, so no lock: a torn read would at worst use last frame's
+	// toggle for one frame, which is what a toggle looks like anyway.
+	const ve::BeautySettings &beauty_settings() const { return beauty_; }
+	Dictionary debug_beauty_settings();
+
 	void lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ);
 	// Push the current lod_walk_ page list (with per-page quad counts) into the raster pass.
 	void prepare_lod_raster();
