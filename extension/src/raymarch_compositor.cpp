@@ -195,7 +195,10 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 						cam_pos, first_pass_count, ve::kLodFadeStartM, ve::kLodFadeEndM);
 				// The second build includes the first pass's far-field depth, so the cull of
 				// the remainder can see far occluders that the near-field-only pyramid missed.
-				hiz->build(rd, rsb->get_depth_texture(), size);
+				// With no remaining pass there is nothing to cull, so skip the extra rebuild.
+				if (remaining_count > 0) {
+					hiz->build(rd, rsb->get_depth_texture(), size);
+				}
 			}
 
 			if (remaining_count > 0) {

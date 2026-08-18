@@ -198,6 +198,11 @@ void LodCullPass::set_last_visible_pages(const std::vector<int> &pages) {
 	last_visible_pages_.erase(
 			std::unique(last_visible_pages_.begin(), last_visible_pages_.end()),
 			last_visible_pages_.end());
+	// A manual visible-set update supersedes any in-flight args readback. Invalidate the
+	// request-time pairing so consume_args_readback() ignores a stale readback that arrives
+	// later and would otherwise re-promote pages that left draw_pages().
+	last_remaining_count_at_request_ = 0;
+	first_pass_pages_at_request_.clear();
 }
 
 bool LodCullPass::run(RenderingDevice *rd, LodPool &pool, HizPass *hiz,
