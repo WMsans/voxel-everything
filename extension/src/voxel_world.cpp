@@ -21,6 +21,7 @@
 #include "lod/lod_grid.h"
 #include "lod/lod_reduce.h"
 #include "lod/lod_skirt.h"
+#include "lod/lod_tree.h"
 #include "physics/collider_streamer.h"
 #include "physics/island_manager.h"
 #include "mesh/dual_contour.h"
@@ -1285,11 +1286,41 @@ Dictionary VoxelWorld::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 	int offsets_changed = 0;
 	int index_counts_changed = 0;
 	int drawn_after = 0;
+	PackedInt32Array pages;
+	PackedInt32Array culled;
+	PackedInt32Array page_frustum_culled;
+	PackedInt32Array slot_frustum_culled;
+	const std::vector<uint32_t> &page_chunk_cpu = lod_pool_->page_chunk_cpu();
+	float planes[6][4];
+	ve::lod_frustum_planes(cam.view_proj, planes);
+	const PackedByteArray chunk_bytes = device->buffer_get_data(lod_pool_->chunk_buffer(), 0,
+			static_cast<uint32_t>(lod_pool_->chunk_record_count() * 32));
+	const float *chunk_data = reinterpret_cast<const float *>(chunk_bytes.ptr());
+	const bool have_chunks = chunk_bytes.size() >= lod_pool_->chunk_record_count() * 32;
+	auto aabb_outside = [&](uint32_t ci) -> bool {
+		if (!have_chunks || ci == 0xffffffffu) return true;
+		const float *rec = chunk_data + static_cast<size_t>(ci) * 8;
+		const float lo[3] = {rec[0], rec[1], rec[2]};
+		const float cell = rec[3];
+		const float hi[3] = {lo[0] + cell * float(ve::kLodChunkCells),
+				lo[1] + cell * float(ve::kLodChunkCells),
+				lo[2] + cell * float(ve::kLodChunkCells)};
+		return !ve::lod_aabb_in_frustum(planes, lo, hi);
+	};
 	for (int i = 0; i < draw_count; i++) {
 		const size_t base = static_cast<size_t>(i) * 5;
 		if (a[base + 1] != 0u) drawn_after++;
 		if (b[base + 0] != a[base + 0]) index_counts_changed++;
 		if (b[base + 3] != a[base + 3]) offsets_changed++;
+		const uint32_t page = b[base + 3] / static_cast<uint32_t>(ve::kLodVertsPerPage);
+		const uint32_t page_ci = page < page_chunk_cpu.size() ?
+				page_chunk_cpu[static_cast<size_t>(page)] : 0xffffffffu;
+		const uint32_t slot_ci = static_cast<uint32_t>(i) < page_chunk_cpu.size() ?
+				page_chunk_cpu[static_cast<size_t>(i)] : 0xffffffffu;
+		pages.append(static_cast<int32_t>(page));
+		culled.append(a[base + 1] == 0u ? 1 : 0);
+		page_frustum_culled.append(aabb_outside(page_ci) ? 1 : 0);
+		slot_frustum_culled.append(aabb_outside(slot_ci) ? 1 : 0);
 	}
 
 	d["args_before"] = draw_count;
@@ -1298,6 +1329,10 @@ Dictionary VoxelWorld::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 	d["index_counts_changed"] = index_counts_changed;
 	d["drawn_after"] = drawn_after;
 	d["culled_ratio"] = static_cast<float>(draw_count - drawn_after) / static_cast<float>(draw_count);
+	d["pages"] = pages;
+	d["culled"] = culled;
+	d["page_frustum_culled"] = page_frustum_culled;
+	d["slot_frustum_culled"] = slot_frustum_culled;
 	return d;
 }
 

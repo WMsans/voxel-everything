@@ -36,8 +36,11 @@ public:
 	RID page_chunk_buffer() const { return page_chunk_; }
 	RID chunk_buffer() const { return chunks_; }
 	RID args_buffer() const { return args_; }
+	// Debug/test support: the CPU mirror of the page_chunk GPU buffer.
+	const std::vector<uint32_t> &page_chunk_cpu() const { return page_chunk_cpu_; }
 
 	int page_count() const { return arena_.capacity(); }
+	int chunk_record_count() const { return kChunkRecords; }
 	int free_pages() const { return arena_.free_pages(); }
 
 private:

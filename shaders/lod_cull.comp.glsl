@@ -40,11 +40,15 @@ bool outside_frustum(vec3 lo, vec3 hi) {
 }
 
 void main() {
-	uint page = gl_GlobalInvocationID.x;
-	if (page >= uint(pc.params.x)) return;
-	uint base = page * 5u;
+	uint slot = gl_GlobalInvocationID.x;
+	if (slot >= uint(pc.params.x)) return;
+	uint base = slot * 5u;
 	if (args.v[base + 1u] == 0u) return; // already empty
 
+	// The args list is compact (walk order), so the thread index is only a slot into
+	// it. The arena page id is encoded in vertexOffset = page * kLodVertsPerPage and must
+	// be recovered before indexing the per-page chunk tables.
+	uint page = args.v[base + 3u] / uint(LOD_QUADS_PER_PAGE * 4);
 	uint ci = page_chunk.v[page];
 	vec4 c0 = chunks.v[ci * 2u + 0u];
 	vec3 lo = c0.xyz;

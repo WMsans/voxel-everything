@@ -77,3 +77,32 @@ func test_the_reported_ratio_is_sane(timeout := 40000) -> void:
 	await settle(w, pos, fwd)
 	var d := w.debug_lod_cull_probe(pos, fwd)
 	assert_float(d["culled_ratio"]).is_between(0.0, 1.0)
+
+# The args list is compact (walk order) while the arena page ids are arbitrary. The cull
+# must recover each slot's real page id from args[slot*5+3] / 2048 and cull using that page's
+# chunk AABB. This test finds slots whose real page AABB is inside the frustum while the
+# slot-index chunk AABB is outside; the old shader culled all of them because it used the
+# slot as the page id, while the fixed shader keeps them (they are not frustum-culled).
+func test_cull_uses_real_arena_page_id(timeout := 40000) -> void:
+	var w := make_world()
+	var pos := Vector3(400.0, 90.0, 400.0)
+	var fwd := Vector3(0.0, -0.35, -1.0).normalized()
+	await settle(w, pos, fwd)
+	var d := w.debug_lod_cull_probe(pos, fwd)
+	var page_frustum: PackedInt32Array = d["page_frustum_culled"]
+	var slot_frustum: PackedInt32Array = d["slot_frustum_culled"]
+	var culled: PackedInt32Array = d["culled"]
+	assert_int(page_frustum.size()).is_greater(0)
+	var wrong_slot_outside := 0
+	var kept_despite_wrong_slot := 0
+	for i in range(page_frustum.size()):
+		if page_frustum[i] == 0 and slot_frustum[i] == 1:
+			wrong_slot_outside += 1
+			if culled[i] == 0:
+				kept_despite_wrong_slot += 1
+	assert_int(wrong_slot_outside).override_failure_message(
+		"no draw slot had a real page inside the frustum while its slot-index chunk was outside; cannot exercise slot-vs-page conflation"
+		).is_greater(0)
+	assert_int(kept_despite_wrong_slot).override_failure_message(
+		"cull culled %d pages whose real arena page AABB was in the frustum but whose slot-index AABB was outside; the compact slot was treated as the arena page id" % kept_despite_wrong_slot
+		).is_greater(0)
