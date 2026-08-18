@@ -22,6 +22,7 @@ func _process(_delta: float) -> void:
 			st.get("overflow_ever", 0)]
 	var p := ""
 	var isl := ""
+	var lod := ""
 	if _world:
 		var ph: Dictionary = _world.debug_physics_stats()
 		# build_ms is the Jolt BVH build for the last chunk; it is the one physics number
@@ -37,4 +38,15 @@ func _process(_delta: float) -> void:
 			st.get("live_islands", 0), st.get("live_debris", 0),
 			st.get("islands_spawned", 0), st.get("islands_merged", 0),
 			st.get("connectivity_runs", 0), st.get("manager_ms", 0.0)]
-	text = "%d fps  (%.1f ms)  |  %s%s%s" % [fps, ms, s, p, isl]
+		if _world.is_initialized():
+			var ld: Dictionary = _world.debug_lod_stats()
+			var pf: Dictionary = _world.debug_perf_stats()
+			var pages_used: int = int(ld.get("pages_used", 0))
+			var pages_total: int = int(ld.get("pages_total", 0))
+			var culled: float = float(ld.get("culled_ratio", 0.0))
+			lod = "  |  lod %dch %d/%dp %dpg %d%% %dbf %ddirty %.2fms" % [
+				ld.get("chunks_resident", 0), pages_used, pages_total,
+				ld.get("draw_pages", 0), int(round(culled * 100.0)),
+				ld.get("builds_in_flight", 0), ld.get("dirty_chunks", 0),
+				pf.get("lod_ms", 0.0)]
+	text = "%d fps  (%.1f ms)  |  %s%s%s%s" % [fps, ms, s, p, isl, lod]
