@@ -3,7 +3,9 @@
 #include "render/composite_pass.h"
 #include "render/gpu_atlas.h"
 #include "render/hiz_pass.h"
+#include "render/lod_pool.h"
 #include "render/lod_raster_pass.h"
+#include "render/lod_cull_pass.h"
 #include "lod/lod_tree.h"
 #include "render/island_cull_pass.h"
 #include "render/raymarch_pass.h"
@@ -133,6 +135,7 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	HizPass *hiz = world->hiz_pass();
 	if (hiz) hiz->build(rd, rsb->get_depth_texture(), size);
 	LodRasterPass *lod_raster = world->lod_raster_pass();
+	LodCullPass *lod_cull = world->lod_cull_pass();
 	if (world->lod_pool() && lod_raster && world->material_atlas()) {
 		ve::LodCamera lod_cam;
 		for (int c = 0; c < 4; c++)
@@ -144,6 +147,12 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 		lod_cam.viewport[0] = size.x;
 		lod_cam.viewport[1] = size.y;
 		world->lod_tick(lod_cam, hiz ? hiz->occlusion() : nullptr);
+		// Ordering: the indirect args upload (a device-level command) must precede the
+		// cull's compute list, and the cull's compute list must end before the raster's
+		// draw list opens. draw() only issues the indirect draw.
+		world->lod_pool()->upload_draw_args(lod_raster->draw_pages());
+		if (lod_cull) lod_cull->run(rd, *world->lod_pool(), hiz, view_proj,
+				lod_raster->draw_page_count());
 		const float cam_pos[3] = {cam.origin.x, cam.origin.y, cam.origin.z};
 		lod_raster->draw(rd, *world->lod_pool(), *world->material_atlas(),
 				rsb->get_color_texture(), rsb->get_depth_texture(), view_proj, cam_pos,

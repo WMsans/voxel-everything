@@ -15,6 +15,7 @@
 #include "render/lod_build_pass.h"
 #include "render/lod_pool.h"
 #include "render/lod_raster_pass.h"
+#include "render/lod_cull_pass.h"
 #include "render/hiz_pass.h"
 #include "lod/lod_contour.h"
 #include "lod/lod_grid.h"
@@ -91,6 +92,8 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::debug_hiz_probe_synthetic);
 	ClassDB::bind_method(D_METHOD("debug_hiz_occluded", "lo", "hi", "depth"),
 			&VoxelWorld::debug_hiz_occluded);
+	ClassDB::bind_method(D_METHOD("debug_lod_cull_probe", "pos", "fwd"),
+			&VoxelWorld::debug_lod_cull_probe);
 	ClassDB::bind_method(D_METHOD("debug_init_physics"), &VoxelWorld::debug_init_physics);
 	ClassDB::bind_method(D_METHOD("debug_teardown_physics"), &VoxelWorld::debug_teardown_physics);
 	ClassDB::bind_method(D_METHOD("debug_mesh_lattice_diff", "chunk"), &VoxelWorld::debug_mesh_lattice_diff);
@@ -238,6 +241,7 @@ void VoxelWorld::teardown_gpu() {
 	if (composite_pass_) { delete composite_pass_; composite_pass_ = nullptr; }
 	if (raymarch_pass_) { delete raymarch_pass_; raymarch_pass_ = nullptr; }
 	if (lod_raster_pass_) { delete lod_raster_pass_; lod_raster_pass_ = nullptr; }
+	if (lod_cull_pass_) { delete lod_cull_pass_; lod_cull_pass_ = nullptr; }
 	if (hiz_pass_) { delete hiz_pass_; hiz_pass_ = nullptr; }
 	if (materials_) { delete materials_; materials_ = nullptr; }
 	if (gen_pass_) { delete gen_pass_; gen_pass_ = nullptr; }
@@ -333,6 +337,13 @@ void VoxelWorld::ensure_initialized() {
 	composite_pass_->initialize(device);
 	lod_raster_pass_ = new LodRasterPass();
 	lod_raster_pass_->initialize(device);
+	lod_cull_pass_ = new LodCullPass();
+	if (!lod_cull_pass_->initialize(device)) {
+		UtilityFunctions::printerr("VoxelWorld: LoD cull initialization failed; continuing "
+				"without GPU culling (safe fail-soft: draw every candidate page)");
+		delete lod_cull_pass_;
+		lod_cull_pass_ = nullptr;
+	}
 	hiz_pass_ = new HizPass();
 	if (!hiz_pass_->initialize(device)) {
 		UtilityFunctions::printerr("VoxelWorld: HiZ initialization failed; continuing without "
@@ -528,6 +539,8 @@ Dictionary VoxelWorld::debug_perf_stats() {
 	d["stream_total_ms"] = streamer_ ? streamer_->last_total_ms() : 0.0f;
 	d["stream_readback_ms"] = streamer_ ? streamer_->last_readback_ms() : 0.0f;
 	d["island_ms"] = island_manager_ ? island_manager_->last_ms() : 0.0f;
+	d["lod_ms"] = (lod_raster_pass_ ? lod_raster_pass_->last_ms() : 0.0f) +
+			(lod_cull_pass_ ? lod_cull_pass_->last_ms() : 0.0f);
 	return d;
 }
 
@@ -1099,6 +1112,8 @@ Dictionary VoxelWorld::debug_lod_stats() {
 	const int unowned = used_pages - static_cast<int>(owned_pages);
 	d["partial_allocations"] = partial + (unowned > 0 ? unowned : 0);
 	d["builds_in_flight"] = mesh_ && mesh_->lod_busy() ? 1 : 0;
+	// Async cull stats readback; zero until the first readback lands (safe "nothing culled").
+	d["culled_ratio"] = lod_cull_pass_ ? lod_cull_pass_->culled_ratio() : 0.0f;
 	return d;
 }
 
@@ -1169,6 +1184,7 @@ Dictionary VoxelWorld::debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, i
 	device->texture_clear(depth, Color(0.0f, 0.0f, 0.0f, 0.0f), 0, 1, 0, 1);
 	lod_raster_pass_->set_cull_enabled(cull);
 	const int draw_count = lod_raster_pass_->draw_page_count();
+	lod_pool_->upload_draw_args(lod_raster_pass_->draw_pages());
 	bool ok = lod_raster_pass_->draw(device, *lod_pool_, *materials_, color, depth,
 			vp, p, draw_count);
 	device->submit();
@@ -1214,6 +1230,74 @@ Dictionary VoxelWorld::debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, i
 	if (framebuffer.is_valid()) device->free_rid(framebuffer);
 	if (color.is_valid()) device->free_rid(color);
 	if (depth.is_valid()) device->free_rid(depth);
+	return d;
+}
+
+Dictionary VoxelWorld::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
+	Dictionary d;
+	d["args_before"] = 0;
+	d["args_after"] = 0;
+	d["offsets_changed"] = 0;
+	d["index_counts_changed"] = 0;
+	d["drawn_after"] = 0;
+	d["culled_ratio"] = 0.0f;
+	ensure_lod();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !lod_pool_ || !lod_raster_pass_ || !lod_cull_pass_ ||
+			!hiz_pass_) {
+		return d;
+	}
+
+	// One tick: refresh the walk and the raster pass's page list for this view.
+	debug_lod_tick(pos, fwd);
+	const float p[3] = {pos.x, pos.y, pos.z};
+	const float f[3] = {fwd.x, fwd.y, fwd.z};
+	const float up[3] = {0.0f, 1.0f, 0.0f};
+	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, 1.2217f,
+			16.0f / 9.0f, 0.1f, 8000.0f, 2560, 1440);
+	Projection vp;
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++)
+			vp.columns[c][r] = cam.view_proj[c * 4 + r];
+
+	const int draw_count = lod_raster_pass_->draw_page_count();
+	if (draw_count <= 0) return d;
+	lod_pool_->upload_draw_args(lod_raster_pass_->draw_pages());
+	device->submit();
+	device->sync();
+	const PackedByteArray before = device->buffer_get_data(lod_pool_->args_buffer(), 0,
+			static_cast<uint32_t>(draw_count) * 20);
+
+	const bool ok = lod_cull_pass_->run(device, *lod_pool_, hiz_pass_, vp, draw_count);
+	device->submit();
+	device->sync();
+	if (!ok) return d;
+
+	const PackedByteArray after = device->buffer_get_data(lod_pool_->args_buffer(), 0,
+			static_cast<uint32_t>(draw_count) * 20);
+	if (before.size() < static_cast<int64_t>(draw_count) * 20 ||
+			after.size() < static_cast<int64_t>(draw_count) * 20) {
+		return d;
+	}
+
+	const uint32_t *b = reinterpret_cast<const uint32_t *>(before.ptr());
+	const uint32_t *a = reinterpret_cast<const uint32_t *>(after.ptr());
+	int offsets_changed = 0;
+	int index_counts_changed = 0;
+	int drawn_after = 0;
+	for (int i = 0; i < draw_count; i++) {
+		const size_t base = static_cast<size_t>(i) * 5;
+		if (a[base + 1] != 0u) drawn_after++;
+		if (b[base + 0] != a[base + 0]) index_counts_changed++;
+		if (b[base + 3] != a[base + 3]) offsets_changed++;
+	}
+
+	d["args_before"] = draw_count;
+	d["args_after"] = draw_count;
+	d["offsets_changed"] = offsets_changed;
+	d["index_counts_changed"] = index_counts_changed;
+	d["drawn_after"] = drawn_after;
+	d["culled_ratio"] = static_cast<float>(draw_count - drawn_after) / static_cast<float>(draw_count);
 	return d;
 }
 

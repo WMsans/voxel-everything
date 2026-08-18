@@ -14,6 +14,7 @@
 #include <godot_cpp/classes/rd_uniform.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
+#include <chrono>
 #include <cstring>
 
 using namespace godot;
@@ -207,27 +208,15 @@ bool LodRasterPass::ensure_index_array(RenderingDevice *rd, LodPool &pool) {
 bool LodRasterPass::draw(RenderingDevice *rd, LodPool &pool, MaterialAtlas &materials,
 		RID dst_color, RID dst_depth, const Projection &view_proj, const float cam_pos[3],
 		int draw_count) {
+	const auto t0 = std::chrono::steady_clock::now();
 	if (!shader_.is_valid()) return false;
 	if (draw_count <= 0 || draw_count > static_cast<int>(draw_pages_.size())) return false;
 	if (!ensure_pipeline(rd, dst_color, dst_depth)) return false;
 	if (!ensure_uniform_set(rd, pool, materials)) return false;
 	if (!ensure_index_array(rd, pool)) return false;
 
-	// Indirect args are built on the CPU (Task 15's cull will only zero instanceCount).
-	// Record before the draw list opens: buffer_update is a device-level command.
-	PackedByteArray args;
-	args.resize(static_cast<int64_t>(draw_count) * 20);
-	uint32_t *a = reinterpret_cast<uint32_t *>(args.ptrw());
-	for (int i = 0; i < draw_count; i++) {
-		const PageDraw &pd = draw_pages_[static_cast<size_t>(i)];
-		a[i * 5 + 0] = static_cast<uint32_t>(pd.quad_count * 6);
-		a[i * 5 + 1] = 1u; // instanceCount; the cull pass zeroes this to remove
-		a[i * 5 + 2] = 0u; // firstIndex: each page starts at index 0 in the shared buffer
-		a[i * 5 + 3] = static_cast<uint32_t>(pd.page * ve::kLodVertsPerPage);
-		a[i * 5 + 4] = 0u; // firstInstance
-	}
-	rd->buffer_update(pool.args_buffer(), 0, args.size(), args);
-
+	// The indirect args were uploaded by LodPool::upload_draw_args before the cull pass ran;
+	// draw() only opens the draw list and issues the indirect draw.
 	const int64_t dl = rd->draw_list_begin(framebuffer_, RenderingDevice::DRAW_DEFAULT_ALL);
 	rd->draw_list_bind_render_pipeline(dl, active_pipeline());
 	rd->draw_list_bind_uniform_set(dl, uset_, 0);
@@ -252,5 +241,6 @@ bool LodRasterPass::draw(RenderingDevice *rd, LodPool &pool, MaterialAtlas &mate
 	rd->draw_list_set_push_constant(dl, pc, pc.size());
 	rd->draw_list_draw_indirect(dl, true, pool.args_buffer(), 0, draw_count, 20);
 	rd->draw_list_end();
+	last_ms_ = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
 	return true;
 }

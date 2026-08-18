@@ -5,6 +5,7 @@
 #include <vector>
 #include "lod/lod_arena.h"
 #include "lod/lod_contour.h"
+#include "render/lod_raster_pass.h"
 #include "world/region.h"
 
 namespace godot {
@@ -24,6 +25,11 @@ public:
 	bool upload(int level, ve::IVec3 coord, const std::vector<ve::LodQuad> &quads,
 			std::vector<int> *pages_out);
 	void release(const std::vector<int> &pages);
+
+	// Uploads the indirect args for the given drawable pages. Task 15 moved this out of
+	// LodRasterPass::draw so the GPU cull can run between the upload and the raster draw;
+	// if draw() still rewrote instanceCount, the cull would be a no-op.
+	void upload_draw_args(const std::vector<LodRasterPass::PageDraw> &draw_pages);
 
 	RID quad_buffer() const { return quads_; }
 	RID index_buffer() const { return index_; }

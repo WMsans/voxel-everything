@@ -199,3 +199,19 @@ void LodPool::release(const std::vector<int> &pages) {
 		}
 	}
 }
+
+void LodPool::upload_draw_args(const std::vector<LodRasterPass::PageDraw> &draw_pages) {
+	if (!rd_ || !args_.is_valid() || draw_pages.empty()) return;
+	PackedByteArray args;
+	args.resize(static_cast<int64_t>(draw_pages.size()) * 20);
+	uint32_t *a = reinterpret_cast<uint32_t *>(args.ptrw());
+	for (size_t i = 0; i < draw_pages.size(); i++) {
+		const LodRasterPass::PageDraw &pd = draw_pages[i];
+		a[i * 5 + 0] = static_cast<uint32_t>(pd.quad_count * 6);
+		a[i * 5 + 1] = 1u; // instanceCount; the cull pass zeroes this to remove
+		a[i * 5 + 2] = 0u; // firstIndex: each page starts at index 0 in the shared buffer
+		a[i * 5 + 3] = static_cast<uint32_t>(pd.page * ve::kLodVertsPerPage);
+		a[i * 5 + 4] = 0u; // firstInstance
+	}
+	rd_->buffer_update(args_, 0, args.size(), args);
+}
