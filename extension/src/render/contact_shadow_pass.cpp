@@ -143,7 +143,8 @@ bool ContactShadowPass::render(RenderingDevice *rd, RID scene_color, RID scene_d
 	float *params = reinterpret_cast<float *>(pc.ptrw()) + 4;
 	params[0] = 0.6f;
 	params[1] = 0.85f;
-	params[2] = 1.5f;
+	// One voxel: large enough to leave the receiver, but too small to bridge terrain gaps.
+	params[2] = 0.05f;
 	params[3] = 0.0f;
 	rd->compute_list_set_push_constant(list, pc, pc.size());
 	rd->compute_list_dispatch(list, (dims[0] + 7) / 8, (dims[1] + 7) / 8, 1);
