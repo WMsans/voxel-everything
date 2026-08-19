@@ -49,4 +49,15 @@ func _process(_delta: float) -> void:
 				ld.get("draw_pages", 0), int(round(culled * 100.0)),
 				ld.get("builds_in_flight", 0), ld.get("dirty_chunks", 0),
 				pf.get("lod_ms", 0.0)]
-	text = "%d fps  (%.1f ms)  |  %s%s%s%s" % [fps, ms, s, p, isl, lod]
+			lod = lod.replace(" %.2fms" % float(pf.get("lod_ms", 0.0)),
+					" %.2fms cpu" % float(pf.get("lod_ms", 0.0)))
+	var gpu_line := "GPU n/a"
+	var gt: Dictionary = _world.debug_gpu_timings() if _world else {}
+	if gt.get("valid", false):
+		var shadows := maxf(float(gt.get("sun_shadow_gpu_ms", -1.0)), 0.0) + \
+				maxf(float(gt.get("contact_gpu_ms", -1.0)), 0.0)
+		gpu_line = "GPU ray %.2f lod %.2f ssgi %.2f ssr %.2f sh %.2f out %.2f ms" % [
+			gt.get("raymarch_gpu_ms", -1.0), gt.get("lod_gpu_ms", -1.0),
+			gt.get("ssgi_gpu_ms", -1.0), gt.get("ssr_gpu_ms", -1.0),
+			shadows, gt.get("outlines_gpu_ms", -1.0)]
+	text = "%d fps  (%.1f ms)  |  %s%s%s%s\n%s" % [fps, ms, s, p, isl, lod, gpu_line]

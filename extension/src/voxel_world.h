@@ -25,6 +25,7 @@
 #include "physics/island_body.h"
 #include "physics/island_manager.h"
 #include "render/island_atlas.h"
+#include "render/gpu_timings.h"
 #include "shade/beauty_settings.h"
 #include "world/edit_log.h"
 #include "world/raycast.h"
@@ -119,6 +120,7 @@ class VoxelWorld : public Node3D {
 	SsrPass *ssr_pass_ = nullptr;
 	OutlinePass *outline_pass_ = nullptr;
 	BeautyCompositor *beauty_compositor_ = nullptr;
+	GpuTimings gpu_timings_;
 	float prev_view_proj_[16] = {};
 	bool has_history_ = false;
 	uint32_t beauty_frame_ = 0;
@@ -212,7 +214,7 @@ class VoxelWorld : public Node3D {
 	bool initialize_downsample(RenderingDevice *rd);
 	void teardown_downsample();
 	bool ensure_downsample_set(RenderingDevice *rd, RID src, RID dst);
-	void downsample_history(RenderingDevice *rd, RID src, GBuffer &gb);
+	bool downsample_history(RenderingDevice *rd, RID src, GBuffer &gb);
 	// Gathers the ops that can affect a LoD chunk: its AABB padded by two cells, flattened
 	// across regions in global append order, truncated to a chronological prefix (M4 errata 1).
 	void gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out);
@@ -277,6 +279,8 @@ public:
 	ve::BeautySettings beauty_settings() const;
 	Dictionary debug_beauty_settings();
 	Dictionary debug_beauty_compositor_stats();
+	Dictionary debug_gpu_timings();
+	Dictionary debug_ingest_gpu_timings(const PackedStringArray &, const PackedInt64Array &, int64_t);
 	Dictionary debug_contact_shadow_probe(Vector3 pos, Vector3 fwd, int w, int h);
 	Dictionary debug_ssr_probe(int fixture, int w, int h);
 	Dictionary debug_outline_probe(int fixture, bool have_dynamic_normals);
@@ -292,6 +296,7 @@ public:
 	void prepare_lod_raster();
 	void prepare_lod_shadow_raster();
 	RenderingDevice *rd() const;
+	GpuTimings *gpu_timings() { return &gpu_timings_; }
 	ve::WorldBounds world_bounds() const;
 
 	GpuAtlas *atlas() { return atlas_; }

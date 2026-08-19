@@ -1,10 +1,11 @@
-[gd_scene load_steps=13 format=3 uid="uid://dx2akrpw2s62k"]
+[gd_scene load_steps=14 format=3 uid="uid://dx2akrpw2s62k"]
 
 [ext_resource type="Script" path="res://demo/player.gd" id="1"]
 [ext_resource type="Script" path="res://demo/hud.gd" id="2"]
 [ext_resource type="Script" path="res://demo/benchmark.gd" id="3"]
 [ext_resource type="Script" path="res://demo/edit_tool.gd" id="4"]
 [ext_resource type="Shader" path="res://shaders/cel_object.gdshader" id="5"]
+[ext_resource type="Script" path="res://demo/debug_menu.gd" id="6"]
 
 [sub_resource type="RaymarchCompositor" id="1"]
 world_path = NodePath("/root/Main/VoxelWorld")
@@ -67,6 +68,18 @@ material_override = SubResource(7)
 offset_left = 10.0
 offset_top = 10.0
 script = ExtResource(2)
+world_path = NodePath("/root/Main/VoxelWorld")
+
+[node name="DebugMenu" type="PanelContainer" parent="HUD"]
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -600.0
+offset_top = 10.0
+offset_right = -10.0
+offset_bottom = 420.0
+grow_horizontal = 0
+script = ExtResource("6")
 world_path = NodePath("/root/Main/VoxelWorld")
 
 [node name="Benchmark" type="Node" parent="."]

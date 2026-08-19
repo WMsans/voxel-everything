@@ -109,6 +109,9 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::debug_beauty_settings);
 	ClassDB::bind_method(D_METHOD("debug_beauty_compositor_stats"),
 			&VoxelWorld::debug_beauty_compositor_stats);
+	ClassDB::bind_method(D_METHOD("debug_gpu_timings"), &VoxelWorld::debug_gpu_timings);
+	ClassDB::bind_method(D_METHOD("debug_ingest_gpu_timings", "names", "gpu_us", "rd_frame"),
+			&VoxelWorld::debug_ingest_gpu_timings);
 	ClassDB::bind_method(D_METHOD("debug_contact_shadow_probe", "pos", "fwd", "w", "h"),
 			&VoxelWorld::debug_contact_shadow_probe);
 	ClassDB::bind_method(D_METHOD("debug_ssr_probe", "fixture", "w", "h"),
@@ -321,6 +324,15 @@ bool VoxelWorld::get_effect_enabled(const String &name) const {
 ve::BeautySettings VoxelWorld::beauty_settings() const {
 	std::lock_guard<std::mutex> lock(beauty_mutex_);
 	return beauty_;
+}
+
+Dictionary VoxelWorld::debug_gpu_timings() {
+	return gpu_timings_.snapshot();
+}
+
+Dictionary VoxelWorld::debug_ingest_gpu_timings(const PackedStringArray &names,
+		const PackedInt64Array &gpu_us, int64_t rd_frame) {
+	return gpu_timings_.ingest_for_test(names, gpu_us, static_cast<uint64_t>(rd_frame));
 }
 
 Dictionary VoxelWorld::debug_beauty_compositor_stats() {
@@ -794,22 +806,23 @@ void VoxelWorld::finish_beauty_frame(const float view_proj[16]) {
 	beauty_frame_++;
 }
 
-void VoxelWorld::downsample_history(RenderingDevice *rd, RID src, GBuffer &gb) {
-	if (!rd || !downsample_pipeline_.is_valid() || !gb.history().is_valid()) return;
+bool VoxelWorld::downsample_history(RenderingDevice *rd, RID src, GBuffer &gb) {
+	if (!rd || !downsample_pipeline_.is_valid() || !gb.history().is_valid()) return false;
 	const Vector2i half = gb.half_size();
-	if (!ensure_downsample_set(rd, src, gb.history())) return;
+	if (!ensure_downsample_set(rd, src, gb.history())) return false;
 	PackedByteArray pc;
 	pc.resize(16);
 	int32_t *dims = reinterpret_cast<int32_t *>(pc.ptrw());
 	dims[0] = half.x; dims[1] = half.y; dims[2] = dims[3] = 0;
 	const int64_t list = rd->compute_list_begin();
-	if (list < 0) return;
+	if (list < 0) return false;
 	rd->compute_list_bind_compute_pipeline(list, downsample_pipeline_);
 	rd->compute_list_bind_uniform_set(list, downsample_uset_, 0);
 	rd->compute_list_set_push_constant(list, pc, pc.size());
 	rd->compute_list_dispatch(list, (half.x + 7) / 8, (half.y + 7) / 8, 1);
 	rd->compute_list_end();
 	has_history_ = true;
+	return true;
 }
 
 void VoxelWorld::teardown_gpu() {
