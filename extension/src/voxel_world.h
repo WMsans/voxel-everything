@@ -6,12 +6,14 @@
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/node_path.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
+#include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/vector2.hpp>
 #include <atomic>
+#include <condition_variable>
 #include <map>
 #include <mutex>
 #include <set>
@@ -24,6 +26,8 @@
 #include "physics/island_body.h"
 #include "physics/island_manager.h"
 #include "render/island_atlas.h"
+#include "render/gpu_timings.h"
+#include "shade/beauty_settings.h"
 #include "world/edit_log.h"
 #include "world/raycast.h"
 #include "world/region.h"
@@ -31,12 +35,23 @@
 
 namespace godot {
 
+// Compositor callbacks can outlive the SceneTree during SceneTree::quit(). Admission
+// serializes the enabled check, SceneTree/world lookup, and per-world callback guard.
+class VoxelWorld;
+bool voxel_compositor_callbacks_enabled();
+bool voxel_try_begin_compositor_callback(const NodePath &world_path, VoxelWorld **world);
+void voxel_compositor_callbacks_ready(VoxelWorld *world);
+void voxel_compositor_callbacks_shutdown_started(VoxelWorld *world);
+
 class GpuAtlas;
 class MaterialAtlas;
 class RegionPass;
 class BrickGenPass;
 class RaymarchPass;
 class CompositePass;
+class DeferredPass;
+class SunShadowPass;
+class InjectPass;
 class WorldStreamer;
 class MeshService;
 class ColliderStreamer;
@@ -44,6 +59,13 @@ class LodPool;
 class LodRasterPass;
 class LodCullPass;
 class HizPass;
+class GBuffer;
+class CameraUbo;
+class ContactShadowPass;
+class SsgiPass;
+class SsrPass;
+class OutlinePass;
+class BeautyCompositor;
 class IslandAtlas;
 class IslandCullPass;
 struct IslandExtractJob;
@@ -63,6 +85,10 @@ struct OccupancyBlock {
 
 class VoxelWorld : public Node3D {
 	GDCLASS(VoxelWorld, Node3D)
+	friend class BeautyCompositor;
+	friend bool voxel_try_begin_compositor_callback(const NodePath &, VoxelWorld **);
+	friend void voxel_compositor_callbacks_ready(VoxelWorld *);
+	friend void voxel_compositor_callbacks_shutdown_started(VoxelWorld *);
 
 	bool use_local_device_ = false;
 
@@ -93,9 +119,26 @@ class VoxelWorld : public Node3D {
 	BrickGenPass *gen_pass_ = nullptr;
 	RaymarchPass *raymarch_pass_ = nullptr;
 	CompositePass *composite_pass_ = nullptr;
+	DeferredPass *deferred_pass_ = nullptr;
+	SunShadowPass *sun_shadow_pass_ = nullptr;
+	InjectPass *inject_pass_ = nullptr;
 	LodRasterPass *lod_raster_pass_ = nullptr;
 	LodCullPass *lod_cull_pass_ = nullptr;
 	HizPass *hiz_pass_ = nullptr;
+	GBuffer *gbuffer_ = nullptr;
+	CameraUbo *beauty_camera_ = nullptr;
+	ContactShadowPass *contact_shadow_pass_ = nullptr;
+	SsgiPass *ssgi_pass_ = nullptr;
+	SsrPass *ssr_pass_ = nullptr;
+	OutlinePass *outline_pass_ = nullptr;
+	BeautyCompositor *beauty_compositor_ = nullptr;
+	GpuTimings gpu_timings_;
+	float prev_view_proj_[16] = {};
+	bool has_history_ = false;
+	uint32_t beauty_frame_ = 0;
+	int normal_roughness_state_ = -1;
+	RID downsample_shader_, downsample_pipeline_, downsample_sampler_, downsample_uset_;
+	RID downsample_src_, downsample_dst_;
 	// CPU cores outlive the GPU objects: a re-init re-streams the same world, edits
 	// included. This is also what a future save/reload will do (saves ARE the edit log).
 	ve::EditLog *edit_log_ = nullptr;
@@ -163,6 +206,14 @@ class VoxelWorld : public Node3D {
 	std::map<int, int> lod_page_quads_; // page -> number of quads stored in that page
 	std::set<LodKey> lod_overflow_logged_; // once-per-chunk overflow diagnostics
 	int lod_pressure_ = 0;
+
+	// --- M6 beautification settings (Task 3) ---
+	// Setters run on the main thread; render callbacks take a value snapshot through
+	// beauty_settings() rather than retaining a reference to this mutable state.
+	mutable std::mutex beauty_mutex_;
+	int quality_tier_ = static_cast<int>(ve::QualityTier::kHigh);
+	ve::BeautySettings beauty_ = ve::settings_for_tier(ve::QualityTier::kHigh);
+
 	void ensure_lod(); // lazy: creates/initializes lod_tree_ + lod_pool_ on first use
 	// Assumes lod_mutex_ is held; emits the real page list for the current lod_walk_.
 	void prepare_lod_raster_locked();
@@ -170,8 +221,22 @@ class VoxelWorld : public Node3D {
 	RenderingDevice *main_rd_ = nullptr;
 	RenderingDevice *local_rd_ = nullptr; // owned when use_local_device_
 	bool initialized_ = false;
+	mutable std::mutex render_lifetime_mutex_;
+	std::condition_variable render_lifetime_cv_;
+	bool render_shutting_down_ = false;
+	bool render_teardown_deferred_ = false;
+	int render_callbacks_ = 0;
+	std::condition_variable gpu_teardown_cv_;
+	bool gpu_teardown_done_ = false;
+	bool last_hiz_readback_was_pending_ = false;
+	bool last_hiz_readback_was_drained_ = true;
 
 	void teardown_gpu(); // every GPU object; CPU cores survive
+	void shutdown_render_resources_on_render_thread();
+	bool initialize_downsample(RenderingDevice *rd);
+	void teardown_downsample();
+	bool ensure_downsample_set(RenderingDevice *rd, RID src, RID dst);
+	bool downsample_history(RenderingDevice *rd, RID src, GBuffer &gb);
 	// Gathers the ops that can affect a LoD chunk: its AABB padded by two cells, flattened
 	// across regions in global append order, truncated to a chronological prefix (M4 errata 1).
 	void gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out);
@@ -204,6 +269,11 @@ public:
 
 	void ensure_initialized();
 	bool is_initialized() const { return initialized_; }
+	void shutdown_render_resources();
+	// Render effects acquire this guard before dereferencing VoxelWorld. _exit_tree() blocks
+	// teardown until all callbacks that already acquired it have released their resources.
+	bool try_begin_render_callback();
+	void end_render_callback();
 	void ensure_physics_initialized();
 	void teardown_physics();
 	int physics_tick(Vector3 center); // returns actions taken; Task 7 gives it a body
@@ -226,10 +296,34 @@ public:
 	int get_max_lod_pages() const { return max_lod_pages_; }
 	void set_lod_builds_per_frame(int v) { lod_builds_per_frame_ = v; }
 	int get_lod_builds_per_frame() const { return lod_builds_per_frame_; }
+
+	void set_quality_tier(int v);
+	int get_quality_tier() const;
+	void set_effect_enabled(const String &name, bool on);
+	bool get_effect_enabled(const String &name) const;
+	// Returns an immutable value snapshot. Render callbacks must take this once per frame and
+	// pass the copy through their work; the mutex is never held during render work.
+	ve::BeautySettings beauty_settings() const;
+	Dictionary debug_beauty_settings();
+	Dictionary debug_beauty_compositor_stats();
+	Dictionary debug_gpu_timings();
+	Dictionary debug_ingest_gpu_timings(const PackedStringArray &, const PackedInt64Array &, int64_t);
+	Dictionary debug_contact_shadow_probe(Vector3 pos, Vector3 fwd, int w, int h);
+	Dictionary debug_ssr_probe(int fixture, int w, int h);
+	Dictionary debug_outline_probe(int fixture, bool have_dynamic_normals);
+	Dictionary debug_glossy_sdf_probe(Vector3 origin, Vector3 dir);
+	Dictionary debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, int h, int frames);
+	Dictionary debug_ssgi_reprojection_probe(Vector3 previous_pos, Vector3 previous_fwd,
+			Vector3 current_pos, Vector3 current_fwd, int w, int h);
+	void set_normal_roughness_state(int state) { normal_roughness_state_ = state; }
+	void set_beauty_compositor(BeautyCompositor *effect) { beauty_compositor_ = effect; }
+
 	void lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ);
 	// Push the current lod_walk_ page list (with per-page quad counts) into the raster pass.
 	void prepare_lod_raster();
+	void prepare_lod_shadow_raster();
 	RenderingDevice *rd() const;
+	GpuTimings *gpu_timings() { return &gpu_timings_; }
 	ve::WorldBounds world_bounds() const;
 
 	GpuAtlas *atlas() { return atlas_; }
@@ -246,10 +340,23 @@ public:
 	RaymarchPass *raymarch_pass() { return raymarch_pass_; }
 	IslandCullPass *island_cull() { return island_cull_; }
 	CompositePass *composite_pass() { return composite_pass_; }
+	DeferredPass *deferred_pass() { return deferred_pass_; }
+	SunShadowPass *sun_shadow_pass() { return sun_shadow_pass_; }
+	InjectPass *inject_pass() { return inject_pass_; }
 	LodPool *lod_pool() { return lod_pool_; }
 	LodRasterPass *lod_raster_pass() { return lod_raster_pass_; }
 	LodCullPass *lod_cull_pass() { return lod_cull_pass_; }
 	HizPass *hiz_pass() { return hiz_pass_; }
+	GBuffer *gbuffer() { return gbuffer_; }
+	CameraUbo *beauty_camera() { return beauty_camera_; }
+	ContactShadowPass *contact_shadow_pass() { return contact_shadow_pass_; }
+	SsgiPass *ssgi_pass() { return ssgi_pass_; }
+	SsrPass *ssr_pass() { return ssr_pass_; }
+	OutlinePass *outline_pass() { return outline_pass_; }
+	const float *prev_view_proj() const { return prev_view_proj_; }
+	bool has_history() const { return has_history_; }
+	uint32_t beauty_frame() const { return beauty_frame_; }
+	void finish_beauty_frame(const float view_proj[16]);
 	std::mutex &edit_mutex() { return edit_mutex_; }
 	MeshService *mesh_service() { return mesh_; }
 	void queue_island_upload(int slot, const ve::VolumeData &d);
@@ -382,6 +489,7 @@ public:
 	// --- Task 12 hooks ---
 	Color debug_raymarch_pixel(Vector3 origin, Vector3 dir);
 	Dictionary debug_raymarch_probe(Vector3 origin, Vector3 dir);
+	Dictionary debug_raymarch_gbuffer(Vector3 origin, Vector3 dir);
 	// --- M5 Task 11 hooks ---
 	Dictionary debug_material_atlas_stats();
 	Color debug_material_probe(int mat, Vector3 p, Vector3 n);
@@ -434,6 +542,11 @@ public:
 			float tan_y, int width, int height);
 
 	// --- Task 6 hooks ---
+	Dictionary debug_cel_diff(Color albedo, Color ambient, float ndl, float ndv, float ndh,
+			float shadow, float ao, float gloss);
+	Color debug_cel_reference(Color albedo, Color ambient, float ndl, float ndv, float ndh,
+			float shadow, float ao, float gloss) const;
+	Dictionary debug_deferred_probe(Vector3 pos, Vector3 fwd, int w, int h, int probe_mode);
 	bool debug_mesh_submit(Array chunks);
 	Array debug_mesh_collect();
 
@@ -455,14 +568,22 @@ public:
 	Dictionary debug_lod_render_probe(Vector3 pos, Vector3 fwd, int w, int h);
 	Dictionary debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, int w, int h,
 			bool cull);
+	Dictionary debug_lod_gbuffer_probe(Vector3 pos, Vector3 fwd, int w, int h);
 	// --- M5 Task 16 seam hooks ---
 	Dictionary debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, bool skip_lod = false);
 	// --- M5 Task 14 HiZ hooks ---
 	Dictionary debug_hiz_stats();
+	Dictionary debug_hiz_shutdown_probe();
+	Dictionary debug_gbuffer_stats(int w, int h);
 	Dictionary debug_hiz_probe_synthetic(float far_value, float near_value);
 	bool debug_hiz_occluded(Vector2 lo, Vector2 hi, float depth);
 	// --- M5 Task 15 LoD cull hooks ---
 	Dictionary debug_lod_cull_probe(Vector3 pos, Vector3 fwd);
+
+	// --- Task 8 hooks ---
+	Dictionary debug_sun_shadow_stats();
+	void debug_sun_shadow_build(bool force);
+	float debug_sun_shadow_visibility(Vector3 p);
 };
 
 } // namespace godot

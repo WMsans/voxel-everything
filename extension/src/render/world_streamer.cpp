@@ -152,6 +152,15 @@ void WorldStreamer::pump_occupancy(RenderingDevice *rd) {
 	}
 }
 
+void WorldStreamer::drain_readbacks(RenderingDevice *rd) {
+	if (!rd) return;
+	if (overflow_read_.is_valid()) overflow_read_->drain(rd);
+	if (free_read_.is_valid()) free_read_->drain(rd);
+	if (costs_read_.is_valid()) costs_read_->drain(rd);
+	for (OccupancyRead &r : occ_reads_)
+		if (r.read.is_valid()) r.read->drain(rd);
+}
+
 int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) {
 	const Clock::time_point t_start = Clock::now();
 	last_readback_ms_ = 0.0f;

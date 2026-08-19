@@ -9,11 +9,13 @@ layout(set = 0, binding = 19) uniform sampler2DArray material_surface_tex;
 
 #include "common.glslh"
 #include "brick_layout.glslh"
+#include "shade.glslh"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-layout(set = 0, binding = 0, rgba16f) writeonly uniform image2D out_color;
+layout(set = 0, binding = 0, rgba8) writeonly uniform image2D out_albedo;
 layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D out_hitpos;
+layout(set = 0, binding = 20, rgba16f) writeonly uniform image2D out_surface;
 layout(set = 0, binding = 2) uniform sampler3D sdf_atlas;   // R8 unorm, nearest
 layout(set = 0, binding = 3) uniform usampler3D mat_atlas;  // R8 uint, nearest
 layout(set = 0, binding = 4) uniform usampler3D mip2_atlas; // RG8 uint, 2^3 cells/brick
@@ -94,7 +96,9 @@ float sdf_near(vec3 p, ivec3 anchor, int anchor_slot) {
 	return brick_sdf(slot, (p - vec3(brick) * BRICK_SIZE) / VOXEL_SIZE);
 }
 
-vec3 calc_normal(vec3 p, ivec3 anchor, int anchor_slot) {
+vec3 calc_normal(vec3 p, ivec3 anchor, int anchor_slot, inout int steps_left) {
+	if (steps_left < 6) return vec3(0.0, 1.0, 0.0);
+	steps_left -= 6;
 	const float e = 0.01;
 	return normalize(vec3(
 		sdf_near(p + vec3(e, 0, 0), anchor, anchor_slot) - sdf_near(p - vec3(e, 0, 0), anchor, anchor_slot),
@@ -143,6 +147,12 @@ const int ISLAND_VOXELS = 262144;   // 64^3
 const int ISLAND_MIP_STRIDE = 8;    // ve::kVolumeMipStride
 const int ISLAND_MIP_CELLS = 8;     // ISLAND_DIM / ISLAND_MIP_STRIDE
 const int ISLAND_MIP_PER_SLOT = 512;
+
+const float GLOSSY_SDF_MAX_DIST = 20.0;
+const int GLOSSY_SDF_STEPS = 64;
+const float GLOSSY_SDF_MIN_GLOSS = 0.5;
+const float GLOSSY_SDF_BIAS = 0.06;
+const float GLOSSY_SDF_STRENGTH = 0.80;
 
 layout(set = 0, binding = 13, std430) readonly buffer IslandSdf { uint w[]; } island_sdf;
 layout(set = 0, binding = 14, std430) readonly buffer IslandMat { uint w[]; } island_mat;
@@ -251,7 +261,7 @@ struct Hit {
 
 // Sphere-traces one island. `best` is updated only when this island is nearer, so calling it
 // for every island in the tile's mask resolves "nearest hit wins" with no sorting.
-void march_island(int slot, vec3 ro, vec3 rd, inout Hit best) {
+void march_island(int slot, vec3 ro, vec3 rd, inout Hit best, inout int steps_left) {
 	Island isl;
 	if (!island_load(slot, isl)) return;
 
@@ -270,12 +280,13 @@ void march_island(int slot, vec3 ro, vec3 rd, inout Hit best) {
 
 	float t = t0;
 	float cell_m = float(ISLAND_MIP_STRIDE) * isl.voxel;
-	for (int k = 0; k < 192; k++) {
+	for (int k = 0; k < 192 && steps_left > 0; k++) {
 		if (t > t1) return;
 		vec3 q = ro_l + rd_l * t;
 		ivec3 c = clamp(ivec3(floor((q - isl.lo) / cell_m)), ivec3(0),
 				ivec3(ISLAND_MIP_CELLS - 1));
 		if (!island_cell_has_surface(slot, c)) {
+			steps_left--;
 			// Jump to the cell's exit face, exactly as the brick march does, with a floor on
 			// the step so a ray grazing a face still makes progress.
 			vec3 clo = isl.lo + vec3(c) * cell_m;
@@ -287,14 +298,20 @@ void march_island(int slot, vec3 ro, vec3 rd, inout Hit best) {
 			t += max(min(tf.x, min(tf.y, tf.z)), 0.002);
 			continue;
 		}
+		if (steps_left <= 0) return;
+		steps_left--;
 		float d = island_sdf_at(slot, isl, q);
 		if (d < 0.002) {
 			for (int r = 0; r < 4; r++) { // secant refinement, as the terrain march does
+				if (steps_left <= 0) return;
+				steps_left--;
 				q = ro_l + rd_l * t;
 				t += island_sdf_at(slot, isl, q) * 0.5;
 			}
 			if (t > best.t) return; // refinement pushed it behind the current winner
 			q = ro_l + rd_l * t;
+			if (steps_left < 6) return;
+			steps_left -= 6;
 			const float e = 0.5 * 0.05;
 			vec3 n_l = normalize(vec3(
 				island_sdf_at(slot, isl, q + vec3(e, 0, 0)) -
@@ -316,7 +333,7 @@ void march_island(int slot, vec3 ro, vec3 rd, inout Hit best) {
 
 // The M1/M2 terrain march, unchanged in behaviour, returning a hit record instead of a
 // colour so an island can outrank it.
-Hit march_terrain(vec3 ro, vec3 rd, float max_dist) {
+Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
 	Hit h;
 	h.hit = false;
 	h.t = max_dist;
@@ -341,12 +358,13 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist) {
 		if (slot >= 0 && brick_may_have_surface(slot)) {
 			bool has_material = palette_buf.ids[slot * 4] != 0u;
 			float t = t_prev;
-			for (int j = 0; j < 64; j++) {
+			for (int j = 0; j < 64 && steps_left > 0; j++) {
 				if (t > t_exit) break;
 				vec3 p = ro + rd * t;
 				vec3 vox = (p - vec3(map) * BRICK_SIZE) / VOXEL_SIZE;
 				ivec3 cell8 = clamp(ivec3(floor(vox * 0.5)), ivec3(0), ivec3(7));
 				if (!cell8_may_have_surface(slot, cell8)) {
+					steps_left--;
 					vec3 cell_lo = vec3(map) * BRICK_SIZE + vec3(cell8 * 2) * VOXEL_SIZE;
 					vec3 cell_hi = cell_lo + 2.0 * VOXEL_SIZE;
 					vec3 far = mix(cell_lo, cell_hi, step(0.0, rd));
@@ -357,9 +375,13 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist) {
 					t = min(t + max(min(tf.x, min(tf.y, tf.z)), 0.002), t_exit);
 					continue;
 				}
+				if (steps_left <= 0) break;
+				steps_left--;
 				float d = world_sdf(p);
 				if (d < 0.002 && has_material) {
 					for (int k = 0; k < 4; k++) {
+						if (steps_left <= 0) return h;
+						steps_left--;
 						float dk = world_sdf(p);
 						t += dk * 0.5;
 						p = ro + rd * t;
@@ -367,7 +389,7 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist) {
 					h.hit = true;
 					h.t = t;
 					h.p = p;
-					h.n = calc_normal(p, map, slot);
+					h.n = calc_normal(p, map, slot, steps_left);
 					h.mat = material_at(p, map, slot);
 					return h;
 				}
@@ -382,9 +404,72 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist) {
 	return h;
 }
 
+// ---------------------------------------------------------------------------------------
+// Shadow layer 1 (spec section 7): the same field the primary ray marched, one ray per
+// pixel. Sphere tracing gives contact hardening for free -- the penumbra narrows as the
+// occluder approaches -- with no shadow map and therefore no acne to bias away.
+//
+// world_sdf() returns +SDF_RANGE for a known-empty brick. Residency is an explicit
+// prerequisite for a shadow result: if the ray leaves the resident/probed region field,
+// return fully lit rather than treating the accumulated darkness as known data.
+// ---------------------------------------------------------------------------------------
+const float RAY_SHADOW_DIST = 60.0;
+const int RAY_SHADOW_STEPS = 96;
+const float RAY_SHADOW_K = 12.0;
+const int RAY_SHADOW_MAX_ISLANDS = 4;
+
+float terrain_sun_visibility(vec3 ro) {
+	float res = 1.0;
+	float t = 0.05;
+	for (int i = 0; i < RAY_SHADOW_STEPS; i++) {
+		if (t > RAY_SHADOW_DIST) break;
+		vec3 q = ro + SUN_DIR * t;
+		ivec3 brick = ivec3(floor(q / BRICK_SIZE));
+		int shadow_region = region_slot_of(brick);
+		if (shadow_region < 0) return 1.0;
+		float d = world_sdf(q);
+		if (d < 0.004) return 0.0;
+		res = min(res, RAY_SHADOW_K * d / t);
+		t += clamp(d, 0.02, 1.0);
+	}
+	return clamp(res, 0.0, 1.0);
+}
+
+// Spec section 5: "islands shade/shadow/reflect exactly like static terrain". The AABB
+// reject costs a few ALU for each of the (at most 32) live slots; only islands the ray
+// actually crosses are marched, and at most RAY_SHADOW_MAX_ISLANDS of them. A fifth
+// overlapping island is a case the demo does not produce and the budget does not pay for.
+float island_sun_visibility(vec3 ro, int island_count) {
+	float res = 1.0;
+	int marched = 0;
+	for (int i = 0; i < 32; i++) {
+		if (i >= island_count || marched >= RAY_SHADOW_MAX_ISLANDS) break;
+		vec3 lo = island_desc.v[i * 8 + 5].xyz;
+		vec3 hi = island_desc.v[i * 8 + 6].xyz;
+		float t0, t1;
+		if (!ray_box(ro, SUN_DIR, lo, hi, t0, t1)) continue;
+		Island isl;
+		if (!island_load(i, isl)) continue;
+		marched++;
+		mat3 inv = transpose(isl.basis);
+		vec3 ro_l = inv * (ro - isl.pos);
+		vec3 rd_l = inv * SUN_DIR;
+		float t = max(t0, 0.05);
+		float tmax = min(t1, RAY_SHADOW_DIST);
+		for (int k = 0; k < 48; k++) {
+			if (t > tmax) break;
+			float d = island_sdf_at(i, isl, ro_l + rd_l * t);
+			if (d < 0.004) return 0.0;
+			res = min(res, RAY_SHADOW_K * d / t);
+			t += clamp(d, 0.02, 1.0);
+		}
+	}
+	return clamp(res, 0.0, 1.0);
+}
+
 void main() {
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
-	ivec2 size = imageSize(out_color);
+	ivec2 size = imageSize(out_albedo);
 	if (px.x >= size.x || px.y >= size.y) return;
 	vec2 uv = (vec2(px) + 0.5) / vec2(size);
 	vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
@@ -395,7 +480,8 @@ void main() {
 		+ pc.cam_up.xyz * ndc.y * pc.params.y);
 	float max_dist = pc.params.z;
 
-	Hit best = march_terrain(ro, rd, max_dist);
+	int primary_steps = 65536;
+	Hit best = march_terrain(ro, rd, max_dist, primary_steps);
 
 	// Which islands could be here? pc.region_origin.w is the cull grid's tiles-per-row, and
 	// 0 means "no mask" -- the 1x1 debug probes and any frame before the cull pass has run.
@@ -410,25 +496,23 @@ void main() {
 	while (mask != 0u) {
 		int i = findLSB(mask);
 		mask &= mask - 1u;
-		march_island(i, ro, rd, best);
+		int island_steps = 192;
+		march_island(i, ro, rd, best, island_steps);
 	}
 
-	// Debug material probe: a 1x1 dispatch calls material_surface() directly with zero
-	// gradients. pc.params.w is otherwise unused, so >0 is the probe flag; cam_pos is the
-	// world point and cam_fwd the surface normal.
-	if (pc.params.w > 0.0) {
-		vec4 surf = material_surface(uint(pc.params.w), pc.cam_pos.xyz,
-				normalize(pc.cam_fwd.xyz), vec3(0.0), vec3(0.0));
-		imageStore(out_color, px, vec4(surf.rgb, 1.0));
-		imageStore(out_hitpos, px, vec4(pc.cam_pos.xyz, 1.0));
-		return;
-	}
+	uint flags = floatBitsToUint(pc.cam_pos.w);
 
-	// One shading path for both (spec §3: "islands shade/shadow/reflect exactly like static
-	// terrain"). M6 replaces this with the deferred cel stack; the point is that there is
-	// exactly one of it.
-	vec3 color = sky_color(rd);
+	// Sky and misses: material 0 means "no voxel here". The albedo channel carries the sky
+	// gradient and the deferred pass passes material 0 straight through unlit, so sky_color()
+	// still lives in exactly one place.
+	vec3 albedo = sky_color(rd);
+	vec2 oct = oct_encode(-rd);
+	float mat_id = 0.0;
+	float gloss = 0.0;
+	float ao = 1.0;
+	float sun = 1.0;
 	vec4 hitpos = vec4(0.0);
+
 	if (best.hit) {
 		// The pixel's world footprint at the hit: the ray direction's screen derivative
 		// scaled by distance. tan_x/tan_y and the target size are already in the push
@@ -436,19 +520,68 @@ void main() {
 		vec3 ddx = pc.cam_right.xyz * (2.0 * pc.params.x / float(size.x)) * best.t;
 		vec3 ddy = pc.cam_up.xyz * (2.0 * pc.params.y / float(size.y)) * best.t;
 		vec4 surf = material_surface(best.mat, best.p, best.n, ddx, ddy);
-		color = shade_terrain(surf, best.n, best.p);
+		vec2 props = material_props(best.mat, best.p, best.n, ddx, ddy);
+		albedo = surf.rgb;
+		oct = oct_encode(best.n);
+		mat_id = float(best.mat);
+		gloss = 1.0 - props.x;
+		ao = props.y;
 		hitpos = vec4(best.p, 1.0);
+		if ((flags & BEAUTY_RAY_SUN_SHADOW) != 0u) {
+			// One voxel of offset: less and the ray self-shadows on its own surface, more
+			// and thin ledges stop casting.
+			vec3 sro = best.p + best.n * 0.06;
+			sun = min(terrain_sun_visibility(sro), island_sun_visibility(sro, island_count));
+		}
+		if (pc.params.w < -0.5) gloss = 1.0;
+		if ((flags & BEAUTY_GLOSSY_RAYS) != 0u && gloss > GLOSSY_SDF_MIN_GLOSS) {
+			vec3 rr = normalize(reflect(rd, best.n));
+			vec3 rro = best.p + best.n * GLOSSY_SDF_BIAS;
+			int reflected_steps = GLOSSY_SDF_STEPS;
+			Hit reflected = march_terrain(rro, rr, GLOSSY_SDF_MAX_DIST, reflected_steps);
+			// A reflected ray leaves the primary tile, so its tile mask is invalid. AABB-reject
+			// every live island descriptor, sharing the same remaining 64-step budget.
+			for (int i = 0; i < island_count && reflected_steps > 0; i++)
+				march_island(i, rro, rr, reflected, reflected_steps);
+			vec3 reflected_albedo = sky_color(rr);
+			if (reflected.hit)
+				reflected_albedo = material_surface(reflected.mat, reflected.p,
+						reflected.n, ddx, ddy).rgb;
+			float ndv = clamp(dot(best.n, -rd), 0.0, 1.0);
+			float fresnel = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);
+			float weight = clamp(GLOSSY_SDF_STRENGTH * fresnel *
+					smoothstep(0.5, 1.0, gloss), 0.0, 0.85);
+			albedo = mix(albedo, reflected_albedo, weight);
+		}
 	}
 
+	// The pending-edit visualiser tints the DESCRIPTION, so the tint survives the deferred
+	// pass instead of being relit away.
 	if (best.hit && edits.params.x > 0.0 &&
 			length(best.p - edits.center.xyz) < edits.params.x) {
-		uint t = uint(edits.params.y);
-		vec3 tint = t == 0u ? vec3(1.0, 0.55, 0.1)
-		          : t == 1u ? flat_material_albedo(4u)
+		uint et = uint(edits.params.y);
+		vec3 tint = et == 0u ? vec3(1.0, 0.55, 0.1)
+		          : et == 1u ? flat_material_albedo(4u)
 		          : flat_material_albedo(uint(edits.params.z));
-		color = mix(color, tint, 0.45);
+		albedo = mix(albedo, tint, 0.45);
 	}
 
-	imageStore(out_color, px, vec4(color, 1.0));
+	// Debug material probe: a 1x1 dispatch calls material_surface() directly with zero
+	// gradients. pc.params.w is otherwise unused, so > 0 is the probe flag.
+	if (pc.params.w > 0.0) {
+		vec4 surf = material_surface(uint(pc.params.w), pc.cam_pos.xyz,
+				normalize(pc.cam_fwd.xyz), vec3(0.0), vec3(0.0));
+		imageStore(out_albedo, px, vec4(surf.rgb, 1.0));
+		imageStore(out_surface, px, vec4(0.0, 0.0, pc.params.w, 0.0));
+		imageStore(out_hitpos, px, vec4(pc.cam_pos.xyz, 1.0));
+		return;
+	}
+
+	// AO has no channel of its own. The cel stack only ever multiplies the AMBIENT term by
+	// it, and folding it into the albedo here costs nothing and keeps hitpos.w the pure hit
+	// flag every existing reader already treats it as. 0.65 is how much of the map is
+	// allowed to darken the surface; a full multiply reads as dirt in the cel bands.
+	imageStore(out_albedo, px, vec4(albedo * mix(1.0, ao, 0.65), sun));
+	imageStore(out_surface, px, vec4(oct, mat_id, gloss));
 	imageStore(out_hitpos, px, hitpos);
 }
