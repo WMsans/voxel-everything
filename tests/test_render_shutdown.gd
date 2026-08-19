@@ -16,6 +16,7 @@ func test_shutdown_drains_pending_hiz_readback_before_freeing_resources() -> voi
 	_worlds.append(world)
 
 	var result: Dictionary = world.debug_hiz_shutdown_probe()
+	assert_bool(result["callback_guarded"]).is_true()
 	assert_bool(result["queued"]).is_true()
 	assert_bool(result["was_pending"]).is_true()
 	assert_bool(result["drained"]).is_true()
