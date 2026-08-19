@@ -182,3 +182,67 @@ Key baseline observations captured into Errata entry 1:
   - `ERROR: Parameter "pointed_win" is null.`
   - `WARNING: The requested V-Sync mode Disabled is not available. Falling back to V-Sync mode Enabled.`
   These did not block the run; all five legs completed with `EXIT_STATUS=0`.
+
+## Fix round 1 — review finding: `verdict_qualified` output key
+
+### Review requirement verified
+
+The review finding was correct: `demo/benchmark.gd` printed:
+
+```text
+BENCH timing_condition ... frame_verdict_qualified=...
+```
+
+but the Task 1 brief requires the field name `verdict_qualified`.
+
+### TDD evidence
+
+#### Red
+
+Added a focused benchmark-output regression suite at `tests/test_benchmark.gd` that instantiates the real benchmark script and asserts the `timing_condition` line uses `verdict_qualified` and does not use `frame_verdict_qualified`.
+
+Ran:
+
+```bash
+./gdunit_tests.sh -c -a res://tests/test_benchmark.gd
+```
+
+Result:
+
+- exit code `100`
+- failure was the intended missing behavior:
+
+  ```text
+  Invalid call. Nonexistent function '_timing_condition_line (via call)' in base 'Node (benchmark.gd)'.
+  ```
+
+#### Green
+
+Implemented the minimum change:
+
+- added `_timing_condition_line()` to `demo/benchmark.gd`
+- changed `_report()` to print that helper
+- emitted the required key `verdict_qualified`
+
+### Verification commands and results
+
+Ran:
+
+```bash
+./gdunit_tests.sh -c -a res://tests/test_benchmark.gd
+./gdunit_tests.sh -c -a res://tests/test_gpu_timings.gd
+```
+
+Results:
+
+- `./gdunit_tests.sh -c -a res://tests/test_benchmark.gd`
+  - exit code `0`
+  - `1 test cases | 0 errors | 0 failures`
+- `./gdunit_tests.sh -c -a res://tests/test_gpu_timings.gd`
+  - exit code `0`
+  - `7 test cases | 0 errors | 0 failures`
+
+### Notes
+
+- I did not re-run the full benchmark sweep for this review fix. The output-contract change is covered by the focused regression suite above, and the benchmark still depends on the known real-display environment described earlier in this report.
+- Errata entry 1 in `docs/superpowers/plans/2026-08-19-m7-budget-demo-capture.md` still records the previously captured baseline output, which predates this key rename.

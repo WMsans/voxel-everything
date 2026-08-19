@@ -284,6 +284,11 @@ func _budget_verdict(values: PackedFloat32Array, budget_ms: float) -> String:
 	sorted.sort()
 	return "PASS" if _percentile(sorted, 0.99) <= budget_ms else "WARN"
 
+func _timing_condition_line() -> String:
+	var qualified := _vsync_actual != "disabled"
+	return "BENCH timing_condition display_driver=%s vsync_requested=disabled vsync_actual=%s verdict_qualified=%s" % [
+		DisplayServer.get_name(), _vsync_actual, str(qualified).to_lower()]
+
 func _report() -> void:
 	var sorted := _samples.duplicate()
 	sorted.sort()
@@ -358,8 +363,7 @@ func _report() -> void:
 		_gpu_timestamp_normalization, _gpu_timestamp_unit, _gpu_timestamp_scale,
 		str(_gpu_timestamp_normalized).to_lower()])
 	var qualified := _vsync_actual != "disabled"
-	print("BENCH timing_condition display_driver=%s vsync_requested=disabled vsync_actual=%s frame_verdict_qualified=%s" % [
-		DisplayServer.get_name(), _vsync_actual, str(qualified).to_lower()])
+	print(_timing_condition_line())
 	if qualified:
 		push_warning("BENCH: V-Sync is %s; frame percentiles are display-capped, not engine numbers" % _vsync_actual)
 	var st: Dictionary = _world.debug_stream_stats()
