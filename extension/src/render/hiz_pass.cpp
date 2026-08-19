@@ -225,6 +225,9 @@ bool HizPass::build(RenderingDevice *rd, RID scene_depth, Vector2i scene_size) {
 	if (!ensure_uniform_set(rd, scene_depth, 0)) return false;
 
 	const int64_t list = rd->compute_list_begin();
+	// A failed list can occur during viewport/device teardown. Return before any binding or
+	// dispatch so the caller can take the conservative visible/no-HiZ path.
+	if (list < 0) return false;
 	for (int m = 0; m < kMipCount; m++) {
 		const int dw = size_at(m);
 		const int dh = size_at(m);

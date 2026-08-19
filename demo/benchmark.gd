@@ -36,8 +36,8 @@ var _last_gpu_sample_id := -1
 var _gpu_dropped_pairs := 0
 var _gpu_timestamp_unit := "unavailable"
 var _gpu_timestamp_scale := 0.0
-var _gpu_timestamp_ratio := 0.0
-var _gpu_timestamp_calibrated := false
+var _gpu_timestamp_normalization := "unavailable"
+var _gpu_timestamp_normalized := false
 var _draining := false
 var _drain_frames := 0
 
@@ -232,8 +232,8 @@ func _capture_gpu_sample() -> void:
 	if d.has("timestamp_unit"):
 		_gpu_timestamp_unit = str(d["timestamp_unit"])
 		_gpu_timestamp_scale = float(d.get("timestamp_scale_to_microseconds", 0.0))
-		_gpu_timestamp_ratio = float(d.get("timestamp_raw_cpu_ratio", 0.0))
-		_gpu_timestamp_calibrated = bool(d.get("timestamp_calibrated", false))
+		_gpu_timestamp_normalization = str(d.get("timestamp_normalization", "unavailable"))
+		_gpu_timestamp_normalized = bool(d.get("timestamp_normalized", false))
 	if not d.get("valid", false):
 		return
 	var sample_id := int(d["sample_id"])
@@ -334,9 +334,9 @@ func _report() -> void:
 	var custom_values: PackedFloat32Array = _gpu_samples["custom_frame"]
 	print("BENCH gpu_timing valid_samples=%d dropped_pairs=%d lod_source=timestamp lod_ms_source=cpu_record" % [
 		custom_values.size(), _gpu_dropped_pairs])
-	print("BENCH gpu_timestamp_calibration unit=%s scale_to_us=%.6f raw_cpu_ratio=%.3f calibrated=%s" % [
-		_gpu_timestamp_unit, _gpu_timestamp_scale, _gpu_timestamp_ratio,
-		str(_gpu_timestamp_calibrated).to_lower()])
+	print("BENCH gpu_timestamp_normalization mode=%s unit=%s scale_to_us=%.6f normalized=%s" % [
+		_gpu_timestamp_normalization, _gpu_timestamp_unit, _gpu_timestamp_scale,
+		str(_gpu_timestamp_normalized).to_lower()])
 	print("BENCH timing_condition vsync_requested=disabled vsync_actual=enabled_wayland verdict_qualified=true")
 	var st: Dictionary = _world.debug_stream_stats()
 	print("BENCH regions=%d overflow=%d" % [st.get("resident_regions", -1),

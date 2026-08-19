@@ -67,10 +67,10 @@ bool GBuffer::is_valid() const {
 bool GBuffer::ensure(RenderingDevice *rd, RenderSceneBuffersRD *rsb, Vector2i size) {
 	if (!rd || size.x <= 0 || size.y <= 0) return false;
 	rd_ = rd;
-	return rsb ? ensure_managed(rd, rsb, size) : ensure_owned(rd, size);
+	return rsb ? ensure_managed(rsb, size) : ensure_owned(rd, size);
 }
 
-bool GBuffer::ensure_managed(RenderingDevice *rd, RenderSceneBuffersRD *rsb, Vector2i size) {
+bool GBuffer::ensure_managed(RenderSceneBuffersRD *rsb, Vector2i size) {
 	// If this object previously owned textures (a probe ran first), let go of them.
 	if (owned_) free_owned();
 	owned_ = false;

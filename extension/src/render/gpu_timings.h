@@ -29,9 +29,6 @@ private:
 	uint64_t serial_ = 0;
 	uint64_t last_rd_frame_ = UINT64_MAX;
 	uint64_t sample_id_ = 0;
-	bool live_timestamp_calibrated_ = false;
-	double live_timestamp_scale_ = 1.0;
-	double live_raw_cpu_ratio_ = 0.0;
 	std::map<std::string, int> next_, active_;
 	mutable std::mutex mutex_;
 	Dictionary latest_;

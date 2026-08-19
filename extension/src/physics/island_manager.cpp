@@ -1405,18 +1405,28 @@ void IslandManager::debug_offset_body(int index, const Vector3 &offset) {
 Dictionary IslandManager::stats() {
 	Dictionary d;
 	int live_bodies = 0, live_islands = 0, live_debris = 0, sleeping_bodies = 0;
+	int live_atlas_islands = 0, live_island_render_meshes = 0, live_debris_render_meshes = 0;
 	float lowest = 1e30f;
 	for (IslandBody *b : bodies_) {
 		if (!b || !b->live()) continue;
 		live_bodies++;
-		if (b->info().debris) live_debris++;
-		else live_islands++;
+		if (b->info().debris) {
+			live_debris++;
+			if (b->has_render_mesh()) live_debris_render_meshes++;
+		} else {
+			live_islands++;
+			if (b->info().atlas_slot >= 0) live_atlas_islands++;
+			if (b->has_render_mesh()) live_island_render_meshes++;
+		}
 		lowest = std::min(lowest, static_cast<float>(b->transform().origin.y));
 		if (b->asleep_seconds() > 0.0f) sleeping_bodies++;
 	}
 	d["live_bodies"] = live_bodies;
 	d["live_islands"] = live_islands;
 	d["live_debris"] = live_debris;
+	d["live_atlas_islands"] = live_atlas_islands;
+	d["live_island_render_meshes"] = live_island_render_meshes;
+	d["live_debris_render_meshes"] = live_debris_render_meshes;
 	d["lowest_body_y"] = live_bodies > 0 ? lowest : 0.0f;
 	d["sleeping_bodies"] = sleeping_bodies;
 	d["islands_spawned"] = islands_spawned_;
