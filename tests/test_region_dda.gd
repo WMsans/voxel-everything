@@ -49,5 +49,7 @@ func test_ray_leaving_residency_finds_nothing_rather_than_something() -> void:
 		Vector3(24.0, 62.0, 24.0), Vector3(1.0, 0.02, 0.0).normalized())
 	var truth: Dictionary = w.debug_raycast(
 		Vector3(24.0, 62.0, 24.0), Vector3(1.0, 0.02, 0.0).normalized())
-	if not truth["hit"]:
+	if truth["hit"]:
+		assert_bool(d["hit"]).is_true()
+	else:
 		assert_bool(d["hit"]).is_false()

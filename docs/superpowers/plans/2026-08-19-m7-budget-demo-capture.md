@@ -3464,13 +3464,30 @@ where this plan's text met reality and lost.
    legs; the other pass verdicts remained `lod=PASS ssgi=PASS ssr=PASS shadows=PASS
    outlines=PASS`, and `frame=WARN` (qualified display timing).
 
-   Cost-view evidence was captured at 2560×1440 with a temporary, uncommitted
-   `--cost-view` launch switch: baseline `/tmp/m7-task4-cost-view-before3.png` (also copied
-   to ignored `reports/m7-task4/cost-view-before.png`, 1,975,168 bytes) and Task 4
-   `/tmp/m7-task4-cost-view-after.png` (also copied to ignored
-   `reports/m7-task4/cost-view-after.png`, 2,053,828 bytes). The before/after pair shows the
-   expected dense grayscale heat view; no demo source change was retained for the temporary
-   switch.
+   Cost-view screenshot artifacts are local ignored evidence, not committed files. The
+   temporary `--cost-view` launch switch used for this capture was not retained in the demo
+   source. With the corresponding baseline or Task 4 demo running at 2560×1440 and cost view
+   enabled, the reproducible Wayland capture commands are:
+
+   ```text
+   WAYLAND_DISPLAY=wayland-1 grim /tmp/m7-task4-cost-view-before3.png
+   WAYLAND_DISPLAY=wayland-1 grim /tmp/m7-task4-cost-view-after.png
+   stat -c '%n %s bytes' /tmp/m7-task4-cost-view-before3.png /tmp/m7-task4-cost-view-after.png
+   /tmp/m7-task4-cost-view-before3.png 1975168 bytes
+   /tmp/m7-task4-cost-view-after.png 2053828 bytes
+   ```
+
+   The captured local copies are `reports/m7-task4/cost-view-before.png` (1,975,168 bytes) and
+   `reports/m7-task4/cost-view-after.png` (2,053,828 bytes); they are ignored by the repository
+   rule and are not claimed as committed evidence. The before/after pair shows the expected
+   dense grayscale heat view; no demo source change was retained for the temporary switch.
+   The ignore check was:
+
+   ```text
+   git check-ignore -v reports/m7-task4/cost-view-before.png reports/m7-task4/cost-view-after.png
+   .gitignore:20:reports/ reports/m7-task4/cost-view-before.png
+   .gitignore:20:reports/ reports/m7-task4/cost-view-after.png
+   ```
 
    The direct cost probe confirms the mechanism: the sky regression test reports a non-zero
    `regions` count and fewer than 32 `bricks`, while the hit-oracle rays still agree. This is
