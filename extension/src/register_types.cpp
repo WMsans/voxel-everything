@@ -5,6 +5,7 @@
 #include "voxel_world.h"
 #include "voxel_edit_tool.h"
 #include "raymarch_compositor.h"
+#include "beauty_compositor.h"
 #include "render/async_readback.h"
 
 using namespace godot;
@@ -16,6 +17,7 @@ void voxel_everything_initialize(ModuleInitializationLevel p_level) {
 	GDREGISTER_INTERNAL_CLASS(AsyncTextureRead);
 	GDREGISTER_CLASS(VoxelWorld);
 	GDREGISTER_CLASS(RaymarchCompositor);
+	GDREGISTER_CLASS(BeautyCompositor);
 	GDREGISTER_CLASS(VoxelEditTool);
 }
 

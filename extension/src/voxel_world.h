@@ -50,6 +50,9 @@ class LodRasterPass;
 class LodCullPass;
 class HizPass;
 class GBuffer;
+class CameraUbo;
+class ContactShadowPass;
+class BeautyCompositor;
 class IslandAtlas;
 class IslandCullPass;
 struct IslandExtractJob;
@@ -69,6 +72,7 @@ struct OccupancyBlock {
 
 class VoxelWorld : public Node3D {
 	GDCLASS(VoxelWorld, Node3D)
+	friend class BeautyCompositor;
 
 	bool use_local_device_ = false;
 
@@ -106,6 +110,12 @@ class VoxelWorld : public Node3D {
 	LodCullPass *lod_cull_pass_ = nullptr;
 	HizPass *hiz_pass_ = nullptr;
 	GBuffer *gbuffer_ = nullptr;
+	CameraUbo *beauty_camera_ = nullptr;
+	ContactShadowPass *contact_shadow_pass_ = nullptr;
+	BeautyCompositor *beauty_compositor_ = nullptr;
+	int normal_roughness_state_ = -1;
+	RID downsample_shader_, downsample_pipeline_, downsample_sampler_, downsample_uset_;
+	RID downsample_src_, downsample_dst_;
 	// CPU cores outlive the GPU objects: a re-init re-streams the same world, edits
 	// included. This is also what a future save/reload will do (saves ARE the edit log).
 	ve::EditLog *edit_log_ = nullptr;
@@ -190,6 +200,10 @@ class VoxelWorld : public Node3D {
 	bool initialized_ = false;
 
 	void teardown_gpu(); // every GPU object; CPU cores survive
+	bool initialize_downsample(RenderingDevice *rd);
+	void teardown_downsample();
+	bool ensure_downsample_set(RenderingDevice *rd, RID src, RID dst);
+	void downsample_history(RenderingDevice *rd, RID src, GBuffer &gb);
 	// Gathers the ops that can affect a LoD chunk: its AABB padded by two cells, flattened
 	// across regions in global append order, truncated to a chronological prefix (M4 errata 1).
 	void gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out);
@@ -253,6 +267,10 @@ public:
 	// pass the copy through their work; the mutex is never held during render work.
 	ve::BeautySettings beauty_settings() const;
 	Dictionary debug_beauty_settings();
+	Dictionary debug_beauty_compositor_stats();
+	Dictionary debug_contact_shadow_probe(Vector3 pos, Vector3 fwd, int w, int h);
+	void set_normal_roughness_state(int state) { normal_roughness_state_ = state; }
+	void set_beauty_compositor(BeautyCompositor *effect) { beauty_compositor_ = effect; }
 
 	void lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ);
 	// Push the current lod_walk_ page list (with per-page quad counts) into the raster pass.
@@ -283,6 +301,8 @@ public:
 	LodCullPass *lod_cull_pass() { return lod_cull_pass_; }
 	HizPass *hiz_pass() { return hiz_pass_; }
 	GBuffer *gbuffer() { return gbuffer_; }
+	CameraUbo *beauty_camera() { return beauty_camera_; }
+	ContactShadowPass *contact_shadow_pass() { return contact_shadow_pass_; }
 	std::mutex &edit_mutex() { return edit_mutex_; }
 	MeshService *mesh_service() { return mesh_; }
 	void queue_island_upload(int slot, const ve::VolumeData &d);
