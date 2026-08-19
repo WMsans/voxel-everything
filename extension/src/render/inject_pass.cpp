@@ -134,6 +134,7 @@ bool InjectPass::draw(RenderingDevice *rd, RID dst_color, RID dst_depth, RID lit
 	}
 	if (!uset_.is_valid()) return false;
 	const int64_t dl = rd->draw_list_begin(framebuffer_, RenderingDevice::DRAW_DEFAULT_ALL);
+	if (dl < 0) return false;
 	rd->draw_list_bind_render_pipeline(dl, pipeline_);
 	rd->draw_list_bind_uniform_set(dl, uset_, 0);
 	rd->draw_list_draw(dl, false, 1, 3);

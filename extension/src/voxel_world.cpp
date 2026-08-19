@@ -1453,7 +1453,8 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 
 	RenderingDevice *device = rd();
 	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_ ||
-			!composite_pass_ || !gbuffer_ || !lod_pool_ || !lod_raster_pass_) return d;
+			!composite_pass_ || !deferred_pass_ || !inject_pass_ || !gbuffer_ ||
+			!lod_pool_ || !lod_raster_pass_) return d;
 
 	// The near field needs the streamer to have populated the SDF atlas; the LoD settle in
 	// the test only converges the far-field walk. Drive the streamer until it is quiet (the
@@ -1546,19 +1547,24 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 		tv.instantiate();
 		marker = device->texture_create(tf, tv, upload);
 	}
-	RID framebuffer;
-	if (color.is_valid() && depth.is_valid() && marker.is_valid()) {
-		framebuffer = device->framebuffer_create(Array::make(color, marker, depth));
-	}
-	if (!framebuffer.is_valid()) {
+	if (!color.is_valid() || !depth.is_valid() || !marker.is_valid()) {
 		if (color.is_valid()) device->free_rid(color);
 		if (depth.is_valid()) device->free_rid(depth);
 		if (marker.is_valid()) device->free_rid(marker);
 		return d;
 	}
-	// Clear to reverse-Z far (0) before drawing the near field. The marker starts at 0 and
-	// is ORed to 1/2/3 by the two field passes.
+	// The G-buffer is resolved into these throwaway scene-buffer targets before LoD draws.
+	// Clear to reverse-Z far (0); the marker starts at 0 and is ORed to 1/2/3 by the two
+	// field passes.
 	device->texture_clear(depth, Color(0.0f, 0.0f, 0.0f, 0.0f), 0, 1, 0, 1);
+	auto cleanup = [&]() {
+		composite_pass_->release_targets();
+		inject_pass_->release_targets();
+		lod_raster_pass_->release_targets();
+		if (color.is_valid()) device->free_rid(color);
+		if (depth.is_valid()) device->free_rid(depth);
+		if (marker.is_valid()) device->free_rid(marker);
+	};
 
 	// Pass 1: near field. Composite writes 1 into the marker where it keeps the depth.
 	// The probe must fade where the production path fades, or it measures a band neither
@@ -1569,7 +1575,28 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 	composite_pass_->draw(device, *gbuffer_, raymarch_pass_->albedo_texture(),
 			raymarch_pass_->surface_texture(), raymarch_pass_->hitpos_texture(), vp, *materials_, p,
 			probe_fade_start, probe_fade_end, marker);
-	if (!composite_pass_->last_draw_ok()) return d;
+	if (!composite_pass_->last_draw_ok()) {
+		cleanup();
+		return d;
+	}
+
+	// Resolve the near field into the throwaway scene buffers. This keeps the probe's LoD half
+	// on the pre-Task-7 scene-buffer path while preserving the Task-6 depth ownership test.
+	DeferredPass::Params dp;
+	const Projection inv = vp.inverse();
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++)
+			dp.inv_view_proj[c * 4 + r] = inv.columns[c][r];
+	dp.cam_pos[0] = pos.x;
+	dp.cam_pos[1] = pos.y;
+	dp.cam_pos[2] = pos.z;
+	dp.flags = ve::pack_flags(beauty_settings());
+	static const float kNoSun[16] = {};
+	if (!deferred_pass_->render(device, *gbuffer_, *materials_, RID(), RID(), kNoSun, 0.0f, dp) ||
+			!inject_pass_->draw(device, color, depth, gbuffer_->lit(), gbuffer_->depth())) {
+		cleanup();
+		return d;
+	}
 
 	// Pass 2: far field. The LoD pipeline uses LOGIC_OP_OR on the marker, so kept far
 	// pixels OR 2 into the composite's 1, making double-claimed pixels read 3.
@@ -1580,13 +1607,13 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 		lod_raster_pass_->set_cull_enabled(true);
 		lod_pool_->upload_draw_args(lod_raster_pass_->draw_pages());
 		const int draw_count = lod_raster_pass_->draw_page_count();
-		lod_raster_pass_->draw(device, *lod_pool_, *materials_, gbuffer_->albedo(),
-				gbuffer_->depth(), vp, p, draw_count, probe_fade_start, probe_fade_end, marker);
+		lod_raster_pass_->draw(device, *lod_pool_, *materials_, color, depth, vp, p,
+				draw_count, probe_fade_start, probe_fade_end, marker);
 	}
 	device->submit();
 	device->sync();
 
-	const PackedByteArray depth_data = device->texture_get_data(gbuffer_->depth(), 0);
+	const PackedByteArray depth_data = device->texture_get_data(depth, 0);
 	const PackedByteArray marker_data = device->texture_get_data(marker, 0);
 	const PackedByteArray hitpos_data = device->texture_get_data(
 			raymarch_pass_->hitpos_texture(), 0);
@@ -1660,13 +1687,8 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 	// than reading lod_walk_ after lod_tick released lod_mutex_.
 	d["draw_pages"] = lod_raster_pass_ ? lod_raster_pass_->draw_page_count() : 0;
 
-	// Both passes cached framebuffers over these throwaway targets; drop them before freeing.
-	composite_pass_->release_targets();
-	lod_raster_pass_->release_targets();
-	if (framebuffer.is_valid()) device->free_rid(framebuffer);
-	if (color.is_valid()) device->free_rid(color);
-	if (depth.is_valid()) device->free_rid(depth);
-	if (marker.is_valid()) device->free_rid(marker);
+	// Drop cached framebuffers before freeing their throwaway scene-buffer/marker targets.
+	cleanup();
 	return d;
 }
 

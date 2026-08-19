@@ -204,6 +204,7 @@ bool DeferredPass::render(RenderingDevice *rd, GBuffer &gb, const MaterialAtlas 
 
 	const Vector2i size = gb.size();
 	const int64_t list = rd->compute_list_begin();
+	if (list < 0) return false;
 	rd->compute_list_bind_compute_pipeline(list, pipeline_);
 	rd->compute_list_bind_uniform_set(list, uset_, 0);
 	rd->compute_list_set_push_constant(list, pcb, pcb.size());
