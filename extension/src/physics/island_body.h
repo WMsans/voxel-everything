@@ -33,7 +33,8 @@ class IslandBody {
 public:
 	~IslandBody();
 
-	// `scenario` is the World3D scenario debris is drawn in; ignored for islands.
+	// `scenario` is the World3D scenario used by the cel render instance. Islands may also
+	// retain their atlas descriptor for the existing raymarch path.
 	// The body's ORIGIN is the compound's centre, so it tumbles about itself, and
 	// `local_lattice_origin()` is where the volume sits relative to that.
 	bool spawn(RID space, RID scenario, const IslandSpawn &info, const ve::VolumeData *volume);

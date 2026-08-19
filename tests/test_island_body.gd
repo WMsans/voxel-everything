@@ -85,7 +85,7 @@ func test_an_impulse_throws_the_body_sideways(timeout := 90000) -> void:
 	assert_float((s["origin"] as Vector3).x).override_failure_message(
 		"the explosion impulse did not reach the body").is_greater(start.x + 0.5)
 
-func test_debris_gets_a_render_instance_and_an_island_does_not(timeout := 90000) -> void:
+func test_islands_and_debris_get_cel_render_instances(timeout := 90000) -> void:
 	var w := make_world()
 	settle_colliders(w, Vector3(20.0, 56.0, 20.0))
 	var rock: Dictionary = w.debug_spawn_test_body(Vector3i(25, 62, 25), Vector3i(26, 63, 26),
@@ -94,7 +94,11 @@ func test_debris_gets_a_render_instance_and_an_island_does_not(timeout := 90000)
 		Vector3(0.0, 20.0, 0.0), Vector3.ZERO, true)
 	assert_bool(rock.get("ok", false)).is_true()
 	assert_bool(crumb.get("ok", false)).is_true()
-	assert_bool(rock["has_render_mesh"]).is_false() # raymarched from the island atlas
+	assert_bool(rock["has_render_mesh"]).override_failure_message(
+		"island did not build its cel render mesh").is_true()
+	assert_int(rock["render_tris"]).is_greater(0)
+	assert_bool(rock["cel_material"]).override_failure_message(
+		"island fell back to StandardMaterial3D").is_true()
 	assert_bool(crumb["has_render_mesh"]).is_true() # dual-contoured, drawn by RenderingServer
 	assert_int(crumb["render_tris"]).is_greater(0)
 	assert_bool(crumb["cel_material"]).override_failure_message(
