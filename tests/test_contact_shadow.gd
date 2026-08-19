@@ -65,10 +65,10 @@ func test_zero_steps_reads_as_off_rather_than_as_a_free_dispatch() -> void:
 	var d: Dictionary = w.debug_beauty_settings()
 	assert_int(int(d["flags"]) & 4).is_equal(0)
 
-# The march jitters its ray start with bayer4, which makes a marginally-occluded pixel come
-# back 0 or 1 depending on its slot in the 4x4 pattern. That jitter is a stochastic estimate
-# of fractional visibility and only means anything once the pattern is averaged back out;
-# applied raw it renders as a lattice of isolated black dots over open ground.
+# The march jitters its ray start with bayer4, which makes a marginal hit's visibility vary
+# with its slot in the 4x4 pattern. That jitter is a stochastic estimate of fractional
+# visibility and only means anything once the pattern is averaged back out; applied raw it
+# renders as a lattice of isolated dark dots over open ground.
 #
 # A resolved contact shadow is a gradient, so the fraction of light it removes may not jump
 # by anything close to full strength between two neighbouring pixels.
@@ -80,4 +80,14 @@ func test_the_shadow_is_a_gradient_not_a_dither_lattice() -> void:
 		"nothing was shadowed, so the speckle bound below proves nothing").is_greater(0.0)
 	assert_float(d["max_neighbour_step"]).override_failure_message(
 		"a single pixel step changed the contact shadow by most of its full strength: " +
-		"the bayer4 dither is reaching the screen unresolved").is_less(0.35)
+		"the bayer4 dither is reaching the screen unresolved").is_less(0.08)
+
+# A shallow view across the continuous terrain must not treat the receiver surface as an
+# occluder. The old march started on the receiver, reconstructed a nearest depth sample at
+# a different UV, and consequently classified most of the visible hills as contact shadow.
+func test_an_open_horizon_does_not_self_shadow() -> void:
+	var w := make_world()
+	var d: Dictionary = w.debug_contact_shadow_probe(Vector3(24.0, 63.9, 24.0),
+		Vector3(1.0, -0.04, 1.0).normalized(), 384, 192)
+	assert_float(d["mask_mean"]).override_failure_message(
+		"open terrain was classified as an occluder against itself").is_greater(0.95)
