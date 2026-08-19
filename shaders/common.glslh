@@ -60,6 +60,14 @@ const float MATERIAL_UV_SCALE = 0.5;
 //   layout(set = ?, binding = ?) uniform sampler2DArray material_albedo;
 //   layout(set = ?, binding = ?) uniform sampler2DArray material_surface_tex;
 // and define MATERIAL_LAYERS to the array's layer count.
+
+// A 4x4 Bayer threshold in [0, 1). It is independent of material layers and is shared by
+// the screen-space beauty masks as well as the terrain shaders.
+float bayer4(ivec2 px) {
+	const int M[16] = int[16](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
+	return float(M[(px.y & 3) * 4 + (px.x & 3)]) / 16.0;
+}
+
 #ifdef MATERIAL_LAYERS
 
 // Triplanar with EXPLICIT gradients. The raymarcher is a compute shader and has no
@@ -102,11 +110,4 @@ vec2 material_props(uint mat, vec3 p, vec3 n, vec3 ddx, vec3 ddy) {
 // shade_terrain() lived here until M6. Lighting now happens exactly once, in
 // shaders/deferred.comp.glsl via cel_shade() in shade.glslh. Do not add a second one.
 
-// A 4x4 Bayer threshold in [0, 1). Task 16 uses it in opposite directions on the two fields,
-// so the two masks are exact complements. It lives here for the same reason the shading
-// does: there must be exactly one of it.
-float bayer4(ivec2 px) {
-	const int M[16] = int[16](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
-	return float(M[(px.y & 3) * 4 + (px.x & 3)]) / 16.0;
-}
 #endif

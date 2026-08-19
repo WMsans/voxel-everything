@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3 uid="uid://dx2akrpw2s62k"]
+[gd_scene load_steps=11 format=3 uid="uid://dx2akrpw2s62k"]
 
 [ext_resource type="Script" path="res://demo/player.gd" id="1"]
 [ext_resource type="Script" path="res://demo/hud.gd" id="2"]
@@ -8,8 +8,11 @@
 [sub_resource type="RaymarchCompositor" id="1"]
 world_path = NodePath("/root/Main/VoxelWorld")
 
+[sub_resource type="BeautyCompositor" id="6"]
+world_path = NodePath("/root/Main/VoxelWorld")
+
 [sub_resource type="Compositor" id="2"]
-compositor_effects = [SubResource(1)]
+compositor_effects = [SubResource(1), SubResource(6)]
 
 [sub_resource type="Environment" id="3"]
 background_mode = 4
