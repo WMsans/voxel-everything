@@ -1,5 +1,6 @@
 #pragma once
 #include <godot_cpp/classes/array_mesh.hpp>
+#include <godot_cpp/classes/material.hpp>
 #include <godot_cpp/classes/physics_server3d.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <godot_cpp/variant/transform3d.hpp>
@@ -44,6 +45,7 @@ public:
 	float mass() const { return mass_; }
 	int shape_count() const { return static_cast<int>(shapes_.size()); }
 	bool has_render_mesh() const { return mesh_.is_valid(); }
+	bool has_cel_material() const;
 	int render_triangles() const { return render_tris_; }
 	const float *local_lattice_origin() const { return local_origin_; }
 
@@ -64,6 +66,7 @@ private:
 	RID body_;
 	std::vector<RID> shapes_;
 	Ref<ArrayMesh> mesh_;
+	Ref<Material> render_material_;
 	RID instance_;
 	float mass_ = 0.0f;
 	float asleep_ = 0.0f;

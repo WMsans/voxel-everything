@@ -211,6 +211,8 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_raymarch_gbuffer", "origin", "dir"), &VoxelWorld::debug_raymarch_gbuffer);
 	ClassDB::bind_method(D_METHOD("debug_cel_diff", "albedo", "ambient", "ndl", "ndv", "ndh",
 			"shadow", "ao", "gloss"), &VoxelWorld::debug_cel_diff);
+	ClassDB::bind_method(D_METHOD("debug_cel_reference", "albedo", "ambient", "ndl", "ndv", "ndh",
+			"shadow", "ao", "gloss"), &VoxelWorld::debug_cel_reference);
 	ClassDB::bind_method(D_METHOD("debug_deferred_probe", "pos", "fwd", "w", "h", "probe_mode"),
 			&VoxelWorld::debug_deferred_probe);
 	ClassDB::bind_method(D_METHOD("debug_material_atlas_stats"), &VoxelWorld::debug_material_atlas_stats);
@@ -3138,6 +3140,7 @@ Dictionary VoxelWorld::debug_spawn_test_body(Vector3i lo_cell, Vector3i hi_cell,
 	d["origin"] = b->transform().origin;
 	d["has_render_mesh"] = b->has_render_mesh();
 	d["render_tris"] = b->render_triangles();
+	d["cel_material"] = b->has_cel_material();
 	return d;
 }
 
@@ -3151,6 +3154,7 @@ Dictionary VoxelWorld::debug_test_body_stats(int index) {
 	d["origin"] = b->transform().origin;
 	d["asleep_s"] = b->asleep_seconds();
 	d["mass"] = b->mass();
+	d["cel_material"] = b->has_cel_material();
 	return d;
 }
 
@@ -3925,6 +3929,19 @@ Dictionary VoxelWorld::debug_glossy_sdf_probe(Vector3 origin, Vector3 dir) {
 	d["hit"] = h[3] > 0.5f;
 	d["position"] = Vector3(h[0], h[1], h[2]);
 	return d;
+}
+
+Color VoxelWorld::debug_cel_reference(Color albedo, Color ambient, float ndl, float ndv,
+		float ndh, float shadow, float ao, float gloss) const {
+	ve::CelParams p;
+	ve::CelInput in;
+	in.albedo[0] = albedo.r; in.albedo[1] = albedo.g; in.albedo[2] = albedo.b;
+	in.ambient[0] = ambient.r; in.ambient[1] = ambient.g; in.ambient[2] = ambient.b;
+	in.ndl = ndl; in.ndv = ndv; in.ndh = ndh;
+	in.shadow = shadow; in.ao = ao; in.gloss = gloss;
+	float out[3];
+	ve::cel_shade(p, in, out);
+	return Color(out[0], out[1], out[2], 1.0f);
 }
 
 Dictionary VoxelWorld::debug_cel_diff(Color albedo, Color ambient, float ndl, float ndv,

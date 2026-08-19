@@ -97,6 +97,8 @@ func test_debris_gets_a_render_instance_and_an_island_does_not(timeout := 90000)
 	assert_bool(rock["has_render_mesh"]).is_false() # raymarched from the island atlas
 	assert_bool(crumb["has_render_mesh"]).is_true() # dual-contoured, drawn by RenderingServer
 	assert_int(crumb["render_tris"]).is_greater(0)
+	assert_bool(crumb["cel_material"]).override_failure_message(
+		"debris fell back to StandardMaterial3D").is_true()
 
 func test_despawn_removes_the_body(timeout := 90000) -> void:
 	var w := make_world()
