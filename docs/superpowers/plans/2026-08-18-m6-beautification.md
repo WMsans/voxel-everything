@@ -19,7 +19,7 @@
 - **M5 errata 3** — **index push constants by float, not by byte**, and keep the `PackedByteArray` size and `draw_list_set_push_constant`'s size argument in step. A single mis-indexed write corrupted the heap on every draw for a whole task while every test still reported PASS. Every push-constant layout in this plan is written out as an explicit float-index map for that reason.
 - **M5 errata 5** — the gdUnit runner is `./gdunit_tests.sh`. Never invoke `addons/gdUnit4/runtest.sh`. Pass `-c` to see every failure; a plain run aborts a suite at its first one.
 - **M5 errata 6** — **a fixed frame count settles nothing.** Wait on the condition (`debug_lod_stats()` reporting `requests_pending == 0 and builds_in_flight == 0` for a streak of 8 ticks). Every settle helper in this plan's tests is condition-based.
-- **M5 errata 2** — the LoD raster's front face is **clockwise** and `LodRasterPass` picks its pipeline from `front_face_clockwise_`. Task 7 adds a colour attachment to that pipeline set; it must not disturb the face selection, and Task 8's depth-only shadow pipeline must make the same choice (it inherits the flag rather than re-deriving it).
+- **M5 errata 2** — the LoD raster's measured front face is **counter-clockwise** and `LodRasterPass` picks its pipeline from `front_face_clockwise_` (false). Task 7 adds a colour attachment to that pipeline set; it must not disturb the face selection, and Task 8's depth-only shadow pipeline must make the same choice (it inherits the flag rather than re-deriving it).
 - **M5 errata 15** — `lod_ms` is CPU command-record time, not GPU execution. Task 14's budget verdicts must not read it as a GPU number; it measures per-pass GPU time with timestamps instead.
 
 ## Milestone Map
@@ -5560,7 +5560,7 @@ budget verdicts and exact timestamp-derived evidence.
    steady: BENCH gpu_custom_frame samples=287 p50_ms=7.345 p99_ms=9.153
    steady: BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
    steady: BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
-   steady: BENCH gpu_timestamp_calibration unit=live_normalized_microseconds scale_to_us=0.001000 raw_cpu_ratio=7637.735 calibrated=true
+   steady: BENCH gpu_timestamp_normalization mode=historical_pre_fix unit=live_normalized_microseconds scale_to_us=0.001000 normalized=true
 
    move: BENCH gpu_raymarch samples=287 p50_ms=6.348 p99_ms=7.719
    move: BENCH gpu_lod samples=287 p50_ms=0.070 p99_ms=0.214
@@ -5571,7 +5571,7 @@ budget verdicts and exact timestamp-derived evidence.
    move: BENCH gpu_custom_frame samples=287 p50_ms=7.610 p99_ms=9.568
    move: BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
    move: BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
-   move: BENCH gpu_timestamp_calibration unit=live_normalized_microseconds scale_to_us=0.001000 raw_cpu_ratio=7059.745 calibrated=true
+   move: BENCH gpu_timestamp_normalization mode=historical_pre_fix unit=live_normalized_microseconds scale_to_us=0.001000 normalized=true
 
    ridge: BENCH gpu_raymarch samples=287 p50_ms=5.954 p99_ms=8.752
    ridge: BENCH gpu_lod samples=287 p50_ms=0.176 p99_ms=0.265
@@ -5582,7 +5582,7 @@ budget verdicts and exact timestamp-derived evidence.
    ridge: BENCH gpu_custom_frame samples=287 p50_ms=7.102 p99_ms=10.371
    ridge: BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
    ridge: BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
-   ridge: BENCH gpu_timestamp_calibration unit=live_normalized_microseconds scale_to_us=0.001000 raw_cpu_ratio=2886.968 calibrated=true
+   ridge: BENCH gpu_timestamp_normalization mode=historical_pre_fix unit=live_normalized_microseconds scale_to_us=0.001000 normalized=true
 
    edit: BENCH gpu_raymarch samples=287 p50_ms=10.018 p99_ms=14.299
    edit: BENCH gpu_lod samples=287 p50_ms=0.050 p99_ms=0.244
@@ -5593,7 +5593,7 @@ budget verdicts and exact timestamp-derived evidence.
    edit: BENCH gpu_custom_frame samples=287 p50_ms=11.984 p99_ms=29.077
    edit: BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
    edit: BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
-   edit: BENCH gpu_timestamp_calibration unit=live_normalized_microseconds scale_to_us=0.001000 raw_cpu_ratio=6357.802 calibrated=true
+   edit: BENCH gpu_timestamp_normalization mode=historical_pre_fix unit=live_normalized_microseconds scale_to_us=0.001000 normalized=true
 
    island: BENCH gpu_raymarch samples=807 p50_ms=6.662 p99_ms=8.519
    island: BENCH gpu_lod samples=807 p50_ms=0.043 p99_ms=0.050
@@ -5604,6 +5604,18 @@ budget verdicts and exact timestamp-derived evidence.
    island: BENCH gpu_custom_frame samples=807 p50_ms=7.678 p99_ms=10.038
    island: BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
    island: BENCH gpu_timing valid_samples=807 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
-   island: BENCH gpu_timestamp_calibration unit=live_normalized_microseconds scale_to_us=0.001000 raw_cpu_ratio=4965.422 calibrated=true
+   island: BENCH gpu_timestamp_normalization mode=historical_pre_fix unit=live_normalized_microseconds scale_to_us=0.001000 normalized=true
    ```
-   The required sentence is: “`lod_ms` was CPU command-record time and was not used in any GPU verdict; `lod_gpu_ms` came only from timestamp deltas.” The live calibration is `unit=live_normalized_microseconds scale_to_us=0.001000`; raw Vulkan timestamp values are normalized once in `poll()`, while `ingest_for_test()` remains microseconds with scale 1.0. Wayland did not honor `--disable-vsync`: Godot printed `The requested V-Sync mode Disabled is not available. Falling back to V-Sync mode Enabled.`, so the five measurements retain the Wayland V-Sync qualification. The existing `2 ObjectDB instances were leaked at exit` warning remains. All five legs now have clean shutdowns; no `corrupted size`, allocator abort, or invalid-RID-free diagnostic was recorded. Budget WARNs are retained as measured verdicts, not retuned.
+   The required sentence is: “`lod_ms` was CPU command-record time and was not used in any GPU verdict; `lod_gpu_ms` came only from timestamp deltas.” This entry is superseded by Errata entry 4, which records deterministic live Vulkan normalization. Wayland did not honor `--disable-vsync`, and the existing `2 ObjectDB instances were leaked at exit` warning remains.
+
+4. **Final review correction wave — authoritative record for the current worktree:** The atlas-backed/non-debris representation remains raymarched; only debris owns a Godot cel mesh. `LodRasterPass::draw()` and `HizPass::build()` now check invalid list handles before recording. Live Vulkan timestamps are normalized deterministically from nanoseconds to microseconds with `raw * 0.001` exactly once; synthetic ingestion remains explicit microseconds. The debug menu quality signal is connected once, the unused G-buffer helper parameter is removed, and front-face documentation records the measured counter-clockwise pipeline inherited by SunShadowPass.
+
+   Verification environment: Godot 4.7.1.stable.arch_linux.a13da4feb, Vulkan 1.4.341, NVIDIA GeForce RTX 4070 Laptop GPU, driver 610.57.04, High tier, 2560x1440, `WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000`. All five commands exited 0 and printed `BENCH gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true`:
+   ```text
+   steady: gpu_raymarch 287 p50=6.336 p99=7.955; gpu_lod 287 p50=0.043 p99=0.051; gpu_ssgi 287 p50=0.172 p99=0.174; gpu_ssr 287 p50=0.146 p99=0.148; gpu_shadows 287 p50=0.078 p99=0.226; gpu_outlines 287 p50=0.089 p99=0.090; custom_frame 287 p50=7.338 p99=9.145; budget raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   move: gpu_raymarch 287 p50=6.374 p99=7.989; gpu_lod 287 p50=0.069 p99=0.194; gpu_ssgi 287 p50=0.180 p99=0.324; gpu_ssr 287 p50=0.165 p99=0.344; gpu_shadows 287 p50=0.080 p99=0.435; gpu_outlines 287 p50=0.085 p99=0.230; custom_frame 287 p50=7.621 p99=9.473; budget raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   ridge: gpu_raymarch 287 p50=5.746 p99=8.736; gpu_lod 287 p50=0.181 p99=0.329; gpu_ssgi 287 p50=0.144 p99=0.371; gpu_ssr 287 p50=0.152 p99=0.333; gpu_shadows 287 p50=0.065 p99=0.575; gpu_outlines 287 p50=0.051 p99=0.187; custom_frame 287 p50=6.822 p99=10.032; budget raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   edit: gpu_raymarch 287 p50=10.269 p99=14.226; gpu_lod 287 p50=0.051 p99=0.249; gpu_ssgi 287 p50=0.158 p99=0.301; gpu_ssr 287 p50=0.171 p99=0.288; gpu_shadows 287 p50=0.079 p99=0.304; gpu_outlines 287 p50=0.085 p99=0.229; custom_frame 287 p50=12.234 p99=26.795; budget raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   island: gpu_raymarch 807 p50=6.671 p99=8.527; gpu_lod 807 p50=0.043 p99=0.050; gpu_ssgi 807 p50=0.168 p99=0.173; gpu_ssr 807 p50=0.149 p99=0.152; gpu_shadows 807 p50=0.079 p99=0.227; gpu_outlines 807 p50=0.088 p99=0.233; custom_frame 807 p50=7.678 p99=10.019; budget raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   ```
+   Each leg also reported `gpu_timing valid_samples=287|807 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record`. Wayland printed the V-Sync fallback (`Disabled` unavailable, `Enabled` used); every leg otherwise shut down cleanly. The existing two ObjectDB leak warning and `Parameter "pointed_win" is null` display warning remain concerns. No focused invalid-list test can induce a failed RenderingDevice list in this environment; the guards are covered by production fail-soft control flow and documented here.

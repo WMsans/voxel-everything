@@ -73,7 +73,10 @@ bool IslandBody::spawn(RID space, RID scenario, const IslandSpawn &info,
 	const Vector3 imp(info.impulse[0], info.impulse[1], info.impulse[2]);
 	if (imp.length_squared() > 0.0f) ps->body_apply_impulse(body_, imp);
 
-	if (scenario.is_valid() && volume && !volume->empty()) build_render_mesh(scenario, *volume);
+	// Atlas-backed islands already have a transformed raymarched representation in the
+	// shared terrain pass. Only debris lacks an atlas slot and gets a dynamic Godot mesh.
+	if (info.debris && scenario.is_valid() && volume && !volume->empty())
+		build_render_mesh(scenario, *volume);
 	return true;
 }
 

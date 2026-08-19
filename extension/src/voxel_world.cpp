@@ -3321,6 +3321,7 @@ Dictionary VoxelWorld::debug_spawn_test_body(Vector3i lo_cell, Vector3i hi_cell,
 	test_bodies_.push_back(b);
 	d["ok"] = true;
 	d["index"] = static_cast<int>(test_bodies_.size()) - 1;
+	d["atlas_slot"] = info.atlas_slot;
 	d["mass"] = b->mass();
 	d["shapes"] = b->shape_count();
 	d["origin"] = b->transform().origin;

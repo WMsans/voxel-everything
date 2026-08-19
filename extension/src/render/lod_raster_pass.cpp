@@ -279,6 +279,10 @@ bool LodRasterPass::draw(RenderingDevice *rd, LodPool &pool, MaterialAtlas &mate
 	// The indirect args were uploaded by LodPool::upload_draw_args before the cull pass ran;
 	// draw() only opens the draw list and issues the indirect draw.
 	const int64_t dl = rd->draw_list_begin(framebuffer_, RenderingDevice::DRAW_DEFAULT_ALL);
+	// RenderingDevice returns an invalid list when the framebuffer or device is no longer
+	// recordable. Do not issue bindings against it: the compositor treats false as a
+	// fail-soft skipped LoD pass and leaves the existing G-buffer intact.
+	if (dl < 0) return false;
 	rd->draw_list_bind_render_pipeline(dl, active_pipeline());
 	rd->draw_list_bind_uniform_set(dl, uset_, 0);
 	rd->draw_list_bind_index_array(dl, index_array_);

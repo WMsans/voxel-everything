@@ -35,4 +35,5 @@ func test_synthetic_ingest_declares_microseconds_without_live_scaling()->void:
 	assert_bool(d["valid"]).is_true()
 	assert_float(d["custom_frame_gpu_ms"]).is_equal_approx(16.0,.0001)
 	assert_str(d["timestamp_unit"]).is_equal("synthetic_microseconds")
+	assert_str(d["timestamp_normalization"]).is_equal("none_synthetic_inputs_are_microseconds")
 	assert_float(d["timestamp_scale_to_microseconds"]).is_equal_approx(1.0,.0001)

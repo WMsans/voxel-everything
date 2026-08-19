@@ -74,9 +74,9 @@ private:
 	std::vector<PageDraw> draw_pages_;
 	float last_ms_ = 0.0f;
 	bool cull_enabled_ = true;
-	// The scene projection flips Y, which mirrors clip space and reverses screen-space
-	// winding, so the pre-wound quads present COUNTER-clockwise front faces. Measured by
-	// test_backface_culling_does_not_remove_visible_ground.
+	// The scene projection's Y flip was measured with the actual LoD quads: visible front
+	// faces are COUNTER-clockwise in the raster pipeline. SunShadowPass inherits this flag;
+	// it must not derive a second winding convention. Covered by the culling regression.
 	bool front_face_clockwise_ = false;
 };
 

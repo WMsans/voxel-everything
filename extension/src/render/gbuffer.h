@@ -49,7 +49,7 @@ public:
 
 private:
 	bool ensure_owned(RenderingDevice *rd, Vector2i size);
-	bool ensure_managed(RenderingDevice *rd, RenderSceneBuffersRD *rsb, Vector2i size);
+	bool ensure_managed(RenderSceneBuffersRD *rsb, Vector2i size);
 	void free_owned();
 
 	RenderingDevice *rd_ = nullptr;
