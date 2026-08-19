@@ -88,6 +88,11 @@ EditOp make_volume_add(int slot, const float origin[3], float voxel, int dim);
 // a box the box; for a volume the lattice's extent, [origin, origin + (dim - 1) * voxel].
 void op_world_aabb(const EditOp &op, float lo[3], float hi[3]);
 
+// Does this op's influence reach the box? Conservative by construction: `pad` must cover
+// the sampler's own reach (the activation margin for brick residency, the narrow band's
+// kSdfRange for stored lattices), because a false negative silently deletes an edit.
+bool op_touches_aabb(const EditOp &op, const float lo[3], const float hi[3], float pad);
+
 // Exact signed distance to an axis-aligned box. Mirrored in shaders/field.glslh.
 float box_sdf(const float lo[3], const float hi[3], float x, float y, float z);
 

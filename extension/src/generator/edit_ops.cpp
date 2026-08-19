@@ -194,6 +194,16 @@ Sample apply_ops(Sample s, const EditOp *ops, int count, float x, float y, float
 	return s;
 }
 
+bool op_touches_aabb(const EditOp &op, const float lo[3], const float hi[3], float pad) {
+	float a[3], b[3];
+	op_world_aabb(op, a, b);
+	for (int i = 0; i < 3; i++) {
+		if (a[i] - pad > hi[i]) return false;
+		if (b[i] + pad < lo[i]) return false;
+	}
+	return true;
+}
+
 void op_brick_range(const EditOp &op, IVec3 *lo, IVec3 *hi) {
 	padded_range(op, kBrickSize, lo, hi);
 }

@@ -2,10 +2,24 @@
 #include "world/palette.h"
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace ve {
 
 namespace {
+
+std::vector<EditOp> ops_for_brick(const EditOp *ops, int op_count, IVec3 brick) {
+	float lo[3];
+	brick_world_origin(brick, lo);
+	float hi[3] = {lo[0] + kBrickSize, lo[1] + kBrickSize, lo[2] + kBrickSize};
+	const int count = std::max(op_count, 0);
+	std::vector<EditOp> kept;
+	kept.reserve(static_cast<size_t>(count));
+	for (int i = 0; i < count; i++)
+		if (op_touches_aabb(ops[i], lo, hi, kActivationPad + kVoxelSize))
+			kept.push_back(ops[i]);
+	return kept;
+}
 
 // Give every cell within reach of a surface hit the material of that surface.
 //
@@ -75,6 +89,9 @@ namespace {
 // and shaders/brick_mark.comp.glsl computes exactly this once per brick and uses it twice.
 void brick_probe(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,
 		const VolumeStore *volumes, float *mn, float *mx) {
+	const std::vector<EditOp> kept = ops_for_brick(ops, op_count, brick);
+	const EditOp *filtered = kept.data();
+	const int filtered_count = static_cast<int>(kept.size());
 	float bo[3];
 	brick_world_origin(brick, bo);
 	*mn = 1e30f;
@@ -82,7 +99,7 @@ void brick_probe(const Generator &gen, const EditOp *ops, int op_count, IVec3 br
 	for (int sz = 0; sz < 3; sz++)
 		for (int sy = 0; sy < 3; sy++)
 			for (int sx = 0; sx < 3; sx++) {
-				const float d = eval_field(gen, ops, op_count,
+				const float d = eval_field(gen, filtered, filtered_count,
 						bo[0] + sx * (kBrickVoxels / 2) * kVoxelSize,
 						bo[1] + sy * (kBrickVoxels / 2) * kVoxelSize,
 						bo[2] + sz * (kBrickVoxels / 2) * kVoxelSize, volumes).sdf;
@@ -119,6 +136,9 @@ void eval_brick(const Generator &gen, const EditOp *ops, int op_count, IVec3 bri
 	Brick &b = out->brick;
 	float bo[3];
 	brick_world_origin(brick, bo);
+	const std::vector<EditOp> kept = ops_for_brick(ops, op_count, brick);
+	const EditOp *filtered = kept.data();
+	const int filtered_count = static_cast<int>(kept.size());
 
 	// The SDF runs over the 17^3 lattice (see kBrickSdfStride): the extra plane at local 16
 	// on each axis is the apron the shader's trilinear filter needs to cover the brick's
@@ -127,7 +147,7 @@ void eval_brick(const Generator &gen, const EditOp *ops, int op_count, IVec3 bri
 	for (int vz = 0; vz < kBrickSdfStride; vz++)
 		for (int vy = 0; vy < kBrickSdfStride; vy++)
 			for (int vx = 0; vx < kBrickSdfStride; vx++) {
-				const Sample s = eval_field(gen, ops, op_count, bo[0] + vx * kVoxelSize,
+				const Sample s = eval_field(gen, filtered, filtered_count, bo[0] + vx * kVoxelSize,
 						bo[1] + vy * kVoxelSize, bo[2] + vz * kVoxelSize, volumes);
 				b.sdf[sdf_index(vx, vy, vz)] = encode_sdf(s.sdf);
 				if (s.material == 0) continue;
@@ -141,7 +161,7 @@ void eval_brick(const Generator &gen, const EditOp *ops, int op_count, IVec3 bri
 				if (!apron || mat[ci] == 0) mat[ci] = s.material; // a cell's own sample wins
 			}
 
-	spread_materials(mat, b, gen, ops, op_count, bo, volumes);
+	spread_materials(mat, b, gen, filtered, filtered_count, bo, volumes);
 
 	uint16_t pal[kBrickPaletteSize] = {};
 	int counts[kBrickPaletteSize] = {};
