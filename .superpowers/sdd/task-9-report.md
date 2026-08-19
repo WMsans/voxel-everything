@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented and committed as `8387d54` (`feat: post-opaque beauty compositor with screen-space contact shadows`).
+Implemented and committed as `2e25e23b3dd68bcbf7551fc489f4f2150481b294` (`feat: post-opaque beauty compositor with screen-space contact shadows`).
 
 ## RED/GREEN evidence
 
@@ -132,23 +132,47 @@ Modified:
 
 ## Normal-roughness spike Errata
 
-The live Godot 4.7.1 Forward+ demo callback reported:
+The live Godot 4.7.1 Forward+ probe reported:
 
 ```text
 { "normal_roughness": 1, "contact_ms": 0.005..., "ssr_ms": 0.0, "outline_ms": 0.0 }
 ```
 
-Verdict: the `forward_clustered/normal_roughness` texture exists and is reachable from the GDExtension when `set_needs_normal_roughness(true)` is enabled. The encoding was not independently calibrated against a known-orientation object in this task; Tasks 10 and 12 must still treat the documented `normal * 0.5 + 0.5` RGB and roughness-alpha/subsurface sign convention as requiring verification before use.
+Verdict: `forward_clustered/normal_roughness` is reachable from the GDExtension when
+`set_needs_normal_roughness(true)` is enabled, but the probe currently reports a
+constant/empty value of `1.0`. The channel encoding was not calibrated against a
+known-orientation object; Tasks 10 and 12 must keep calibration pending and must not rely
+on this texture as meaningful dynamic normal/roughness data until that verification is done.
 
 ## Demo verification
 
-Command used with the available Wayland socket:
+The required bounded command was attempted from this worktree:
 
 ```text
-XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 timeout 35 godot --path . demo/main.tscn
+timeout 15s godot --path /home/jeremy/Development/Godot/voxel-everything/.worktrees/m6-beautification demo/main.tscn
 ```
 
-The demo initialized Vulkan/NVIDIA rendering and repeatedly reported `normal_roughness: 1` with non-zero contact record times. It exited with status 124 because the command was intentionally time-limited. The environment also emitted Godot's existing Wayland `pointed_win` mouse warning; no compositor shader or rendering-device errors remained after the Bayer fix.
+Exact result: exit status `1` before the timeout. Godot 4.7.1 reported `X11 Display is
+not available`, then `Can't connect to a Wayland display`, `Could not initialize the
+Wayland thread`, and `Unable to create DisplayServer, all display drivers failed`.
+The environment prevented display startup and visual inspection, so no visual acceptance
+evidence is claimed and no screenshot infrastructure was added.
+
+## Review fixes
+
+- Corrected the report metadata to the actual Task 9 commit:
+  `2e25e23b3dd68bcbf7551fc489f4f2150481b294`.
+- Added the numbered normal-roughness verdict to the plan Errata.
+- Recorded the exact required demo attempt and its display initialization failure; visual
+  acceptance remains unverified because the environment has no usable display.
+
+### Covering checks
+
+- `./gdunit_tests.sh -a res://tests/test_contact_shadow.gd -a res://tests/test_beauty_compositor.gd -c`
+  — exit `0`; `5 test cases | 0 errors | 0 failures | ... | PASSED`. The runner also
+  reported that `res://tests/test_beauty_compositor.gd` does not exist in this worktree.
+- `cd extension && scons test` — exit `0`; `294 passed | 0 failed`, status `SUCCESS`.
+- `./build.sh -j$(nproc)` — exit `0`; `Build OK: 4.4M` and `Done` (targets were up to date).
 
 ## Self-review
 
