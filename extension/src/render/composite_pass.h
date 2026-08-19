@@ -14,6 +14,9 @@ public:
 	void initialize(RenderingDevice *rd);
 	void teardown();
 	void release_targets();
+	// RaymarchPass may replace its output textures before this pass sees the new RIDs. Drop
+	// the dependent set first so a texture replacement cannot leave a stale RID to free.
+	void invalidate_uniform_set(RenderingDevice *);
 	bool last_draw_ok() const { return last_draw_ok_; }
 	void draw(RenderingDevice *rd, GBuffer &gb, RID src_albedo, RID src_surface, RID src_hitpos,
 			const Projection &view_proj, const MaterialAtlas &materials, const float cam_pos[3],

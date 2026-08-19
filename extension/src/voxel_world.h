@@ -13,6 +13,7 @@
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/vector2.hpp>
 #include <atomic>
+#include <condition_variable>
 #include <map>
 #include <mutex>
 #include <set>
@@ -33,6 +34,10 @@
 #include "world/residency.h"
 
 namespace godot {
+
+// Compositor callbacks can outlive the SceneTree during SceneTree::quit(). They must stop
+// before Engine::get_main_loop() becomes a stale Object pointer.
+bool voxel_compositor_callbacks_enabled();
 
 class GpuAtlas;
 class MaterialAtlas;
@@ -209,8 +214,15 @@ class VoxelWorld : public Node3D {
 	RenderingDevice *main_rd_ = nullptr;
 	RenderingDevice *local_rd_ = nullptr; // owned when use_local_device_
 	bool initialized_ = false;
+	mutable std::mutex render_lifetime_mutex_;
+	std::condition_variable render_lifetime_cv_;
+	bool render_shutting_down_ = false;
+	int render_callbacks_ = 0;
+	std::condition_variable gpu_teardown_cv_;
+	bool gpu_teardown_done_ = false;
 
 	void teardown_gpu(); // every GPU object; CPU cores survive
+	void shutdown_render_resources_on_render_thread();
 	bool initialize_downsample(RenderingDevice *rd);
 	void teardown_downsample();
 	bool ensure_downsample_set(RenderingDevice *rd, RID src, RID dst);
@@ -247,6 +259,11 @@ public:
 
 	void ensure_initialized();
 	bool is_initialized() const { return initialized_; }
+	void shutdown_render_resources();
+	// Render effects acquire this guard before dereferencing VoxelWorld. _exit_tree() blocks
+	// teardown until all callbacks that already acquired it have released their resources.
+	bool try_begin_render_callback();
+	void end_render_callback();
 	void ensure_physics_initialized();
 	void teardown_physics();
 	int physics_tick(Vector3 center); // returns actions taken; Task 7 gives it a body

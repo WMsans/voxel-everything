@@ -157,6 +157,10 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 	uset_ = rd->uniform_set_create(uset_args, shader_, 0);
 }
 
+bool RaymarchPass::targets_need_rebuild(int width, int height, RID mask) const {
+	return width != width_ || height != height_ || mask != uset_mask_ || !uset_.is_valid();
+}
+
 bool RaymarchPass::render(RenderingDevice *rd, const GpuAtlas &atlas,
 		const IslandAtlas *islands, RID tile_mask, const ve::CameraParams &cam,
 		int width, int height, const float edit_state[6]) {

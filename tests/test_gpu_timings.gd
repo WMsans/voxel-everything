@@ -28,3 +28,11 @@ func test_new_rd_frame_gets_new_sample_id()->void:
 	var a: Dictionary = w.debug_ingest_gpu_timings(n,PackedInt64Array([100,200]),50)
 	var b: Dictionary = w.debug_ingest_gpu_timings(n,PackedInt64Array([300,500]),51)
 	assert_int(b["sample_id"]).is_greater(int(a["sample_id"]))
+func test_synthetic_ingest_declares_microseconds_without_live_scaling()->void:
+	var d: Dictionary = world().debug_ingest_gpu_timings(
+		PackedStringArray(["ve:10:frame:0:b","ve:10:frame:0:e"]),
+		PackedInt64Array([6000000,6016000]),52)
+	assert_bool(d["valid"]).is_true()
+	assert_float(d["custom_frame_gpu_ms"]).is_equal_approx(16.0,.0001)
+	assert_str(d["timestamp_unit"]).is_equal("synthetic_microseconds")
+	assert_float(d["timestamp_scale_to_microseconds"]).is_equal_approx(1.0,.0001)

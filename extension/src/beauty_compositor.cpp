@@ -28,12 +28,18 @@ void BeautyCompositor::_bind_methods() {
 
 void BeautyCompositor::_render_callback(int cb_type, RenderData *render_data) {
 	if (cb_type != EFFECT_CALLBACK_TYPE_POST_OPAQUE) return;
+	if (!voxel_compositor_callbacks_enabled()) return;
 	if (world_path_.is_empty() || !render_data) return;
 	SceneTree *tree = Object::cast_to<SceneTree>(Engine::get_singleton()->get_main_loop());
 	if (!tree) return;
 	VoxelWorld *world = Object::cast_to<VoxelWorld>(
 			tree->get_root()->get_node_or_null(world_path_));
 	if (!world || world->get_use_local_device()) return;
+	if (!world->try_begin_render_callback()) return;
+	struct CallbackGuard {
+		VoxelWorld *world;
+		~CallbackGuard() { world->end_render_callback(); }
+	} callback_guard{world};
 	world->ensure_initialized();
 	if (!world->is_initialized()) return;
 	RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
@@ -72,6 +78,7 @@ void BeautyCompositor::_render_callback(int cb_type, RenderData *render_data) {
 		const bool contact_ok = cs->render(rd, rsb->get_color_texture(), rsb->get_depth_texture(), size,
 				ubo->buffer(), settings);
 		if (contact_ok) timings->end(rd, "contact");
+		else timings->cancel("contact");
 	}
 	GBuffer *gb = world->gbuffer();
 	if (SsrPass *ssr = world->ssr_pass()) {
@@ -80,6 +87,7 @@ void BeautyCompositor::_render_callback(int cb_type, RenderData *render_data) {
 				gb ? gb->surface() : RID(), gb ? gb->depth() : RID(), normal_rough,
 				normal_roughness_state_ == 1, ubo->buffer(), size, settings);
 		if (ssr_ok) timings->end(rd, "ssr");
+		else timings->cancel("ssr");
 	}
 	if (OutlinePass *outline = world->outline_pass(); outline && gb && gb->is_valid()) {
 		timings->begin(rd, "outlines");
@@ -87,12 +95,14 @@ void BeautyCompositor::_render_callback(int cb_type, RenderData *render_data) {
 				gb->depth(), gb->surface(), normal_rough, have_calibrated_normal_roughness,
 				ubo->buffer(), size, settings);
 		if (outline_ok) timings->end(rd, "outlines");
+		else timings->cancel("outlines");
 	}
 	// Non-visual copy: outline above is the last scene-colour mutation before glow/tonemap.
 	if (gb && gb->is_valid()) {
 		timings->begin(rd, "history");
 		if (world->downsample_history(rd, rsb->get_color_texture(), *gb))
 			timings->end(rd, "history");
+		else timings->cancel("history");
 	}
 	timings->end_frame(rd);
 }

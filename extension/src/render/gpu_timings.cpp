@@ -2,6 +2,7 @@
 
 #include <godot_cpp/variant/string.hpp>
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <limits>
 #include <map>
@@ -58,6 +59,12 @@ Dictionary empty_snapshot() {
 	result["render_device_frame"] = -1;
 	result["captured_serial"] = -1;
 	result["dropped_pairs"] = 0;
+	// ingest_for_test() receives the documented unit directly. Live RenderingDevice values
+	// are normalized in poll() before they reach this parser.
+	result["timestamp_unit"] = "synthetic_microseconds";
+	result["timestamp_scale_to_microseconds"] = 1.0;
+	result["timestamp_calibrated"] = false;
+	result["timestamp_raw_cpu_ratio"] = 0.0;
 	return result;
 }
 
@@ -87,7 +94,9 @@ void GpuTimings::end_frame(RenderingDevice *rd) {
 	const auto it = active_.find("frame");
 	if (it == active_.end()) return;
 	rd->capture_timestamp(String(marker_name(serial_, "frame", it->second, 'e').c_str()));
-	active_.erase(it);
+	// A pass that forgot to close is a dropped pair, never an active marker carried into the
+	// next frame. The unmatched begin remains in the capture query for diagnostics.
+	active_.clear();
 }
 
 void GpuTimings::begin(RenderingDevice *rd, const char *pass) {
@@ -109,6 +118,67 @@ void GpuTimings::end(RenderingDevice *rd, const char *pass) {
 	active_.erase(it);
 }
 
+void GpuTimings::cancel(const char *pass) {
+	if (!pass || !*pass) return;
+	std::lock_guard<std::mutex> lock(mutex_);
+	active_.erase(pass);
+}
+
+void GpuTimings::abort_frame() {
+	std::lock_guard<std::mutex> lock(mutex_);
+	active_.clear();
+}
+
+namespace {
+
+// Godot 4.7.1 documents get_captured_timestamp_gpu_time() as microseconds. On the
+// Vulkan/NVIDIA device used for M6, the raw values are nanoseconds: a paired frame marker
+// measured against Godot's own CPU marker is approximately 1000:1. This calibration chooses
+// the conversion for live data only; ingest_for_test() deliberately remains microseconds.
+void calibrate_live_unit(const PackedStringArray &names, const PackedInt64Array &raw_gpu,
+		const PackedInt64Array &cpu_us, double *scale, double *ratio, bool *calibrated) {
+	int64_t raw_begin = 0, raw_end = 0, cpu_begin = 0, cpu_end = 0;
+	const int count = std::min({names.size(), raw_gpu.size(), cpu_us.size()});
+	for (int i = 0; i < count; i++) {
+		Marker marker;
+		if (!parse_marker(names[i].utf8().get_data(), &marker) || marker.pass != "frame" ||
+				marker.serial == 0 || marker.occurrence != 0) continue;
+		if (marker.side == 'b') {
+			raw_begin = raw_gpu[i];
+			cpu_begin = cpu_us[i];
+		} else {
+			raw_end = raw_gpu[i];
+			cpu_end = cpu_us[i];
+		}
+	}
+	if (raw_begin <= 0 || raw_end <= raw_begin || cpu_begin <= 0 || cpu_end <= cpu_begin)
+		return;
+	const double raw_delta = static_cast<double>(raw_end - raw_begin);
+	const double cpu_delta = static_cast<double>(cpu_end - cpu_begin);
+	const double observed = raw_delta / cpu_delta;
+	*ratio = observed;
+	// A GPU timestamp should be on the same order as the CPU marker, never three orders of
+	// magnitude apart unless one side is in ns. The bounds reject an invalid query without
+	// allowing a wall-clock duration to become a GPU duration.
+	if (observed > 100.0 && observed < 10000.0) {
+		*scale = 0.001;
+		*calibrated = true;
+	} else if (observed > 0.01 && observed < 100.0) {
+		*scale = 1.0;
+		*calibrated = true;
+	}
+}
+
+int64_t normalize_live_gpu_us(uint64_t raw, double scale) {
+	const double normalized = static_cast<double>(raw) * scale;
+	if (!(normalized > 0.0)) return 0;
+	if (normalized >= static_cast<double>(std::numeric_limits<int64_t>::max()))
+		return std::numeric_limits<int64_t>::max();
+	return static_cast<int64_t>(std::llround(normalized));
+}
+
+} // namespace
+
 void GpuTimings::poll(RenderingDevice *rd) {
 	if (!rd) return;
 	const uint64_t frame = rd->get_captured_timestamps_frame();
@@ -119,16 +189,45 @@ void GpuTimings::poll(RenderingDevice *rd) {
 	const uint32_t count = rd->get_captured_timestamps_count();
 	PackedStringArray names;
 	PackedInt64Array values;
+	PackedInt64Array cpu_values;
 	names.resize(count);
 	values.resize(count);
+	cpu_values.resize(count);
 	for (uint32_t i = 0; i < count; i++) {
 		names.set(i, rd->get_captured_timestamp_name(i));
 		values.set(i, static_cast<int64_t>(rd->get_captured_timestamp_gpu_time(i)));
+		cpu_values.set(i, static_cast<int64_t>(rd->get_captured_timestamp_cpu_time(i)));
 	}
+	// Calibrate the unit from the paired frame markers, using CPU timestamps only to identify
+	// the backend's scale. The published durations still come exclusively from GPU timestamps.
+	double scale = 0.001;
+	double ratio = 0.0;
+	bool calibrated = false;
+	calibrate_live_unit(names, values, cpu_values, &scale, &ratio, &calibrated);
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		if (calibrated || !live_timestamp_calibrated_) {
+			live_timestamp_scale_ = scale;
+			live_raw_cpu_ratio_ = ratio;
+			live_timestamp_calibrated_ = calibrated;
+		}
+	}
+	PackedInt64Array normalized;
+	normalized.resize(count);
+	for (uint32_t i = 0; i < count; i++)
+		normalized.set(i, normalize_live_gpu_us(static_cast<uint64_t>(values[i]), scale));
 	// Updating this even for an empty capture prevents repeatedly consuming a frame whose
 	// timestamp query has already been attempted. A later RD frame will supersede it.
-	if (count > 0) ingest_for_test(names, values, frame);
-	else {
+	if (count > 0) {
+		Dictionary result = ingest_for_test(names, normalized, frame);
+		std::lock_guard<std::mutex> lock(mutex_);
+		result["timestamp_unit"] = calibrated || live_timestamp_calibrated_
+				? "live_normalized_microseconds" : "live_vulkan_nanoseconds_assumed";
+		result["timestamp_scale_to_microseconds"] = live_timestamp_scale_;
+		result["timestamp_calibrated"] = live_timestamp_calibrated_;
+		result["timestamp_raw_cpu_ratio"] = live_raw_cpu_ratio_;
+		latest_ = result;
+	} else {
 		std::lock_guard<std::mutex> lock(mutex_);
 		last_rd_frame_ = frame;
 	}
