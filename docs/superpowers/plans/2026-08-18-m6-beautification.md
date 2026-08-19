@@ -5515,7 +5515,7 @@ budget verdicts and exact timestamp-derived evidence.
    as meaningful dynamic normal/roughness data until a known-orientation object verifies
    the channels.
 
-2. **Task 14 1440p timestamp budget legs:** Recorded on commit `722ab906a6870f65e9dc48599ca78c9c8dcb99f4`, Godot 4.7.1.stable.arch_linux.a13da4feb, Vulkan 1.4.341, NVIDIA GeForce RTX 4070 Laptop GPU, NVIDIA driver 610.57.04, High tier, 2560x1440. The five commands were:
+2. **Superseded historical baseline — Task 14 1440p timestamp budget legs:** Recorded on commit `722ab906a6870f65e9dc48599ca78c9c8dcb99f4`, Godot 4.7.1.stable.arch_linux.a13da4feb, Vulkan 1.4.341, NVIDIA GeForce RTX 4070 Laptop GPU, NVIDIA driver 610.57.04, High tier, 2560x1440. The five commands were:
    ```text
    WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/godot --path /home/jeremy/Development/Godot/voxel-everything/.worktrees/m6-beautification --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark | tee /tmp/m6-benchmark-steady.txt
    WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/godot --path /home/jeremy/Development/Godot/voxel-everything/.worktrees/m6-beautification --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark-move | tee /tmp/m6-benchmark-move.txt
@@ -5533,65 +5533,77 @@ budget verdicts and exact timestamp-derived evidence.
    ```
    Every leg recorded `BENCH budget_verdict raymarch=WARN lod=WARN ssgi=WARN ssr=WARN shadows=WARN outlines=WARN frame=WARN` and `BENCH gpu_timing valid_samples=<287|807> dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record`. All WARN results are retained; no budget or quality retuning was performed. The observed GPU values are approximately 1000x larger than wall-clock frame timing on this Godot/Vulkan stack even though the documented API unit is microseconds; follow-up is to reconcile the engine/backend timestamp conversion before using the numeric verdicts as performance claims. “`lod_ms` was CPU command-record time and was not used in any GPU verdict; `lod_gpu_ms` came only from timestamp deltas.”
 
-3. **Task 14 correction wave (recorded on correction commit `f888110`):** Godot 4.7.1.stable.arch_linux.a13da4feb, Vulkan 1.4.341, NVIDIA GeForce RTX 4070 Laptop GPU, driver 610.57.04, High tier, 2560x1440. Exact commands:
+3. **Task 14 correction wave — authoritative final record for commit `fe8826b`:** Godot 4.7.1.stable.arch_linux.a13da4feb, Vulkan 1.4.341, NVIDIA GeForce RTX 4070 Laptop GPU, driver 610.57.04, High tier, 2560x1440. All five commands ran with `WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000`:
    ```text
-   WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/godot --path /home/jeremy/Development/Godot/voxel-everything/.worktrees/m6-beautification --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark 2>&1 | tee /tmp/m6-benchmark-steady.txt
-   WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/godot --path /home/jeremy/Development/Godot/voxel-everything/.worktrees/m6-beautification --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark-move 2>&1 | tee /tmp/m6-benchmark-move.txt
-   WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/godot --path /home/jeremy/Development/Godot/voxel-everything/.worktrees/m6-beautification --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark-ridge 2>&1 | tee /tmp/m6-benchmark-ridge.txt
-   WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/godot --path /home/jeremy/Development/Godot/voxel-everything/.worktrees/m6-beautification --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark-edit 2>&1 | tee /tmp/m6-benchmark-edit.txt
-   WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/godot --path /home/jeremy/Development/Godot/voxel-everything/.worktrees/m6-beautification --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark-island 2>&1 | tee /tmp/m6-benchmark-island.txt
+   COMMAND: env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/godot --path /home/jeremy/Development/Godot/voxel-everything/.worktrees/m6-beautification --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark
+   COMMAND: env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/godot --path /home/jeremy/Development/Godot/voxel-everything/.worktrees/m6-beautification --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark-move
+   COMMAND: env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/godot --path /home/jeremy/Development/Godot/voxel-everything/.worktrees/m6-beautification --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark-ridge
+   COMMAND: env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/godot --path /home/jeremy/Development/Godot/voxel-everything/.worktrees/m6-beautification --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark-edit
+   COMMAND: env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/godot --path /home/jeremy/Development/Godot/voxel-everything/.worktrees/m6-beautification --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark-island
    ```
-   Exact per-leg GPU p50/p99, verdict, sample/drop, and qualification lines:
+   Each leg exited cleanly:
    ```text
-   steady: BENCH gpu_raymarch samples=287 p50_ms=6.347 p99_ms=7.983
-   steady: BENCH gpu_lod samples=287 p50_ms=0.044 p99_ms=0.051
-   steady: BENCH gpu_ssgi samples=287 p50_ms=0.172 p99_ms=0.175
+   EXIT_STATUS=0; clean=yes
+   EXIT_STATUS=0; clean=yes
+   EXIT_STATUS=0; clean=yes
+   EXIT_STATUS=0; clean=yes
+   EXIT_STATUS=0; clean=yes
+   ```
+   Exact current per-leg GPU p50/p99, budget, timing, and calibration lines:
+   ```text
+   steady: BENCH gpu_raymarch samples=287 p50_ms=6.341 p99_ms=7.963
+   steady: BENCH gpu_lod samples=287 p50_ms=0.043 p99_ms=0.050
+   steady: BENCH gpu_ssgi samples=287 p50_ms=0.172 p99_ms=0.174
    steady: BENCH gpu_ssr samples=287 p50_ms=0.146 p99_ms=0.148
    steady: BENCH gpu_shadows samples=287 p50_ms=0.078 p99_ms=0.225
    steady: BENCH gpu_outlines samples=287 p50_ms=0.089 p99_ms=0.090
-   steady: BENCH gpu_custom_frame samples=287 p50_ms=7.349 p99_ms=9.180
+   steady: BENCH gpu_custom_frame samples=287 p50_ms=7.345 p99_ms=9.153
    steady: BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
    steady: BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
-   steady: BENCH timing_condition vsync_requested=disabled vsync_actual=enabled_wayland verdict_qualified=true
-   move: BENCH gpu_raymarch samples=287 p50_ms=6.397 p99_ms=7.747
-   move: BENCH gpu_lod samples=287 p50_ms=0.070 p99_ms=0.219
-   move: BENCH gpu_ssgi samples=287 p50_ms=0.177 p99_ms=0.318
-   move: BENCH gpu_ssr samples=287 p50_ms=0.167 p99_ms=0.342
-   move: BENCH gpu_shadows samples=287 p50_ms=0.080 p99_ms=0.437
-   move: BENCH gpu_outlines samples=287 p50_ms=0.086 p99_ms=0.230
-   move: BENCH gpu_custom_frame samples=287 p50_ms=7.643 p99_ms=9.320
+   steady: BENCH gpu_timestamp_calibration unit=live_normalized_microseconds scale_to_us=0.001000 raw_cpu_ratio=7637.735 calibrated=true
+
+   move: BENCH gpu_raymarch samples=287 p50_ms=6.348 p99_ms=7.719
+   move: BENCH gpu_lod samples=287 p50_ms=0.070 p99_ms=0.214
+   move: BENCH gpu_ssgi samples=287 p50_ms=0.179 p99_ms=0.324
+   move: BENCH gpu_ssr samples=287 p50_ms=0.166 p99_ms=0.349
+   move: BENCH gpu_shadows samples=287 p50_ms=0.081 p99_ms=0.437
+   move: BENCH gpu_outlines samples=287 p50_ms=0.085 p99_ms=0.231
+   move: BENCH gpu_custom_frame samples=287 p50_ms=7.610 p99_ms=9.568
    move: BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
    move: BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
-   move: BENCH timing_condition vsync_requested=disabled vsync_actual=enabled_wayland verdict_qualified=true
-   ridge: BENCH gpu_raymarch samples=287 p50_ms=5.889 p99_ms=8.426
-   ridge: BENCH gpu_lod samples=287 p50_ms=0.173 p99_ms=0.249
-   ridge: BENCH gpu_ssgi samples=287 p50_ms=0.142 p99_ms=0.368
-   ridge: BENCH gpu_ssr samples=287 p50_ms=0.155 p99_ms=0.327
-   ridge: BENCH gpu_shadows samples=287 p50_ms=0.065 p99_ms=0.575
-   ridge: BENCH gpu_outlines samples=287 p50_ms=0.051 p99_ms=0.187
-   ridge: BENCH gpu_custom_frame samples=287 p50_ms=7.018 p99_ms=9.512
+   move: BENCH gpu_timestamp_calibration unit=live_normalized_microseconds scale_to_us=0.001000 raw_cpu_ratio=7059.745 calibrated=true
+
+   ridge: BENCH gpu_raymarch samples=287 p50_ms=5.954 p99_ms=8.752
+   ridge: BENCH gpu_lod samples=287 p50_ms=0.176 p99_ms=0.265
+   ridge: BENCH gpu_ssgi samples=287 p50_ms=0.144 p99_ms=0.360
+   ridge: BENCH gpu_ssr samples=287 p50_ms=0.155 p99_ms=0.322
+   ridge: BENCH gpu_shadows samples=287 p50_ms=0.065 p99_ms=0.578
+   ridge: BENCH gpu_outlines samples=287 p50_ms=0.051 p99_ms=0.185
+   ridge: BENCH gpu_custom_frame samples=287 p50_ms=7.102 p99_ms=10.371
    ridge: BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
    ridge: BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
-   ridge: BENCH timing_condition vsync_requested=disabled vsync_actual=enabled_wayland verdict_qualified=true
-   edit: BENCH gpu_raymarch samples=287 p50_ms=10.441 p99_ms=14.177
-   edit: BENCH gpu_lod samples=287 p50_ms=0.051 p99_ms=0.250
-   edit: BENCH gpu_ssgi samples=287 p50_ms=0.158 p99_ms=0.296
-   edit: BENCH gpu_ssr samples=287 p50_ms=0.171 p99_ms=0.312
-   edit: BENCH gpu_shadows samples=287 p50_ms=0.079 p99_ms=0.302
-   edit: BENCH gpu_outlines samples=287 p50_ms=0.086 p99_ms=0.226
-   edit: BENCH gpu_custom_frame samples=287 p50_ms=12.448 p99_ms=29.005
+   ridge: BENCH gpu_timestamp_calibration unit=live_normalized_microseconds scale_to_us=0.001000 raw_cpu_ratio=2886.968 calibrated=true
+
+   edit: BENCH gpu_raymarch samples=287 p50_ms=10.018 p99_ms=14.299
+   edit: BENCH gpu_lod samples=287 p50_ms=0.050 p99_ms=0.244
+   edit: BENCH gpu_ssgi samples=287 p50_ms=0.159 p99_ms=0.292
+   edit: BENCH gpu_ssr samples=287 p50_ms=0.171 p99_ms=0.289
+   edit: BENCH gpu_shadows samples=287 p50_ms=0.079 p99_ms=0.303
+   edit: BENCH gpu_outlines samples=287 p50_ms=0.085 p99_ms=0.228
+   edit: BENCH gpu_custom_frame samples=287 p50_ms=11.984 p99_ms=29.077
    edit: BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
    edit: BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
-   edit: BENCH timing_condition vsync_requested=disabled vsync_actual=enabled_wayland verdict_qualified=true
-   island: BENCH gpu_raymarch samples=807 p50_ms=6.742 p99_ms=8.512
+   edit: BENCH gpu_timestamp_calibration unit=live_normalized_microseconds scale_to_us=0.001000 raw_cpu_ratio=6357.802 calibrated=true
+
+   island: BENCH gpu_raymarch samples=807 p50_ms=6.662 p99_ms=8.519
    island: BENCH gpu_lod samples=807 p50_ms=0.043 p99_ms=0.050
    island: BENCH gpu_ssgi samples=807 p50_ms=0.168 p99_ms=0.173
-   island: BENCH gpu_ssr samples=807 p50_ms=0.148 p99_ms=0.151
-   island: BENCH gpu_shadows samples=807 p50_ms=0.078 p99_ms=0.228
+   island: BENCH gpu_ssr samples=807 p50_ms=0.149 p99_ms=0.152
+   island: BENCH gpu_shadows samples=807 p50_ms=0.078 p99_ms=0.229
    island: BENCH gpu_outlines samples=807 p50_ms=0.087 p99_ms=0.235
-   island: BENCH gpu_custom_frame samples=807 p50_ms=7.755 p99_ms=9.745
+   island: BENCH gpu_custom_frame samples=807 p50_ms=7.678 p99_ms=10.038
    island: BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
    island: BENCH gpu_timing valid_samples=807 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
-   island: BENCH timing_condition vsync_requested=disabled vsync_actual=enabled_wayland verdict_qualified=true
+   island: BENCH gpu_timestamp_calibration unit=live_normalized_microseconds scale_to_us=0.001000 raw_cpu_ratio=4965.422 calibrated=true
    ```
-   Live calibration evidence: `BENCH gpu_timestamp_calibration unit=live_normalized_microseconds scale_to_us=0.001000 ... calibrated=true`, with paired raw-GPU/CPU ratios 3,722.530–9,789.078. Raw Vulkan values are nanoseconds on this backend and are normalized once in `poll()` to documented microseconds; `ingest_for_test()` remains microseconds with scale 1.0. No UNMEASURED sample was emitted in these runs. Wayland did not honor `--disable-vsync`; Godot printed `The requested V-Sync mode Disabled is not available. Falling back to V-Sync mode Enabled.`, so frame verdicts are qualified. Steady and edit exited 0 with the existing 2 ObjectDB leak warning; move, ridge, and island still aborted during shutdown with `corrupted size vs. prev_size`, so none of the five legs is claimed clean. The island invalid-RID report was eliminated by invalidating CompositePass's dependent uniform set and framebuffer before RaymarchPass replaces its output textures. “`lod_ms` was CPU command-record time and was not used in any GPU verdict; `lod_gpu_ms` came only from timestamp deltas.”
+   The required sentence is: “`lod_ms` was CPU command-record time and was not used in any GPU verdict; `lod_gpu_ms` came only from timestamp deltas.” The live calibration is `unit=live_normalized_microseconds scale_to_us=0.001000`; raw Vulkan timestamp values are normalized once in `poll()`, while `ingest_for_test()` remains microseconds with scale 1.0. Wayland did not honor `--disable-vsync`: Godot printed `The requested V-Sync mode Disabled is not available. Falling back to V-Sync mode Enabled.`, so the five measurements retain the Wayland V-Sync qualification. The existing `2 ObjectDB instances were leaked at exit` warning remains. All five legs now have clean shutdowns; no `corrupted size`, allocator abort, or invalid-RID-free diagnostic was recorded. Budget WARNs are retained as measured verdicts, not retuned.

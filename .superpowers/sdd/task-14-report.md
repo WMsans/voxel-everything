@@ -257,3 +257,15 @@ BENCH gpu_timestamp_calibration unit=live_normalized_microseconds scale_to_us=0.
 ```
 
 The captured stdout is authoritative in `/tmp/task14-shutdown-ridge.txt`. All five benchmark legs now have clean shutdowns. Budget WARNs are retained as measured verdicts, not retuned; `lod_ms` remains CPU command-record time and no GPU verdict uses it.
+
+## Documentation correction
+
+The plan Errata correction-wave entry was updated to the authoritative final record for commit `fe8826b`: the five exact commands, current GPU p50/p99 lines, budget verdicts, timing/sample/drop lines, per-leg calibration, clean exit statuses, Wayland V-Sync qualification, and existing ObjectDB leak warning. The earlier `f888110` correction-wave measurements are superseded historical evidence, not the current verdict.
+
+## Documentation verification
+
+```text
+git diff --check
+# clean
+plan record check: 5 EXIT_STATUS=0; clean=yes records; final commit fe8826b present; calibration text present
+```
