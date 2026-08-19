@@ -5508,3 +5508,9 @@ git commit -m "feat: beauty controls and per-pass gpu budget telemetry"
 Implementation-time facts are appended here as numbered entries. Task 9 records the
 Forward+ normal-roughness availability/encoding verdict; Task 14 records all five 1440p
 budget verdicts and exact timestamp-derived evidence.
+
+1. **Task 9 normal-roughness verdict:** `normal_roughness` is reachable, but the probe
+   currently reports a constant/empty value of `1.0`. Its channel encoding is therefore
+   not calibrated; Tasks 10 and 12 must keep calibration pending and must not rely on it
+   as meaningful dynamic normal/roughness data until a known-orientation object verifies
+   the channels.
