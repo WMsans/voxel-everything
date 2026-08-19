@@ -392,6 +392,10 @@ bool *beauty_field(ve::BeautySettings &s, const String &name) {
 } // namespace
 
 void VoxelWorld::set_effect_enabled(const String &name, bool on) {
+	if (name == "islands") {
+		islands_enabled_.store(on, std::memory_order_relaxed);
+		return;
+	}
 	std::lock_guard<std::mutex> lock(beauty_mutex_);
 	bool *f = beauty_field(beauty_, name);
 	if (!f) return; // fail-soft: an unknown name in a debug menu is not a crash
@@ -400,6 +404,7 @@ void VoxelWorld::set_effect_enabled(const String &name, bool on) {
 }
 
 bool VoxelWorld::get_effect_enabled(const String &name) const {
+	if (name == "islands") return islands_enabled_.load(std::memory_order_relaxed);
 	std::lock_guard<std::mutex> lock(beauty_mutex_);
 	ve::BeautySettings copy = beauty_;
 	const bool *f = beauty_field(copy, name);
@@ -811,6 +816,7 @@ Dictionary VoxelWorld::debug_beauty_settings() {
 	d["glossy_sdf_rays"] = beauty.glossy_sdf_rays;
 	d["raymarched_sun_shadow"] = beauty.raymarched_sun_shadow;
 	d["cost_view"] = beauty.cost_view;
+	d["islands"] = islands_enabled_.load(std::memory_order_relaxed);
 	d["ssgi_taps"] = beauty.ssgi_taps;
 	d["ssr_steps"] = beauty.ssr_steps;
 	d["contact_steps"] = beauty.contact_steps;
@@ -1213,6 +1219,7 @@ int VoxelWorld::island_slot_count() const {
 	// island_mutex_. The manager's own slot_high_water_ is atomic as well, since it is also
 	// updated outside this mutex.
 	std::lock_guard<std::mutex> lock(island_mutex_);
+	if (!islands_enabled_.load(std::memory_order_relaxed)) return 0;
 	const int manager_slots = island_manager_ ? island_manager_->slot_high_water() : 0;
 	return island_slots_ > manager_slots ? island_slots_ : manager_slots;
 }

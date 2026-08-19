@@ -68,16 +68,15 @@ var _island_waiting_for_merge := false
 var _target_frames := FRAMES
 
 func _effects_off_from_args(args: PackedStringArray) -> PackedStringArray:
+	var effects := PackedStringArray()
 	for arg in args:
 		if not arg.begins_with("--effects-off="):
 			continue
-		var effects := PackedStringArray()
 		for name in arg.trim_prefix("--effects-off=").split(",", false):
 			var trimmed := String(name).strip_edges()
 			if not trimmed.is_empty():
 				effects.append(trimmed)
-		return effects
-	return PackedStringArray()
+	return effects
 
 func _ready() -> void:
 	var args := OS.get_cmdline_user_args()

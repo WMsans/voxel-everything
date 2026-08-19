@@ -113,6 +113,7 @@ class VoxelWorld : public Node3D {
 	GpuAtlas *atlas_ = nullptr;
 	MaterialAtlas *materials_ = nullptr;
 	IslandAtlas *islands_ = nullptr;
+	std::atomic<bool> islands_enabled_{true};
 	int island_slots_ = 0; // high-water mark, not a population; guarded by island_mutex_
 	IslandCullPass *island_cull_ = nullptr;
 	RegionPass *region_pass_ = nullptr;

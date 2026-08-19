@@ -4,7 +4,7 @@ Status: DONE_WITH_CONCERNS
 
 Date: 2026-08-19
 
-Implementation commit SHA before report self-reference amend: f1be892
+Prior implementation commit SHA: 7936f75
 
 Files changed:
 
@@ -147,3 +147,43 @@ Concerns / gaps
 2. The exact X11 benchmark command is not runnable here because no X11 display is available.
 3. I did not produce a meaningful “with and without islands” benchmark pair in Task 2 scope; the new `--effects-off=` hook currently routes through `VoxelWorld.set_effect_enabled()`, which only covers the beauty effect names available on this branch.
 4. Godot still reports `WARNING: 2 ObjectDB instances were leaked at exit` at the end of the gdUnit runs; that warning predates this task’s logic and did not cause test failures.
+
+---
+
+## Round 1 fix report
+
+Status: FIXED_WITH_CAPTURE_LIMITATION
+
+Changes:
+
+- `shaders/raymarch.comp.glsl`: changed cost view to an explicit one-step-per-heat-unit grayscale mapping, clamped to 512 units, with black at 0 and white at 512. The final output bypasses AO/sun lighting while the cost flag is enabled, preserving endpoint semantics; the debug material branch follows the same override.
+- `demo/benchmark.gd`: `--effects-off=` now accumulates comma-separated names across repeated options.
+- `extension/src/voxel_world.h`, `extension/src/voxel_world.cpp`: added a real atomic islands render switch. `set_effect_enabled("islands", false)` gates the reported island slot count to zero, which skips island culling and raymarching while leaving island physics active; getter/debug settings report the state.
+- `demo/debug_menu.gd`: exposed the islands switch on the existing effect/debug surface.
+- `tests/test_benchmark.gd`, `tests/test_debug_menu.gd`: added regression coverage for repeated options and the real islands toggle.
+- `docs/superpowers/plans/2026-08-19-m7-budget-demo-capture.md`: filled Errata entry 2 with fresh A/B data, corrected stale `frame_verdict_qualified` text to the emitted `verdict_qualified` key, and documented screenshot limits.
+
+Fresh verification commands and outputs:
+
+1. `./build.sh -j$(nproc)` — `Build OK: 4.6M libvoxel_everything.linux.template_debug.x86_64.so`.
+2. `cd extension && scons test` — `295/295` doctest cases and `3961643/3961643` assertions passed.
+3. `./gdunit_tests.sh -c -a res://tests/test_raymarch_cost.gd` — `2/2` passed, exit 0; `./gdunit_tests.sh -c -a res://tests/test_raymarch_pixel.gd` — `5/5` passed, exit 0. These compiled/executed the amended shader.
+4. `./gdunit_tests.sh -c -a res://tests/test_benchmark.gd && ./gdunit_tests.sh -c -a res://tests/test_debug_menu.gd` — benchmark `3/3`, debug menu `3/3` passed.
+
+Benchmark commands (all emitted `verdict_qualified=false` because Wayland kept V-Sync enabled):
+
+- `WAYLAND_DISPLAY=wayland-1 /usr/bin/godot --path . --display-driver wayland --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark`: `BENCH gpu_raymarch samples=287 p50_ms=6.319 p99_ms=7.896`; `BENCH islands=0`.
+- `WAYLAND_DISPLAY=wayland-1 /usr/bin/godot --path . --display-driver wayland --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark --effects-off=raymarched_sun_shadow`: `p50_ms=5.729 p99_ms=7.106`.
+- `WAYLAND_DISPLAY=wayland-1 /usr/bin/godot --path . --display-driver wayland --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark --effects-off=islands`: `p50_ms=6.324 p99_ms=7.982`; `BENCH islands=0` (null no-live-island control).
+- `WAYLAND_DISPLAY=wayland-1 /usr/bin/godot --path . --display-driver wayland --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark --effects-off=raymarched_sun_shadow,islands`: `p50_ms=5.727 p99_ms=7.143`.
+- `WAYLAND_DISPLAY=wayland-1 /usr/bin/godot --path . --display-driver wayland --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark-island`: `BENCH gpu_raymarch samples=807 p50_ms=6.665 p99_ms=8.494`; `BENCH islands=2`.
+- `WAYLAND_DISPLAY=wayland-1 /usr/bin/godot --path . --display-driver wayland --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark-island --effects-off=islands`: `p50_ms=6.544 p99_ms=8.087`; `BENCH islands=2`, confirming the control is applied to rendering rather than silently suppressing island simulation.
+
+The steady no-ray-shadow delta (−0.590 ms p50, −0.790 ms p99) supports the **shadow rays** hypothesis. The steady islands pair is not interpreted as an island-cost result because no island was live; the island-leg pair is the available with/without-islands measurement.
+
+Screenshot evidence: the exact X11 command from Step 10 failed with `ERROR: X11 Display is not available`, followed by no usable Wayland fallback. The attempted alternative was
+`WAYLAND_DISPLAY=wayland-1 /usr/bin/godot --path . --display-driver wayland --resolution 2560x1440 --disable-vsync demo/main.tscn` plus `WAYLAND_DISPLAY=wayland-1 grim /tmp/m7-task2-cost-view.png`, which returned `grim_exit=0 file=167656 bytes`. No F3 input could be injected, and this branch has no `KEY_F3` handler, so the captured PNG is explicitly ordinary-frame evidence, not a cost-view screenshot.
+
+Report/output correction: the prior report’s recorded `f1be892` SHA did not match the worktree’s actual prior implementation commit (`7936f75`); the header above is corrected. The fresh benchmark values above supersede the earlier stale `6.324/7.900` and `5.722/7.154` figures; the plan’s emitted timing key is also corrected.
+
+Remaining concerns: interactive cost-view screenshot capture is unavailable in this environment; gdUnit continues to emit the pre-existing `WARNING: 2 ObjectDB instances were leaked at exit`. One chained cost-plus-pixel invocation timed out after printing cost `2/2`; both suites passed with exit 0 when rerun independently.

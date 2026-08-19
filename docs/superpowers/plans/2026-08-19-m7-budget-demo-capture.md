@@ -3270,7 +3270,7 @@ M7 is complete when all of the following hold, each verified by a command whose 
 
 1. `cd extension && scons test` — every native suite passes, including `test_brick_flags`, `test_op_filter`, `test_override_store`, `test_octant_split`.
 2. `./gdunit_tests.sh -c` — every gdUnit suite passes, including the ten new ones.
-3. `tools/run_benchmarks.sh m7-final` — five legs, each `EXIT_STATUS=0`, each printing `BENCH timing_condition ... vsync_actual=disabled frame_verdict_qualified=false`. If V-Sync cannot be disabled on the available display server, the run is qualified and **says so in the verdict line**, which is itself the acceptance criterion — the failure mode this milestone removes is a silent one.
+3. `tools/run_benchmarks.sh m7-final` — five legs, each `EXIT_STATUS=0`, each printing `BENCH timing_condition ... vsync_actual=disabled verdict_qualified=false`. If V-Sync cannot be disabled on the available display server, the run is qualified and **says so in the verdict line**, which is itself the acceptance criterion — the failure mode this milestone removes is a silent one.
 4. Every `BENCH budget_verdict` line is recorded in Errata entry 10 with its measured numbers, WARNs included and unaltered.
 5. The edit leg's GPU cost does not grow across a 900-frame run (Task 8, Step 7), and `BENCH regions=... overflow=0`.
 6. `--capture` writes 900 PNGs and `tools/encode_capture.sh` produces a playable file (Task 13, Step 6).
@@ -3304,7 +3304,7 @@ where this plan's text met reality and lost.
      BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
      BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
      BENCH gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true
-     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled frame_verdict_qualified=false
+     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false
      ```
 
    - move
@@ -3322,7 +3322,7 @@ where this plan's text met reality and lost.
      BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
      BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
      BENCH gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true
-     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled frame_verdict_qualified=false
+     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false
      ```
 
    - ridge
@@ -3340,7 +3340,7 @@ where this plan's text met reality and lost.
      BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
      BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
      BENCH gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true
-     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled frame_verdict_qualified=false
+     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false
      ```
 
    - edit
@@ -3358,7 +3358,7 @@ where this plan's text met reality and lost.
      BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
      BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
      BENCH gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true
-     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled frame_verdict_qualified=false
+     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false
      ```
 
    - island
@@ -3376,9 +3376,41 @@ where this plan's text met reality and lost.
      BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
      BENCH gpu_timing valid_samples=807 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
      BENCH gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true
-     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled frame_verdict_qualified=false
+     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false
      ```
-2. _(Task 2, Step 10: raymarch attribution — to be filled)_
+2. **Task 2, Step 10: raymarch attribution**
+
+   Environment for all runs: Godot 4.7.1, Vulkan 1.4.341, NVIDIA GeForce RTX 4070 Laptop GPU,
+   Wayland, requested 2560×1440, requested V-Sync disabled but compositor actual V-Sync enabled;
+   therefore each run prints `verdict_qualified=false`. Commands used the available Wayland
+   alternative to the brief's X11 command:
+   `WAYLAND_DISPLAY=wayland-1 /usr/bin/godot --path . --display-driver wayland --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark`.
+
+   - Steady full: `BENCH gpu_raymarch samples=287 p50_ms=6.319 p99_ms=7.896`; `BENCH islands=0 ...`.
+   - Steady `--effects-off=raymarched_sun_shadow`: `p50_ms=5.729 p99_ms=7.106`.
+   - Steady `--effects-off=islands`: `p50_ms=6.324 p99_ms=7.982`; `BENCH islands=0 ...`, so this
+     is a valid no-live-island control, not evidence of an island cost.
+   - Steady `--effects-off=raymarched_sun_shadow,islands`: `p50_ms=5.727 p99_ms=7.143`.
+   - Island leg full (`--benchmark-island`, 900 frames; `BENCH islands=2 ...`):
+     `p50_ms=6.665 p99_ms=8.494`.
+   - Island leg `--effects-off=islands` (`BENCH islands=2 ...`):
+     `p50_ms=6.544 p99_ms=8.087`. The switch is real: it gates the raymarch island count while
+     the physics harness still reports its spawned/live islands.
+
+   The no-ray-shadow steady A/B is the useful attribution: removing the shadow ray reduced p50
+   by 0.590 ms and p99 by 0.790 ms, supporting the **shadow rays** hypothesis rather than DDA
+   overhead or field complexity. The steady-leg island pair is explicitly null because no island
+   was live; the island-leg pair is the available with/without-islands measurement.
+
+   Cost-view screenshot evidence: the requested X11 command
+   `/usr/bin/godot --path . --display-driver x11 --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark`
+   was attempted and failed with `ERROR: X11 Display is not available`. The alternative
+   `WAYLAND_DISPLAY=wayland-1 /usr/bin/godot --path . --display-driver wayland --resolution 2560x1440 --disable-vsync demo/main.tscn`
+   plus `WAYLAND_DISPLAY=wayland-1 grim /tmp/m7-task2-cost-view.png` did capture a 167656-byte
+   frame, but no F3 input could be injected and this branch has no `KEY_F3` handler, so it is
+   **not** claimed as cost-view evidence. Interactive cost-view screenshot capture remains
+   unavailable in this environment; the exact attempted alternative frame is
+   `/tmp/m7-task2-cost-view.png` (ordinary demo frame only).
 3. _(Task 3, Step 13: brick flags measured delta — to be filled)_
 4. _(Task 4, Step 8: region DDA measured delta — to be filled)_
 5. _(Task 5, Step 12: op filtering measured delta — to be filled)_

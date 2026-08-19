@@ -31,3 +31,11 @@ func test_effects_off_args_parse_multiple_effect_names() -> void:
 	assert_int(names.size()).is_equal(2)
 	assert_str(names[0]).is_equal("raymarched_sun_shadow")
 	assert_str(names[1]).is_equal("islands")
+
+func test_effects_off_args_accumulate_repeated_options() -> void:
+	var bench := benchmark_node()
+	var names: PackedStringArray = bench.call("_effects_off_from_args",
+		PackedStringArray(["--effects-off=raymarched_sun_shadow", "--effects-off=islands"]))
+	assert_int(names.size()).is_equal(2)
+	assert_str(names[0]).is_equal("raymarched_sun_shadow")
+	assert_str(names[1]).is_equal("islands")
