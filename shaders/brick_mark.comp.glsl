@@ -5,6 +5,11 @@
 #define FIELD_VOLUME_SDF_BINDING 7
 #define FIELD_VOLUME_MAT_BINDING 8
 #include "common.glslh"
+// A workgroup shares the ordered subset of ops that can reach its conservative brick slab.
+shared uint s_ops[256];
+shared uint s_op_n;
+shared uint s_keep[256];
+#define FIELD_OP_INDEX(base, i) ((base) + s_ops[i])
 #include "field.glslh"
 
 layout(local_size_x = 256) in;
@@ -80,10 +85,43 @@ void main() {
 	ivec3 ext = pc.hi.xyz - pc.lo.xyz + ivec3(1);
 	int total = ext.x * ext.y * ext.z;
 	int i = int(gl_GlobalInvocationID.x);
-	if (i >= total) return;
-	ivec3 brick = pc.lo.xyz + ivec3(i % ext.x, (i / ext.x) % ext.y, i / (ext.x * ext.y));
+	bool in_range = i < total;
+
+	// A workgroup covers 256 consecutive bricks in the flattened scan. When that span
+	// wraps a row, use the complete scan range rather than accidentally dropping an op that
+	// reaches a brick on the far side of the wrap.
+	int wg_first = int(gl_WorkGroupID.x) * 256;
+	int wg_last = min(wg_first + 255, total - 1);
+	ivec3 b0 = pc.lo.xyz + ivec3(wg_first % ext.x, (wg_first / ext.x) % ext.y,
+			wg_first / (ext.x * ext.y));
+	ivec3 b1 = pc.lo.xyz + ivec3(wg_last % ext.x, (wg_last / ext.x) % ext.y,
+			wg_last / (ext.x * ext.y));
+	vec3 slab_lo = vec3(min(b0, b1)) * BRICK_SIZE;
+	vec3 slab_hi = (vec3(max(b0, b1)) + vec3(1.0)) * BRICK_SIZE;
+	if (b0.y != b1.y || b0.z != b1.z) {
+		slab_lo = vec3(pc.lo.xyz) * BRICK_SIZE;
+		slab_hi = (vec3(pc.hi.xyz) + vec3(1.0)) * BRICK_SIZE;
+	}
 
 	int rslot = pc.region.w;
+	uint op_base = uint(rslot) * MAX_REGION_OPS;
+	uint op_count = uint(clamp(pc.cfg.x, 0, int(MAX_REGION_OPS)));
+	if (gl_LocalInvocationID.x < op_count)
+		s_keep[gl_LocalInvocationID.x] = op_touches_aabb(op_base + gl_LocalInvocationID.x,
+				slab_lo, slab_hi, ACTIVATION_PAD) ? 1u : 0u;
+	if (gl_LocalInvocationID.x == 0u) s_op_n = 0u;
+	barrier();
+	if (gl_LocalInvocationID.x == 0u) {
+		uint n = 0u;
+		for (uint oi = 0u; oi < op_count; oi++)
+			if (s_keep[oi] != 0u) s_ops[n++] = oi;
+		s_op_n = n;
+	}
+	barrier();
+
+	if (!in_range) return;
+	ivec3 brick = pc.lo.xyz + ivec3(i % ext.x, (i / ext.x) % ext.y, i / (ext.x * ext.y));
+
 	// REGION_BRICKS is 32, a power of two: `& 31` is the floor-modulo for negative brick
 	// coordinates too, where GLSL's `%` would truncate towards zero and give -1 for -1.
 	int bi = (brick.x & 31) + (brick.y & 31) * REGION_BRICKS +
@@ -91,10 +129,8 @@ void main() {
 	int idx = rslot * REGION_BRICK_COUNT + bi;
 	int cur = region_tables.slot[idx];
 
-	uint op_base = uint(rslot) * MAX_REGION_OPS;
-	uint op_count = uint(pc.cfg.x);
 	float probe_mn, probe_mx;
-	brick_probe(brick, op_base, op_count, probe_mn, probe_mx);
+	brick_probe(brick, op_base, s_op_n, probe_mn, probe_mx);
 	// `active` is a GLSL reserved word (M2 errata 5); this local is has_surface.
 	bool has_surface = probe_mn < ACTIVATION_PAD && probe_mx > -ACTIVATION_PAD;
 	// Occupancy is written in the ALLOCATE phase only: both phases scan the same range, so

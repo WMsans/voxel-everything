@@ -3493,7 +3493,35 @@ where this plan's text met reality and lost.
    `regions` count and fewer than 32 `bricks`, while the hit-oracle rays still agree. This is
    the intended null-result guard: even if the GPU percentile movement is noisy, the measured
    traversal work changed from brick-by-brick sky walking to region skips.
-5. _(Task 5, Step 12: op filtering measured delta — to be filled)_
+5. **Task 5, Step 12: per-brick/per-workgroup op filtering**
+
+   The focused native and GPU differential tests passed after the CPU reference and both
+   shader paths used the same ordered AABB filter. The benchmark was run as:
+
+   ```text
+   WAYLAND_DISPLAY=wayland-1 tools/run_benchmarks.sh m7-task5
+   ```
+
+   All five benchmark processes exited 0. This environment is the same qualified Wayland
+   setup as Task 4: `vsync_requested=disabled`, `vsync_actual=disabled`,
+   `verdict_qualified=false`. The fresh Task 5 readings, compared with Task 4 round 1,
+   are:
+
+   | leg | Task 4 gpu_stream p50/p99 ms | Task 5 gpu_stream p50/p99 ms | Task 4 gpu_raymarch p50/p99 ms | Task 5 gpu_raymarch p50/p99 ms |
+   |---|---:|---:|---:|---:|
+   | steady | 0.003 / 0.004 | 0.003 / 0.004 | 6.838 / 8.927 | 6.835 / 8.945 |
+   | move | 0.004 / 0.801 | 0.004 / 0.952 | 6.836 / 8.362 | 6.790 / 8.459 |
+   | ridge | 0.012 / 0.684 | 0.010 / 0.628 | 5.541 / 8.333 | 5.437 / 8.501 |
+   | edit | 0.867 / 14.786 | 0.236 / 2.977 | 11.296 / 16.888 | 11.129 / 15.798 |
+   | island | 0.003 / 2.032 | 0.003 / 0.736 | 7.182 / 9.253 | 7.171 / 9.258 |
+
+   The edit leg is the expected result: `gpu_stream` fell 72.8% at p50 and 79.9% at p99,
+   while `gpu_raymarch` moved -1.5% at p50 and -6.5% at p99. The filter is retained; its
+   cost is specifically in the edit path, and the measurement does not support claiming a
+   broad raymarch speedup. Every leg retained `raymarch=WARN`, with
+   `lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN`. The edit run also
+   reported `regions=133 overflow=1`; the overflow is the existing edit benchmark's
+   stream/job pressure and is not attributed to the filter.
 6. _(Task 8, Step 7: consolidation measured delta and overflow verdict — to be filled)_
 7. _(Task 9, Step 9: collider octant split measured delta — to be filled)_
 8. _(Task 13, Step 6: first capture, defects observed — to be filled)_
