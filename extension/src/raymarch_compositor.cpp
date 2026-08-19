@@ -4,6 +4,8 @@
 #include "render/deferred_pass.h"
 #include "render/inject_pass.h"
 #include "render/gbuffer.h"
+#include "render/beauty_camera.h"
+#include "render/ssgi_pass.h"
 #include "render/gpu_atlas.h"
 #include "render/hiz_pass.h"
 #include "render/lod_pool.h"
@@ -93,8 +95,17 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	cp.region_origin[3] = 0; // Task 11 sets the cull grid
 	const Vector3i ab = world->get_atlas_bricks();
 	cp.atlas_bricks[0] = ab.x; cp.atlas_bricks[1] = ab.y; cp.atlas_bricks[2] = ab.z;
-	const uint32_t beauty_flags = ve::pack_flags(world->beauty_settings());
+	const ve::BeautySettings beauty = world->beauty_settings();
+	const uint32_t beauty_flags = ve::pack_flags(beauty);
 	std::memcpy(&cp.cam_pos[3], &beauty_flags, sizeof(float));
+
+	const Projection view(cam.affine_inverse());
+	const Projection view_proj = proj * view;
+	const float cam_pos[3] = {cam.origin.x, cam.origin.y, cam.origin.z};
+	CameraUbo *ubo = world->beauty_camera();
+	if (!ubo || !ubo->ensure(rd)) return;
+	// Device-level operation: SSGI consumes this block before its compute list opens.
+	ubo->update(rd, view_proj, cam_pos, size, 0.05f, 4000.0f);
 
 	// Volumes before anything that evaluates the field: an op naming a slot may already be
 	// in the edit log, and the streamer is about to regenerate the bricks that read it.
@@ -135,13 +146,10 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	cp.dims[3] = islands;
 	if (!rmp->render(rd, *atlas, world->islands(), mask, cp, rw, rh, edit_state)) return;
 
-	const Projection view(cam.affine_inverse());
-	const Projection view_proj = proj * view;
 	// Master-API note: rsb->get_color_texture()/get_depth_texture() exist on godot-cpp master
 	// (render_scene_buffers_rd.hpp) and return the non-MSAA internal color/depth textures —
 	// the same RIDs the engine's own framebuffers use when MSAA is disabled (verified against
 	// render_forward_clustered.cpp), so the composite writes into the actual scene buffers.
-	const float cam_pos[3] = {cam.origin.x, cam.origin.y, cam.origin.z};
 	// Both fields fade at the SAME two distances, and those distances follow how far the
 	// near field's bricks actually reach this frame -- not the spec's 120/150, which assumes
 	// an atlas three times this one. Read once here so the composite and every far-field
@@ -243,6 +251,13 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 		}
 	}
 
+	SsgiPass *ssgi = world->ssgi_pass();
+	if (ssgi) ssgi->clear_result();
+	bool ssgi_ok = false;
+	if (ssgi && beauty.ssgi)
+		ssgi_ok = ssgi->render(rd, *gb, ubo->buffer(), world->prev_view_proj(),
+				world->has_history(), beauty, world->beauty_frame());
+
 	DeferredPass::Params dp;
 	const Projection inv = view_proj.inverse();
 	for (int c = 0; c < 4; c++)
@@ -255,9 +270,14 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	static const float kNoSun[16] = {};
 	const bool use_sun = sun && sun->is_valid() && sun->rebuilds() > 0 &&
 			(beauty_flags & ve::kFlagSunMap) != 0u;
-	if (!deferred->render(rd, *gb, *materials, RID(), use_sun ? sun->map() : RID(),
-			use_sun ? sun->view_proj() : kNoSun, use_sun ? sun->texel_world() : 0.0f, dp)) return;
+	if (!deferred->render(rd, *gb, *materials, ssgi_ok ? ssgi->result() : RID(),
+			use_sun ? sun->map() : RID(), use_sun ? sun->view_proj() : kNoSun,
+			use_sun ? sun->texel_world() : 0.0f, dp)) return;
 	if (!inject->draw(rd, rsb->get_color_texture(), rsb->get_depth_texture(), gb->lit(), gb->depth()))
 		return;
+	float current_view_proj[16];
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++) current_view_proj[c * 4 + r] = view_proj.columns[c][r];
+	world->finish_beauty_frame(current_view_proj);
 
 }
