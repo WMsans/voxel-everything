@@ -11,6 +11,7 @@
 #include "render/gbuffer.h"
 #include "render/beauty_camera.h"
 #include "render/contact_shadow_pass.h"
+#include "render/ssgi_pass.h"
 #include "beauty_compositor.h"
 #include "render/region_pass.h"
 #include "render/brick_gen_pass.h"
@@ -108,6 +109,8 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::debug_beauty_compositor_stats);
 	ClassDB::bind_method(D_METHOD("debug_contact_shadow_probe", "pos", "fwd", "w", "h"),
 			&VoxelWorld::debug_contact_shadow_probe);
+	ClassDB::bind_method(D_METHOD("debug_ssgi_probe", "pos", "fwd", "w", "h", "frames"),
+			&VoxelWorld::debug_ssgi_probe);
 	ClassDB::bind_method(D_METHOD("debug_lod_tick", "pos", "fwd"), &VoxelWorld::debug_lod_tick);
 	ClassDB::bind_method(D_METHOD("debug_lod_stats"), &VoxelWorld::debug_lod_stats);
 	ClassDB::bind_method(D_METHOD("debug_lod_fade_band"), &VoxelWorld::debug_lod_fade_band);
@@ -425,6 +428,104 @@ Dictionary VoxelWorld::debug_contact_shadow_probe(Vector3 pos, Vector3 fwd, int 
 	return d;
 }
 
+Dictionary VoxelWorld::debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, int h, int frames) {
+	Dictionary d;
+	d["width"] = std::max(1, w / 2);
+	d["height"] = std::max(1, h / 2);
+	d["max_channel"] = 0.0f;
+	d["mean_luma"] = 0.0;
+	d["ran"] = false;
+	if (w <= 0 || h <= 0 || frames <= 0) return d;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_ ||
+			!composite_pass_ || !deferred_pass_ || !gbuffer_ || !beauty_camera_ || !ssgi_pass_)
+		return d;
+	int quiet = 0;
+	for (int i = 0; i < 400 && quiet < 6; i++)
+		quiet = debug_stream_frame(pos) == 0 ? quiet + 1 : 0;
+	composite_pass_->release_targets();
+	if (!gbuffer_->ensure(device, nullptr, Vector2i(w, h)) || !beauty_camera_->ensure(device)) return d;
+
+	const float p[3] = {pos.x, pos.y, pos.z};
+	const float f[3] = {fwd.x, fwd.y, fwd.z};
+	const float up[3] = {0.0f, std::fabs(fwd.y) > 0.9f ? 0.0f : 1.0f,
+			std::fabs(fwd.y) > 0.9f ? 1.0f : 0.0f};
+	const float aspect = static_cast<float>(w) / static_cast<float>(h);
+	const float fov_y = 1.0471975512f;
+	const float tan_y = std::tan(fov_y * 0.5f);
+	const float tan_x = tan_y * aspect;
+	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, fov_y, aspect,
+			0.05f, 4000.0f, w, h);
+	Projection view_proj;
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++) view_proj.columns[c][r] = cam.view_proj[c * 4 + r];
+	ve::CameraParams cp = ve::CameraParams::looking_at(pos.x, pos.y, pos.z,
+			fwd.x, fwd.y, fwd.z, up[0], up[1], up[2]);
+	cp.params[0] = tan_x; cp.params[1] = tan_y; cp.params[2] = 200.0f;
+	const ve::WorldBounds wb = world_bounds();
+	const ve::IVec3 ro = wb.origin_regions();
+	cp.dims[0] = world_size_regions_.x; cp.dims[1] = world_size_regions_.y;
+	cp.dims[2] = world_size_regions_.z; cp.dims[3] = island_slot_count();
+	cp.region_origin[0] = ro.x; cp.region_origin[1] = ro.y; cp.region_origin[2] = ro.z;
+	cp.atlas_bricks[0] = atlas_bricks_.x; cp.atlas_bricks[1] = atlas_bricks_.y;
+	cp.atlas_bricks[2] = atlas_bricks_.z;
+	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
+	static const float no_sun[16] = {};
+	const ve::BeautySettings settings = beauty_settings();
+	ssgi_pass_->clear_result();
+	float prev_view_proj[16] = {};
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++) prev_view_proj[c * 4 + r] = view_proj.columns[c][r];
+	const Projection inv = view_proj.inverse();
+	bool ran = false;
+	for (int i = 0; i < frames; i++) {
+		beauty_camera_->update(device, view_proj, p, Vector2i(w, h), 0.05f, 4000.0f);
+		if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cp, w, h, no_edit)) break;
+		float fade_start = ve::kLodFadeStartM, fade_end = ve::kLodFadeEndM;
+		lod_fade_band(&fade_start, &fade_end);
+		composite_pass_->draw(device, *gbuffer_, raymarch_pass_->albedo_texture(),
+				raymarch_pass_->surface_texture(), raymarch_pass_->hitpos_texture(), view_proj,
+				*materials_, p, fade_start, fade_end);
+		if (!composite_pass_->last_draw_ok()) break;
+		const bool ssgi_ok = ssgi_pass_->render(device, *gbuffer_, beauty_camera_->buffer(),
+				prev_view_proj, i > 0, settings, static_cast<uint32_t>(i));
+		ran = ran || ssgi_ok;
+		DeferredPass::Params dp;
+		for (int c = 0; c < 4; c++)
+			for (int r = 0; r < 4; r++) dp.inv_view_proj[c * 4 + r] = inv.columns[c][r];
+		dp.cam_pos[0] = pos.x; dp.cam_pos[1] = pos.y; dp.cam_pos[2] = pos.z;
+		dp.flags = ve::pack_flags(settings);
+		if (!deferred_pass_->render(device, *gbuffer_, *materials_,
+				ssgi_ok ? ssgi_pass_->result() : RID(), RID(), no_sun, 0.0f, dp)) break;
+		downsample_history(device, gbuffer_->lit(), *gbuffer_);
+	}
+	device->submit();
+	device->sync();
+	d["ran"] = ran;
+	const RID output = ssgi_pass_->result();
+	const Vector2i half = gbuffer_->half_size();
+	d["width"] = half.x;
+	d["height"] = half.y;
+	if (!output.is_valid()) return d;
+	const PackedByteArray data = device->texture_get_data(output, 0);
+	const int pixels = half.x * half.y;
+	if (data.size() < static_cast<int64_t>(pixels) * 8) return d;
+	const uint16_t *values = reinterpret_cast<const uint16_t *>(data.ptr());
+	float max_channel = 0.0f;
+	double mean_luma = 0.0;
+	for (int i = 0; i < pixels; i++) {
+		const float r = Math::half_to_float(values[i * 4]);
+		const float g = Math::half_to_float(values[i * 4 + 1]);
+		const float b = Math::half_to_float(values[i * 4 + 2]);
+		max_channel = std::max(max_channel, std::max(r, std::max(g, b)));
+		mean_luma += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+	}
+	d["max_channel"] = max_channel;
+	d["mean_luma"] = mean_luma / static_cast<double>(pixels);
+	return d;
+}
+
 Dictionary VoxelWorld::debug_beauty_settings() {
 	ve::BeautySettings beauty;
 	int quality_tier;
@@ -533,6 +634,11 @@ bool VoxelWorld::ensure_downsample_set(RenderingDevice *rd, RID src, RID dst) {
 	return true;
 }
 
+void VoxelWorld::finish_beauty_frame(const float view_proj[16]) {
+	if (view_proj) std::memcpy(prev_view_proj_, view_proj, sizeof(prev_view_proj_));
+	beauty_frame_++;
+}
+
 void VoxelWorld::downsample_history(RenderingDevice *rd, RID src, GBuffer &gb) {
 	if (!rd || !downsample_pipeline_.is_valid() || !gb.history().is_valid()) return;
 	const Vector2i half = gb.half_size();
@@ -548,6 +654,7 @@ void VoxelWorld::downsample_history(RenderingDevice *rd, RID src, GBuffer &gb) {
 	rd->compute_list_set_push_constant(list, pc, pc.size());
 	rd->compute_list_dispatch(list, (half.x + 7) / 8, (half.y + 7) / 8, 1);
 	rd->compute_list_end();
+	has_history_ = true;
 }
 
 void VoxelWorld::teardown_gpu() {
@@ -561,6 +668,7 @@ void VoxelWorld::teardown_gpu() {
 	if (hiz_pass_ && gbuffer_) hiz_pass_->release_level0_set();
 	teardown_downsample();
 	if (contact_shadow_pass_) { delete contact_shadow_pass_; contact_shadow_pass_ = nullptr; }
+	if (ssgi_pass_) { delete ssgi_pass_; ssgi_pass_ = nullptr; }
 	if (beauty_camera_) { beauty_camera_->teardown(); delete beauty_camera_; beauty_camera_ = nullptr; }
 	if (gbuffer_) { delete gbuffer_; gbuffer_ = nullptr; }
 	if (raymarch_pass_) { delete raymarch_pass_; raymarch_pass_ = nullptr; }
@@ -588,6 +696,9 @@ void VoxelWorld::teardown_gpu() {
 	lod_pages_of_.clear();
 	lod_page_quads_.clear();
 	lod_overflow_logged_.clear();
+	has_history_ = false;
+	beauty_frame_ = 0;
+	std::memset(prev_view_proj_, 0, sizeof(prev_view_proj_));
 	initialized_ = false;
 }
 
@@ -668,6 +779,8 @@ void VoxelWorld::ensure_initialized() {
 	beauty_camera_ = new CameraUbo();
 	contact_shadow_pass_ = new ContactShadowPass();
 	contact_shadow_pass_->initialize(device);
+	ssgi_pass_ = new SsgiPass();
+	ssgi_pass_->initialize(device);
 	initialize_downsample(device);
 	lod_raster_pass_ = new LodRasterPass();
 	lod_raster_pass_->initialize(device);
