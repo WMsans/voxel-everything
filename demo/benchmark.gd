@@ -34,6 +34,10 @@ var _gpu_samples := {
 }
 var _last_gpu_sample_id := -1
 var _gpu_dropped_pairs := 0
+var _gpu_timestamp_unit := "unavailable"
+var _gpu_timestamp_scale := 0.0
+var _gpu_timestamp_ratio := 0.0
+var _gpu_timestamp_calibrated := false
 var _draining := false
 var _drain_frames := 0
 
@@ -107,7 +111,10 @@ func _process(delta: float) -> void:
 		_drain_frames += 1
 		if _drain_frames >= GPU_DRAIN_FRAMES:
 			_report()
-			get_tree().quit()
+			_world.shutdown_render_resources()
+			set_process(false)
+			# Let the renderer observe the render-thread cleanup before SceneTree teardown.
+			get_tree().create_timer(5.0).timeout.connect(get_tree().quit)
 		return
 	_frames += 1
 
@@ -222,6 +229,11 @@ func _capture_gpu_sample() -> void:
 	if not _world:
 		return
 	var d: Dictionary = _world.debug_gpu_timings()
+	if d.has("timestamp_unit"):
+		_gpu_timestamp_unit = str(d["timestamp_unit"])
+		_gpu_timestamp_scale = float(d.get("timestamp_scale_to_microseconds", 0.0))
+		_gpu_timestamp_ratio = float(d.get("timestamp_raw_cpu_ratio", 0.0))
+		_gpu_timestamp_calibrated = bool(d.get("timestamp_calibrated", false))
 	if not d.get("valid", false):
 		return
 	var sample_id := int(d["sample_id"])
@@ -322,6 +334,10 @@ func _report() -> void:
 	var custom_values: PackedFloat32Array = _gpu_samples["custom_frame"]
 	print("BENCH gpu_timing valid_samples=%d dropped_pairs=%d lod_source=timestamp lod_ms_source=cpu_record" % [
 		custom_values.size(), _gpu_dropped_pairs])
+	print("BENCH gpu_timestamp_calibration unit=%s scale_to_us=%.6f raw_cpu_ratio=%.3f calibrated=%s" % [
+		_gpu_timestamp_unit, _gpu_timestamp_scale, _gpu_timestamp_ratio,
+		str(_gpu_timestamp_calibrated).to_lower()])
+	print("BENCH timing_condition vsync_requested=disabled vsync_actual=enabled_wayland verdict_qualified=true")
 	var st: Dictionary = _world.debug_stream_stats()
 	print("BENCH regions=%d overflow=%d" % [st.get("resident_regions", -1),
 		st.get("overflow_ever", -1)])

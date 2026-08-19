@@ -23,6 +23,7 @@ public:
 	bool render(RenderingDevice *rd, const GpuAtlas &atlas, const IslandAtlas *islands,
 			RID tile_mask, const ve::CameraParams &cam, int width, int height,
 			const float edit_state[6]);
+	bool targets_need_rebuild(int width, int height, RID mask) const;
 
 	RID albedo_texture() const { return albedo_; }
 	RID surface_texture() const { return surface_; }

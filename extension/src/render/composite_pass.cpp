@@ -82,6 +82,18 @@ void CompositePass::release_targets() {
 	fb_marker_ = RID();
 }
 
+void CompositePass::invalidate_uniform_set(RenderingDevice *rd) {
+	if (rd && uset_.is_valid()) rd->free_rid(uset_);
+	uset_ = RID();
+	uset_shader_ = RID();
+	uset_src_albedo_ = RID();
+	uset_src_surface_ = RID();
+	uset_src_hitpos_ = RID();
+	uset_material_albedo_ = RID();
+	uset_material_surface_ = RID();
+	uset_material_sampler_ = RID();
+}
+
 void CompositePass::teardown() {
 	if (!rd_) return;
 	for (RID *r : {&uset_, &pipeline_, &shader_, &shader_marker_,

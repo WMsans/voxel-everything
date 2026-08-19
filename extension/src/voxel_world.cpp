@@ -55,6 +55,7 @@
 #include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/core/memory.hpp>
 #include <godot_cpp/variant/projection.hpp>
+#include <godot_cpp/variant/callable.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <chrono>
 #include <thread>
@@ -66,7 +67,32 @@
 
 using namespace godot;
 
+namespace {
+std::atomic<bool> g_voxel_compositor_callbacks_enabled{true};
+}
+
+bool godot::voxel_compositor_callbacks_enabled() {
+	return g_voxel_compositor_callbacks_enabled.load(std::memory_order_acquire);
+}
+
+bool VoxelWorld::try_begin_render_callback() {
+	std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
+	if (render_shutting_down_) return false;
+	render_callbacks_++;
+	return true;
+}
+
+void VoxelWorld::end_render_callback() {
+	std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
+	if (render_callbacks_ <= 0) return;
+	if (--render_callbacks_ == 0) render_lifetime_cv_.notify_all();
+}
+
 void VoxelWorld::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("_shutdown_render_resources_on_render_thread"),
+			&VoxelWorld::shutdown_render_resources_on_render_thread);
+	ClassDB::bind_method(D_METHOD("shutdown_render_resources"),
+			&VoxelWorld::shutdown_render_resources);
 	ClassDB::bind_method(D_METHOD("set_use_local_device", "v"), &VoxelWorld::set_use_local_device);
 	ClassDB::bind_method(D_METHOD("get_use_local_device"), &VoxelWorld::get_use_local_device);
 	ClassDB::bind_method(D_METHOD("set_atlas_bricks", "v"), &VoxelWorld::set_atlas_bricks);
@@ -721,6 +747,13 @@ Dictionary VoxelWorld::debug_beauty_settings() {
 }
 
 void VoxelWorld::_ready() {
+	// A scene can be instantiated again after a benchmark/test quit request in the same
+	// process. Re-enable callbacks only for a live SceneTree lifetime.
+	g_voxel_compositor_callbacks_enabled.store(true, std::memory_order_release);
+	{
+		std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
+		render_shutting_down_ = false;
+	}
 	// Godot only calls _process on a GDExtension node that asks for it.
 	set_process(true);
 }
@@ -872,7 +905,45 @@ void VoxelWorld::teardown_gpu() {
 	initialized_ = false;
 }
 
+void VoxelWorld::shutdown_render_resources_on_render_thread() {
+	teardown_gpu();
+	{
+		std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
+		gpu_teardown_done_ = true;
+	}
+	gpu_teardown_cv_.notify_all();
+}
+
+void VoxelWorld::shutdown_render_resources() {
+	if (!main_rd_ || !initialized_) return;
+	if (RenderingServer::get_singleton()->is_on_render_thread()) {
+		teardown_gpu();
+		return;
+	}
+	// Drain the RenderingServer queue first; unlike RenderingDevice::submit/sync this is the
+	// supported global-device synchronization boundary.
+	RenderingServer::get_singleton()->force_sync();
+	{
+		std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
+		gpu_teardown_done_ = false;
+	}
+	RenderingServer::get_singleton()->call_on_render_thread(
+			Callable(this, "_shutdown_render_resources_on_render_thread"));
+	std::unique_lock<std::mutex> lock(render_lifetime_mutex_);
+	gpu_teardown_cv_.wait(lock, [this] { return gpu_teardown_done_; });
+}
+
 void VoxelWorld::_exit_tree() {
+	// SceneTree::quit() can tear down the main loop while the renderer still has one or more
+	// compositor callbacks queued. Stop new callbacks before touching Engine::get_main_loop(),
+	// then wait for callbacks that already acquired the guard. This is the lifetime boundary;
+	// merely suppressing the shutdown diagnostic would leave their RIDs use-after-free.
+	g_voxel_compositor_callbacks_enabled.store(false, std::memory_order_release);
+	{
+		std::unique_lock<std::mutex> lock(render_lifetime_mutex_);
+		render_shutting_down_ = true;
+		render_lifetime_cv_.wait(lock, [this] { return render_callbacks_ == 0; });
+	}
 	teardown_physics();
 	teardown_gpu();
 	if (residency_) { delete residency_; residency_ = nullptr; }
