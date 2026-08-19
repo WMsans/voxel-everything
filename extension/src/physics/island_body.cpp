@@ -73,7 +73,7 @@ bool IslandBody::spawn(RID space, RID scenario, const IslandSpawn &info,
 	const Vector3 imp(info.impulse[0], info.impulse[1], info.impulse[2]);
 	if (imp.length_squared() > 0.0f) ps->body_apply_impulse(body_, imp);
 
-	if (info.debris && volume && !volume->empty()) build_render_mesh(scenario, *volume);
+	if (scenario.is_valid() && volume && !volume->empty()) build_render_mesh(scenario, *volume);
 	return true;
 }
 
