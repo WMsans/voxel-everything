@@ -31,6 +31,7 @@ layout(set = 0, binding = 6, std430) buffer RegionSlotCounts { int n[]; } region
 // Byte layout: cell i occupies bits (i & 15) * 2 of word (i >> 4), which on little-endian
 // memory is exactly ve::OccupancyGrid's "cell i in byte i >> 2, shift (i & 3) * 2".
 layout(set = 0, binding = 9, std430) buffer RegionOccupancy { uint w[]; } occupancy;
+layout(set = 0, binding = 10, std430) buffer BrickFlags { uint v[]; } brick_flags;
 const int OCC_WORDS_PER_REGION = REGION_BRICK_COUNT / 16; // 2048
 
 const uint CELL_AIR = 1u;
@@ -130,6 +131,10 @@ void main() {
 	} else if (pc.cfg.w == 0) {
 		return; // resident already and this is a plain stream-in: nothing to regenerate
 	}
+	// Until brick_gen runs, this slot's atlas bytes belong to whoever had it last.
+	// Conservative means the marcher enters the brick and sphere-traces it: one wasted
+	// traversal in a rare frame, instead of a hole a player can fall through.
+	brick_flags.v[slot] = BRICK_FLAG_CONSERVATIVE;
 
 	int j = atomicAdd(frame.job_count, 1);
 	if (j >= pc.cfg.z) {

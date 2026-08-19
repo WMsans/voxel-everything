@@ -468,6 +468,9 @@ public:
 	void debug_generate_pending();
 	Dictionary debug_brick_diff(Vector3i brick, int region_slot, const PackedByteArray &ops,
 			int op_count);
+	void debug_stream_region(Vector3i region);
+	Dictionary debug_brick_flags(Vector3i region);
+	Dictionary debug_brick_flags_after_mark(Vector3i region);
 	RID debug_sdf_atlas() const;
 	RID debug_mat_atlas() const;
 	RID debug_mip_atlas(int level) const;

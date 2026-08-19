@@ -118,8 +118,8 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 	width_ = w;
 	height_ = h;
 
-	Ref<RDUniform> u[22];
-	for (int i = 0; i < 22; i++) u[i].instantiate();
+	Ref<RDUniform> u[24];
+	for (int i = 0; i < 24; i++) u[i].instantiate();
 	u[0]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
 	u[0]->set_binding(0); u[0]->add_id(albedo_);
 	u[1]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
@@ -156,9 +156,13 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 	u[20]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
 	u[20]->set_binding(20); u[20]->add_id(surface_);
 	u[21]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	u[21]->set_binding(23); u[21]->add_id(cost_buf_);
+	u[21]->set_binding(21); u[21]->add_id(atlas.brick_flags());
+	u[22]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
+	u[22]->set_binding(22); u[22]->add_id(atlas.region_slot_counts());
+	u[23]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
+	u[23]->set_binding(23); u[23]->add_id(cost_buf_);
 	Array uset_args;
-	for (int i = 0; i < 22; i++) uset_args.push_back(u[i]);
+	for (int i = 0; i < 24; i++) uset_args.push_back(u[i]);
 	uset_ = rd->uniform_set_create(uset_args, shader_, 0);
 }
 
