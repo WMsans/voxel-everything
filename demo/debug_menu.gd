@@ -10,6 +10,7 @@ const EFFECTS := [
 	["Sun shadow map", "sun_shadow_map"],
 	["Glossy SDF rays", "glossy_sdf_rays"],
 	["Raymarched sun shadow", "raymarched_sun_shadow"],
+	["Islands", "islands"],
 ]
 
 var _world: VoxelWorld

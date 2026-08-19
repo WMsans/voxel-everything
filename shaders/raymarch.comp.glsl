@@ -566,7 +566,7 @@ void main() {
 		gloss = 1.0 - props.x;
 		ao = props.y;
 		hitpos = vec4(best.p, 1.0);
-	if ((flags & BEAUTY_RAY_SUN_SHADOW) != 0u) {
+		if ((flags & BEAUTY_RAY_SUN_SHADOW) != 0u) {
 			// One voxel of offset: less and the ray self-shadows on its own surface, more
 			// and thin ledges stop casting.
 			vec3 sro = best.p + best.n * 0.06;
@@ -605,6 +605,11 @@ void main() {
 		albedo = mix(albedo, tint, 0.45);
 	}
 
+	// One heat unit per primary marching step; 512 heat units is white. Clamp the integer
+	// step count before scaling so zero steps is exactly black and excess work is white.
+	float heat_units = clamp(float(65536 - primary_steps), 0.0, 512.0);
+	float cost_heat = heat_units / 512.0;
+
 	// Debug material probe: a 1x1 dispatch calls material_surface() directly with zero
 	// gradients. pc.params.w is otherwise unused, so > 0 is the probe flag.
 	if (pc.params.w > 0.0) {
@@ -614,21 +619,17 @@ void main() {
 		cost_out.v[cost_i + 0] = uint(65536 - primary_steps);
 		cost_out.v[cost_i + 1] =
 				(g_brick_cells & 0xFFFFu) | (min(g_region_cells, 0xFFFFu) << 16);
-		imageStore(out_albedo, px, vec4(surf.rgb, 1.0));
+		vec3 probe_albedo = (flags & BEAUTY_COST_VIEW) != 0u ? vec3(cost_heat) : surf.rgb;
+		imageStore(out_albedo, px, vec4(probe_albedo, 1.0));
 		imageStore(out_surface, px, vec4(0.0, 0.0, pc.params.w, 0.0));
 		imageStore(out_hitpos, px, vec4(pc.cam_pos.xyz, 1.0));
 		return;
 	}
 
 	if ((flags & BEAUTY_COST_VIEW) != 0u) {
-		// One heat unit per marching step, black at 0 and white at 512, so a pixel that
-		// burns half the shadow budget is unmistakable next to one that does not.
-		float heat = clamp(float(65536 - primary_steps) / 512.0, 0.0, 1.0);
-		// Blue -> green -> red, which reads as "cheap -> expensive" at a glance and keeps
-		// the sky (0 steps) black rather than a colour the eye reads as terrain.
-		vec3 hc = heat < 0.5 ? mix(vec3(0.0, 0.1, 0.6), vec3(0.1, 0.8, 0.2), heat * 2.0)
-		                     : mix(vec3(0.1, 0.8, 0.2), vec3(0.9, 0.1, 0.05), heat * 2.0 - 1.0);
-		albedo = hc;
+		// The final store below also bypasses AO and sun lighting. This makes the contract
+		// exact at both endpoints rather than merely preserving the heat before shading.
+		albedo = vec3(cost_heat);
 		// Everything else in the G-buffer stays truthful: depth, normal, material and sun
 		// visibility are written exactly as they would be, so the depth test, the outlines
 		// and the LoD seam behave normally and the view can be toggled mid-flight.
@@ -641,7 +642,10 @@ void main() {
 	int cost_i = (px.y * size.x + px.x) * 2;
 	cost_out.v[cost_i + 0] = uint(65536 - primary_steps);
 	cost_out.v[cost_i + 1] = (g_brick_cells & 0xFFFFu) | (min(g_region_cells, 0xFFFFu) << 16);
-	imageStore(out_albedo, px, vec4(albedo * mix(1.0, ao, 0.65), sun));
+	if ((flags & BEAUTY_COST_VIEW) != 0u)
+		imageStore(out_albedo, px, vec4(vec3(cost_heat), 1.0));
+	else
+		imageStore(out_albedo, px, vec4(albedo * mix(1.0, ao, 0.65), sun));
 	imageStore(out_surface, px, vec4(oct, mat_id, gloss));
 	imageStore(out_hitpos, px, hitpos);
 }
