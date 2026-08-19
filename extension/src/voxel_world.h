@@ -38,6 +38,8 @@ class RegionPass;
 class BrickGenPass;
 class RaymarchPass;
 class CompositePass;
+class DeferredPass;
+class InjectPass;
 class WorldStreamer;
 class MeshService;
 class ColliderStreamer;
@@ -95,6 +97,8 @@ class VoxelWorld : public Node3D {
 	BrickGenPass *gen_pass_ = nullptr;
 	RaymarchPass *raymarch_pass_ = nullptr;
 	CompositePass *composite_pass_ = nullptr;
+	DeferredPass *deferred_pass_ = nullptr;
+	InjectPass *inject_pass_ = nullptr;
 	LodRasterPass *lod_raster_pass_ = nullptr;
 	LodCullPass *lod_cull_pass_ = nullptr;
 	HizPass *hiz_pass_ = nullptr;
@@ -267,6 +271,8 @@ public:
 	RaymarchPass *raymarch_pass() { return raymarch_pass_; }
 	IslandCullPass *island_cull() { return island_cull_; }
 	CompositePass *composite_pass() { return composite_pass_; }
+	DeferredPass *deferred_pass() { return deferred_pass_; }
+	InjectPass *inject_pass() { return inject_pass_; }
 	LodPool *lod_pool() { return lod_pool_; }
 	LodRasterPass *lod_raster_pass() { return lod_raster_pass_; }
 	LodCullPass *lod_cull_pass() { return lod_cull_pass_; }
@@ -457,6 +463,9 @@ public:
 			float tan_y, int width, int height);
 
 	// --- Task 6 hooks ---
+	Dictionary debug_cel_diff(Color albedo, Color ambient, float ndl, float ndv, float ndh,
+			float shadow, float ao, float gloss);
+	Dictionary debug_deferred_probe(Vector3 pos, Vector3 fwd, int w, int h, int probe_mode);
 	bool debug_mesh_submit(Array chunks);
 	Array debug_mesh_collect();
 

@@ -1,6 +1,9 @@
 #include "raymarch_compositor.h"
 #include "voxel_world.h"
 #include "render/composite_pass.h"
+#include "render/deferred_pass.h"
+#include "render/inject_pass.h"
+#include "render/gbuffer.h"
 #include "render/gpu_atlas.h"
 #include "render/hiz_pass.h"
 #include "render/lod_pool.h"
@@ -100,7 +103,10 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	GpuAtlas *atlas = world->atlas();
 	CompositePass *cmp = world->composite_pass();
 	MaterialAtlas *materials = world->material_atlas();
-	if (!rmp || !atlas || !cmp || !materials) return;
+	GBuffer *gb = world->gbuffer();
+	DeferredPass *deferred = world->deferred_pass();
+	InjectPass *inject = world->inject_pass();
+	if (!rmp || !atlas || !cmp || !materials || !gb || !deferred || !inject) return;
 
 	float edit_state[6] = {0, 0, 0, 0, 0, 0};
 	if (st && st->last_edit_radius() > 0.0f) {
@@ -140,11 +146,26 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	float fade_start = ve::kLodFadeStartM;
 	float fade_end = ve::kLodFadeEndM;
 	world->lod_fade_band(&fade_start, &fade_end);
-	cmp->draw(rd, rsb->get_color_texture(), rsb->get_depth_texture(),
-			rmp->albedo_texture(), rmp->hitpos_texture(), view_proj, *materials,
-			cam_pos, fade_start, fade_end);
+	if (!gb->ensure(rd, rsb, size)) return;
+	cmp->draw(rd, *gb, rmp->albedo_texture(), rmp->surface_texture(), rmp->hitpos_texture(),
+			view_proj, *materials, cam_pos, fade_start, fade_end);
+	if (!cmp->last_draw_ok()) return;
 
-	// Far field: after the composite the scene depth holds exact near-field occluders. Build
+	DeferredPass::Params dp;
+	const Projection inv = view_proj.inverse();
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++)
+			dp.inv_view_proj[c * 4 + r] = inv.columns[c][r];
+	dp.cam_pos[0] = cam.origin.x;
+	dp.cam_pos[1] = cam.origin.y;
+	dp.cam_pos[2] = cam.origin.z;
+	dp.flags = beauty_flags;
+	static const float kNoSun[16] = {};
+	if (!deferred->render(rd, *gb, *materials, RID(), RID(), kNoSun, 0.0f, dp)) return;
+	if (!inject->draw(rd, rsb->get_color_texture(), rsb->get_depth_texture(), gb->lit(), gb->depth()))
+		return;
+
+	// Far field: after the injection the scene depth holds exact near-field occluders. Build
 	// the HiZ pyramid from it for the GPU cull (Task 15) and the coarse async readback for the
 	// CPU walk, then draw the LoD raster against the same depth buffer. The CPU walk gets the
 	// occlusion interface: stale readback may delay a build, never hide a chunk.

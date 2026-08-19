@@ -6,6 +6,8 @@
 #include "render/island_cull_pass.h"
 #include "render/raymarch_pass.h"
 #include "render/composite_pass.h"
+#include "render/deferred_pass.h"
+#include "render/inject_pass.h"
 #include "render/gbuffer.h"
 #include "render/region_pass.h"
 #include "render/brick_gen_pass.h"
@@ -33,6 +35,7 @@
 #include "world/brick_mip.h"
 #include "world/raycast.h"
 #include "shade/oct.h"
+#include "shade/cel.h"
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rd_texture_format.hpp>
 #include <godot_cpp/classes/rd_texture_view.hpp>
@@ -171,6 +174,10 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_raymarch_pixel", "origin", "dir"), &VoxelWorld::debug_raymarch_pixel);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_probe", "origin", "dir"), &VoxelWorld::debug_raymarch_probe);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_gbuffer", "origin", "dir"), &VoxelWorld::debug_raymarch_gbuffer);
+	ClassDB::bind_method(D_METHOD("debug_cel_diff", "albedo", "ambient", "ndl", "ndv", "ndh",
+			"shadow", "ao", "gloss"), &VoxelWorld::debug_cel_diff);
+	ClassDB::bind_method(D_METHOD("debug_deferred_probe", "pos", "fwd", "w", "h", "probe_mode"),
+			&VoxelWorld::debug_deferred_probe);
 	ClassDB::bind_method(D_METHOD("debug_material_atlas_stats"), &VoxelWorld::debug_material_atlas_stats);
 	ClassDB::bind_method(D_METHOD("debug_material_probe", "mat", "p", "n"), &VoxelWorld::debug_material_probe);
 	ClassDB::bind_method(D_METHOD("debug_sdf_atlas"), &VoxelWorld::debug_sdf_atlas);
@@ -331,6 +338,8 @@ void VoxelWorld::teardown_gpu() {
 	// texture cascades to referencing sets (M1's documented order). Islands sit between
 	// passes and the atlas pool: RaymarchPass's uniform set references island buffers too.
 	if (composite_pass_) { delete composite_pass_; composite_pass_ = nullptr; }
+	if (inject_pass_) { delete inject_pass_; inject_pass_ = nullptr; }
+	if (deferred_pass_) { delete deferred_pass_; deferred_pass_ = nullptr; }
 	if (gbuffer_) { delete gbuffer_; gbuffer_ = nullptr; }
 	if (raymarch_pass_) { delete raymarch_pass_; raymarch_pass_ = nullptr; }
 	if (lod_raster_pass_) { delete lod_raster_pass_; lod_raster_pass_ = nullptr; }
@@ -429,6 +438,10 @@ void VoxelWorld::ensure_initialized() {
 	raymarch_pass_->set_materials(*materials_);
 	composite_pass_ = new CompositePass();
 	composite_pass_->initialize(device);
+	deferred_pass_ = new DeferredPass();
+	deferred_pass_->initialize(device);
+	inject_pass_ = new InjectPass();
+	inject_pass_->initialize(device);
 	gbuffer_ = new GBuffer();
 	lod_raster_pass_ = new LodRasterPass();
 	lod_raster_pass_->initialize(device);
@@ -1440,7 +1453,7 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 
 	RenderingDevice *device = rd();
 	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_ ||
-			!composite_pass_ || !lod_pool_ || !lod_raster_pass_) return d;
+			!composite_pass_ || !gbuffer_ || !lod_pool_ || !lod_raster_pass_) return d;
 
 	// The near field needs the streamer to have populated the SDF atlas; the LoD settle in
 	// the test only converges the far-field walk. Drive the streamer until it is quiet (the
@@ -1462,6 +1475,8 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 	const float tan_x = tan_y * aspect;
 	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, fov_y,
 			aspect, 0.1f, 8000.0f, w, h);
+	composite_pass_->release_targets();
+	if (!gbuffer_->ensure(device, nullptr, Vector2i(w, h))) return d;
 	Projection vp;
 	for (int c = 0; c < 4; c++)
 		for (int r = 0; r < 4; r++)
@@ -1551,9 +1566,10 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 	float probe_fade_start = ve::kLodFadeStartM;
 	float probe_fade_end = ve::kLodFadeEndM;
 	lod_fade_band(&probe_fade_start, &probe_fade_end);
-	composite_pass_->draw(device, color, depth, raymarch_pass_->albedo_texture(),
-			raymarch_pass_->hitpos_texture(), vp, *materials_, p,
+	composite_pass_->draw(device, *gbuffer_, raymarch_pass_->albedo_texture(),
+			raymarch_pass_->surface_texture(), raymarch_pass_->hitpos_texture(), vp, *materials_, p,
 			probe_fade_start, probe_fade_end, marker);
+	if (!composite_pass_->last_draw_ok()) return d;
 
 	// Pass 2: far field. The LoD pipeline uses LOGIC_OP_OR on the marker, so kept far
 	// pixels OR 2 into the composite's 1, making double-claimed pixels read 3.
@@ -1564,13 +1580,13 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 		lod_raster_pass_->set_cull_enabled(true);
 		lod_pool_->upload_draw_args(lod_raster_pass_->draw_pages());
 		const int draw_count = lod_raster_pass_->draw_page_count();
-		lod_raster_pass_->draw(device, *lod_pool_, *materials_, color, depth, vp, p,
-				draw_count, probe_fade_start, probe_fade_end, marker);
+		lod_raster_pass_->draw(device, *lod_pool_, *materials_, gbuffer_->albedo(),
+				gbuffer_->depth(), vp, p, draw_count, probe_fade_start, probe_fade_end, marker);
 	}
 	device->submit();
 	device->sync();
 
-	const PackedByteArray depth_data = device->texture_get_data(depth, 0);
+	const PackedByteArray depth_data = device->texture_get_data(gbuffer_->depth(), 0);
 	const PackedByteArray marker_data = device->texture_get_data(marker, 0);
 	const PackedByteArray hitpos_data = device->texture_get_data(
 			raymarch_pass_->hitpos_texture(), 0);
@@ -2839,6 +2855,164 @@ Dictionary VoxelWorld::debug_raymarch_gbuffer(Vector3 origin, Vector3 dir) {
 	d["gloss"] = half_to_float(s[3]);
 	d["hit"] = h[3] > 0.5f;
 	d["position"] = Vector3(h[0], h[1], h[2]);
+	return d;
+}
+
+Dictionary VoxelWorld::debug_cel_diff(Color albedo, Color ambient, float ndl, float ndv,
+		float ndh, float shadow, float ao, float gloss) {
+	Dictionary d;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !gbuffer_ || !deferred_pass_ || !materials_) return d;
+	if (gbuffer_->size() != Vector2i(1, 1)) {
+		deferred_pass_->teardown();
+		deferred_pass_->initialize(device);
+		if (composite_pass_) composite_pass_->release_targets();
+	}
+	if (!gbuffer_->ensure(device, nullptr, Vector2i(1, 1))) return d;
+	DeferredPass::Params p;
+	p.probe_mode = 1;
+	p.inv_view_proj[0] = albedo.r;
+	p.inv_view_proj[1] = albedo.g;
+	p.inv_view_proj[2] = albedo.b;
+	p.inv_view_proj[4] = ambient.r;
+	p.inv_view_proj[5] = ambient.g;
+	p.inv_view_proj[6] = ambient.b;
+	p.inv_view_proj[8] = ndl;
+	p.inv_view_proj[9] = ndv;
+	p.inv_view_proj[10] = ndh;
+	p.inv_view_proj[11] = shadow;
+	p.inv_view_proj[12] = ao;
+	p.inv_view_proj[13] = gloss;
+	static const float kNoSun[16] = {};
+	if (!deferred_pass_->render(device, *gbuffer_, *materials_, RID(), RID(), kNoSun, 0.0f, p))
+		return d;
+	device->submit();
+	device->sync();
+	const PackedByteArray got = device->texture_get_data(gbuffer_->lit(), 0);
+	if (got.size() < 8) return d;
+	const uint16_t *h = reinterpret_cast<const uint16_t *>(got.ptr());
+	const Color gpu(half_to_float(h[0]), half_to_float(h[1]), half_to_float(h[2]), 1.0f);
+	ve::CelParams params;
+	ve::CelInput in;
+	in.albedo[0] = albedo.r; in.albedo[1] = albedo.g; in.albedo[2] = albedo.b;
+	in.ambient[0] = ambient.r; in.ambient[1] = ambient.g; in.ambient[2] = ambient.b;
+	in.ndl = ndl; in.ndv = ndv; in.ndh = ndh;
+	in.shadow = shadow; in.ao = ao; in.gloss = gloss;
+	float ref[3];
+	ve::cel_shade(params, in, ref);
+	const Color cpu(ref[0], ref[1], ref[2], 1.0f);
+	d["gpu"] = gpu;
+	d["cpu"] = cpu;
+	d["max_delta"] = std::max({std::fabs(gpu.r - cpu.r), std::fabs(gpu.g - cpu.g),
+			std::fabs(gpu.b - cpu.b)});
+	return d;
+}
+
+Dictionary VoxelWorld::debug_deferred_probe(Vector3 pos, Vector3 fwd, int w, int h,
+		int probe_mode) {
+	Dictionary d;
+	if (w <= 0 || h <= 0 || (probe_mode != 0 && probe_mode != 1 && probe_mode != 2)) return d;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_ ||
+			!composite_pass_ || !deferred_pass_ || !gbuffer_) return d;
+	if (gbuffer_->size() != Vector2i(w, h)) {
+		deferred_pass_->teardown();
+		deferred_pass_->initialize(device);
+		composite_pass_->release_targets();
+	}
+	int quiet = 0;
+	for (int i = 0; i < 400 && quiet < 6; i++) {
+		quiet = debug_stream_frame(pos) == 0 ? quiet + 1 : 0;
+	}
+	const float p[3] = {pos.x, pos.y, pos.z};
+	const float f[3] = {fwd.x, fwd.y, fwd.z};
+	const float up[3] = {0.0f, std::fabs(fwd.y) > 0.9f ? 0.0f : 1.0f,
+			std::fabs(fwd.y) > 0.9f ? 1.0f : 0.0f};
+	const float fov_y = 1.0471975512f;
+	const float aspect = static_cast<float>(w) / static_cast<float>(h);
+	const float tan_y = std::tan(fov_y * 0.5f);
+	const float tan_x = tan_y * aspect;
+	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, fov_y, aspect,
+			0.05f, 4000.0f, w, h);
+	Projection view_proj;
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++)
+			view_proj.columns[c][r] = cam.view_proj[c * 4 + r];
+	ve::CameraParams cp = ve::CameraParams::looking_at(pos.x, pos.y, pos.z,
+			fwd.x, fwd.y, fwd.z, up[0], up[1], up[2]);
+	cp.params[0] = tan_x;
+	cp.params[1] = tan_y;
+	cp.params[2] = 200.0f;
+	const ve::WorldBounds wb = world_bounds();
+	const ve::IVec3 ro = wb.origin_regions();
+	cp.dims[0] = world_size_regions_.x;
+	cp.dims[1] = world_size_regions_.y;
+	cp.dims[2] = world_size_regions_.z;
+	cp.dims[3] = island_slot_count();
+	cp.region_origin[0] = ro.x;
+	cp.region_origin[1] = ro.y;
+	cp.region_origin[2] = ro.z;
+	cp.atlas_bricks[0] = atlas_bricks_.x;
+	cp.atlas_bricks[1] = atlas_bricks_.y;
+	cp.atlas_bricks[2] = atlas_bricks_.z;
+	const uint32_t flags = ve::pack_flags(beauty_settings());
+	std::memcpy(&cp.cam_pos[3], &flags, sizeof(float));
+	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cp, w, h, kNoEdit)) return d;
+	if (!gbuffer_->ensure(device, nullptr, Vector2i(w, h))) return d;
+	float fade_start = ve::kLodFadeStartM;
+	float fade_end = ve::kLodFadeEndM;
+	lod_fade_band(&fade_start, &fade_end);
+	composite_pass_->draw(device, *gbuffer_, raymarch_pass_->albedo_texture(),
+			raymarch_pass_->surface_texture(), raymarch_pass_->hitpos_texture(), view_proj,
+			*materials_, p, fade_start, fade_end);
+	if (!composite_pass_->last_draw_ok()) return d;
+	DeferredPass::Params dp;
+	const Projection inv = view_proj.inverse();
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++)
+			dp.inv_view_proj[c * 4 + r] = inv.columns[c][r];
+	dp.cam_pos[0] = pos.x;
+	dp.cam_pos[1] = pos.y;
+	dp.cam_pos[2] = pos.z;
+	dp.flags = flags;
+	dp.probe_mode = probe_mode;
+	if (!deferred_pass_->render(device, *gbuffer_, *materials_, RID(), RID(), kNoEdit, 0.0f, dp))
+		return d;
+	device->submit();
+	device->sync();
+	const PackedByteArray data = device->texture_get_data(gbuffer_->lit(), 0);
+	const int pixels = w * h;
+	if (data.size() < static_cast<int64_t>(pixels) * 8) return d;
+	const uint16_t *values = reinterpret_cast<const uint16_t *>(data.ptr());
+	const int center = (h / 2) * w + (w / 2);
+	if (probe_mode == 2) {
+		float center_sum[3] = {};
+		for (int oy = -1; oy <= 0; oy++)
+			for (int ox = -1; ox <= 0; ox++) {
+				const int sample = (std::max(0, h / 2 + oy) * w) + std::max(0, w / 2 + ox);
+				center_sum[0] += half_to_float(values[sample * 4]);
+				center_sum[1] += half_to_float(values[sample * 4 + 1]);
+				center_sum[2] += half_to_float(values[sample * 4 + 2]);
+			}
+		d["center"] = Vector3(center_sum[0] * 0.25f, center_sum[1] * 0.25f, center_sum[2] * 0.25f);
+	} else {
+		d["center"] = Color(half_to_float(values[center * 4]), half_to_float(values[center * 4 + 1]),
+				half_to_float(values[center * 4 + 2]), 1.0f);
+	}
+	double mean_luma = 0.0;
+	for (int i = 0; i < pixels; i++) {
+		const float r = half_to_float(values[i * 4]);
+		const float g = half_to_float(values[i * 4 + 1]);
+		const float b = half_to_float(values[i * 4 + 2]);
+		mean_luma += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+	}
+	d["mean_luma"] = mean_luma / static_cast<double>(pixels);
+	std::set<uint16_t> rows;
+	for (int y = 0; y < h; y++) rows.insert(values[(y * w + w / 2) * 4 + 2]);
+	d["distinct_rows"] = static_cast<int>(rows.size());
 	return d;
 }
 
