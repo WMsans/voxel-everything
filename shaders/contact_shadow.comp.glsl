@@ -52,7 +52,21 @@ void main() {
 		return;
 	}
 
-	float vis = texture(mask_tex, uv).r;
+	// march() jitters its ray start by bayer4, so a marginally-occluded pixel comes back 0 or
+	// 1 according to its slot in the 4x4 pattern. That is a stochastic estimate of fractional
+	// visibility and only carries its intended meaning once the pattern is averaged back out;
+	// sampled raw it reaches the screen as a lattice of isolated black dots on open ground.
+	//
+	// The box is exactly the 4x4 bayer period in MASK space, so every jitter phase is counted
+	// once and the average is the unbiased visibility the jitter was encoding. Offsets -1..2
+	// cover a full period whatever the pixel's own phase is.
+	ivec2 msize = max(pc.dims.xy / 2, ivec2(1));
+	ivec2 mpx = clamp(ivec2(uv * vec2(msize)), ivec2(0), msize - 1);
+	float vis = 0.0;
+	for (int y = -1; y <= 2; y++)
+		for (int x = -1; x <= 2; x++)
+			vis += texelFetch(mask_tex, clamp(mpx + ivec2(x, y), ivec2(0), msize - 1), 0).r;
+	vis *= 1.0 / 16.0;
 	vec4 c = imageLoad(scene_color, px);
 	imageStore(scene_color, px, vec4(c.rgb * mix(1.0, vis, pc.params.y), c.a));
 }

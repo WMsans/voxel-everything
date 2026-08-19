@@ -104,3 +104,65 @@ func test_turning_the_sun_ray_off_makes_everything_fully_lit() -> void:
 	w.set_effect_enabled("raymarched_sun_shadow", false)
 	var d := probe_ground(w)
 	assert_float(d["sun"]).is_equal_approx(1.0, 0.01)
+
+# Shadow layer 1, the open-sky case. The SDF is a NARROW BAND: world_sdf() saturates at
+# +SDF_RANGE (0.64 m), so a sample in open air says "no surface within 0.64 m" and nothing
+# more. The sphere-traced penumbra term K*d/t treats that saturated value as a true occluder
+# distance, so past t = K*SDF_RANGE (7.68 m) every open-air step darkens the result by 1/t.
+#
+# make_world()'s 5-region-tall world hides this: the shadow ray leaves the region field after
+# ~27 m and takes the fully-lit early-out. The demo's world is tall enough that the ray runs
+# the whole 60 m budget inside it, which is why the terrain there renders near-black.
+func make_tall_world() -> VoxelWorld:
+	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	w.use_local_device = true
+	w.physics_enabled = false
+	w.world_origin_bricks = Vector3i(0, -64, 0)
+	# 7 regions of head-room puts the world ceiling at y = 179.2, well above the y = 102 the
+	# 60 m shadow ray reaches from the ground at y = 56.
+	w.world_size_regions = Vector3i(8, 7, 8)
+	add_child(w)
+	_worlds.append(w)
+	assert_bool(w.debug_init_atlas()).is_true()
+	var quiet := 0
+	for i in range(400):
+		quiet = quiet + 1 if w.debug_stream_frame(Vector3(20.0, 56.2, 20.0)) == 0 else 0
+		if quiet >= 6:
+			break
+	return w
+
+func test_open_ground_under_open_sky_is_fully_lit() -> void:
+	var w := make_tall_world()
+	var d := probe_ground(w)
+	assert_bool(d["hit"]).is_true()
+	# Flat ground facing up with nothing between it and the sun. Anything below 1.0 here is
+	# the saturated band being read as an occluder.
+	assert_float(d["sun"]).is_equal_approx(1.0, 0.02)
+
+func test_open_sky_visibility_does_not_depend_on_world_height() -> void:
+	# The same ground point, the same sun, two worlds that differ only in how much EMPTY
+	# space sits above the surface. Sun visibility is a property of the geometry, so the two
+	# must agree; if they do not, the marcher is measuring the air rather than the occluders.
+	var short_sun: float = probe_ground(make_world())["sun"]
+	var tall_sun: float = probe_ground(make_tall_world())["sun"]
+	assert_float(tall_sun).is_equal_approx(short_sun, 0.02)
+
+# The 8^3 min-max chain gates whether a cell is sphere-traced at all. The march's hit test is
+# one-sided (any d below a small positive threshold, negatives included), so the only sound
+# question for the gate is whether the cell's MINIMUM is low enough. Also demanding a sign
+# change skipped every cell lying wholly inside the surface, and a ray that entered the solid
+# through one was advanced straight out the far side.
+#
+# The result is a single missed pixel surrounded by hits. Real sky is a connected region, so
+# an isolated miss in the middle of terrain can only be the march stepping over geometry.
+func test_the_march_leaves_no_isolated_holes_in_the_gbuffer() -> void:
+	var w := make_world()
+	# Looking down onto the height field from 19 m up: the rays cross many bricks at a steep
+	# enough angle to enter the solid, which is where a cell-level skip that also demands a
+	# sign change loses them. This view produced 8 holes before the gate was corrected.
+	var d: Dictionary = w.debug_raymarch_hole_probe(Vector3(20.0, 70.0, 20.0),
+		Vector3(1.0, -0.8, 0.6).normalized(), 384, 256)
+	assert_bool(d["ran"]).is_true()
+	assert_int(d["hit_pixels"]).override_failure_message(
+		"the view hit nothing, so the hole count below proves nothing").is_greater(20000)
+	assert_int(d["isolated_misses"]).is_equal(0)

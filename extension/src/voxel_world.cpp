@@ -67,6 +67,7 @@
 #include <algorithm>
 #include <array>
 #include <iterator>
+#include <vector>
 
 using namespace godot;
 
@@ -291,6 +292,8 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_raymarch_pixel", "origin", "dir"), &VoxelWorld::debug_raymarch_pixel);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_probe", "origin", "dir"), &VoxelWorld::debug_raymarch_probe);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_gbuffer", "origin", "dir"), &VoxelWorld::debug_raymarch_gbuffer);
+	ClassDB::bind_method(D_METHOD("debug_raymarch_hole_probe", "origin", "dir", "w", "h"),
+			&VoxelWorld::debug_raymarch_hole_probe);
 	ClassDB::bind_method(D_METHOD("debug_cel_diff", "albedo", "ambient", "ndl", "ndv", "ndh",
 			"shadow", "ao", "gloss"), &VoxelWorld::debug_cel_diff);
 	ClassDB::bind_method(D_METHOD("debug_cel_reference", "albedo", "ambient", "ndl", "ndv", "ndh",
@@ -429,6 +432,7 @@ Dictionary VoxelWorld::debug_contact_shadow_probe(Vector3 pos, Vector3 fwd, int 
 	d["mask_width"] = 0; d["mask_height"] = 0;
 	d["mask_min"] = 1.0f; d["mask_mean"] = 1.0f;
 	d["mean_darkening"] = 0.0f; d["max_brightening"] = 0.0f;
+	d["max_neighbour_step"] = 0.0f;
 	if (w <= 0 || h <= 0) return d;
 	ensure_initialized();
 	RenderingDevice *device = rd();
@@ -519,13 +523,27 @@ Dictionary VoxelWorld::debug_contact_shadow_probe(Vector3 pos, Vector3 fwd, int 
 		const uint16_t *b = reinterpret_cast<const uint16_t *>(post.ptr());
 		float min_mask = 1.0f; double mask_sum = 0.0, dark = 0.0; float bright = 0.0f;
 		for (int i = 0; i < mw * mh; i++) { const float v = m[i] / 255.0f; min_mask = std::min(min_mask, v); mask_sum += v; }
+		// Per-pixel FRACTION of light removed, so the speckle measure below is independent
+		// of how bright the surface under the shadow happens to be.
+		std::vector<float> removed(static_cast<size_t>(w) * h, 0.0f);
 		for (int i = 0; i < w * h; i++) {
 			const float la = 0.2126f * Math::half_to_float(a[i * 4]) + 0.7152f * Math::half_to_float(a[i * 4 + 1]) + 0.0722f * Math::half_to_float(a[i * 4 + 2]);
 			const float lb = 0.2126f * Math::half_to_float(b[i * 4]) + 0.7152f * Math::half_to_float(b[i * 4 + 1]) + 0.0722f * Math::half_to_float(b[i * 4 + 2]);
 			dark += std::max(0.0f, la - lb); bright = std::max(bright, lb - la);
+			removed[i] = la > 1e-4f ? std::clamp((la - lb) / la, 0.0f, 1.0f) : 0.0f;
 		}
+		// The largest jump in that fraction between neighbouring pixels. A resolved shadow
+		// is a gradient; an unresolved bayer4 dither steps the full strength in one pixel.
+		float step = 0.0f;
+		for (int y = 0; y < h; y++)
+			for (int x = 0; x < w; x++) {
+				const float c = removed[static_cast<size_t>(y) * w + x];
+				if (x + 1 < w) step = std::max(step, std::fabs(c - removed[static_cast<size_t>(y) * w + x + 1]));
+				if (y + 1 < h) step = std::max(step, std::fabs(c - removed[static_cast<size_t>(y + 1) * w + x]));
+			}
 		d["mask_min"] = min_mask; d["mask_mean"] = static_cast<float>(mask_sum / (mw * mh));
 		d["mean_darkening"] = static_cast<float>(dark / (w * h)); d["max_brightening"] = bright;
+		d["max_neighbour_step"] = step;
 	}
 	contact_shadow_pass_->teardown();
 	device->free_rid(scratch); device->free_rid(before);
@@ -3635,6 +3653,61 @@ Dictionary VoxelWorld::debug_raymarch_gbuffer(Vector3 origin, Vector3 dir) {
 	return d;
 }
 
+// Isolated g-buffer holes: a pixel the primary march missed while all four of its
+// neighbours hit. Real sky is a connected region, so an isolated miss can only be the march
+// stepping over geometry it should have found. Counting them is view-robust in a way that
+// naming one guilty pixel is not.
+Dictionary VoxelWorld::debug_raymarch_hole_probe(Vector3 origin, Vector3 dir, int w, int h) {
+	Dictionary d;
+	d["ran"] = false;
+	d["hit_pixels"] = 0;
+	d["isolated_misses"] = 0;
+	if (w <= 2 || h <= 2) return d;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_) return d;
+	const float aspect = static_cast<float>(w) / static_cast<float>(h);
+	const float tan_y = std::tan(1.0471975512f * 0.5f);
+	ve::CameraParams cam = ve::CameraParams::looking_at(
+			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
+	cam.params[0] = tan_y * aspect;
+	cam.params[1] = tan_y;
+	cam.params[2] = 200.0f;
+	const ve::WorldBounds wb = world_bounds();
+	const ve::IVec3 ro = wb.origin_regions();
+	cam.dims[0] = world_size_regions_.x; cam.dims[1] = world_size_regions_.y;
+	cam.dims[2] = world_size_regions_.z; cam.dims[3] = island_slot_count();
+	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
+	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
+	cam.atlas_bricks[2] = atlas_bricks_.z;
+	const uint32_t flags = ve::pack_flags(beauty_);
+	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
+	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, w, h, kNoEdit)) return d;
+	device->submit();
+	device->sync();
+	const PackedByteArray hp = device->texture_get_data(raymarch_pass_->hitpos_texture(), 0);
+	if (hp.size() < static_cast<int64_t>(w) * h * 16) return d;
+	const float *f = reinterpret_cast<const float *>(hp.ptr());
+	std::vector<uint8_t> hit(static_cast<size_t>(w) * h, 0);
+	int hits = 0;
+	for (int i = 0; i < w * h; i++) {
+		hit[i] = f[i * 4 + 3] > 0.5f ? 1 : 0;
+		hits += hit[i];
+	}
+	int isolated = 0;
+	for (int y = 1; y < h - 1; y++)
+		for (int x = 1; x < w - 1; x++) {
+			const size_t i = static_cast<size_t>(y) * w + x;
+			if (hit[i]) continue;
+			if (hit[i - 1] && hit[i + 1] && hit[i - w] && hit[i + w]) isolated++;
+		}
+	d["ran"] = true;
+	d["hit_pixels"] = hits;
+	d["isolated_misses"] = isolated;
+	return d;
+}
+
 Dictionary VoxelWorld::debug_ssr_probe(int fixture, int w, int h) {
 	Dictionary d;
 	const int width = std::max(1, w);
@@ -3975,20 +4048,71 @@ Dictionary VoxelWorld::debug_outline_probe(int fixture, bool have_dynamic_normal
 		normal_bytes.resize(pixels * 4 * static_cast<int>(sizeof(uint16_t)));
 		normal = reinterpret_cast<uint16_t *>(normal_bytes.ptrw());
 	}
+	// Fixtures 5-7 exercise the two ways the edge test used to report an edge where the
+	// geometry has none. All three cover the whole frame with terrain (material != 0).
+	//
+	//   5  seam hole  one column lost its depth to the near/far dither while its g-buffer
+	//                 surface survived. Not a silhouette; nothing may darken.
+	//   6  real sky   the same column with material 0 as well. That IS a silhouette.
+	//   7  grazing    a depth ramp seen almost edge-on, holding the relative depth step at
+	//                 a constant 6% -- over the old flat 4% threshold, under the incidence-
+	//                 scaled one -- with a genuine cliff at column 24 that must still show.
+	const bool hole_fixture = fixture == 5 || fixture == 6;
+	const int hole_column = width / 2;
+	const int cliff_column = 24;
+	const float kGrazingStep = 0.06f;   // relative depth step per column
+	// The cliff has to clear the incidence-scaled threshold, which at this fixture's
+	// near-edge-on angle is the OUTLINE_MIN_NDV cap: 0.04 / 0.05 = 0.8 relative.
+	const float kCliffFactor = 20.0f;
+	std::vector<float> ramp(width, 10.0f), ramp_ndv(width, 1.0f);
+	if (fixture == 7) {
+		// The camera sits at z = -100 and the identity view_proj puts the reconstructed
+		// world point at (u, v, depth), so the camera distance is depth + 100.
+		for (int x = 1; x < width; x++) {
+			const float step = (ramp[x - 1] + 100.0f) * kGrazingStep;
+			ramp[x] = ramp[x - 1] + step * (x == cliff_column ? kCliffFactor : 1.0f);
+		}
+		// World x spans [-1, 1] across the row, so one column advances 2/width in x while
+		// the surface advances `step` along the view axis. The normal is perpendicular to
+		// that tangent, which is what makes the surface edge-on.
+		for (int x = 0; x < width; x++) {
+			const float dz = x + 1 < width ? ramp[x + 1] - ramp[x]
+					: ramp[x] - ramp[x - 1];
+			const float dx = 2.0f / static_cast<float>(width);
+			const float len = std::sqrt(dz * dz + dx * dx);
+			ramp_ndv[x] = len > 0.0f ? dx / len : 1.0f;
+		}
+	}
 	for (int y = 0; y < height; y++)
 		for (int x = 0; x < width; x++) {
 			const int p = y * width + x;
 			const bool right_side = x >= width / 2;
 			const bool depth_line = fixture == 1 || fixture == 4;
 			depth[p] = depth_line && right_side ? 20.0f : 10.0f;
+			if (fixture == 7) depth[p] = ramp[x];
+			if (hole_fixture && x == hole_column) depth[p] = 0.0f;
 			gb_depth[p] = depth[p];
 			color[p * 4 + 0] = one; color[p * 4 + 1] = one;
 			color[p * 4 + 2] = one; color[p * 4 + 3] = one;
 			const bool terrain = fixture == 2;
-			const bool covered = terrain;
+			// Fixture 6's hole column is the only place a covered fixture writes material 0.
+			const bool covered = terrain || fixture == 5 || fixture == 7 ||
+					(fixture == 6 && x != hole_column);
 			const bool up = !right_side;
 			surface[p * 4 + 0] = up ? half : one;
 			surface[p * 4 + 1] = up ? one : half;
+			if (fixture == 5 || fixture == 6 || fixture == 7) {
+				// A real encoded normal, so the shader's oct_decode returns the vector the
+				// incidence term needs rather than an arbitrary pair of fp16 constants. The
+				// camera looks down +z here, so an incidence cosine of c is a normal whose
+				// z component is -c.
+				const float c = ramp_ndv[x];
+				const float n[3] = {std::sqrt(std::max(0.0f, 1.0f - c * c)), 0.0f, -c};
+				float e[2];
+				ve::oct_encode(n, e);
+				surface[p * 4 + 0] = float16(e[0]);
+				surface[p * 4 + 1] = float16(e[1]);
+			}
 			surface[p * 4 + 2] = covered ? one : 0;
 			surface[p * 4 + 3] = one;
 			if (normal) {
