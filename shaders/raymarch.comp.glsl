@@ -357,20 +357,25 @@ void march_island(int slot, vec3 ro, vec3 rd, inout Hit best, inout int steps_le
 	}
 }
 
-// The M1/M2 terrain march, unchanged in behaviour, returning a hit record instead of a
-// colour so an island can outrank it.
-Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
+// The brick-level march, bounded to one region-DDA segment. The DDA is seeded from the
+// segment start rather than recomputing from `ro`: a ray that crosses several regions must
+// not revisit the bricks it already crossed. Local `t` is converted back to world distance
+// only when writing the hit record and evaluating the ray position.
+Hit march_bricks(vec3 ro, vec3 rd, float t_begin, float t_end, inout int steps_left) {
 	Hit h;
 	h.hit = false;
-	h.t = max_dist;
+	h.t = t_end;
 	h.p = vec3(0.0);
 	h.n = vec3(0.0, 1.0, 0.0);
 	h.mat = 0u;
 
-	ivec3 map = ivec3(floor(ro / BRICK_SIZE));
+	vec3 segment_ro = ro + rd * t_begin;
+	float segment_length = max(t_end - t_begin, 0.0);
+	ivec3 map = ivec3(floor(segment_ro / BRICK_SIZE));
 	vec3 delta = abs(vec3(BRICK_SIZE) / rd);
 	ivec3 st = ivec3(sign(rd));
-	vec3 side = (vec3(map) * BRICK_SIZE - ro + (vec3(st) * 0.5 + 0.5) * BRICK_SIZE) / rd;
+	vec3 side = (vec3(map) * BRICK_SIZE - segment_ro +
+			(vec3(st) * 0.5 + 0.5) * BRICK_SIZE) / rd;
 	if (st.x == 0) side.x = 1.0 / 0.0;
 	if (st.y == 0) side.y = 1.0 / 0.0;
 	if (st.z == 0) side.z = 1.0 / 0.0;
@@ -379,7 +384,7 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
 	for (int i = 0; i < 1024; i++) {
 		float t_exit = min(side.x, min(side.y, side.z));
 		g_brick_cells++;
-		if (t_exit > max_dist) break;
+		if (t_exit > segment_length) break;
 
 		int slot = slot_at(map);
 		if (slot >= 0 && brick_may_have_surface(slot)) {
@@ -387,7 +392,7 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
 			float t = t_prev;
 			for (int j = 0; j < 64 && steps_left > 0; j++) {
 				if (t > t_exit) break;
-				vec3 p = ro + rd * t;
+				vec3 p = segment_ro + rd * t;
 				vec3 vox = (p - vec3(map) * BRICK_SIZE) / VOXEL_SIZE;
 				ivec3 cell8 = clamp(ivec3(floor(vox * 0.5)), ivec3(0), ivec3(7));
 				if (!cell8_may_have_surface(slot, cell8)) {
@@ -411,10 +416,10 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
 						steps_left--;
 						float dk = world_sdf(p);
 						t += dk * 0.5;
-						p = ro + rd * t;
+						p = segment_ro + rd * t;
 					}
 					h.hit = true;
-					h.t = t;
+					h.t = t_begin + t;
 					h.p = p;
 					h.n = calc_normal(p, map, slot, steps_left);
 					h.mat = material_at(p, map, slot);
@@ -427,6 +432,54 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
 		if (side.x < side.y && side.x < side.z) { t_prev = side.x; side.x += delta.x; map.x += st.x; }
 		else if (side.y < side.z)               { t_prev = side.y; side.y += delta.y; map.y += st.y; }
 		else                                    { t_prev = side.z; side.z += delta.z; map.z += st.z; }
+	}
+	return h;
+}
+
+// The three-level traversal from spec section 3: region DDA (25.6 m), brick DDA (0.8 m),
+// then in-brick sphere tracing. A region without a table, or with no resident bricks, is
+// known empty and is crossed without paying for its brick indirection lookups.
+Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
+	Hit h;
+	h.hit = false;
+	h.t = max_dist;
+	h.p = vec3(0.0);
+	h.n = vec3(0.0, 1.0, 0.0);
+	h.mat = 0u;
+
+	ivec3 rmap = ivec3(floor(ro / REGION_SIZE));
+	vec3 rdelta = abs(vec3(REGION_SIZE) / rd);
+	ivec3 rst = ivec3(sign(rd));
+	vec3 rside = (vec3(rmap) * REGION_SIZE - ro +
+			(vec3(rst) * 0.5 + 0.5) * REGION_SIZE) / rd;
+	if (rst.x == 0) rside.x = 1.0 / 0.0;
+	if (rst.y == 0) rside.y = 1.0 / 0.0;
+	if (rst.z == 0) rside.z = 1.0 / 0.0;
+	float rt_prev = 0.0;
+
+	for (int r = 0; r < 64; r++) {
+		float rt_exit = min(rside.x, min(rside.y, rside.z));
+		if (rt_prev > max_dist) break;
+		g_region_cells++;
+
+		// `region_slot_of` takes a brick coordinate. Multiplication by 32 picks the
+		// first brick of this region and is the inverse of its `>> 5` mapping.
+		int rs = region_slot_of(rmap * REGION_BRICKS);
+		bool region_worth_entering = rs >= 0 && region_slot_counts.n[rs] > 0;
+		if (region_worth_entering) {
+			Hit candidate = march_bricks(ro, rd, max(rt_prev, 0.0),
+					min(rt_exit, max_dist), steps_left);
+			if (candidate.hit) return candidate;
+			if (steps_left <= 0) return h;
+		}
+
+		if (rside.x < rside.y && rside.x < rside.z) {
+			rt_prev = rside.x; rside.x += rdelta.x; rmap.x += rst.x;
+		} else if (rside.y < rside.z) {
+			rt_prev = rside.y; rside.y += rdelta.y; rmap.y += rst.y;
+		} else {
+			rt_prev = rside.z; rside.z += rdelta.z; rmap.z += rst.z;
+		}
 	}
 	return h;
 }
@@ -469,6 +522,18 @@ float terrain_sun_visibility(vec3 ro) {
 		ivec3 brick = ivec3(floor(q / BRICK_SIZE));
 		int shadow_region = region_slot_of(brick);
 		if (shadow_region < 0) return 1.0;
+		// SUN_DIR has no zero component (it is the normalised vec3(0.6, 0.8, 0.3)),
+		// so this far-face division needs no primary-DDA-style zero guard. A resident but
+		// empty region cannot contain an occluder; skip its whole 25.6 m cell.
+		if (region_slot_counts.n[shadow_region] == 0) {
+			vec3 rlo = floor(q / REGION_SIZE) * REGION_SIZE;
+			vec3 rhi = rlo + vec3(REGION_SIZE);
+			vec3 far = mix(rlo, rhi, step(0.0, SUN_DIR));
+			vec3 tf = (far - q) / SUN_DIR;
+			float skip = min(tf.x, min(tf.y, tf.z));
+			t += max(skip, 0.01) + 0.001;
+			continue;
+		}
 		float d = world_sdf(q);
 		if (d < 0.004) return 0.0;
 		if (t <= RAY_SHADOW_PENUMBRA_DIST) res = min(res, RAY_SHADOW_K * d / t);
