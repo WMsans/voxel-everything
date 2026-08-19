@@ -23,15 +23,18 @@ const TargetSpec kTargets[5] = {
 	{"albedo", RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM,
 			RenderingDevice::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT |
 			RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
-			RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT, false},
+			RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT, false},
 	{"surface", RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT,
 			RenderingDevice::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT |
 			RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
-			RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT, false},
+			RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT, false},
 	{"depth", RenderingDevice::DATA_FORMAT_D32_SFLOAT,
 			RenderingDevice::TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
 			RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
-			RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT, false},
+			RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT, false},
 	{"lit", RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT,
 			RenderingDevice::TEXTURE_USAGE_STORAGE_BIT |
 			RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |

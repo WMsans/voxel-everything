@@ -151,6 +151,84 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 			view_proj, *materials, cam_pos, fade_start, fade_end);
 	if (!cmp->last_draw_ok()) return;
 
+	// Build HiZ from the near field's G-buffer depth before the LoD producer runs. The
+	// deferred pass consumes both producers below, so neither field is shaded twice.
+	HizPass *hiz = world->hiz_pass();
+	bool hiz_built = false;
+	if (hiz) hiz_built = hiz->build(rd, gb->depth(), size);
+	LodRasterPass *lod_raster = world->lod_raster_pass();
+	LodCullPass *lod_cull = world->lod_cull_pass();
+	if (world->lod_pool() && lod_raster && world->material_atlas()) {
+		ve::LodCamera lod_cam;
+		for (int c = 0; c < 4; c++)
+			for (int r = 0; r < 4; r++)
+				lod_cam.view_proj[c * 4 + r] = view_proj.columns[c][r];
+		lod_cam.pos[0] = cam.origin.x;
+		lod_cam.pos[1] = cam.origin.y;
+		lod_cam.pos[2] = cam.origin.z;
+		lod_cam.viewport[0] = size.x;
+		lod_cam.viewport[1] = size.y;
+		world->lod_tick(lod_cam, hiz ? hiz->occlusion() : nullptr);
+		// Device-level indirect-argument uploads precede the cull list; draw() only opens
+		// its own list after any cull list has ended.
+		const bool two_phase = lod_cull && lod_cull->is_valid() && hiz && hiz->pyramid().is_valid() &&
+				hiz_built;
+		if (!two_phase) {
+			world->lod_pool()->upload_draw_args(lod_raster->draw_pages());
+			lod_raster->draw(rd, *world->lod_pool(), *materials, *gb, view_proj, cam_pos,
+					lod_raster->draw_page_count(), fade_start, fade_end);
+		} else {
+			// Draw the previous visible set, rebuild HiZ with its far-field depth, then cull
+			// the remainder. A failed rebuild always falls back to drawing the remainder.
+			const std::vector<LodRasterPass::PageDraw> &draw_pages = lod_raster->draw_pages();
+			const std::vector<int> &last_visible = lod_cull->last_visible_pages();
+			std::vector<LodRasterPass::PageDraw> first_pass_draw;
+			std::vector<LodRasterPass::PageDraw> remaining_draw;
+			first_pass_draw.reserve(draw_pages.size());
+			remaining_draw.reserve(draw_pages.size());
+			for (const LodRasterPass::PageDraw &pd : draw_pages) {
+				if (std::binary_search(last_visible.begin(), last_visible.end(), pd.page))
+					first_pass_draw.push_back(pd);
+				else
+					remaining_draw.push_back(pd);
+			}
+
+			std::vector<int> first_pass_pages;
+			first_pass_pages.reserve(first_pass_draw.size());
+			for (const LodRasterPass::PageDraw &pd : first_pass_draw)
+				first_pass_pages.push_back(pd.page);
+
+			const int first_pass_count = static_cast<int>(first_pass_draw.size());
+			const int remaining_count = static_cast<int>(remaining_draw.size());
+			const int total_count = lod_raster->draw_page_count();
+			if (first_pass_count > 0) {
+				world->lod_pool()->upload_draw_args(first_pass_draw);
+				lod_raster->draw(rd, *world->lod_pool(), *materials, *gb, view_proj, cam_pos,
+						first_pass_count, fade_start, fade_end);
+				if (remaining_count > 0)
+					hiz_built = hiz->build(rd, gb->depth(), size);
+			}
+
+			if (remaining_count > 0) {
+				world->lod_pool()->upload_draw_args(remaining_draw);
+				if (hiz_built) {
+					lod_cull->set_first_pass_pages(first_pass_pages);
+					lod_cull->run(rd, *world->lod_pool(), hiz, view_proj, remaining_count,
+							total_count, first_pass_count);
+				} else {
+					std::vector<int> visible = first_pass_pages;
+					for (const LodRasterPass::PageDraw &pd : remaining_draw)
+						visible.push_back(pd.page);
+					lod_cull->set_last_visible_pages(visible);
+				}
+				lod_raster->draw(rd, *world->lod_pool(), *materials, *gb, view_proj, cam_pos,
+						remaining_count, fade_start, fade_end);
+			} else {
+				lod_cull->set_last_visible_pages(first_pass_pages);
+			}
+		}
+	}
+
 	DeferredPass::Params dp;
 	const Projection inv = view_proj.inverse();
 	for (int c = 0; c < 4; c++)
@@ -165,102 +243,4 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	if (!inject->draw(rd, rsb->get_color_texture(), rsb->get_depth_texture(), gb->lit(), gb->depth()))
 		return;
 
-	// Far field: after the injection the scene depth holds exact near-field occluders. Build
-	// the HiZ pyramid from it for the GPU cull (Task 15) and the coarse async readback for the
-	// CPU walk, then draw the LoD raster against the same depth buffer. The CPU walk gets the
-	// occlusion interface: stale readback may delay a build, never hide a chunk.
-	HizPass *hiz = world->hiz_pass();
-	bool hiz_built = false;
-	if (hiz) hiz_built = hiz->build(rd, rsb->get_depth_texture(), size);
-	LodRasterPass *lod_raster = world->lod_raster_pass();
-	LodCullPass *lod_cull = world->lod_cull_pass();
-	if (world->lod_pool() && lod_raster && world->material_atlas()) {
-		ve::LodCamera lod_cam;
-		for (int c = 0; c < 4; c++)
-			for (int r = 0; r < 4; r++)
-				lod_cam.view_proj[c * 4 + r] = view_proj.columns[c][r];
-		lod_cam.pos[0] = cam.origin.x;
-		lod_cam.pos[1] = cam.origin.y;
-		lod_cam.pos[2] = cam.origin.z;
-		lod_cam.viewport[0] = size.x;
-		lod_cam.viewport[1] = size.y;
-		world->lod_tick(lod_cam, hiz ? hiz->occlusion() : nullptr);
-		// Ordering: the indirect args upload (a device-level command) must precede the
-		// cull's compute list, and the cull's compute list must end before the raster's
-		// draw list opens. draw() only issues the indirect draw.
-		// Fail-soft: only cull against a pyramid that was successfully rebuilt this frame.
-		// A failed initial build means the single-pass draw-all path (no GPU cull).
-		const bool two_phase = lod_cull && lod_cull->is_valid() && hiz && hiz->pyramid().is_valid() &&
-				hiz_built;
-		if (!two_phase) {
-			// Fallback: the pre-trigger single pass. No cull means every candidate draws.
-			world->lod_pool()->upload_draw_args(lod_raster->draw_pages());
-			lod_raster->draw(rd, *world->lod_pool(), *materials,
-					rsb->get_color_texture(), rsb->get_depth_texture(), view_proj, cam_pos,
-					lod_raster->draw_page_count(), fade_start, fade_end);
-		} else {
-			// Temporal second phase (spec 7.5): draw last frame's visible set first, rebuild
-			// HiZ with those far-field depth writes, then cull and draw the remainder.
-			const std::vector<LodRasterPass::PageDraw> &draw_pages = lod_raster->draw_pages();
-			const std::vector<int> &last_visible = lod_cull->last_visible_pages();
-			std::vector<LodRasterPass::PageDraw> first_pass_draw;
-			std::vector<LodRasterPass::PageDraw> remaining_draw;
-			first_pass_draw.reserve(draw_pages.size());
-			remaining_draw.reserve(draw_pages.size());
-			for (const LodRasterPass::PageDraw &pd : draw_pages) {
-				if (std::binary_search(last_visible.begin(), last_visible.end(), pd.page)) {
-					first_pass_draw.push_back(pd);
-				} else {
-					remaining_draw.push_back(pd);
-				}
-			}
-
-			std::vector<int> first_pass_pages;
-			first_pass_pages.reserve(first_pass_draw.size());
-			for (const LodRasterPass::PageDraw &pd : first_pass_draw)
-				first_pass_pages.push_back(pd.page);
-
-			const int first_pass_count = static_cast<int>(first_pass_draw.size());
-			const int remaining_count = static_cast<int>(remaining_draw.size());
-			const int total_count = lod_raster->draw_page_count();
-
-			if (first_pass_count > 0) {
-				world->lod_pool()->upload_draw_args(first_pass_draw);
-				lod_raster->draw(rd, *world->lod_pool(), *materials,
-						rsb->get_color_texture(), rsb->get_depth_texture(), view_proj,
-						cam_pos, first_pass_count, fade_start, fade_end);
-				// The second build includes the first pass's far-field depth, so the cull of
-				// the remainder can see far occluders that the near-field-only pyramid missed.
-				// With no remaining pass there is nothing to cull, so skip the extra rebuild.
-				if (remaining_count > 0) {
-					hiz_built = hiz->build(rd, rsb->get_depth_texture(), size);
-				}
-			}
-
-			if (remaining_count > 0) {
-				world->lod_pool()->upload_draw_args(remaining_draw);
-				if (hiz_built) {
-					lod_cull->set_first_pass_pages(first_pass_pages);
-					lod_cull->run(rd, *world->lod_pool(), hiz, view_proj, remaining_count,
-							total_count, first_pass_count);
-				} else {
-					// The second build failed: never cull against a pyramid that was not
-					// rebuilt with this frame's far-field depth. Draw the remainder unculled
-					// and record the full visible set so the next temporal pass is accurate.
-					std::vector<int> visible = first_pass_pages;
-					for (const LodRasterPass::PageDraw &pd : remaining_draw)
-						visible.push_back(pd.page);
-					lod_cull->set_last_visible_pages(visible);
-				}
-				lod_raster->draw(rd, *world->lod_pool(), *materials,
-						rsb->get_color_texture(), rsb->get_depth_texture(), view_proj,
-						cam_pos, remaining_count, fade_start, fade_end);
-			} else {
-				// No remaining pass means no async args readback will refresh the visible
-				// set. Record exactly what this frame's first pass drew, including an empty
-				// set when every candidate is new (first_pass_count == 0).
-				lod_cull->set_last_visible_pages(first_pass_pages);
-			}
-		}
-	}
 }

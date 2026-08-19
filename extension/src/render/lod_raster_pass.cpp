@@ -1,4 +1,5 @@
 #include "render/lod_raster_pass.h"
+#include "render/gbuffer.h"
 #include "render/lod_pool.h"
 #include "render/material_atlas.h"
 #include "render/shader_loader.h"
@@ -83,6 +84,9 @@ void LodRasterPass::teardown() {
 	uset_surface_ = RID();
 	uset_sampler_ = RID();
 	index_array_buffer_ = RID();
+	fb_albedo_ = RID();
+	fb_surface_ = RID();
+	fb_depth_ = RID();
 	fb_marker_ = RID();
 	draw_pages_.clear();
 	rd_ = nullptr;
@@ -91,7 +95,8 @@ void LodRasterPass::teardown() {
 void LodRasterPass::release_targets() {
 	if (rd_ && framebuffer_.is_valid()) rd_->free_rid(framebuffer_);
 	framebuffer_ = RID();
-	fb_color_ = RID();
+	fb_albedo_ = RID();
+	fb_surface_ = RID();
 	fb_depth_ = RID();
 	fb_marker_ = RID();
 }
@@ -100,22 +105,26 @@ void LodRasterPass::set_draw_pages(const std::vector<PageDraw> &pages) {
 	draw_pages_ = pages;
 }
 
-bool LodRasterPass::ensure_pipeline(RenderingDevice *rd, RID dst_color, RID dst_depth, RID marker) {
+bool LodRasterPass::ensure_pipeline(RenderingDevice *rd, GBuffer &gb, RID marker) {
+	const RID albedo = gb.albedo();
+	const RID surface = gb.surface();
+	const RID depth = gb.depth();
 	const bool want_marker = marker.is_valid();
 	const RID shader = want_marker ? shader_marker_ : shader_;
 	if (!shader.is_valid()) return false;
 	if (pipeline_cull_off_.is_valid() && pipeline_cull_ccw_.is_valid() &&
 			pipeline_cull_cw_.is_valid() && framebuffer_.is_valid() &&
-			dst_color == fb_color_ && dst_depth == fb_depth_ && marker == fb_marker_ &&
-			pipeline_marker_ == want_marker) {
+			albedo == fb_albedo_ && surface == fb_surface_ && depth == fb_depth_ &&
+			marker == fb_marker_ && pipeline_marker_ == want_marker) {
 		return true;
 	}
 	if (framebuffer_.is_valid()) rd->free_rid(framebuffer_);
 	const Array attachments = want_marker ?
-			Array::make(dst_color, marker, dst_depth) : Array::make(dst_color, dst_depth);
+			Array::make(albedo, surface, marker, depth) : Array::make(albedo, surface, depth);
 	framebuffer_ = rd->framebuffer_create(attachments);
-	fb_color_ = dst_color;
-	fb_depth_ = dst_depth;
+	fb_albedo_ = albedo;
+	fb_surface_ = surface;
+	fb_depth_ = depth;
 	fb_marker_ = marker;
 	if (!framebuffer_.is_valid()) return false;
 	fb_format_ = rd->framebuffer_get_format(framebuffer_);
@@ -144,23 +153,25 @@ bool LodRasterPass::ensure_pipeline(RenderingDevice *rd, RID dst_color, RID dst_
 			// depth where it is nearer than the current buffer and leaves nearer geometry
 			// untouched.
 			ds->set_depth_compare_operator(RenderingDevice::COMPARE_OP_GREATER_OR_EQUAL);
-			Ref<RDPipelineColorBlendStateAttachment> att;
-			att.instantiate();
-			att->set_enable_blend(false);
+			Ref<RDPipelineColorBlendStateAttachment> att_albedo, att_surface;
+			att_albedo.instantiate();
+			att_surface.instantiate();
+			att_albedo->set_enable_blend(false);
+			att_surface->set_enable_blend(false);
 			Ref<RDPipelineColorBlendState> cb;
 			cb.instantiate();
 			if (want_marker) {
 				Ref<RDPipelineColorBlendStateAttachment> att_marker;
 				att_marker.instantiate();
 				att_marker->set_enable_blend(false);
-				cb->set_attachments(Array::make(att, att_marker));
+				cb->set_attachments(Array::make(att_albedo, att_surface, att_marker));
 				// Debug seam probe: the LoD marker (2) must OR into the composite marker
 				// (1) so double-claimed band pixels read 3. This is debug-only; production
 				// pipelines have no marker attachment and keep blending disabled.
 				cb->set_enable_logic_op(true);
 				cb->set_logic_op(RenderingDevice::LOGIC_OP_OR);
 			} else {
-				cb->set_attachments(Array::make(att));
+				cb->set_attachments(Array::make(att_albedo, att_surface));
 			}
 			// Pull-only pipeline: no vertex array, so the vertex format must be INVALID_ID
 			// (an empty vertex format is valid but expects vertices and ERR_FAILs).
@@ -251,13 +262,13 @@ bool LodRasterPass::ensure_index_array(RenderingDevice *rd, LodPool &pool) {
 }
 
 bool LodRasterPass::draw(RenderingDevice *rd, LodPool &pool, MaterialAtlas &materials,
-		RID dst_color, RID dst_depth, const Projection &view_proj, const float cam_pos[3],
+		GBuffer &gb, const Projection &view_proj, const float cam_pos[3],
 		int draw_count, float fade_start, float fade_end, RID marker) {
 	const auto t0 = std::chrono::steady_clock::now();
 	const RID shader = marker.is_valid() ? shader_marker_ : shader_;
-	if (!shader.is_valid()) return false;
+	if (!shader.is_valid() || !gb.is_valid()) return false;
 	if (draw_count <= 0 || draw_count > static_cast<int>(draw_pages_.size())) return false;
-	if (!ensure_pipeline(rd, dst_color, dst_depth, marker)) return false;
+	if (!ensure_pipeline(rd, gb, marker)) return false;
 	if (!ensure_uniform_set(rd, pool, materials, shader)) return false;
 	if (!ensure_index_array(rd, pool)) return false;
 

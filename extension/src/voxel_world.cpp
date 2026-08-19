@@ -102,6 +102,8 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::debug_lod_render_probe);
 	ClassDB::bind_method(D_METHOD("debug_lod_render_probe_culled", "pos", "fwd", "w", "h",
 			"cull"), &VoxelWorld::debug_lod_render_probe_culled);
+	ClassDB::bind_method(D_METHOD("debug_lod_gbuffer_probe", "pos", "fwd", "w", "h"),
+			&VoxelWorld::debug_lod_gbuffer_probe);
 	ClassDB::bind_method(D_METHOD("debug_seam_probe", "pos", "fwd", "w", "h", "skip_lod"),
 			&VoxelWorld::debug_seam_probe, DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("debug_hiz_stats"), &VoxelWorld::debug_hiz_stats);
@@ -340,6 +342,7 @@ void VoxelWorld::teardown_gpu() {
 	if (composite_pass_) { delete composite_pass_; composite_pass_ = nullptr; }
 	if (inject_pass_) { delete inject_pass_; inject_pass_ = nullptr; }
 	if (deferred_pass_) { delete deferred_pass_; deferred_pass_ = nullptr; }
+	if (hiz_pass_ && gbuffer_) hiz_pass_->release_level0_set();
 	if (gbuffer_) { delete gbuffer_; gbuffer_ = nullptr; }
 	if (raymarch_pass_) { delete raymarch_pass_; raymarch_pass_ = nullptr; }
 	if (lod_raster_pass_) { delete lod_raster_pass_; lod_raster_pass_ = nullptr; }
@@ -1345,53 +1348,24 @@ Dictionary VoxelWorld::debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, i
 		for (int r = 0; r < 4; r++)
 			vp.columns[c][r] = cam.view_proj[c * 4 + r];
 
-	auto make_target = [&](RID *out, RenderingDevice::DataFormat fmt, bool depth) {
-		Ref<RDTextureFormat> tf;
-		tf.instantiate();
-		tf->set_format(fmt);
-		tf->set_width(w);
-		tf->set_height(h);
-		tf->set_usage_bits(depth ?
-				RenderingDevice::TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-						RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
-						RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT |
-						RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT :
-				RenderingDevice::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT |
-						RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
-						RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT |
-						RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT);
-		Ref<RDTextureView> tv;
-		tv.instantiate();
-		*out = device->texture_create(tf, tv, {});
-	};
-	RID color, depth;
-	make_target(&color, RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM, false);
-	make_target(&depth, RenderingDevice::DATA_FORMAT_D32_SFLOAT, true);
-	RID framebuffer;
-	if (color.is_valid() && depth.is_valid()) {
-		framebuffer = device->framebuffer_create(Array::make(color, depth));
-	}
-	if (!framebuffer.is_valid()) {
-		if (color.is_valid()) device->free_rid(color);
-		if (depth.is_valid()) device->free_rid(depth);
-		return d;
-	}
+	if (!gbuffer_ || !gbuffer_->ensure(device, nullptr, Vector2i(w, h))) return d;
 
-	// Clear to reverse-Z far (0) before drawing the far field.
-	device->texture_clear(depth, Color(0.0f, 0.0f, 0.0f, 0.0f), 0, 1, 0, 1);
+	// Clear to reverse-Z far (0) before drawing the far field. The G-buffer owns the
+	// attachment format used by both production producers.
+	device->texture_clear(gbuffer_->depth(), Color(0.0f, 0.0f, 0.0f, 0.0f), 0, 1, 0, 1);
 	lod_raster_pass_->set_cull_enabled(cull);
 	const int draw_count = lod_raster_pass_->draw_page_count();
 	lod_pool_->upload_draw_args(lod_raster_pass_->draw_pages());
 	float probe_start = ve::kLodFadeStartM;
 	float probe_end = ve::kLodFadeEndM;
 	lod_fade_band(&probe_start, &probe_end);
-	bool ok = lod_raster_pass_->draw(device, *lod_pool_, *materials_, color, depth,
+	bool ok = lod_raster_pass_->draw(device, *lod_pool_, *materials_, *gbuffer_,
 			vp, p, draw_count, probe_start, probe_end);
 	device->submit();
 	device->sync();
 
 	if (ok) {
-		const PackedByteArray depth_data = device->texture_get_data(depth, 0);
+		const PackedByteArray depth_data = device->texture_get_data(gbuffer_->depth(), 0);
 		const int pixel_count = w * h;
 		if (depth_data.size() >= pixel_count * 4) {
 			const float *depths = reinterpret_cast<const float *>(depth_data.ptr());
@@ -1430,12 +1404,87 @@ Dictionary VoxelWorld::debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, i
 	// reading lod_walk_ here would require re-taking lod_mutex_ after the tick released it.
 	d["draw_pages"] = lod_raster_pass_ ? lod_raster_pass_->draw_page_count() : 0;
 
-	// The raster pass cached a framebuffer over these throwaway targets; drop it before
-	// freeing them so teardown never frees a framebuffer whose attachments are already gone.
+	// The raster pass cached a framebuffer over the owned G-buffer; drop it before a future
+	// probe changes its attachments.
 	lod_raster_pass_->release_targets();
-	if (framebuffer.is_valid()) device->free_rid(framebuffer);
-	if (color.is_valid()) device->free_rid(color);
-	if (depth.is_valid()) device->free_rid(depth);
+	return d;
+}
+
+Dictionary VoxelWorld::debug_lod_gbuffer_probe(Vector3 pos, Vector3 fwd, int w, int h) {
+	Dictionary d;
+	d["material_coverage"] = 0.0f;
+	d["worst_normal_length_error"] = 0.0f;
+	d["gloss_max"] = 0.0f;
+	d["sun_min"] = 1.0f;
+	d["sun_max"] = 0.0f;
+	if (w <= 0 || h <= 0) return d;
+
+	debug_lod_tick(pos, fwd);
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !lod_pool_ || !lod_raster_pass_ || !materials_ || !gbuffer_)
+		return d;
+	lod_raster_pass_->release_targets();
+	if (!gbuffer_->ensure(device, nullptr, Vector2i(w, h))) return d;
+
+	const float p[3] = {pos.x, pos.y, pos.z};
+	const float f[3] = {fwd.x, fwd.y, fwd.z};
+	const float up[3] = {0.0f, 1.0f, 0.0f};
+	const float aspect = static_cast<float>(w) / static_cast<float>(h);
+	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, 1.2217f,
+			aspect, 0.1f, 8000.0f, w, h);
+	Projection vp;
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++)
+			vp.columns[c][r] = cam.view_proj[c * 4 + r];
+
+	device->texture_clear(gbuffer_->albedo(), Color(0, 0, 0, 0), 0, 1, 0, 1);
+	device->texture_clear(gbuffer_->surface(), Color(0, 0, 0, 0), 0, 1, 0, 1);
+	device->texture_clear(gbuffer_->depth(), Color(0, 0, 0, 0), 0, 1, 0, 1);
+	lod_raster_pass_->set_cull_enabled(true);
+	lod_pool_->upload_draw_args(lod_raster_pass_->draw_pages());
+	float fade_start = ve::kLodFadeStartM;
+	float fade_end = ve::kLodFadeEndM;
+	lod_fade_band(&fade_start, &fade_end);
+	const bool ok = lod_raster_pass_->draw(device, *lod_pool_, *materials_, *gbuffer_, vp, p,
+			lod_raster_pass_->draw_page_count(), fade_start, fade_end);
+	device->submit();
+	device->sync();
+
+	if (ok) {
+		const PackedByteArray albedo = device->texture_get_data(gbuffer_->albedo(), 0);
+		const PackedByteArray surface = device->texture_get_data(gbuffer_->surface(), 0);
+		const int pixels = w * h;
+		if (albedo.size() >= pixels * 4 && surface.size() >= pixels * 8) {
+			const uint8_t *a = reinterpret_cast<const uint8_t *>(albedo.ptr());
+			const uint16_t *s = reinterpret_cast<const uint16_t *>(surface.ptr());
+			int covered = 0;
+
+			float worst = 0.0f;
+			float gloss_max = 0.0f;
+			float sun_min = 1.0f;
+			float sun_max = 0.0f;
+			for (int i = 0; i < pixels; i++) {
+				const float material = Math::half_to_float(s[i * 4 + 2]);
+				if (material < 0.5f) continue;
+				covered++;
+				const float e[2] = {Math::half_to_float(s[i * 4]), Math::half_to_float(s[i * 4 + 1])};
+				float n[3] = {};
+				ve::oct_decode(e, n);
+				const float length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+				worst = std::max(worst, std::fabs(length - 1.0f));
+				gloss_max = std::max(gloss_max, Math::half_to_float(s[i * 4 + 3]));
+				const float sun = static_cast<float>(a[i * 4 + 3]) / 255.0f;
+				sun_min = std::min(sun_min, sun);
+				sun_max = std::max(sun_max, sun);
+			}
+			d["material_coverage"] = static_cast<float>(covered) / static_cast<float>(pixels);
+			d["worst_normal_length_error"] = worst;
+			d["gloss_max"] = gloss_max;
+			d["sun_min"] = covered > 0 ? sun_min : 1.0f;
+			d["sun_max"] = covered > 0 ? sun_max : 1.0f;
+		}
+	}
+	lod_raster_pass_->release_targets();
 	return d;
 }
 
@@ -1477,6 +1526,7 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, fov_y,
 			aspect, 0.1f, 8000.0f, w, h);
 	composite_pass_->release_targets();
+	lod_raster_pass_->release_targets();
 	if (!gbuffer_->ensure(device, nullptr, Vector2i(w, h))) return d;
 	Projection vp;
 	for (int c = 0; c < 4; c++)
@@ -1553,10 +1603,7 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 		if (marker.is_valid()) device->free_rid(marker);
 		return d;
 	}
-	// The G-buffer is resolved into these throwaway scene-buffer targets before LoD draws.
-	// Clear to reverse-Z far (0); the marker starts at 0 and is ORed to 1/2/3 by the two
-	// field passes.
-	device->texture_clear(depth, Color(0.0f, 0.0f, 0.0f, 0.0f), 0, 1, 0, 1);
+	// The marker starts at 0 and is ORed to 1/2/3 by the two G-buffer producers.
 	auto cleanup = [&]() {
 		composite_pass_->release_targets();
 		inject_pass_->release_targets();
@@ -1580,8 +1627,20 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 		return d;
 	}
 
-	// Resolve the near field into the throwaway scene buffers. This keeps the probe's LoD half
-	// on the pre-Task-7 scene-buffer path while preserving the Task-6 depth ownership test.
+	// Pass 2: far field. The LoD pipeline uses LOGIC_OP_OR on the marker, so kept far
+	// pixels OR 2 into the composite's 1, making double-claimed pixels read 3.
+	// `skip_lod` is a debug-only knob for the regression test: by leaving the far field
+	// out entirely it creates a real far-field gap, which the probe must count as
+	// unclaimed. Production rendering never passes it.
+	if (!skip_lod) {
+		lod_raster_pass_->set_cull_enabled(true);
+		lod_pool_->upload_draw_args(lod_raster_pass_->draw_pages());
+		const int draw_count = lod_raster_pass_->draw_page_count();
+		lod_raster_pass_->draw(device, *lod_pool_, *materials_, *gbuffer_, vp, p,
+				draw_count, probe_fade_start, probe_fade_end, marker);
+	}
+
+	// The single deferred evaluation follows both producers, matching production ordering.
 	DeferredPass::Params dp;
 	const Projection inv = vp.inverse();
 	for (int c = 0; c < 4; c++)
@@ -1597,23 +1656,10 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 		cleanup();
 		return d;
 	}
-
-	// Pass 2: far field. The LoD pipeline uses LOGIC_OP_OR on the marker, so kept far
-	// pixels OR 2 into the composite's 1, making double-claimed pixels read 3.
-	// `skip_lod` is a debug-only knob for the regression test: by leaving the far field
-	// out entirely it creates a real far-field gap, which the probe must count as
-	// unclaimed. Production rendering never passes it.
-	if (!skip_lod) {
-		lod_raster_pass_->set_cull_enabled(true);
-		lod_pool_->upload_draw_args(lod_raster_pass_->draw_pages());
-		const int draw_count = lod_raster_pass_->draw_page_count();
-		lod_raster_pass_->draw(device, *lod_pool_, *materials_, color, depth, vp, p,
-				draw_count, probe_fade_start, probe_fade_end, marker);
-	}
 	device->submit();
 	device->sync();
 
-	const PackedByteArray depth_data = device->texture_get_data(depth, 0);
+	const PackedByteArray depth_data = device->texture_get_data(gbuffer_->depth(), 0);
 	const PackedByteArray marker_data = device->texture_get_data(marker, 0);
 	const PackedByteArray hitpos_data = device->texture_get_data(
 			raymarch_pass_->hitpos_texture(), 0);
@@ -1681,6 +1727,9 @@ Dictionary VoxelWorld::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 	d["band_pixels"] = band_pixels;
 	d["band_pixels_unclaimed"] = band_pixels_unclaimed;
 	d["band_pixels_double_claimed"] = band_pixels_double_claimed;
+	// Short aliases retained for the Task 7 seam contract.
+	d["neither"] = band_pixels_unclaimed;
+	d["both"] = band_pixels_double_claimed;
 	d["near_pixels_lost_to_lod"] = near_pixels_lost_to_lod;
 	d["far_pixels_lost_to_raymarch"] = far_pixels_lost_to_raymarch;
 	// Same as debug_lod_render_probe_culled: use the raster pass's prepared page list rather

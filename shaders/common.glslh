@@ -99,13 +99,8 @@ vec2 material_props(uint mat, vec3 p, vec3 n, vec3 ddx, vec3 ddy) {
 	return vec2(c.b, c.a);
 }
 
-// The lighting that was inlined in raymarch.comp.glsl until M5. Both fields call it, so M6
-// replaces the lighting in ONE place instead of two.
-vec3 shade_terrain(vec4 surf, vec3 n, vec3 wpos) {
-	vec3 sun = normalize(vec3(0.6, 0.8, 0.3));
-	float lam = max(dot(n, sun), 0.0);
-	return surf.rgb * (0.25 + 0.75 * lam);
-}
+// shade_terrain() lived here until M6. Lighting now happens exactly once, in
+// shaders/deferred.comp.glsl via cel_shade() in shade.glslh. Do not add a second one.
 
 // A 4x4 Bayer threshold in [0, 1). Task 16 uses it in opposite directions on the two fields,
 // so the two masks are exact complements. It lives here for the same reason the shading

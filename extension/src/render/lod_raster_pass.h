@@ -8,6 +8,7 @@ namespace godot {
 
 class LodPool;
 class MaterialAtlas;
+class GBuffer;
 
 // Rasterizes the LoD arena with one indexed indirect multi-draw into the scene framebuffer.
 // Geometry is pulled from the quad/page/chunk buffers; the CPU supplies one indirect command
@@ -37,14 +38,19 @@ public:
 	// CPU command-record time only: std::chrono around draw()'s command recording, not GPU
 	// execution time. VoxelWorld::debug_perf_stats() reports this as lod_ms.
 	float last_ms() const { return last_ms_; }
+	// Task 8's depth-only shadow pipeline inherits this rather than re-deriving it: the
+	// winding was MEASURED (M5 errata 2), and a second derivation is a second chance to get
+	// it wrong.
+	bool front_face_clockwise() const { return front_face_clockwise_; }
+	RID index_array() const { return index_array_; }
 
 	bool draw(RenderingDevice *rd, LodPool &pool, MaterialAtlas &materials,
-			RID dst_color, RID dst_depth, const Projection &view_proj,
+			GBuffer &gb, const Projection &view_proj,
 			const float cam_pos[3], int draw_count,
 			float fade_start, float fade_end, RID marker = RID());
 
 private:
-	bool ensure_pipeline(RenderingDevice *rd, RID dst_color, RID dst_depth, RID marker);
+	bool ensure_pipeline(RenderingDevice *rd, GBuffer &gb, RID marker);
 	bool ensure_uniform_set(RenderingDevice *rd, LodPool &pool, MaterialAtlas &materials,
 			RID shader);
 	bool ensure_index_array(RenderingDevice *rd, LodPool &pool);
@@ -61,7 +67,7 @@ private:
 	RID index_array_, index_array_buffer_;
 	int64_t fb_format_ = 0;
 	bool pipeline_marker_ = false;
-	RID framebuffer_, fb_color_, fb_depth_, fb_marker_;
+	RID framebuffer_, fb_albedo_, fb_surface_, fb_depth_, fb_marker_;
 	std::vector<PageDraw> draw_pages_;
 	float last_ms_ = 0.0f;
 	bool cull_enabled_ = true;
