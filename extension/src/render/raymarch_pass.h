@@ -28,6 +28,7 @@ public:
 	RID albedo_texture() const { return albedo_; }
 	RID surface_texture() const { return surface_; }
 	RID hitpos_texture() const { return hitpos_; }
+	RID cost_buffer() const { return cost_buf_; }
 
 private:
 	RID make_target(RenderingDevice *rd, RenderingDevice::DataFormat fmt, int w, int h);
@@ -39,7 +40,7 @@ private:
 	RID sampler_;     // shared NEAREST sampler, created once
 	RID edits_ubo_;   // 32-byte uniform buffer, updated every render
 	RID material_albedo_, material_surface_, material_sampler_;
-	RID albedo_, surface_, hitpos_, uset_, uset_mask_;
+	RID albedo_, surface_, hitpos_, cost_buf_, uset_, uset_mask_;
 	int width_ = 0, height_ = 0;
 };
 

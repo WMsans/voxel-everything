@@ -160,6 +160,7 @@ class VoxelWorld : public Node3D {
 	// the blast.
 	std::atomic<int64_t> edit_seq_{0};
 	void drain_occupancy();                    // inbox -> grid
+	bool render_probe_pixel(Vector3 origin, Vector3 dir);
 
 	// The mesher runs on its own thread and owns its local RenderingDevice there; see
 	// MeshService. Nothing on the main thread touches that device.
@@ -489,6 +490,7 @@ public:
 	// --- Task 12 hooks ---
 	Color debug_raymarch_pixel(Vector3 origin, Vector3 dir);
 	Dictionary debug_raymarch_probe(Vector3 origin, Vector3 dir);
+	Dictionary debug_raymarch_cost_probe(Vector3 origin, Vector3 dir);
 	Dictionary debug_raymarch_gbuffer(Vector3 origin, Vector3 dir);
 	Dictionary debug_raymarch_hole_probe(Vector3 origin, Vector3 dir, int w, int h);
 	// --- M5 Task 11 hooks ---

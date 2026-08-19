@@ -1,4 +1,5 @@
 #include <doctest/doctest.h>
+#include <initializer_list>
 #include "shade/beauty_settings.h"
 
 TEST_CASE("the Off tier turns every effect off and leaves no work in any counter") {
@@ -103,4 +104,17 @@ TEST_CASE("the packed flag bits are stable, because a shader hardcodes them") {
 TEST_CASE("an out-of-range tier falls back to High rather than to nothing") {
 	const ve::BeautySettings s = ve::settings_for_tier(static_cast<ve::QualityTier>(99));
 	CHECK(s.ssgi_taps == 8);
+}
+
+TEST_CASE("cost view is a flag, off in every quality tier") {
+	// It is a debug view, not a quality level: switching to High must never turn the screen
+	// into a heat map, and switching to Off must not be the only way to leave it.
+	for (const ve::QualityTier tier : {ve::QualityTier::kOff, ve::QualityTier::kLow,
+			ve::QualityTier::kMedium, ve::QualityTier::kHigh}) {
+		const ve::BeautySettings s = ve::settings_for_tier(tier);
+		CHECK((ve::pack_beauty_flags(s) & ve::kFlagCostView) == 0u);
+	}
+	ve::BeautySettings s = ve::settings_for_tier(ve::QualityTier::kHigh);
+	s.cost_view = true;
+	CHECK((ve::pack_beauty_flags(s) & ve::kFlagCostView) == ve::kFlagCostView);
 }

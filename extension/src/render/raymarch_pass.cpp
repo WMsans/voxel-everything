@@ -76,7 +76,8 @@ void RaymarchPass::teardown() {
 	// pipelines — so uset_ first, then pipeline_ before shader_, then the targets.
 	// uset_mask_ is only a cache key for an externally owned tile-mask RID (usually the
 	// IslandAtlas fallback mask); it must not be freed here.
-	for (RID *r : {&uset_, &pipeline_, &shader_, &albedo_, &surface_, &hitpos_, &sampler_, &edits_ubo_}) {
+	for (RID *r : {&uset_, &pipeline_, &shader_, &albedo_, &surface_, &hitpos_, &cost_buf_,
+			 &sampler_, &edits_ubo_}) {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
@@ -109,14 +110,16 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 	if (albedo_.is_valid()) rd->free_rid(albedo_);
 	if (surface_.is_valid()) rd->free_rid(surface_);
 	if (hitpos_.is_valid()) rd->free_rid(hitpos_);
+	if (cost_buf_.is_valid()) rd->free_rid(cost_buf_);
 	albedo_ = make_target(rd, RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM, w, h);
 	surface_ = make_target(rd, RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT, w, h);
 	hitpos_ = make_target(rd, RenderingDevice::DATA_FORMAT_R32G32B32A32_SFLOAT, w, h);
+	cost_buf_ = rd->storage_buffer_create(static_cast<uint32_t>(w) * h * 2u * sizeof(uint32_t));
 	width_ = w;
 	height_ = h;
 
-	Ref<RDUniform> u[21];
-	for (int i = 0; i < 21; i++) u[i].instantiate();
+	Ref<RDUniform> u[22];
+	for (int i = 0; i < 22; i++) u[i].instantiate();
 	u[0]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
 	u[0]->set_binding(0); u[0]->add_id(albedo_);
 	u[1]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
@@ -152,8 +155,10 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 	}
 	u[20]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
 	u[20]->set_binding(20); u[20]->add_id(surface_);
+	u[21]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
+	u[21]->set_binding(23); u[21]->add_id(cost_buf_);
 	Array uset_args;
-	for (int i = 0; i < 21; i++) uset_args.push_back(u[i]);
+	for (int i = 0; i < 22; i++) uset_args.push_back(u[i]);
 	uset_ = rd->uniform_set_create(uset_args, shader_, 0);
 }
 

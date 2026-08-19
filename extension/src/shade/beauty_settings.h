@@ -15,6 +15,7 @@ struct BeautySettings {
 	bool sun_shadow_map = true;
 	bool glossy_sdf_rays = true;
 	bool raymarched_sun_shadow = true;
+	bool cost_view = false;
 
 	int ssgi_taps = 8;      // [0, 16]
 	int ssr_steps = 24;     // [0, 64]
@@ -33,9 +34,15 @@ inline constexpr uint32_t kFlagOutlines = 8u;
 inline constexpr uint32_t kFlagSunMap = 16u;
 inline constexpr uint32_t kFlagGlossyRays = 32u;
 inline constexpr uint32_t kFlagRaySunShadow = 64u;
+// A debug view, not an effect: it replaces the albedo channel with marching cost so the
+// budget conversation can be about pixels instead of averages. It is never set by a tier.
+inline constexpr uint32_t kFlagCostView = 128u;
 
 BeautySettings settings_for_tier(QualityTier t);
 void clamp_settings(BeautySettings *s);
-uint32_t pack_flags(const BeautySettings &s);
+uint32_t pack_beauty_flags(const BeautySettings &s);
+inline uint32_t pack_flags(const BeautySettings &s) {
+	return pack_beauty_flags(s);
+}
 
 } // namespace ve

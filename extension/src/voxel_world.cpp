@@ -291,6 +291,8 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_pixel", "origin", "dir"), &VoxelWorld::debug_raymarch_pixel);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_probe", "origin", "dir"), &VoxelWorld::debug_raymarch_probe);
+	ClassDB::bind_method(D_METHOD("debug_raymarch_cost_probe", "origin", "dir"),
+			&VoxelWorld::debug_raymarch_cost_probe);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_gbuffer", "origin", "dir"), &VoxelWorld::debug_raymarch_gbuffer);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_hole_probe", "origin", "dir", "w", "h"),
 			&VoxelWorld::debug_raymarch_hole_probe);
@@ -384,6 +386,7 @@ bool *beauty_field(ve::BeautySettings &s, const String &name) {
 	if (name == "sun_shadow_map") return &s.sun_shadow_map;
 	if (name == "glossy_sdf_rays") return &s.glossy_sdf_rays;
 	if (name == "raymarched_sun_shadow") return &s.raymarched_sun_shadow;
+	if (name == "cost_view") return &s.cost_view;
 	return nullptr;
 }
 } // namespace
@@ -807,13 +810,14 @@ Dictionary VoxelWorld::debug_beauty_settings() {
 	d["sun_shadow_map"] = beauty.sun_shadow_map;
 	d["glossy_sdf_rays"] = beauty.glossy_sdf_rays;
 	d["raymarched_sun_shadow"] = beauty.raymarched_sun_shadow;
+	d["cost_view"] = beauty.cost_view;
 	d["ssgi_taps"] = beauty.ssgi_taps;
 	d["ssr_steps"] = beauty.ssr_steps;
 	d["contact_steps"] = beauty.contact_steps;
 	d["outline_depth_threshold"] = beauty.outline_depth_threshold;
 	d["outline_normal_threshold"] = beauty.outline_normal_threshold;
 	d["tier"] = quality_tier;
-	d["flags"] = static_cast<int>(ve::pack_flags(beauty));
+	d["flags"] = static_cast<int>(ve::pack_beauty_flags(beauty));
 	return d;
 }
 
@@ -3505,11 +3509,14 @@ static float half_to_float(uint16_t v) {
 	return f;
 }
 
-Color VoxelWorld::debug_raymarch_pixel(Vector3 origin, Vector3 dir) {
+bool VoxelWorld::render_probe_pixel(Vector3 origin, Vector3 dir) {
 	ensure_initialized();
 	RenderingDevice *device = rd();
 	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_)
-		return Color(1, 0, 1);
+		return false;
+	int quiet = 0;
+	for (int i = 0; i < 400 && quiet < 6; i++)
+		quiet = debug_stream_frame(origin) == 0 ? quiet + 1 : 0;
 	ve::CameraParams cam = ve::CameraParams::looking_at(
 			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
 	const ve::WorldBounds wb = world_bounds();
@@ -3525,9 +3532,15 @@ Color VoxelWorld::debug_raymarch_pixel(Vector3 origin, Vector3 dir) {
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1,
 			kNoEdit))
-		return Color(1, 0, 1);
+		return false;
 	device->submit();
 	device->sync();
+	return true;
+}
+
+Color VoxelWorld::debug_raymarch_pixel(Vector3 origin, Vector3 dir) {
+	if (!render_probe_pixel(origin, dir)) return Color(1, 0, 1);
+	RenderingDevice *device = rd();
 	const PackedByteArray data = device->texture_get_data(raymarch_pass_->albedo_texture(), 0);
 	const PackedByteArray hp = device->texture_get_data(raymarch_pass_->hitpos_texture(), 0);
 	if (data.size() < 4 || hp.size() < 16) return Color(1, 0, 1);
@@ -3541,26 +3554,8 @@ Color VoxelWorld::debug_raymarch_pixel(Vector3 origin, Vector3 dir) {
 Dictionary VoxelWorld::debug_raymarch_probe(Vector3 origin, Vector3 dir) {
 	Dictionary d;
 	d["hit"] = false;
-	ensure_initialized();
+	if (!render_probe_pixel(origin, dir)) return d;
 	RenderingDevice *device = rd();
-	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_) return d;
-	ve::CameraParams cam = ve::CameraParams::looking_at(
-			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
-	const ve::WorldBounds wb = world_bounds();
-	const ve::IVec3 rorig = wb.origin_regions();
-	cam.dims[0] = world_size_regions_.x; cam.dims[1] = world_size_regions_.y;
-	cam.dims[2] = world_size_regions_.z;
-	cam.dims[3] = island_slot_count();
-	cam.region_origin[0] = rorig.x; cam.region_origin[1] = rorig.y; cam.region_origin[2] = rorig.z;
-	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
-	cam.atlas_bricks[2] = atlas_bricks_.z;
-	const uint32_t flags = ve::pack_flags(beauty_);
-	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
-	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1,
-			kNoEdit)) return d;
-	device->submit();
-	device->sync();
 	const PackedByteArray hp = device->texture_get_data(raymarch_pass_->hitpos_texture(), 0);
 	const PackedByteArray col = device->texture_get_data(raymarch_pass_->albedo_texture(), 0);
 	if (hp.size() < 16 || col.size() < 4) return d;
@@ -3609,6 +3604,31 @@ Dictionary VoxelWorld::debug_raymarch_probe(Vector3 origin, Vector3 dir) {
 		d["cell8_surface"] = m8[o] <= ve::kEncodedZero && m8[o + 1] >= ve::kEncodedZero;
 	}
 	return d;
+}
+
+Dictionary VoxelWorld::debug_raymarch_cost_probe(Vector3 origin, Vector3 dir) {
+	Dictionary out;
+	out["hit"] = false;
+	out["steps"] = 0;
+	out["bricks"] = 0;
+	out["regions"] = 0;
+	ensure_initialized();
+	if (!initialized_) return out;
+	if (!render_probe_pixel(origin, dir)) return out;
+	RenderingDevice *device = rd();
+	const PackedByteArray words = device->buffer_get_data(raymarch_pass_->cost_buffer(), 0, 8);
+	if (words.size() < 8) return out;
+	const uint32_t steps = words.decode_u32(0);
+	const uint32_t cells = words.decode_u32(4);
+	const PackedByteArray hp = device->texture_get_data(raymarch_pass_->hitpos_texture(), 0);
+	if (hp.size() >= 16) {
+		const float *hf = reinterpret_cast<const float *>(hp.ptr());
+		out["hit"] = hf[3] > 0.5f;
+	}
+	out["steps"] = static_cast<int>(steps);
+	out["bricks"] = static_cast<int>(cells & 0xFFFFu);
+	out["regions"] = static_cast<int>(cells >> 16);
+	return out;
 }
 
 Dictionary VoxelWorld::debug_raymarch_gbuffer(Vector3 origin, Vector3 dir) {

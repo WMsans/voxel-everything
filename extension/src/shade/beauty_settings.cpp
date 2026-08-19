@@ -60,7 +60,7 @@ void clamp_settings(BeautySettings *s) {
 	if (s->contact_steps == 0) s->contact_shadows = false;
 }
 
-uint32_t pack_flags(const BeautySettings &s) {
+uint32_t pack_beauty_flags(const BeautySettings &s) {
 	uint32_t f = 0;
 	if (s.ssgi && s.ssgi_taps > 0) f |= kFlagSsgi;
 	if (s.ssr && s.ssr_steps > 0) f |= kFlagSsr;
@@ -69,6 +69,7 @@ uint32_t pack_flags(const BeautySettings &s) {
 	if (s.sun_shadow_map) f |= kFlagSunMap;
 	if (s.glossy_sdf_rays) f |= kFlagGlossyRays;
 	if (s.raymarched_sun_shadow) f |= kFlagRaySunShadow;
+	if (s.cost_view) f |= kFlagCostView;
 	return f;
 }
 
