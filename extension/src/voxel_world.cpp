@@ -45,6 +45,9 @@
 #include "shade/cel.h"
 #include "shade/sun_ortho.h"
 #include <godot_cpp/classes/project_settings.hpp>
+#include <godot_cpp/classes/engine.hpp>
+#include <godot_cpp/classes/scene_tree.hpp>
+#include <godot_cpp/classes/window.hpp>
 #include <godot_cpp/classes/rd_texture_format.hpp>
 #include <godot_cpp/classes/rd_texture_view.hpp>
 #include <godot_cpp/classes/rd_sampler_state.hpp>
@@ -68,11 +71,50 @@
 using namespace godot;
 
 namespace {
-std::atomic<bool> g_voxel_compositor_callbacks_enabled{true};
+std::mutex g_voxel_compositor_admission_mutex;
+bool g_voxel_compositor_callbacks_enabled = true;
 }
 
 bool godot::voxel_compositor_callbacks_enabled() {
-	return g_voxel_compositor_callbacks_enabled.load(std::memory_order_acquire);
+	std::lock_guard<std::mutex> lock(g_voxel_compositor_admission_mutex);
+	return g_voxel_compositor_callbacks_enabled;
+}
+
+bool godot::voxel_try_begin_compositor_callback(const NodePath &world_path,
+		VoxelWorld **out_world) {
+	if (!out_world) return false;
+	*out_world = nullptr;
+	// Keep this lock only through lookup and the per-world guard acquisition. Once the guard
+	// is counted, shutdown cannot invalidate the world before the callback starts rendering.
+	std::lock_guard<std::mutex> admission(g_voxel_compositor_admission_mutex);
+	if (!g_voxel_compositor_callbacks_enabled) return false;
+	Engine *engine = Engine::get_singleton();
+	if (!engine) return false;
+	SceneTree *tree = Object::cast_to<SceneTree>(engine->get_main_loop());
+	if (!tree || !tree->get_root()) return false;
+	VoxelWorld *world = Object::cast_to<VoxelWorld>(
+			tree->get_root()->get_node_or_null(world_path));
+	if (!world || world->get_use_local_device()) return false;
+	if (!world->try_begin_render_callback()) return false;
+	*out_world = world;
+	return true;
+}
+
+void godot::voxel_compositor_callbacks_ready(VoxelWorld *world) {
+	std::lock_guard<std::mutex> admission(g_voxel_compositor_admission_mutex);
+	{
+		std::lock_guard<std::mutex> lifetime(world->render_lifetime_mutex_);
+		world->render_shutting_down_ = false;
+		world->render_teardown_deferred_ = false;
+	}
+	g_voxel_compositor_callbacks_enabled = true;
+}
+
+void godot::voxel_compositor_callbacks_shutdown_started(VoxelWorld *world) {
+	std::lock_guard<std::mutex> admission(g_voxel_compositor_admission_mutex);
+	g_voxel_compositor_callbacks_enabled = false;
+	std::lock_guard<std::mutex> lifetime(world->render_lifetime_mutex_);
+	world->render_shutting_down_ = true;
 }
 
 bool VoxelWorld::try_begin_render_callback() {
@@ -759,13 +801,8 @@ Dictionary VoxelWorld::debug_beauty_settings() {
 
 void VoxelWorld::_ready() {
 	// A scene can be instantiated again after a benchmark/test quit request in the same
-	// process. Re-enable callbacks only for a live SceneTree lifetime.
-	g_voxel_compositor_callbacks_enabled.store(true, std::memory_order_release);
-	{
-		std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
-		render_shutting_down_ = false;
-		render_teardown_deferred_ = false;
-	}
+	// process. Reset this world's lifetime state before reopening global callback admission.
+	voxel_compositor_callbacks_ready(this);
 	// Godot only calls _process on a GDExtension node that asks for it.
 	set_process(true);
 }
@@ -937,12 +974,11 @@ void VoxelWorld::shutdown_render_resources_on_render_thread() {
 }
 
 void VoxelWorld::shutdown_render_resources() {
-	// Close admission before synchronizing or queueing teardown. A compositor callback that
-	// starts after this point must return before looking up the world or calling ensure_init.
-	g_voxel_compositor_callbacks_enabled.store(false, std::memory_order_release);
+	// Close admission before synchronizing or queueing teardown. The admission lock makes
+	// the enabled check and world lookup indivisible from this transition.
+	voxel_compositor_callbacks_shutdown_started(this);
 	{
 		std::unique_lock<std::mutex> lock(render_lifetime_mutex_);
-		render_shutting_down_ = true;
 		const bool on_render_thread = RenderingServer::get_singleton()->is_on_render_thread();
 		if (on_render_thread && render_callbacks_ > 0) {
 			render_teardown_deferred_ = true;
@@ -2528,17 +2564,27 @@ Dictionary VoxelWorld::debug_hiz_stats() {
 
 Dictionary VoxelWorld::debug_hiz_shutdown_probe() {
 	Dictionary d;
+	d["callback_guarded"] = false;
 	d["queued"] = false;
 	d["was_pending"] = false;
 	d["drained"] = false;
 	d["initialized_after"] = true;
-	ensure_initialized();
-	RenderingDevice *device = rd();
-	if (!device || !hiz_pass_ || !gbuffer_) return d;
-	const Vector2i size(64, 64);
-	if (!gbuffer_->ensure(device, nullptr, size)) return d;
-	if (!hiz_pass_->build(device, gbuffer_->depth(), size)) return d;
-	d["queued"] = hiz_pass_->readback_pending();
+	{
+		const bool callback_guarded = try_begin_render_callback();
+		d["callback_guarded"] = callback_guarded;
+		if (!callback_guarded) return d;
+		struct CallbackGuard {
+			VoxelWorld *world;
+			~CallbackGuard() { world->end_render_callback(); }
+		} callback_guard{this};
+		ensure_initialized();
+		RenderingDevice *device = rd();
+		if (!device || !hiz_pass_ || !gbuffer_) return d;
+		const Vector2i size(64, 64);
+		if (!gbuffer_->ensure(device, nullptr, size)) return d;
+		if (!hiz_pass_->build(device, gbuffer_->depth(), size)) return d;
+		d["queued"] = hiz_pass_->readback_pending();
+	}
 	shutdown_render_resources();
 	d["was_pending"] = last_hiz_readback_was_pending_;
 	d["drained"] = last_hiz_readback_was_drained_;

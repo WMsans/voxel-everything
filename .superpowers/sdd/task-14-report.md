@@ -268,4 +268,46 @@ The plan Errata correction-wave entry was updated to the authoritative final rec
 git diff --check
 # clean
 plan record check: 5 EXIT_STATUS=0; clean=yes records; final commit fe8826b present; calibration text present
+
+## Final compositor-admission race fix
+
+### RED evidence
+
+The focused shutdown regression was extended first to require the guarded callback/resource sequence:
+
+```text
+./gdunit_tests.sh -a res://tests/test_render_shutdown.gd -c
+Invalid access to property or key 'callback_guarded' on a base object of type 'Dictionary'.
+Exit code: 100
+```
+
+### Fix details
+
+- Added one mutex-backed global admission protocol. PRE_OPAQUE and POST_OPAQUE now perform the enabled check, SceneTree/root/world lookup, and `try_begin_render_callback()` while holding the same admission mutex; the mutex is released immediately after the per-world guard is counted.
+- `_ready` resets the world lifetime state and re-enables global admission under that protocol. Shutdown acquires the same mutex before disabling admission, then preserves the existing counted-callback wait and render-thread deferred-teardown path, avoiding self-wait when called from a render callback.
+- The HiZ shutdown probe now exercises `try_begin_render_callback()` around resource setup before the existing async-readback drain and teardown assertions. Existing synchronous shutdown draining and resource teardown behavior is unchanged.
+
+### Fresh verification
+
+```text
+./build.sh -j$(nproc)
+Build OK: 4.6M libvoxel_everything.linux.template_debug.x86_64.so
+
+cd extension && scons test
+[doctest] test cases:     294 |     294 passed | 0 failed | 0 skipped
+[doctest] assertions: 3961638 | 3961638 passed | 0 failed
+[doctest] Status: SUCCESS!
+
+./gdunit_tests.sh -a res://tests/test_render_shutdown.gd -a res://tests/test_gpu_timings.gd -a res://tests/test_debug_menu.gd -a res://tests/test_beauty_settings.gd -c
+Overall Summary: 11 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans
+Exit code: 0
+
+./gdunit_tests.sh -c
+Overall Summary: 234 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans
+Executed test suites: (48/48)
+Executed test cases : (234/234)
+Exit code: 0
+```
+
+The gdUnit runs used the detected Wayland display and retained the existing `2 ObjectDB instances were leaked at exit` warning despite zero test errors/failures.
 ```

@@ -35,9 +35,13 @@
 
 namespace godot {
 
-// Compositor callbacks can outlive the SceneTree during SceneTree::quit(). They must stop
-// before Engine::get_main_loop() becomes a stale Object pointer.
+// Compositor callbacks can outlive the SceneTree during SceneTree::quit(). Admission
+// serializes the enabled check, SceneTree/world lookup, and per-world callback guard.
+class VoxelWorld;
 bool voxel_compositor_callbacks_enabled();
+bool voxel_try_begin_compositor_callback(const NodePath &world_path, VoxelWorld **world);
+void voxel_compositor_callbacks_ready(VoxelWorld *world);
+void voxel_compositor_callbacks_shutdown_started(VoxelWorld *world);
 
 class GpuAtlas;
 class MaterialAtlas;
@@ -82,6 +86,9 @@ struct OccupancyBlock {
 class VoxelWorld : public Node3D {
 	GDCLASS(VoxelWorld, Node3D)
 	friend class BeautyCompositor;
+	friend bool voxel_try_begin_compositor_callback(const NodePath &, VoxelWorld **);
+	friend void voxel_compositor_callbacks_ready(VoxelWorld *);
+	friend void voxel_compositor_callbacks_shutdown_started(VoxelWorld *);
 
 	bool use_local_device_ = false;
 

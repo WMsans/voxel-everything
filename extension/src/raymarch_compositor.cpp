@@ -19,12 +19,9 @@
 #include "shade/beauty_settings.h"
 #include "shade/cel.h"
 #include "shade/sun_ortho.h"
-#include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/render_scene_buffers_rd.hpp>
 #include <godot_cpp/classes/render_scene_data.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
-#include <godot_cpp/classes/scene_tree.hpp>
-#include <godot_cpp/classes/window.hpp>
 #include <godot_cpp/variant/projection.hpp>
 #include <algorithm>
 #include <cmath>
@@ -45,14 +42,10 @@ void RaymarchCompositor::_bind_methods() {
 
 void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) {
 	if (cb_type != EFFECT_CALLBACK_TYPE_PRE_OPAQUE) return;
-	if (!voxel_compositor_callbacks_enabled()) return;
 	if (world_path_.is_empty()) return;
 	if (!render_data) return;
-	SceneTree *tree = Object::cast_to<SceneTree>(Engine::get_singleton()->get_main_loop());
-	if (!tree) return;
-	VoxelWorld *world = Object::cast_to<VoxelWorld>(tree->get_root()->get_node_or_null(world_path_));
-	if (!world || world->get_use_local_device()) return;
-	if (!world->try_begin_render_callback()) return;
+	VoxelWorld *world = nullptr;
+	if (!voxel_try_begin_compositor_callback(world_path_, &world)) return;
 	struct CallbackGuard {
 		VoxelWorld *world;
 		~CallbackGuard() { world->end_render_callback(); }
