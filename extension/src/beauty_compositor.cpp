@@ -43,6 +43,8 @@ void BeautyCompositor::_render_callback(int cb_type, RenderData *render_data) {
 	if (!rd || !rsb || !sd) return;
 	const Vector2i size = rsb->get_internal_size();
 	if (size.x <= 0 || size.y <= 0) return;
+	GpuTimings *timings = world->gpu_timings();
+	timings->poll(rd);
 
 	normal_roughness_state_ = rsb->has_texture("forward_clustered", "normal_roughness") ? 1 : 0;
 	const RID normal_rough = normal_roughness_state_ == 1
@@ -65,19 +67,32 @@ void BeautyCompositor::_render_callback(int cb_type, RenderData *render_data) {
 
 	const ve::BeautySettings settings = world->beauty_settings();
 	ContactShadowPass *cs = world->contact_shadow_pass();
-	if (cs)
-		cs->render(rd, rsb->get_color_texture(), rsb->get_depth_texture(), size,
+	if (cs) {
+		timings->begin(rd, "contact");
+		const bool contact_ok = cs->render(rd, rsb->get_color_texture(), rsb->get_depth_texture(), size,
 				ubo->buffer(), settings);
+		if (contact_ok) timings->end(rd, "contact");
+	}
 	GBuffer *gb = world->gbuffer();
-	if (SsrPass *ssr = world->ssr_pass())
-		ssr->render(rd, rsb->get_color_texture(), rsb->get_depth_texture(), gb ? gb->surface() : RID(),
-				gb ? gb->depth() : RID(), normal_rough, normal_roughness_state_ == 1,
+	if (SsrPass *ssr = world->ssr_pass()) {
+		timings->begin(rd, "ssr");
+		const bool ssr_ok = ssr->render(rd, rsb->get_color_texture(), rsb->get_depth_texture(),
+				gb ? gb->surface() : RID(), gb ? gb->depth() : RID(), normal_rough,
+				normal_roughness_state_ == 1, ubo->buffer(), size, settings);
+		if (ssr_ok) timings->end(rd, "ssr");
+	}
+	if (OutlinePass *outline = world->outline_pass(); outline && gb && gb->is_valid()) {
+		timings->begin(rd, "outlines");
+		const bool outline_ok = outline->render(rd, rsb->get_color_texture(), rsb->get_depth_texture(),
+				gb->depth(), gb->surface(), normal_rough, have_calibrated_normal_roughness,
 				ubo->buffer(), size, settings);
-	if (OutlinePass *outline = world->outline_pass(); outline && gb && gb->is_valid())
-		outline->render(rd, rsb->get_color_texture(), rsb->get_depth_texture(), gb->depth(),
-				gb->surface(), normal_rough, have_calibrated_normal_roughness,
-				ubo->buffer(), size, settings);
+		if (outline_ok) timings->end(rd, "outlines");
+	}
 	// Non-visual copy: outline above is the last scene-colour mutation before glow/tonemap.
-	if (gb && gb->is_valid())
-		world->downsample_history(rd, rsb->get_color_texture(), *gb);
+	if (gb && gb->is_valid()) {
+		timings->begin(rd, "history");
+		if (world->downsample_history(rd, rsb->get_color_texture(), *gb))
+			timings->end(rd, "history");
+	}
+	timings->end_frame(rd);
 }

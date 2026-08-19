@@ -64,6 +64,8 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	if (!rd || !rsb || !sd) return;
 	const Vector2i size = rsb->get_internal_size();
 	if (size.x <= 0 || size.y <= 0) return;
+	GpuTimings *timings = world->gpu_timings();
+	timings->begin_frame(rd);
 
 	const Transform3D cam = sd->get_cam_transform();
 	const Projection proj = sd->get_cam_projection();
@@ -138,6 +140,7 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	const int islands = world->island_slot_count();
 	IslandCullPass *cull = world->island_cull();
 	RID mask;
+	timings->begin(rd, "raymarch");
 	if (cull && islands > 0 && cull->render(rd, *world->islands(), cp, rw, rh, islands)) {
 		mask = cull->mask_buffer();
 		cp.region_origin[3] = cull->tiles_x();
@@ -145,6 +148,7 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	}
 	cp.dims[3] = islands;
 	if (!rmp->render(rd, *atlas, world->islands(), mask, cp, rw, rh, edit_state)) return;
+	timings->end(rd, "raymarch");
 
 	// Master-API note: rsb->get_color_texture()/get_depth_texture() exist on godot-cpp master
 	// (render_scene_buffers_rd.hpp) and return the non-MSAA internal color/depth textures —
@@ -158,9 +162,11 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	float fade_end = ve::kLodFadeEndM;
 	world->lod_fade_band(&fade_start, &fade_end);
 	if (!gb->ensure(rd, rsb, size)) return;
+	timings->begin(rd, "composite");
 	cmp->draw(rd, *gb, rmp->albedo_texture(), rmp->surface_texture(), rmp->hitpos_texture(),
 			view_proj, *materials, cam_pos, fade_start, fade_end);
 	if (!cmp->last_draw_ok()) return;
+	timings->end(rd, "composite");
 
 	// Build HiZ from the near field's G-buffer depth before the LoD producer runs. The
 	// deferred pass consumes both producers below, so neither field is shaded twice.
@@ -183,12 +189,14 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 		world->lod_tick(lod_cam, hiz ? hiz->occlusion() : nullptr);
 		if (sun && (beauty_flags & ve::kFlagSunMap) != 0u) {
 			world->prepare_lod_shadow_raster();
+			timings->begin(rd, "sun_shadow");
 			const ve::WorldBounds wb = world->world_bounds();
 			float lo[3];
 			float hi[3];
 			wb.aabb(lo, hi);
-			sun->build(rd, *world->lod_pool(), *lod_raster,
-				ve::sun_ortho(ve::kSunDir, lo, hi, SunShadowPass::kSize), false);
+			const bool shadow_ok = sun->build(rd, *world->lod_pool(), *lod_raster,
+					ve::sun_ortho(ve::kSunDir, lo, hi, SunShadowPass::kSize), false);
+			if (shadow_ok) timings->end(rd, "sun_shadow");
 			world->prepare_lod_raster();
 		}
 		// Device-level indirect-argument uploads precede the cull list; draw() only opens
@@ -197,8 +205,10 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 				hiz_built;
 		if (!two_phase) {
 			world->lod_pool()->upload_draw_args(lod_raster->draw_pages());
-			lod_raster->draw(rd, *world->lod_pool(), *materials, *gb, view_proj, cam_pos,
-					lod_raster->draw_page_count(), fade_start, fade_end);
+			timings->begin(rd, "lod");
+			const bool lod_ok = lod_raster->draw(rd, *world->lod_pool(), *materials, *gb, view_proj,
+					cam_pos, lod_raster->draw_page_count(), fade_start, fade_end);
+			if (lod_ok) timings->end(rd, "lod");
 		} else {
 			// Draw the previous visible set, rebuild HiZ with its far-field depth, then cull
 			// the remainder. A failed rebuild always falls back to drawing the remainder.
@@ -225,8 +235,10 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 			const int total_count = lod_raster->draw_page_count();
 			if (first_pass_count > 0) {
 				world->lod_pool()->upload_draw_args(first_pass_draw);
-				lod_raster->draw(rd, *world->lod_pool(), *materials, *gb, view_proj, cam_pos,
-						first_pass_count, fade_start, fade_end);
+				timings->begin(rd, "lod");
+				const bool first_lod_ok = lod_raster->draw(rd, *world->lod_pool(), *materials, *gb,
+						view_proj, cam_pos, first_pass_count, fade_start, fade_end);
+				if (first_lod_ok) timings->end(rd, "lod");
 				if (remaining_count > 0)
 					hiz_built = hiz->build(rd, gb->depth(), size);
 			}
@@ -243,8 +255,10 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 						visible.push_back(pd.page);
 					lod_cull->set_last_visible_pages(visible);
 				}
-				lod_raster->draw(rd, *world->lod_pool(), *materials, *gb, view_proj, cam_pos,
-						remaining_count, fade_start, fade_end);
+				timings->begin(rd, "lod");
+				const bool remaining_lod_ok = lod_raster->draw(rd, *world->lod_pool(), *materials, *gb,
+						view_proj, cam_pos, remaining_count, fade_start, fade_end);
+				if (remaining_lod_ok) timings->end(rd, "lod");
 			} else {
 				lod_cull->set_last_visible_pages(first_pass_pages);
 			}
@@ -254,9 +268,12 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	SsgiPass *ssgi = world->ssgi_pass();
 	if (ssgi) ssgi->clear_result();
 	bool ssgi_ok = false;
-	if (ssgi && beauty.ssgi)
+	if (ssgi && beauty.ssgi) {
+		timings->begin(rd, "ssgi");
 		ssgi_ok = ssgi->render(rd, *gb, ubo->buffer(), world->prev_view_proj(),
 				world->has_history(), beauty, world->beauty_frame());
+		if (ssgi_ok) timings->end(rd, "ssgi");
+	}
 
 	DeferredPass::Params dp;
 	const Projection inv = view_proj.inverse();
@@ -270,11 +287,16 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	static const float kNoSun[16] = {};
 	const bool use_sun = sun && sun->is_valid() && sun->rebuilds() > 0 &&
 			(beauty_flags & ve::kFlagSunMap) != 0u;
-	if (!deferred->render(rd, *gb, *materials, ssgi_ok ? ssgi->result() : RID(),
+	timings->begin(rd, "deferred");
+	const bool deferred_ok = deferred->render(rd, *gb, *materials, ssgi_ok ? ssgi->result() : RID(),
 			use_sun ? sun->map() : RID(), use_sun ? sun->view_proj() : kNoSun,
-			use_sun ? sun->texel_world() : 0.0f, dp)) return;
+			use_sun ? sun->texel_world() : 0.0f, dp);
+	if (!deferred_ok) return;
+	timings->end(rd, "deferred");
+	timings->begin(rd, "inject");
 	if (!inject->draw(rd, rsb->get_color_texture(), rsb->get_depth_texture(), gb->lit(), gb->depth()))
 		return;
+	timings->end(rd, "inject");
 	float current_view_proj[16];
 	for (int c = 0; c < 4; c++)
 		for (int r = 0; r < 4; r++) current_view_proj[c * 4 + r] = view_proj.columns[c][r];

@@ -19,6 +19,23 @@ const WARMUP := 60
 const FRAMES := 300
 const ISLAND_FRAMES := 900
 const TARGET_MS := 16.6
+const GPU_DRAIN_FRAMES := 30
+const MIN_GPU_SAMPLES := 30
+const BUDGETS_MS := {
+	"raymarch": 6.0, "lod": 2.0, "ssgi": 1.5, "ssr": 1.5,
+	"shadows": 1.0, "outlines": 0.3, "frame": 16.0,
+}
+
+var _gpu_samples := {
+	"raymarch": PackedFloat32Array(), "lod": PackedFloat32Array(),
+	"ssgi": PackedFloat32Array(), "ssr": PackedFloat32Array(),
+	"shadows": PackedFloat32Array(), "outlines": PackedFloat32Array(),
+	"custom_frame": PackedFloat32Array(),
+}
+var _last_gpu_sample_id := -1
+var _gpu_dropped_pairs := 0
+var _draining := false
+var _drain_frames := 0
 
 var _mode := ""
 var _frames := 0
@@ -85,6 +102,13 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if _mode == "":
 		return
+	if _draining:
+		_capture_gpu_sample()
+		_drain_frames += 1
+		if _drain_frames >= GPU_DRAIN_FRAMES:
+			_report()
+			get_tree().quit()
+		return
 	_frames += 1
 
 	if _mode == "--benchmark-move":
@@ -104,6 +128,7 @@ func _process(delta: float) -> void:
 
 	if _frames <= WARMUP:
 		return # let the first regions land before sampling
+	_capture_gpu_sample()
 	var ms := delta * 1000.0
 	_samples.append(ms)
 	# `delta` is the PREVIOUS frame's duration, while debug_perf_stats() read now describes
@@ -131,8 +156,7 @@ func _process(delta: float) -> void:
 		_worst = perf.duplicate()
 
 	if _samples.size() >= _target_frames:
-		_report()
-		get_tree().quit()
+		_draining = true
 
 func _terrain_height(x: float, z: float) -> float:
 	# Mirror of extension/src/generator/generator.cpp and shaders/field.glslh. Used only to
@@ -189,6 +213,46 @@ func _percentile(sorted: PackedFloat32Array, p: float) -> float:
 	var i := int(round(p * (sorted.size() - 1)))
 	return sorted[clampi(i, 0, sorted.size() - 1)]
 
+func _append_gpu(key: String, value: float) -> void:
+	var values: PackedFloat32Array = _gpu_samples[key]
+	values.append(value)
+	_gpu_samples[key] = values
+
+func _capture_gpu_sample() -> void:
+	if not _world:
+		return
+	var d: Dictionary = _world.debug_gpu_timings()
+	if not d.get("valid", false):
+		return
+	var sample_id := int(d["sample_id"])
+	if sample_id == _last_gpu_sample_id:
+		return
+	_last_gpu_sample_id = sample_id
+	_gpu_dropped_pairs = max(_gpu_dropped_pairs, int(d.get("dropped_pairs", 0)))
+	for key in ["raymarch", "lod", "ssgi", "ssr", "outlines"]:
+		var value := float(d.get(key + "_gpu_ms", -1.0))
+		if value >= 0.0:
+			_append_gpu(key, value)
+	var shadow_ms := 0.0
+	var shadow_ran := false
+	for key in ["sun_shadow", "contact"]:
+		var value := float(d.get(key + "_gpu_ms", -1.0))
+		if value >= 0.0:
+			shadow_ms += value
+			shadow_ran = true
+	if shadow_ran:
+		_append_gpu("shadows", shadow_ms)
+	var custom_frame := float(d.get("custom_frame_gpu_ms", -1.0))
+	if custom_frame >= 0.0:
+		_append_gpu("custom_frame", custom_frame)
+
+func _budget_verdict(values: PackedFloat32Array, budget_ms: float) -> String:
+	if values.size() < MIN_GPU_SAMPLES:
+		return "UNMEASURED"
+	var sorted := values.duplicate()
+	sorted.sort()
+	return "PASS" if _percentile(sorted, 0.99) <= budget_ms else "WARN"
+
 func _report() -> void:
 	var sorted := _samples.duplicate()
 	sorted.sort()
@@ -215,7 +279,7 @@ func _report() -> void:
 	sorted_chunks_resident.sort()
 	var sorted_pages_used := _pages_used_samples.duplicate()
 	sorted_pages_used.sort()
-	print("BENCH lod_summary lod_ms_p50=%.2f lod_ms_p99=%.2f draw_pages_p50=%.0f draw_pages_p99=%.0f culled_ratio_p50=%.3f culled_ratio_p99=%.3f chunks_resident_p50=%.0f chunks_resident_p99=%.0f pages_used_p50=%.0f pages_used_p99=%.0f" % [
+	print("BENCH lod_summary lod_cpu_record_ms_p50=%.2f lod_cpu_record_ms_p99=%.2f draw_pages_p50=%.0f draw_pages_p99=%.0f culled_ratio_p50=%.3f culled_ratio_p99=%.3f chunks_resident_p50=%.0f chunks_resident_p99=%.0f pages_used_p50=%.0f pages_used_p99=%.0f" % [
 		_percentile(sorted_lod_ms, 0.50), _percentile(sorted_lod_ms, 0.99),
 		_percentile(sorted_draw_pages, 0.50), _percentile(sorted_draw_pages, 0.99),
 		_percentile(sorted_culled_ratio, 0.50), _percentile(sorted_culled_ratio, 0.99),
@@ -235,6 +299,29 @@ func _report() -> void:
 	for k: String in keys:
 		worstparts.append("%s=%.2f" % [k, float(_worst.get(k, 0.0))])
 	print("BENCH worst_frame(%.2fms) " % _worst_ms + " ".join(worstparts))
+	for key in ["raymarch", "lod", "ssgi", "ssr", "shadows", "outlines", "custom_frame"]:
+		var values: PackedFloat32Array = _gpu_samples[key]
+		var sorted_gpu := values.duplicate()
+		sorted_gpu.sort()
+		print("BENCH gpu_%s samples=%d p50_ms=%.3f p99_ms=%.3f" % [key, values.size(),
+			_percentile(sorted_gpu, 0.50), _percentile(sorted_gpu, 0.99)])
+	var frame_sorted := _samples.duplicate()
+	frame_sorted.sort()
+	var verdict := {
+		"raymarch": _budget_verdict(_gpu_samples["raymarch"], BUDGETS_MS["raymarch"]),
+		"lod": _budget_verdict(_gpu_samples["lod"], BUDGETS_MS["lod"]),
+		"ssgi": _budget_verdict(_gpu_samples["ssgi"], BUDGETS_MS["ssgi"]),
+		"ssr": _budget_verdict(_gpu_samples["ssr"], BUDGETS_MS["ssr"]),
+		"shadows": _budget_verdict(_gpu_samples["shadows"], BUDGETS_MS["shadows"]),
+		"outlines": _budget_verdict(_gpu_samples["outlines"], BUDGETS_MS["outlines"]),
+		"frame": "PASS" if _percentile(frame_sorted, 0.99) <= BUDGETS_MS["frame"] else "WARN",
+	}
+	print("BENCH budget_verdict raymarch=%s lod=%s ssgi=%s ssr=%s shadows=%s outlines=%s frame=%s" % [
+		verdict["raymarch"], verdict["lod"], verdict["ssgi"], verdict["ssr"],
+		verdict["shadows"], verdict["outlines"], verdict["frame"]])
+	var custom_values: PackedFloat32Array = _gpu_samples["custom_frame"]
+	print("BENCH gpu_timing valid_samples=%d dropped_pairs=%d lod_source=timestamp lod_ms_source=cpu_record" % [
+		custom_values.size(), _gpu_dropped_pairs])
 	var st: Dictionary = _world.debug_stream_stats()
 	print("BENCH regions=%d overflow=%d" % [st.get("resident_regions", -1),
 		st.get("overflow_ever", -1)])
