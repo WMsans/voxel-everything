@@ -134,7 +134,16 @@ bool brick_may_have_surface(int slot) {
 
 bool cell8_may_have_surface(int slot, ivec3 cell) { // cell in [0,8)^3, 2 voxels per cell
 	uvec2 mm = texelFetch(mip8_atlas, atlas_base(slot, pc.atlas_bricks.xyz, 8) + cell, 0).xy;
-	return mm.x <= ENCODED_ZERO && mm.y >= ENCODED_ZERO;
+	// Only the MIN half belongs here. The march's hit test is one-sided -- it accepts any
+	// d below a small positive threshold, negatives included -- so the question this gate
+	// has to answer is "can any point in the cell be close enough to hit", i.e. is the
+	// minimum low enough. Requiring a sign CHANGE as well (mm.y >= ENCODED_ZERO) additionally
+	// skipped every cell lying wholly INSIDE the surface, whose max is below the zero code.
+	// A ray that entered the solid through such a cell was advanced straight out the far
+	// side, leaving isolated one-pixel holes in the g-buffer that the outline pass then drew
+	// a black speck around. The trilinear field is bounded by its corner samples, so the
+	// minimum alone is still a sound skip.
+	return mm.x <= ENCODED_ZERO;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -418,6 +427,21 @@ const int RAY_SHADOW_STEPS = 96;
 const float RAY_SHADOW_K = 12.0;
 const int RAY_SHADOW_MAX_ISLANDS = 4;
 
+// How far the penumbra term is allowed to look. The field is a NARROW BAND: every read goes
+// through decode_sdf(), which saturates at +SDF_RANGE, so a sample of 0.64 means "no surface
+// within 0.64 m" and carries no occluder distance at all.
+//
+// K*d/t only clears 1.0 when d >= t/K, so once t passes K * SDF_RANGE there is no value the
+// band can hold that reports "lit": every further step darkens by 1/t whether anything is
+// there or not. That is what turned open ground black -- a full 60 m march under an empty
+// sky ended at 12 * 0.64 / 60 = 0.128 visibility, and whether a given pixel's ray ran the
+// whole budget or took the fully-lit residency early-out below made the difference between
+// black and white on neighbouring pixels.
+//
+// Past this distance the march keeps its hard hit test and nothing else. An occluder that
+// far away is a shadow edge this band cannot soften anyway.
+const float RAY_SHADOW_PENUMBRA_DIST = RAY_SHADOW_K * SDF_RANGE; // 7.68 m
+
 float terrain_sun_visibility(vec3 ro) {
 	float res = 1.0;
 	float t = 0.05;
@@ -429,7 +453,7 @@ float terrain_sun_visibility(vec3 ro) {
 		if (shadow_region < 0) return 1.0;
 		float d = world_sdf(q);
 		if (d < 0.004) return 0.0;
-		res = min(res, RAY_SHADOW_K * d / t);
+		if (t <= RAY_SHADOW_PENUMBRA_DIST) res = min(res, RAY_SHADOW_K * d / t);
 		t += clamp(d, 0.02, 1.0);
 	}
 	return clamp(res, 0.0, 1.0);
@@ -460,7 +484,8 @@ float island_sun_visibility(vec3 ro, int island_count) {
 			if (t > tmax) break;
 			float d = island_sdf_at(i, isl, ro_l + rd_l * t);
 			if (d < 0.004) return 0.0;
-			res = min(res, RAY_SHADOW_K * d / t);
+			// Same narrow band, same saturation, same cutoff as terrain_sun_visibility.
+			if (t <= RAY_SHADOW_PENUMBRA_DIST) res = min(res, RAY_SHADOW_K * d / t);
 			t += clamp(d, 0.02, 1.0);
 		}
 	}

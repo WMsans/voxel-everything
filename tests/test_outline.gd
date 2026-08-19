@@ -31,3 +31,18 @@ func test_flat_and_off_are_unchanged() -> void:
 	assert_bool(d["ran"]).is_false()
 	assert_float(d["mean_delta"]).is_equal_approx(0.0, 0.0001)
 	assert_float(d["max_alpha_delta"]).is_less(0.0001)
+
+# The near/far dither seam leaves pixels whose depth was dropped by BOTH fields while their
+# g-buffer surface survives. Scene depth alone cannot tell that hole apart from the sky, and
+# reading it as a silhouette speckles the terrain with isolated black dots.
+func test_a_seam_hole_is_not_a_silhouette() -> void:
+	assert_int(make_world().debug_outline_probe(5, false)["dark_columns"]).is_equal(0)
+
+func test_real_sky_is_still_a_silhouette() -> void:
+	assert_int(make_world().debug_outline_probe(6, false)["dark_columns"]).is_equal(1)
+
+# A flat surface seen almost edge-on moves a long way along the view ray per pixel, so a
+# view-independent relative depth threshold reports the whole grazing slope as edges. Only
+# the genuine cliff planted in the ramp may darken.
+func test_a_grazing_slope_outlines_only_its_real_cliff() -> void:
+	assert_int(make_world().debug_outline_probe(7, false)["dark_columns"]).is_equal(1)

@@ -64,3 +64,20 @@ func test_zero_steps_reads_as_off_rather_than_as_a_free_dispatch() -> void:
 	w.quality_tier = 0
 	var d: Dictionary = w.debug_beauty_settings()
 	assert_int(int(d["flags"]) & 4).is_equal(0)
+
+# The march jitters its ray start with bayer4, which makes a marginally-occluded pixel come
+# back 0 or 1 depending on its slot in the 4x4 pattern. That jitter is a stochastic estimate
+# of fractional visibility and only means anything once the pattern is averaged back out;
+# applied raw it renders as a lattice of isolated black dots over open ground.
+#
+# A resolved contact shadow is a gradient, so the fraction of light it removes may not jump
+# by anything close to full strength between two neighbouring pixels.
+func test_the_shadow_is_a_gradient_not_a_dither_lattice() -> void:
+	var w := make_world()
+	var d: Dictionary = w.debug_contact_shadow_probe(Vector3(30.0, 70.0, 30.0),
+		Vector3(0.2, -1.0, 0.2).normalized(), 128, 128)
+	assert_float(d["mean_darkening"]).override_failure_message(
+		"nothing was shadowed, so the speckle bound below proves nothing").is_greater(0.0)
+	assert_float(d["max_neighbour_step"]).override_failure_message(
+		"a single pixel step changed the contact shadow by most of its full strength: " +
+		"the bayer4 dither is reaching the screen unresolved").is_less(0.35)
