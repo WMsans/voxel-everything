@@ -60,6 +60,14 @@ const float MATERIAL_UV_SCALE = 0.5;
 //   layout(set = ?, binding = ?) uniform sampler2DArray material_albedo;
 //   layout(set = ?, binding = ?) uniform sampler2DArray material_surface_tex;
 // and define MATERIAL_LAYERS to the array's layer count.
+
+// A 4x4 Bayer threshold in [0, 1). It is independent of material layers and is shared by
+// the screen-space beauty masks as well as the terrain shaders.
+float bayer4(ivec2 px) {
+	const int M[16] = int[16](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
+	return float(M[(px.y & 3) * 4 + (px.x & 3)]) / 16.0;
+}
+
 #ifdef MATERIAL_LAYERS
 
 // Triplanar with EXPLICIT gradients. The raymarcher is a compute shader and has no
@@ -82,19 +90,24 @@ vec4 material_surface(uint mat, vec3 p, vec3 n, vec3 ddx, vec3 ddy) {
 	return cx * w.x + cy * w.y + cz * w.z;
 }
 
-// The lighting that was inlined in raymarch.comp.glsl until M5. Both fields call it, so M6
-// replaces the lighting in ONE place instead of two.
-vec3 shade_terrain(vec4 surf, vec3 n, vec3 wpos) {
-	vec3 sun = normalize(vec3(0.6, 0.8, 0.3));
-	float lam = max(dot(n, sun), 0.0);
-	return surf.rgb * (0.25 + 0.75 * lam);
+// The other half of the material: roughness and ambient occlusion, triplanar-weighted
+// exactly like the albedo so a cliff face and a flat top read the same numbers. The channel
+// packing is render/material_atlas.cpp's pack_layer(): normal XY, roughness in B, AO in A.
+// M5 loaded this array and never sampled it; the cel stack is what needed it.
+vec2 material_props(uint mat, vec3 p, vec3 n, vec3 ddx, vec3 ddy) {
+	int layer = int(mat) - 1;
+	if (layer < 0 || layer >= MATERIAL_LAYERS) return vec2(1.0, 1.0); // rough, unoccluded
+	vec3 an = abs(n);
+	vec3 w = an / max(an.x + an.y + an.z, 1e-5);
+	float s = MATERIAL_UV_SCALE;
+	vec4 cx = textureGrad(material_surface_tex, vec3(p.zy * s, float(layer)), ddx.zy * s, ddy.zy * s);
+	vec4 cy = textureGrad(material_surface_tex, vec3(p.xz * s, float(layer)), ddx.xz * s, ddy.xz * s);
+	vec4 cz = textureGrad(material_surface_tex, vec3(p.xy * s, float(layer)), ddx.xy * s, ddy.xy * s);
+	vec4 c = cx * w.x + cy * w.y + cz * w.z;
+	return vec2(c.b, c.a);
 }
 
-// A 4x4 Bayer threshold in [0, 1). Task 16 uses it in opposite directions on the two fields,
-// so the two masks are exact complements. It lives here for the same reason the shading
-// does: there must be exactly one of it.
-float bayer4(ivec2 px) {
-	const int M[16] = int[16](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
-	return float(M[(px.y & 3) * 4 + (px.x & 3)]) / 16.0;
-}
+// shade_terrain() lived here until M6. Lighting now happens exactly once, in
+// shaders/deferred.comp.glsl via cel_shade() in shade.glslh. Do not add a second one.
+
 #endif

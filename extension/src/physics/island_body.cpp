@@ -1,6 +1,9 @@
 #include "physics/island_body.h"
 #include "mesh/dual_contour.h"
 #include <godot_cpp/classes/rendering_server.hpp>
+#include <godot_cpp/classes/resource_loader.hpp>
+#include <godot_cpp/classes/shader.hpp>
+#include <godot_cpp/classes/shader_material.hpp>
 #include <godot_cpp/classes/standard_material3d.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
@@ -70,7 +73,10 @@ bool IslandBody::spawn(RID space, RID scenario, const IslandSpawn &info,
 	const Vector3 imp(info.impulse[0], info.impulse[1], info.impulse[2]);
 	if (imp.length_squared() > 0.0f) ps->body_apply_impulse(body_, imp);
 
-	if (info.debris && volume && !volume->empty()) build_render_mesh(scenario, *volume);
+	// Atlas-backed islands already have a transformed raymarched representation in the
+	// shared terrain pass. Only debris lacks an atlas slot and gets a dynamic Godot mesh.
+	if (info.debris && scenario.is_valid() && volume && !volume->empty())
+		build_render_mesh(scenario, *volume);
 	return true;
 }
 
@@ -91,6 +97,7 @@ void IslandBody::despawn() {
 		instance_ = RID();
 	}
 	mesh_.unref();
+	render_material_.unref();
 	render_tris_ = 0;
 	asleep_ = 0.0f;
 	mass_ = 0.0f;
@@ -112,6 +119,12 @@ void IslandBody::tick(float dt) {
 void IslandBody::sync_render() {
 	if (!instance_.is_valid()) return;
 	RenderingServer::get_singleton()->instance_set_transform(instance_, transform());
+}
+
+bool IslandBody::has_cel_material() const {
+	ShaderMaterial *cel = Object::cast_to<ShaderMaterial>(render_material_.ptr());
+	if (!cel || !cel->get_shader().is_valid()) return false;
+	return cel->get_shader()->get_path() == String("res://shaders/cel_object.gdshader");
 }
 
 void IslandBody::build_render_mesh(RID scenario, const ve::VolumeData &volume) {
@@ -166,12 +179,23 @@ void IslandBody::build_render_mesh(RID scenario, const ve::VolumeData &volume) {
 	arrays[Mesh::ARRAY_INDEX] = idx;
 	mesh_.instantiate();
 	mesh_->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
-	// A plain material for M4; M6's cel pass replaces it with the shared ShaderMaterial so
-	// debris is shaded by the same GLSL as everything else (spec §7).
-	Ref<StandardMaterial3D> mat;
-	mat.instantiate();
-	mat->set_albedo(Color(0.45f, 0.42f, 0.40f));
-	mesh_->surface_set_material(0, mat);
+	Ref<StandardMaterial3D> fallback;
+	fallback.instantiate();
+	fallback->set_albedo(Color(0.45f, 0.42f, 0.40f));
+	render_material_ = fallback;
+	if (ResourceLoader::get_singleton()) {
+		Ref<Shader> shader = ResourceLoader::get_singleton()->load(
+				"res://shaders/cel_object.gdshader");
+		if (shader.is_valid()) {
+			Ref<ShaderMaterial> cel;
+			cel.instantiate();
+			cel->set_shader(shader);
+			cel->set_shader_parameter("base_color_linear", Vector3(0.45f, 0.42f, 0.40f));
+			cel->set_shader_parameter("ambient_linear", Vector3(0.16f, 0.19f, 0.26f));
+			render_material_ = cel;
+		}
+	}
+	mesh_->surface_set_material(0, render_material_);
 	render_tris_ = mb.triangle_count();
 
 	RenderingServer *rs = RenderingServer::get_singleton();

@@ -1,0 +1,114 @@
+// The shading numbers, mirrored from extension/src/shade/oct.h and extension/src/shade/cel.h.
+// There is exactly ONE of each of these functions in the engine: the raymarcher, the LoD
+// fragment shader, the deferred pass and the object material all read them from here, which
+// is what makes spec section 7's "the near/far seam is mathematically invisible" a fact
+// about the code rather than a hope.
+//
+// NOTE: never put a literal include directive inside a comment in this file -- the loader
+// matches include tokens anywhere in a line and would self-include (cycle error).
+
+const vec3 SUN_DIR = vec3(0.5746958, 0.7662610, 0.2873479); // ve::kSunDir
+
+// ---- ve::oct_encode / ve::oct_decode -------------------------------------------------
+// NOT sign(): sign(0.0) is 0 and sign(-0.0) is -0, either of which folds a normal into the
+// wrong octant. The C++ mirror uses the same >= 0 test.
+vec2 oct_sign_not_zero(vec2 v) {
+	return vec2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
+}
+
+vec2 oct_encode(vec3 n) {
+	float l1 = abs(n.x) + abs(n.y) + abs(n.z);
+	vec3 p = l1 > 0.0 ? n / l1 : vec3(0.0);
+	vec2 e = p.xy;
+	if (p.z < 0.0) e = (1.0 - abs(e.yx)) * oct_sign_not_zero(e);
+	return e;
+}
+
+vec3 oct_decode(vec2 e) {
+	vec3 v = vec3(e, 1.0 - abs(e.x) - abs(e.y));
+	if (v.z < 0.0) v.xy = (1.0 - abs(v.yx)) * oct_sign_not_zero(v.xy);
+	float l = length(v);
+	return l > 0.0 ? v / l : vec3(0.0, 0.0, 1.0);
+}
+
+// ---- ve::CelParams / ve::cel_shade ---------------------------------------------------
+const int CEL_BANDS = 4;
+const float CEL_BAND_EDGE[3] = float[3](0.08, 0.32, 0.66);
+const float CEL_BAND_LEVEL[4] = float[4](0.18, 0.45, 0.75, 1.00);
+const float CEL_SHADOW_HUE_SHIFT = 0.055;
+const float CEL_SHADOW_SATURATION = 1.35;
+const float CEL_SPEC_EDGE = 0.72;
+const float CEL_SPEC_STRENGTH = 0.45;
+const float CEL_RIM_STRENGTH = 0.35;
+const float CEL_RIM_POWER = 3.0;
+
+int cel_band(float ndl) {
+	float v = clamp(ndl, 0.0, 1.0);
+	int band = 0;
+	for (int i = 0; i < CEL_BANDS - 1; i++)
+		if (v > CEL_BAND_EDGE[i]) band = i + 1;
+	return band;
+}
+
+float cel_level(float ndl) { return CEL_BAND_LEVEL[cel_band(ndl)]; }
+
+vec3 cel_rgb_to_hsv(vec3 c) {
+	float mx = max(c.r, max(c.g, c.b));
+	float mn = min(c.r, min(c.g, c.b));
+	float d = mx - mn;
+	float h = 0.0;
+	if (d > 0.0) {
+		if (mx == c.r) h = (c.g - c.b) / d + (c.g < c.b ? 6.0 : 0.0);
+		else if (mx == c.g) h = (c.b - c.r) / d + 2.0;
+		else h = (c.r - c.g) / d + 4.0;
+		h /= 6.0;
+	}
+	return vec3(h, mx > 0.0 ? d / mx : 0.0, mx);
+}
+
+vec3 cel_hsv_to_rgb(vec3 c) {
+	float h = fract(c.x) * 6.0;
+	float s = clamp(c.y, 0.0, 1.0);
+	float v = c.z;
+	int i = int(floor(h)) % 6;
+	float f = h - floor(h);
+	float a = v * (1.0 - s);
+	float b = v * (1.0 - s * f);
+	float g = v * (1.0 - s * (1.0 - f));
+	if (i == 0) return vec3(v, g, a);
+	if (i == 1) return vec3(b, v, a);
+	if (i == 2) return vec3(a, v, g);
+	if (i == 3) return vec3(a, b, v);
+	if (i == 4) return vec3(g, a, v);
+	return vec3(v, a, b);
+}
+
+// A grey albedo has zero saturation, and multiplying zero keeps it zero, so grey is left
+// alone by the maths rather than by a branch.
+vec3 cel_shadow_tint(vec3 albedo, float t) {
+	float k = clamp(t, 0.0, 1.0);
+	vec3 hsv = cel_rgb_to_hsv(albedo);
+	hsv.x = fract(hsv.x + CEL_SHADOW_HUE_SHIFT * k);
+	hsv.y = clamp(hsv.y * (1.0 + (CEL_SHADOW_SATURATION - 1.0) * k), 0.0, 1.0);
+	return cel_hsv_to_rgb(hsv);
+}
+
+vec3 cel_shade(vec3 albedo, vec3 ambient, float ndl, float ndv, float ndh,
+		float shadow, float ao, float gloss) {
+	float sh = clamp(shadow, 0.0, 1.0);
+	float lit = cel_level(ndl) * sh;
+	vec3 tint = cel_shadow_tint(albedo, 1.0 - lit);
+	// A hard step, not a falloff: the band edge IS the highlight's silhouette.
+	float spec = (gloss > 0.0 && ndh >= CEL_SPEC_EDGE) ? gloss * CEL_SPEC_STRENGTH * sh : 0.0;
+	float rim = CEL_RIM_STRENGTH * pow(1.0 - clamp(ndv, 0.0, 1.0), CEL_RIM_POWER);
+	return tint * lit + tint * ambient * clamp(ao, 0.0, 1.0) + vec3(spec + rim);
+}
+
+// ---- ve::pack_flags bits -------------------------------------------------------------
+const uint BEAUTY_SSGI = 1u;
+const uint BEAUTY_SSR = 2u;
+const uint BEAUTY_CONTACT = 4u;
+const uint BEAUTY_OUTLINES = 8u;
+const uint BEAUTY_SUN_MAP = 16u;
+const uint BEAUTY_GLOSSY_RAYS = 32u;
+const uint BEAUTY_RAY_SUN_SHADOW = 64u;

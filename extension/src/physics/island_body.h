@@ -1,5 +1,6 @@
 #pragma once
 #include <godot_cpp/classes/array_mesh.hpp>
+#include <godot_cpp/classes/material.hpp>
 #include <godot_cpp/classes/physics_server3d.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <godot_cpp/variant/transform3d.hpp>
@@ -32,7 +33,9 @@ class IslandBody {
 public:
 	~IslandBody();
 
-	// `scenario` is the World3D scenario debris is drawn in; ignored for islands.
+	// `scenario` is the World3D scenario used by debris' cel render instance. Atlas-backed
+	// islands retain their descriptor for the existing raymarch path and intentionally do not
+	// create a second RenderingServer representation.
 	// The body's ORIGIN is the compound's centre, so it tumbles about itself, and
 	// `local_lattice_origin()` is where the volume sits relative to that.
 	bool spawn(RID space, RID scenario, const IslandSpawn &info, const ve::VolumeData *volume);
@@ -44,6 +47,7 @@ public:
 	float mass() const { return mass_; }
 	int shape_count() const { return static_cast<int>(shapes_.size()); }
 	bool has_render_mesh() const { return mesh_.is_valid(); }
+	bool has_cel_material() const;
 	int render_triangles() const { return render_tris_; }
 	const float *local_lattice_origin() const { return local_origin_; }
 
@@ -64,6 +68,7 @@ private:
 	RID body_;
 	std::vector<RID> shapes_;
 	Ref<ArrayMesh> mesh_;
+	Ref<Material> render_material_;
 	RID instance_;
 	float mass_ = 0.0f;
 	float asleep_ = 0.0f;

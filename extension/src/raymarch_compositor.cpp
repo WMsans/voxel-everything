@@ -1,24 +1,31 @@
 #include "raymarch_compositor.h"
 #include "voxel_world.h"
 #include "render/composite_pass.h"
+#include "render/deferred_pass.h"
+#include "render/inject_pass.h"
+#include "render/gbuffer.h"
+#include "render/beauty_camera.h"
+#include "render/ssgi_pass.h"
 #include "render/gpu_atlas.h"
 #include "render/hiz_pass.h"
 #include "render/lod_pool.h"
 #include "render/lod_raster_pass.h"
+#include "render/sun_shadow_pass.h"
 #include "render/lod_cull_pass.h"
 #include "lod/lod_tree.h"
 #include "render/island_cull_pass.h"
 #include "render/raymarch_pass.h"
 #include "render/world_streamer.h"
-#include <godot_cpp/classes/engine.hpp>
+#include "shade/beauty_settings.h"
+#include "shade/cel.h"
+#include "shade/sun_ortho.h"
 #include <godot_cpp/classes/render_scene_buffers_rd.hpp>
 #include <godot_cpp/classes/render_scene_data.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
-#include <godot_cpp/classes/scene_tree.hpp>
-#include <godot_cpp/classes/window.hpp>
 #include <godot_cpp/variant/projection.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <vector>
 
 using namespace godot;
@@ -37,10 +44,12 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	if (cb_type != EFFECT_CALLBACK_TYPE_PRE_OPAQUE) return;
 	if (world_path_.is_empty()) return;
 	if (!render_data) return;
-	SceneTree *tree = Object::cast_to<SceneTree>(Engine::get_singleton()->get_main_loop());
-	if (!tree) return;
-	VoxelWorld *world = Object::cast_to<VoxelWorld>(tree->get_root()->get_node_or_null(world_path_));
-	if (!world || world->get_use_local_device()) return;
+	VoxelWorld *world = nullptr;
+	if (!voxel_try_begin_compositor_callback(world_path_, &world)) return;
+	struct CallbackGuard {
+		VoxelWorld *world;
+		~CallbackGuard() { world->end_render_callback(); }
+	} callback_guard{world};
 
 	// Runs on the render thread (PRE_OPAQUE fires between the depth pre-pass and the opaque
 	// pass, outside any engine draw list); the main RenderingDevice is safe to use here.
@@ -54,6 +63,9 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	if (!rd || !rsb || !sd) return;
 	const Vector2i size = rsb->get_internal_size();
 	if (size.x <= 0 || size.y <= 0) return;
+	GpuTimings *timings = world->gpu_timings();
+	timings->begin_frame(rd);
+	auto abort_frame = [&]() { timings->abort_frame(); }; // invalidate all active markers
 
 	const Transform3D cam = sd->get_cam_transform();
 	const Projection proj = sd->get_cam_projection();
@@ -65,7 +77,10 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	// shader already handles up/down via ndc.y, so the sign is discarded.
 	const float tan_x = std::fabs(1.0f / static_cast<float>(proj.columns[0][0]));
 	const float tan_y = std::fabs(1.0f / static_cast<float>(proj.columns[1][1]));
-	if (!std::isfinite(tan_x) || !std::isfinite(tan_y) || tan_x <= 0.0f || tan_y <= 0.0f) return; // ortho/degenerate
+	if (!std::isfinite(tan_x) || !std::isfinite(tan_y) || tan_x <= 0.0f || tan_y <= 0.0f) {
+		abort_frame();
+		return; // ortho/degenerate
+	}
 
 	ve::CameraParams cp{};
 	const Vector3 right = cam.basis.get_column(0);
@@ -85,6 +100,20 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	cp.region_origin[3] = 0; // Task 11 sets the cull grid
 	const Vector3i ab = world->get_atlas_bricks();
 	cp.atlas_bricks[0] = ab.x; cp.atlas_bricks[1] = ab.y; cp.atlas_bricks[2] = ab.z;
+	const ve::BeautySettings beauty = world->beauty_settings();
+	const uint32_t beauty_flags = ve::pack_flags(beauty);
+	std::memcpy(&cp.cam_pos[3], &beauty_flags, sizeof(float));
+
+	const Projection view(cam.affine_inverse());
+	const Projection view_proj = proj * view;
+	const float cam_pos[3] = {cam.origin.x, cam.origin.y, cam.origin.z};
+	CameraUbo *ubo = world->beauty_camera();
+	if (!ubo || !ubo->ensure(rd)) {
+		abort_frame();
+		return;
+	}
+	// Device-level operation: SSGI consumes this block before its compute list opens.
+	ubo->update(rd, view_proj, cam_pos, size, 0.05f, 4000.0f);
 
 	// Volumes before anything that evaluates the field: an op naming a slot may already be
 	// in the edit log, and the streamer is about to regenerate the bricks that read it.
@@ -96,7 +125,13 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	GpuAtlas *atlas = world->atlas();
 	CompositePass *cmp = world->composite_pass();
 	MaterialAtlas *materials = world->material_atlas();
-	if (!rmp || !atlas || !cmp || !materials) return;
+	GBuffer *gb = world->gbuffer();
+	DeferredPass *deferred = world->deferred_pass();
+	InjectPass *inject = world->inject_pass();
+	if (!rmp || !atlas || !cmp || !materials || !gb || !deferred || !inject) {
+		abort_frame();
+		return;
+	}
 
 	float edit_state[6] = {0, 0, 0, 0, 0, 0};
 	if (st && st->last_edit_radius() > 0.0f) {
@@ -110,25 +145,39 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 
 	const int rw = static_cast<int>(size.x * 0.66f);
 	const int rh = static_cast<int>(size.y * 0.66f);
-	if (rw <= 0 || rh <= 0) return;
+	if (rw <= 0 || rh <= 0) {
+		abort_frame();
+		return;
+	}
 	const int islands = world->island_slot_count();
 	IslandCullPass *cull = world->island_cull();
 	RID mask;
+	timings->begin(rd, "raymarch");
 	if (cull && islands > 0 && cull->render(rd, *world->islands(), cp, rw, rh, islands)) {
 		mask = cull->mask_buffer();
 		cp.region_origin[3] = cull->tiles_x();
 		cp.atlas_bricks[3] = cull->tiles_y();
 	}
 	cp.dims[3] = islands;
-	if (!rmp->render(rd, *atlas, world->islands(), mask, cp, rw, rh, edit_state)) return;
+	const RID effective_mask = mask.is_valid() ? mask : world->islands()->fallback_mask();
+	// If the island cull mask/target size changes, RaymarchPass releases its old target
+	// textures. CompositePass owns a uniform set that references those textures, so drop that
+	// dependent set first rather than later attempting to free a cascade-invalid RID.
+	if (rmp->targets_need_rebuild(rw, rh, effective_mask)) {
+		cmp->release_targets();
+		cmp->invalidate_uniform_set(rd);
+	}
+	if (!rmp->render(rd, *atlas, world->islands(), mask, cp, rw, rh, edit_state)) {
+		timings->cancel("raymarch");
+		abort_frame();
+		return;
+	}
+	timings->end(rd, "raymarch");
 
-	const Projection view(cam.affine_inverse());
-	const Projection view_proj = proj * view;
 	// Master-API note: rsb->get_color_texture()/get_depth_texture() exist on godot-cpp master
 	// (render_scene_buffers_rd.hpp) and return the non-MSAA internal color/depth textures —
 	// the same RIDs the engine's own framebuffers use when MSAA is disabled (verified against
 	// render_forward_clustered.cpp), so the composite writes into the actual scene buffers.
-	const float cam_pos[3] = {cam.origin.x, cam.origin.y, cam.origin.z};
 	// Both fields fade at the SAME two distances, and those distances follow how far the
 	// near field's bricks actually reach this frame -- not the spec's 120/150, which assumes
 	// an atlas three times this one. Read once here so the composite and every far-field
@@ -136,19 +185,28 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	float fade_start = ve::kLodFadeStartM;
 	float fade_end = ve::kLodFadeEndM;
 	world->lod_fade_band(&fade_start, &fade_end);
-	cmp->draw(rd, rsb->get_color_texture(), rsb->get_depth_texture(),
-			rmp->color_texture(), rmp->hitpos_texture(), view_proj, *materials,
-			cam_pos, fade_start, fade_end);
+	if (!gb->ensure(rd, rsb, size)) {
+		abort_frame();
+		return;
+	}
+	timings->begin(rd, "composite");
+	cmp->draw(rd, *gb, rmp->albedo_texture(), rmp->surface_texture(), rmp->hitpos_texture(),
+			view_proj, *materials, cam_pos, fade_start, fade_end);
+	if (!cmp->last_draw_ok()) {
+		timings->cancel("composite");
+		abort_frame();
+		return;
+	}
+	timings->end(rd, "composite");
 
-	// Far field: after the composite the scene depth holds exact near-field occluders. Build
-	// the HiZ pyramid from it for the GPU cull (Task 15) and the coarse async readback for the
-	// CPU walk, then draw the LoD raster against the same depth buffer. The CPU walk gets the
-	// occlusion interface: stale readback may delay a build, never hide a chunk.
+	// Build HiZ from the near field's G-buffer depth before the LoD producer runs. The
+	// deferred pass consumes both producers below, so neither field is shaded twice.
 	HizPass *hiz = world->hiz_pass();
 	bool hiz_built = false;
-	if (hiz) hiz_built = hiz->build(rd, rsb->get_depth_texture(), size);
+	if (hiz) hiz_built = hiz->build(rd, gb->depth(), size);
 	LodRasterPass *lod_raster = world->lod_raster_pass();
 	LodCullPass *lod_cull = world->lod_cull_pass();
+	SunShadowPass *sun = world->sun_shadow_pass();
 	if (world->lod_pool() && lod_raster && world->material_atlas()) {
 		ve::LodCamera lod_cam;
 		for (int c = 0; c < 4; c++)
@@ -160,22 +218,53 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 		lod_cam.viewport[0] = size.x;
 		lod_cam.viewport[1] = size.y;
 		world->lod_tick(lod_cam, hiz ? hiz->occlusion() : nullptr);
-		// Ordering: the indirect args upload (a device-level command) must precede the
-		// cull's compute list, and the cull's compute list must end before the raster's
-		// draw list opens. draw() only issues the indirect draw.
-		// Fail-soft: only cull against a pyramid that was successfully rebuilt this frame.
-		// A failed initial build means the single-pass draw-all path (no GPU cull).
+		const bool use_sun_shadow = sun && (beauty_flags & ve::kFlagSunMap) != 0u;
+		auto build_sun_shadow = [&]() {
+			if (!use_sun_shadow) return;
+			world->prepare_lod_shadow_raster();
+			timings->begin(rd, "sun_shadow");
+			const ve::WorldBounds wb = world->world_bounds();
+			float lo[3];
+			float hi[3];
+			wb.aabb(lo, hi);
+			const bool shadow_ok = sun->build(rd, *world->lod_pool(), *lod_raster,
+					ve::sun_ortho(ve::kSunDir, lo, hi, SunShadowPass::kSize), false);
+			if (shadow_ok) timings->end(rd, "sun_shadow");
+			else timings->cancel("sun_shadow");
+			world->prepare_lod_raster();
+		};
+		// Device-level indirect-argument uploads precede the cull list; draw() only opens
+		// its own list after any cull list has ended. The first LoD occurrence is deliberately
+		// before the sun-map build; the second follows it, so the parser never double-counts
+		// shadow work as LoD work.
 		const bool two_phase = lod_cull && lod_cull->is_valid() && hiz && hiz->pyramid().is_valid() &&
 				hiz_built;
 		if (!two_phase) {
-			// Fallback: the pre-trigger single pass. No cull means every candidate draws.
-			world->lod_pool()->upload_draw_args(lod_raster->draw_pages());
-			lod_raster->draw(rd, *world->lod_pool(), *materials,
-					rsb->get_color_texture(), rsb->get_depth_texture(), view_proj, cam_pos,
-					lod_raster->draw_page_count(), fade_start, fade_end);
+			const std::vector<LodRasterPass::PageDraw> draw_pages = lod_raster->draw_pages();
+			const bool split_for_shadow = use_sun_shadow && draw_pages.size() > 1;
+			const size_t first_count = split_for_shadow ? (draw_pages.size() + 1) / 2 : draw_pages.size();
+			std::vector<LodRasterPass::PageDraw> first_draw(draw_pages.begin(), draw_pages.begin() + first_count);
+			std::vector<LodRasterPass::PageDraw> second_draw(draw_pages.begin() + first_count, draw_pages.end());
+			if (!first_draw.empty()) {
+				world->lod_pool()->upload_draw_args(first_draw);
+				timings->begin(rd, "lod");
+				const bool first_lod_ok = lod_raster->draw(rd, *world->lod_pool(), *materials, *gb,
+						view_proj, cam_pos, static_cast<int>(first_draw.size()), fade_start, fade_end);
+				if (!first_lod_ok) { timings->cancel("lod"); timings->abort_frame(); return; }
+				timings->end(rd, "lod");
+			}
+			build_sun_shadow();
+			if (!second_draw.empty()) {
+				world->lod_pool()->upload_draw_args(second_draw);
+				timings->begin(rd, "lod");
+				const bool second_lod_ok = lod_raster->draw(rd, *world->lod_pool(), *materials, *gb,
+						view_proj, cam_pos, static_cast<int>(second_draw.size()), fade_start, fade_end);
+				if (!second_lod_ok) { timings->cancel("lod"); timings->abort_frame(); return; }
+				timings->end(rd, "lod");
+			}
 		} else {
-			// Temporal second phase (spec 7.5): draw last frame's visible set first, rebuild
-			// HiZ with those far-field depth writes, then cull and draw the remainder.
+			// Draw the previous visible set, then place sun shadow between it and the culled
+			// remainder. A failed HiZ rebuild still falls back to drawing all remaining pages.
 			const std::vector<LodRasterPass::PageDraw> &draw_pages = lod_raster->draw_pages();
 			const std::vector<int> &last_visible = lod_cull->last_visible_pages();
 			std::vector<LodRasterPass::PageDraw> first_pass_draw;
@@ -183,35 +272,27 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 			first_pass_draw.reserve(draw_pages.size());
 			remaining_draw.reserve(draw_pages.size());
 			for (const LodRasterPass::PageDraw &pd : draw_pages) {
-				if (std::binary_search(last_visible.begin(), last_visible.end(), pd.page)) {
+				if (std::binary_search(last_visible.begin(), last_visible.end(), pd.page))
 					first_pass_draw.push_back(pd);
-				} else {
+				else
 					remaining_draw.push_back(pd);
-				}
 			}
-
 			std::vector<int> first_pass_pages;
 			first_pass_pages.reserve(first_pass_draw.size());
-			for (const LodRasterPass::PageDraw &pd : first_pass_draw)
-				first_pass_pages.push_back(pd.page);
-
+			for (const LodRasterPass::PageDraw &pd : first_pass_draw) first_pass_pages.push_back(pd.page);
 			const int first_pass_count = static_cast<int>(first_pass_draw.size());
 			const int remaining_count = static_cast<int>(remaining_draw.size());
 			const int total_count = lod_raster->draw_page_count();
-
 			if (first_pass_count > 0) {
 				world->lod_pool()->upload_draw_args(first_pass_draw);
-				lod_raster->draw(rd, *world->lod_pool(), *materials,
-						rsb->get_color_texture(), rsb->get_depth_texture(), view_proj,
-						cam_pos, first_pass_count, fade_start, fade_end);
-				// The second build includes the first pass's far-field depth, so the cull of
-				// the remainder can see far occluders that the near-field-only pyramid missed.
-				// With no remaining pass there is nothing to cull, so skip the extra rebuild.
-				if (remaining_count > 0) {
-					hiz_built = hiz->build(rd, rsb->get_depth_texture(), size);
-				}
+				timings->begin(rd, "lod");
+				const bool first_lod_ok = lod_raster->draw(rd, *world->lod_pool(), *materials, *gb,
+						view_proj, cam_pos, first_pass_count, fade_start, fade_end);
+				if (!first_lod_ok) { timings->cancel("lod"); timings->abort_frame(); return; }
+				timings->end(rd, "lod");
+				if (remaining_count > 0) hiz_built = hiz->build(rd, gb->depth(), size);
 			}
-
+			build_sun_shadow();
 			if (remaining_count > 0) {
 				world->lod_pool()->upload_draw_args(remaining_draw);
 				if (hiz_built) {
@@ -219,23 +300,64 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 					lod_cull->run(rd, *world->lod_pool(), hiz, view_proj, remaining_count,
 							total_count, first_pass_count);
 				} else {
-					// The second build failed: never cull against a pyramid that was not
-					// rebuilt with this frame's far-field depth. Draw the remainder unculled
-					// and record the full visible set so the next temporal pass is accurate.
 					std::vector<int> visible = first_pass_pages;
-					for (const LodRasterPass::PageDraw &pd : remaining_draw)
-						visible.push_back(pd.page);
+					for (const LodRasterPass::PageDraw &pd : remaining_draw) visible.push_back(pd.page);
 					lod_cull->set_last_visible_pages(visible);
 				}
-				lod_raster->draw(rd, *world->lod_pool(), *materials,
-						rsb->get_color_texture(), rsb->get_depth_texture(), view_proj,
-						cam_pos, remaining_count, fade_start, fade_end);
+				timings->begin(rd, "lod");
+				const bool remaining_lod_ok = lod_raster->draw(rd, *world->lod_pool(), *materials, *gb,
+						view_proj, cam_pos, remaining_count, fade_start, fade_end);
+				if (!remaining_lod_ok) { timings->cancel("lod"); timings->abort_frame(); return; }
+				timings->end(rd, "lod");
 			} else {
-				// No remaining pass means no async args readback will refresh the visible
-				// set. Record exactly what this frame's first pass drew, including an empty
-				// set when every candidate is new (first_pass_count == 0).
 				lod_cull->set_last_visible_pages(first_pass_pages);
 			}
 		}
 	}
+
+	SsgiPass *ssgi = world->ssgi_pass();
+	if (ssgi) ssgi->clear_result();
+	bool ssgi_ok = false;
+	if (ssgi && beauty.ssgi) {
+		timings->begin(rd, "ssgi");
+		ssgi_ok = ssgi->render(rd, *gb, ubo->buffer(), world->prev_view_proj(),
+				world->has_history(), beauty, world->beauty_frame());
+		if (ssgi_ok) timings->end(rd, "ssgi");
+		else timings->cancel("ssgi");
+	}
+
+	DeferredPass::Params dp;
+	const Projection inv = view_proj.inverse();
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++)
+			dp.inv_view_proj[c * 4 + r] = inv.columns[c][r];
+	dp.cam_pos[0] = cam.origin.x;
+	dp.cam_pos[1] = cam.origin.y;
+	dp.cam_pos[2] = cam.origin.z;
+	dp.flags = beauty_flags;
+	static const float kNoSun[16] = {};
+	const bool use_sun = sun && sun->is_valid() && sun->rebuilds() > 0 &&
+			(beauty_flags & ve::kFlagSunMap) != 0u;
+	timings->begin(rd, "deferred");
+	const bool deferred_ok = deferred->render(rd, *gb, *materials, ssgi_ok ? ssgi->result() : RID(),
+			use_sun ? sun->map() : RID(), use_sun ? sun->view_proj() : kNoSun,
+			use_sun ? sun->texel_world() : 0.0f, dp);
+	if (!deferred_ok) {
+		timings->cancel("deferred");
+		abort_frame();
+		return;
+	}
+	timings->end(rd, "deferred");
+	timings->begin(rd, "inject");
+	if (!inject->draw(rd, rsb->get_color_texture(), rsb->get_depth_texture(), gb->lit(), gb->depth())) {
+		timings->cancel("inject");
+		abort_frame();
+		return;
+	}
+	timings->end(rd, "inject");
+	float current_view_proj[16];
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++) current_view_proj[c * 4 + r] = view_proj.columns[c][r];
+	world->finish_beauty_frame(current_view_proj);
+
 }

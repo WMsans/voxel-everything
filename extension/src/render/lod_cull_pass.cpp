@@ -94,6 +94,10 @@ bool LodCullPass::initialize(RenderingDevice *rd) {
 
 void LodCullPass::teardown() {
 	if (!rd_) return;
+	// Complete pending staging-buffer callbacks while their source buffer and RefCounted
+	// targets are still alive; RenderingDevice has no cancellation operation.
+	if (stats_readback_.is_valid()) stats_readback_->drain(rd_);
+	if (args_readback_.is_valid()) args_readback_->drain(rd_);
 	// Uniform set first: it references the shader, stats, and pool buffers.
 	if (uset_.is_valid()) rd_->free_rid(uset_);
 	uset_ = RID();

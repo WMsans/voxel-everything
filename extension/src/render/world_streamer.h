@@ -35,6 +35,9 @@ public:
 	// Returns the number of actions taken (loads + evicts + edit-mark jobs). Records ONE
 	// compute list; the caller submits. buffer_update calls happen before the list opens.
 	int run_frame(RenderingDevice *rd, float cx, float cy, float cz);
+	// RenderingDevice has no async-readback cancellation. Called on the owning render thread
+	// before atlas buffers are freed so every pending Callable target is completed first.
+	void drain_readbacks(RenderingDevice *rd);
 
 	int last_frame_edits() const { return frame_edits_; }
 	// --- profiling (diagnostic only; see VoxelWorld::debug_perf_stats) ---

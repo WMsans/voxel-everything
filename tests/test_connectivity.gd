@@ -114,6 +114,10 @@ func test_the_grid_and_the_flood_find_a_severed_pillar_top(timeout := 120000) ->
 	var st: Dictionary = w.debug_island_stats()
 	assert_int(st["islands_spawned"]).override_failure_message(
 		"nothing came loose: %s" % st).is_greater(0)
+	# Production atlas-backed islands remain raymarched; creating a second mesh would
+	# duplicate large islands and shade them twice.
+	assert_int(st["live_atlas_islands"]).is_greater(0)
+	assert_int(st["live_island_render_meshes"]).is_equal(0)
 	# The top is no longer part of the static field: it is a body now.
 	assert_bool(solid_at(w, top)).override_failure_message(
 		"the severed top is still in the terrain (the carve did not happen)").is_false()
