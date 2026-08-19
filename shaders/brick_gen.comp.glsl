@@ -5,6 +5,12 @@
 #define FIELD_VOLUME_SDF_BINDING 8
 #define FIELD_VOLUME_MAT_BINDING 9
 #include "common.glslh"
+// The region's ops that can reach THIS brick, in append order, as pool-relative indices.
+// The filter is compacted serially after the parallel keep test so CSG order is preserved.
+shared uint s_ops[256];
+shared uint s_op_n;
+shared uint s_keep[256];
+#define FIELD_OP_INDEX(base, i) ((base) + s_ops[i])
 #include "field.glslh"
 #include "brick_layout.glslh"
 
@@ -90,6 +96,23 @@ void main() {
 	uint op_base = uint(j1.x) * MAX_REGION_OPS;
 	uint op_count = uint(j1.y);
 
+	// Test in parallel, compact serially. atomicAdd would compact too, but it would also
+	// scramble the order, and an ordered CSG list whose order is gone is a different world.
+	vec3 brick_lo = vec3(brick) * BRICK_SIZE;
+	vec3 brick_hi = brick_lo + vec3(BRICK_SIZE);
+	if (tid < op_count)
+		s_keep[tid] = op_touches_aabb(op_base + tid, brick_lo, brick_hi,
+				0.15 + VOXEL_SIZE) ? 1u : 0u;
+	if (tid == 0u) s_op_n = 0u;
+	barrier();
+	if (tid == 0u) {
+		uint n = 0u;
+		for (uint i = 0u; i < op_count; i++)
+			if (s_keep[i] != 0u) s_ops[n++] = i;
+		s_op_n = n;
+	}
+	barrier();
+
 	ivec3 sdf_base = atlas_base(slot, pc.atlas_bricks.xyz, BRICK_SDF_STRIDE);
 	ivec3 mat_base = atlas_base(slot, pc.atlas_bricks.xyz, BRICK_VOXELS);
 	vec3 bo = vec3(brick) * BRICK_SIZE;
@@ -101,7 +124,7 @@ void main() {
 		ivec3 v = cell_coord(i);
 		float sdf;
 		uint mat;
-		eval_field(bo + vec3(v) * VOXEL_SIZE, op_base, op_count, sdf, mat);
+		eval_field(bo + vec3(v) * VOXEL_SIZE, op_base, s_op_n, sdf, mat);
 		imageStore(sdf_atlas, sdf_base + v, vec4(quantise_sdf(sdf)));
 		s_mat[i] = mat;
 	}
@@ -119,7 +142,7 @@ void main() {
 		if (v.x < BRICK_VOXELS && v.y < BRICK_VOXELS && v.z < BRICK_VOXELS) continue;
 		float sdf;
 		uint mat;
-		eval_field(bo + vec3(v) * VOXEL_SIZE, op_base, op_count, sdf, mat);
+		eval_field(bo + vec3(v) * VOXEL_SIZE, op_base, s_op_n, sdf, mat);
 		imageStore(sdf_atlas, sdf_base + v, vec4(quantise_sdf(sdf)));
 		if (mat == 0u) continue;
 		ivec3 c = min(v, ivec3(BRICK_VOXELS - 1));
@@ -150,7 +173,7 @@ void main() {
 			// mat2 is a GLSL reserved word (the 2x2 matrix type), so the plan's variable
 			// name is rejected by glslang; renamed to matB, no semantic change.
 			uint matB;
-			eval_field(bo + vec3(v) * VOXEL_SIZE - g / len * t, op_base, op_count, sdf2, matB);
+			eval_field(bo + vec3(v) * VOXEL_SIZE - g / len * t, op_base, s_op_n, sdf2, matB);
 			s_mat[i] = matB;
 		}
 	}

@@ -117,6 +117,37 @@ void sample_field_volume(int slot, vec3 origin, float voxel, int dim, vec3 p,
 }
 #endif
 
+// Conservative mirror of ve::op_world_aabb/ve::op_touches_aabb. The box clearance
+// margin is intentionally not part of the op AABB: the CPU range calculation uses the
+// same activation and lattice pads around this stored box.
+bool op_touches_aabb(uint index, vec3 lo, vec3 hi, float pad) {
+	uvec4 a = field_op_pool.v[index * 2u + 0u];
+	uvec4 b = field_op_pool.v[index * 2u + 1u];
+	uint type = a.x;
+	vec3 c = vec3(uintBitsToFloat(a.z), uintBitsToFloat(a.w), uintBitsToFloat(b.x));
+	float radius = uintBitsToFloat(b.y);
+	vec3 op_lo;
+	vec3 op_hi;
+	if (type == OP_BOX_SUBTRACT) {
+		vec3 n = vec3(float(b.z & 0x3FFu), float((b.z >> 10) & 0x3FFu),
+				float((b.z >> 20) & 0x3FFu));
+		op_lo = c;
+		op_hi = c + n * OCCUPANCY_CELL_SIZE;
+	} else if (type == OP_VOLUME_ADD) {
+		float span = float(int(b.w) - 1) * radius;
+		op_lo = c;
+		op_hi = c + vec3(span);
+	} else {
+		op_lo = c - vec3(radius);
+		op_hi = c + vec3(radius);
+	}
+	for (int axis = 0; axis < 3; axis++) {
+		if (op_lo[axis] - pad > hi[axis]) return false;
+		if (op_hi[axis] + pad < lo[axis]) return false;
+	}
+	return true;
+}
+
 void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat) {
 	uvec4 a = field_op_pool.v[index * 2u + 0u];
 	uvec4 b = field_op_pool.v[index * 2u + 1u];
@@ -160,8 +191,16 @@ void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat) {
 	}
 }
 
+// How a caller names the pool index of its i-th op. The default is the region's list in
+// order; a caller that has pre-filtered the list into shared memory redefines this BEFORE
+// including this file, and passes its own count. There is exactly one loop either way.
+#ifndef FIELD_OP_INDEX
+#define FIELD_OP_INDEX(base, i) ((base) + (i))
+#endif
+
 // op_base is the index of the region's first op in the pool (region_slot * MAX_REGION_OPS).
 void eval_field(vec3 p, uint op_base, uint op_count, out float sdf, out uint mat) {
 	base_field(p, sdf, mat);
-	for (uint i = 0u; i < op_count; i++) apply_field_op(op_base + i, p, sdf, mat);
+	for (uint i = 0u; i < op_count; i++)
+		apply_field_op(FIELD_OP_INDEX(op_base, i), p, sdf, mat);
 }
