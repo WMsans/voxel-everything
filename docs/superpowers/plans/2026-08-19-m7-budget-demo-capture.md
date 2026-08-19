@@ -3411,7 +3411,35 @@ where this plan's text met reality and lost.
    **not** claimed as cost-view evidence. Interactive cost-view screenshot capture remains
    unavailable in this environment; the exact attempted alternative frame is
    `/tmp/m7-task2-cost-view.png` (ordinary demo frame only).
-3. _(Task 3, Step 13: brick flags measured delta — to be filled)_
+3. **Task 3, Step 13: brick flags measured delta — null result and required revert**
+
+   Command: `WAYLAND_DISPLAY=wayland-1 tools/run_benchmarks.sh m7-task3`.
+   Environment: Godot 4.7.1, Vulkan 1.4.341, NVIDIA GeForce RTX 4070 Laptop GPU,
+   Wayland, requested 2560x1440, requested V-Sync disabled. The run emitted
+   `WARNING: The requested V-Sync mode Disabled is not available. Falling back to V-Sync mode Enabled.`
+   The benchmark's exact timing line was `BENCH timing_condition display_driver=Wayland
+   vsync_requested=disabled vsync_actual=disabled verdict_qualified=false`; therefore these
+   are qualified relative GPU comparisons, not an unqualified display/frame-budget PASS.
+
+   | leg | Task 1 baseline p50/p99 ms | Task 3 pre-revert p50/p99 ms | p50 delta |
+   |---|---:|---:|---:|
+   | steady | 6.294 / 7.910 | 6.307 / 7.935 | +0.21% |
+   | move | 6.354 / 7.571 | 6.379 / 7.865 | +0.39% |
+   | ridge | 6.016 / 8.724 | 5.947 / 8.296 | -1.15% |
+   | edit | 10.533 / 14.263 | 10.815 / 14.365 | +2.68% |
+   | island | 6.666 / 8.475 | 6.746 / 8.516 | +1.20% |
+
+   Exact Task 3 evidence (each process exited 0; lines copied from the five leg files):
+
+   - steady: `BENCH gpu_raymarch samples=287 p50_ms=6.307 p99_ms=7.935`; `BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN`; `BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false`
+   - move: `BENCH gpu_raymarch samples=287 p50_ms=6.379 p99_ms=7.865`; `BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN`; `BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false`
+   - ridge: `BENCH gpu_raymarch samples=287 p50_ms=5.947 p99_ms=8.296`; `BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN`; `BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false`
+   - edit: `BENCH gpu_raymarch samples=287 p50_ms=10.815 p99_ms=14.365`; `BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN`; `BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false`
+   - island: `BENCH gpu_raymarch samples=807 p50_ms=6.746 p99_ms=8.516`; `BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN`; `BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false`
+
+   Every p50 delta was under 3%, so the Task 3 marcher change was reverted as required.
+   The conservative flag buffer and its mark/generator bindings remain for Task 4. This is
+   a null performance result; no Task 3 PASS is claimed.
 4. _(Task 4, Step 8: region DDA measured delta — to be filled)_
 5. _(Task 5, Step 12: op filtering measured delta — to be filled)_
 6. _(Task 8, Step 7: consolidation measured delta and overflow verdict — to be filled)_
