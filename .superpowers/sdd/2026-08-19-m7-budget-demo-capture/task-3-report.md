@@ -207,3 +207,50 @@ steady +0.21%   move +0.39%   ridge -1.15%   edit +2.68%   island +1.20%
 The committed decision is the required null result: revert the marcher gate, retain the
 conservative flag buffer/bindings for Task 4, and claim no Task 3 performance PASS. The source
 benchmark lines contain `raymarch=WARN` and `frame=WARN`; only process exit status was zero.
+
+## Round 2 fix report
+
+### Finding — invalid shader-verification evidence
+
+The Round 1 focused shader snippet was not valid executable evidence: it listed the temporary
+`/tmp/task3-round1-brick_gen.comp.glsl` source path as a command, and its stated check did not
+assert the complete ordering. It is replaced here with a direct source-order check against the
+repository shader. This verifies the implemented sequence: palette SSBO write, buffer fence,
+workgroup barrier, palette read, then flag publication. It does not claim standalone GLSL/SPIR-V
+compilation; the targeted GPU test remains recorded above as the loader-compiled coverage.
+
+Exact focused verification command:
+
+```text
+python3 - <<'PY'
+from pathlib import Path
+
+source = Path("shaders/brick_gen.comp.glsl").read_text()
+markers = {
+    "palette_write": "palette_buf.id[slot * 4 + a] = s_pal[order[a]];",
+    "buffer_barrier": "memoryBarrierBuffer();",
+    "workgroup_barrier": "\n\tbarrier();",
+    "palette_read": "if (palette_buf.id[slot * 4] != 0u)",
+    "flag_publication": "brick_flags.v[slot] = f;",
+}
+positions = {}
+for name, marker in markers.items():
+    start = positions["buffer_barrier"] if name == "workgroup_barrier" else 0
+    positions[name] = source.index(marker, start)
+assert positions["palette_write"] < positions["buffer_barrier"] < positions["workgroup_barrier"] < positions["palette_read"] < positions["flag_publication"]
+for name, position in positions.items():
+    print(f"{name}: line {source.count(chr(10), 0, position) + 1}")
+print("PASS: palette SSBO write -> memoryBarrierBuffer() -> barrier() -> palette read -> flag publication")
+PY
+```
+
+Exact output:
+
+```text
+palette_write: line 181
+buffer_barrier: line 188
+workgroup_barrier: line 189
+palette_read: line 264
+flag_publication: line 265
+PASS: palette SSBO write -> memoryBarrierBuffer() -> barrier() -> palette read -> flag publication
+```
