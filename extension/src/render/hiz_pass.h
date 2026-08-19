@@ -37,6 +37,9 @@ public:
 
 	// Debug/test support used by VoxelWorld::debug_hiz_*.
 	RID readback_texture() const { return readback_tex_; }
+	bool readback_pending() const { return readback_.is_valid() && readback_->pending(); }
+	bool readback_was_pending_at_teardown() const { return readback_was_pending_at_teardown_; }
+	bool readback_was_drained_at_teardown() const { return readback_was_drained_at_teardown_; }
 	// Drops the cached level-0 uniform set before an external scene-depth source is freed.
 	// Freeing a texture cascades to referencing uniform sets, so the cache must not try to
 	// free the already-cascade-freed set on the next build.
@@ -69,6 +72,8 @@ private:
 	RID uset0_src_;
 	HizOcclusion occlusion_;
 	Ref<AsyncTextureRead> readback_;
+	bool readback_was_pending_at_teardown_ = false;
+	bool readback_was_drained_at_teardown_ = true;
 };
 
 } // namespace godot

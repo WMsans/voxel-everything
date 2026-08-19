@@ -217,9 +217,12 @@ class VoxelWorld : public Node3D {
 	mutable std::mutex render_lifetime_mutex_;
 	std::condition_variable render_lifetime_cv_;
 	bool render_shutting_down_ = false;
+	bool render_teardown_deferred_ = false;
 	int render_callbacks_ = 0;
 	std::condition_variable gpu_teardown_cv_;
 	bool gpu_teardown_done_ = false;
+	bool last_hiz_readback_was_pending_ = false;
+	bool last_hiz_readback_was_drained_ = true;
 
 	void teardown_gpu(); // every GPU object; CPU cores survive
 	void shutdown_render_resources_on_render_thread();
@@ -563,6 +566,7 @@ public:
 	Dictionary debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, bool skip_lod = false);
 	// --- M5 Task 14 HiZ hooks ---
 	Dictionary debug_hiz_stats();
+	Dictionary debug_hiz_shutdown_probe();
 	Dictionary debug_gbuffer_stats(int w, int h);
 	Dictionary debug_hiz_probe_synthetic(float far_value, float near_value);
 	bool debug_hiz_occluded(Vector2 lo, Vector2 hi, float depth);
