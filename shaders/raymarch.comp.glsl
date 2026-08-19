@@ -96,7 +96,9 @@ float sdf_near(vec3 p, ivec3 anchor, int anchor_slot) {
 	return brick_sdf(slot, (p - vec3(brick) * BRICK_SIZE) / VOXEL_SIZE);
 }
 
-vec3 calc_normal(vec3 p, ivec3 anchor, int anchor_slot) {
+vec3 calc_normal(vec3 p, ivec3 anchor, int anchor_slot, inout int steps_left) {
+	if (steps_left < 6) return vec3(0.0, 1.0, 0.0);
+	steps_left -= 6;
 	const float e = 0.01;
 	return normalize(vec3(
 		sdf_near(p + vec3(e, 0, 0), anchor, anchor_slot) - sdf_near(p - vec3(e, 0, 0), anchor, anchor_slot),
@@ -145,6 +147,12 @@ const int ISLAND_VOXELS = 262144;   // 64^3
 const int ISLAND_MIP_STRIDE = 8;    // ve::kVolumeMipStride
 const int ISLAND_MIP_CELLS = 8;     // ISLAND_DIM / ISLAND_MIP_STRIDE
 const int ISLAND_MIP_PER_SLOT = 512;
+
+const float GLOSSY_SDF_MAX_DIST = 20.0;
+const int GLOSSY_SDF_STEPS = 64;
+const float GLOSSY_SDF_MIN_GLOSS = 0.5;
+const float GLOSSY_SDF_BIAS = 0.06;
+const float GLOSSY_SDF_STRENGTH = 0.80;
 
 layout(set = 0, binding = 13, std430) readonly buffer IslandSdf { uint w[]; } island_sdf;
 layout(set = 0, binding = 14, std430) readonly buffer IslandMat { uint w[]; } island_mat;
@@ -253,7 +261,7 @@ struct Hit {
 
 // Sphere-traces one island. `best` is updated only when this island is nearer, so calling it
 // for every island in the tile's mask resolves "nearest hit wins" with no sorting.
-void march_island(int slot, vec3 ro, vec3 rd, inout Hit best) {
+void march_island(int slot, vec3 ro, vec3 rd, inout Hit best, inout int steps_left) {
 	Island isl;
 	if (!island_load(slot, isl)) return;
 
@@ -272,12 +280,13 @@ void march_island(int slot, vec3 ro, vec3 rd, inout Hit best) {
 
 	float t = t0;
 	float cell_m = float(ISLAND_MIP_STRIDE) * isl.voxel;
-	for (int k = 0; k < 192; k++) {
+	for (int k = 0; k < 192 && steps_left > 0; k++) {
 		if (t > t1) return;
 		vec3 q = ro_l + rd_l * t;
 		ivec3 c = clamp(ivec3(floor((q - isl.lo) / cell_m)), ivec3(0),
 				ivec3(ISLAND_MIP_CELLS - 1));
 		if (!island_cell_has_surface(slot, c)) {
+			steps_left--;
 			// Jump to the cell's exit face, exactly as the brick march does, with a floor on
 			// the step so a ray grazing a face still makes progress.
 			vec3 clo = isl.lo + vec3(c) * cell_m;
@@ -289,14 +298,20 @@ void march_island(int slot, vec3 ro, vec3 rd, inout Hit best) {
 			t += max(min(tf.x, min(tf.y, tf.z)), 0.002);
 			continue;
 		}
+		if (steps_left <= 0) return;
+		steps_left--;
 		float d = island_sdf_at(slot, isl, q);
 		if (d < 0.002) {
 			for (int r = 0; r < 4; r++) { // secant refinement, as the terrain march does
+				if (steps_left <= 0) return;
+				steps_left--;
 				q = ro_l + rd_l * t;
 				t += island_sdf_at(slot, isl, q) * 0.5;
 			}
 			if (t > best.t) return; // refinement pushed it behind the current winner
 			q = ro_l + rd_l * t;
+			if (steps_left < 6) return;
+			steps_left -= 6;
 			const float e = 0.5 * 0.05;
 			vec3 n_l = normalize(vec3(
 				island_sdf_at(slot, isl, q + vec3(e, 0, 0)) -
@@ -318,7 +333,7 @@ void march_island(int slot, vec3 ro, vec3 rd, inout Hit best) {
 
 // The M1/M2 terrain march, unchanged in behaviour, returning a hit record instead of a
 // colour so an island can outrank it.
-Hit march_terrain(vec3 ro, vec3 rd, float max_dist) {
+Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
 	Hit h;
 	h.hit = false;
 	h.t = max_dist;
@@ -343,12 +358,13 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist) {
 		if (slot >= 0 && brick_may_have_surface(slot)) {
 			bool has_material = palette_buf.ids[slot * 4] != 0u;
 			float t = t_prev;
-			for (int j = 0; j < 64; j++) {
+			for (int j = 0; j < 64 && steps_left > 0; j++) {
 				if (t > t_exit) break;
 				vec3 p = ro + rd * t;
 				vec3 vox = (p - vec3(map) * BRICK_SIZE) / VOXEL_SIZE;
 				ivec3 cell8 = clamp(ivec3(floor(vox * 0.5)), ivec3(0), ivec3(7));
 				if (!cell8_may_have_surface(slot, cell8)) {
+					steps_left--;
 					vec3 cell_lo = vec3(map) * BRICK_SIZE + vec3(cell8 * 2) * VOXEL_SIZE;
 					vec3 cell_hi = cell_lo + 2.0 * VOXEL_SIZE;
 					vec3 far = mix(cell_lo, cell_hi, step(0.0, rd));
@@ -359,9 +375,13 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist) {
 					t = min(t + max(min(tf.x, min(tf.y, tf.z)), 0.002), t_exit);
 					continue;
 				}
+				if (steps_left <= 0) break;
+				steps_left--;
 				float d = world_sdf(p);
 				if (d < 0.002 && has_material) {
 					for (int k = 0; k < 4; k++) {
+						if (steps_left <= 0) return h;
+						steps_left--;
 						float dk = world_sdf(p);
 						t += dk * 0.5;
 						p = ro + rd * t;
@@ -369,7 +389,7 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist) {
 					h.hit = true;
 					h.t = t;
 					h.p = p;
-					h.n = calc_normal(p, map, slot);
+					h.n = calc_normal(p, map, slot, steps_left);
 					h.mat = material_at(p, map, slot);
 					return h;
 				}
@@ -460,7 +480,8 @@ void main() {
 		+ pc.cam_up.xyz * ndc.y * pc.params.y);
 	float max_dist = pc.params.z;
 
-	Hit best = march_terrain(ro, rd, max_dist);
+	int primary_steps = 65536;
+	Hit best = march_terrain(ro, rd, max_dist, primary_steps);
 
 	// Which islands could be here? pc.region_origin.w is the cull grid's tiles-per-row, and
 	// 0 means "no mask" -- the 1x1 debug probes and any frame before the cull pass has run.
@@ -475,7 +496,8 @@ void main() {
 	while (mask != 0u) {
 		int i = findLSB(mask);
 		mask &= mask - 1u;
-		march_island(i, ro, rd, best);
+		int island_steps = 192;
+		march_island(i, ro, rd, best, island_steps);
 	}
 
 	uint flags = floatBitsToUint(pc.cam_pos.w);
@@ -510,6 +532,26 @@ void main() {
 			// and thin ledges stop casting.
 			vec3 sro = best.p + best.n * 0.06;
 			sun = min(terrain_sun_visibility(sro), island_sun_visibility(sro, island_count));
+		}
+		if (pc.params.w < -0.5) gloss = 1.0;
+		if ((flags & BEAUTY_GLOSSY_RAYS) != 0u && gloss > GLOSSY_SDF_MIN_GLOSS) {
+			vec3 rr = normalize(reflect(rd, best.n));
+			vec3 rro = best.p + best.n * GLOSSY_SDF_BIAS;
+			int reflected_steps = GLOSSY_SDF_STEPS;
+			Hit reflected = march_terrain(rro, rr, GLOSSY_SDF_MAX_DIST, reflected_steps);
+			// A reflected ray leaves the primary tile, so its tile mask is invalid. AABB-reject
+			// every live island descriptor, sharing the same remaining 64-step budget.
+			for (int i = 0; i < island_count && reflected_steps > 0; i++)
+				march_island(i, rro, rr, reflected, reflected_steps);
+			vec3 reflected_albedo = sky_color(rr);
+			if (reflected.hit)
+				reflected_albedo = material_surface(reflected.mat, reflected.p,
+						reflected.n, ddx, ddy).rgb;
+			float ndv = clamp(dot(best.n, -rd), 0.0, 1.0);
+			float fresnel = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);
+			float weight = clamp(GLOSSY_SDF_STRENGTH * fresnel *
+					smoothstep(0.5, 1.0, gloss), 0.0, 0.85);
+			albedo = mix(albedo, reflected_albedo, weight);
 		}
 	}
 
