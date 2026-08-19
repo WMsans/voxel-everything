@@ -1,9 +1,10 @@
-[gd_scene load_steps=11 format=3 uid="uid://dx2akrpw2s62k"]
+[gd_scene load_steps=13 format=3 uid="uid://dx2akrpw2s62k"]
 
 [ext_resource type="Script" path="res://demo/player.gd" id="1"]
 [ext_resource type="Script" path="res://demo/hud.gd" id="2"]
 [ext_resource type="Script" path="res://demo/benchmark.gd" id="3"]
 [ext_resource type="Script" path="res://demo/edit_tool.gd" id="4"]
+[ext_resource type="Shader" path="res://shaders/cel_object.gdshader" id="5"]
 
 [sub_resource type="RaymarchCompositor" id="1"]
 world_path = NodePath("/root/Main/VoxelWorld")
@@ -25,6 +26,11 @@ size = Vector3(2, 2, 2)
 [sub_resource type="CapsuleShape3D" id="5"]
 radius = 0.4
 height = 1.8
+
+[sub_resource type="ShaderMaterial" id="7"]
+shader = ExtResource("5")
+shader_parameter/base_color_linear = Vector3(0.62, 0.6, 0.66)
+shader_parameter/gloss = 0.15
 
 [node name="Main" type="Node3D"]
 
@@ -53,6 +59,7 @@ transform = Transform3D(0.6, -0.48, 0.64, 0, 0.8, 0.6, -0.8, -0.36, 0.48, 0, 20,
 [node name="TestCube" type="MeshInstance3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 24, 57.2, 24)
 mesh = SubResource(4)
+material_override = SubResource(7)
 
 [node name="HUD" type="CanvasLayer" parent="."]
 

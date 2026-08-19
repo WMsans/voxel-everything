@@ -512,6 +512,8 @@ public:
 	// --- Task 6 hooks ---
 	Dictionary debug_cel_diff(Color albedo, Color ambient, float ndl, float ndv, float ndh,
 			float shadow, float ao, float gloss);
+	Color debug_cel_reference(Color albedo, Color ambient, float ndl, float ndv, float ndh,
+			float shadow, float ao, float gloss) const;
 	Dictionary debug_deferred_probe(Vector3 pos, Vector3 fwd, int w, int h, int probe_mode);
 	bool debug_mesh_submit(Array chunks);
 	Array debug_mesh_collect();
