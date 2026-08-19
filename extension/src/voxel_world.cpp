@@ -13,6 +13,7 @@
 #include "render/contact_shadow_pass.h"
 #include "render/ssgi_pass.h"
 #include "render/ssr_pass.h"
+#include "render/outline_pass.h"
 #include "beauty_compositor.h"
 #include "render/region_pass.h"
 #include "render/brick_gen_pass.h"
@@ -112,6 +113,8 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::debug_contact_shadow_probe);
 	ClassDB::bind_method(D_METHOD("debug_ssr_probe", "fixture", "w", "h"),
 			&VoxelWorld::debug_ssr_probe);
+	ClassDB::bind_method(D_METHOD("debug_outline_probe", "fixture", "have_dynamic_normals"),
+			&VoxelWorld::debug_outline_probe);
 	ClassDB::bind_method(D_METHOD("debug_glossy_sdf_probe", "origin", "dir"),
 			&VoxelWorld::debug_glossy_sdf_probe);
 	ClassDB::bind_method(D_METHOD("debug_ssgi_probe", "pos", "fwd", "w", "h", "frames"),
@@ -324,7 +327,7 @@ Dictionary VoxelWorld::debug_beauty_compositor_stats() {
 	d["contact_ms"] = contact_shadow_pass_ ? contact_shadow_pass_->last_ms() : 0.0f;
 	// CPU command-record time only; GPU timings belong to the later performance task.
 	d["ssr_ms"] = ssr_pass_ ? ssr_pass_->last_ms() : 0.0f;
-	d["outline_ms"] = 0.0f;
+	d["outline_ms"] = outline_pass_ ? outline_pass_->last_ms() : 0.0f;
 	return d;
 }
 
@@ -819,6 +822,7 @@ void VoxelWorld::teardown_gpu() {
 	teardown_downsample();
 	if (contact_shadow_pass_) { delete contact_shadow_pass_; contact_shadow_pass_ = nullptr; }
 	if (ssr_pass_) { delete ssr_pass_; ssr_pass_ = nullptr; }
+	if (outline_pass_) { delete outline_pass_; outline_pass_ = nullptr; }
 	if (ssgi_pass_) { delete ssgi_pass_; ssgi_pass_ = nullptr; }
 	if (beauty_camera_) { beauty_camera_->teardown(); delete beauty_camera_; beauty_camera_ = nullptr; }
 	if (gbuffer_) { delete gbuffer_; gbuffer_ = nullptr; }
@@ -934,6 +938,8 @@ void VoxelWorld::ensure_initialized() {
 	ssgi_pass_->initialize(device);
 	ssr_pass_ = new SsrPass();
 	ssr_pass_->initialize(device);
+	outline_pass_ = new OutlinePass();
+	outline_pass_->initialize(device);
 	initialize_downsample(device);
 	lod_raster_pass_ = new LodRasterPass();
 	lod_raster_pass_->initialize(device);
@@ -3725,6 +3731,154 @@ Dictionary VoxelWorld::debug_ssr_probe(int fixture, int w, int h) {
 	d["ran"] = true;
 	release_fixture();
 	return d;
+}
+
+Dictionary VoxelWorld::debug_outline_probe(int fixture, bool have_dynamic_normals) {
+	Dictionary d;
+	d["ran"] = false;
+	d["dark_columns"] = 0;
+	d["dark_value"] = 0.0f;
+	d["mean_delta"] = 0.0f;
+	d["max_brightening"] = 0.0f;
+	d["max_alpha_delta"] = 0.0f;
+	if (fixture < 0) return d;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !outline_pass_ || !beauty_camera_) return d;
+	const int width = 32, height = 16, pixels = width * height;
+	if (!beauty_camera_->ensure(device)) return d;
+	Projection view_proj;
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++) view_proj.columns[c][r] = c == r ? 1.0f : 0.0f;
+	const float camera_pos[3] = {0.0f, 0.0f, -100.0f};
+	beauty_camera_->update(device, view_proj, camera_pos, Vector2i(width, height), 0.05f,
+			4000.0f);
+
+	auto float16 = [](float value) -> uint16_t {
+		uint32_t bits;
+		std::memcpy(&bits, &value, sizeof(bits));
+		const uint32_t sign = (bits >> 16) & 0x8000u;
+		const int exp = static_cast<int>((bits >> 23) & 0xFFu) - 127 + 15;
+		const uint32_t mant = bits & 0x7FFFFFu;
+		if (exp <= 0) return static_cast<uint16_t>(sign);
+		if (exp >= 31) return static_cast<uint16_t>(sign | 0x7C00u);
+		return static_cast<uint16_t>(sign | (static_cast<uint32_t>(exp) << 10) |
+				(mant >> 13));
+	};
+	const uint16_t one = float16(1.0f), half = float16(0.5f);
+	PackedByteArray depth_bytes;
+	depth_bytes.resize(pixels * static_cast<int>(sizeof(float)));
+	float *depth = reinterpret_cast<float *>(depth_bytes.ptrw());
+	PackedByteArray color_bytes;
+	color_bytes.resize(pixels * 4 * static_cast<int>(sizeof(uint16_t)));
+	uint16_t *color = reinterpret_cast<uint16_t *>(color_bytes.ptrw());
+	PackedByteArray gb_depth_bytes;
+	gb_depth_bytes.resize(pixels * static_cast<int>(sizeof(float)));
+	float *gb_depth = reinterpret_cast<float *>(gb_depth_bytes.ptrw());
+	PackedByteArray surface_bytes;
+	surface_bytes.resize(pixels * 4 * static_cast<int>(sizeof(uint16_t)));
+	uint16_t *surface = reinterpret_cast<uint16_t *>(surface_bytes.ptrw());
+	PackedByteArray normal_bytes;
+	uint16_t *normal = nullptr;
+	if (fixture == 3) {
+		normal_bytes.resize(pixels * 4 * static_cast<int>(sizeof(uint16_t)));
+		normal = reinterpret_cast<uint16_t *>(normal_bytes.ptrw());
+	}
+	for (int y = 0; y < height; y++)
+		for (int x = 0; x < width; x++) {
+			const int p = y * width + x;
+			const bool right_side = x >= width / 2;
+			const bool depth_line = fixture == 1 || fixture == 4;
+			depth[p] = depth_line && right_side ? 20.0f : 10.0f;
+			gb_depth[p] = depth[p];
+			color[p * 4 + 0] = one; color[p * 4 + 1] = one;
+			color[p * 4 + 2] = one; color[p * 4 + 3] = one;
+			const bool terrain = fixture == 2;
+			const bool covered = terrain;
+			const bool up = !right_side;
+			surface[p * 4 + 0] = up ? half : one;
+			surface[p * 4 + 1] = up ? one : half;
+			surface[p * 4 + 2] = covered ? one : 0;
+			surface[p * 4 + 3] = one;
+			if (normal) {
+				normal[p * 4 + 0] = up ? half : one;
+				normal[p * 4 + 1] = up ? one : half;
+				normal[p * 4 + 2] = half;
+				normal[p * 4 + 3] = one;
+			}
+		}
+
+	auto create = [&](RenderingDevice::DataFormat format, uint32_t usage,
+			const PackedByteArray &bytes) -> RID {
+			Ref<RDTextureFormat> f;
+			f.instantiate(); f->set_format(format); f->set_width(width); f->set_height(height);
+			f->set_usage_bits(usage);
+			Ref<RDTextureView> v; v.instantiate();
+			TypedArray<PackedByteArray> data; data.push_back(bytes);
+			return device->texture_create(f, v, data);
+		};
+	const uint32_t sampled = RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT;
+	const uint32_t color_usage = sampled | RenderingDevice::TEXTURE_USAGE_STORAGE_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_UPDATE_BIT;
+	const RID scene_depth = create(RenderingDevice::DATA_FORMAT_R32_SFLOAT, sampled,
+				depth_bytes);
+		const RID scene_color = create(RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT,
+				color_usage, color_bytes);
+		const RID fixture_gb_depth = create(RenderingDevice::DATA_FORMAT_R32_SFLOAT, sampled,
+				gb_depth_bytes);
+		const RID fixture_surface = create(RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT,
+				sampled, surface_bytes);
+		RID normal_texture;
+		if (normal)
+			normal_texture = create(RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT, sampled,
+					normal_bytes);
+		const bool valid = scene_depth.is_valid() && scene_color.is_valid() &&
+			fixture_gb_depth.is_valid() && fixture_surface.is_valid() &&
+			(!normal || normal_texture.is_valid());
+		if (!valid) {
+			for (RID r : {scene_depth, scene_color, fixture_gb_depth, fixture_surface, normal_texture})
+				if (r.is_valid()) device->free_rid(r);
+			return d;
+		}
+		const ve::BeautySettings settings = beauty_settings();
+		const bool ok = outline_pass_->render(device, scene_color, scene_depth, fixture_gb_depth,
+				fixture_surface, normal_texture, have_dynamic_normals && normal_texture.is_valid(),
+				beauty_camera_->buffer(), Vector2i(width, height), settings);
+		device->submit();
+		device->sync();
+		d["ran"] = ok;
+		const PackedByteArray after = device->texture_get_data(scene_color, 0);
+		if (ok && after.size() >= pixels * 8) {
+			const uint16_t *out = reinterpret_cast<const uint16_t *>(after.ptr());
+			int dark_columns = 0;
+			float dark_value = 0.0f, max_brightening = 0.0f, max_alpha_delta = 0.0f;
+			double total_delta = 0.0;
+			for (int x = 0; x < width; x++) {
+				bool dark = false;
+				for (int y = 0; y < height; y++) {
+					const int p = (y * width + x) * 4;
+					const float r = Math::half_to_float(out[p]);
+					const float a = Math::half_to_float(out[p + 3]);
+					if (r < 0.99f) { dark = true; dark_value = r; }
+					max_brightening = std::max(max_brightening, r - 1.0f);
+					max_alpha_delta = std::max(max_alpha_delta, std::fabs(a - 1.0f));
+					total_delta += std::fabs(r - 1.0f);
+				}
+				if (dark) dark_columns++;
+			}
+			d["dark_columns"] = dark_columns;
+			d["dark_value"] = dark_value;
+			d["mean_delta"] = static_cast<float>(total_delta / pixels);
+			d["max_brightening"] = max_brightening;
+			d["max_alpha_delta"] = max_alpha_delta;
+		}
+		outline_pass_->teardown();
+		outline_pass_->initialize(device);
+		for (RID r : {scene_depth, scene_color, fixture_gb_depth, fixture_surface, normal_texture})
+			if (r.is_valid()) device->free_rid(r);
+		return d;
 }
 
 Dictionary VoxelWorld::debug_glossy_sdf_probe(Vector3 origin, Vector3 dir) {
