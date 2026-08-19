@@ -3,6 +3,7 @@
 #include "render/beauty_camera.h"
 #include "render/contact_shadow_pass.h"
 #include "render/gbuffer.h"
+#include "render/ssr_pass.h"
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/render_scene_buffers_rd.hpp>
 #include <godot_cpp/classes/render_scene_data.hpp>
@@ -64,8 +65,13 @@ void BeautyCompositor::_render_callback(int cb_type, RenderData *render_data) {
 	if (cs)
 		cs->render(rd, rsb->get_color_texture(), rsb->get_depth_texture(), size,
 				ubo->buffer(), settings);
-	// Task 11 inserts SSR here; Task 12 inserts outlines here.
 	GBuffer *gb = world->gbuffer();
+	if (SsrPass *ssr = world->ssr_pass())
+		ssr->render(rd, rsb->get_color_texture(), rsb->get_depth_texture(), gb ? gb->surface() : RID(),
+				gb ? gb->depth() : RID(), normal_rough, normal_roughness_state_ == 1,
+				ubo->buffer(), size, settings);
+	// Task 12 inserts outlines here.
+
 	if (gb && gb->is_valid())
 		world->downsample_history(rd, rsb->get_color_texture(), *gb);
 }

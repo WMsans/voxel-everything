@@ -12,6 +12,7 @@
 #include "render/beauty_camera.h"
 #include "render/contact_shadow_pass.h"
 #include "render/ssgi_pass.h"
+#include "render/ssr_pass.h"
 #include "beauty_compositor.h"
 #include "render/region_pass.h"
 #include "render/brick_gen_pass.h"
@@ -109,6 +110,10 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::debug_beauty_compositor_stats);
 	ClassDB::bind_method(D_METHOD("debug_contact_shadow_probe", "pos", "fwd", "w", "h"),
 			&VoxelWorld::debug_contact_shadow_probe);
+	ClassDB::bind_method(D_METHOD("debug_ssr_probe", "fixture", "w", "h"),
+			&VoxelWorld::debug_ssr_probe);
+	ClassDB::bind_method(D_METHOD("debug_glossy_sdf_probe", "origin", "dir"),
+			&VoxelWorld::debug_glossy_sdf_probe);
 	ClassDB::bind_method(D_METHOD("debug_ssgi_probe", "pos", "fwd", "w", "h", "frames"),
 			&VoxelWorld::debug_ssgi_probe);
 	ClassDB::bind_method(D_METHOD("debug_ssgi_reprojection_probe", "previous_pos",
@@ -317,7 +322,8 @@ Dictionary VoxelWorld::debug_beauty_compositor_stats() {
 	Dictionary d;
 	d["normal_roughness"] = normal_roughness_state_;
 	d["contact_ms"] = contact_shadow_pass_ ? contact_shadow_pass_->last_ms() : 0.0f;
-	d["ssr_ms"] = 0.0f;
+	// CPU command-record time only; GPU timings belong to the later performance task.
+	d["ssr_ms"] = ssr_pass_ ? ssr_pass_->last_ms() : 0.0f;
 	d["outline_ms"] = 0.0f;
 	return d;
 }
@@ -812,6 +818,7 @@ void VoxelWorld::teardown_gpu() {
 	if (hiz_pass_ && gbuffer_) hiz_pass_->release_level0_set();
 	teardown_downsample();
 	if (contact_shadow_pass_) { delete contact_shadow_pass_; contact_shadow_pass_ = nullptr; }
+	if (ssr_pass_) { delete ssr_pass_; ssr_pass_ = nullptr; }
 	if (ssgi_pass_) { delete ssgi_pass_; ssgi_pass_ = nullptr; }
 	if (beauty_camera_) { beauty_camera_->teardown(); delete beauty_camera_; beauty_camera_ = nullptr; }
 	if (gbuffer_) { delete gbuffer_; gbuffer_ = nullptr; }
@@ -925,6 +932,8 @@ void VoxelWorld::ensure_initialized() {
 	contact_shadow_pass_->initialize(device);
 	ssgi_pass_ = new SsgiPass();
 	ssgi_pass_->initialize(device);
+	ssr_pass_ = new SsrPass();
+	ssr_pass_->initialize(device);
 	initialize_downsample(device);
 	lod_raster_pass_ = new LodRasterPass();
 	lod_raster_pass_->initialize(device);
@@ -3424,6 +3433,282 @@ Dictionary VoxelWorld::debug_raymarch_gbuffer(Vector3 origin, Vector3 dir) {
 	d["normal"] = Vector3(n[0], n[1], n[2]);
 	d["material"] = static_cast<int>(half_to_float(s[2]) + 0.5f);
 	d["gloss"] = half_to_float(s[3]);
+	d["hit"] = h[3] > 0.5f;
+	d["position"] = Vector3(h[0], h[1], h[2]);
+	return d;
+}
+
+Dictionary VoxelWorld::debug_ssr_probe(int fixture, int w, int h) {
+	Dictionary d;
+	const int width = std::max(1, w);
+	const int height = std::max(1, h);
+	d["width"] = std::max(1, width / 2);
+	d["height"] = std::max(1, height / 2);
+	d["ran"] = false;
+	d["steps"] = 0;
+	d["hit_pixels"] = 0;
+	d["red_gain"] = 0.0f;
+	d["max_weight"] = 0.0f;
+	d["max_alpha_delta"] = 0.0f;
+	d["mean_delta"] = 0.0f;
+	d["finite"] = true;
+	if (w <= 0 || h <= 0) return d;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !materials_ || !raymarch_pass_ || !composite_pass_ ||
+			!gbuffer_ || !beauty_camera_ || !ssr_pass_) return d;
+	const ve::BeautySettings settings = beauty_settings();
+	d["steps"] = settings.ssr_steps;
+	if (!settings.ssr || settings.ssr_steps <= 0) return d;
+	const Vector2i size(width, height);
+	if (!gbuffer_->ensure(device, nullptr, size) || !beauty_camera_->ensure(device)) return d;
+	const float camera_pos[3] = {20.0f, 75.0f, 20.0f};
+	const float camera_fwd[3] = {0.0f, -1.0f, 0.0f};
+	const float camera_up[3] = {0.0f, 0.0f, -1.0f};
+	const float aspect = static_cast<float>(width) / static_cast<float>(height);
+	const ve::LodCamera camera = ve::lod_camera_perspective(camera_pos, camera_fwd, camera_up,
+			1.0471975512f, aspect, 0.05f, 4000.0f, width, height);
+	Projection view_proj;
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++) view_proj.columns[c][r] = camera.view_proj[c * 4 + r];
+	float normal[3] = {0.6f, 0.8f, 0.0f};
+	float oct[2];
+	ve::oct_encode(normal, oct);
+	ve::CameraParams camera_params = ve::CameraParams::looking_at(
+			camera_pos[0], camera_pos[1], camera_pos[2], camera_fwd[0], camera_fwd[1], camera_fwd[2],
+			camera_up[0], camera_up[1], camera_up[2]);
+	camera_params.params[0] = std::tan(1.0471975512f * 0.5f) * aspect;
+	camera_params.params[1] = std::tan(1.0471975512f * 0.5f);
+	camera_params.params[2] = 200.0f;
+	const ve::WorldBounds probe_bounds = world_bounds();
+	const ve::IVec3 probe_origin = probe_bounds.origin_regions();
+	camera_params.dims[0] = world_size_regions_.x;
+	camera_params.dims[1] = world_size_regions_.y;
+	camera_params.dims[2] = world_size_regions_.z;
+	camera_params.dims[3] = island_slot_count();
+	camera_params.region_origin[0] = probe_origin.x;
+	camera_params.region_origin[1] = probe_origin.y;
+	camera_params.region_origin[2] = probe_origin.z;
+	camera_params.atlas_bricks[0] = atlas_bricks_.x;
+	camera_params.atlas_bricks[1] = atlas_bricks_.y;
+	camera_params.atlas_bricks[2] = atlas_bricks_.z;
+	const uint32_t probe_flags = ve::pack_flags(settings);
+	std::memcpy(&camera_params.cam_pos[3], &probe_flags, sizeof(float));
+	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), camera_params, width, height,
+			no_edit)) return d;
+	float fade_start = ve::kLodFadeStartM, fade_end = ve::kLodFadeEndM;
+	lod_fade_band(&fade_start, &fade_end);
+	composite_pass_->draw(device, *gbuffer_, raymarch_pass_->albedo_texture(),
+			raymarch_pass_->surface_texture(), raymarch_pass_->hitpos_texture(), view_proj,
+			*materials_, camera_pos, fade_start, fade_end);
+	if (!composite_pass_->last_draw_ok()) return d;
+	auto float16 = [](float value) -> uint16_t {
+		uint32_t bits;
+		std::memcpy(&bits, &value, sizeof(bits));
+		const uint32_t sign = (bits >> 16) & 0x8000u;
+		const int exp = static_cast<int>((bits >> 23) & 0xFFu) - 127 + 15;
+		const uint32_t mant = bits & 0x7FFFFFu;
+		if (exp <= 0) return static_cast<uint16_t>(sign);
+		if (exp >= 31) return static_cast<uint16_t>(sign | 0x7C00u);
+		return static_cast<uint16_t>(sign | (static_cast<uint32_t>(exp) << 10) |
+				(mant >> 13));
+	};
+	const int pixels = width * height;
+	PackedByteArray depths;
+	depths.resize(pixels * static_cast<int>(sizeof(float)));
+	float *depth_ptr = reinterpret_cast<float *>(depths.ptrw());
+	PackedByteArray colors;
+	colors.resize(pixels * 4 * static_cast<int>(sizeof(uint16_t)));
+	uint16_t *color_ptr = reinterpret_cast<uint16_t *>(colors.ptrw());
+	for (int y = 0; y < height; y++) {
+		for (int x = 0; x < width; x++) {
+			const int index = y * width + x;
+			const bool blocker = fixture == 0 && x >= width / 4 && x < width / 2 &&
+					y >= height / 4 && y < height / 2;
+			depth_ptr[index] = 0.0f;
+			const float r = blocker ? 1.0f : 0.2f;
+			const float g = blocker ? 0.03f : 0.2f;
+			const float b = blocker ? 0.03f : 0.2f;
+			color_ptr[index * 4 + 0] = float16(r);
+			color_ptr[index * 4 + 1] = float16(g);
+			color_ptr[index * 4 + 2] = float16(b);
+			color_ptr[index * 4 + 3] = float16(0.7f);
+		}
+	}
+	PackedByteArray surface_bytes;
+	surface_bytes.resize(pixels * 4 * static_cast<int>(sizeof(uint16_t)));
+	uint16_t *surface_ptr = reinterpret_cast<uint16_t *>(surface_bytes.ptrw());
+	for (int i = 0; i < pixels; i++) {
+		surface_ptr[i * 4 + 0] = float16(oct[0]);
+		surface_ptr[i * 4 + 1] = float16(oct[1]);
+		surface_ptr[i * 4 + 2] = float16(1.0f);
+		surface_ptr[i * 4 + 3] = float16(1.0f);
+	}
+	Ref<RDTextureFormat> depth_format;
+	depth_format.instantiate();
+	depth_format->set_format(RenderingDevice::DATA_FORMAT_R32_SFLOAT);
+	depth_format->set_width(width); depth_format->set_height(height);
+	depth_format->set_usage_bits(RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_UPDATE_BIT);
+	Ref<RDTextureView> depth_view; depth_view.instantiate();
+	TypedArray<PackedByteArray> depth_data; depth_data.push_back(depths);
+	const RID scene_depth = device->texture_create(depth_format, depth_view, depth_data);
+	Ref<RDTextureFormat> color_format;
+	color_format.instantiate();
+	color_format->set_format(RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT);
+	color_format->set_width(width); color_format->set_height(height);
+	color_format->set_usage_bits(RenderingDevice::TEXTURE_USAGE_STORAGE_BIT |
+			RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_UPDATE_BIT);
+	Ref<RDTextureView> color_view; color_view.instantiate();
+	TypedArray<PackedByteArray> color_data; color_data.push_back(colors);
+	const RID scene_color = device->texture_create(color_format, color_view, color_data);
+	Ref<RDTextureFormat> surface_format;
+	surface_format.instantiate();
+	surface_format->set_format(RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT);
+	surface_format->set_width(width); surface_format->set_height(height);
+	surface_format->set_usage_bits(RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_UPDATE_BIT);
+	Ref<RDTextureView> surface_view; surface_view.instantiate();
+	TypedArray<PackedByteArray> surface_data; surface_data.push_back(surface_bytes);
+	const RID fixture_surface = device->texture_create(surface_format, surface_view, surface_data);
+	if (!scene_depth.is_valid() || !scene_color.is_valid() || !fixture_surface.is_valid()) {
+		if (scene_depth.is_valid()) device->free_rid(scene_depth);
+		if (scene_color.is_valid()) device->free_rid(scene_color);
+		if (fixture_surface.is_valid()) device->free_rid(fixture_surface);
+		return d;
+	}
+	device->submit();
+	device->sync();
+	const PackedByteArray rendered_depth = device->texture_get_data(gbuffer_->depth(), 0);
+	if (rendered_depth.size() < pixels * static_cast<int>(sizeof(float))) {
+		device->free_rid(scene_depth);
+		device->free_rid(scene_color);
+		device->free_rid(fixture_surface);
+		return d;
+	}
+	const float *rendered_depth_ptr = reinterpret_cast<const float *>(rendered_depth.ptr());
+	for (int y = 0; y < height; y++)
+		for (int x = 0; x < width; x++) {
+			const int index = y * width + x;
+			const bool blocker = fixture == 0 && x >= width / 4 && x < width / 2 &&
+					y >= height / 4 && y < height / 2;
+			depth_ptr[index] = blocker ?
+					std::min(1.0f, rendered_depth_ptr[index] + 0.001f) : rendered_depth_ptr[index];
+		}
+	device->texture_update(scene_depth, 0, depths);
+	device->texture_update(scene_color, 0, colors);
+	device->texture_copy(fixture_surface, gbuffer_->surface(), Vector3(), Vector3(),
+			Vector3(width, height, 1), 0, 0, 0, 0);
+	device->submit();
+	device->sync();
+	beauty_camera_->update(device, view_proj, camera_pos, size, 0.05f, 4000.0f);
+	const RID normal_roughness = RID();
+	const bool ok = ssr_pass_->render(device, scene_color, scene_depth, gbuffer_->surface(),
+			gbuffer_->depth(), normal_roughness, false, beauty_camera_->buffer(), size, settings);
+	device->submit();
+	device->sync();
+	auto release_fixture = [&]() {
+		ssr_pass_->teardown();
+		if (!ssr_pass_->initialize(device))
+			UtilityFunctions::printerr("debug_ssr_probe: SSR pass reinitialization failed");
+		device->free_rid(scene_depth);
+		device->free_rid(scene_color);
+		device->free_rid(fixture_surface);
+	};
+	if (!ok) {
+		release_fixture();
+		return d;
+	}
+	const PackedByteArray before = colors;
+	const PackedByteArray after = device->texture_get_data(scene_color, 0);
+	const PackedByteArray reflection = device->texture_get_data(ssr_pass_->reflection(), 0);
+	const int half_w = std::max(1, width / 2), half_h = std::max(1, height / 2);
+	const int half_pixels = half_w * half_h;
+	if (after.size() >= pixels * 8 && reflection.size() >= half_pixels * 8) {
+		const uint16_t *a = reinterpret_cast<const uint16_t *>(after.ptr());
+		const uint16_t *r = reinterpret_cast<const uint16_t *>(reflection.ptr());
+		const uint16_t *b = reinterpret_cast<const uint16_t *>(before.ptr());
+		double delta = 0.0;
+		float red_gain_max = 0.0f;
+		float max_weight = 0.0f, max_alpha_delta = 0.0f;
+		int hits = 0;
+		for (int i = 0; i < pixels; i++) {
+			const float br = Math::half_to_float(b[i * 4]);
+			const float ar = Math::half_to_float(a[i * 4]);
+			const float ba = Math::half_to_float(b[i * 4 + 3]);
+			const float aa = Math::half_to_float(a[i * 4 + 3]);
+			red_gain_max = std::max(red_gain_max, ar - br);
+			delta += std::fabs(ar - br) + std::fabs(Math::half_to_float(a[i * 4 + 1]) -
+					Math::half_to_float(b[i * 4 + 1]));
+			max_alpha_delta = std::max(max_alpha_delta, std::fabs(aa - ba));
+		}
+		for (int i = 0; i < half_pixels; i++) {
+			const float weight = Math::half_to_float(r[i * 4 + 3]);
+			max_weight = std::max(max_weight, weight);
+			if (weight > 0.001f) hits++;
+		}
+		d["hit_pixels"] = hits;
+		d["red_gain"] = red_gain_max;
+		d["mean_delta"] = static_cast<float>(delta / pixels);
+		d["max_weight"] = max_weight;
+		d["max_alpha_delta"] = max_alpha_delta;
+		for (int i = 0; i < pixels * 4; i++)
+			if (!std::isfinite(Math::half_to_float(a[i]))) d["finite"] = false;
+	}
+	d["ran"] = true;
+	release_fixture();
+	return d;
+}
+
+Dictionary VoxelWorld::debug_glossy_sdf_probe(Vector3 origin, Vector3 dir) {
+	Dictionary d;
+	d["hit"] = false;
+	d["albedo"] = Color();
+	d["sun"] = 0.0f;
+	d["material"] = 0;
+	d["gloss"] = 0.0f;
+	d["position"] = origin;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_) return d;
+	ve::CameraParams cam = ve::CameraParams::looking_at(
+			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
+	cam.params[0] = 0.0f;
+	cam.params[1] = 0.0f;
+	cam.params[2] = 200.0f;
+	cam.params[3] = -1.0f;
+	const ve::WorldBounds wb = world_bounds();
+	const ve::IVec3 ro = wb.origin_regions();
+	cam.dims[0] = world_size_regions_.x; cam.dims[1] = world_size_regions_.y;
+	cam.dims[2] = world_size_regions_.z; cam.dims[3] = island_slot_count();
+	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
+	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
+	cam.atlas_bricks[2] = atlas_bricks_.z;
+	const uint32_t flags = ve::pack_flags(beauty_settings());
+	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
+	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1, kNoEdit)) return d;
+	device->submit();
+	device->sync();
+	const PackedByteArray ab = device->texture_get_data(raymarch_pass_->albedo_texture(), 0);
+	const PackedByteArray sf = device->texture_get_data(raymarch_pass_->surface_texture(), 0);
+	const PackedByteArray hp = device->texture_get_data(raymarch_pass_->hitpos_texture(), 0);
+	if (ab.size() < 4 || sf.size() < 8 || hp.size() < 16) return d;
+	const uint8_t *a = ab.ptr();
+	const uint16_t *s = reinterpret_cast<const uint16_t *>(sf.ptr());
+	const float *h = reinterpret_cast<const float *>(hp.ptr());
+	d["albedo"] = Color(a[0] / 255.0f, a[1] / 255.0f, a[2] / 255.0f, 1.0f);
+	d["sun"] = a[3] / 255.0f;
+	d["gloss"] = half_to_float(s[3]);
+	d["material"] = static_cast<int>(half_to_float(s[2]) + 0.5f);
 	d["hit"] = h[3] > 0.5f;
 	d["position"] = Vector3(h[0], h[1], h[2]);
 	return d;
