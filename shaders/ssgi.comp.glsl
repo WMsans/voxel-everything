@@ -27,6 +27,15 @@ vec2 spiral_tap(int i, int n, float rot) {
 	return vec2(cos(a), sin(a)) * sqrt(t);
 }
 
+bool previous_uv(vec3 p, out vec2 uv) {
+	vec4 clip = pc.prev_view_proj * vec4(p, 1.0);
+	if (clip.w <= 0.0) return false;
+	vec3 ndc = clip.xyz / clip.w;
+	uv = ndc.xy * 0.5 + 0.5;
+	return all(greaterThanEqual(uv, vec2(0.0))) &&
+			all(lessThanEqual(uv, vec2(1.0)));
+}
+
 void main() {
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
 	if (any(greaterThanEqual(px, pc.dims.xy))) return;
@@ -64,27 +73,29 @@ void main() {
 		if (cosine <= 0.0) continue;
 		vec3 sn = oct_decode(texture(gb_surface, suv).xy);
 		if (dot(sn, -dir) <= 0.0) continue;
+		vec2 history_uv;
+		if (!previous_uv(sp, history_uv)) continue;
 		float falloff = 1.0 / (1.0 + dist * dist);
-		sum += texture(history, suv).rgb * cosine * falloff;
+		sum += texture(history, history_uv).rgb * cosine * falloff;
 		weight += 1.0;
 	}
 	vec3 gi = weight > 0.0 ? sum / weight * pc.params.z : vec3(0.0);
 
 	vec2 puv;
-	vec4 pc4 = pc.prev_view_proj * vec4(p, 1.0);
-	bool reproj = pc4.w > 0.0;
-	if (reproj) {
-		vec3 pn = pc4.xyz / pc4.w;
-		puv = pn.xy * 0.5 + 0.5;
-		reproj = all(greaterThanEqual(puv, vec2(0.0))) && all(lessThanEqual(puv, vec2(1.0)));
-	}
+	bool reproj = previous_uv(p, puv);
 	if (reproj) {
 		vec3 lo = gi;
 		vec3 hi = gi;
 		for (int y = -1; y <= 1; y++)
 			for (int x = -1; x <= 1; x++) {
-				vec3 s = texelFetch(prev_ssgi,
-						clamp(px + ivec2(x, y), ivec2(0), pc.dims.xy - 1), 0).rgb;
+				ivec2 npx = clamp(px + ivec2(x, y), ivec2(0), pc.dims.xy - 1);
+				vec2 nuv = (vec2(npx) + 0.5) / vec2(pc.dims.xy);
+				float ndepth = texture(gb_depth, nuv).r;
+				if (ndepth <= 0.0) continue;
+				vec3 np = beauty_world_from_depth(nuv, ndepth);
+				vec2 npuv;
+				if (!previous_uv(np, npuv)) continue;
+				vec3 s = texture(prev_ssgi, npuv).rgb;
 				lo = min(lo, s);
 				hi = max(hi, s);
 			}
