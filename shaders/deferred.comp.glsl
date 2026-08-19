@@ -53,6 +53,13 @@ void main() {
 		return;
 	}
 
+	if (pc.flags.y == 3u) {
+		float vis = ((pc.flags.x & BEAUTY_SUN_MAP) != 0u)
+				? sun_map_visibility(pc.cam.xyz, 1.0) : 1.0;
+		imageStore(out_lit, px, vec4(vis, vis, vis, 1.0));
+		return;
+	}
+
 	vec2 uv = (vec2(px) + 0.5) / vec2(size);
 	vec4 g0 = texelFetch(gb_albedo, px, 0);
 	vec4 g1 = texelFetch(gb_surface, px, 0);

@@ -6,6 +6,7 @@
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/node_path.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
+#include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 #include <godot_cpp/variant/rid.hpp>
@@ -39,6 +40,7 @@ class BrickGenPass;
 class RaymarchPass;
 class CompositePass;
 class DeferredPass;
+class SunShadowPass;
 class InjectPass;
 class WorldStreamer;
 class MeshService;
@@ -98,6 +100,7 @@ class VoxelWorld : public Node3D {
 	RaymarchPass *raymarch_pass_ = nullptr;
 	CompositePass *composite_pass_ = nullptr;
 	DeferredPass *deferred_pass_ = nullptr;
+	SunShadowPass *sun_shadow_pass_ = nullptr;
 	InjectPass *inject_pass_ = nullptr;
 	LodRasterPass *lod_raster_pass_ = nullptr;
 	LodCullPass *lod_cull_pass_ = nullptr;
@@ -254,6 +257,7 @@ public:
 	void lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ);
 	// Push the current lod_walk_ page list (with per-page quad counts) into the raster pass.
 	void prepare_lod_raster();
+	void prepare_lod_shadow_raster();
 	RenderingDevice *rd() const;
 	ve::WorldBounds world_bounds() const;
 
@@ -272,6 +276,7 @@ public:
 	IslandCullPass *island_cull() { return island_cull_; }
 	CompositePass *composite_pass() { return composite_pass_; }
 	DeferredPass *deferred_pass() { return deferred_pass_; }
+	SunShadowPass *sun_shadow_pass() { return sun_shadow_pass_; }
 	InjectPass *inject_pass() { return inject_pass_; }
 	LodPool *lod_pool() { return lod_pool_; }
 	LodRasterPass *lod_raster_pass() { return lod_raster_pass_; }
@@ -497,6 +502,11 @@ public:
 	bool debug_hiz_occluded(Vector2 lo, Vector2 hi, float depth);
 	// --- M5 Task 15 LoD cull hooks ---
 	Dictionary debug_lod_cull_probe(Vector3 pos, Vector3 fwd);
+
+	// --- Task 8 hooks ---
+	Dictionary debug_sun_shadow_stats();
+	void debug_sun_shadow_build(bool force);
+	float debug_sun_shadow_visibility(Vector3 p);
 };
 
 } // namespace godot

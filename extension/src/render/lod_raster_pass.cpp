@@ -261,6 +261,10 @@ bool LodRasterPass::ensure_index_array(RenderingDevice *rd, LodPool &pool) {
 	return index_array_.is_valid();
 }
 
+bool LodRasterPass::prepare_index_array(RenderingDevice *rd, LodPool &pool) {
+	return ensure_index_array(rd, pool);
+}
+
 bool LodRasterPass::draw(RenderingDevice *rd, LodPool &pool, MaterialAtlas &materials,
 		GBuffer &gb, const Projection &view_proj, const float cam_pos[3],
 		int draw_count, float fade_start, float fade_end, RID marker) {

@@ -18,6 +18,7 @@
 #include "render/lod_build_pass.h"
 #include "render/lod_pool.h"
 #include "render/lod_raster_pass.h"
+#include "render/sun_shadow_pass.h"
 #include "render/lod_cull_pass.h"
 #include "render/hiz_pass.h"
 #include "lod/lod_contour.h"
@@ -36,6 +37,7 @@
 #include "world/raycast.h"
 #include "shade/oct.h"
 #include "shade/cel.h"
+#include "shade/sun_ortho.h"
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rd_texture_format.hpp>
 #include <godot_cpp/classes/rd_texture_view.hpp>
@@ -115,6 +117,12 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::debug_hiz_occluded);
 	ClassDB::bind_method(D_METHOD("debug_lod_cull_probe", "pos", "fwd"),
 			&VoxelWorld::debug_lod_cull_probe);
+	ClassDB::bind_method(D_METHOD("debug_sun_shadow_stats"),
+			&VoxelWorld::debug_sun_shadow_stats);
+	ClassDB::bind_method(D_METHOD("debug_sun_shadow_build", "force"),
+			&VoxelWorld::debug_sun_shadow_build);
+	ClassDB::bind_method(D_METHOD("debug_sun_shadow_visibility", "p"),
+			&VoxelWorld::debug_sun_shadow_visibility);
 	ClassDB::bind_method(D_METHOD("debug_init_physics"), &VoxelWorld::debug_init_physics);
 	ClassDB::bind_method(D_METHOD("debug_teardown_physics"), &VoxelWorld::debug_teardown_physics);
 	ClassDB::bind_method(D_METHOD("debug_mesh_lattice_diff", "chunk"), &VoxelWorld::debug_mesh_lattice_diff);
@@ -342,6 +350,7 @@ void VoxelWorld::teardown_gpu() {
 	if (composite_pass_) { delete composite_pass_; composite_pass_ = nullptr; }
 	if (inject_pass_) { delete inject_pass_; inject_pass_ = nullptr; }
 	if (deferred_pass_) { delete deferred_pass_; deferred_pass_ = nullptr; }
+	if (sun_shadow_pass_) { delete sun_shadow_pass_; sun_shadow_pass_ = nullptr; }
 	if (hiz_pass_ && gbuffer_) hiz_pass_->release_level0_set();
 	if (gbuffer_) { delete gbuffer_; gbuffer_ = nullptr; }
 	if (raymarch_pass_) { delete raymarch_pass_; raymarch_pass_ = nullptr; }
@@ -448,6 +457,13 @@ void VoxelWorld::ensure_initialized() {
 	gbuffer_ = new GBuffer();
 	lod_raster_pass_ = new LodRasterPass();
 	lod_raster_pass_->initialize(device);
+	sun_shadow_pass_ = new SunShadowPass();
+	if (!sun_shadow_pass_->initialize(device)) {
+		UtilityFunctions::printerr("VoxelWorld: sun shadow initialization failed; continuing without "
+				"the world shadow map");
+		delete sun_shadow_pass_;
+		sun_shadow_pass_ = nullptr;
+	}
 	lod_cull_pass_ = new LodCullPass();
 	if (!lod_cull_pass_->initialize(device)) {
 		UtilityFunctions::printerr("VoxelWorld: LoD cull initialization failed; continuing "
@@ -1131,6 +1147,7 @@ void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ)
 				if (old_it != lod_pages_of_.end()) {
 					for (int p : old_it->second) lod_page_quads_.erase(p);
 					lod_pool_->release(old_it->second);
+					if (sun_shadow_pass_) sun_shadow_pass_->mark_dirty();
 					lod_pages_of_.erase(old_it);
 				}
 				lod_tree_->note_empty(r.level, r.coord);
@@ -1159,6 +1176,7 @@ void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ)
 			// A rebuild replaces the old page list. Release the stale pages only once the
 			// new pages are allocated and uploaded, so a refused rebuild keeps the old pages
 			// drawing; after this point the tree points at the new list.
+			if (sun_shadow_pass_) sun_shadow_pass_->mark_dirty();
 			const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
 			const auto old_it = lod_pages_of_.find(key);
 			if (old_it != lod_pages_of_.end()) {
@@ -1187,6 +1205,7 @@ void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ)
 		if (it == lod_pages_of_.end()) continue;
 		for (int p : it->second) lod_page_quads_.erase(p);
 		lod_pool_->release(it->second);
+		if (sun_shadow_pass_) sun_shadow_pass_->mark_dirty();
 		lod_pages_of_.erase(it);
 	}
 
@@ -1238,6 +1257,16 @@ void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ)
 void VoxelWorld::prepare_lod_raster() {
 	std::lock_guard<std::mutex> lock(lod_mutex_);
 	prepare_lod_raster_locked();
+}
+
+void VoxelWorld::prepare_lod_shadow_raster() {
+	std::lock_guard<std::mutex> lock(lod_mutex_);
+	if (!lod_raster_pass_ || !lod_pool_) return;
+	std::vector<LodRasterPass::PageDraw> pages;
+	pages.reserve(lod_page_quads_.size());
+	for (const auto &kv : lod_page_quads_)
+		pages.push_back(LodRasterPass::PageDraw{kv.first, kv.second});
+	lod_raster_pass_->set_draw_pages(pages);
 }
 
 void VoxelWorld::prepare_lod_raster_locked() {
@@ -2978,6 +3007,82 @@ Dictionary VoxelWorld::debug_cel_diff(Color albedo, Color ambient, float ndl, fl
 	d["max_delta"] = std::max({std::fabs(gpu.r - cpu.r), std::fabs(gpu.g - cpu.g),
 			std::fabs(gpu.b - cpu.b)});
 	return d;
+}
+
+Dictionary VoxelWorld::debug_sun_shadow_stats() {
+	Dictionary d;
+	d["size"] = SunShadowPass::kSize;
+	d["map_valid"] = false;
+	d["ortho_valid"] = false;
+	d["texel_world"] = 0.0f;
+	d["rebuilds"] = 0;
+	d["view_proj"] = PackedFloat32Array();
+	ensure_initialized();
+	SunShadowPass *sun = sun_shadow_pass_;
+	if (!sun) return d;
+	const ve::WorldBounds wb = world_bounds();
+	float lo[3];
+	float hi[3];
+	wb.aabb(lo, hi);
+	const ve::SunOrtho ortho = ve::sun_ortho(ve::kSunDir, lo, hi, SunShadowPass::kSize);
+	d["map_valid"] = sun->map().is_valid();
+	d["ortho_valid"] = ortho.valid;
+	d["texel_world"] = ortho.valid ? ortho.texel_world : sun->texel_world();
+	d["rebuilds"] = sun->rebuilds();
+	PackedFloat32Array matrix;
+	matrix.resize(16);
+	const float *source = sun->rebuilds() > 0 ? sun->view_proj() :
+			(ortho.valid ? ortho.view_proj : sun->view_proj());
+	for (int i = 0; i < 16; i++) matrix[i] = source[i];
+	d["view_proj"] = matrix;
+	return d;
+}
+
+void VoxelWorld::debug_sun_shadow_build(bool force) {
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!device || !sun_shadow_pass_ || !lod_pool_ || !lod_raster_pass_) return;
+	prepare_lod_shadow_raster();
+	const ve::WorldBounds wb = world_bounds();
+	float lo[3];
+	float hi[3];
+	wb.aabb(lo, hi);
+	sun_shadow_pass_->build(device, *lod_pool_, *lod_raster_pass_,
+			ve::sun_ortho(ve::kSunDir, lo, hi, SunShadowPass::kSize), force);
+	prepare_lod_raster();
+}
+
+float VoxelWorld::debug_sun_shadow_visibility(Vector3 p) {
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!device || !gbuffer_ || !deferred_pass_ || !materials_) return 1.0f;
+	if (gbuffer_->size() != Vector2i(1, 1)) {
+		deferred_pass_->teardown();
+		deferred_pass_->initialize(device);
+		if (composite_pass_) composite_pass_->release_targets();
+	}
+	if (!gbuffer_->ensure(device, nullptr, Vector2i(1, 1))) return 1.0f;
+	const ve::BeautySettings beauty = beauty_settings();
+	const bool use_sun = sun_shadow_pass_ && sun_shadow_pass_->is_valid() &&
+			sun_shadow_pass_->rebuilds() > 0 && beauty.sun_shadow_map;
+	DeferredPass::Params dp;
+	dp.cam_pos[0] = p.x;
+	dp.cam_pos[1] = p.y;
+	dp.cam_pos[2] = p.z;
+	dp.flags = ve::pack_flags(beauty);
+	dp.probe_mode = 3;
+	static const float kNoSun[16] = {};
+	if (!deferred_pass_->render(device, *gbuffer_, *materials_, RID(),
+			use_sun ? sun_shadow_pass_->map() : RID(),
+			use_sun ? sun_shadow_pass_->view_proj() : kNoSun,
+			use_sun ? sun_shadow_pass_->texel_world() : 0.0f, dp))
+		return 1.0f;
+	device->submit();
+	device->sync();
+	const PackedByteArray data = device->texture_get_data(gbuffer_->lit(), 0);
+	if (data.size() < 8) return 1.0f;
+	const uint16_t *value = reinterpret_cast<const uint16_t *>(data.ptr());
+	return half_to_float(value[0]);
 }
 
 Dictionary VoxelWorld::debug_deferred_probe(Vector3 pos, Vector3 fwd, int w, int h,

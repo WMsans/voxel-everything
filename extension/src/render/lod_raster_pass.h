@@ -42,6 +42,9 @@ public:
 	// winding was MEASURED (M5 errata 2), and a second derivation is a second chance to get
 	// it wrong.
 	bool front_face_clockwise() const { return front_face_clockwise_; }
+	// The shadow pass runs before the camera draw on a frame, so it must be able to create
+	// the shared index RID without opening a scene framebuffer first.
+	bool prepare_index_array(RenderingDevice *rd, LodPool &pool);
 	RID index_array() const { return index_array_; }
 
 	bool draw(RenderingDevice *rd, LodPool &pool, MaterialAtlas &materials,

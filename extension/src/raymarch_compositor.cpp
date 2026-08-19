@@ -8,12 +8,15 @@
 #include "render/hiz_pass.h"
 #include "render/lod_pool.h"
 #include "render/lod_raster_pass.h"
+#include "render/sun_shadow_pass.h"
 #include "render/lod_cull_pass.h"
 #include "lod/lod_tree.h"
 #include "render/island_cull_pass.h"
 #include "render/raymarch_pass.h"
 #include "render/world_streamer.h"
 #include "shade/beauty_settings.h"
+#include "shade/cel.h"
+#include "shade/sun_ortho.h"
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/render_scene_buffers_rd.hpp>
 #include <godot_cpp/classes/render_scene_data.hpp>
@@ -158,6 +161,7 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	if (hiz) hiz_built = hiz->build(rd, gb->depth(), size);
 	LodRasterPass *lod_raster = world->lod_raster_pass();
 	LodCullPass *lod_cull = world->lod_cull_pass();
+	SunShadowPass *sun = world->sun_shadow_pass();
 	if (world->lod_pool() && lod_raster && world->material_atlas()) {
 		ve::LodCamera lod_cam;
 		for (int c = 0; c < 4; c++)
@@ -169,6 +173,16 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 		lod_cam.viewport[0] = size.x;
 		lod_cam.viewport[1] = size.y;
 		world->lod_tick(lod_cam, hiz ? hiz->occlusion() : nullptr);
+		if (sun && (beauty_flags & ve::kFlagSunMap) != 0u) {
+			world->prepare_lod_shadow_raster();
+			const ve::WorldBounds wb = world->world_bounds();
+			float lo[3];
+			float hi[3];
+			wb.aabb(lo, hi);
+			sun->build(rd, *world->lod_pool(), *lod_raster,
+				ve::sun_ortho(ve::kSunDir, lo, hi, SunShadowPass::kSize), false);
+			world->prepare_lod_raster();
+		}
 		// Device-level indirect-argument uploads precede the cull list; draw() only opens
 		// its own list after any cull list has ended.
 		const bool two_phase = lod_cull && lod_cull->is_valid() && hiz && hiz->pyramid().is_valid() &&
@@ -239,7 +253,10 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	dp.cam_pos[2] = cam.origin.z;
 	dp.flags = beauty_flags;
 	static const float kNoSun[16] = {};
-	if (!deferred->render(rd, *gb, *materials, RID(), RID(), kNoSun, 0.0f, dp)) return;
+	const bool use_sun = sun && sun->is_valid() && sun->rebuilds() > 0 &&
+			(beauty_flags & ve::kFlagSunMap) != 0u;
+	if (!deferred->render(rd, *gb, *materials, RID(), use_sun ? sun->map() : RID(),
+			use_sun ? sun->view_proj() : kNoSun, use_sun ? sun->texel_world() : 0.0f, dp)) return;
 	if (!inject->draw(rd, rsb->get_color_texture(), rsb->get_depth_texture(), gb->lit(), gb->depth()))
 		return;
 
