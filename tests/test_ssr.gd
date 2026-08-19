@@ -60,6 +60,22 @@ func test_the_apply_is_bounded_and_preserves_alpha() -> void:
 	assert_float(d["max_alpha_delta"]).is_less(0.0001)
 	assert_bool(d["finite"]).is_true()
 
+# Fixtures 2 and 3 contain the same dynamic receiver and scene blocker, but the optional
+# normal-roughness texture has alpha 0 and 1 respectively. Dynamic pixels must be skipped;
+# voxel receivers outside the dynamic region must still reflect the scene blocker.
+func test_uncalibrated_normal_roughness_does_not_enable_dynamic_receivers() -> void:
+	var w := make_world()
+	var alpha_zero: Dictionary = w.debug_ssr_probe(2, 128, 128)
+	var alpha_one: Dictionary = w.debug_ssr_probe(3, 128, 128)
+	assert_bool(alpha_zero["ran"]).is_true()
+	assert_bool(alpha_one["ran"]).is_true()
+	assert_int(alpha_zero["dynamic_hit_pixels"]).is_equal(0)
+	assert_int(alpha_one["dynamic_hit_pixels"]).is_equal(0)
+	assert_int(alpha_zero["scene_hit_pixels"]).is_greater(0)
+	assert_int(alpha_one["scene_hit_pixels"]).is_greater(0)
+	assert_float(alpha_zero["mean_delta"]).is_equal_approx(float(alpha_one["mean_delta"]), 0.0001)
+	assert_int(alpha_zero["hit_pixels"]).is_equal(int(alpha_one["hit_pixels"]))
+
 # Current roughness assets never exceed gloss 0.5. The probe uses a negative params.w
 # sentinel to force shader gloss=1 on a real ground hit without changing production data.
 func test_true_sdf_reflections_are_high_only_and_change_only_albedo() -> void:

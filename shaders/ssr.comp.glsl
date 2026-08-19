@@ -28,22 +28,10 @@ bool receiver(vec2 uv, float depth, out vec3 p, out vec3 n, out float gloss) {
 		gloss = clamp(g.w, 0.0, 1.0);
 		return true;
 	}
-	// Dynamic objects are absent from gb_surface. Depth derivatives provide a world-space
-	// reflection plane; normal_roughness contributes roughness only. Without that optional
-	// buffer the object is still reflected by terrain but is not itself an SSR receiver.
-	if (pc.dims.w == 0) return false;
-	vec2 dx = vec2(bcam.screen.z, 0.0), dy = vec2(0.0, bcam.screen.w);
-	vec2 ux = clamp(uv + dx, vec2(0.0), vec2(1.0));
-	vec2 uy = clamp(uv + dy, vec2(0.0), vec2(1.0));
-	float zx = texture(scene_depth, ux).r, zy = texture(scene_depth, uy).r;
-	if (zx <= 0.0 || zy <= 0.0) return false;
-	vec3 px = beauty_world_from_depth(ux, zx), py = beauty_world_from_depth(uy, zy);
-	if (distance(px, p) > 2.0 || distance(py, p) > 2.0) return false;
-	n = normalize(cross(px - p, py - p));
-	if (dot(n, bcam.cam.xyz - p) < 0.0) n = -n;
-	gloss = clamp(1.0 - texture(normal_roughness, uv).a, 0.0, 1.0);
-	return !isnan(n.x) && !isnan(n.y) && !isnan(n.z) &&
-		!isinf(n.x) && !isinf(n.y) && !isinf(n.z);
+	// Dynamic objects are valid scene colour/depth reflection targets, but their receiver
+	// normal/roughness is not calibrated. Keep them out of the receiver path until that
+	// optional buffer is proven meaningful; in particular, never derive gloss from its alpha.
+	return false;
 }
 
 void main() {

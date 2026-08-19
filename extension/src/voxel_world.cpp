@@ -3447,6 +3447,8 @@ Dictionary VoxelWorld::debug_ssr_probe(int fixture, int w, int h) {
 	d["ran"] = false;
 	d["steps"] = 0;
 	d["hit_pixels"] = 0;
+	d["dynamic_hit_pixels"] = 0;
+	d["scene_hit_pixels"] = 0;
 	d["red_gain"] = 0.0f;
 	d["max_weight"] = 0.0f;
 	d["max_alpha_delta"] = 0.0f;
@@ -3524,7 +3526,7 @@ Dictionary VoxelWorld::debug_ssr_probe(int fixture, int w, int h) {
 	for (int y = 0; y < height; y++) {
 		for (int x = 0; x < width; x++) {
 			const int index = y * width + x;
-			const bool blocker = fixture == 0 && x >= width / 4 && x < width / 2 &&
+			const bool blocker = (fixture == 0 || fixture >= 2) && x >= width / 4 && x < width / 2 &&
 					y >= height / 4 && y < height / 2;
 			depth_ptr[index] = 0.0f;
 			const float r = blocker ? 1.0f : 0.2f;
@@ -3539,12 +3541,15 @@ Dictionary VoxelWorld::debug_ssr_probe(int fixture, int w, int h) {
 	PackedByteArray surface_bytes;
 	surface_bytes.resize(pixels * 4 * static_cast<int>(sizeof(uint16_t)));
 	uint16_t *surface_ptr = reinterpret_cast<uint16_t *>(surface_bytes.ptrw());
-	for (int i = 0; i < pixels; i++) {
-		surface_ptr[i * 4 + 0] = float16(oct[0]);
-		surface_ptr[i * 4 + 1] = float16(oct[1]);
-		surface_ptr[i * 4 + 2] = float16(1.0f);
-		surface_ptr[i * 4 + 3] = float16(1.0f);
-	}
+	for (int y = 0; y < height; y++)
+		for (int x = 0; x < width; x++) {
+			const int i = y * width + x;
+			const bool dynamic_receiver = fixture >= 2 && x < width / 3 && y < height / 3;
+			surface_ptr[i * 4 + 0] = dynamic_receiver ? float16(0.0f) : float16(oct[0]);
+			surface_ptr[i * 4 + 1] = dynamic_receiver ? float16(0.0f) : float16(oct[1]);
+			surface_ptr[i * 4 + 2] = dynamic_receiver ? float16(0.0f) : float16(1.0f);
+			surface_ptr[i * 4 + 3] = dynamic_receiver ? float16(0.0f) : float16(1.0f);
+		}
 	Ref<RDTextureFormat> depth_format;
 	depth_format.instantiate();
 	depth_format->set_format(RenderingDevice::DATA_FORMAT_R32_SFLOAT);
@@ -3579,10 +3584,28 @@ Dictionary VoxelWorld::debug_ssr_probe(int fixture, int w, int h) {
 	Ref<RDTextureView> surface_view; surface_view.instantiate();
 	TypedArray<PackedByteArray> surface_data; surface_data.push_back(surface_bytes);
 	const RID fixture_surface = device->texture_create(surface_format, surface_view, surface_data);
-	if (!scene_depth.is_valid() || !scene_color.is_valid() || !fixture_surface.is_valid()) {
+	RID normal_texture;
+	if (fixture >= 2) {
+		PackedByteArray normal_bytes;
+		normal_bytes.resize(pixels * 4 * static_cast<int>(sizeof(uint16_t)));
+		uint16_t *normal_ptr = reinterpret_cast<uint16_t *>(normal_bytes.ptrw());
+		const uint16_t alpha = float16(fixture == 2 ? 0.0f : 1.0f);
+		for (int i = 0; i < pixels; i++) {
+			normal_ptr[i * 4 + 0] = float16(0.0f);
+			normal_ptr[i * 4 + 1] = float16(0.0f);
+			normal_ptr[i * 4 + 2] = float16(0.0f);
+			normal_ptr[i * 4 + 3] = alpha;
+		}
+		TypedArray<PackedByteArray> normal_data;
+		normal_data.push_back(normal_bytes);
+		normal_texture = device->texture_create(color_format, color_view, normal_data);
+	}
+	if (!scene_depth.is_valid() || !scene_color.is_valid() || !fixture_surface.is_valid() ||
+			(fixture >= 2 && !normal_texture.is_valid())) {
 		if (scene_depth.is_valid()) device->free_rid(scene_depth);
 		if (scene_color.is_valid()) device->free_rid(scene_color);
 		if (fixture_surface.is_valid()) device->free_rid(fixture_surface);
+		if (normal_texture.is_valid()) device->free_rid(normal_texture);
 		return d;
 	}
 	device->submit();
@@ -3592,16 +3615,40 @@ Dictionary VoxelWorld::debug_ssr_probe(int fixture, int w, int h) {
 		device->free_rid(scene_depth);
 		device->free_rid(scene_color);
 		device->free_rid(fixture_surface);
+		if (normal_texture.is_valid()) device->free_rid(normal_texture);
 		return d;
 	}
 	const float *rendered_depth_ptr = reinterpret_cast<const float *>(rendered_depth.ptr());
+	const Projection inv_view_proj = view_proj.inverse();
+	auto mul_projection = [](const Projection &m, const Vector4 &v) {
+		Vector4 result;
+		for (int c = 0; c < 4; c++)
+			for (int r = 0; r < 4; r++) result[r] += m.columns[c][r] * v[c];
+		return result;
+	};
+	auto dynamic_plane_depth = [&](int x, int y) {
+		const Vector2 ndc((static_cast<float>(x) + 0.5f) / width * 2.0f - 1.0f,
+				(static_cast<float>(y) + 0.5f) / height * 2.0f - 1.0f);
+		const Vector4 far_h = mul_projection(inv_view_proj, Vector4(ndc.x, ndc.y, 0.0f, 1.0f));
+		const Vector3 far_p = Vector3(far_h.x, far_h.y, far_h.z) / far_h.w;
+		const Vector3 ray = (far_p - Vector3(camera_pos[0], camera_pos[1], camera_pos[2])).normalized();
+		const Vector3 plane_normal(0.6f, 0.8f, 0.0f);
+		const Vector3 plane_point(20.0f, 60.0f, 20.0f);
+		const float denom = plane_normal.dot(ray);
+		if (std::fabs(denom) < 1e-5f) return rendered_depth_ptr[y * width + x];
+		const Vector3 hit = Vector3(camera_pos[0], camera_pos[1], camera_pos[2]) + ray *
+				(plane_normal.dot(plane_point - Vector3(camera_pos[0], camera_pos[1], camera_pos[2])) / denom);
+		const Vector4 clip = mul_projection(view_proj, Vector4(hit.x, hit.y, hit.z, 1.0f));
+		return clip.z / clip.w;
+	};
 	for (int y = 0; y < height; y++)
 		for (int x = 0; x < width; x++) {
 			const int index = y * width + x;
-			const bool blocker = fixture == 0 && x >= width / 4 && x < width / 2 &&
+			const bool dynamic_receiver = fixture >= 2 && x < width / 3 && y < height / 3;
+			const bool blocker = (fixture == 0 || fixture >= 2) && x >= width / 4 && x < width / 2 &&
 					y >= height / 4 && y < height / 2;
-			depth_ptr[index] = blocker ?
-					std::min(1.0f, rendered_depth_ptr[index] + 0.001f) : rendered_depth_ptr[index];
+			const float base_depth = dynamic_receiver ? dynamic_plane_depth(x, y) : rendered_depth_ptr[index];
+			depth_ptr[index] = blocker ? std::min(1.0f, base_depth + 0.001f) : base_depth;
 		}
 	device->texture_update(scene_depth, 0, depths);
 	device->texture_update(scene_color, 0, colors);
@@ -3610,9 +3657,10 @@ Dictionary VoxelWorld::debug_ssr_probe(int fixture, int w, int h) {
 	device->submit();
 	device->sync();
 	beauty_camera_->update(device, view_proj, camera_pos, size, 0.05f, 4000.0f);
-	const RID normal_roughness = RID();
+	const RID normal_roughness = normal_texture;
 	const bool ok = ssr_pass_->render(device, scene_color, scene_depth, gbuffer_->surface(),
-			gbuffer_->depth(), normal_roughness, false, beauty_camera_->buffer(), size, settings);
+			gbuffer_->depth(), normal_roughness, normal_roughness.is_valid(), beauty_camera_->buffer(),
+			size, settings);
 	device->submit();
 	device->sync();
 	auto release_fixture = [&]() {
@@ -3622,6 +3670,7 @@ Dictionary VoxelWorld::debug_ssr_probe(int fixture, int w, int h) {
 		device->free_rid(scene_depth);
 		device->free_rid(scene_color);
 		device->free_rid(fixture_surface);
+		if (normal_texture.is_valid()) device->free_rid(normal_texture);
 	};
 	if (!ok) {
 		release_fixture();
@@ -3639,7 +3688,7 @@ Dictionary VoxelWorld::debug_ssr_probe(int fixture, int w, int h) {
 		double delta = 0.0;
 		float red_gain_max = 0.0f;
 		float max_weight = 0.0f, max_alpha_delta = 0.0f;
-		int hits = 0;
+		int hits = 0, dynamic_hits = 0, scene_hits = 0;
 		for (int i = 0; i < pixels; i++) {
 			const float br = Math::half_to_float(b[i * 4]);
 			const float ar = Math::half_to_float(a[i * 4]);
@@ -3653,9 +3702,19 @@ Dictionary VoxelWorld::debug_ssr_probe(int fixture, int w, int h) {
 		for (int i = 0; i < half_pixels; i++) {
 			const float weight = Math::half_to_float(r[i * 4 + 3]);
 			max_weight = std::max(max_weight, weight);
-			if (weight > 0.001f) hits++;
+			if (weight > 0.001f) {
+				hits++;
+				const int sx = (i % half_w) * width / half_w;
+				const int sy = (i / half_w) * height / half_h;
+				if (fixture >= 2 && sx < width / 3 && sy < height / 3)
+					dynamic_hits++;
+				else
+					scene_hits++;
+			}
 		}
 		d["hit_pixels"] = hits;
+		d["dynamic_hit_pixels"] = dynamic_hits;
+		d["scene_hit_pixels"] = scene_hits;
 		d["red_gain"] = red_gain_max;
 		d["mean_delta"] = static_cast<float>(delta / pixels);
 		d["max_weight"] = max_weight;
