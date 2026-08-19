@@ -3440,7 +3440,42 @@ where this plan's text met reality and lost.
    Every p50 delta was under 3%, so the Task 3 marcher change was reverted as required.
    The conservative flag buffer and its mark/generator bindings remain for Task 4. This is
    a null performance result; no Task 3 PASS is claimed.
-4. _(Task 4, Step 8: region DDA measured delta — to be filled)_
+4. **Task 4, Step 8: region DDA measured delta**
+
+   Environment: Godot 4.7.1, Vulkan 1.4.341, NVIDIA GeForce RTX 4070 Laptop GPU, Wayland,
+   requested 2560×1440. X11 is unavailable here; Wayland ignored the disabled-V-Sync request,
+   but the benchmark reported `vsync_actual=disabled` and `verdict_qualified=false` on every
+   leg. All five benchmark processes exited 0. Full logs are in the ignored
+   `reports/m7-task4/` directory.
+
+   The comparison is against Task 3's pre-revert marcher numbers (the flag buffer remained in
+   place, as required). GPU raymarch p50/p99, with p50 and p99 deltas versus Task 3:
+
+   | leg | Task 3 p50/p99 ms | Task 4 p50/p99 ms | p50 delta | p99 delta |
+   |---|---:|---:|---:|---:|
+   | steady | 6.307 / 7.935 | 6.834 / 8.925 | +8.36% | +12.48% |
+   | move | 6.379 / 7.865 | 6.776 / 8.081 | +6.22% | +2.75% |
+   | ridge | 5.947 / 8.296 | 5.436 / 8.443 | -8.59% | +1.77% |
+   | edit | 10.815 / 14.365 | 11.066 / 16.861 | +2.32% | +17.38% |
+   | island | 6.746 / 8.516 | 7.083 / 9.269 | +5.00% | +8.84% |
+
+   Task 4 did **not** meet the 3% null-result revert condition on every leg, so the
+   region-level DDA is retained. The budget verdict remained `raymarch=WARN` on all five
+   legs; the other pass verdicts remained `lod=PASS ssgi=PASS ssr=PASS shadows=PASS
+   outlines=PASS`, and `frame=WARN` (qualified display timing).
+
+   Cost-view evidence was captured at 2560×1440 with a temporary, uncommitted
+   `--cost-view` launch switch: baseline `/tmp/m7-task4-cost-view-before3.png` (also copied
+   to ignored `reports/m7-task4/cost-view-before.png`, 1,975,168 bytes) and Task 4
+   `/tmp/m7-task4-cost-view-after.png` (also copied to ignored
+   `reports/m7-task4/cost-view-after.png`, 2,053,828 bytes). The before/after pair shows the
+   expected dense grayscale heat view; no demo source change was retained for the temporary
+   switch.
+
+   The direct cost probe confirms the mechanism: the sky regression test reports a non-zero
+   `regions` count and fewer than 32 `bricks`, while the hit-oracle rays still agree. This is
+   the intended null-result guard: even if the GPU percentile movement is noisy, the measured
+   traversal work changed from brick-by-brick sky walking to region skips.
 5. _(Task 5, Step 12: op filtering measured delta — to be filled)_
 6. _(Task 8, Step 7: consolidation measured delta and overflow verdict — to be filled)_
 7. _(Task 9, Step 9: collider octant split measured delta — to be filled)_
