@@ -39,6 +39,7 @@
 #include "mesh/box_merge.h"
 #include "generator/generator.h"
 #include "world/brick_eval.h"
+#include "world/brick_flags.h"
 #include "world/brick_mip.h"
 #include "world/raycast.h"
 #include "shade/oct.h"
@@ -319,6 +320,9 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_mark_region", "region", "region_slot", "lo", "hi", "op_count", "force"), &VoxelWorld::debug_mark_region);
 	ClassDB::bind_method(D_METHOD("debug_generate_pending"), &VoxelWorld::debug_generate_pending);
 	ClassDB::bind_method(D_METHOD("debug_brick_diff", "brick", "region_slot", "ops", "op_count"), &VoxelWorld::debug_brick_diff);
+	ClassDB::bind_method(D_METHOD("debug_stream_region", "region"), &VoxelWorld::debug_stream_region);
+	ClassDB::bind_method(D_METHOD("debug_brick_flags", "region"), &VoxelWorld::debug_brick_flags);
+	ClassDB::bind_method(D_METHOD("debug_brick_flags_after_mark", "region"), &VoxelWorld::debug_brick_flags_after_mark);
 	ClassDB::bind_method(D_METHOD("debug_release_region", "region_slot"), &VoxelWorld::debug_release_region);
 	ClassDB::bind_method(D_METHOD("debug_jobs"), &VoxelWorld::debug_jobs);
 	ClassDB::bind_method(D_METHOD("debug_region_table_slot", "region_slot", "brick"), &VoxelWorld::debug_region_table_slot);
@@ -4824,6 +4828,107 @@ Dictionary VoxelWorld::debug_brick_diff(Vector3i brick, int region_slot,
 				}
 	}
 	d["mip_mismatch"] = mip_bad;
+	return d;
+}
+
+void VoxelWorld::debug_stream_region(Vector3i region) {
+	ensure_initialized();
+	if (!initialized_ || !rd() || !streamer_) return;
+	const Vector3 center((region.x * ve::kRegionBricks + ve::kRegionBricks / 2) * ve::kBrickSize,
+			(region.y * ve::kRegionBricks + ve::kRegionBricks / 2) * ve::kBrickSize,
+			(region.z * ve::kRegionBricks + ve::kRegionBricks / 2) * ve::kBrickSize);
+	for (int i = 0; i < 8; i++) {
+		debug_stream_frame(center);
+		if (debug_slot_of_region(region) >= 0) return;
+	}
+}
+
+Dictionary VoxelWorld::debug_brick_flags(Vector3i region) {
+	Dictionary d;
+	debug_stream_region(region);
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_ || !edit_log_) return d;
+	const int rslot = debug_region_map_entry(region);
+	if (rslot < 0) return d;
+
+	const PackedByteArray table = device->buffer_get_data(atlas_->region_tables(),
+			static_cast<uint32_t>(rslot) * ve::kRegionBrickCount * 4,
+			static_cast<uint32_t>(ve::kRegionBrickCount) * 4);
+	const PackedByteArray flags = device->buffer_get_data(atlas_->brick_flags());
+	if (table.size() < ve::kRegionBrickCount * 4 ||
+			flags.size() < atlas_->atlas_slot_count() * static_cast<int>(sizeof(uint32_t))) return d;
+
+	std::vector<ve::EditOp> ops;
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		ops = edit_log_->ops({region.x, region.y, region.z});
+	}
+	ve::AnalyticGenerator gen;
+	const int32_t *slots = reinterpret_cast<const int32_t *>(table.ptr());
+	const uint32_t *gpu_flags = reinterpret_cast<const uint32_t *>(flags.ptr());
+	int compared = 0;
+	int mismatches = 0;
+	Vector3i first_mismatch(-1, -1, -1);
+	for (int bi = 0; bi < ve::kRegionBrickCount; bi++) {
+		const int slot = slots[bi];
+		if (slot < 0) continue;
+		const int x = bi & (ve::kRegionBricks - 1);
+		const int y = (bi >> 5) & (ve::kRegionBricks - 1);
+		const int z = bi >> 10;
+		const ve::IVec3 brick{region.x * ve::kRegionBricks + x,
+				region.y * ve::kRegionBricks + y, region.z * ve::kRegionBricks + z};
+		ve::BrickEval ref{};
+		ve::eval_brick(gen, ops.data(), static_cast<int>(ops.size()), brick, &ref, &volumes_);
+		const uint32_t want = ve::brick_flags_from_mips(ref.mips, ref.brick.palette[0]);
+		const uint32_t got = gpu_flags[slot];
+		compared++;
+		if (got != want) {
+			mismatches++;
+			if (mismatches == 1) first_mismatch = Vector3i(brick.x, brick.y, brick.z);
+		}
+	}
+	d["compared"] = compared;
+	d["mismatches"] = mismatches;
+	d["first_mismatch_brick"] = first_mismatch;
+	return d;
+}
+
+Dictionary VoxelWorld::debug_brick_flags_after_mark(Vector3i region) {
+	Dictionary d;
+	debug_stream_region(region);
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_ || !edit_log_ || !region_pass_) return d;
+	const int rslot = debug_region_map_entry(region);
+	if (rslot < 0) return d;
+	int op_count = 0;
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		op_count = static_cast<int>(edit_log_->ops({region.x, region.y, region.z}).size());
+	}
+	const ve::IVec3 lo{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
+			region.z * ve::kRegionBricks};
+	const ve::IVec3 hi{lo.x + ve::kRegionBricks - 1, lo.y + ve::kRegionBricks - 1,
+			lo.z + ve::kRegionBricks - 1};
+	debug_mark_region(region, rslot, Vector3i(lo.x, lo.y, lo.z), Vector3i(hi.x, hi.y, hi.z),
+			op_count, true);
+	const PackedByteArray table = device->buffer_get_data(atlas_->region_tables(),
+			static_cast<uint32_t>(rslot) * ve::kRegionBrickCount * 4,
+			static_cast<uint32_t>(ve::kRegionBrickCount) * 4);
+	const PackedByteArray flags = device->buffer_get_data(atlas_->brick_flags());
+	if (table.size() < ve::kRegionBrickCount * 4 ||
+			flags.size() < atlas_->atlas_slot_count() * static_cast<int>(sizeof(uint32_t))) return d;
+	const int32_t *slots = reinterpret_cast<const int32_t *>(table.ptr());
+	const uint32_t *gpu_flags = reinterpret_cast<const uint32_t *>(flags.ptr());
+	int allocated = 0;
+	int non_conservative = 0;
+	for (int bi = 0; bi < ve::kRegionBrickCount; bi++) {
+		const int slot = slots[bi];
+		if (slot < 0) continue;
+		allocated++;
+		if (gpu_flags[slot] != ve::kBrickFlagConservative) non_conservative++;
+	}
+	d["allocated"] = allocated;
+	d["non_conservative"] = non_conservative;
 	return d;
 }
 

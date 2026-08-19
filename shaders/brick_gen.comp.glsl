@@ -19,9 +19,10 @@ layout(set = 0, binding = 1, r8ui) writeonly uniform uimage3D mat_atlas;
 layout(set = 0, binding = 2, rg8ui) writeonly uniform uimage3D mip2_atlas;
 layout(set = 0, binding = 3, rg8ui) writeonly uniform uimage3D mip4_atlas;
 layout(set = 0, binding = 4, rg8ui) writeonly uniform uimage3D mip8_atlas;
-layout(set = 0, binding = 5, std430) writeonly buffer Palette { uint id[]; } palette_buf;
+layout(set = 0, binding = 5, std430) buffer Palette { uint id[]; } palette_buf;
 layout(set = 0, binding = 6, std430) readonly buffer Jobs { ivec4 v[]; } jobs;
 // binding 7 is the field op pool, declared by field.glslh
+layout(set = 0, binding = 10, std430) writeonly buffer BrickFlags { uint v[]; } brick_flags;
 
 layout(push_constant, std430) uniform Push {
 	ivec4 atlas_bricks;
@@ -241,5 +242,21 @@ void main() {
 					mx = max(mx, p & 255u);
 				}
 		imageStore(mip2_atlas, b2 + c, uvec4(mn, mx, 0u, 0u));
+	}
+
+	memoryBarrierShared();
+	barrier();
+	if (tid == 0u) {
+		uint mn = 255u, mx = 0u;
+		for (int i = 0; i < 64; i++) {
+			mn = min(mn, s_mip4[i] >> 8);
+			mx = max(mx, s_mip4[i] & 255u);
+		}
+		// Mirror of ve::brick_flags_from_mips: the same inclusive straddle test, and the
+		// same "palette slot 0 is id 0 means no material" rule the marcher's hit test uses.
+		uint f = 0u;
+		if (mn <= ENCODED_ZERO && mx >= ENCODED_ZERO) f |= BRICK_FLAG_HAS_SURFACE;
+		if (palette_buf.id[slot * 4] != 0u) f |= BRICK_FLAG_HAS_MATERIAL;
+		brick_flags.v[slot] = f;
 	}
 }

@@ -22,6 +22,9 @@ const float BRICK_SDF_MAX = float(BRICK_VOXELS); // last valid lattice coordinat
 // A cell of the min-max chain holds no surface unless its range straddles this value.
 // It is exactly ve::encode_sdf(0.0f).
 const uint ENCODED_ZERO = 128u;
+const uint BRICK_FLAG_HAS_SURFACE = 1u;
+const uint BRICK_FLAG_HAS_MATERIAL = 2u;
+const uint BRICK_FLAG_CONSERVATIVE = 3u;
 
 float decode_sdf(float unorm) { return unorm * 2.0 * SDF_RANGE - SDF_RANGE; }
 

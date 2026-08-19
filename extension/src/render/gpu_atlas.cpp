@@ -87,6 +87,10 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 	// force GL_EXT_shader_16bit_storage on every consumer to save 512 KB; it is not worth it.
 	palette_ = rd->storage_buffer_create(static_cast<uint32_t>(slots) * ve::kBrickPaletteSize * 4,
 			zeroed(static_cast<int64_t>(slots) * ve::kBrickPaletteSize * 4));
+	// Every never-generated slot must be conservative: zero means "skip" to the marcher, and
+	// the atlas contains stale bytes until brick_gen overwrites a slot.
+	brick_flags_ = rd->storage_buffer_create(static_cast<uint32_t>(slots) * sizeof(uint32_t),
+			filled_i32(slots, static_cast<int32_t>(ve::kBrickFlagConservative)));
 
 	// The region map is a BUFFER, not a texture: streaming re-points one entry per region,
 	// and buffer_update writes four bytes where texture_update would rewrite a whole layer.
@@ -138,7 +142,7 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 	}
 
 	bool ok = sdf_atlas_.is_valid() && mat_atlas_.is_valid() && palette_.is_valid() &&
-			region_map_.is_valid() && region_tables_.is_valid() && free_list_.is_valid() &&
+			brick_flags_.is_valid() && region_map_.is_valid() && region_tables_.is_valid() && free_list_.is_valid() &&
 			counters_.is_valid() && frame_.is_valid() && dispatch_args_.is_valid() &&
 			jobs_.is_valid() && op_pool_.is_valid() && op_counts_.is_valid() &&
 			region_slot_counts_.is_valid() && region_occupancy_.is_valid() && volumes_.is_valid();
@@ -161,6 +165,7 @@ void GpuAtlas::teardown() {
 	free_if_valid(rd_, mat_atlas_);
 	for (int l = 0; l < ve::kMipLevels; l++) free_if_valid(rd_, mips_[l]);
 	free_if_valid(rd_, palette_);
+	free_if_valid(rd_, brick_flags_);
 	free_if_valid(rd_, region_map_);
 	free_if_valid(rd_, region_tables_);
 	free_if_valid(rd_, free_list_);
@@ -244,7 +249,13 @@ void GpuAtlas::set_region_map_entry(RenderingDevice *rd, int region_index, int r
 }
 
 void GpuAtlas::clear_region_map(RenderingDevice *rd) {
-	if (!region_map_.is_valid()) return;
-	const PackedByteArray b = filled_i32(region_map_entries(), -1);
-	rd->buffer_update(region_map_, 0, static_cast<uint32_t>(b.size()), b);
+	if (region_map_.is_valid()) {
+		const PackedByteArray b = filled_i32(region_map_entries(), -1);
+		rd->buffer_update(region_map_, 0, static_cast<uint32_t>(b.size()), b);
+	}
+	if (brick_flags_.is_valid()) {
+		const PackedByteArray b = filled_i32(atlas_slot_count(),
+				static_cast<int32_t>(ve::kBrickFlagConservative));
+		rd->buffer_update(brick_flags_, 0, static_cast<uint32_t>(b.size()), b);
+	}
 }

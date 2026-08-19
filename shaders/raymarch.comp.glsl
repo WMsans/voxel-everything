@@ -31,6 +31,10 @@ layout(set = 0, binding = 8, std430) readonly buffer RegionMap { int slot[]; } r
 layout(set = 0, binding = 9, std430) readonly buffer RegionTables { int slot[]; } region_tables;
 layout(set = 0, binding = 10, std430) readonly buffer OpPool { uvec4 v[]; } op_pool;
 layout(set = 0, binding = 11, std430) readonly buffer OpCounts { int n[]; } op_counts;
+layout(set = 0, binding = 21, std430) readonly buffer BrickFlags { uint v[]; } brick_flags;
+// Binding 22 is reserved for Task 4's region slot counts; keep the relationship stable while
+// this pass learns the per-brick gate.
+layout(set = 0, binding = 22, std430) readonly buffer RegionSlotCounts { int n[]; } region_slot_counts;
 // The pending-edit visualizer: tint the atlas content an edit WILL change, so the player
 // gets one frame of feedback before the regenerated bricks land (spec §5 latency).
 layout(set = 0, binding = 12) uniform Edits { vec4 center; vec4 params; } edits;
