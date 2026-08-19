@@ -111,6 +111,9 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::debug_contact_shadow_probe);
 	ClassDB::bind_method(D_METHOD("debug_ssgi_probe", "pos", "fwd", "w", "h", "frames"),
 			&VoxelWorld::debug_ssgi_probe);
+	ClassDB::bind_method(D_METHOD("debug_ssgi_reprojection_probe", "previous_pos",
+			"previous_fwd", "current_pos", "current_fwd", "w", "h"),
+			&VoxelWorld::debug_ssgi_reprojection_probe);
 	ClassDB::bind_method(D_METHOD("debug_lod_tick", "pos", "fwd"), &VoxelWorld::debug_lod_tick);
 	ClassDB::bind_method(D_METHOD("debug_lod_stats"), &VoxelWorld::debug_lod_stats);
 	ClassDB::bind_method(D_METHOD("debug_lod_fade_band"), &VoxelWorld::debug_lod_fade_band);
@@ -523,6 +526,147 @@ Dictionary VoxelWorld::debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, int h, 
 	}
 	d["max_channel"] = max_channel;
 	d["mean_luma"] = mean_luma / static_cast<double>(pixels);
+	return d;
+}
+
+Dictionary VoxelWorld::debug_ssgi_reprojection_probe(Vector3 previous_pos, Vector3 previous_fwd,
+		Vector3 current_pos, Vector3 current_fwd, int w, int h) {
+	Dictionary d;
+	d["non_identity"] = previous_pos != current_pos || previous_fwd != current_fwd;
+	d["mapping_luma"] = 0.0;
+	d["current_mapping_luma"] = 0.0;
+	d["mapping_delta"] = 0.0;
+	if (w <= 0 || h <= 0) return d;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_ ||
+			!composite_pass_ || !deferred_pass_ || !gbuffer_ || !beauty_camera_ || !ssgi_pass_)
+		return d;
+	int quiet = 0;
+	for (int i = 0; i < 400 && quiet < 6; i++)
+		quiet = debug_stream_frame(previous_pos) == 0 ? quiet + 1 : 0;
+	composite_pass_->release_targets();
+	if (!gbuffer_->ensure(device, nullptr, Vector2i(w, h)) || !beauty_camera_->ensure(device))
+		return d;
+
+	const float fov_y = 1.0471975512f;
+	const float aspect = static_cast<float>(w) / static_cast<float>(h);
+	const float tan_y = std::tan(fov_y * 0.5f);
+	const float tan_x = tan_y * aspect;
+	const float near_clip = 0.05f;
+	const float far_clip = 4000.0f;
+	const float p[3] = {previous_pos.x, previous_pos.y, previous_pos.z};
+	const float cp_pos[3] = {current_pos.x, current_pos.y, current_pos.z};
+	const float previous_f[3] = {previous_fwd.x, previous_fwd.y, previous_fwd.z};
+	const float current_f[3] = {current_fwd.x, current_fwd.y, current_fwd.z};
+	const float previous_up[3] = {0.0f, std::fabs(previous_fwd.y) > 0.9f ? 0.0f : 1.0f,
+			std::fabs(previous_fwd.y) > 0.9f ? 1.0f : 0.0f};
+	const float current_up[3] = {0.0f, std::fabs(current_fwd.y) > 0.9f ? 0.0f : 1.0f,
+			std::fabs(current_fwd.y) > 0.9f ? 1.0f : 0.0f};
+	const ve::LodCamera previous_cam = ve::lod_camera_perspective(p, previous_f, previous_up,
+			fov_y, aspect, near_clip, far_clip, w, h);
+	const ve::LodCamera current_cam = ve::lod_camera_perspective(cp_pos, current_f, current_up,
+			fov_y, aspect, near_clip, far_clip, w, h);
+	Projection previous_view_proj, current_view_proj;
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++) {
+			previous_view_proj.columns[c][r] = previous_cam.view_proj[c * 4 + r];
+			current_view_proj.columns[c][r] = current_cam.view_proj[c * 4 + r];
+		}
+	auto make_camera_params = [&](Vector3 camera_pos, Vector3 camera_fwd,
+			const float up[3]) {
+			ve::CameraParams result = ve::CameraParams::looking_at(camera_pos.x, camera_pos.y,
+					camera_pos.z, camera_fwd.x, camera_fwd.y, camera_fwd.z, up[0], up[1], up[2]);
+			result.params[0] = tan_x;
+			result.params[1] = tan_y;
+			result.params[2] = 200.0f;
+			const ve::WorldBounds wb = world_bounds();
+			const ve::IVec3 ro = wb.origin_regions();
+			result.dims[0] = world_size_regions_.x;
+			result.dims[1] = world_size_regions_.y;
+			result.dims[2] = world_size_regions_.z;
+			result.dims[3] = island_slot_count();
+			result.region_origin[0] = ro.x;
+			result.region_origin[1] = ro.y;
+			result.region_origin[2] = ro.z;
+			result.atlas_bricks[0] = atlas_bricks_.x;
+			result.atlas_bricks[1] = atlas_bricks_.y;
+			result.atlas_bricks[2] = atlas_bricks_.z;
+			return result;
+		};
+	const ve::CameraParams previous_params = make_camera_params(previous_pos, previous_fwd,
+			previous_up);
+	const ve::CameraParams current_params = make_camera_params(current_pos, current_fwd, current_up);
+	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
+	static const float no_sun[16] = {};
+	const ve::BeautySettings settings = beauty_settings();
+	ssgi_pass_->clear_result();
+	float previous_matrix[16], current_matrix[16];
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++) {
+			previous_matrix[c * 4 + r] = previous_view_proj.columns[c][r];
+			current_matrix[c * 4 + r] = current_view_proj.columns[c][r];
+		}
+	const Projection previous_inv = previous_view_proj.inverse();
+	const Projection current_inv = current_view_proj.inverse();
+	auto render = [&](const ve::CameraParams &camera, const Projection &view_proj,
+			const Projection &inv, Vector3 camera_pos, const float previous_mapping[16],
+			bool have_history, uint32_t frame) {
+			const float camera_position[3] = {camera_pos.x, camera_pos.y, camera_pos.z};
+			beauty_camera_->update(device, view_proj, camera_position, Vector2i(w, h), near_clip,
+					far_clip);
+			if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), camera, w, h, no_edit))
+				return false;
+			float fade_start = ve::kLodFadeStartM, fade_end = ve::kLodFadeEndM;
+			lod_fade_band(&fade_start, &fade_end);
+			composite_pass_->draw(device, *gbuffer_, raymarch_pass_->albedo_texture(),
+					raymarch_pass_->surface_texture(), raymarch_pass_->hitpos_texture(), view_proj,
+					*materials_, camera_position, fade_start, fade_end);
+			if (!composite_pass_->last_draw_ok()) return false;
+			const bool ssgi_ok = ssgi_pass_->render(device, *gbuffer_, beauty_camera_->buffer(),
+					previous_mapping, have_history, settings, frame);
+			if (!ssgi_ok) return false;
+			DeferredPass::Params dp;
+			for (int c = 0; c < 4; c++)
+				for (int r = 0; r < 4; r++) dp.inv_view_proj[c * 4 + r] = inv.columns[c][r];
+			dp.cam_pos[0] = camera_pos.x;
+			dp.cam_pos[1] = camera_pos.y;
+			dp.cam_pos[2] = camera_pos.z;
+			dp.flags = ve::pack_flags(settings);
+			return deferred_pass_->render(device, *gbuffer_, *materials_, ssgi_pass_->result(), RID(),
+					no_sun, 0.0f, dp);
+	};
+	auto read_luma = [&]() {
+		const Vector2i half = gbuffer_->half_size();
+		const PackedByteArray data = device->texture_get_data(ssgi_pass_->result(), 0);
+		const int pixels = half.x * half.y;
+		if (data.size() < static_cast<int64_t>(pixels) * 8) return 0.0;
+		const uint16_t *values = reinterpret_cast<const uint16_t *>(data.ptr());
+		double luma = 0.0;
+		for (int i = 0; i < pixels; i++)
+			luma += 0.2126 * Math::half_to_float(values[i * 4]) +
+					0.7152 * Math::half_to_float(values[i * 4 + 1]) +
+					0.0722 * Math::half_to_float(values[i * 4 + 2]);
+		return luma / static_cast<double>(pixels);
+	};
+	if (!render(previous_params, previous_view_proj, previous_inv, previous_pos, previous_matrix,
+			false, 0)) return d;
+	downsample_history(device, gbuffer_->lit(), *gbuffer_);
+	device->submit();
+	device->sync();
+	if (!render(current_params, current_view_proj, current_inv, current_pos, previous_matrix,
+			true, 1)) return d;
+	device->submit();
+	device->sync();
+	const double mapping_luma = read_luma();
+	if (!render(current_params, current_view_proj, current_inv, current_pos, current_matrix,
+			true, 1)) return d;
+	device->submit();
+	device->sync();
+	const double current_mapping_luma = read_luma();
+	d["mapping_luma"] = mapping_luma;
+	d["current_mapping_luma"] = current_mapping_luma;
+	d["mapping_delta"] = std::fabs(mapping_luma - current_mapping_luma);
 	return d;
 }
 

@@ -67,3 +67,15 @@ func test_turning_ssgi_off_produces_nothing_and_costs_no_dispatch() -> void:
 	var d: Dictionary = w.debug_ssgi_probe(Vector3(30.0, 70.0, 30.0), Vector3(0.2, -1.0, 0.2).normalized(),
 		128, 128, 8)
 	assert_bool(d["ran"]).is_false()
+
+# Keep the same previous lit image and current camera, but change only the matrix supplied
+# as the previous-frame mapping. A motion-correct history sample must respond to that
+# non-identity transform; sampling history at current-frame horizon UVs produces no change.
+func test_temporal_history_uses_previous_camera_mapping() -> void:
+	var w := make_world()
+	var d: Dictionary = w.debug_ssgi_reprojection_probe(
+		Vector3(30.0, 70.0, 30.0), Vector3(0.2, -1.0, 0.2).normalized(),
+		Vector3(34.0, 70.0, 30.0), Vector3(-0.2, -1.0, 0.2).normalized(), 128, 128)
+	assert_bool(d["non_identity"]).is_true()
+	assert_float(float(d["mapping_delta"])).override_failure_message(
+		"temporal lit history did not respond to previous-frame camera mapping").is_greater(0.0001)
