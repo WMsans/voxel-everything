@@ -4,6 +4,7 @@
 #include "render/contact_shadow_pass.h"
 #include "render/gbuffer.h"
 #include "render/ssr_pass.h"
+#include "render/outline_pass.h"
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/render_scene_buffers_rd.hpp>
 #include <godot_cpp/classes/render_scene_data.hpp>
@@ -46,7 +47,9 @@ void BeautyCompositor::_render_callback(int cb_type, RenderData *render_data) {
 	normal_roughness_state_ = rsb->has_texture("forward_clustered", "normal_roughness") ? 1 : 0;
 	const RID normal_rough = normal_roughness_state_ == 1
 			? rsb->get_texture("forward_clustered", "normal_roughness") : RID();
-	(void)normal_rough;
+	// Task 9 found the texture reachable but constant/uncalibrated. Keep dynamic normal
+	// creases disabled until a known-orientation calibration promotes the state to 2.
+	const bool have_calibrated_normal_roughness = normal_roughness_state_ == 2;
 	world->set_normal_roughness_state(normal_roughness_state_);
 	world->set_beauty_compositor(this);
 
@@ -70,8 +73,11 @@ void BeautyCompositor::_render_callback(int cb_type, RenderData *render_data) {
 		ssr->render(rd, rsb->get_color_texture(), rsb->get_depth_texture(), gb ? gb->surface() : RID(),
 				gb ? gb->depth() : RID(), normal_rough, normal_roughness_state_ == 1,
 				ubo->buffer(), size, settings);
-	// Task 12 inserts outlines here.
-
+	if (OutlinePass *outline = world->outline_pass(); outline && gb && gb->is_valid())
+		outline->render(rd, rsb->get_color_texture(), rsb->get_depth_texture(), gb->depth(),
+				gb->surface(), normal_rough, have_calibrated_normal_roughness,
+				ubo->buffer(), size, settings);
+	// Non-visual copy: outline above is the last scene-colour mutation before glow/tonemap.
 	if (gb && gb->is_valid())
 		world->downsample_history(rd, rsb->get_color_texture(), *gb);
 }

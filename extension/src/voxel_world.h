@@ -54,6 +54,7 @@ class CameraUbo;
 class ContactShadowPass;
 class SsgiPass;
 class SsrPass;
+class OutlinePass;
 class BeautyCompositor;
 class IslandAtlas;
 class IslandCullPass;
@@ -116,6 +117,7 @@ class VoxelWorld : public Node3D {
 	ContactShadowPass *contact_shadow_pass_ = nullptr;
 	SsgiPass *ssgi_pass_ = nullptr;
 	SsrPass *ssr_pass_ = nullptr;
+	OutlinePass *outline_pass_ = nullptr;
 	BeautyCompositor *beauty_compositor_ = nullptr;
 	float prev_view_proj_[16] = {};
 	bool has_history_ = false;
@@ -277,6 +279,7 @@ public:
 	Dictionary debug_beauty_compositor_stats();
 	Dictionary debug_contact_shadow_probe(Vector3 pos, Vector3 fwd, int w, int h);
 	Dictionary debug_ssr_probe(int fixture, int w, int h);
+	Dictionary debug_outline_probe(int fixture, bool have_dynamic_normals);
 	Dictionary debug_glossy_sdf_probe(Vector3 origin, Vector3 dir);
 	Dictionary debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, int h, int frames);
 	Dictionary debug_ssgi_reprojection_probe(Vector3 previous_pos, Vector3 previous_fwd,
@@ -317,6 +320,7 @@ public:
 	ContactShadowPass *contact_shadow_pass() { return contact_shadow_pass_; }
 	SsgiPass *ssgi_pass() { return ssgi_pass_; }
 	SsrPass *ssr_pass() { return ssr_pass_; }
+	OutlinePass *outline_pass() { return outline_pass_; }
 	const float *prev_view_proj() const { return prev_view_proj_; }
 	bool has_history() const { return has_history_; }
 	uint32_t beauty_frame() const { return beauty_frame_; }
