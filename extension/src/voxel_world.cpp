@@ -83,9 +83,19 @@ bool VoxelWorld::try_begin_render_callback() {
 }
 
 void VoxelWorld::end_render_callback() {
-	std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
-	if (render_callbacks_ <= 0) return;
-	if (--render_callbacks_ == 0) render_lifetime_cv_.notify_all();
+	bool defer_teardown = false;
+	{
+		std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
+		if (render_callbacks_ <= 0) return;
+		if (--render_callbacks_ == 0) {
+			defer_teardown = render_teardown_deferred_;
+			render_teardown_deferred_ = false;
+			render_lifetime_cv_.notify_all();
+		}
+	}
+	// A render-thread caller cannot wait for its own callback guard. Defer destruction until
+	// that guard has released the last callback; no resource is touched after this destructor.
+	if (defer_teardown) shutdown_render_resources_on_render_thread();
 }
 
 void VoxelWorld::_bind_methods() {
@@ -163,6 +173,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_seam_probe", "pos", "fwd", "w", "h", "skip_lod"),
 			&VoxelWorld::debug_seam_probe, DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("debug_hiz_stats"), &VoxelWorld::debug_hiz_stats);
+	ClassDB::bind_method(D_METHOD("debug_hiz_shutdown_probe"), &VoxelWorld::debug_hiz_shutdown_probe);
 	ClassDB::bind_method(D_METHOD("debug_gbuffer_stats", "w", "h"),
 			&VoxelWorld::debug_gbuffer_stats);
 	ClassDB::bind_method(D_METHOD("debug_hiz_probe_synthetic", "far_value", "near_value"),
@@ -753,6 +764,7 @@ void VoxelWorld::_ready() {
 	{
 		std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
 		render_shutting_down_ = false;
+		render_teardown_deferred_ = false;
 	}
 	// Godot only calls _process on a GDExtension node that asks for it.
 	set_process(true);
@@ -877,11 +889,21 @@ void VoxelWorld::teardown_gpu() {
 	if (raymarch_pass_) { delete raymarch_pass_; raymarch_pass_ = nullptr; }
 	if (lod_raster_pass_) { delete lod_raster_pass_; lod_raster_pass_ = nullptr; }
 	if (lod_cull_pass_) { delete lod_cull_pass_; lod_cull_pass_ = nullptr; }
-	if (hiz_pass_) { delete hiz_pass_; hiz_pass_ = nullptr; }
+	if (hiz_pass_) {
+		hiz_pass_->teardown();
+		last_hiz_readback_was_pending_ = hiz_pass_->readback_was_pending_at_teardown();
+		last_hiz_readback_was_drained_ = hiz_pass_->readback_was_drained_at_teardown();
+		delete hiz_pass_;
+		hiz_pass_ = nullptr;
+	}
 	if (materials_) { delete materials_; materials_ = nullptr; }
 	if (gen_pass_) { delete gen_pass_; gen_pass_ = nullptr; }
 	if (region_pass_) { delete region_pass_; region_pass_ = nullptr; }
-	if (streamer_) { delete streamer_; streamer_ = nullptr; }
+	if (streamer_) {
+		streamer_->drain_readbacks(rd());
+		delete streamer_;
+		streamer_ = nullptr;
+	}
 	if (residency_) { residency_->clear(); } // slot assignments are meaningless pre-atlas
 	if (island_cull_) { delete island_cull_; island_cull_ = nullptr; }
 	if (islands_) { delete islands_; islands_ = nullptr; }
@@ -915,13 +937,29 @@ void VoxelWorld::shutdown_render_resources_on_render_thread() {
 }
 
 void VoxelWorld::shutdown_render_resources() {
-	if (!main_rd_ || !initialized_) return;
-	if (RenderingServer::get_singleton()->is_on_render_thread()) {
+	// Close admission before synchronizing or queueing teardown. A compositor callback that
+	// starts after this point must return before looking up the world or calling ensure_init.
+	g_voxel_compositor_callbacks_enabled.store(false, std::memory_order_release);
+	{
+		std::unique_lock<std::mutex> lock(render_lifetime_mutex_);
+		render_shutting_down_ = true;
+		const bool on_render_thread = RenderingServer::get_singleton()->is_on_render_thread();
+		if (on_render_thread && render_callbacks_ > 0) {
+			render_teardown_deferred_ = true;
+			return;
+		}
+		if (!on_render_thread) {
+			render_lifetime_cv_.wait(lock, [this] { return render_callbacks_ == 0; });
+		}
+	}
+	if (!initialized_ || !rd()) return;
+	if (RenderingServer::get_singleton()->is_on_render_thread() || use_local_device_ || !main_rd_) {
 		teardown_gpu();
 		return;
 	}
 	// Drain the RenderingServer queue first; unlike RenderingDevice::submit/sync this is the
-	// supported global-device synchronization boundary.
+	// supported global-device synchronization boundary. The actual RD teardown is queued on
+	// the render thread, where HizPass can drain its pending async Callable safely.
 	RenderingServer::get_singleton()->force_sync();
 	{
 		std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
@@ -935,17 +973,11 @@ void VoxelWorld::shutdown_render_resources() {
 
 void VoxelWorld::_exit_tree() {
 	// SceneTree::quit() can tear down the main loop while the renderer still has one or more
-	// compositor callbacks queued. Stop new callbacks before touching Engine::get_main_loop(),
-	// then wait for callbacks that already acquired the guard. This is the lifetime boundary;
-	// merely suppressing the shutdown diagnostic would leave their RIDs use-after-free.
-	g_voxel_compositor_callbacks_enabled.store(false, std::memory_order_release);
-	{
-		std::unique_lock<std::mutex> lock(render_lifetime_mutex_);
-		render_shutting_down_ = true;
-		render_lifetime_cv_.wait(lock, [this] { return render_callbacks_ == 0; });
-	}
+	// compositor callbacks queued. shutdown_render_resources() closes admission and drains
+	// callbacks before freeing GPU resources; this preserves the same lifetime boundary for
+	// explicit benchmark shutdown and normal SceneTree exit.
+	shutdown_render_resources();
 	teardown_physics();
-	teardown_gpu();
 	if (residency_) { delete residency_; residency_ = nullptr; }
 	if (edit_log_) { delete edit_log_; edit_log_ = nullptr; }
 	pending_edits_.clear();
@@ -968,6 +1000,10 @@ void VoxelWorld::_exit_tree() {
 }
 
 void VoxelWorld::ensure_initialized() {
+	{
+		std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
+		if (render_shutting_down_) return;
+	}
 	if (initialized_) return;
 	if (use_local_device_ && !local_rd_) {
 		local_rd_ = RenderingServer::get_singleton()->create_local_rendering_device();
@@ -2487,6 +2523,26 @@ Dictionary VoxelWorld::debug_hiz_stats() {
 	d["mips"] = HizPass::kMipCount;
 	d["readback_level"] = HizPass::kReadbackLevel;
 	d["readback_texels"] = HizPass::kGrid * HizPass::kGrid;
+	return d;
+}
+
+Dictionary VoxelWorld::debug_hiz_shutdown_probe() {
+	Dictionary d;
+	d["queued"] = false;
+	d["was_pending"] = false;
+	d["drained"] = false;
+	d["initialized_after"] = true;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!device || !hiz_pass_ || !gbuffer_) return d;
+	const Vector2i size(64, 64);
+	if (!gbuffer_->ensure(device, nullptr, size)) return d;
+	if (!hiz_pass_->build(device, gbuffer_->depth(), size)) return d;
+	d["queued"] = hiz_pass_->readback_pending();
+	shutdown_render_resources();
+	d["was_pending"] = last_hiz_readback_was_pending_;
+	d["drained"] = last_hiz_readback_was_drained_;
+	d["initialized_after"] = initialized_;
 	return d;
 }
 

@@ -2,6 +2,7 @@
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
+#include <godot_cpp/variant/rid.hpp>
 
 namespace godot {
 
@@ -23,6 +24,9 @@ class AsyncBufferRead : public RefCounted {
 	GDCLASS(AsyncBufferRead, RefCounted)
 
 	PackedByteArray data_;
+	RID buffer_;
+	uint32_t offset_ = 0;
+	uint32_t size_ = 0;
 	bool pending_ = false;
 	bool has_data_ = false;
 	bool fresh_ = false;
@@ -35,6 +39,10 @@ public:
 
 	// Issues a read unless one is already outstanding. Returns true if one went out.
 	bool request(RenderingDevice *rd, const RID &buffer, uint32_t offset, uint32_t size);
+	// RenderingDevice has no cancellation API. On teardown, issue the synchronous equivalent
+	// while the source RID is still valid; it flushes the pending async request and invokes the
+	// retained Callable before this target can be released.
+	bool drain(RenderingDevice *rd);
 	bool pending() const { return pending_; }
 	bool has_data() const { return has_data_; }
 	// True once per arrival, so a caller can rebase its bookkeeping exactly when the value
@@ -59,6 +67,7 @@ class AsyncTextureRead : public RefCounted {
 	GDCLASS(AsyncTextureRead, RefCounted)
 
 	PackedByteArray data_;
+	RID texture_;
 	bool pending_ = false;
 	bool has_data_ = false;
 	bool fresh_ = false;
@@ -71,6 +80,9 @@ public:
 
 	// Issues a read unless one is already outstanding. Returns true if one went out.
 	bool request(RenderingDevice *rd, const RID &texture);
+	// RenderingDevice has no cancellation API. Drain the request before releasing its target;
+	// texture_get_data() flushes the frame queue and runs the callback synchronously.
+	bool drain(RenderingDevice *rd);
 	bool pending() const { return pending_; }
 	bool has_data() const { return has_data_; }
 	// True once per arrival, so a caller can rebase its bookkeeping exactly when the value

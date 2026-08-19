@@ -130,3 +130,130 @@ Exit code: 0
 ```
 
 Required benchmark commands and exact current evidence are in Errata entry 3 of `docs/superpowers/plans/2026-08-18-m6-beautification.md`. Captured stdout files include `/tmp/m6-benchmark-steady.txt` and the per-leg rerun files under `/tmp/m6-final2-*`; the current worktree has not yet been committed, so correction commit: `f888110` (`fix: stabilize beauty timing markers and resource lifetimes`). The environment qualification remains: Wayland prints `The requested V-Sync mode Disabled is not available. Falling back to V-Sync mode Enabled.` Steady and edit exited 0; move, ridge, and island still aborted during shutdown, and are not clean benchmark passes.
+
+## Confirmed shutdown fix (Task 14 correction)
+
+### Root cause
+
+`RenderingDevice::texture_get_data_async()` retains the callback `Callable`, but `callable_mp(this, ...)` does not retain the `RefCounted` receiver. `HizPass::teardown()` released `AsyncTextureRead` while its request could still be queued for the RenderingDevice frame-queue callback. The later Callable validation therefore reached a freed ObjectDB target. Explicit benchmark shutdown also left compositor admission enabled, so a callback queued after resource teardown could call `ensure_initialized()` and recreate the Hiz resources.
+
+### Fix
+
+- `AsyncTextureRead` now records its source RID and drains a pending request with the synchronous `texture_get_data()` equivalent before `HizPass` frees the source texture or releases the callback target. `AsyncBufferRead` uses the same shutdown protocol; `WorldStreamer` and `LodCullPass` drain their pending reads before freeing source buffers.
+- `VoxelWorld::shutdown_render_resources()` closes global and per-world compositor admission before synchronization, waits for already-acquired callbacks off the render thread, performs teardown on the render thread, and refuses reinitialization until `_ready`. A shutdown requested from an active render callback defers teardown until that callback guard releases, avoiding a self-wait/deadlock.
+- Normal async HiZ readback remains unchanged during rendering; only shutdown uses the synchronous drain. No readback suppression or cleanup removal was added.
+
+### Regression evidence
+
+TDD red run before the hook existed:
+
+```text
+./gdunit_tests.sh -a res://tests/test_render_shutdown.gd -c
+Invalid call. Nonexistent function 'debug_hiz_shutdown_probe' in base 'VoxelWorld'.
+Exit code: 100
+```
+
+The new deterministic local-device hook queues a real HiZ async readback, calls shutdown, and asserts `queued`, `was_pending`, `drained`, `initialized_after == false`, plus that a later `ensure_initialized()` cannot recreate resources. Fresh result:
+
+```text
+./gdunit_tests.sh -a res://tests/test_render_shutdown.gd -c
+Overall Summary: 1 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans
+Exit code: 0
+```
+
+Fresh required verification after the fix:
+
+```text
+./build.sh -j$(nproc)
+Build OK: 4.6M libvoxel_everything.linux.template_debug.x86_64.so
+
+cd extension && scons test
+[doctest] test cases:     294 |     294 passed | 0 failed | 0 skipped
+[doctest] assertions: 3961638 | 3961638 passed | 0 failed
+[doctest] Status: SUCCESS!
+
+./gdunit_tests.sh -a res://tests/test_gpu_timings.gd -a res://tests/test_debug_menu.gd -a res://tests/test_beauty_settings.gd -c
+Overall Summary: 10 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans
+Exit code: 0
+
+./gdunit_tests.sh -c
+Overall Summary: 234 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans
+Executed test suites: (48/48)
+Executed test cases : (234/234)
+Exit code: 0
+```
+
+The focused command above was followed by the one-case shutdown regression suite; the full suite included `tests/test_render_shutdown.gd`.
+
+### Fresh 2560x1440 benchmark outcomes
+
+All commands ran against this worktree with `WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000`, NVIDIA GeForce RTX 4070 Laptop GPU, driver 610.57.04, Vulkan 1.4.341, Godot 4.7.1.stable.arch_linux.a13da4feb. The requested disabled V-Sync was unavailable under Wayland and fell back to enabled V-Sync. Each leg exited 0, printed the required telemetry, and shut down without `corrupted size`, allocator abort, or invalid-RID-free diagnostics. `clean` below means clean process shutdown; the Wayland/X11 fallback and existing two-ObjectDB-leak warning remain environment/runtime concerns.
+
+```text
+COMMAND: env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/godot --path /home/jeremy/Development/Godot/voxel-everything/.worktrees/m6-beautification --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark
+EXIT_STATUS=0; clean=yes
+BENCH gpu_raymarch samples=287 p50_ms=6.341 p99_ms=7.963
+BENCH gpu_lod samples=287 p50_ms=0.043 p99_ms=0.050
+BENCH gpu_ssgi samples=287 p50_ms=0.172 p99_ms=0.174
+BENCH gpu_ssr samples=287 p50_ms=0.146 p99_ms=0.148
+BENCH gpu_shadows samples=287 p50_ms=0.078 p99_ms=0.225
+BENCH gpu_outlines samples=287 p50_ms=0.089 p99_ms=0.090
+BENCH gpu_custom_frame samples=287 p50_ms=7.345 p99_ms=9.153
+BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
+BENCH gpu_timestamp_calibration unit=live_normalized_microseconds scale_to_us=0.001000 raw_cpu_ratio=7637.735 calibrated=true
+
+COMMAND: env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/godot --path /home/jeremy/Development/Godot/voxel-everything/.worktrees/m6-beautification --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark-move
+EXIT_STATUS=0; clean=yes
+BENCH gpu_raymarch samples=287 p50_ms=6.348 p99_ms=7.719
+BENCH gpu_lod samples=287 p50_ms=0.070 p99_ms=0.214
+BENCH gpu_ssgi samples=287 p50_ms=0.179 p99_ms=0.324
+BENCH gpu_ssr samples=287 p50_ms=0.166 p99_ms=0.349
+BENCH gpu_shadows samples=287 p50_ms=0.081 p99_ms=0.437
+BENCH gpu_outlines samples=287 p50_ms=0.085 p99_ms=0.231
+BENCH gpu_custom_frame samples=287 p50_ms=7.610 p99_ms=9.568
+BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
+BENCH gpu_timestamp_calibration unit=live_normalized_microseconds scale_to_us=0.001000 raw_cpu_ratio=7059.745 calibrated=true
+
+COMMAND: env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/godot --path /home/jeremy/Development/Godot/voxel-everything/.worktrees/m6-beautification --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark-ridge
+EXIT_STATUS=0; clean=yes
+BENCH gpu_raymarch samples=287 p50_ms=5.954 p99_ms=8.752
+BENCH gpu_lod samples=287 p50_ms=0.176 p99_ms=0.265
+BENCH gpu_ssgi samples=287 p50_ms=0.144 p99_ms=0.360
+BENCH gpu_ssr samples=287 p50_ms=0.155 p99_ms=0.322
+BENCH gpu_shadows samples=287 p50_ms=0.065 p99_ms=0.578
+BENCH gpu_outlines samples=287 p50_ms=0.051 p99_ms=0.185
+BENCH gpu_custom_frame samples=287 p50_ms=7.102 p99_ms=10.371
+BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
+BENCH gpu_timestamp_calibration unit=live_normalized_microseconds scale_to_us=0.001000 raw_cpu_ratio=2886.968 calibrated=true
+
+COMMAND: env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/godot --path /home/jeremy/Development/Godot/voxel-everything/.worktrees/m6-beautification --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark-edit
+EXIT_STATUS=0; clean=yes
+BENCH gpu_raymarch samples=287 p50_ms=10.018 p99_ms=14.299
+BENCH gpu_lod samples=287 p50_ms=0.050 p99_ms=0.244
+BENCH gpu_ssgi samples=287 p50_ms=0.159 p99_ms=0.292
+BENCH gpu_ssr samples=287 p50_ms=0.171 p99_ms=0.289
+BENCH gpu_shadows samples=287 p50_ms=0.079 p99_ms=0.303
+BENCH gpu_outlines samples=287 p50_ms=0.085 p99_ms=0.228
+BENCH gpu_custom_frame samples=287 p50_ms=11.984 p99_ms=29.077
+BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
+BENCH gpu_timestamp_calibration unit=live_normalized_microseconds scale_to_us=0.001000 raw_cpu_ratio=6357.802 calibrated=true
+
+COMMAND: env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/godot --path /home/jeremy/Development/Godot/voxel-everything/.worktrees/m6-beautification --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark-island
+EXIT_STATUS=0; clean=yes
+BENCH gpu_raymarch samples=807 p50_ms=6.662 p99_ms=8.519
+BENCH gpu_lod samples=807 p50_ms=0.043 p99_ms=0.050
+BENCH gpu_ssgi samples=807 p50_ms=0.168 p99_ms=0.173
+BENCH gpu_ssr samples=807 p50_ms=0.149 p99_ms=0.152
+BENCH gpu_shadows samples=807 p50_ms=0.078 p99_ms=0.229
+BENCH gpu_outlines samples=807 p50_ms=0.087 p99_ms=0.235
+BENCH gpu_custom_frame samples=807 p50_ms=7.678 p99_ms=10.038
+BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+BENCH gpu_timing valid_samples=807 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
+BENCH gpu_timestamp_calibration unit=live_normalized_microseconds scale_to_us=0.001000 raw_cpu_ratio=4965.422 calibrated=true
+```
+
+The captured stdout is authoritative in `/tmp/task14-shutdown-ridge.txt`. All five benchmark legs now have clean shutdowns. Budget WARNs are retained as measured verdicts, not retuned; `lod_ms` remains CPU command-record time and no GPU verdict uses it.

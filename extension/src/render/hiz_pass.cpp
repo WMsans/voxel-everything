@@ -161,6 +161,11 @@ bool HizPass::initialize(RenderingDevice *rd) {
 
 void HizPass::teardown() {
 	if (!rd_) return;
+	// RenderingDevice retains the Callable for an async readback but not this RefCounted target.
+	// Drain before freeing the source texture or releasing readback_, otherwise the deferred
+	// callback can validate a freed ObjectDB entry during allocator cleanup.
+	readback_was_pending_at_teardown_ = readback_.is_valid() && readback_->pending();
+	readback_was_drained_at_teardown_ = !readback_was_pending_at_teardown_ || readback_->drain(rd_);
 	// Free order: uniform sets reference the shader, and freeing a texture cascades to its
 	// shared slices and referencing sets, so sets first, then pipeline/shader, then the
 	// texture/sampler resources.
