@@ -37,3 +37,26 @@ func test_synthetic_ingest_declares_microseconds_without_live_scaling()->void:
 	assert_str(d["timestamp_unit"]).is_equal("synthetic_microseconds")
 	assert_str(d["timestamp_normalization"]).is_equal("none_synthetic_inputs_are_microseconds")
 	assert_float(d["timestamp_scale_to_microseconds"]).is_equal_approx(1.0,.0001)
+
+func test_stream_scope_is_a_known_pass()->void:
+	var d: Dictionary = world().debug_ingest_gpu_timings(PackedStringArray([
+		"ve:20:frame:0:b","ve:20:stream:0:b","ve:20:stream:0:e","ve:20:frame:0:e"]),
+		PackedInt64Array([1000,1200,3200,9000]),60)
+	assert_bool(d["valid"]).is_true()
+	assert_float(d["stream_gpu_ms"]).is_equal_approx(2.0,.0001)
+
+func test_unattributed_is_the_frame_minus_every_labelled_pass()->void:
+	# frame = 8 ms, raymarch = 3 ms, stream = 2 ms -> 3 ms carries no label.
+	var d: Dictionary = world().debug_ingest_gpu_timings(PackedStringArray([
+		"ve:21:frame:0:b","ve:21:raymarch:0:b","ve:21:raymarch:0:e",
+		"ve:21:stream:0:b","ve:21:stream:0:e","ve:21:frame:0:e"]),
+		PackedInt64Array([1000,1000,4000,4000,6000,9000]),61)
+	assert_float(d["unattributed_gpu_ms"]).is_equal_approx(3.0,.0001)
+
+func test_unattributed_never_goes_negative()->void:
+	# Overlapping scopes can sum past the frame; a negative "unattributed" would read as a
+	# measurement, and it is not one.
+	var d: Dictionary = world().debug_ingest_gpu_timings(PackedStringArray([
+		"ve:22:frame:0:b","ve:22:raymarch:0:b","ve:22:raymarch:0:e","ve:22:frame:0:e"]),
+		PackedInt64Array([1000,1000,9000,2000]),62)
+	assert_float(d["unattributed_gpu_ms"]).is_greater_equal(0.0)

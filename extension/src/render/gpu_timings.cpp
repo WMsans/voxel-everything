@@ -15,7 +15,7 @@ namespace {
 
 const char *const kPasses[] = {
 		"raymarch", "composite", "lod", "sun_shadow", "ssgi", "deferred", "inject",
-		"contact", "ssr", "outlines", "history"};
+		"contact", "ssr", "outlines", "history", "stream"};
 
 struct Marker {
 	uint64_t serial = 0;
@@ -54,6 +54,9 @@ Dictionary empty_snapshot() {
 	Dictionary result;
 	for (const char *name : kPasses) result[String(name) + "_gpu_ms"] = -1.0;
 	result["custom_frame_gpu_ms"] = -1.0;
+	// Frame time this engine spent inside its own compositor with no pass label on it.
+	// -1 means "no complete frame pair", which is a different statement from "0 ms".
+	result["unattributed_gpu_ms"] = -1.0;
 	result["valid"] = false;
 	result["sample_id"] = 0;
 	result["render_device_frame"] = -1;
@@ -240,6 +243,16 @@ Dictionary GpuTimings::ingest_for_test(const PackedStringArray &names,
 		if (frame_complete) {
 			const auto frame_pair = (*selected)["frame"][0];
 			result["custom_frame_gpu_ms"] = static_cast<double>(frame_pair.second - frame_pair.first) / 1000.0;
+			// Scopes can nest or overlap (the island cull sits inside "raymarch"), so the
+			// sum is an upper bound on labelled time and the remainder is clamped at zero.
+			// A negative number here would be read as a measurement; it is arithmetic.
+			double labelled = 0.0;
+			for (const char *name : kPasses) {
+				const double value = result.get(String(name) + "_gpu_ms", -1.0);
+				if (value > 0.0) labelled += value;
+			}
+			const double frame_ms = result["custom_frame_gpu_ms"];
+			result["unattributed_gpu_ms"] = frame_ms > labelled ? frame_ms - labelled : 0.0;
 		}
 	}
 

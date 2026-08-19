@@ -117,9 +117,15 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 
 	// Volumes before anything that evaluates the field: an op naming a slot may already be
 	// in the edit log, and the streamer is about to regenerate the bricks that read it.
+	// Everything from here to the raymarch is world maintenance: volume uploads, the region
+	// mark/free passes, and the indirect brick-generation dispatch. It was the only GPU work
+	// in this callback with no timing label, and in the edit leg it is the largest single
+	// contributor to a frame (M6 errata 3's 26.8 ms p99). Scope it before optimising it.
+	timings->begin(rd, "stream");
 	world->drain_island_uploads(rd);
 	WorldStreamer *st = world->streamer();
 	if (st) st->run_frame(rd, cam.origin.x, cam.origin.y, cam.origin.z);
+	timings->end(rd, "stream");
 
 	RaymarchPass *rmp = world->raymarch_pass();
 	GpuAtlas *atlas = world->atlas();

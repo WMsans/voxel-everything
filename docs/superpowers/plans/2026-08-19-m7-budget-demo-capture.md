@@ -3287,7 +3287,97 @@ the tasks above: 1 the baseline sweep, 2 the raymarch attribution, 3 brick flags
 verdict, 10 the closing sweep. Later entries are free-form corrections in the style of M1–M6:
 where this plan's text met reality and lost.
 
-1. _(Task 1, Step 10: M7 baseline — to be filled)_
+1. **Task 1, Step 10: M7 baseline**
+
+   - steady
+
+     ```text
+     BENCH gpu_raymarch samples=287 p50_ms=6.294 p99_ms=7.910
+     BENCH gpu_stream samples=287 p50_ms=0.003 p99_ms=0.004
+     BENCH gpu_lod samples=287 p50_ms=0.043 p99_ms=0.051
+     BENCH gpu_ssgi samples=287 p50_ms=0.172 p99_ms=0.174
+     BENCH gpu_ssr samples=287 p50_ms=0.139 p99_ms=0.141
+     BENCH gpu_shadows samples=287 p50_ms=0.123 p99_ms=0.271
+     BENCH gpu_outlines samples=287 p50_ms=0.080 p99_ms=0.082
+     BENCH gpu_unattributed samples=287 p50_ms=0.133 p99_ms=0.297
+     BENCH gpu_custom_frame samples=287 p50_ms=7.326 p99_ms=9.188
+     BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+     BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
+     BENCH gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true
+     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled frame_verdict_qualified=false
+     ```
+
+   - move
+
+     ```text
+     BENCH gpu_raymarch samples=287 p50_ms=6.354 p99_ms=7.571
+     BENCH gpu_stream samples=287 p50_ms=0.004 p99_ms=0.873
+     BENCH gpu_lod samples=287 p50_ms=0.070 p99_ms=0.091
+     BENCH gpu_ssgi samples=287 p50_ms=0.176 p99_ms=0.321
+     BENCH gpu_ssr samples=287 p50_ms=0.166 p99_ms=0.345
+     BENCH gpu_shadows samples=287 p50_ms=0.122 p99_ms=0.491
+     BENCH gpu_outlines samples=287 p50_ms=0.079 p99_ms=0.215
+     BENCH gpu_unattributed samples=287 p50_ms=0.147 p99_ms=0.293
+     BENCH gpu_custom_frame samples=287 p50_ms=7.571 p99_ms=9.346
+     BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+     BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
+     BENCH gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true
+     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled frame_verdict_qualified=false
+     ```
+
+   - ridge
+
+     ```text
+     BENCH gpu_raymarch samples=287 p50_ms=6.016 p99_ms=8.724
+     BENCH gpu_stream samples=287 p50_ms=0.012 p99_ms=0.815
+     BENCH gpu_lod samples=287 p50_ms=0.181 p99_ms=0.315
+     BENCH gpu_ssgi samples=287 p50_ms=0.144 p99_ms=0.363
+     BENCH gpu_ssr samples=287 p50_ms=0.153 p99_ms=0.328
+     BENCH gpu_shadows samples=287 p50_ms=0.099 p99_ms=0.611
+     BENCH gpu_outlines samples=287 p50_ms=0.052 p99_ms=0.183
+     BENCH gpu_unattributed samples=287 p50_ms=0.155 p99_ms=0.291
+     BENCH gpu_custom_frame samples=287 p50_ms=7.191 p99_ms=9.875
+     BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+     BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
+     BENCH gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true
+     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled frame_verdict_qualified=false
+     ```
+
+   - edit
+
+     ```text
+     BENCH gpu_raymarch samples=287 p50_ms=10.533 p99_ms=14.263
+     BENCH gpu_stream samples=287 p50_ms=0.870 p99_ms=17.205
+     BENCH gpu_lod samples=287 p50_ms=0.050 p99_ms=0.251
+     BENCH gpu_ssgi samples=287 p50_ms=0.159 p99_ms=0.299
+     BENCH gpu_ssr samples=287 p50_ms=0.167 p99_ms=0.300
+     BENCH gpu_shadows samples=287 p50_ms=0.127 p99_ms=0.351
+     BENCH gpu_outlines samples=287 p50_ms=0.080 p99_ms=0.224
+     BENCH gpu_unattributed samples=287 p50_ms=0.162 p99_ms=0.311
+     BENCH gpu_custom_frame samples=287 p50_ms=12.872 p99_ms=27.758
+     BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+     BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
+     BENCH gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true
+     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled frame_verdict_qualified=false
+     ```
+
+   - island
+
+     ```text
+     BENCH gpu_raymarch samples=807 p50_ms=6.666 p99_ms=8.475
+     BENCH gpu_stream samples=807 p50_ms=0.003 p99_ms=1.198
+     BENCH gpu_lod samples=807 p50_ms=0.042 p99_ms=0.049
+     BENCH gpu_ssgi samples=807 p50_ms=0.167 p99_ms=0.173
+     BENCH gpu_ssr samples=807 p50_ms=0.144 p99_ms=0.164
+     BENCH gpu_shadows samples=807 p50_ms=0.124 p99_ms=0.273
+     BENCH gpu_outlines samples=807 p50_ms=0.080 p99_ms=0.225
+     BENCH gpu_unattributed samples=807 p50_ms=0.134 p99_ms=0.165
+     BENCH gpu_custom_frame samples=807 p50_ms=7.704 p99_ms=10.552
+     BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+     BENCH gpu_timing valid_samples=807 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
+     BENCH gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true
+     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled frame_verdict_qualified=false
+     ```
 2. _(Task 2, Step 10: raymarch attribution — to be filled)_
 3. _(Task 3, Step 13: brick flags measured delta — to be filled)_
 4. _(Task 4, Step 8: region DDA measured delta — to be filled)_
