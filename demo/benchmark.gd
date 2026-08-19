@@ -27,9 +27,10 @@ const BUDGETS_MS := {
 }
 
 var _gpu_samples := {
-	"raymarch": PackedFloat32Array(), "lod": PackedFloat32Array(),
+	"raymarch": PackedFloat32Array(), "stream": PackedFloat32Array(), "lod": PackedFloat32Array(),
 	"ssgi": PackedFloat32Array(), "ssr": PackedFloat32Array(),
 	"shadows": PackedFloat32Array(), "outlines": PackedFloat32Array(),
+	"unattributed": PackedFloat32Array(),
 	"custom_frame": PackedFloat32Array(),
 }
 var _last_gpu_sample_id := -1
@@ -38,6 +39,7 @@ var _gpu_timestamp_unit := "unavailable"
 var _gpu_timestamp_scale := 0.0
 var _gpu_timestamp_normalization := "unavailable"
 var _gpu_timestamp_normalized := false
+var _vsync_actual := "unknown"
 var _draining := false
 var _drain_frames := 0
 
@@ -79,7 +81,7 @@ func _ready() -> void:
 	# Without this the harness measures the DISPLAY, not the engine: a compositor that hands
 	# an unfocused window one frame callback in eight reports a 133 ms frame and a 7 fps
 	# "regression" that no code change can move.
-	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	_record_vsync()
 
 	_player = get_parent().get_node("Player")
 	_world = get_parent().get_node("VoxelWorld")
@@ -102,6 +104,23 @@ func _ready() -> void:
 	if _mode == "--benchmark-edit" or _mode == "--benchmark-island":
 		_tool = ClassDB.instantiate("VoxelEditTool")
 		_world.add_child(_tool)
+
+func _record_vsync() -> void:
+	# Requesting DISABLED is not the same as getting it: a Wayland compositor can refuse,
+	# and every frame percentile in M6 was qualified for exactly that reason. Ask, read
+	# back, and print what the run actually measured.
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	match DisplayServer.window_get_vsync_mode():
+		DisplayServer.VSYNC_DISABLED:
+			_vsync_actual = "disabled"
+		DisplayServer.VSYNC_ENABLED:
+			_vsync_actual = "enabled"
+		DisplayServer.VSYNC_ADAPTIVE:
+			_vsync_actual = "adaptive"
+		DisplayServer.VSYNC_MAILBOX:
+			_vsync_actual = "mailbox"
+		_:
+			_vsync_actual = "unknown"
 
 func _process(delta: float) -> void:
 	if _mode == "":
@@ -241,7 +260,7 @@ func _capture_gpu_sample() -> void:
 		return
 	_last_gpu_sample_id = sample_id
 	_gpu_dropped_pairs = max(_gpu_dropped_pairs, int(d.get("dropped_pairs", 0)))
-	for key in ["raymarch", "lod", "ssgi", "ssr", "outlines"]:
+	for key in ["raymarch", "stream", "lod", "ssgi", "ssr", "outlines", "unattributed"]:
 		var value := float(d.get(key + "_gpu_ms", -1.0))
 		if value >= 0.0:
 			_append_gpu(key, value)
@@ -311,7 +330,8 @@ func _report() -> void:
 	for k: String in keys:
 		worstparts.append("%s=%.2f" % [k, float(_worst.get(k, 0.0))])
 	print("BENCH worst_frame(%.2fms) " % _worst_ms + " ".join(worstparts))
-	for key in ["raymarch", "lod", "ssgi", "ssr", "shadows", "outlines", "custom_frame"]:
+	for key in ["raymarch", "stream", "lod", "ssgi", "ssr", "shadows", "outlines",
+			"unattributed", "custom_frame"]:
 		var values: PackedFloat32Array = _gpu_samples[key]
 		var sorted_gpu := values.duplicate()
 		sorted_gpu.sort()
@@ -337,7 +357,11 @@ func _report() -> void:
 	print("BENCH gpu_timestamp_normalization mode=%s unit=%s scale_to_us=%.6f normalized=%s" % [
 		_gpu_timestamp_normalization, _gpu_timestamp_unit, _gpu_timestamp_scale,
 		str(_gpu_timestamp_normalized).to_lower()])
-	print("BENCH timing_condition vsync_requested=disabled vsync_actual=enabled_wayland verdict_qualified=true")
+	var qualified := _vsync_actual != "disabled"
+	print("BENCH timing_condition display_driver=%s vsync_requested=disabled vsync_actual=%s frame_verdict_qualified=%s" % [
+		DisplayServer.get_name(), _vsync_actual, str(qualified).to_lower()])
+	if qualified:
+		push_warning("BENCH: V-Sync is %s; frame percentiles are display-capped, not engine numbers" % _vsync_actual)
 	var st: Dictionary = _world.debug_stream_stats()
 	print("BENCH regions=%d overflow=%d" % [st.get("resident_regions", -1),
 		st.get("overflow_ever", -1)])
