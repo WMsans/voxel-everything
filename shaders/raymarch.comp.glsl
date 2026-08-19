@@ -389,8 +389,8 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist) {
 // pixel. Sphere tracing gives contact hardening for free -- the penumbra narrows as the
 // occluder approaches -- with no shadow map and therefore no acne to bias away.
 //
-// world_sdf() returns +SDF_RANGE for a brick with no atlas slot. Residency is an
-// explicit prerequisite for a shadow result: if the ray leaves the resident/probed field,
+// world_sdf() returns +SDF_RANGE for a known-empty brick. Residency is an explicit
+// prerequisite for a shadow result: if the ray leaves the resident/probed region field,
 // return fully lit rather than treating the accumulated darkness as known data.
 // ---------------------------------------------------------------------------------------
 const float RAY_SHADOW_DIST = 60.0;
@@ -405,8 +405,8 @@ float terrain_sun_visibility(vec3 ro) {
 		if (t > RAY_SHADOW_DIST) break;
 		vec3 q = ro + SUN_DIR * t;
 		ivec3 brick = ivec3(floor(q / BRICK_SIZE));
-		int shadow_slot = slot_at(brick);
-		if (shadow_slot < 0) return 1.0;
+		int shadow_region = region_slot_of(brick);
+		if (shadow_region < 0) return 1.0;
 		float d = world_sdf(q);
 		if (d < 0.004) return 0.0;
 		res = min(res, RAY_SHADOW_K * d / t);
