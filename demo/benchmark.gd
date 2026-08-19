@@ -67,6 +67,18 @@ var _island_built := false
 var _island_waiting_for_merge := false
 var _target_frames := FRAMES
 
+func _effects_off_from_args(args: PackedStringArray) -> PackedStringArray:
+	for arg in args:
+		if not arg.begins_with("--effects-off="):
+			continue
+		var effects := PackedStringArray()
+		for name in arg.trim_prefix("--effects-off=").split(",", false):
+			var trimmed := String(name).strip_edges()
+			if not trimmed.is_empty():
+				effects.append(trimmed)
+		return effects
+	return PackedStringArray()
+
 func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
 	for m in ["--benchmark-move", "--benchmark-ridge", "--benchmark-edit",
@@ -85,6 +97,8 @@ func _ready() -> void:
 
 	_player = get_parent().get_node("Player")
 	_world = get_parent().get_node("VoxelWorld")
+	for effect in _effects_off_from_args(args):
+		_world.set_effect_enabled(effect, false)
 	_cam = _player.get_node("Camera3D")
 	# Drive the player from here rather than from input, so a run is reproducible.
 	_player.set_physics_process(false)
