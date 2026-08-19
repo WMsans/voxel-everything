@@ -181,6 +181,11 @@ void main() {
 			palette_buf.id[slot * 4 + a] = s_pal[order[a]];
 		}
 	}
+	// Palette is an SSBO: shared-memory fencing alone does not make tid 0's writes visible
+	// before the final flag publication (or to the later raymarch dispatch). Fence the buffer
+	// before the workgroup rendezvous; the renderer's dispatch barrier handles cross-dispatch
+	// visibility after this generator completes.
+	memoryBarrierBuffer();
 	memoryBarrierShared();
 	barrier();
 
