@@ -218,3 +218,79 @@ Fresh round 1 verification after the helper-boundary fix:
 cd extension && scons test                              321 passed, 0 failed
 git diff --check                                      clean
 ```
+
+## Round 2 fix
+
+Resolved the remaining review finding: overflow recovery and repair-queue re-marks now pass
+`generate_probe_misses=true` so probe-missed exact-edit bricks are not released/skipped when
+the edit job list overflows or a repair re-mark occurs.
+
+### RED (before the fix)
+
+The uncommitted test as handed off did **not** fail before the fix: its original
+`add 0.25 / subtract 0.15` shell is close enough to a probe sample that `brick_has_surface`
+is still true through the activation pad, so the old force-regen path regenerates it instead
+of releasing it. I strengthened the regression to a true probe miss (`add 0.19 / subtract
+0.09`, with the shell centered at the probe-cube middle) and narrowed the world to a single
+resident region so the overflow/repair path is exercised without an eviction/reload detour.
+Against the unfixed source this failed:
+
+```text
+./gdunit_tests.sh -c -a res://tests/test_repro_thin_sheet.gd
+test_edit_overflow_repair_preserves_thin_sheet_occupancy FAILED
+overflow/repair recovery reverted the thin sheet to probe-only occupancy
+2 test cases | 0 errors | 1 failures
+```
+
+Instrumentation showed the unfixed repair re-mark arrived as `MARK ... force=1 gen=0`, which
+released the probe-missed brick (`table=-1`) and later folded AIR into the occupancy grid.
+
+### Fix
+
+`extension/src/render/world_streamer.cpp`:
+
+- overflow recovery mark: `region_pass_->mark(..., true)` → `region_pass_->mark(..., true, true)`
+- repair queue mark: `region_pass_->mark(..., true)` → `region_pass_->mark(..., true, true)`
+
+`tests/test_repro_thin_sheet.gd`:
+
+- retained `test_edit_overflow_repair_preserves_thin_sheet_occupancy`
+- made it a true probe miss (`0.19`/`0.09`) and a single resident region (`stream_radius=5.0`)
+- polls the sticky overflow word (`overflow_ever & 2`) because the overflow readback is async
+
+### GREEN (after the fix)
+
+```text
+./build.sh -j$(nproc)
+==> Build OK: 4.7M libvoxel_everything.linux.template_debug.x86_64.so
+
+./gdunit_tests.sh -c -a res://tests/test_repro_thin_sheet.gd
+2 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | PASSED
+
+./gdunit_tests.sh -c -a res://tests/test_occupancy_lattice.gd
+3 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | PASSED
+
+./gdunit_tests.sh -c -a res://tests/test_occupancy.gd
+4 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | PASSED
+
+./gdunit_tests.sh -c -a res://tests/test_repro_pillar_debris.gd -a res://tests/test_island_body.gd
+6 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | PASSED
+
+cd extension && scons test
+321 test cases | 321 passed | 0 failed
+git diff --check    clean
+```
+
+Commit: `5c51fa5 fix: propagate exact-edit occupancy through recovery and repair`
+
+### Concerns
+
+- Passing `generate_probe_misses=true` to the full-region repair/overflow marks makes the
+  mark pass treat every brick in the region as an exact-edit brick. With several resident
+  regions this can allocate far more bricks than the original edit AABB and pressure the
+  atlas (the first strengthened version with `stream_radius=10` also triggered an
+  eviction/reload path, after which a plain stream-in still wrote probe AIR for the
+  probe-missed shell). The regression is intentionally single-region to isolate the
+  overflow/repair re-mark path. A follow-up could replay the original edit AABB (or
+  otherwise bound exact-edit mode) for recovery/repair marks, and decide whether plain
+  stream-in of a region with a probe-missed edit should also carry exact-edit intent.
