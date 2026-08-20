@@ -288,3 +288,133 @@ Exit code: 0
 The Godot run retained the existing X11-unavailable to Wayland fallback, GTK theme/FIFO
 warnings, and two ObjectDB leak warnings at shutdown; these are environment/runtime concerns,
 not test failures.
+
+## Round 4 — restore sparse empty-octant slots
+
+Round 3 made `commit_pending()` create a PhysicsServer body even when an octant had no
+staged shape. That made the eight-RID assertion deterministic, but it changed production
+behavior for a test: `bodies_raw` became exactly `bodies * 8`, and empty bins consumed
+shape-less bodies despite Task 9's contract that raw bodies count populated bins.
+
+Round 4 restores shape-conditional body creation. The flat vectors still reserve eight stable
+indices per chunk, while an empty octant stores an invalid RID and contributes nothing to
+`bodies_in_space()`. The deterministic test now treats the eight entries as a sparse RID mask:
+it proves the exact old mask remains unchanged after replacement shapes begin building, then
+proves every populated post-commit RID is new. The selected chunk deterministically has six
+populated octants and two empty octants before and after the edit.
+
+### Round 4 RED
+
+The regression test was changed before production code. Against the round-3 implementation:
+
+```text
+./gdunit_tests.sh -c -a res://tests/test_collider_octants.gd
+Expecting to be less than: 968 but was 968 at test_collider_octants.gd:112
+Expecting to be less than: 8 but was 8 at test_collider_octants.gd:133
+Expecting to be less than: 8 but was 8 at test_collider_octants.gd:190
+Statistics: 4 test cases | 0 errors | 3 failures | 0 flaky | 0 skipped | 0 orphans | PASSED
+Overall Summary: 4 test cases | 0 errors | 3 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 100
+```
+
+The three failures respectively proved global raw-body inflation, an all-valid old RID mask,
+and an all-valid replacement RID mask.
+
+### Round 4 focused GREEN
+
+```text
+./build.sh -j$(nproc)
+==> Build OK: 4.7M libvoxel_everything.linux.template_debug.x86_64.so
+
+./gdunit_tests.sh -c -a res://tests/test_collider_octants.gd
+COLLIDER_OCTANT_PROOF chunk=(5, 8, 5) slot=0 old_rids=[15985868276136, 15990163243431, 15994458210726, 15998753178021, 16003048145316, 16007343112611, 0, 0] new_rids=[19920058319306, 19924353286603, 19928648253900, 19932943221197, 19937238188494, 19941533155791, 0, 0] max_staged_built_octants=6
+Statistics: 4 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED
+Overall Summary: 4 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+```
+
+The pre-fix unconditional-body mutation is exactly the implementation used for the RED run,
+so the test's mutation check is direct rather than hypothetical.
+
+### Round 4 benchmark
+
+Command:
+
+```text
+env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 tools/run_benchmarks.sh m7-task9-round4-final
+```
+
+All five processes exited 0. Wayland again rejected disabled V-Sync, so frame percentiles are
+qualified. The move and edit evidence recorded in Errata 7 is:
+
+```text
+move: BENCH p50=19.23 p95=23.98 p99=27.29 max=35.67 min_fps=28.0 over_16.6ms=279 (93.0%)
+move: BENCH max_ms build_ms=0.49 island_ms=0.01 lod_ms=0.08 phys_apply_ms=24.40 phys_body_ms=0.04 phys_collect_ms=1.12 phys_faces_ms=0.48 phys_plan_ms=3.78 phys_setdata_ms=0.31 phys_submit_ms=0.01 phys_tris=7625.00 physics_tick_ms=26.28 stream_readback_ms=0.02 stream_total_ms=0.29
+move: BENCH chunks=929 pending=860 bodies=69 bodies_raw=282 failures=0 build_ms=0.18 collect_ms=0.38
+edit: BENCH p50=22.86 p95=33.33 p99=50.39 max=77.28 min_fps=12.9 over_16.6ms=297 (99.0%)
+edit: BENCH max_ms build_ms=1.03 island_ms=38.86 lod_ms=0.06 phys_apply_ms=28.72 phys_body_ms=0.07 phys_collect_ms=4.73 phys_faces_ms=0.67 phys_plan_ms=2.09 phys_setdata_ms=0.40 phys_submit_ms=0.01 phys_tris=8519.00 physics_tick_ms=29.54 stream_readback_ms=0.01 stream_total_ms=0.29
+edit: BENCH chunks=664 pending=566 bodies=98 bodies_raw=460 failures=0 build_ms=0.48 collect_ms=2.83
+```
+
+Every leg reported `raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS
+frame=WARN` and `display_driver=Wayland vsync_requested=disabled vsync_actual=disabled
+verdict_qualified=false`. The raw counts are sparse again, and the maximum one-call
+`shape_set_data` cost remains below the pre-split Task 8 values.
+
+### Round 4 affected-suite verification
+
+```text
+./build.sh -j$(nproc)
+==> Build OK: 4.7M libvoxel_everything.linux.template_debug.x86_64.so
+
+cd extension && scons target=template_release -j$(nproc)
+scons: done building targets.
+
+cd extension && scons test
+[doctest] test cases:     320 |     320 passed | 0 failed | 0 skipped
+[doctest] assertions: 3962273 | 3962273 passed | 0 failed |
+[doctest] Status: SUCCESS!
+
+./gdunit_tests.sh -c \
+  -a res://tests/test_collider_octants.gd \
+  -a res://tests/test_collider_stream.gd \
+  -a res://tests/test_collider_edits.gd \
+  -a res://tests/test_player_kick.gd \
+  -a res://tests/test_island_body.gd
+Overall Summary: 19 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Executed test suites: (5/5)
+Executed test cases : (19/19)
+Exit code: 0
+
+git diff --check
+# no output
+```
+
+The Godot run retained the known X11-to-Wayland fallback, GTK theme, missing protocol, and
+two ObjectDB leak warnings. No test failure or script error accompanied those warnings.
+
+### Repository-wide completion gate
+
+A post-change repository-wide run kept the native suite green but exposed failures outside
+Task 9's affected suite:
+
+```text
+cd extension && scons test
+[doctest] test cases: 320 | 320 passed | 0 failed | 0 skipped
+
+./gdunit_tests.sh -c
+Overall Summary: 281 test cases | 1 errors | 13 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 100
+```
+
+The same failing suites reproduce when launched in fresh, isolated Godot processes:
+
+```text
+test_connectivity.gd: 33 test cases | 0 errors | 10 failures
+test_edit_pipeline.gd: 8 test cases | 1 errors | 2 failures
+test_raymarch_gbuffer.gd: 9 test cases | 0 errors | 1 failure
+```
+
+None of those three test files or their render/connectivity implementations changed in round 4.
+The 19-case collider/island affected set remains green as recorded above; this task does not
+expand into those separate failures, and the branch is not presented as repository-wide green.
