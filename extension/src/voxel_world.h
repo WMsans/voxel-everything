@@ -529,6 +529,8 @@ public:
 	ve::OccupancyGrid &occupancy() { return occupancy_; }
 	int64_t edit_seq() const { return edit_seq_.load(std::memory_order_relaxed); }
 	int debug_occupancy_state(Vector3i cell);
+	void debug_pump_occupancy();
+	Dictionary debug_occupancy_diff(Vector3i region);
 	// The world field's signed distance at a point: generator + that point's region ops +
 	// the volume store, the same evaluation ve::raycast marches. Diagnostic.
 	float debug_field_sdf(Vector3 p);

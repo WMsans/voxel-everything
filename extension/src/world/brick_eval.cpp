@@ -87,7 +87,7 @@ void spread_materials(uint16_t *mat, const Brick &b, const Generator &gen,
 
 namespace {
 
-// The 3^3 activation probe, reduced. Both brick_has_surface and cell_state_field read it,
+// The 3^3 activation probe, reduced. brick_has_surface and cell_state_probe read it,
 // and shaders/brick_mark.comp.glsl computes exactly this once per brick and uses it twice.
 void brick_probe(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,
 		const VolumeStore *volumes, const OverrideSource *overrides, float *mn, float *mx) {
@@ -126,12 +126,26 @@ bool brick_has_surface(const Generator &gen, const EditOp *ops, int op_count, IV
 	return mn < kActivationPad && mx > -kActivationPad;
 }
 
-CellState cell_state_field(const Generator &gen, const EditOp *ops, int op_count, IVec3 cell,
+CellState cell_state_probe(const Generator &gen, const EditOp *ops, int op_count, IVec3 cell,
 		const VolumeStore *volumes, const OverrideSource *overrides) {
 	float mn = 0.0f, mx = 0.0f;
 	brick_probe(gen, ops, op_count, cell, volumes, overrides, &mn, &mx);
 	if (mn > 0.0f) return kCellAir;
 	return mx <= 0.0f ? kCellFull : kCellSolid;
+}
+
+CellState cell_state_field(const Generator &gen, const EditOp *ops, int op_count, IVec3 cell,
+		const VolumeStore *volumes, const OverrideSource *overrides) {
+	BrickEval eval{};
+	eval_brick(gen, ops, op_count, cell, &eval, volumes, overrides);
+	uint8_t mn = 255u, mx = 0u;
+	for (int i = 0; i < kBrickSdfCount; i++) {
+		mn = std::min(mn, eval.brick.sdf[i]);
+		mx = std::max(mx, eval.brick.sdf[i]);
+	}
+	const uint8_t zero = encode_sdf(0.0f);
+	if (mn > zero) return kCellAir;
+	return mx <= zero ? kCellFull : kCellSolid;
 }
 
 void eval_brick(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,

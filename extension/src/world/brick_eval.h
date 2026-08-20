@@ -28,10 +28,15 @@ Sample eval_field(const Generator &gen, const EditOp *ops, int op_count,
 bool brick_has_surface(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,
 		const VolumeStore *volumes = nullptr, const OverrideSource *overrides = nullptr);
 
-// The occupancy classification shaders/brick_mark.comp.glsl writes, as a pure function: the
-// same 3^3 probe brick_has_surface uses, reduced to spec §5's two bits. Never returns
-// kCellUnknown -- the field always answers; only the GRID has a "nobody looked" state.
+// The exact occupancy classification written by brick_gen.comp.glsl: reduce the encoded
+// signed-distance lattice produced for this brick. Never returns kCellUnknown -- the field
+// always answers; only the GRID has a "nobody looked" state.
 CellState cell_state_field(const Generator &gen, const EditOp *ops, int op_count, IVec3 cell,
+		const VolumeStore *volumes = nullptr, const OverrideSource *overrides = nullptr);
+
+// The conservative 3^3 activation-probe classification used by brick_mark for bricks it
+// decides not to generate. Kept separate so the two consumers cannot silently diverge.
+CellState cell_state_probe(const Generator &gen, const EditOp *ops, int op_count, IVec3 cell,
 		const VolumeStore *volumes = nullptr, const OverrideSource *overrides = nullptr);
 
 // Full brick contents at L0. This is BOTH the path WorldData walks and the CPU reference

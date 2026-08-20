@@ -366,6 +366,8 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_op_pool"), &VoxelWorld::debug_op_pool);
 	ClassDB::bind_method(D_METHOD("debug_op_counts"), &VoxelWorld::debug_op_counts);
 	ClassDB::bind_method(D_METHOD("debug_occupancy_state", "cell"), &VoxelWorld::debug_occupancy_state);
+	ClassDB::bind_method(D_METHOD("debug_pump_occupancy"), &VoxelWorld::debug_pump_occupancy);
+	ClassDB::bind_method(D_METHOD("debug_occupancy_diff", "region"), &VoxelWorld::debug_occupancy_diff);
 	ClassDB::bind_method(D_METHOD("debug_cell_state", "cell"), &VoxelWorld::debug_cell_state);
 	ClassDB::bind_method(D_METHOD("debug_field_sdf", "p"), &VoxelWorld::debug_field_sdf);
 	ClassDB::bind_method(D_METHOD("debug_occupancy_stats", "center"), &VoxelWorld::debug_occupancy_stats);
@@ -5851,6 +5853,60 @@ void VoxelWorld::drain_occupancy() {
 int VoxelWorld::debug_occupancy_state(Vector3i cell) {
 	drain_occupancy(); // tests step the streamer by hand and never run _process
 	return static_cast<int>(occupancy_.state({cell.x, cell.y, cell.z}));
+}
+
+void VoxelWorld::debug_pump_occupancy() {
+	ensure_initialized();
+	drain_occupancy();
+}
+
+Dictionary VoxelWorld::debug_occupancy_diff(Vector3i region) {
+	Dictionary d;
+	d["compared"] = 0;
+	d["mismatches"] = 0;
+	d["first_mismatch_brick"] = Vector3i(-1, -1, -1);
+	ensure_initialized();
+	if (!rd() || !atlas_ || !edit_log_) return d;
+	debug_stream_region(region);
+	const int rslot = debug_region_map_entry(region);
+	if (rslot < 0) return d;
+	const uint32_t block_bytes = GpuAtlas::occupancy_block_bytes();
+	const PackedByteArray gpu = rd()->buffer_get_data(atlas_->region_occupancy(),
+			static_cast<uint32_t>(rslot) * block_bytes, block_bytes);
+	const PackedByteArray table = rd()->buffer_get_data(atlas_->region_tables(),
+			static_cast<uint32_t>(rslot) * ve::kRegionBrickCount * 4,
+			static_cast<uint32_t>(ve::kRegionBrickCount) * 4);
+	if (gpu.size() < static_cast<int>(block_bytes) ||
+			table.size() < ve::kRegionBrickCount * 4) return d;
+	std::vector<ve::EditOp> ops;
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		ops = edit_log_->ops({region.x, region.y, region.z});
+	}
+	const int32_t *slots = reinterpret_cast<const int32_t *>(table.ptr());
+	ve::AnalyticGenerator gen;
+	int compared = 0, mismatches = 0;
+	Vector3i first(-1, -1, -1);
+	for (int bi = 0; bi < ve::kRegionBrickCount; bi++) {
+		if (slots[bi] < 0) continue;
+		const ve::IVec3 brick{
+				region.x * ve::kRegionBricks + (bi & (ve::kRegionBricks - 1)),
+				region.y * ve::kRegionBricks + ((bi >> 5) & (ve::kRegionBricks - 1)),
+				region.z * ve::kRegionBricks + (bi >> 10)};
+		const int got = ve::OccupancyGrid::read_packed(
+				reinterpret_cast<const uint8_t *>(gpu.ptr()), bi);
+		const int want = static_cast<int>(ve::cell_state_field(gen, ops.data(),
+				static_cast<int>(ops.size()), brick, &volumes_, overrides_));
+		compared++;
+		if (got != want) {
+			mismatches++;
+			if (mismatches == 1) first = Vector3i(brick.x, brick.y, brick.z);
+		}
+	}
+	d["compared"] = compared;
+	d["mismatches"] = mismatches;
+	d["first_mismatch_brick"] = first;
+	return d;
 }
 
 float VoxelWorld::debug_field_sdf(Vector3 p) {

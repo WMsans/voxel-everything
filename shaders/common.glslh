@@ -12,6 +12,7 @@ const float LATTICE_FILTER_PAD = VOXEL_SIZE + SDF_RANGE;
 const int REGION_BRICKS = 32;
 const float REGION_SIZE = 25.6;       // 32 * 0.8
 const int REGION_BRICK_COUNT = 32768; // 32^3
+const int OCC_WORDS_PER_REGION = REGION_BRICK_COUNT / 16; // 2048
 
 // The SDF atlas stores a 17^3 LATTICE per brick: sample n sits at local coordinate n, and
 // the extra plane at 16 is a one-voxel apron so trilinear reconstruction covers the brick's

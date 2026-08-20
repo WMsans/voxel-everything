@@ -42,8 +42,6 @@ layout(set = 0, binding = 6, std430) buffer RegionSlotCounts { int n[]; } region
 // memory is exactly ve::OccupancyGrid's "cell i in byte i >> 2, shift (i & 3) * 2".
 layout(set = 0, binding = 9, std430) buffer RegionOccupancy { uint w[]; } occupancy;
 layout(set = 0, binding = 10, std430) buffer BrickFlags { uint v[]; } brick_flags;
-const int OCC_WORDS_PER_REGION = REGION_BRICK_COUNT / 16; // 2048
-
 const uint CELL_AIR = 1u;
 const uint CELL_SOLID = 2u;
 const uint CELL_FULL = 3u;
@@ -137,11 +135,12 @@ void main() {
 	brick_probe(brick, op_base, s_op_n, probe_mn, probe_mx);
 	// `active` is a GLSL reserved word (M2 errata 5); this local is has_surface.
 	bool has_surface = probe_mn < ACTIVATION_PAD && probe_mx > -ACTIVATION_PAD;
-	// Occupancy is written in the ALLOCATE phase only: both phases scan the same range, so
-	// one write per brick per mark is enough and the release phase returns early for most.
-	if (pc.cfg.y == 1)
-		write_occupancy(rslot, bi,
-				probe_mn > 0.0 ? CELL_AIR : (probe_mx <= 0.0 ? CELL_FULL : CELL_SOLID));
+	// Only the unambiguous no-surface case is written here. A brick with a surface is
+	// generated immediately below and brick_gen writes the exact answer from its lattice;
+	// publishing this conservative estimate first would expose a one-frame lie to
+	// connectivity.
+	if (pc.cfg.y == 1 && !has_surface)
+		write_occupancy(rslot, bi, probe_mn > 0.0 ? CELL_AIR : CELL_FULL);
 
 	if (pc.cfg.y == 0) {
 		// Release phase. Kept in its own dispatch: a push at index free_count and a pop at
