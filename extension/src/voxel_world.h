@@ -264,6 +264,16 @@ class VoxelWorld : public Node3D {
 	bool last_hiz_readback_was_pending_ = false;
 	bool last_hiz_readback_was_drained_ = true;
 
+	// Shader hot reload (spec §8). request_shader_reload() only sets the latch; the render
+	// callback pumps it, pre-flights every shader, and only then tears down and rebuilds the
+	// GPU objects so a bad shader never kills the last-known-good pipelines.
+	std::atomic<bool> reload_requested_{false};
+	std::mutex reload_mutex_;
+	int reload_count_ = 0;
+	bool reload_last_ok_ = true;
+	String reload_last_error_;
+	bool preflight_shaders(RenderingDevice *rd, String *out_error);
+
 	void teardown_gpu(); // every GPU object; CPU cores survive
 	void shutdown_render_resources_on_render_thread();
 	bool initialize_downsample(RenderingDevice *rd);
@@ -339,6 +349,17 @@ public:
 	int get_quality_tier() const;
 	void set_effect_enabled(const String &name, bool on);
 	bool get_effect_enabled(const String &name) const;
+	// Spec §8 dev-build affordances: request a shader reload (latch, safe from _input) and
+	// report what the last reload did. debug_pump_shader_reload() lets tests step the render
+	// callback's reload work directly.
+	void request_shader_reload();
+	void pump_shader_reload();
+	Dictionary debug_shader_reload_stats();
+	void debug_pump_shader_reload() { pump_shader_reload(); }
+	void debug_set_shader_override(const String &name, const String &source);
+	// Differential self-check: runs the CPU-vs-GPU diff machinery the gdUnit suites use and
+	// returns a single dictionary a running demo can print.
+	Dictionary debug_self_check();
 	// Returns an immutable value snapshot. Render callbacks must take this once per frame and
 	// pass the copy through their work; the mutex is never held during render work.
 	ve::BeautySettings beauty_settings() const;
