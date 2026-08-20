@@ -1,6 +1,7 @@
 #include "render/island_extract_pass.h"
 #include "render/shader_loader.h"
 #include "render/volume_pool.h"
+#include "render/override_pool.h"
 #include "world/edit_log.h"
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rd_shader_source.hpp>
@@ -86,9 +87,14 @@ bool IslandExtractPass::initialize(RenderingDevice *rd, const VolumePool *volume
 		teardown();
 		return false;
 	}
+	// The extraction pass shares the worker's override mirror; its owner installs the
+	// pointer before initialize so the uniform set never changes identity.
+	if (!overrides_) return false;
 	uset_ = rd->uniform_set_create(Array::make(storage(0, out_), storage(1, ops_),
 			storage(2, volumes->sdf_buffer()), storage(3, volumes->mat_buffer()),
-			storage(4, boxes_), storage(5, counts_)), shader_, 0);
+			storage(4, boxes_), storage(5, counts_),
+			storage(6, overrides_->sdf_buffer()), storage(7, overrides_->mat_buffer()),
+			storage(8, overrides_->tables()), storage(9, overrides_->region_table_map())), shader_, 0);
 	if (!uset_.is_valid()) {
 		UtilityFunctions::printerr("IslandExtractPass: uniform set creation failed");
 		teardown();
@@ -154,7 +160,7 @@ bool IslandExtractPass::extract(const IslandExtractJob &job, IslandExtractResult
 	pi[4] = job.dim;
 	pi[5] = op_count;
 	pi[6] = box_count;
-	pi[7] = 0;
+	pi[7] = job.override_table;
 
 	const int64_t list = rd_->compute_list_begin();
 	rd_->compute_list_bind_compute_pipeline(list, pipeline_);

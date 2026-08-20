@@ -1,4 +1,4 @@
-[gd_scene load_steps=14 format=3 uid="uid://dx2akrpw2s62k"]
+[gd_scene load_steps=17 format=3 uid="uid://dx2akrpw2s62k"]
 
 [ext_resource type="Script" path="res://demo/player.gd" id="1"]
 [ext_resource type="Script" path="res://demo/hud.gd" id="2"]
@@ -6,6 +6,9 @@
 [ext_resource type="Script" path="res://demo/edit_tool.gd" id="4"]
 [ext_resource type="Shader" path="res://shaders/cel_object.gdshader" id="5"]
 [ext_resource type="Script" path="res://demo/debug_menu.gd" id="6"]
+[ext_resource type="Script" path="res://demo/help.gd" id="7"]
+[ext_resource type="Script" path="res://demo/dev_tools.gd" id="8"]
+[ext_resource type="Script" path="res://demo/capture.gd" id="9"]
 
 [sub_resource type="RaymarchCompositor" id="1"]
 world_path = NodePath("/root/Main/VoxelWorld")
@@ -36,6 +39,7 @@ shader_parameter/gloss = 0.15
 [node name="Main" type="Node3D"]
 
 [node name="VoxelWorld" type="VoxelWorld" parent="."]
+process_mode = 3
 world_origin_bricks = Vector3i(0, -64, 0)
 world_size_regions = Vector3i(64, 8, 64)
 physics_center_path = NodePath("/root/Main/Player")
@@ -69,6 +73,25 @@ offset_left = 10.0
 offset_top = 10.0
 script = ExtResource(2)
 world_path = NodePath("/root/Main/VoxelWorld")
+tool_path = NodePath("/root/Main/EditTool")
+reticle_path = NodePath("/root/Main/HUD/Reticle")
+
+[node name="Reticle" type="Control" parent="HUD"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Help" type="Control" parent="HUD"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource(7)
 
 [node name="DebugMenu" type="PanelContainer" parent="HUD"]
 anchors_preset = 1
@@ -90,3 +113,10 @@ script = ExtResource(4)
 world_path = NodePath("/root/Main/VoxelWorld")
 camera_path = NodePath("/root/Main/Player/Camera3D")
 player_path = NodePath("/root/Main/Player")
+
+[node name="DevTools" type="Node" parent="."]
+script = ExtResource("8")
+world_path = NodePath("/root/Main/VoxelWorld")
+
+[node name="Capture" type="Node" parent="."]
+script = ExtResource("9")

@@ -6,8 +6,12 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <utility>
+#include <map>
+#include <tuple>
 #include "generator/edit_ops.h"
 #include "render/island_extract_pass.h"
+#include "render/consolidate_pass.h"
 #include "render/lod_build_pass.h"
 #include "render/mesh_pass.h"
 #include "world/region.h"
@@ -19,6 +23,29 @@ namespace godot {
 struct MeshRequest {
 	ve::IVec3 chunk{};
 	std::vector<ve::EditOp> ops;
+};
+
+// An asynchronous worker-owned override publication. The old bytes are part of the command so
+// a partial upload can be rolled back on the worker without blocking the frame pump.
+struct OverridePublication {
+	std::vector<int> slots;
+	std::vector<ve::OverrideBrick> bricks;
+	std::vector<int> old_slots;
+	std::vector<ve::OverrideBrick> old_bricks;
+	ve::IVec3 region{};
+	int region_slot = -1;
+	int table = -1;
+	int old_table = -1;
+	std::vector<std::pair<int, int>> entries;
+	std::vector<std::pair<int, int>> old_entries;
+};
+
+struct OverridePublicationResult {
+	bool success = false;
+	// False means the worker could not restore its old bytes/table after a failed
+	// publication. The main thread must rebuild the worker from CPU-authoritative state
+	// before it requeues the transaction or submits any override-dependent work.
+	bool worker_state_valid = true;
 };
 
 // The collision mesher, moved off the main thread.
@@ -71,6 +98,32 @@ public:
 	// True while a LoD batch is queued or being built.
 	bool lod_busy() const { return lod_busy_.load(std::memory_order_acquire); }
 	int collect_lod(std::vector<LodBuildResult> *out);
+
+	bool submit_consolidations(std::vector<ConsolidateJob> jobs);
+	int collect_consolidations(std::vector<ConsolidateResult> *out);
+	bool submit_override_publication(OverridePublication publication);
+	int collect_override_publications(std::vector<OverridePublicationResult> *out);
+	// Queues an override table update for the worker-owned pass. These calls never wait for
+	// the worker; the update is drained before any later mesh/LoD/consolidation job.
+	bool set_override_region(ve::IVec3 region, int region_slot, int table,
+			const std::vector<std::pair<int, int>> &entries);
+	void clear_override_region(int region_slot);
+	bool replay_overrides(const ve::OverrideStore &store,
+			const std::map<std::tuple<int, int, int>, int> &tables);
+	// A failed publication invalidates the worker bytes. Cancel work that was queued behind
+	// that publication before the recovery sync runs; otherwise the invalid-state worker will
+	// refuse to drain it and run_sync() can never become eligible.
+	void cancel_queued_work_for_rebuild();
+	bool restore_overrides(const std::vector<int> &slots,
+			const std::vector<ve::OverrideBrick> &bricks, ve::IVec3 region, int region_slot,
+			int table, int old_table, const std::vector<std::pair<int, int>> &old_entries);
+	// Publishes all bricks for a region in one worker-thread transaction. The table is
+	// repointed only after every upload succeeds, so a partial bake remains invisible.
+	bool publish_overrides(const std::vector<int> &slots,
+			const std::vector<ve::OverrideBrick> &bricks, ve::IVec3 region, int region_slot,
+			int table, const std::vector<std::pair<int, int>> &entries);
+	bool publish_override(int slot, const ve::OverrideBrick &brick, ve::IVec3 region,
+			int region_slot, int table, const std::vector<std::pair<int, int>> &entries);
 	// True when the worker has a live LodBuildPass.
 	bool lod_available() const {
 		return lod_available_.load(std::memory_order_acquire);
@@ -91,12 +144,40 @@ public:
 	void debug_set_fail_extract_submit(bool v) {
 		fail_extract_submit_.store(v, std::memory_order_release);
 	}
+	void debug_set_fail_consolidations(bool v) {
+		fail_consolidations_.store(v, std::memory_order_release);
+	}
+	void debug_set_fail_consolidate_uploads(bool v) {
+		fail_consolidate_uploads_.store(v, std::memory_order_release);
+	}
+	void debug_set_fail_restore_overrides(bool v) {
+		fail_next_restore_.store(v, std::memory_order_release);
+	}
+	void debug_set_fail_restore_overrides_always(bool v) {
+		fail_restore_overrides_.store(v, std::memory_order_release);
+	}
+	// Deterministic queue-ordering barrier for recovery tests. The worker pauses only after
+	// taking a publication out of the queue, so ordinary jobs submitted while paused are
+	// guaranteed to remain queued behind that publication.
+	void debug_set_pause_override_publication(bool v) {
+		pause_override_publication_.store(v, std::memory_order_release);
+		if (!v) cv_.notify_all();
+	}
+	bool debug_override_publication_paused() const {
+		return override_publication_paused_.load(std::memory_order_acquire);
+	}
 #else
 	// Fail-injection hooks are debug-only: release builds must not be able to drive the
 	// mesh service into artificial failure states.
 	void debug_set_extraction_available(bool v) { (void)v; }
 	void debug_set_fail_extractions(bool v) { (void)v; }
 	void debug_set_fail_extract_submit(bool v) { (void)v; }
+	void debug_set_fail_consolidations(bool v) { (void)v; }
+	void debug_set_fail_consolidate_uploads(bool v) { (void)v; }
+	void debug_set_fail_restore_overrides(bool v) { (void)v; }
+	void debug_set_fail_restore_overrides_always(bool v) { (void)v; }
+	void debug_set_pause_override_publication(bool v) { (void)v; }
+	bool debug_override_publication_paused() const { return false; }
 #endif
 
 	// Copies one stored volume into THIS device's pool, on the worker thread. The main
@@ -139,8 +220,21 @@ private:
 	std::vector<IslandExtractJob> pending_extract_;
 	std::vector<IslandExtractResult> extract_results_;
 	LodBuildPass *lod_ = nullptr;                  // worker thread only
+	ConsolidatePass *consolidate_ = nullptr;       // worker thread only
 	std::vector<LodBuildJob> pending_lod_;
 	std::vector<LodBuildResult> lod_results_;
+	struct OverrideUpdate {
+		bool clear = false;
+		ve::IVec3 region{};
+		int region_slot = -1;
+		int table = -1;
+		std::vector<std::pair<int, int>> entries;
+	};
+	std::vector<OverrideUpdate> pending_override_updates_;
+	std::vector<ConsolidateJob> pending_consolidations_;
+	std::vector<ConsolidateResult> consolidate_results_;
+	std::vector<OverridePublication> pending_override_publications_;
+	std::vector<OverridePublicationResult> override_publication_results_;
 	std::vector<VolumeUpload> pending_volumes_;
 #ifdef DEBUG_ENABLED
 	// Debug-only: accepted volume upload slots, used by debug_submitted_volume_slots().
@@ -153,6 +247,19 @@ private:
 	std::atomic<bool> fail_extract_submit_{false};
 	std::atomic<bool> lod_busy_{false};
 	std::atomic<bool> lod_available_{false};
+	std::atomic<bool> consolidate_busy_{false};
+	std::atomic<bool> override_publication_busy_{false};
+	std::atomic<bool> fail_consolidations_{false};
+	std::atomic<bool> fail_consolidate_uploads_{false};
+	std::atomic<bool> fail_next_restore_{false};
+	std::atomic<bool> fail_restore_overrides_{false};
+#ifdef DEBUG_ENABLED
+	std::atomic<bool> pause_override_publication_{false};
+	std::atomic<bool> override_publication_paused_{false};
+#endif
+	std::atomic<bool> worker_state_valid_{true};
+	std::atomic<bool> rebuilding_worker_{false};
+	std::map<std::tuple<int, int, int>, int> override_tables_;
 	const std::function<void(MeshPass &)> *sync_fn_ = nullptr;
 	bool sync_pending_ = false;
 	bool started_ = false;   // startup attempt has settled (ready_ is then meaningful)

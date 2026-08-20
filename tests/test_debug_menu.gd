@@ -45,3 +45,14 @@ func test_checkbox_writes_only_its_named_field() -> void:
 	outlines.emit_signal("toggled", false)
 	assert_bool(world.get_effect_enabled("outlines")).is_false()
 	assert_bool(world.get_effect_enabled("ssr")).is_true()
+
+func test_islands_toggle_is_a_real_render_effect() -> void:
+	var pair: Array = make_pair()
+	await get_tree().process_frame
+	var world: VoxelWorld = pair[0]
+	var menu: PanelContainer = pair[1]
+	assert_bool(world.get_effect_enabled("islands")).is_true()
+	var islands: CheckBox = menu.get_node("Controls/islands")
+	islands.emit_signal("toggled", false)
+	assert_bool(world.get_effect_enabled("islands")).is_false()
+	assert_bool(world.debug_beauty_settings()["islands"]).is_false()

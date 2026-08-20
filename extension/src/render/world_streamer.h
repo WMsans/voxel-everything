@@ -9,12 +9,16 @@
 #include "render/brick_gen_pass.h"
 #include "render/region_pass.h"
 #include "world/edit_log.h"
+#include "world/override_store.h"
 #include "world/residency.h"
+#include <map>
+#include <tuple>
 
 namespace godot {
 
 struct PendingEdit;      // defined in voxel_world.h; here only the pointer type is needed
 struct OccupancyBlock;   // defined in voxel_world.h; here only the pointer type is needed
+class MeshService;
 
 // Drives one frame of world maintenance on the render thread: residency loads/evictions,
 // edit fan-out, one compute list holding every mark + the indirect generation dispatch.
@@ -24,7 +28,15 @@ public:
 	void initialize(ve::RegionResidency *residency, ve::EditLog *edit_log,
 			std::mutex *edit_mutex, std::vector<PendingEdit> *pending, GpuAtlas *atlas,
 			RegionPass *region_pass, BrickGenPass *brick_gen, std::mutex *occ_mutex,
-			std::vector<OccupancyBlock> *occ_inbox, std::atomic<int64_t> *edit_seq);
+			std::vector<OccupancyBlock> *occ_inbox, std::atomic<int64_t> *edit_seq,
+			const ve::OverrideStore *overrides,
+			const std::map<std::tuple<int, int, int>, int> *override_tables);
+	void set_mesh_service(MeshService *mesh) { mesh_ = mesh; }
+	// A consolidation changes the base bytes without leaving an edit for the normal edit
+	// fan-out. Queue a full-region force mark so the render atlas cannot retain pre-bake data.
+	void queue_region_regeneration(ve::IVec3 region);
+	// Caller holds edit_mutex_; used by the atomic consolidation commit.
+	void queue_region_regeneration_locked(ve::IVec3 region);
 
 	// Eight reads in flight. buffer_get_data_async costs the frame that asks nothing, but
 	// the bytes turn up a few frames later, so the only way to shorten the delay between an
@@ -38,6 +50,9 @@ public:
 	// RenderingDevice has no async-readback cancellation. Called on the owning render thread
 	// before atlas buffers are freed so every pending Callable target is completed first.
 	void drain_readbacks(RenderingDevice *rd);
+	// Debug/test hook: harvest occupancy readbacks and queue the next reads without running a
+	// streaming mark or opening a compute list.
+	void harvest_occupancy(RenderingDevice *rd);
 
 	int last_frame_edits() const { return frame_edits_; }
 	// --- profiling (diagnostic only; see VoxelWorld::debug_perf_stats) ---
@@ -61,12 +76,16 @@ private:
 	GpuAtlas *atlas_ = nullptr;
 	RegionPass *region_pass_ = nullptr;
 	BrickGenPass *brick_gen_ = nullptr;
+	MeshService *mesh_ = nullptr;
+	const ve::OverrideStore *overrides_ = nullptr;
+	const std::map<std::tuple<int, int, int>, int> *override_tables_ = nullptr;
 	int frame_edits_ = 0;
 	uint32_t overflow_seen_ = 0;
 	// Regions marked last frame (loads + on-screen edit jobs). If the job list overflowed
 	// (brick_mark.comp.glsl sets frame.overflow bit 1), the next run_frame re-marks these
 	// with force_regen so the dropped bricks are re-enqueued (see run_frame).
 	std::vector<ve::IVec3> pending_regen_;
+	std::vector<ve::IVec3> forced_regen_;
 	// Atlas slots held by each region slot, read back from the mark pass' tally once a frame
 	// (max_region_slots ints). It is what makes an eviction's worth knowable: the streamer
 	// funds every stream-in out of releases that actually return bricks, instead of assuming

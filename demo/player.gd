@@ -5,6 +5,9 @@ extends CharacterBody3D
 # WALK (gravity, move_and_slide against the streamed colliders). It starts in FLY on purpose
 # — the collider streamer needs a second or so to build the first chunks, and a walking body
 # dropped into a world whose colliders do not exist yet would fall straight through.
+#
+# P pauses the game. This node keeps PROCESS_MODE_ALWAYS so P can also unpause, but physics
+# and gameplay input are skipped while paused; the HUD/help overlays stay readable.
 
 @export var walk_speed := 6.0
 @export var fly_speed := 25.0
@@ -21,9 +24,19 @@ var _impulse := Vector3.ZERO
 @onready var _cam: Camera3D = $Camera3D
 
 func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_P:
+		get_tree().paused = not get_tree().paused
+		return
+	if get_tree().paused:
+		# While paused, only allow releasing/capturing the mouse so the player can reach
+		# the window controls or unpause with P; no gameplay input.
+		if event.is_action_pressed("ui_cancel"):
+			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED else Input.MOUSE_MODE_CAPTURED
+		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		rotate_y(-event.relative.x * look_sensitivity)
 		_cam.rotate_x(-event.relative.y * look_sensitivity)
@@ -35,6 +48,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		velocity = Vector3.ZERO
 
 func _physics_process(delta: float) -> void:
+	if get_tree().paused:
+		return
 	var dir := Vector3.ZERO
 	# Flying steers with the camera (pitch included); walking steers with the body.
 	var basis := _cam.global_transform.basis if flying else global_transform.basis

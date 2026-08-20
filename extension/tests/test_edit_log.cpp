@@ -162,6 +162,17 @@ TEST_CASE("overflow in one region does not block the op's other regions") {
 	CHECK(r.rejected[0] == ve::IVec3{0, 0, 0});
 }
 
+TEST_CASE("clear through a sequence preserves edits appended during the bake") {
+	ve::EditLog log(bounds());
+	log.append(sphere(1.0f, 1.0f, 1.0f, 0.5f));
+	const uint64_t through = log.seqs({0, 0, 0}).back();
+	log.append(sphere(2.0f, 1.0f, 1.0f, 0.5f));
+	log.clear_region_through({0, 0, 0}, through);
+	REQUIRE(log.op_count({0, 0, 0}) == 1);
+	CHECK(log.ops({0, 0, 0})[0].pos[0] == doctest::Approx(2.0f));
+	CHECK(log.seqs({0, 0, 0})[0] > through);
+}
+
 TEST_CASE("clear drops everything") {
 	ve::EditLog log(bounds());
 	log.append(sphere(1.0f, 1.0f, 1.0f, 1.0f));

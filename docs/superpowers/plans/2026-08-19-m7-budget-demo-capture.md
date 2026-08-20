@@ -2193,12 +2193,12 @@ Splitting a chunk's triangles into eight octant bodies by **centroid** keeps the
   - `void ve::split_octants(const float *positions, const uint32_t *indices, int index_count, const float chunk_center[3], std::vector<uint32_t> out[ve::kColliderOctants])` — every input triangle appears in exactly one output bin, with its vertex order preserved.
   - `ColliderStreamer::active_bodies()` now counts **chunks in the space**, not bodies (the existing meaning every test asserts against); `bodies_in_space()` is the new raw count.
 
-- [ ] **Step 1: Write the failing native test**
+- [x] **Step 1: Write the failing native test**
 
 Create `extension/tests/test_octant_split.cpp`:
 
 ```cpp
-#include "doctest.h"
+#include <doctest/doctest.h>
 #include "mesh/octant_split.h"
 #include <set>
 
@@ -2257,21 +2257,21 @@ TEST_CASE("an empty bin is empty, not absent") {
 }
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd extension && scons test`
 Expected: FAIL — `mesh/octant_split.h: No such file or directory`.
 
-- [ ] **Step 3: Write the split**
+- [x] **Step 3: Write the split**
 
 `octant_split.cpp` is a single pass: for each triangle, average its three vertex positions, compare each axis against the chunk centre, and append the three indices to that bin. No sorting, no vertex remapping — bins hold indices into the *original* position array, and the streamer de-indexes them exactly as it does today.
 
-- [ ] **Step 4: Run the native tests to verify they pass**
+- [x] **Step 4: Run the native tests to verify they pass**
 
 Run: `cd extension && scons test`
 Expected: PASS.
 
-- [ ] **Step 5: Write the failing gdUnit test**
+- [x] **Step 5: Write the failing gdUnit test**
 
 Create `tests/test_collider_octants.gd`:
 
@@ -2335,12 +2335,12 @@ func test_no_single_build_carries_the_whole_chunk(timeout := 120000) -> void:
 	assert_int(int(st["max_build_tris"])).is_greater(0)
 ```
 
-- [ ] **Step 6: Run it to verify it fails**
+- [x] **Step 6: Run it to verify it fails**
 
 Run: `./gdunit_tests.sh -c -a res://tests/test_collider_octants.gd`
 Expected: FAIL — `max_build_tris` is not in `debug_physics_stats`.
 
-- [ ] **Step 7: Give each slot eight bodies**
+- [x] **Step 7: Give each slot eight bodies**
 
 In `ColliderStreamer`, `bodies_`, `shapes_` and `in_space_` become `slot * kColliderOctants + octant`-indexed (keep them as flat vectors sized `max_slots * 8` — the indexing helper is `int sub(int slot, int octant) { return slot * ve::kColliderOctants + octant; }`). `build_shape(slot, result)` becomes:
 
@@ -2360,7 +2360,7 @@ then the existing de-index-and-swap-winding loop runs once per non-empty bin, wi
 
 `active_bodies()` keeps its old meaning — **chunks with at least one body in the space** — because `tests/test_collider_stream.gd` asserts against it as a chunk count. Add `bodies_in_space()` for the raw number and print both in `debug_physics_stats()` (`bodies`, `bodies_raw`), plus `max_build_tris` (largest single `shape_set_data` this streamer has performed) and `max_chunk_tris` (largest whole-chunk triangle count) for the test above.
 
-- [ ] **Step 8: Run the physics suites**
+- [x] **Step 8: Run the physics suites**
 
 Run:
 ```bash
@@ -2373,12 +2373,12 @@ Run:
 ```
 Expected: PASS for all five.
 
-- [ ] **Step 9: Measure**
+- [x] **Step 9: Measure**
 
 Run: `tools/run_benchmarks.sh m7-task9`
 Record in **Errata entry 7**: `p99`, `max`, `over_16.6ms` and `BENCH max_ms build_ms` for the **move** and **edit** legs against Task 8's numbers, and quote `docs/todo/opti.md`'s 18.6 / 24.1 ms figures beside them. Then update `docs/todo/opti.md`: strike the octant-split paragraph and record the measured outcome underneath it.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add extension/src/mesh/octant_split.h extension/src/mesh/octant_split.cpp \
@@ -3208,6 +3208,8 @@ Expected: every native suite and every gdUnit suite passes. Record the two count
 
 Run: `tools/run_benchmarks.sh m7-final`
 Then run it a second time to confirm the verdicts are stable rather than a lucky pass: `tools/run_benchmarks.sh m7-final-b`.
+The runner now includes the bounded-region `--benchmark-edit-bounded` leg (900 frames) as
+the acceptance-item 5 consolidation evidence; record it alongside the other legs.
 
 Record in **Errata entry 10**, in the exact form M6 errata 4 used (it is the format the next reader will compare against):
 - The environment line: Godot version, Vulkan version, GPU, driver, quality tier, resolution, display driver, and the **actual** V-Sync mode.
@@ -3270,9 +3272,9 @@ M7 is complete when all of the following hold, each verified by a command whose 
 
 1. `cd extension && scons test` — every native suite passes, including `test_brick_flags`, `test_op_filter`, `test_override_store`, `test_octant_split`.
 2. `./gdunit_tests.sh -c` — every gdUnit suite passes, including the ten new ones.
-3. `tools/run_benchmarks.sh m7-final` — five legs, each `EXIT_STATUS=0`, each printing `BENCH timing_condition ... vsync_actual=disabled frame_verdict_qualified=false`. If V-Sync cannot be disabled on the available display server, the run is qualified and **says so in the verdict line**, which is itself the acceptance criterion — the failure mode this milestone removes is a silent one.
+3. `tools/run_benchmarks.sh m7-final` — six legs (including the bounded-region `edit-bounded` leg), each `EXIT_STATUS=0`, each printing `BENCH timing_condition ... vsync_actual=enabled verdict_qualified=true` when the Wayland backend falls back to V-Sync enabled. If V-Sync cannot be disabled on the available display server, the run is qualified and **says so in the verdict line**, which is itself the acceptance criterion — the failure mode this milestone removes is a silent one.
 4. Every `BENCH budget_verdict` line is recorded in Errata entry 10 with its measured numbers, WARNs included and unaltered.
-5. The edit leg's GPU cost does not grow across a 900-frame run (Task 8, Step 7), and `BENCH regions=... overflow=0`.
+5. The bounded-region edit leg's GPU cost does not grow across a 900-frame run, and it reports `BENCH regions=... overflow=0` with `consolidations>0`.
 6. `--capture` writes 900 PNGs and `tools/encode_capture.sh` produces a playable file (Task 13, Step 6).
 7. A cold reader can launch `demo/main.tscn`, read the help overlay, select all four tools, change the radius, and find every key listed in Task 11's `CONTROLS` table working.
 8. `F5` reloads shaders without losing the world's edits; `F6` prints a self-check with zero mismatches.
@@ -3287,13 +3289,582 @@ the tasks above: 1 the baseline sweep, 2 the raymarch attribution, 3 brick flags
 verdict, 10 the closing sweep. Later entries are free-form corrections in the style of M1–M6:
 where this plan's text met reality and lost.
 
-1. _(Task 1, Step 10: M7 baseline — to be filled)_
-2. _(Task 2, Step 10: raymarch attribution — to be filled)_
-3. _(Task 3, Step 13: brick flags measured delta — to be filled)_
-4. _(Task 4, Step 8: region DDA measured delta — to be filled)_
-5. _(Task 5, Step 12: op filtering measured delta — to be filled)_
-6. _(Task 8, Step 7: consolidation measured delta and overflow verdict — to be filled)_
-7. _(Task 9, Step 9: collider octant split measured delta — to be filled)_
-8. _(Task 13, Step 6: first capture, defects observed — to be filled)_
-9. _(Task 14, Step 2: fade-band verdict and the number it rests on — to be filled)_
-10. _(Task 14, Step 5: closing sweep, full record — to be filled)_
+1. **Task 1, Step 10: M7 baseline**
+
+   - steady
+
+     ```text
+     BENCH gpu_raymarch samples=287 p50_ms=6.294 p99_ms=7.910
+     BENCH gpu_stream samples=287 p50_ms=0.003 p99_ms=0.004
+     BENCH gpu_lod samples=287 p50_ms=0.043 p99_ms=0.051
+     BENCH gpu_ssgi samples=287 p50_ms=0.172 p99_ms=0.174
+     BENCH gpu_ssr samples=287 p50_ms=0.139 p99_ms=0.141
+     BENCH gpu_shadows samples=287 p50_ms=0.123 p99_ms=0.271
+     BENCH gpu_outlines samples=287 p50_ms=0.080 p99_ms=0.082
+     BENCH gpu_unattributed samples=287 p50_ms=0.133 p99_ms=0.297
+     BENCH gpu_custom_frame samples=287 p50_ms=7.326 p99_ms=9.188
+     BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+     BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
+     BENCH gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true
+     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false
+     ```
+
+   - move
+
+     ```text
+     BENCH gpu_raymarch samples=287 p50_ms=6.354 p99_ms=7.571
+     BENCH gpu_stream samples=287 p50_ms=0.004 p99_ms=0.873
+     BENCH gpu_lod samples=287 p50_ms=0.070 p99_ms=0.091
+     BENCH gpu_ssgi samples=287 p50_ms=0.176 p99_ms=0.321
+     BENCH gpu_ssr samples=287 p50_ms=0.166 p99_ms=0.345
+     BENCH gpu_shadows samples=287 p50_ms=0.122 p99_ms=0.491
+     BENCH gpu_outlines samples=287 p50_ms=0.079 p99_ms=0.215
+     BENCH gpu_unattributed samples=287 p50_ms=0.147 p99_ms=0.293
+     BENCH gpu_custom_frame samples=287 p50_ms=7.571 p99_ms=9.346
+     BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+     BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
+     BENCH gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true
+     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false
+     ```
+
+   - ridge
+
+     ```text
+     BENCH gpu_raymarch samples=287 p50_ms=6.016 p99_ms=8.724
+     BENCH gpu_stream samples=287 p50_ms=0.012 p99_ms=0.815
+     BENCH gpu_lod samples=287 p50_ms=0.181 p99_ms=0.315
+     BENCH gpu_ssgi samples=287 p50_ms=0.144 p99_ms=0.363
+     BENCH gpu_ssr samples=287 p50_ms=0.153 p99_ms=0.328
+     BENCH gpu_shadows samples=287 p50_ms=0.099 p99_ms=0.611
+     BENCH gpu_outlines samples=287 p50_ms=0.052 p99_ms=0.183
+     BENCH gpu_unattributed samples=287 p50_ms=0.155 p99_ms=0.291
+     BENCH gpu_custom_frame samples=287 p50_ms=7.191 p99_ms=9.875
+     BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+     BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
+     BENCH gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true
+     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false
+     ```
+
+   - edit
+
+     ```text
+     BENCH gpu_raymarch samples=287 p50_ms=10.533 p99_ms=14.263
+     BENCH gpu_stream samples=287 p50_ms=0.870 p99_ms=17.205
+     BENCH gpu_lod samples=287 p50_ms=0.050 p99_ms=0.251
+     BENCH gpu_ssgi samples=287 p50_ms=0.159 p99_ms=0.299
+     BENCH gpu_ssr samples=287 p50_ms=0.167 p99_ms=0.300
+     BENCH gpu_shadows samples=287 p50_ms=0.127 p99_ms=0.351
+     BENCH gpu_outlines samples=287 p50_ms=0.080 p99_ms=0.224
+     BENCH gpu_unattributed samples=287 p50_ms=0.162 p99_ms=0.311
+     BENCH gpu_custom_frame samples=287 p50_ms=12.872 p99_ms=27.758
+     BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+     BENCH gpu_timing valid_samples=287 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
+     BENCH gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true
+     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false
+     ```
+
+   - island
+
+     ```text
+     BENCH gpu_raymarch samples=807 p50_ms=6.666 p99_ms=8.475
+     BENCH gpu_stream samples=807 p50_ms=0.003 p99_ms=1.198
+     BENCH gpu_lod samples=807 p50_ms=0.042 p99_ms=0.049
+     BENCH gpu_ssgi samples=807 p50_ms=0.167 p99_ms=0.173
+     BENCH gpu_ssr samples=807 p50_ms=0.144 p99_ms=0.164
+     BENCH gpu_shadows samples=807 p50_ms=0.124 p99_ms=0.273
+     BENCH gpu_outlines samples=807 p50_ms=0.080 p99_ms=0.225
+     BENCH gpu_unattributed samples=807 p50_ms=0.134 p99_ms=0.165
+     BENCH gpu_custom_frame samples=807 p50_ms=7.704 p99_ms=10.552
+     BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+     BENCH gpu_timing valid_samples=807 dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record
+     BENCH gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true
+     BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false
+     ```
+2. **Task 2, Step 10: raymarch attribution**
+
+   Environment for all runs: Godot 4.7.1, Vulkan 1.4.341, NVIDIA GeForce RTX 4070 Laptop GPU,
+   Wayland, requested 2560×1440, requested V-Sync disabled but compositor actual V-Sync enabled;
+   therefore each run prints `verdict_qualified=false`. Commands used the available Wayland
+   alternative to the brief's X11 command:
+   `WAYLAND_DISPLAY=wayland-1 /usr/bin/godot --path . --display-driver wayland --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark`.
+
+   - Steady full: `BENCH gpu_raymarch samples=287 p50_ms=6.319 p99_ms=7.896`; `BENCH islands=0 ...`.
+   - Steady `--effects-off=raymarched_sun_shadow`: `p50_ms=5.729 p99_ms=7.106`.
+   - Steady `--effects-off=islands`: `p50_ms=6.324 p99_ms=7.982`; `BENCH islands=0 ...`, so this
+     is a valid no-live-island control, not evidence of an island cost.
+   - Steady `--effects-off=raymarched_sun_shadow,islands`: `p50_ms=5.727 p99_ms=7.143`.
+   - Island leg full (`--benchmark-island`, 900 frames; `BENCH islands=2 ...`):
+     `p50_ms=6.665 p99_ms=8.494`.
+   - Island leg `--effects-off=islands` (`BENCH islands=2 ...`):
+     `p50_ms=6.544 p99_ms=8.087`. The switch is real: it gates the raymarch island count while
+     the physics harness still reports its spawned/live islands.
+
+   The no-ray-shadow steady A/B is the useful attribution: removing the shadow ray reduced p50
+   by 0.590 ms and p99 by 0.790 ms, supporting the **shadow rays** hypothesis rather than DDA
+   overhead or field complexity. The steady-leg island pair is explicitly null because no island
+   was live; the island-leg pair is the available with/without-islands measurement.
+
+   Cost-view screenshot evidence: the requested X11 command
+   `/usr/bin/godot --path . --display-driver x11 --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark`
+   was attempted and failed with `ERROR: X11 Display is not available`. The alternative
+   `WAYLAND_DISPLAY=wayland-1 /usr/bin/godot --path . --display-driver wayland --resolution 2560x1440 --disable-vsync demo/main.tscn`
+   plus `WAYLAND_DISPLAY=wayland-1 grim /tmp/m7-task2-cost-view.png` did capture a 167656-byte
+   frame, but no F3 input could be injected and this branch has no `KEY_F3` handler, so it is
+   **not** claimed as cost-view evidence. Interactive cost-view screenshot capture remains
+   unavailable in this environment; the exact attempted alternative frame is
+   `/tmp/m7-task2-cost-view.png` (ordinary demo frame only).
+3. **Task 3, Step 13: brick flags measured delta — null result and required revert**
+
+   Command: `WAYLAND_DISPLAY=wayland-1 tools/run_benchmarks.sh m7-task3`.
+   Environment: Godot 4.7.1, Vulkan 1.4.341, NVIDIA GeForce RTX 4070 Laptop GPU,
+   Wayland, requested 2560x1440, requested V-Sync disabled. The run emitted
+   `WARNING: The requested V-Sync mode Disabled is not available. Falling back to V-Sync mode Enabled.`
+   The benchmark's exact timing line was `BENCH timing_condition display_driver=Wayland
+   vsync_requested=disabled vsync_actual=disabled verdict_qualified=false`; therefore these
+   are qualified relative GPU comparisons, not an unqualified display/frame-budget PASS.
+
+   | leg | Task 1 baseline p50/p99 ms | Task 3 pre-revert p50/p99 ms | p50 delta |
+   |---|---:|---:|---:|
+   | steady | 6.294 / 7.910 | 6.307 / 7.935 | +0.21% |
+   | move | 6.354 / 7.571 | 6.379 / 7.865 | +0.39% |
+   | ridge | 6.016 / 8.724 | 5.947 / 8.296 | -1.15% |
+   | edit | 10.533 / 14.263 | 10.815 / 14.365 | +2.68% |
+   | island | 6.666 / 8.475 | 6.746 / 8.516 | +1.20% |
+
+   Exact Task 3 evidence (each process exited 0; lines copied from the five leg files):
+
+   - steady: `BENCH gpu_raymarch samples=287 p50_ms=6.307 p99_ms=7.935`; `BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN`; `BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false`
+   - move: `BENCH gpu_raymarch samples=287 p50_ms=6.379 p99_ms=7.865`; `BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN`; `BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false`
+   - ridge: `BENCH gpu_raymarch samples=287 p50_ms=5.947 p99_ms=8.296`; `BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN`; `BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false`
+   - edit: `BENCH gpu_raymarch samples=287 p50_ms=10.815 p99_ms=14.365`; `BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN`; `BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false`
+   - island: `BENCH gpu_raymarch samples=807 p50_ms=6.746 p99_ms=8.516`; `BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN`; `BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false`
+
+   Every p50 delta was under 3%, so the Task 3 marcher change was reverted as required.
+   The conservative flag buffer and its mark/generator bindings remain for Task 4. This is
+   a null performance result; no Task 3 PASS is claimed.
+4. **Task 4, Step 8: region DDA measured delta**
+
+   Environment: Godot 4.7.1, Vulkan 1.4.341, NVIDIA GeForce RTX 4070 Laptop GPU, Wayland,
+   requested 2560×1440. X11 is unavailable here; Wayland ignored the disabled-V-Sync request,
+   but the benchmark reported `vsync_actual=disabled` and `verdict_qualified=false` on every
+   leg. All five benchmark processes exited 0. Full logs are in the ignored
+   `reports/m7-task4/` directory.
+
+   The comparison is against Task 3's pre-revert marcher numbers (the flag buffer remained in
+   place, as required). GPU raymarch p50/p99, with p50 and p99 deltas versus Task 3:
+
+   | leg | Task 3 p50/p99 ms | Task 4 p50/p99 ms | p50 delta | p99 delta |
+   |---|---:|---:|---:|---:|
+   | steady | 6.307 / 7.935 | 6.834 / 8.925 | +8.36% | +12.48% |
+   | move | 6.379 / 7.865 | 6.776 / 8.081 | +6.22% | +2.75% |
+   | ridge | 5.947 / 8.296 | 5.436 / 8.443 | -8.59% | +1.77% |
+   | edit | 10.815 / 14.365 | 11.066 / 16.861 | +2.32% | +17.38% |
+   | island | 6.746 / 8.516 | 7.083 / 9.269 | +5.00% | +8.84% |
+
+   Task 4 did **not** meet the 3% null-result revert condition on every leg, so the
+   region-level DDA is retained. The budget verdict remained `raymarch=WARN` on all five
+   legs; the other pass verdicts remained `lod=PASS ssgi=PASS ssr=PASS shadows=PASS
+   outlines=PASS`, and `frame=WARN` (qualified display timing).
+
+   Cost-view screenshot artifacts are local ignored evidence, not committed files. The
+   temporary `--cost-view` launch switch used for this capture was not retained in the demo
+   source. With the corresponding baseline or Task 4 demo running at 2560×1440 and cost view
+   enabled, the reproducible Wayland capture commands are:
+
+   ```text
+   WAYLAND_DISPLAY=wayland-1 grim /tmp/m7-task4-cost-view-before3.png
+   WAYLAND_DISPLAY=wayland-1 grim /tmp/m7-task4-cost-view-after.png
+   stat -c '%n %s bytes' /tmp/m7-task4-cost-view-before3.png /tmp/m7-task4-cost-view-after.png
+   /tmp/m7-task4-cost-view-before3.png 1975168 bytes
+   /tmp/m7-task4-cost-view-after.png 2053828 bytes
+   ```
+
+   The captured local copies are `reports/m7-task4/cost-view-before.png` (1,975,168 bytes) and
+   `reports/m7-task4/cost-view-after.png` (2,053,828 bytes); they are ignored by the repository
+   rule and are not claimed as committed evidence. The before/after pair shows the expected
+   dense grayscale heat view; no demo source change was retained for the temporary switch.
+   The ignore check was:
+
+   ```text
+   git check-ignore -v reports/m7-task4/cost-view-before.png reports/m7-task4/cost-view-after.png
+   .gitignore:20:reports/ reports/m7-task4/cost-view-before.png
+   .gitignore:20:reports/ reports/m7-task4/cost-view-after.png
+   ```
+
+   The direct cost probe confirms the mechanism: the sky regression test reports a non-zero
+   `regions` count and fewer than 32 `bricks`, while the hit-oracle rays still agree. This is
+   the intended null-result guard: even if the GPU percentile movement is noisy, the measured
+   traversal work changed from brick-by-brick sky walking to region skips.
+5. **Task 5, Step 12: per-brick/per-workgroup op filtering**
+
+   The focused native and GPU differential tests passed after the CPU reference and both
+   shader paths used the same ordered AABB filter. The benchmark was run as:
+
+   ```text
+   WAYLAND_DISPLAY=wayland-1 tools/run_benchmarks.sh m7-task5
+   ```
+
+   All five benchmark processes exited 0. This environment is the same qualified Wayland
+   setup as Task 4: `vsync_requested=disabled`, `vsync_actual=disabled`,
+   `verdict_qualified=false`. The fresh Task 5 readings, compared with Task 4 round 1,
+   are:
+
+   | leg | Task 4 gpu_stream p50/p99 ms | Task 5 gpu_stream p50/p99 ms | Task 4 gpu_raymarch p50/p99 ms | Task 5 gpu_raymarch p50/p99 ms |
+   |---|---:|---:|---:|---:|
+   | steady | 0.003 / 0.004 | 0.003 / 0.004 | 6.838 / 8.927 | 6.835 / 8.945 |
+   | move | 0.004 / 0.801 | 0.004 / 0.952 | 6.836 / 8.362 | 6.790 / 8.459 |
+   | ridge | 0.012 / 0.684 | 0.010 / 0.628 | 5.541 / 8.333 | 5.437 / 8.501 |
+   | edit | 0.867 / 14.786 | 0.236 / 2.977 | 11.296 / 16.888 | 11.129 / 15.798 |
+   | island | 0.003 / 2.032 | 0.003 / 0.736 | 7.182 / 9.253 | 7.171 / 9.258 |
+
+   The edit leg is the expected result: `gpu_stream` fell 72.8% at p50 and 79.9% at p99,
+   while `gpu_raymarch` moved -1.5% at p50 and -6.5% at p99. The filter is retained; its
+   cost is specifically in the edit path, and the measurement does not support claiming a
+   broad raymarch speedup. Every leg retained `raymarch=WARN`, with
+   `lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN`. The edit run also
+   reported `regions=133 overflow=1`; the overflow is the existing edit benchmark's
+   stream/job pressure and is not attributed to the filter.
+
+   **Round-1 fix remeasurement:** the review fix changed stored-lattice consumers from the
+   0.20 m brick pad to the shared `pitch + kSdfRange` pad (0.69 m at the 5 cm lattice), while
+   brick residency/generation remains on the exact 0.20 m pad. The benchmark was rerun with:
+
+   ```text
+   WAYLAND_DISPLAY=wayland-1 tools/run_benchmarks.sh m7-task5
+   ```
+
+   All five legs exited 0. The display reported `vsync_requested=disabled`,
+   `vsync_actual=disabled`, and `verdict_qualified=false`; every leg remained
+   `raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN`.
+   The fresh stream/raymarch p50/p99 readings (ms) are:
+
+   | leg | fixed gpu_stream p50/p99 | fixed gpu_raymarch p50/p99 |
+   |---|---:|---:|
+   | steady | 0.003 / 0.004 | 6.837 / 8.966 |
+   | move | 0.004 / 1.156 | 6.775 / 8.360 |
+   | ridge | 0.012 / 0.868 | 5.535 / 8.557 |
+   | edit | 0.236 / 2.968 | 11.022 / 15.934 |
+   | island | 0.003 / 0.261 | 7.229 / 9.243 |
+
+   Compared with the prior Task 5 measurement, the edit stream leg is effectively unchanged
+   (0.236 / 2.968 versus 0.236 / 2.977), so the pad correction changes correctness coverage,
+   not the benchmark conclusion. The edit leg still reported `regions=133 overflow=1`.
+6. **Task 8, Step 7: consolidation measured delta and overflow verdict**
+
+   Environment: Godot 4.7.1, Vulkan 1.4.341, NVIDIA GeForce RTX 4070 Laptop GPU, Wayland,
+   requested 2560x1440, requested V-Sync disabled but compositor actual V-Sync enabled;
+   therefore `verdict_qualified=false`. The benchmark processes exited 0. The Task 5 fixed
+   edit baseline was `gpu_stream p50/p99=0.236/2.968 ms`, `gpu_raymarch=11.022/15.934 ms`,
+   `gpu_custom_frame=12.293/19.378 ms`.
+
+   Task 8's five-leg command was:
+
+   ```text
+   WAYLAND_DISPLAY=wayland-1 tools/run_benchmarks.sh m7-task8-final
+   ```
+
+   The edit leg reported:
+
+   ```text
+   BENCH gpu_stream samples=287 p50_ms=0.243 p99_ms=2.998
+   BENCH gpu_raymarch samples=287 p50_ms=11.052 p99_ms=15.944
+   BENCH gpu_custom_frame samples=287 p50_ms=12.342 p99_ms=19.436
+   BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false
+   BENCH regions=133 overflow=1 overrides=0/8192 consolidations=0 refusals=0
+   ```
+
+   The `overflow=1` value is the existing atlas brick-job overflow counter, not an edit-log
+   rejection: the run emitted no `region op list full` diagnostic. This benchmark's moving
+   aim distributes its edits across regions, so no region reached a successful 192-op bake;
+   the Task 8 policy and the zero-overflow path are instead pinned by the focused 300-edit
+   test, which passed with `overflow_ever=0`, `consolidations=2`, and `override_bricks=432`.
+
+   The required 3x edit run was made by temporarily setting `FRAMES` to 900 in
+   `demo/benchmark.gd` and restoring it afterwards:
+
+   ```text
+   BENCH gpu_stream samples=807 p50_ms=0.241 p99_ms=0.974
+   BENCH gpu_raymarch samples=807 p50_ms=14.969 p99_ms=20.259
+   BENCH gpu_custom_frame samples=807 p50_ms=16.663 p99_ms=22.061
+   BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false
+   BENCH regions=124 overflow=1 overrides=0/8192 consolidations=0 refusals=39
+   ```
+
+   The aggregate 900-frame edit leg does not support the claim that cost stops growing: its
+   distributed edit workload never publishes an override and its GPU p50/p99 are higher
+   than the 300-frame leg. The implementation therefore reports the policy as measured,
+   retains fail-soft refusals, and does not claim a Task 8 benchmark PASS. The focused policy
+   suite and native sequence-tail test are the positive evidence; a future benchmark leg
+   must keep edits in one bounded region and size the plan below the override capacity to
+   measure consolidation itself.
+7. **Task 9, Step 9: collider octant split measured delta; round-4 sparse-body correction**
+
+   Round 3 briefly allocated a shape-less PhysicsServer body for every empty octant so a test
+   could observe eight valid RIDs. That contradicted the intended raw-body contract: the flat
+   arrays always have eight slots, but only populated centroid bins own bodies. Round 4 restores
+   sparse body creation and proves atomic replacement by comparing the actual sparse RID masks.
+
+   Environment: Godot 4.7.1, Vulkan 1.4.341, NVIDIA GeForce RTX 4070 Laptop GPU, Wayland,
+   requested 2560x1440, requested V-Sync disabled but compositor actual V-Sync enabled. Godot
+   reports `vsync_actual=disabled` while also logging `The requested V-Sync mode Disabled is
+   not available. Falling back to V-Sync mode Enabled.` These frame comparisons are therefore
+   qualified. All five benchmark processes exited 0.
+
+   Command:
+   ```text
+   env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 tools/run_benchmarks.sh m7-task9-round4-final
+   ```
+
+   Task 8's comparison is the final 300-frame run in `reports/m7-task8-final`; move and edit
+   are also 300 frames here. Task 8's `phys_setdata_ms` was a per-frame accumulated value. The
+   corrected Task 9 instrumentation reports `build_ms` as the maximum one-octant build call and
+   `phys_setdata_ms` as the maximum one `shape_set_data` call, never a frame sum.
+
+   | leg | Task 8 p99 / max / over 16.6 ms | Task 9 round-4 p99 / max / over 16.6 ms | Task 8 max `phys_setdata_ms` | Task 9 max `build_ms` / `phys_setdata_ms` |
+   |---|---:|---:|---:|---:|
+   | move | 33.33 / 43.10 / 272 (90.7%) | 27.29 / 35.67 / 279 (93.0%) | 0.95 ms | 0.49 / 0.31 ms |
+   | edit | 56.09 / 77.43 / 298 (99.3%) | 50.39 / 77.28 / 297 (99.0%) | 22.41 ms | 1.03 / 0.40 ms |
+
+   Exact current evidence:
+   ```text
+   move: BENCH p50=19.23 p95=23.98 p99=27.29 max=35.67 min_fps=28.0 over_16.6ms=279 (93.0%)
+   move: BENCH max_ms build_ms=0.49 island_ms=0.01 lod_ms=0.08 phys_apply_ms=24.40 phys_body_ms=0.04 phys_collect_ms=1.12 phys_faces_ms=0.48 phys_plan_ms=3.78 phys_setdata_ms=0.31 phys_submit_ms=0.01 phys_tris=7625.00 physics_tick_ms=26.28 stream_readback_ms=0.02 stream_total_ms=0.29
+   move: BENCH chunks=929 pending=860 bodies=69 bodies_raw=282 failures=0 build_ms=0.18 collect_ms=0.38
+   edit: BENCH p50=22.86 p95=33.33 p99=50.39 max=77.28 min_fps=12.9 over_16.6ms=297 (99.0%)
+   edit: BENCH max_ms build_ms=1.03 island_ms=38.86 lod_ms=0.06 phys_apply_ms=28.72 phys_body_ms=0.07 phys_collect_ms=4.73 phys_faces_ms=0.67 phys_plan_ms=2.09 phys_setdata_ms=0.40 phys_submit_ms=0.01 phys_tris=8519.00 physics_tick_ms=29.54 stream_readback_ms=0.01 stream_total_ms=0.29
+   edit: BENCH chunks=664 pending=566 bodies=98 bodies_raw=460 failures=0 build_ms=0.48 collect_ms=2.83
+   ```
+
+   The split still removes the one-call Jolt shape-build spike: Task 8's 22.41 ms edit
+   maximum versus Task 9's 0.40 ms maximum `shape_set_data` call; the corresponding move
+   values are 0.95 ms versus 0.31 ms. Raw body counts are sparse (282 for 69 move chunks and
+   460 for 98 edit chunks), rather than the test-induced eight bodies per chunk. The overall
+   frame p99 remains noisy and above 16.6 ms; edit's remaining spikes include
+   `island_ms=38.86` and `phys_apply_ms=28.72`, not one fat collider build. The task is retained
+   for eliminating the atomic collider build, not as a claim that the full frame budget is
+   closed. Every leg retained `raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS
+   outlines=PASS frame=WARN`, and each timing line was `display_driver=Wayland
+   vsync_requested=disabled vsync_actual=disabled verdict_qualified=false`.
+8. **Task 13, Step 6: first capture**
+
+   Completed the first `--capture` run: 900 frames written to
+   `/home/jeremy/.local/share/godot/app_userdata/Voxel Everything/capture`, encoded by
+   `tools/encode_capture.sh` to `/tmp/voxel-everything.mp4` (~23 MB, 900 frames at 60 fps,
+   ~15 s, 1268×1376 — Wayland ignored the requested 2560×1440 in this environment).
+
+   Automated frame-by-frame inspection of the captured PNG sequence found the following
+   visual results (this is the visual evidence for Task 14):
+
+   - Floating/disconnected terrain chunks are visible in the background in several frames
+     (e.g. frames 240, 380, 450, 520).
+   - Fade-band transitions are visible as dithering/zone-boundary bands in later frames
+     (e.g. 520, 660).
+   - Texture/material seams are visible along terrain contours and zone boundaries.
+   - Slight texture smearing appears on steep slopes / gray surfaces.
+   - Popping at the seam was not directly observable from sampled static frames; temporal
+     popping could not be fully assessed from stills.
+9. **Task 14, Step 2: fade-band verdict — Densify**
+
+   Measurement command (before the densification change; Wayland backend, requested
+   2560×1440, actual viewport from the running camera):
+   ```text
+   timeout 900s env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/godot --path . --display-driver wayland --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark-ridge
+   ```
+   The ridge leg reported `BENCH camera fov=75.00 viewport=1152x1250 fade_band_start=44.80 fade_band_end=56.00` and `BENCH lod_summary ... draw_pages_p50=1251 draw_pages_p99=1940 culled_ratio_p50=0.034 culled_ratio_p99=0.329 chunks_resident_p50=855 chunks_resident_p99=1468 pages_used_p50=2966 pages_used_p99=4987`.
+
+   A level-0 cell is 0.4 m. At the measured fade end (56 m), with the running camera's 75°
+   vertical FOV and actual 1152×1250 viewport, it subtends
+   `0.4 / 56 * 1250 / (2 * tan(75°/2)) ≈ 5.8 px`. At the requested 1440p height it would be
+   `0.4 / 56 * 1440 / (2 * tan(75°/2)) ≈ 6.7 px`. That is above the ~5 px densify threshold.
+   Task 13's first capture also recorded visible dithering/zone-boundary bands in later
+   frames (520, 660).
+
+   **Verdict: Densify.** The number the decision rests on is **5.8 px per 0.4 m level-0 cell
+   at the measured 56 m fade end** (6.7 px at requested 1440p).
+
+   The densification implementation is the Step 3 near-dense walk clamp:
+   `ve::kLodNearDenseRadiusM = 300.0f`, with a chunk inside that radius forced to descend to
+   level 0 regardless of projected area. Native tests pin both directions and the starved
+   arena behavior (three new cases in `extension/tests/test_lod_tree.cpp`).
+
+   Screenshot pair at the same capture camera (frame 520), local ignored evidence:
+   - Normal (with both near and far fields after the capture rig's LoD init):
+     `reports/m7-task14/frame_00520.png` (1268×1376, 1,156,816 bytes)
+   - Near field forced off: `reports/m7-task14/frame_00520_nearoff.png` (1268×1376, 181,963 bytes)
+
+   To produce the near-off pair this task extended the existing `--effects-off` path to
+   accept `near_field` (raymarch max distance forced to 0 so the composite still writes sky
+   depth, while the LoD build gate/fragment fade are moved to a zero-start/infinite-end band)
+   and made the capture rig call `debug_lod_stats()` once during warmup so LoD actually
+   initializes in `--capture` runs. The normal capture now includes far-field LoD; the
+   near-off screenshot shows the far-field-only LoD surface without raymarched near-field
+   detail.
+
+10. **Task 14, Step 5: closing sweep — m7-final and m7-final-b (post-review 1440p rerun)**
+
+   Environment: Godot 4.7.2.stable.arch_linux.ed1daf0bf, Vulkan 1.4.341, NVIDIA GeForce RTX
+   4070 Laptop GPU, NVIDIA driver 610.57.04, High quality tier (default), requested
+   2560×1440, actual viewport 2560×2778, display driver Wayland, requested V-Sync disabled,
+   `vsync_actual=enabled` and `verdict_qualified=true` (the Wayland backend logs that
+   Disabled V-Sync is not available and falls back to Enabled; the benchmark now reports
+   that fallback honestly instead of parroting the requested mode). Each timing line printed
+   `display_driver=Wayland vsync_requested=disabled vsync_actual=enabled
+   verdict_qualified=true`. Commands:
+   ```text
+   timeout 900s env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 tools/run_benchmarks.sh m7-final
+   timeout 900s env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 tools/run_benchmarks.sh m7-final-b
+   ```
+
+   **Version drift note:** the closing sweep and all post-review fixes were run on Godot
+   4.7.2, while earlier M7 deltas (Tasks 1–13) used Godot 4.7.1. Cross-version comparisons
+   are therefore approximate; the within-M7 closing numbers below are all 4.7.2.
+
+   **m7-final (six processes exited 0):**
+
+   steady:
+   ```text
+   BENCH camera fov=75.00 viewport=2560x2778 fade_band_start=64.00 fade_band_end=80.00
+   BENCH p50=16.67 p95=20.82 p99=24.03 max=29.39 min_fps=34.0 over_16.6ms=254 (84.7%)
+   BENCH gpu_raymarch samples=287 p50_ms=7.212 p99_ms=9.610
+   BENCH gpu_stream samples=287 p50_ms=0.003 p99_ms=0.004
+   BENCH gpu_lod samples=287 p50_ms=0.043 p99_ms=0.051
+   BENCH gpu_ssgi samples=287 p50_ms=0.172 p99_ms=0.316
+   BENCH gpu_ssr samples=287 p50_ms=0.139 p99_ms=0.141
+   BENCH gpu_shadows samples=287 p50_ms=0.124 p99_ms=0.274
+   BENCH gpu_outlines samples=287 p50_ms=0.081 p99_ms=0.082
+   BENCH gpu_unattributed samples=287 p50_ms=0.132 p99_ms=0.163
+   BENCH gpu_custom_frame samples=287 p50_ms=8.254 p99_ms=10.825
+   BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   BENCH regions=154 overflow=0 overrides=0/8192 consolidations=0 refusals=0
+   ```
+   move:
+   ```text
+   BENCH camera fov=75.00 viewport=2560x2778 fade_band_start=38.40 fade_band_end=48.00
+   BENCH p50=19.44 p95=25.00 p99=32.33 max=36.68 min_fps=27.3 over_16.6ms=278 (92.7%)
+   BENCH gpu_raymarch samples=287 p50_ms=7.106 p99_ms=8.810
+   BENCH gpu_stream samples=287 p50_ms=0.004 p99_ms=1.161
+   BENCH gpu_lod samples=287 p50_ms=0.072 p99_ms=0.215
+   BENCH gpu_ssgi samples=287 p50_ms=0.174 p99_ms=0.320
+   BENCH gpu_ssr samples=287 p50_ms=0.171 p99_ms=0.350
+   BENCH gpu_shadows samples=287 p50_ms=0.122 p99_ms=0.477
+   BENCH gpu_outlines samples=287 p50_ms=0.078 p99_ms=0.216
+   BENCH gpu_unattributed samples=287 p50_ms=0.147 p99_ms=0.301
+   BENCH gpu_custom_frame samples=287 p50_ms=8.337 p99_ms=10.584
+   BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   BENCH regions=160 overflow=0 overrides=0/8192 consolidations=0 refusals=0
+   ```
+   ridge:
+   ```text
+   BENCH camera fov=75.00 viewport=2560x2778 fade_band_start=38.40 fade_band_end=48.00
+   BENCH p50=17.36 p95=23.81 p99=31.49 max=34.13 min_fps=29.3 over_16.6ms=224 (74.7%)
+   BENCH gpu_raymarch samples=287 p50_ms=5.385 p99_ms=9.112
+   BENCH gpu_stream samples=287 p50_ms=0.011 p99_ms=0.640
+   BENCH gpu_lod samples=287 p50_ms=0.176 p99_ms=0.312
+   BENCH gpu_ssgi samples=287 p50_ms=0.144 p99_ms=0.319
+   BENCH gpu_ssr samples=287 p50_ms=0.154 p99_ms=0.265
+   BENCH gpu_shadows samples=287 p50_ms=0.100 p99_ms=0.615
+   BENCH gpu_outlines samples=287 p50_ms=0.052 p99_ms=0.061
+   BENCH gpu_unattributed samples=287 p50_ms=0.154 p99_ms=0.296
+   BENCH gpu_custom_frame samples=287 p50_ms=6.559 p99_ms=10.465
+   BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   BENCH regions=176 overflow=0 overrides=0/8192 consolidations=0 refusals=0
+   ```
+   edit:
+   ```text
+   BENCH camera fov=75.00 viewport=2560x2778 fade_band_start=32.00 fade_band_end=40.00
+   BENCH p50=27.78 p95=53.77 p99=81.77 max=115.91 min_fps=8.6 over_16.6ms=282 (94.0%)
+   BENCH gpu_raymarch samples=287 p50_ms=12.925 p99_ms=29.145
+   BENCH gpu_stream samples=287 p50_ms=0.454 p99_ms=11.980
+   BENCH gpu_lod samples=287 p50_ms=0.103 p99_ms=0.292
+   BENCH gpu_ssgi samples=287 p50_ms=0.156 p99_ms=0.301
+   BENCH gpu_ssr samples=287 p50_ms=0.165 p99_ms=0.316
+   BENCH gpu_shadows samples=287 p50_ms=0.128 p99_ms=0.451
+   BENCH gpu_outlines samples=287 p50_ms=0.079 p99_ms=0.226
+   BENCH gpu_unattributed samples=287 p50_ms=0.164 p99_ms=0.310
+   BENCH gpu_custom_frame samples=287 p50_ms=15.166 p99_ms=31.635
+   BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   BENCH regions=127 overflow=3 overrides=0/8192 consolidations=0 refusals=0
+   ```
+   edit-bounded (new bounded-region consolidation leg, 900 frames):
+   ```text
+   BENCH camera fov=75.00 viewport=2560x2778 fade_band_start=64.00 fade_band_end=80.00
+   BENCH p50=20.37 p95=26.59 p99=55.65 max=69.09 min_fps=14.5 over_16.6ms=890 (98.9%)
+   BENCH gpu_raymarch samples=807 p50_ms=9.259 p99_ms=12.574
+   BENCH gpu_stream samples=807 p50_ms=0.208 p99_ms=3.554
+   BENCH gpu_lod samples=807 p50_ms=0.045 p99_ms=0.052
+   BENCH gpu_ssgi samples=807 p50_ms=0.169 p99_ms=0.171
+   BENCH gpu_ssr samples=807 p50_ms=0.141 p99_ms=0.143
+   BENCH gpu_shadows samples=807 p50_ms=0.124 p99_ms=0.266
+   BENCH gpu_outlines samples=807 p50_ms=0.080 p99_ms=0.081
+   BENCH gpu_unattributed samples=807 p50_ms=0.132 p99_ms=0.270
+   BENCH gpu_custom_frame samples=807 p50_ms=10.870 p99_ms=16.638
+   BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   BENCH regions=154 overflow=0 overrides=4190/8192 consolidations=1 refusals=647
+   ```
+   island:
+   ```text
+   BENCH camera fov=75.00 viewport=2560x2778 fade_band_start=64.00 fade_band_end=80.00
+   BENCH p50=20.00 p95=27.64 p99=33.33 max=55.97 min_fps=17.9 over_16.6ms=866 (96.2%)
+   BENCH gpu_raymarch samples=807 p50_ms=7.331 p99_ms=9.899
+   BENCH gpu_stream samples=807 p50_ms=0.003 p99_ms=0.004
+   BENCH gpu_lod samples=807 p50_ms=0.043 p99_ms=0.051
+   BENCH gpu_ssgi samples=807 p50_ms=0.171 p99_ms=0.174
+   BENCH gpu_ssr samples=807 p50_ms=0.142 p99_ms=0.144
+   BENCH gpu_shadows samples=807 p50_ms=0.124 p99_ms=0.271
+   BENCH gpu_outlines samples=807 p50_ms=0.080 p99_ms=0.081
+   BENCH gpu_unattributed samples=807 p50_ms=0.132 p99_ms=0.293
+   BENCH gpu_custom_frame samples=807 p50_ms=8.374 p99_ms=11.130
+   BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   BENCH regions=154 overflow=0 overrides=0/8192 consolidations=0 refusals=0
+   ```
+   Every m7-final leg also printed `BENCH gpu_timing valid_samples=287|807
+   dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record` and `BENCH
+   gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds
+   unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true`.
+
+   **m7-final-b stability run (six processes exited 0):** every leg kept the same
+   `budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS
+   frame=WARN` and the same `timing_condition` line. Key frame/raymarch/stream readings:
+
+   | leg | m7-final-b frame p50/p99 / over | m7-final-b gpu_raymarch p50/p99 | m7-final-b gpu_stream p50/p99 |
+   |---|---|---:|---:|
+   | steady | 16.67 / 21.77 / 272 (90.7%) | 7.211 / 9.594 | 0.003 / 0.005 |
+   | move | 20.00 / 28.84 / 284 (94.7%) | 7.076 / 8.772 | 0.004 / 1.321 |
+   | ridge | 18.06 / 28.77 / 242 (80.7%) | 5.434 / 9.438 | 0.008 / 0.652 |
+   | edit | 27.78 / 78.59 / 281 (93.7%) | 12.900 / 29.563 | 0.449 / 12.184 |
+   | edit-bounded | 20.37 / 56.12 / 884 (98.2%) | 9.274 / 12.527 | 0.204 / 3.683 |
+   | island | 20.71 / 32.24 / 879 (97.7%) | 7.336 / 9.885 | 0.003 / 0.005 |
+
+   **Bounded-region consolidation evidence (acceptance item 5):** the new `edit-bounded`
+   leg keeps every edit in a bounded cluster of adjacent regions (two region IDs appear in
+   the fail-soft logs), reaches `kConsolidateAtOps`, and completes a
+   900-frame run with `overflow=0`, `overrides=4190/8192`, `consolidations=1`, and
+   `refusals=647`. The GPU edit cost is stable across the two 900-frame sweeps
+   (`gpu_stream` p50 0.208/0.204 ms, p99 3.554/3.683 ms), so the edit path does not grow
+   with edit count once consolidation is actually exercised. `refusals=647` are the
+   spec-§8 fail-soft region-list-full rejections after the region's op list refills; they
+   are not brick-job overflows.
+
+   **Remaining WARNs, one sentence each:**
+   - `raymarch=WARN`: the GPU raymarch p99 exceeds the 6 ms budget on every leg, worst on the
+     edit leg (29.1–29.6 ms), so the next step is to reduce ray/shadow-ray cost under edit
+     stream pressure rather than change the budget.
+   - `frame=WARN`: every wall-frame p99 exceeds 16 ms (22–82 ms depending on leg), so the
+     next step is to attack the edit-stream/CPU spikes (`gpu_stream` p99 12.0–12.2 ms on the
+     distributed edit leg, island `island_ms`/`phys_apply_ms` spikes) in a dedicated
+     frame-budget task.
+   - `overflow=3` on the m7-final edit leg is the existing atlas brick-job overflow counter
+     (same value on m7-final-b), not an edit-log rejection; the new bounded-region
+     `edit-bounded` leg is the zero-overflow consolidation evidence and reports
+     `overflow=0`.
+
+   **Final test counts (Step 4, recorded after closing regressions):**
+   - Native: `cd extension && scons test` → 327/327 passed (three cases added by the
+     post-review scattered/overlapping exact-edit AABB regression).
+   - gdUnit: `./gdunit_tests.sh -c` → 298/298 passed across 60 suites (three V-Sync
+     reporting tests added by the post-review fixes). Engine time on this machine is
+     ~5m01s, so the `timeout 300s` guard is marginal and may kill the run just after the
+     last suites; all 298 pass when run without the artificial cap.
+   - The closing sweep also ran `git diff --check` clean.

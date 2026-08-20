@@ -1,7 +1,14 @@
 extends Node
-# Demo destruction tool (spec §5 "demo edit tools"): LMB carves, RMB fills, MMB paints.
+# Demo destruction tool (spec §5 "demo edit tools"): 1 Carve, 2 Fill, 3 Paint, 4 Drill.
 # Aims with the world's analytic raycast — the same field the GPU bricks are generated
 # from — so the reticle tracks the surface exactly, with no physics and no readback stall.
+
+enum Tool { SUBTRACT, ADD, PAINT, DRILL }
+
+const TOOL_NAMES := ["Carve", "Fill", "Paint", "Drill"]
+const RADIUS_MIN := 0.5
+const RADIUS_MAX := 8.0
+const RADIUS_STEP := 1.25
 
 @export var world_path: NodePath
 @export var camera_path: NodePath
@@ -12,6 +19,8 @@ extends Node
 @export var drill_radius := 0.6
 @export var drill_length := 6.0
 @export var drill_steps := 10
+
+var active_tool := Tool.SUBTRACT
 
 var _world: VoxelWorld
 var _tool: VoxelEditTool
@@ -26,14 +35,44 @@ func _ready() -> void:
 	_tool = ClassDB.instantiate("VoxelEditTool")
 	_world.add_child(_tool) # VoxelEditTool resolves the world through its parent
 
+# Split out of _unhandled_input so a test can drive it without a viewport, and so the two
+# input paths (key event, wheel event) each have exactly one implementation.
+func select_tool_from_key(event: InputEventKey) -> bool:
+	if not event.pressed or event.echo:
+		return false
+	var index := event.keycode - KEY_1
+	if index < 0 or index >= TOOL_NAMES.size():
+		return false
+	active_tool = index
+	return true
+
+func adjust_radius(notches: int) -> void:
+	radius = clampf(radius * pow(RADIUS_STEP, float(notches)), RADIUS_MIN, RADIUS_MAX)
+
+func tool_name() -> String:
+	return TOOL_NAMES[active_tool]
+
 func _unhandled_input(event: InputEvent) -> void:
 	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		return
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_R:
-		_drill()
+	if event is InputEventKey:
+		if event.pressed and not event.echo:
+			if select_tool_from_key(event):
+				get_viewport().set_input_as_handled()
+				return
+			if event.keycode == KEY_R:
+				_drill()
+				get_viewport().set_input_as_handled()
+				return
 		return
 	var mb := event as InputEventMouseButton
 	if mb == null or not mb.pressed:
+		return
+	if mb.button_index == MOUSE_BUTTON_WHEEL_UP:
+		adjust_radius(1)
+		return
+	if mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+		adjust_radius(-1)
 		return
 	var hit: Dictionary = _world.debug_raycast(
 		_cam.global_position, -_cam.global_transform.basis.z)
@@ -42,8 +81,16 @@ func _unhandled_input(event: InputEvent) -> void:
 	var pos: Vector3 = hit["pos"]
 	match mb.button_index:
 		MOUSE_BUTTON_LEFT:
-			_tool.apply_sphere_subtract(pos, radius)
-			_kick(pos)
+			match active_tool:
+				Tool.SUBTRACT:
+					_tool.apply_sphere_subtract(pos, radius)
+					_kick(pos)
+				Tool.ADD:
+					_tool.apply_sphere_add(pos, radius * 0.7, fill_material)
+				Tool.PAINT:
+					_tool.apply_sphere_paint(pos, radius, paint_material)
+				Tool.DRILL:
+					_drill()
 		MOUSE_BUTTON_RIGHT:
 			_tool.apply_sphere_add(pos, radius * 0.7, fill_material)
 		MOUSE_BUTTON_MIDDLE:

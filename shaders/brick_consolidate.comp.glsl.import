@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://vd87b0086w78"
+path="res://.godot/imported/brick_consolidate.comp.glsl-4abacc7d9090f309ecb154480ac95e92.res"
+
+[deps]
+
+source_file="res://shaders/brick_consolidate.comp.glsl"
+dest_files=["res://.godot/imported/brick_consolidate.comp.glsl-4abacc7d9090f309ecb154480ac95e92.res"]
+
+[params]
+

@@ -22,6 +22,7 @@ int floor_mod(int a, int b);
 // Brick coordinates are GLOBAL: the world-space corner of brick b is b * kBrickSize, with
 // no origin term. WorldBounds::origin_bricks only decides membership and map indexing.
 void brick_world_origin(IVec3 b, float out[3]);
+void brick_world_aabb(IVec3 b, float lo[3], float hi[3]);
 
 // A bounded, region-aligned world placed on the global brick lattice.
 struct WorldBounds {

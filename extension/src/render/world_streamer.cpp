@@ -1,9 +1,12 @@
 #include "render/world_streamer.h"
+#include "render/edit_aabb.h"
 #include "voxel_world.h" // godot::PendingEdit
+#include "render/mesh_service.h"
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <utility>
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -58,7 +61,9 @@ using namespace godot;
 void WorldStreamer::initialize(ve::RegionResidency *residency, ve::EditLog *edit_log,
 		std::mutex *edit_mutex, std::vector<PendingEdit> *pending, GpuAtlas *atlas,
 		RegionPass *region_pass, BrickGenPass *brick_gen, std::mutex *occ_mutex,
-		std::vector<OccupancyBlock> *occ_inbox, std::atomic<int64_t> *edit_seq) {
+		std::vector<OccupancyBlock> *occ_inbox, std::atomic<int64_t> *edit_seq,
+		const ve::OverrideStore *overrides,
+		const std::map<std::tuple<int, int, int>, int> *override_tables) {
 	residency_ = residency;
 	edit_log_ = edit_log;
 	edit_mutex_ = edit_mutex;
@@ -66,6 +71,9 @@ void WorldStreamer::initialize(ve::RegionResidency *residency, ve::EditLog *edit
 	atlas_ = atlas;
 	region_pass_ = region_pass;
 	brick_gen_ = brick_gen;
+	mesh_ = nullptr;
+	overrides_ = overrides;
+	override_tables_ = override_tables;
 	occ_mutex_ = occ_mutex;
 	occ_inbox_ = occ_inbox;
 	edit_seq_ = edit_seq;
@@ -82,6 +90,17 @@ void WorldStreamer::initialize(ve::RegionResidency *residency, ve::EditLog *edit
 	committed_base_ = 0;
 	region_slot_costs_.assign(
 			static_cast<size_t>(atlas_ ? atlas_->config().max_region_slots : 0), 0);
+}
+
+void WorldStreamer::queue_region_regeneration(ve::IVec3 region) {
+	if (!edit_mutex_) return;
+	std::lock_guard<std::mutex> lock(*edit_mutex_);
+	queue_region_regeneration_locked(region);
+}
+
+void WorldStreamer::queue_region_regeneration_locked(ve::IVec3 region) {
+	if (!edit_mutex_) return;
+	forced_regen_.push_back(region);
 }
 
 void WorldStreamer::note_marked(ve::IVec3 region, int64_t seq) {
@@ -159,6 +178,12 @@ void WorldStreamer::drain_readbacks(RenderingDevice *rd) {
 	if (costs_read_.is_valid()) costs_read_->drain(rd);
 	for (OccupancyRead &r : occ_reads_)
 		if (r.read.is_valid()) r.read->drain(rd);
+}
+
+void WorldStreamer::harvest_occupancy(RenderingDevice *rd) {
+	if (!rd) return;
+	drain_readbacks(rd);
+	pump_occupancy(rd);
 }
 
 int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) {
@@ -344,6 +369,18 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 	// count is captured here too so the mark loop below needs no second (locked) read.
 	struct LoadJob { ve::IVec3 region; int slot; int op_count; int64_t seq; };
 	std::vector<LoadJob> load_jobs;
+	std::vector<ve::IVec3> forced_regen;
+	{
+		std::lock_guard<std::mutex> lock(*edit_mutex_);
+		forced_regen.swap(forced_regen_);
+	}
+	// Clear evicted tenants before assigning any reused slot to a load in this same frame.
+	// The ordering matters: clearing after the load would erase the replacement table map.
+	for (const auto &e : plan.evicts) {
+		atlas_->set_region_map_entry(rd, e.map_index, -1);
+		atlas_->set_override_table(rd, e.slot, -1, {});
+		if (mesh_) mesh_->clear_override_region(e.slot);
+	}
 	for (const auto &l : plan.loads) {
 		int op_count = 0;
 		int64_t seq = 0;
@@ -362,10 +399,53 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 			atlas_->upload_region_ops(rd, l.slot, ops.data(), op_count);
 		}
 		atlas_->set_region_map_entry(rd, l.map_index, l.slot);
+		// The table ID and its slot entries are one publication snapshot. Consolidation may
+		// replace both under edit_mutex_; reading them in separate critical sections could
+		// pair a new table with old entries (or vice versa) for one stream-in.
+		int table = -1;
+		std::vector<std::pair<int, int>> entries;
+		{
+			std::lock_guard<std::mutex> lock(*edit_mutex_);
+			if (override_tables_) {
+				const auto table_it = override_tables_->find(
+						std::tuple<int, int, int>{l.region.x, l.region.y, l.region.z});
+				if (table_it != override_tables_->end()) table = table_it->second;
+			}
+			if (overrides_ && table >= 0) {
+				const ve::IVec3 base{l.region.x * ve::kRegionBricks,
+						l.region.y * ve::kRegionBricks, l.region.z * ve::kRegionBricks};
+				for (int z = 0; z < ve::kRegionBricks; z++)
+					for (int y = 0; y < ve::kRegionBricks; y++)
+						for (int x = 0; x < ve::kRegionBricks; x++) {
+							const ve::IVec3 b{base.x + x, base.y + y, base.z + z};
+							const int slot = overrides_->slot_of(b);
+							if (slot >= 0)
+								entries.emplace_back(ve::WorldBounds::brick_index_in_region(b), slot);
+						}
+			}
+		}
+		atlas_->set_override_table(rd, l.slot, table, entries);
+		if (mesh_ && table >= 0) mesh_->set_override_region(l.region, l.slot, table, entries);
 		load_jobs.push_back({l.region, l.slot, op_count, seq});
 	}
-	for (const auto &e : plan.evicts)
-		atlas_->set_region_map_entry(rd, e.map_index, -1);
+	// Consolidation has no EditOp left to drive the normal mark path. Force a full-region
+	// mark for any resident region explicitly queued by the publication transaction.
+	for (const ve::IVec3 region : forced_regen) {
+		const int slot = residency_->slot_of(region);
+		if (slot < 0) continue;
+		bool duplicate = false;
+		for (const LoadJob &j : load_jobs) if (j.region == region) { duplicate = true; break; }
+		if (duplicate) continue;
+		int op_count = 0;
+		int64_t seq = 0;
+		{
+			std::lock_guard<std::mutex> lock(*edit_mutex_);
+			op_count = static_cast<int>(edit_log_->ops(region).size());
+			seq = edit_seq_ ? edit_seq_->load(std::memory_order_relaxed) : 0;
+			atlas_->upload_region_ops(rd, slot, edit_log_->ops(region).data(), op_count);
+		}
+		load_jobs.push_back({region, slot, op_count, seq});
+	}
 
 	// Edits re-mark only the op's brick AABB clamped to each touched region. An op that
 	// touches a region's APRON plane is in that region's list by construction (Task 2's
@@ -432,7 +512,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		// each job keeps one job's release phase from racing the previous job's allocate
 		// phase when two edits share bricks (the race the phase split exists to avoid).
 		rd->compute_list_add_barrier(list);
-		region_pass_->mark(rd, list, j.region, j.slot, j.lo, j.hi, j.op_count, true);
+		region_pass_->mark(rd, list, j.region, j.slot, j.lo, j.hi, j.op_count, true, true);
 		note_marked(j.region, j.seq);
 		any = true;
 	}
@@ -446,16 +526,36 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 			if (slot < 0) continue;
 			int op_count = 0;
 			int64_t seq = 0;
+			std::vector<ve::EditAabb> exact_ranges;
+			bool has_exact = false;
 			{
 				std::lock_guard<std::mutex> lock(*edit_mutex_);
-				op_count = static_cast<int>(edit_log_->ops(region).size());
+				const std::vector<ve::EditOp> &ops = edit_log_->ops(region);
+				op_count = static_cast<int>(ops.size());
 				seq = edit_seq_ ? edit_seq_->load(std::memory_order_relaxed) : 0;
+				has_exact = ve::exact_edit_aabbs(region, ops, &exact_ranges);
 			}
 			const ve::IVec3 lo{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
 					region.z * ve::kRegionBricks};
 			const ve::IVec3 hi{lo.x + 31, lo.y + 31, lo.z + 31};
 			rd->compute_list_add_barrier(list);
-			region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true);
+			if (has_exact) {
+				// Keep the full-region force-regen for ordinary dropped/stale surface
+				// bricks, then replay each disjoint bounded AABB with exact-edit mode so
+				// the thin probe-missed result is not undone. Per-edit ranges stay small
+				// even when edits are scattered, so the whole 32^3 region is never
+				// re-queued as exact-edit bricks during recovery.
+				region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, false);
+				for (const ve::EditAabb &range : exact_ranges) {
+					rd->compute_list_add_barrier(list);
+					region_pass_->mark(rd, list, region, slot, range.lo, range.hi, op_count,
+							true, true);
+				}
+			} else {
+				// No exact edit range: this is the original plain force-regen recovery.
+				// Exact-edit mode would re-queue every brick in the 32^3 region.
+				region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, false);
+			}
 			note_marked(region, seq);
 			any = true;
 		}
@@ -475,16 +575,33 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		if (slot < 0) continue; // evicted since: it regenerates on stream-in
 		int op_count = 0;
 		int64_t seq = 0;
+		std::vector<ve::EditAabb> exact_ranges;
+		bool has_exact = false;
 		{
 			std::lock_guard<std::mutex> lock(*edit_mutex_);
-			op_count = static_cast<int>(edit_log_->ops(region).size());
+			const std::vector<ve::EditOp> &ops = edit_log_->ops(region);
+			op_count = static_cast<int>(ops.size());
 			seq = edit_seq_ ? edit_seq_->load(std::memory_order_relaxed) : 0;
+			has_exact = ve::exact_edit_aabbs(region, ops, &exact_ranges);
 		}
 		const ve::IVec3 lo{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
 				region.z * ve::kRegionBricks};
 		const ve::IVec3 hi{lo.x + 31, lo.y + 31, lo.z + 31};
 		rd->compute_list_add_barrier(list);
-		region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true);
+		if (has_exact) {
+			// Full-region force-regen first for general dropped/stale bricks; the disjoint
+			// exact AABBs second so probe-missed edits stay resident and generated without
+			// ever re-queueing the union of scattered edits.
+			region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, false);
+			for (const ve::EditAabb &range : exact_ranges) {
+				rd->compute_list_add_barrier(list);
+				region_pass_->mark(rd, list, region, slot, range.lo, range.hi, op_count,
+						true, true);
+			}
+		} else {
+			// No exact edit range: plain force-regen only, as in the pre-Round-2 path.
+			region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, false);
+		}
 		note_marked(region, seq);
 		any = true;
 		repairs++;

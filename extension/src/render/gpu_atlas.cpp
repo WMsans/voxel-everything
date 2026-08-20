@@ -67,7 +67,8 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 	cfg_ = cfg;
 	if (!rd) return false;
 	const int slots = atlas_slot_count();
-	if (slots <= 0 || cfg_.max_region_slots <= 0 || cfg_.max_brick_jobs <= 0) {
+	if (slots <= 0 || cfg_.max_region_slots <= 0 || cfg_.max_brick_jobs <= 0 ||
+			cfg_.max_override_bricks <= 0) {
 		UtilityFunctions::printerr("GpuAtlas: degenerate configuration");
 		return false;
 	}
@@ -87,6 +88,10 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 	// force GL_EXT_shader_16bit_storage on every consumer to save 512 KB; it is not worth it.
 	palette_ = rd->storage_buffer_create(static_cast<uint32_t>(slots) * ve::kBrickPaletteSize * 4,
 			zeroed(static_cast<int64_t>(slots) * ve::kBrickPaletteSize * 4));
+	// Every never-generated slot must be conservative: zero means "skip" to the marcher, and
+	// the atlas contains stale bytes until brick_gen overwrites a slot.
+	brick_flags_ = rd->storage_buffer_create(static_cast<uint32_t>(slots) * sizeof(uint32_t),
+			filled_i32(slots, static_cast<int32_t>(ve::kBrickFlagConservative)));
 
 	// The region map is a BUFFER, not a texture: streaming re-points one entry per region,
 	// and buffer_update writes four bytes where texture_update would rewrite a whole layer.
@@ -132,16 +137,18 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 			static_cast<uint32_t>(cfg.max_region_slots) * ve::kOccupancyBlockBytes,
 			zeroed(static_cast<int64_t>(cfg.max_region_slots) * ve::kOccupancyBlockBytes));
 
-	if (!volumes_.initialize(rd, ve::kMaxVolumes, ve::kIslandDim)) {
+	if (!volumes_.initialize(rd, ve::kMaxVolumes, ve::kIslandDim) ||
+			!overrides_.initialize(rd, cfg_.max_override_bricks, cfg_.max_region_slots)) {
 		teardown();
 		return false;
 	}
 
 	bool ok = sdf_atlas_.is_valid() && mat_atlas_.is_valid() && palette_.is_valid() &&
-			region_map_.is_valid() && region_tables_.is_valid() && free_list_.is_valid() &&
+			brick_flags_.is_valid() && region_map_.is_valid() && region_tables_.is_valid() && free_list_.is_valid() &&
 			counters_.is_valid() && frame_.is_valid() && dispatch_args_.is_valid() &&
 			jobs_.is_valid() && op_pool_.is_valid() && op_counts_.is_valid() &&
-			region_slot_counts_.is_valid() && region_occupancy_.is_valid() && volumes_.is_valid();
+			region_slot_counts_.is_valid() && region_occupancy_.is_valid() && volumes_.is_valid() &&
+			overrides_.is_valid();
 	for (int l = 0; l < ve::kMipLevels; l++) ok = ok && mips_[l].is_valid();
 	if (!ok) {
 		// Most likely cause: the driver refuses STORAGE usage on R8_UNORM / R8G8_UINT
@@ -156,11 +163,13 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 
 void GpuAtlas::teardown() {
 	volumes_.teardown();
+	overrides_.teardown();
 	if (!rd_) return;
 	free_if_valid(rd_, sdf_atlas_);
 	free_if_valid(rd_, mat_atlas_);
 	for (int l = 0; l < ve::kMipLevels; l++) free_if_valid(rd_, mips_[l]);
 	free_if_valid(rd_, palette_);
+	free_if_valid(rd_, brick_flags_);
 	free_if_valid(rd_, region_map_);
 	free_if_valid(rd_, region_tables_);
 	free_if_valid(rd_, free_list_);
@@ -243,8 +252,47 @@ void GpuAtlas::set_region_map_entry(RenderingDevice *rd, int region_index, int r
 	rd->buffer_update(region_map_, static_cast<uint32_t>(region_index) * 4, 4, b);
 }
 
+void GpuAtlas::set_override_table(RenderingDevice *rd, int region_slot, int table,
+		const std::vector<std::pair<int, int>> &entries) {
+	if (!overrides_.is_valid()) return;
+	overrides_.set_region_table(rd, region_slot, table);
+	for (const auto &entry : entries)
+		overrides_.set_table_entry(rd, table, entry.first, entry.second);
+}
+
+bool GpuAtlas::replay_overrides(RenderingDevice *rd, const ve::OverrideStore &store,
+		const std::map<std::tuple<int, int, int>, int> &tables) {
+	if (!rd || !overrides_.is_valid()) return false;
+	for (const auto &region_table : tables) {
+		const ve::IVec3 region{std::get<0>(region_table.first), std::get<1>(region_table.first),
+				std::get<2>(region_table.first)};
+		const int table = region_table.second;
+		if (table < 0 || table >= OverridePool::kMaxOverrideTables) return false;
+		const ve::IVec3 base{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
+				region.z * ve::kRegionBricks};
+		for (int z = 0; z < ve::kRegionBricks; z++)
+			for (int y = 0; y < ve::kRegionBricks; y++)
+				for (int x = 0; x < ve::kRegionBricks; x++) {
+					const ve::IVec3 brick{base.x + x, base.y + y, base.z + z};
+					const int slot = store.slot_of(brick);
+					if (slot < 0) continue;
+					const ve::OverrideBrick *data = store.data(slot);
+					if (!data || !overrides_.upload(slot, *data)) return false;
+					overrides_.set_table_entry(rd, table,
+						ve::WorldBounds::brick_index_in_region(brick), slot);
+				}
+		}
+	return true;
+}
+
 void GpuAtlas::clear_region_map(RenderingDevice *rd) {
-	if (!region_map_.is_valid()) return;
-	const PackedByteArray b = filled_i32(region_map_entries(), -1);
-	rd->buffer_update(region_map_, 0, static_cast<uint32_t>(b.size()), b);
+	if (region_map_.is_valid()) {
+		const PackedByteArray b = filled_i32(region_map_entries(), -1);
+		rd->buffer_update(region_map_, 0, static_cast<uint32_t>(b.size()), b);
+	}
+	if (brick_flags_.is_valid()) {
+		const PackedByteArray b = filled_i32(atlas_slot_count(),
+				static_cast<int32_t>(ve::kBrickFlagConservative));
+		rd->buffer_update(brick_flags_, 0, static_cast<uint32_t>(b.size()), b);
+	}
 }

@@ -10,6 +10,7 @@
 namespace godot {
 
 class VolumePool;
+class OverridePool;
 
 // A component's extraction, or a sleeping island's rest-pose resample. One queue, because
 // the second is pure CPU (ve::resample_volume) and belongs on the same off-frame thread the
@@ -35,6 +36,7 @@ struct IslandExtractJob {
 	float basis[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1}; // ROW major (ve::resample_volume's form)
 	float rest_origin[3] = {0.0f, 0.0f, 0.0f};
 	int out_slot = -1;
+	int override_table = -1;
 };
 
 struct IslandExtractResult {
@@ -57,6 +59,8 @@ public:
 	bool initialize(RenderingDevice *rd, const VolumePool *volumes);
 	void teardown();
 	bool is_valid() const { return pipeline_.is_valid(); }
+	OverridePool *overrides() { return overrides_; }
+	void set_override_pool(OverridePool *pool) { overrides_ = pool; }
 
 	bool extract(const IslandExtractJob &job, IslandExtractResult *out);
 
@@ -64,6 +68,7 @@ private:
 	RenderingDevice *rd_ = nullptr;
 	RID out_, boxes_, counts_, ops_;
 	RID shader_, pipeline_, uset_;
+	OverridePool *overrides_ = nullptr;
 };
 
 } // namespace godot
