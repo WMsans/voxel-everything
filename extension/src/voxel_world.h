@@ -446,6 +446,8 @@ public:
 	void debug_set_fail_consolidate_uploads(bool v);
 	void debug_set_fail_restore_overrides(bool v);
 	void debug_set_fail_restore_overrides_always(bool v);
+	void debug_set_pause_override_publication(bool v);
+	bool debug_override_publication_paused() const;
 	void debug_set_merge_sleep_seconds(float v);
 	// Test hook: lower the dynamic-body guardrail so a small test can prove slot-pool holes
 	// after merges do not count against the cap.
@@ -610,6 +612,8 @@ public:
 	Dictionary debug_deferred_probe(Vector3 pos, Vector3 fwd, int w, int h, int probe_mode);
 	bool debug_mesh_submit(Array chunks);
 	Array debug_mesh_collect();
+	bool debug_extract_submit(int id, Vector3i lo_cell, Vector3i hi_cell);
+	Array debug_extract_collect();
 
 	// --- M5 Task 10 LoD queue hooks ---
 	bool debug_lod_submit(Array jobs);

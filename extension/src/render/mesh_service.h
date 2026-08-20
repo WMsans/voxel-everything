@@ -156,6 +156,16 @@ public:
 	void debug_set_fail_restore_overrides_always(bool v) {
 		fail_restore_overrides_.store(v, std::memory_order_release);
 	}
+	// Deterministic queue-ordering barrier for recovery tests. The worker pauses only after
+	// taking a publication out of the queue, so ordinary jobs submitted while paused are
+	// guaranteed to remain queued behind that publication.
+	void debug_set_pause_override_publication(bool v) {
+		pause_override_publication_.store(v, std::memory_order_release);
+		if (!v) cv_.notify_all();
+	}
+	bool debug_override_publication_paused() const {
+		return override_publication_paused_.load(std::memory_order_acquire);
+	}
 #else
 	// Fail-injection hooks are debug-only: release builds must not be able to drive the
 	// mesh service into artificial failure states.
@@ -166,6 +176,8 @@ public:
 	void debug_set_fail_consolidate_uploads(bool v) { (void)v; }
 	void debug_set_fail_restore_overrides(bool v) { (void)v; }
 	void debug_set_fail_restore_overrides_always(bool v) { (void)v; }
+	void debug_set_pause_override_publication(bool v) { (void)v; }
+	bool debug_override_publication_paused() const { return false; }
 #endif
 
 	// Copies one stored volume into THIS device's pool, on the worker thread. The main
@@ -241,6 +253,10 @@ private:
 	std::atomic<bool> fail_consolidate_uploads_{false};
 	std::atomic<bool> fail_next_restore_{false};
 	std::atomic<bool> fail_restore_overrides_{false};
+#ifdef DEBUG_ENABLED
+	std::atomic<bool> pause_override_publication_{false};
+	std::atomic<bool> override_publication_paused_{false};
+#endif
 	std::atomic<bool> worker_state_valid_{true};
 	std::atomic<bool> rebuilding_worker_{false};
 	std::map<std::tuple<int, int, int>, int> override_tables_;

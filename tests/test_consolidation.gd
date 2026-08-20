@@ -143,48 +143,76 @@ func test_teardown_releases_staged_override_slots_before_reinit() -> void:
 
 func test_publication_failure_recovers_with_queued_worker_work(timeout := 120000) -> void:
 	var w := make_world()
-	w.debug_apply_sphere_subtract(Vector3(24.4, 51.4, 24.4), 2.0)
+	w.debug_apply_sphere_subtract(Vector3(24.4, 55.0, 24.4), 2.0)
 	assert_bool(w.debug_consolidate_region(Vector3i(0, 2, 0))).is_true()
 	for i in range(192):
-		w.debug_apply_sphere_subtract(Vector3(20.0 + float(i % 4) * 0.25, 51.4,
+		w.debug_apply_sphere_subtract(Vector3(20.0 + float(i % 4) * 0.25, 55.0,
 				20.0 + float(i / 4 % 4) * 0.25), 0.8)
-	# Keep substantial mesh work and a LoD job queued while the publication is submitted. The
-	# invalid-worker recovery must cancel these queues (with failed results), not wait for them.
-	var chunks: Array = []
-	for i in range(64):
-		chunks.append(Vector3i(i % 8, 8 + (i / 8) % 4, i / 32))
-	assert_bool(w.debug_mesh_submit(chunks)).is_true()
-	assert_bool(w.debug_lod_submit([[0, Vector3i(1, 4, 1)]])).is_true()
+
+	# Hold the worker only after it has dequeued the publication. Jobs submitted from this
+	# point are deterministically queued behind the publication rather than racing the worker's
+	# extract -> mesh -> LoD -> consolidation -> publication priority order.
 	w.debug_set_fail_consolidate_uploads(true)
 	w.debug_set_fail_restore_overrides_always(true)
+	w.debug_set_pause_override_publication(true)
+	var publication_paused := false
+	for i in range(400):
+		w.debug_pump_consolidation_async()
+		if w.debug_override_publication_paused():
+			publication_paused = true
+			break
+		OS.delay_msec(2)
+	assert_bool(publication_paused).override_failure_message(
+			"publication never reached the worker barrier").is_true()
+
+	var mesh_chunks := [Vector3i(2, 8, 2), Vector3i(3, 8, 2)]
+	assert_bool(w.debug_mesh_submit(mesh_chunks)).is_true()
+	assert_bool(w.debug_extract_submit(73, Vector3i(30, 64, 30),
+			Vector3i(30, 64, 30))).is_true()
+	assert_bool(w.debug_lod_submit([[0, Vector3i(1, 4, 1)]])).is_true()
+
+	var refusals_before: int = int(w.debug_stream_stats().get("consolidation_refusals", 0))
+	w.debug_set_pause_override_publication(false)
 	var refused := false
 	for i in range(400):
 		w.debug_pump_consolidation_async()
-		if int(w.debug_stream_stats().get("consolidation_refusals", 0)) > 0:
+		if int(w.debug_stream_stats().get("consolidation_refusals", 0)) > refusals_before:
 			refused = true
 			break
 		OS.delay_msec(2)
 	assert_bool(refused).override_failure_message("publication failure did not recover").is_true()
+
+	# The failed publication must preserve its edit prefix and cancel every queued consumer with
+	# an explicit failed result so each producer can release scheduler-facing in-flight state.
+	assert_int(w.debug_region_op_count(Vector3i(0, 2, 0))).is_equal(192)
+	var mesh_results := w.debug_mesh_collect()
+	var extract_results: Array = w.debug_extract_collect()
+	var lod_results := w.debug_lod_collect()
+	assert_int(mesh_results.size()).is_equal(2)
+	for i in range(mesh_results.size()):
+		assert_object(mesh_results[i]["chunk"]).is_equal(mesh_chunks[i])
+		assert_bool(mesh_results[i]["failed"]).is_true()
+	assert_int(extract_results.size()).is_equal(1)
+	assert_int(int(extract_results[0]["id"])).is_equal(73)
+	assert_int(int(extract_results[0]["kind"])).is_equal(0)
+	assert_bool(extract_results[0]["failed"]).is_true()
+	assert_int(lod_results.size()).is_equal(1)
+	assert_vector(lod_results[0]["coord"]).is_equal(Vector3i(1, 4, 1))
+	assert_bool(lod_results[0]["failed"]).is_true()
+
+	# Clearing injection lets the requeued transaction complete on the rebuilt worker. This is
+	# the recovery completion assertion: the captured prefix is published and then removed.
 	w.debug_set_fail_consolidate_uploads(false)
 	w.debug_set_fail_restore_overrides_always(false)
-	# Cancellation must release the scheduler-facing results, and the failed transaction must
-	# remain queued for a normal retry once the worker is authoritative again.
-	var mesh_results := w.debug_mesh_collect()
-	var lod_results := w.debug_lod_collect()
-	assert_int(mesh_results.size()).is_greater(0)
-	assert_int(lod_results.size()).is_greater(0)
+	var consolidations_before_retry: int = int(w.debug_stream_stats().get("consolidations", 0))
 	var recovered := false
 	for i in range(2000):
 		w.debug_pump_consolidation_async()
-		if int(w.debug_stream_stats().get("consolidations", 0)) == 1:
+		if int(w.debug_stream_stats().get("consolidations", 0)) > consolidations_before_retry:
 			recovered = true
 			break
 		OS.delay_msec(5)
 	assert_bool(recovered).override_failure_message("worker recovery did not complete").is_true()
-	# The failed transaction keeps the old edit prefix intact. A fresh normal transaction must
-	# still be schedulable on the recovered worker, proving the failure did not wedge the service.
-	assert_int(w.debug_region_op_count(Vector3i(0, 2, 0))).is_equal(192)
-	assert_bool(w.debug_consolidate_region(Vector3i(0, 2, 0))).is_true()
 	assert_int(w.debug_region_op_count(Vector3i(0, 2, 0))).is_equal(0)
 
 func test_mesh_consumer_replays_consolidated_override_after_worker_reinit(timeout := 120000) -> void:

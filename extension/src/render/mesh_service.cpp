@@ -35,6 +35,10 @@ bool MeshService::start(const MeshPassConfig &cfg) {
 		fail_consolidate_uploads_.store(false, std::memory_order_release);
 		fail_next_restore_.store(false, std::memory_order_release);
 		fail_restore_overrides_.store(false, std::memory_order_release);
+#ifdef DEBUG_ENABLED
+		pause_override_publication_.store(false, std::memory_order_release);
+		override_publication_paused_.store(false, std::memory_order_release);
+#endif
 		worker_state_valid_.store(true, std::memory_order_release);
 		rebuilding_worker_.store(false, std::memory_order_release);
 	}
@@ -87,6 +91,10 @@ void MeshService::stop() {
 	fail_consolidate_uploads_.store(false, std::memory_order_release);
 	fail_next_restore_.store(false, std::memory_order_release);
 	fail_restore_overrides_.store(false, std::memory_order_release);
+#ifdef DEBUG_ENABLED
+	pause_override_publication_.store(false, std::memory_order_release);
+	override_publication_paused_.store(false, std::memory_order_release);
+#endif
 	worker_state_valid_.store(true, std::memory_order_release);
 	rebuilding_worker_.store(false, std::memory_order_release);
 }
@@ -625,6 +633,19 @@ void MeshService::run() {
 		}
 
 		if (!override_publications.empty()) {
+#ifdef DEBUG_ENABLED
+			{
+				std::unique_lock<std::mutex> lock(mu_);
+				override_publication_paused_.store(true, std::memory_order_release);
+				done_cv_.notify_all();
+				cv_.wait(lock, [this] {
+					return stopping_ ||
+							!pause_override_publication_.load(std::memory_order_acquire);
+				});
+				override_publication_paused_.store(false, std::memory_order_release);
+				if (stopping_) continue;
+			}
+#endif
 			std::vector<OverridePublicationResult> publication_out;
 			publication_out.reserve(override_publications.size());
 			for (const OverridePublication &publication : override_publications) {

@@ -258,6 +258,9 @@ void VoxelWorld::_bind_methods() {
 			"width", "height"), &VoxelWorld::debug_island_tile_mask);
 	ClassDB::bind_method(D_METHOD("debug_mesh_submit", "chunks"), &VoxelWorld::debug_mesh_submit);
 	ClassDB::bind_method(D_METHOD("debug_mesh_collect"), &VoxelWorld::debug_mesh_collect);
+	ClassDB::bind_method(D_METHOD("debug_extract_submit", "id", "lo_cell", "hi_cell"),
+			&VoxelWorld::debug_extract_submit);
+	ClassDB::bind_method(D_METHOD("debug_extract_collect"), &VoxelWorld::debug_extract_collect);
 	ClassDB::bind_method(D_METHOD("debug_lod_submit", "jobs"), &VoxelWorld::debug_lod_submit);
 	ClassDB::bind_method(D_METHOD("debug_lod_collect"), &VoxelWorld::debug_lod_collect);
 	ClassDB::bind_method(D_METHOD("debug_physics_frame", "center"), &VoxelWorld::debug_physics_frame);
@@ -293,6 +296,10 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::debug_set_fail_restore_overrides);
 	ClassDB::bind_method(D_METHOD("debug_set_fail_restore_overrides_always", "v"),
 			&VoxelWorld::debug_set_fail_restore_overrides_always);
+	ClassDB::bind_method(D_METHOD("debug_set_pause_override_publication", "v"),
+			&VoxelWorld::debug_set_pause_override_publication);
+	ClassDB::bind_method(D_METHOD("debug_override_publication_paused"),
+			&VoxelWorld::debug_override_publication_paused);
 	ClassDB::bind_method(D_METHOD("debug_set_merge_sleep_seconds", "v"), &VoxelWorld::debug_set_merge_sleep_seconds);
 #ifdef DEBUG_ENABLED
 	// These hooks can change the production 64-body cap or mark atlas slots used; keep them
@@ -1731,6 +1738,15 @@ void VoxelWorld::debug_set_fail_restore_overrides(bool v) {
 void VoxelWorld::debug_set_fail_restore_overrides_always(bool v) {
 	ensure_physics_initialized();
 	if (mesh_) mesh_->debug_set_fail_restore_overrides_always(v);
+}
+
+void VoxelWorld::debug_set_pause_override_publication(bool v) {
+	ensure_physics_initialized();
+	if (mesh_) mesh_->debug_set_pause_override_publication(v);
+}
+
+bool VoxelWorld::debug_override_publication_paused() const {
+	return mesh_ && mesh_->debug_override_publication_paused();
 }
 
 int VoxelWorld::debug_island_frame(float dt, Vector3 center) {
@@ -4253,6 +4269,61 @@ bool VoxelWorld::debug_lod_submit(Array jobs) {
 		lod_jobs.push_back(std::move(job));
 	}
 	return mesh_->submit_lod(std::move(lod_jobs));
+}
+
+bool VoxelWorld::debug_extract_submit(int id, Vector3i lo_cell, Vector3i hi_cell) {
+	ensure_physics_initialized();
+	if (!physics_ready_ || !mesh_ || !edit_log_) return false;
+	if (lo_cell.x > hi_cell.x || lo_cell.y > hi_cell.y || lo_cell.z > hi_cell.z ||
+			hi_cell.x - lo_cell.x > 7 || hi_cell.y - lo_cell.y > 7 ||
+			hi_cell.z - lo_cell.z > 7)
+		return false;
+
+	std::vector<ve::IVec3> cells;
+	for (int z = lo_cell.z; z <= hi_cell.z; z++)
+		for (int y = lo_cell.y; y <= hi_cell.y; y++)
+			for (int x = lo_cell.x; x <= hi_cell.x; x++) cells.push_back({x, y, z});
+	std::vector<ve::CellBox> boxes;
+	if (!ve::greedy_box_merge(cells, ve::kMaxIslandBoxes, &boxes)) return false;
+
+	float wlo[3] = {1e30f, 1e30f, 1e30f}, whi[3] = {-1e30f, -1e30f, -1e30f};
+	for (const ve::CellBox &box : boxes) {
+		float box_lo[3], box_hi[3];
+		box.world_aabb(box_lo, box_hi);
+		for (int axis = 0; axis < 3; axis++) {
+			wlo[axis] = std::min(wlo[axis], box_lo[axis]);
+			whi[axis] = std::max(whi[axis], box_hi[axis]);
+		}
+	}
+	IslandExtractJob job;
+	job.id = id;
+	job.boxes = boxes;
+	if (!ve::plan_island_lattice(wlo, whi, ve::kIslandDim, &job.voxel, job.origin)) return false;
+	job.dim = ve::kIslandDim;
+	job.override_table = override_table_for_region(
+			ve::WorldBounds::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		ve::collect_ops_for_aabb(*edit_log_, wlo, whi, &job.ops);
+	}
+	std::vector<IslandExtractJob> jobs;
+	jobs.push_back(std::move(job));
+	return mesh_->submit_extracts(std::move(jobs));
+}
+
+Array VoxelWorld::debug_extract_collect() {
+	Array out;
+	if (!physics_ready_ || !mesh_) return out;
+	std::vector<IslandExtractResult> results;
+	mesh_->collect_extracts(&results);
+	for (const IslandExtractResult &r : results) {
+		Dictionary d;
+		d["id"] = r.id;
+		d["kind"] = static_cast<int>(r.kind);
+		d["failed"] = r.failed;
+		out.push_back(d);
+	}
+	return out;
 }
 
 Array VoxelWorld::debug_lod_collect() {
