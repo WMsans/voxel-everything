@@ -19,6 +19,7 @@
 #include <set>
 #include <utility>
 #include <vector>
+#include <tuple>
 #include "connectivity/occupancy.h"
 #include "generator/volume_set.h"
 #include "lod/lod_tree.h"
@@ -31,6 +32,7 @@
 #include "world/edit_log.h"
 #include "world/raycast.h"
 #include "world/region.h"
+#include "world/override_store.h"
 #include "world/residency.h"
 
 namespace godot {
@@ -143,6 +145,8 @@ class VoxelWorld : public Node3D {
 	// CPU cores outlive the GPU objects: a re-init re-streams the same world, edits
 	// included. This is also what a future save/reload will do (saves ARE the edit log).
 	ve::EditLog *edit_log_ = nullptr;
+	ve::OverrideStore *overrides_ = nullptr;
+	std::map<std::tuple<int, int, int>, int> override_tables_;
 	// The authoritative copy of every stored volume. Owned here because it outlives the GPU
 	// objects exactly as the edit log does: a re-init re-uploads the same rubble.
 	ve::VolumeSet volumes_;
@@ -531,6 +535,9 @@ public:
 
 	// --- Task 5 hook ---
 	Dictionary debug_mesh_diff(Vector3i chunk);
+	Dictionary debug_consolidate_diff(Vector3i region);
+	bool debug_consolidate_region(Vector3i region);
+	int debug_region_op_count(Vector3i region);
 
 	// --- M5 Task 9 hooks ---
 	Dictionary debug_lod_diff(int level, Vector3i coord);

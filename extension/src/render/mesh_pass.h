@@ -3,9 +3,11 @@
 #include <godot_cpp/variant/rid.hpp>
 #include <cstdint>
 #include <vector>
+#include <utility>
 #include "generator/edit_ops.h"
 #include "mesh/mesh_chunk.h"
 #include "render/volume_pool.h"
+#include "render/override_pool.h"
 #include "world/region.h"
 
 namespace godot {
@@ -28,6 +30,7 @@ struct MeshJob {
 	float origin[3] = {0.0f, 0.0f, 0.0f};
 	float cell_size = ve::kChunkCellSize;
 	int lattice = ve::kChunkLattice;
+	int override_table = -1;
 };
 
 struct MeshResult {
@@ -50,6 +53,9 @@ public:
 	bool is_valid() const { return field_pipeline_.is_valid(); }
 	const MeshPassConfig &config() const { return cfg_; }
 	VolumePool &volumes() { return volumes_; }
+	OverridePool &overrides() { return overrides_; }
+	bool upload_override(int slot, const ve::OverrideBrick &brick) { return overrides_.upload(slot, brick); }
+	void set_override_table(int region_slot, int table, const std::vector<std::pair<int, int>> &entries);
 
 	// Uploads one stored volume to THIS device. Called on the worker thread only (the device
 	// belongs to it); MeshService::submit_volume is the main thread's way in.
@@ -98,6 +104,7 @@ private:
 	RID ops_;         // max_jobs * kMaxRegionOps EditOps
 	VolumePool volumes_;
 	RID field_shader_, field_pipeline_, field_uset_;
+	OverridePool overrides_;
 	RID cells_shader_, cells_pipeline_, cells_uset_;
 	RID quads_shader_, quads_pipeline_, quads_uset_;
 

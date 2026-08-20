@@ -129,13 +129,14 @@ bool MeshPass::initialize(RenderingDevice *rd, const MeshPassConfig &cfg) {
 	ops_ = rd->storage_buffer_create(
 			static_cast<uint32_t>(cfg_.max_jobs) * ve::kMaxRegionOps * 32,
 			zeroed(static_cast<int64_t>(cfg_.max_jobs) * ve::kMaxRegionOps * 32));
-	if (!volumes_.initialize(rd, ve::kMaxVolumes, ve::kIslandDim)) {
-		UtilityFunctions::printerr("MeshPass: volume pool creation failed");
+	if (!volumes_.initialize(rd, ve::kMaxVolumes, ve::kIslandDim) ||
+			!overrides_.initialize(rd, OverridePool::kDefaultCapacity)) {
+		UtilityFunctions::printerr("MeshPass: field pool creation failed");
 		teardown();
 		return false;
 	}
 	if (!lattice_.is_valid() || !cells_.is_valid() || !verts_.is_valid() || !tris_.is_valid() ||
-			!counts_.is_valid() || !ops_.is_valid() || !volumes_.is_valid()) {
+			!counts_.is_valid() || !ops_.is_valid() || !volumes_.is_valid() || !overrides_.is_valid()) {
 		UtilityFunctions::printerr("MeshPass: buffer creation failed");
 		teardown();
 		return false;
@@ -146,7 +147,9 @@ bool MeshPass::initialize(RenderingDevice *rd, const MeshPassConfig &cfg) {
 		return false;
 	}
 	field_uset_ = rd->uniform_set_create(Array::make(image(0, lattice_), storage(1, ops_),
-			storage(2, volumes_.sdf_buffer()), storage(3, volumes_.mat_buffer())),
+			storage(2, volumes_.sdf_buffer()), storage(3, volumes_.mat_buffer()),
+			storage(4, overrides_.sdf_buffer()), storage(5, overrides_.mat_buffer()),
+			storage(6, overrides_.tables()), storage(7, overrides_.region_table_map())),
 			field_shader_, 0);
 	if (!field_uset_.is_valid()) {
 		UtilityFunctions::printerr("MeshPass: uniform set creation failed");
@@ -188,6 +191,7 @@ void MeshPass::teardown() {
 	free_if_valid(rd_, cells_shader_);
 	free_if_valid(rd_, field_uset_);
 	volumes_.teardown();
+	overrides_.teardown();
 	free_if_valid(rd_, field_pipeline_);
 	free_if_valid(rd_, field_shader_);
 	free_if_valid(rd_, ops_);
@@ -209,6 +213,13 @@ void MeshPass::upload_ops(const MeshJob &job, int job_index) {
 			static_cast<uint32_t>(b.size()), b);
 }
 
+void MeshPass::set_override_table(int region_slot, int table,
+		const std::vector<std::pair<int, int>> &entries) {
+	if (!overrides_.is_valid()) return;
+	overrides_.set_region_table(rd_, region_slot, table);
+	for (const auto &entry : entries) overrides_.set_table_entry(rd_, table, entry.first, entry.second);
+}
+
 bool MeshPass::upload_volume(int slot, const ve::VolumeData &data) {
 	// buffer_update is device-level and must not land inside an open compute list; the
 	// worker only ever calls this between jobs, which is where that is guaranteed.
@@ -218,7 +229,7 @@ bool MeshPass::upload_volume(int slot, const ve::VolumeData &data) {
 // The same 48-byte block for all three passes, so one helper serves them all.
 void MeshPass::push(int64_t list, const MeshJob &job, int job_index) {
 	PackedByteArray pc;
-	pc.resize(48);
+	pc.resize(64);
 	int32_t *p = reinterpret_cast<int32_t *>(pc.ptrw());
 	p[0] = job.chunk.x;
 	p[1] = job.chunk.y;
@@ -233,6 +244,10 @@ void MeshPass::push(int64_t list, const MeshJob &job, int job_index) {
 	f[9] = job.origin[1];
 	f[10] = job.origin[2];
 	f[11] = job.cell_size;
+	p[12] = job.override_table;
+	p[13] = -1;
+	p[14] = 0;
+	p[15] = 0;
 	rd_->compute_list_set_push_constant(list, pc, pc.size());
 }
 

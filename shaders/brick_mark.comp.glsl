@@ -4,12 +4,17 @@
 #define FIELD_OP_POOL_BINDING 4
 #define FIELD_VOLUME_SDF_BINDING 7
 #define FIELD_VOLUME_MAT_BINDING 8
+#define FIELD_OVERRIDE_SDF_BINDING 11
+#define FIELD_OVERRIDE_MAT_BINDING 12
+#define FIELD_OVERRIDE_TABLE_BINDING 13
+#define FIELD_OVERRIDE_REGION_BINDING 14
 #include "common.glslh"
 // A workgroup shares the ordered subset of ops that can reach its conservative brick slab.
 shared uint s_ops[256];
 shared uint s_op_n;
 shared uint s_keep[256];
 #define FIELD_OP_INDEX(base, i) ((base) + s_ops[i])
+#define FIELD_OVERRIDE_TABLE(base) (field_override_region_map.table[int((base) / MAX_REGION_OPS)])
 #include "field.glslh"
 
 layout(local_size_x = 256) in;

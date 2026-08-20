@@ -4,9 +4,14 @@
 #define FIELD_OP_POOL_BINDING 1
 #define FIELD_VOLUME_SDF_BINDING 2
 #define FIELD_VOLUME_MAT_BINDING 3
+#define FIELD_OVERRIDE_SDF_BINDING 4
+#define FIELD_OVERRIDE_MAT_BINDING 5
+#define FIELD_OVERRIDE_TABLE_BINDING 6
+#define FIELD_OVERRIDE_REGION_BINDING 7
 #include "common.glslh"
-#include "field.glslh"
 #include "mesh_common.glslh"
+#define FIELD_OVERRIDE_TABLE(base) (pc.override_data.x)
+#include "field.glslh"
 
 // One thread per lattice sample. 130 is not a multiple of 4, so the last group in each axis
 // runs partly out of bounds and returns.

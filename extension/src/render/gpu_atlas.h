@@ -2,9 +2,11 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <vector>
+#include <utility>
 #include "connectivity/occupancy.h"
 #include "generator/edit_ops.h"
 #include "render/volume_pool.h"
+#include "render/override_pool.h"
 #include "world/brick_flags.h"
 #include "world/edit_log.h"
 #include "world/region.h"
@@ -64,6 +66,12 @@ public:
 	}
 	VolumePool &volumes() { return volumes_; }
 	const VolumePool &volumes() const { return volumes_; }
+	OverridePool &overrides() { return overrides_; }
+	const OverridePool &overrides() const { return overrides_; }
+	void upload_override(RenderingDevice *rd, int slot, const ve::OverrideBrick &brick) {
+		if (overrides_.is_valid()) overrides_.upload(slot, brick);
+	}
+	void set_override_table(RenderingDevice *rd, int region_slot, int table, const std::vector<std::pair<int, int>> &entries);
 
 	void reset_frame_counters(RenderingDevice *rd);
 	void clear_overflow(RenderingDevice *rd);
@@ -91,6 +99,7 @@ private:
 	RID jobs_, op_pool_, op_counts_, region_slot_counts_;
 	RID region_occupancy_;
 	VolumePool volumes_;
+	OverridePool overrides_;
 };
 
 } // namespace godot

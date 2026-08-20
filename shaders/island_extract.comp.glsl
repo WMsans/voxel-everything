@@ -4,7 +4,16 @@
 #define FIELD_OP_POOL_BINDING 1
 #define FIELD_VOLUME_SDF_BINDING 2
 #define FIELD_VOLUME_MAT_BINDING 3
+#define FIELD_OVERRIDE_SDF_BINDING 6
+#define FIELD_OVERRIDE_MAT_BINDING 7
+#define FIELD_OVERRIDE_TABLE_BINDING 8
+#define FIELD_OVERRIDE_REGION_BINDING 9
 #include "common.glslh"
+layout(push_constant, std430) uniform Push {
+	vec4 origin_voxel;
+	ivec4 params;
+} pc;
+#define FIELD_OVERRIDE_TABLE(base) (pc.params.w)
 #include "field.glslh"
 
 // One thread per lattice sample. 64 is a multiple of 4, so no group runs out of bounds --
@@ -19,11 +28,6 @@ layout(set = 0, binding = 0, std430) writeonly buffer Out { uint v[]; } out_vol;
 // Two vec4 per box: the world AABB's min and max corners.
 layout(set = 0, binding = 4, std430) readonly buffer Boxes { vec4 v[]; } boxes;
 layout(set = 0, binding = 5, std430) buffer Counts { uint solid; uint pad0, pad1, pad2; } counts;
-
-layout(push_constant, std430) uniform Push {
-	vec4 origin_voxel; // xyz = lattice world origin, w = voxel pitch
-	ivec4 params;      // x = dim, y = op count, z = box count, w = unused
-} pc;
 
 // Mirror of ve::extract_island_volume's `masked` lambda: the island IS the solid field
 // intersected with the union of its 0.8 m cells, which is max(field, min over boxes). A

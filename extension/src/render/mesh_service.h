@@ -6,8 +6,12 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <utility>
+#include <map>
+#include <tuple>
 #include "generator/edit_ops.h"
 #include "render/island_extract_pass.h"
+#include "render/consolidate_pass.h"
 #include "render/lod_build_pass.h"
 #include "render/mesh_pass.h"
 #include "world/region.h"
@@ -71,6 +75,11 @@ public:
 	// True while a LoD batch is queued or being built.
 	bool lod_busy() const { return lod_busy_.load(std::memory_order_acquire); }
 	int collect_lod(std::vector<LodBuildResult> *out);
+
+	bool submit_consolidations(std::vector<ConsolidateJob> jobs);
+	int collect_consolidations(std::vector<ConsolidateResult> *out);
+	bool publish_override(int slot, const ve::OverrideBrick &brick, ve::IVec3 region,
+			int region_slot, int table, const std::vector<std::pair<int, int>> &entries);
 	// True when the worker has a live LodBuildPass.
 	bool lod_available() const {
 		return lod_available_.load(std::memory_order_acquire);
@@ -139,8 +148,11 @@ private:
 	std::vector<IslandExtractJob> pending_extract_;
 	std::vector<IslandExtractResult> extract_results_;
 	LodBuildPass *lod_ = nullptr;                  // worker thread only
+	ConsolidatePass *consolidate_ = nullptr;       // worker thread only
 	std::vector<LodBuildJob> pending_lod_;
 	std::vector<LodBuildResult> lod_results_;
+	std::vector<ConsolidateJob> pending_consolidations_;
+	std::vector<ConsolidateResult> consolidate_results_;
 	std::vector<VolumeUpload> pending_volumes_;
 #ifdef DEBUG_ENABLED
 	// Debug-only: accepted volume upload slots, used by debug_submitted_volume_slots().
@@ -153,6 +165,8 @@ private:
 	std::atomic<bool> fail_extract_submit_{false};
 	std::atomic<bool> lod_busy_{false};
 	std::atomic<bool> lod_available_{false};
+	std::atomic<bool> consolidate_busy_{false};
+	std::map<std::tuple<int, int, int>, int> override_tables_;
 	const std::function<void(MeshPass &)> *sync_fn_ = nullptr;
 	bool sync_pending_ = false;
 	bool started_ = false;   // startup attempt has settled (ready_ is then meaningful)
