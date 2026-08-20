@@ -4405,9 +4405,7 @@ bool VoxelWorld::render_probe_pixel(Vector3 origin, Vector3 dir) {
 	RenderingDevice *device = rd();
 	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_)
 		return false;
-	int quiet = 0;
-	for (int i = 0; i < 400 && quiet < 6; i++)
-		quiet = debug_stream_frame(origin) == 0 ? quiet + 1 : 0;
+	// The probe is a read-only diagnostic: it must not mutate the streamed world.
 	ve::CameraParams cam = ve::CameraParams::looking_at(
 			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
 	const ve::WorldBounds wb = world_bounds();

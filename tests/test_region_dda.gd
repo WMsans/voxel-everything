@@ -16,7 +16,12 @@ func make_world() -> VoxelWorld:
 	w.world_size_regions = Vector3i(8, 5, 8)
 	add_child(w)
 	_worlds.append(w)
-	w.ensure_initialized()
+	assert_bool(w.debug_init_atlas()).is_true()
+	var quiet := 0
+	for i in range(400):
+		quiet = quiet + 1 if w.debug_stream_frame(Vector3(24.0, 56.2, 24.0)) == 0 else 0
+		if quiet >= 6:
+			break
 	return w
 
 # A ray fired straight up crosses ~200 m of nothing. With a brick DDA that is 250 cells;
