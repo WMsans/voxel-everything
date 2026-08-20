@@ -12,6 +12,7 @@
 #include <godot_cpp/variant/rid.hpp>
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/vector2.hpp>
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <map>
@@ -19,6 +20,7 @@
 #include <set>
 #include <utility>
 #include <vector>
+#include <tuple>
 #include "connectivity/occupancy.h"
 #include "generator/volume_set.h"
 #include "lod/lod_tree.h"
@@ -27,10 +29,12 @@
 #include "physics/island_manager.h"
 #include "render/island_atlas.h"
 #include "render/gpu_timings.h"
+#include "render/consolidate_pass.h"
 #include "shade/beauty_settings.h"
 #include "world/edit_log.h"
 #include "world/raycast.h"
 #include "world/region.h"
+#include "world/override_store.h"
 #include "world/residency.h"
 
 namespace godot {
@@ -95,6 +99,7 @@ class VoxelWorld : public Node3D {
 	Vector3i atlas_bricks_ = Vector3i(64, 32, 32);
 	int max_region_slots_ = 512;
 	int max_brick_jobs_ = 16384;
+	int max_override_bricks_ = 8192;
 	Vector3i world_origin_bricks_ = Vector3i(0, -64, 0);
 	Vector3i world_size_regions_ = Vector3i(64, 8, 64);
 	float residency_radius_m_ = 96.0f;
@@ -113,6 +118,8 @@ class VoxelWorld : public Node3D {
 	GpuAtlas *atlas_ = nullptr;
 	MaterialAtlas *materials_ = nullptr;
 	IslandAtlas *islands_ = nullptr;
+	std::atomic<bool> islands_enabled_{true};
+	std::atomic<bool> near_field_enabled_{true};
 	int island_slots_ = 0; // high-water mark, not a population; guarded by island_mutex_
 	IslandCullPass *island_cull_ = nullptr;
 	RegionPass *region_pass_ = nullptr;
@@ -142,6 +149,8 @@ class VoxelWorld : public Node3D {
 	// CPU cores outlive the GPU objects: a re-init re-streams the same world, edits
 	// included. This is also what a future save/reload will do (saves ARE the edit log).
 	ve::EditLog *edit_log_ = nullptr;
+	ve::OverrideStore *overrides_ = nullptr;
+	std::map<std::tuple<int, int, int>, int> override_tables_;
 	// The authoritative copy of every stored volume. Owned here because it outlives the GPU
 	// objects exactly as the edit log does: a re-init re-uploads the same rubble.
 	ve::VolumeSet volumes_;
@@ -150,6 +159,27 @@ class VoxelWorld : public Node3D {
 	std::mutex edit_mutex_;                   // guards edit_log_ + pending_edits_
 	std::vector<PendingEdit> pending_edits_;  // appended by tools, drained by the streamer
 	int overflow_seen_ = 0;                   // sticky OR of frame overflow bits (tests)
+
+	// Consolidation is deliberately one-region-at-a-time. The worker owns the bake; the main
+	// thread owns this queue and publishes the completed transaction between frames.
+	std::vector<ve::IVec3> consolidation_queue_;
+	bool consolidation_in_flight_ = false;
+	ConsolidateJob consolidation_job_;
+	int consolidation_table_ = -1;
+	int consolidation_old_table_ = -1;
+	std::vector<std::pair<int, int>> consolidation_old_entries_;
+	std::vector<std::pair<int, int>> consolidation_entries_;
+	std::vector<int> consolidation_old_slots_;
+	std::vector<ve::OverrideBrick> consolidation_old_bricks_;
+	std::vector<ve::IVec3> consolidation_newly_acquired_;
+	std::vector<int> consolidation_slots_;
+	std::vector<ve::OverrideBrick> consolidation_baked_;
+	bool consolidation_publish_in_flight_ = false;
+	int consolidation_count_ = 0;
+	int consolidation_refusals_ = 0;
+	int consolidation_queue_refusals_ = 0;
+	int edit_rejections_ = 0;
+	bool consolidation_queue_refusal_logged_ = false;
 
 	ve::OccupancyGrid occupancy_;              // main thread only
 	std::mutex occupancy_mutex_;               // guards occupancy_inbox_
@@ -160,6 +190,10 @@ class VoxelWorld : public Node3D {
 	// the blast.
 	std::atomic<int64_t> edit_seq_{0};
 	void drain_occupancy();                    // inbox -> grid
+	void pump_consolidation();
+	bool queue_consolidation(ve::IVec3 region); // edit_mutex_ must be held
+	void requeue_consolidation_locked(ve::IVec3 region);
+	bool render_probe_pixel(Vector3 origin, Vector3 dir);
 
 	// The mesher runs on its own thread and owns its local RenderingDevice there; see
 	// MeshService. Nothing on the main thread touches that device.
@@ -231,6 +265,16 @@ class VoxelWorld : public Node3D {
 	bool last_hiz_readback_was_pending_ = false;
 	bool last_hiz_readback_was_drained_ = true;
 
+	// Shader hot reload (spec §8). request_shader_reload() only sets the latch; the render
+	// callback pumps it, pre-flights every shader, and only then tears down and rebuilds the
+	// GPU objects so a bad shader never kills the last-known-good pipelines.
+	std::atomic<bool> reload_requested_{false};
+	std::mutex reload_mutex_;
+	int reload_count_ = 0;
+	bool reload_last_ok_ = true;
+	String reload_last_error_;
+	bool preflight_shaders(RenderingDevice *rd, String *out_error);
+
 	void teardown_gpu(); // every GPU object; CPU cores survive
 	void shutdown_render_resources_on_render_thread();
 	bool initialize_downsample(RenderingDevice *rd);
@@ -260,6 +304,11 @@ public:
 	int get_max_region_slots() const { return max_region_slots_; }
 	void set_max_brick_jobs(int v) { max_brick_jobs_ = v; }
 	int get_max_brick_jobs() const { return max_brick_jobs_; }
+	void set_max_override_bricks(int v) {
+		const int requested = std::max(v, 0);
+		max_override_bricks_ = overrides_ ? std::min(requested, overrides_->capacity()) : requested;
+	}
+	int get_max_override_bricks() const { return max_override_bricks_; }
 	void set_world_origin_bricks(Vector3i v) { world_origin_bricks_ = v; }
 	Vector3i get_world_origin_bricks() const { return world_origin_bricks_; }
 	void set_world_size_regions(Vector3i v) { world_size_regions_ = v; }
@@ -301,6 +350,17 @@ public:
 	int get_quality_tier() const;
 	void set_effect_enabled(const String &name, bool on);
 	bool get_effect_enabled(const String &name) const;
+	// Spec §8 dev-build affordances: request a shader reload (latch, safe from _input) and
+	// report what the last reload did. debug_pump_shader_reload() lets tests step the render
+	// callback's reload work directly.
+	void request_shader_reload();
+	void pump_shader_reload();
+	Dictionary debug_shader_reload_stats();
+	void debug_pump_shader_reload() { pump_shader_reload(); }
+	void debug_set_shader_override(const String &name, const String &source);
+	// Differential self-check: runs the CPU-vs-GPU diff machinery the gdUnit suites use and
+	// returns a single dictionary a running demo can print.
+	Dictionary debug_self_check();
 	// Returns an immutable value snapshot. Render callbacks must take this once per frame and
 	// pass the copy through their work; the mutex is never held during render work.
 	ve::BeautySettings beauty_settings() const;
@@ -404,6 +464,12 @@ public:
 	// Test hook: make the mesher reject extraction submits even when it is idle, so the
 	// island manager's submit rollback path can be exercised deterministically.
 	void debug_set_fail_extract_submit(bool v);
+	void debug_set_fail_consolidations(bool v);
+	void debug_set_fail_consolidate_uploads(bool v);
+	void debug_set_fail_restore_overrides(bool v);
+	void debug_set_fail_restore_overrides_always(bool v);
+	void debug_set_pause_override_publication(bool v);
+	bool debug_override_publication_paused() const;
 	void debug_set_merge_sleep_seconds(float v);
 	// Test hook: lower the dynamic-body guardrail so a small test can prove slot-pool holes
 	// after merges do not count against the cap.
@@ -443,6 +509,8 @@ public:
 	// it removes was already labelled UNANCHORED, so nothing that was holding on can be
 	// loosened by its going, and enqueueing a window would relabel the same neighbourhood
 	// every time a speck of sub-voxel dust is swept up.
+	int override_table_for_region(ve::IVec3 region) const;
+
 	ve::EditLog::AppendResult append_edit_locked(const ve::EditOp &op,
 			bool notify_islands = true);
 
@@ -466,6 +534,9 @@ public:
 	void debug_generate_pending();
 	Dictionary debug_brick_diff(Vector3i brick, int region_slot, const PackedByteArray &ops,
 			int op_count);
+	void debug_stream_region(Vector3i region);
+	Dictionary debug_brick_flags(Vector3i region);
+	Dictionary debug_brick_flags_after_mark(Vector3i region);
 	RID debug_sdf_atlas() const;
 	RID debug_mat_atlas() const;
 	RID debug_mip_atlas(int level) const;
@@ -480,6 +551,10 @@ public:
 	ve::OccupancyGrid &occupancy() { return occupancy_; }
 	int64_t edit_seq() const { return edit_seq_.load(std::memory_order_relaxed); }
 	int debug_occupancy_state(Vector3i cell);
+	// Harvest already-issued occupancy readbacks; does not advance streaming or issue a mark.
+	void debug_pump_occupancy();
+	Dictionary debug_occupancy_diff(Vector3i region);
+	Dictionary debug_occupancy_fallback_diff(Vector3i region);
 	// The world field's signed distance at a point: generator + that point's region ops +
 	// the volume store, the same evaluation ve::raycast marches. Diagnostic.
 	float debug_field_sdf(Vector3 p);
@@ -489,6 +564,7 @@ public:
 	// --- Task 12 hooks ---
 	Color debug_raymarch_pixel(Vector3 origin, Vector3 dir);
 	Dictionary debug_raymarch_probe(Vector3 origin, Vector3 dir);
+	Dictionary debug_raymarch_cost_probe(Vector3 origin, Vector3 dir);
 	Dictionary debug_raymarch_gbuffer(Vector3 origin, Vector3 dir);
 	Dictionary debug_raymarch_hole_probe(Vector3 origin, Vector3 dir, int w, int h);
 	// --- M5 Task 11 hooks ---
@@ -522,9 +598,22 @@ public:
 	// benchmark read it to say WHERE a frame went, rather than that it was slow.
 	Dictionary debug_perf_stats();
 	RID debug_body_of_chunk(Vector3i chunk);
+	Dictionary debug_chunk_collider_octants(Vector3i chunk);
 
 	// --- Task 5 hook ---
 	Dictionary debug_mesh_diff(Vector3i chunk);
+	Dictionary debug_consolidate_diff(Vector3i region);
+	bool debug_consolidate_region(Vector3i region);
+	void debug_pump_consolidation();
+	void debug_pump_consolidation_async();
+	void debug_wait_consolidation();
+	int debug_region_op_count(Vector3i region);
+	int debug_override_used() const;
+	// Test-only fixture: publish one valid table containing every override slot, exhausting
+	// the real 8192-slot store so refusal tests do not rely on an oversized plan shortcut.
+	bool debug_fill_override_pool();
+	Dictionary debug_override_render_state(Vector3i brick);
+	int debug_override_region_table(int region_slot) const;
 
 	// --- M5 Task 9 hooks ---
 	Dictionary debug_lod_diff(int level, Vector3i coord);
@@ -550,6 +639,8 @@ public:
 	Dictionary debug_deferred_probe(Vector3 pos, Vector3 fwd, int w, int h, int probe_mode);
 	bool debug_mesh_submit(Array chunks);
 	Array debug_mesh_collect();
+	bool debug_extract_submit(int id, Vector3i lo_cell, Vector3i hi_cell);
+	Array debug_extract_collect();
 
 	// --- M5 Task 10 LoD queue hooks ---
 	bool debug_lod_submit(Array jobs);

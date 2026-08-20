@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://b2lh3o6s6fehn"
+path="res://.godot/imported/ssgi.comp.glsl-6b54bf107a673e75be82c3cbdc8682bb.res"
+
+[deps]
+
+source_file="res://shaders/ssgi.comp.glsl"
+dest_files=["res://.godot/imported/ssgi.comp.glsl-6b54bf107a673e75be82c3cbdc8682bb.res"]
+
+[params]
+

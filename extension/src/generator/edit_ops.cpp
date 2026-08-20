@@ -13,20 +13,12 @@ float sphere_sdf(const EditOp &op, float x, float y, float z) {
 }
 
 // Inclusive [lo, hi] cell range of the op's padded AABB on a lattice of the given pitch.
-//
-// Two margins, and the op's own extent covers neither. kVoxelSize is the brick's apron: its
-// SDF lattice reaches one voxel past its own extent (kBrickSdfStride == 17), so an op
-// grazing that plane still changes the bytes the brick stores. kActivationPad is the
-// activation probe's: a CSG difference is a max and a union is a min, so BOTH move the
-// field outside the shape itself -- a point d metres beyond a carved box reads -d, and once
-// d is under the pad, a brick that was solidly interior starts reporting a surface. Those
-// bricks flip active or inactive exactly like the ones inside the shape, and the streamer
-// re-marks nothing but this range, so leaving them out means the GPU and the CPU disagree
-// about whether they hold an atlas slot with nothing to ever settle it.
-void padded_range(const EditOp &op, float pitch, IVec3 *lo, IVec3 *hi) {
+// The caller selects the consumer's conservative pad: brick residency uses the activation
+// margin plus its one-voxel apron, while stored-lattice consumers use the representable SDF
+// range plus one 5 cm pitch.
+void padded_range(const EditOp &op, float pitch, float pad, IVec3 *lo, IVec3 *hi) {
 	float a[3], b[3];
 	op_world_aabb(op, a, b);
-	const float pad = kActivationPad + kVoxelSize;
 	const auto cell = [pitch](float v) { return static_cast<int>(std::floor(v / pitch)); };
 	*lo = {cell(a[0] - pad), cell(a[1] - pad), cell(a[2] - pad)};
 	*hi = {cell(b[0] + pad), cell(b[1] + pad), cell(b[2] + pad)};
@@ -194,12 +186,25 @@ Sample apply_ops(Sample s, const EditOp *ops, int count, float x, float y, float
 	return s;
 }
 
+bool op_touches_aabb(const EditOp &op, const float lo[3], const float hi[3], float pad) {
+	float a[3], b[3];
+	op_world_aabb(op, a, b);
+	for (int i = 0; i < 3; i++) {
+		if (a[i] - pad > hi[i]) return false;
+		if (b[i] + pad < lo[i]) return false;
+	}
+	return true;
+}
+
 void op_brick_range(const EditOp &op, IVec3 *lo, IVec3 *hi) {
-	padded_range(op, kBrickSize, lo, hi);
+	padded_range(op, kBrickSize, kBrickFilterPad, lo, hi);
 }
 
 void op_region_range(const EditOp &op, IVec3 *lo, IVec3 *hi) {
-	padded_range(op, kRegionSize, lo, hi);
+	// Region membership feeds the brick residency path, whose exact conservative pad is the
+	// activation margin plus its one-voxel apron. Lattice consumers gather neighbouring
+	// region lists through collect_ops_for_aabb() and use kLatticeFilterPad there.
+	padded_range(op, kRegionSize, kBrickFilterPad, lo, hi);
 }
 
 } // namespace ve

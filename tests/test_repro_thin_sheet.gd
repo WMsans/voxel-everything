@@ -1,15 +1,8 @@
 extends GdUnitTestSuite
 
-# DIAGNOSTIC ONLY. Hypothesis under test:
-#
-#   ve::cell_state_field (and shaders/brick_mark.comp.glsl, which computes the same thing)
-#   decides a 0.8 m cell's state from a 3x3x3 lattice of SDF samples -- a 0.4 m spacing.
-#   A cell reads kCellAir when ALL 27 samples are positive. Matter thinner than that spacing
-#   can contain no sample point at all, so a thin sheet reads AIR.
-#
-#   Everything downstream believes it: ve::flood_anchored only walks `solid` cells, so the
-#   sheet is never in any labelled component, is never carved, and is left standing as static
-#   terrain after the island around it becomes a body.
+# Regression coverage for a sheet thinner than the 27-sample activation spacing. The
+# streaming/occupancy path must generate the touched bricks from the edit range so the exact
+# 5 cm lattice, not a missed activation sample, describes the resulting cells.
 
 const CENTER := Vector3(20.0, 56.0, 20.0)
 
@@ -21,13 +14,33 @@ func after_test() -> void:
 			w.free()
 	_worlds.clear()
 
-func make_world() -> VoxelWorld:
+func make_world(max_jobs := 16384, stream_radius := 40.0) -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
+	w.max_brick_jobs = max_jobs
 	w.physics_enabled = false
 	w.world_origin_bricks = Vector3i(0, -64, 0)
 	w.world_size_regions = Vector3i(8, 5, 8)
-	w.residency_radius_m = 40.0
+	w.residency_radius_m = stream_radius
+	w.atlas_bricks = Vector3i(48, 24, 48)
+	w.max_region_slots = 64
+	w.physics_radius_m = 30.0
+	w.max_collider_chunks = 128
+	w.shape_builds_per_frame = 4
+	add_child(w)
+	_worlds.append(w)
+	assert_bool(w.debug_init_atlas()).is_true()
+	assert_bool(w.debug_init_physics()).is_true()
+	return w
+
+func make_tall_world(max_jobs := 16384, stream_radius := 40.0) -> VoxelWorld:
+	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	w.use_local_device = true
+	w.max_brick_jobs = max_jobs
+	w.physics_enabled = false
+	w.world_origin_bricks = Vector3i(0, -64, 0)
+	w.world_size_regions = Vector3i(8, 7, 8)
+	w.residency_radius_m = stream_radius
 	w.atlas_bricks = Vector3i(48, 24, 48)
 	w.max_region_slots = 64
 	w.physics_radius_m = 30.0
@@ -47,12 +60,77 @@ func tool_of(w: VoxelWorld) -> VoxelEditTool:
 func step(w: VoxelWorld, frames: int, center: Vector3 = CENTER) -> void:
 	for i in range(frames):
 		w.debug_stream_frame(center)
-		w.debug_physics_frame(center)
-		w.debug_island_frame(1.0 / 60.0, center)
 
 # A shell thinner than the probe spacing: add a ball, subtract a slightly smaller ball at the
 # same centre. What survives is a spherical skin `radius - inner` thick.
-func test_a_sheet_thinner_than_the_probe_spacing_reads_as_air(timeout := 300000) -> void:
+func test_edit_overflow_repair_preserves_thin_sheet_occupancy(timeout := 300000) -> void:
+	var w := make_world(4096, 5.0)
+	var t := tool_of(w)
+	var sheet := Vector3(20.2, 62.2, 20.2)
+	# First generate a 10 cm shell whose exact edit range is exactly eight bricks. Its
+	# occupancy is solid even though every 27-sample probe lands more than the activation
+	# pad away from the shell (a true probe miss, not just a probe sample outside the skin).
+	step(w, 30)
+	t.apply_sphere_add(sheet, 0.19, 4)
+	step(w, 12)
+	t.apply_sphere_subtract(sheet, 0.09)
+	step(w, 12)
+	var cell := Vector3i(25, 77, 25)
+	assert_int(w.debug_cell_state(cell)).is_equal(2)
+	assert_int(w.debug_occupancy_state(cell)).is_equal(2)
+	# A separate paint edit in the same region expands the exact edit job list beyond 4096.
+	# It changes no SDF, so the sheet remains a probe-missed thin surface while overflow
+	# triggers the region recovery/repair paths.
+	t.apply_sphere_paint(Vector3(23.0, 62.0, 23.0), 8.0, 4)
+	# The overflow word is read back asynchronously, so poll a few frames for the sticky
+	# job-list overflow bit. The single resident region keeps the re-mark from also forcing
+	# eviction/reload, so this exercises the overflow/repair re-mark path itself.
+	var overflow_seen := 0
+	for i in range(5):
+		w.debug_stream_frame(sheet)
+		overflow_seen |= int(w.debug_stream_stats()["overflow_ever"])
+	assert_int(overflow_seen & 2).override_failure_message(
+		"the expanded exact-edit list did not overflow").is_not_equal(0)
+	for i in range(90):
+		w.debug_stream_frame(sheet)
+	assert_int(w.debug_occupancy_state(cell)).override_failure_message(
+		"overflow/repair recovery reverted the thin sheet to probe-only occupancy").is_equal(2)
+
+func test_bounded_exact_edit_recovery_does_not_requeue_whole_region(timeout := 300000) -> void:
+	# 4096 is above the single resident region's ordinary surface-brick count, so the
+	# full-region PLAIN force-regen mark in recovery fits. It is far below the 32768-brick
+	# whole-region exact-edit worst case, so an over-broad exact re-mark would overflow
+	# again on every recovery frame and this test would never see the overflow bit clear.
+	var w := make_tall_world(4096, 5.0)
+	var t := tool_of(w)
+	var c := Vector3(20.2, 90.0, 20.2)
+	step(w, 30)
+	# A chain of overlapping exact-edit ops in one high-air region, staying under the
+	# 256-op region log. The normal edit path queues each op's own padded brick AABB, so
+	# the same small set of bricks is queued many times and overflows the 4096 job list;
+	# their union AABB stays far below 4096. That is exactly the overflow case a
+	# whole-region exact re-mark would make unrecoverable (32768 > 4096), while the
+	# bounded AABB re-mark fits.
+	for i in range(80):
+		t.apply_sphere_add(c + Vector3(0.0, i * 0.05, 0.0), 1.5, 4)
+	w.debug_stream_frame(c)
+	var overflow_seen := 0
+	for i in range(5):
+		w.debug_stream_frame(c)
+		overflow_seen |= int(w.debug_stream_stats()["overflow_ever"])
+	assert_int(overflow_seen & 2).override_failure_message(
+		"the tiny exact-edit job list did not overflow").is_not_equal(0)
+	var cleared := false
+	for i in range(90):
+		w.debug_stream_frame(c)
+		if (int(w.debug_atlas_stats()["overflow"]) & 2) == 0:
+			cleared = true
+			break
+	assert_bool(cleared).override_failure_message(
+		"overflow recovery kept re-queueing the whole region instead of the bounded exact-edit AABB"
+		).is_true()
+
+func test_a_sheet_thinner_than_the_probe_spacing_is_generated(timeout := 300000) -> void:
 	var w := make_world()
 	var t := tool_of(w)
 	# Well clear of the terrain so nothing else is in these cells.
@@ -72,11 +150,10 @@ func test_a_sheet_thinner_than_the_probe_spacing_reads_as_air(timeout := 300000)
 	prints("field samples inside the 10 cm skin:", on_shell, "/ 64")
 	assert_int(on_shell).override_failure_message("the skin was never built").is_greater(0)
 
-	# ...and the occupancy grid cannot see it.
+	# The exact occupancy grid must retain the lattice cells containing the skin.
 	var air := 0
 	var solid := 0
 	var cells := 0
-	var probe_mins := []
 	var lo := Vector3i(int(floor((c.x - 2.4) / 0.8)), int(floor((c.y - 2.4) / 0.8)),
 		int(floor((c.z - 2.4) / 0.8)))
 	var hi := Vector3i(int(floor((c.x + 2.4) / 0.8)), int(floor((c.y + 2.4) / 0.8)),
@@ -104,31 +181,11 @@ func test_a_sheet_thinner_than_the_probe_spacing_reads_as_air(timeout := 300000)
 				cells += 1
 				if w.debug_cell_state(cell) == 1:
 					air += 1
-					# ve::brick_probe, recomputed here: 3^3 samples at 0.4 m spacing. How far
-					# does the closest of them clear zero? That is the pad the air verdict
-					# would need in order to catch this cell.
-					var mn := 1e30
-					for sx in range(3):
-						for sy in range(3):
-							for sz in range(3):
-								mn = minf(mn, w.debug_field_sdf(Vector3(
-									(cx * 0.8) + sx * 0.4, (cy * 0.8) + sy * 0.4,
-									(cz * 0.8) + sz * 0.4)))
-					probe_mins.append(mn)
 				else:
 					solid += 1
-	prints("cells holding matter:", cells, " reported AIR by the 3^3 probe:", air,
+	prints("cells holding matter:", cells, " reported AIR:", air,
 		" reported solid/full:", solid)
-	probe_mins.sort()
-	if probe_mins.size() > 0:
-		prints("probe_mn over the missed cells: min %.4f  median %.4f  max %.4f" % [
-			probe_mins[0], probe_mins[probe_mins.size() / 2],
-			probe_mins[probe_mins.size() - 1]])
-		var within := 0
-		for m in probe_mins:
-			if m <= 0.15:
-				within += 1
-		prints("missed cells that ACTIVATION_PAD (0.15) would catch:", within, "/",
-			probe_mins.size())
-	assert_int(air).override_failure_message(
-		"the 3^3 probe saw every cell of a 10 cm skin; hypothesis is wrong").is_greater(0)
+	assert_int(cells).is_greater(0)
+	assert_int(solid).override_failure_message(
+		"the exact lattice did not retain any cell containing the 10 cm skin").is_greater(0)
+	assert_int(air).is_equal(0)

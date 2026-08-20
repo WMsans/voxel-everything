@@ -16,6 +16,11 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(set = 0, binding = 0, rgba8) writeonly uniform image2D out_albedo;
 layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D out_hitpos;
 layout(set = 0, binding = 20, rgba16f) writeonly uniform image2D out_surface;
+// Two words per pixel: [0] steps consumed by the primary ray, [1] brick cells in the low
+// 16 bits and region cells in the high 16. Written every frame -- one store per pixel is
+// below the noise floor of a pass that reads the atlas thousands of times -- so the probe
+// never needs a special dispatch path that could drift from the real one.
+layout(set = 0, binding = 23, std430) writeonly buffer CostOut { uint v[]; } cost_out;
 layout(set = 0, binding = 2) uniform sampler3D sdf_atlas;   // R8 unorm, nearest
 layout(set = 0, binding = 3) uniform usampler3D mat_atlas;  // R8 uint, nearest
 layout(set = 0, binding = 4) uniform usampler3D mip2_atlas; // RG8 uint, 2^3 cells/brick
@@ -26,6 +31,10 @@ layout(set = 0, binding = 8, std430) readonly buffer RegionMap { int slot[]; } r
 layout(set = 0, binding = 9, std430) readonly buffer RegionTables { int slot[]; } region_tables;
 layout(set = 0, binding = 10, std430) readonly buffer OpPool { uvec4 v[]; } op_pool;
 layout(set = 0, binding = 11, std430) readonly buffer OpCounts { int n[]; } op_counts;
+layout(set = 0, binding = 21, std430) readonly buffer BrickFlags { uint v[]; } brick_flags;
+// Binding 22 is reserved for Task 4's region slot counts; keep the relationship stable while
+// this pass learns the per-brick gate.
+layout(set = 0, binding = 22, std430) readonly buffer RegionSlotCounts { int n[]; } region_slot_counts;
 // The pending-edit visualizer: tint the atlas content an edit WILL change, so the player
 // gets one frame of feedback before the regenerated bricks land (spec §5 latency).
 layout(set = 0, binding = 12) uniform Edits { vec4 center; vec4 params; } edits;
@@ -40,6 +49,14 @@ layout(push_constant, std430) uniform Push {
 	ivec4 region_origin;  // world origin in REGIONS
 	ivec4 atlas_bricks;   // atlas grid
 } pc;
+
+// Diagnostic counters. They are plain globals rather than an inout parameter chain because
+// every function that could touch them already takes `steps_left`, and a second inout on
+// three call sites buys nothing. The compiler drops them when BEAUTY_COST_VIEW is unset in
+// the flags word only at runtime, not at compile time -- two counters of ALU is the price
+// of being able to see the march at all.
+uint g_brick_cells = 0u;
+uint g_region_cells = 0u;
 
 // Region-table slot for the region holding a GLOBAL brick coord; -1 outside the world or
 // not resident. `>> 5` is an arithmetic shift: floor(b / 32), correct for negatives.
@@ -340,20 +357,25 @@ void march_island(int slot, vec3 ro, vec3 rd, inout Hit best, inout int steps_le
 	}
 }
 
-// The M1/M2 terrain march, unchanged in behaviour, returning a hit record instead of a
-// colour so an island can outrank it.
-Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
+// The brick-level march, bounded to one region-DDA segment. The DDA is seeded from the
+// segment start rather than recomputing from `ro`: a ray that crosses several regions must
+// not revisit the bricks it already crossed. Local `t` is converted back to world distance
+// only when writing the hit record and evaluating the ray position.
+Hit march_bricks(vec3 ro, vec3 rd, float t_begin, float t_end, inout int steps_left) {
 	Hit h;
 	h.hit = false;
-	h.t = max_dist;
+	h.t = t_end;
 	h.p = vec3(0.0);
 	h.n = vec3(0.0, 1.0, 0.0);
 	h.mat = 0u;
 
-	ivec3 map = ivec3(floor(ro / BRICK_SIZE));
+	vec3 segment_ro = ro + rd * t_begin;
+	float segment_length = max(t_end - t_begin, 0.0);
+	ivec3 map = ivec3(floor(segment_ro / BRICK_SIZE));
 	vec3 delta = abs(vec3(BRICK_SIZE) / rd);
 	ivec3 st = ivec3(sign(rd));
-	vec3 side = (vec3(map) * BRICK_SIZE - ro + (vec3(st) * 0.5 + 0.5) * BRICK_SIZE) / rd;
+	vec3 side = (vec3(map) * BRICK_SIZE - segment_ro +
+			(vec3(st) * 0.5 + 0.5) * BRICK_SIZE) / rd;
 	if (st.x == 0) side.x = 1.0 / 0.0;
 	if (st.y == 0) side.y = 1.0 / 0.0;
 	if (st.z == 0) side.z = 1.0 / 0.0;
@@ -361,7 +383,11 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
 
 	for (int i = 0; i < 1024; i++) {
 		float t_exit = min(side.x, min(side.y, side.z));
-		if (t_exit > max_dist) break;
+		g_brick_cells++;
+		// Compare the brick ENTRY against the segment end. The segment end is itself a brick
+		// face; testing `t_exit > segment_length` can drop that final brick by a float ULP,
+		// leaving isolated holes at the far edge of a region.
+		if (t_prev > segment_length) break;
 
 		int slot = slot_at(map);
 		if (slot >= 0 && brick_may_have_surface(slot)) {
@@ -369,7 +395,7 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
 			float t = t_prev;
 			for (int j = 0; j < 64 && steps_left > 0; j++) {
 				if (t > t_exit) break;
-				vec3 p = ro + rd * t;
+				vec3 p = segment_ro + rd * t;
 				vec3 vox = (p - vec3(map) * BRICK_SIZE) / VOXEL_SIZE;
 				ivec3 cell8 = clamp(ivec3(floor(vox * 0.5)), ivec3(0), ivec3(7));
 				if (!cell8_may_have_surface(slot, cell8)) {
@@ -393,10 +419,10 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
 						steps_left--;
 						float dk = world_sdf(p);
 						t += dk * 0.5;
-						p = ro + rd * t;
+						p = segment_ro + rd * t;
 					}
 					h.hit = true;
-					h.t = t;
+					h.t = t_begin + t;
 					h.p = p;
 					h.n = calc_normal(p, map, slot, steps_left);
 					h.mat = material_at(p, map, slot);
@@ -409,6 +435,54 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
 		if (side.x < side.y && side.x < side.z) { t_prev = side.x; side.x += delta.x; map.x += st.x; }
 		else if (side.y < side.z)               { t_prev = side.y; side.y += delta.y; map.y += st.y; }
 		else                                    { t_prev = side.z; side.z += delta.z; map.z += st.z; }
+	}
+	return h;
+}
+
+// The three-level traversal from spec section 3: region DDA (25.6 m), brick DDA (0.8 m),
+// then in-brick sphere tracing. A region without a table, or with no resident bricks, is
+// known empty and is crossed without paying for its brick indirection lookups.
+Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
+	Hit h;
+	h.hit = false;
+	h.t = max_dist;
+	h.p = vec3(0.0);
+	h.n = vec3(0.0, 1.0, 0.0);
+	h.mat = 0u;
+
+	ivec3 rmap = ivec3(floor(ro / REGION_SIZE));
+	vec3 rdelta = abs(vec3(REGION_SIZE) / rd);
+	ivec3 rst = ivec3(sign(rd));
+	vec3 rside = (vec3(rmap) * REGION_SIZE - ro +
+			(vec3(rst) * 0.5 + 0.5) * REGION_SIZE) / rd;
+	if (rst.x == 0) rside.x = 1.0 / 0.0;
+	if (rst.y == 0) rside.y = 1.0 / 0.0;
+	if (rst.z == 0) rside.z = 1.0 / 0.0;
+	float rt_prev = 0.0;
+
+	for (int r = 0; r < 64; r++) {
+		float rt_exit = min(rside.x, min(rside.y, rside.z));
+		if (rt_prev > max_dist) break;
+		g_region_cells++;
+
+		// `region_slot_of` takes a brick coordinate. Multiplication by 32 picks the
+		// first brick of this region and is the inverse of its `>> 5` mapping.
+		int rs = region_slot_of(rmap * REGION_BRICKS);
+		bool region_worth_entering = rs >= 0 && region_slot_counts.n[rs] > 0;
+		if (region_worth_entering) {
+			Hit candidate = march_bricks(ro, rd, max(rt_prev, 0.0),
+					min(rt_exit, max_dist), steps_left);
+			if (candidate.hit) return candidate;
+			if (steps_left <= 0) return h;
+		}
+
+		if (rside.x < rside.y && rside.x < rside.z) {
+			rt_prev = rside.x; rside.x += rdelta.x; rmap.x += rst.x;
+		} else if (rside.y < rside.z) {
+			rt_prev = rside.y; rside.y += rdelta.y; rmap.y += rst.y;
+		} else {
+			rt_prev = rside.z; rside.z += rdelta.z; rmap.z += rst.z;
+		}
 	}
 	return h;
 }
@@ -451,6 +525,18 @@ float terrain_sun_visibility(vec3 ro) {
 		ivec3 brick = ivec3(floor(q / BRICK_SIZE));
 		int shadow_region = region_slot_of(brick);
 		if (shadow_region < 0) return 1.0;
+		// SUN_DIR has no zero component (it is the normalised vec3(0.6, 0.8, 0.3)),
+		// so this far-face division needs no primary-DDA-style zero guard. A resident but
+		// empty region cannot contain an occluder; skip its whole 25.6 m cell.
+		if (region_slot_counts.n[shadow_region] == 0) {
+			vec3 rlo = floor(q / REGION_SIZE) * REGION_SIZE;
+			vec3 rhi = rlo + vec3(REGION_SIZE);
+			vec3 far = mix(rlo, rhi, step(0.0, SUN_DIR));
+			vec3 tf = (far - q) / SUN_DIR;
+			float skip = min(tf.x, min(tf.y, tf.z));
+			t += max(skip, 0.01) + 0.001;
+			continue;
+		}
 		float d = world_sdf(q);
 		if (d < 0.004) return 0.0;
 		if (t <= RAY_SHADOW_PENUMBRA_DIST) res = min(res, RAY_SHADOW_K * d / t);
@@ -591,22 +677,47 @@ void main() {
 		albedo = mix(albedo, tint, 0.45);
 	}
 
+	// One heat unit per primary marching step; 512 heat units is white. Clamp the integer
+	// step count before scaling so zero steps is exactly black and excess work is white.
+	float heat_units = clamp(float(65536 - primary_steps), 0.0, 512.0);
+	float cost_heat = heat_units / 512.0;
+
 	// Debug material probe: a 1x1 dispatch calls material_surface() directly with zero
 	// gradients. pc.params.w is otherwise unused, so > 0 is the probe flag.
 	if (pc.params.w > 0.0) {
 		vec4 surf = material_surface(uint(pc.params.w), pc.cam_pos.xyz,
 				normalize(pc.cam_fwd.xyz), vec3(0.0), vec3(0.0));
-		imageStore(out_albedo, px, vec4(surf.rgb, 1.0));
+		int cost_i = (px.y * size.x + px.x) * 2;
+		cost_out.v[cost_i + 0] = uint(65536 - primary_steps);
+		cost_out.v[cost_i + 1] =
+				(g_brick_cells & 0xFFFFu) | (min(g_region_cells, 0xFFFFu) << 16);
+		vec3 probe_albedo = (flags & BEAUTY_COST_VIEW) != 0u ? vec3(cost_heat) : surf.rgb;
+		imageStore(out_albedo, px, vec4(probe_albedo, 1.0));
 		imageStore(out_surface, px, vec4(0.0, 0.0, pc.params.w, 0.0));
 		imageStore(out_hitpos, px, vec4(pc.cam_pos.xyz, 1.0));
 		return;
+	}
+
+	if ((flags & BEAUTY_COST_VIEW) != 0u) {
+		// The final store below also bypasses AO and sun lighting. This makes the contract
+		// exact at both endpoints rather than merely preserving the heat before shading.
+		albedo = vec3(cost_heat);
+		// Everything else in the G-buffer stays truthful: depth, normal, material and sun
+		// visibility are written exactly as they would be, so the depth test, the outlines
+		// and the LoD seam behave normally and the view can be toggled mid-flight.
 	}
 
 	// AO has no channel of its own. The cel stack only ever multiplies the AMBIENT term by
 	// it, and folding it into the albedo here costs nothing and keeps hitpos.w the pure hit
 	// flag every existing reader already treats it as. 0.65 is how much of the map is
 	// allowed to darken the surface; a full multiply reads as dirt in the cel bands.
-	imageStore(out_albedo, px, vec4(albedo * mix(1.0, ao, 0.65), sun));
+	int cost_i = (px.y * size.x + px.x) * 2;
+	cost_out.v[cost_i + 0] = uint(65536 - primary_steps);
+	cost_out.v[cost_i + 1] = (g_brick_cells & 0xFFFFu) | (min(g_region_cells, 0xFFFFu) << 16);
+	if ((flags & BEAUTY_COST_VIEW) != 0u)
+		imageStore(out_albedo, px, vec4(vec3(cost_heat), 1.0));
+	else
+		imageStore(out_albedo, px, vec4(albedo * mix(1.0, ao, 0.65), sun));
 	imageStore(out_surface, px, vec4(oct, mat_id, gloss));
 	imageStore(out_hitpos, px, hitpos);
 }

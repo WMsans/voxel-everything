@@ -5,9 +5,14 @@ const int BRICK_VOXELS = 16;
 const float VOXEL_SIZE = 0.05;
 const float BRICK_SIZE = 0.8;         // 16 * 0.05
 const float SDF_RANGE = 0.64;         // uint8 unorm <-> [-0.64, 0.64]
+// Mirrors ve::kActivationPad and the CPU consumer-specific filter pads in world/brick.h.
+const float ACTIVATION_PAD = 0.15;
+const float BRICK_FILTER_PAD = ACTIVATION_PAD + VOXEL_SIZE;
+const float LATTICE_FILTER_PAD = VOXEL_SIZE + SDF_RANGE;
 const int REGION_BRICKS = 32;
 const float REGION_SIZE = 25.6;       // 32 * 0.8
 const int REGION_BRICK_COUNT = 32768; // 32^3
+const int OCC_WORDS_PER_REGION = REGION_BRICK_COUNT / 16; // 2048
 
 // The SDF atlas stores a 17^3 LATTICE per brick: sample n sits at local coordinate n, and
 // the extra plane at 16 is a one-voxel apron so trilinear reconstruction covers the brick's
@@ -22,6 +27,9 @@ const float BRICK_SDF_MAX = float(BRICK_VOXELS); // last valid lattice coordinat
 // A cell of the min-max chain holds no surface unless its range straddles this value.
 // It is exactly ve::encode_sdf(0.0f).
 const uint ENCODED_ZERO = 128u;
+const uint BRICK_FLAG_HAS_SURFACE = 1u;
+const uint BRICK_FLAG_HAS_MATERIAL = 2u;
+const uint BRICK_FLAG_CONSERVATIVE = 3u;
 
 float decode_sdf(float unorm) { return unorm * 2.0 * SDF_RANGE - SDF_RANGE; }
 

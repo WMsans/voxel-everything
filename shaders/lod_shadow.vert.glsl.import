@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://daay72jji14i6"
+path="res://.godot/imported/lod_shadow.vert.glsl-5ae323e5a63e1cfcaaa41ff1852aa642.res"
+
+[deps]
+
+source_file="res://shaders/lod_shadow.vert.glsl"
+dest_files=["res://.godot/imported/lod_shadow.vert.glsl-5ae323e5a63e1cfcaaa41ff1852aa642.res"]
+
+[params]
+

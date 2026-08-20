@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dlkqhx8s6dbew"
+path="res://.godot/imported/inject.frag.glsl-7cc025ba16fe9345b97edc0a00253631.res"
+
+[deps]
+
+source_file="res://shaders/inject.frag.glsl"
+dest_files=["res://.godot/imported/inject.frag.glsl-7cc025ba16fe9345b97edc0a00253631.res"]
+
+[params]
+

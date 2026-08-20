@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://b48reojpepj6i"
+path="res://.godot/imported/deferred.comp.glsl-ee4df1717ead23a5fb21ffbe7657728a.res"
+
+[deps]
+
+source_file="res://shaders/deferred.comp.glsl"
+dest_files=["res://.godot/imported/deferred.comp.glsl-ee4df1717ead23a5fb21ffbe7657728a.res"]
+
+[params]
+

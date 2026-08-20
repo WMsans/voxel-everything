@@ -2,12 +2,17 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <vector>
+#include <utility>
+#include <map>
+#include <tuple>
 #include "connectivity/occupancy.h"
 #include "generator/edit_ops.h"
 #include "render/volume_pool.h"
-#include "world/brick_mip.h"
+#include "render/override_pool.h"
+#include "world/brick_flags.h"
 #include "world/edit_log.h"
 #include "world/region.h"
+#include "world/override_store.h"
 
 namespace godot {
 
@@ -15,6 +20,7 @@ struct GpuAtlasConfig {
 	ve::IVec3 atlas_bricks{64, 32, 32};
 	int max_region_slots = 512;
 	int max_brick_jobs = 16384;
+	int max_override_bricks = OverridePool::kDefaultCapacity;
 	ve::WorldBounds bounds{};
 };
 
@@ -45,6 +51,7 @@ public:
 		return level >= 0 && level < ve::kMipLevels ? mips_[level] : RID();
 	}
 	RID palette() const { return palette_; }
+	RID brick_flags() const { return brick_flags_; }
 	RID region_map() const { return region_map_; }
 	RID region_tables() const { return region_tables_; }
 	RID free_list() const { return free_list_; }
@@ -63,6 +70,17 @@ public:
 	}
 	VolumePool &volumes() { return volumes_; }
 	const VolumePool &volumes() const { return volumes_; }
+	OverridePool &overrides() { return overrides_; }
+	const OverridePool &overrides() const { return overrides_; }
+	bool upload_override(RenderingDevice *rd, int slot, const ve::OverrideBrick &brick) {
+		return overrides_.is_valid() && overrides_.upload(slot, brick);
+	}
+	void set_override_table(RenderingDevice *rd, int region_slot, int table, const std::vector<std::pair<int, int>> &entries);
+	// Replays the CPU-authoritative override bytes and all table entries after this device's
+	// resources have been recreated. Region-slot bindings are restored by WorldStreamer when
+	// the regions stream back in.
+	bool replay_overrides(RenderingDevice *rd, const ve::OverrideStore &store,
+			const std::map<std::tuple<int, int, int>, int> &tables);
 
 	void reset_frame_counters(RenderingDevice *rd);
 	void clear_overflow(RenderingDevice *rd);
@@ -84,12 +102,13 @@ private:
 
 	RenderingDevice *rd_ = nullptr;
 	GpuAtlasConfig cfg_;
-	RID sdf_atlas_, mat_atlas_, palette_;
+	RID sdf_atlas_, mat_atlas_, palette_, brick_flags_;
 	RID mips_[ve::kMipLevels];
 	RID region_map_, region_tables_, free_list_, counters_, frame_, dispatch_args_;
 	RID jobs_, op_pool_, op_counts_, region_slot_counts_;
 	RID region_occupancy_;
 	VolumePool volumes_;
+	OverridePool overrides_;
 };
 
 } // namespace godot

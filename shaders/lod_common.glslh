@@ -7,6 +7,7 @@ layout(push_constant, std430) uniform LodPush {
 	ivec4 job;    // xyz = chunk coordinates, w = job index in this batch
 	ivec4 params; // x = op count, y = max quads per job, z = level, w = unused
 	vec4 grid;    // xyz = the chunk's world origin, w = the level's cell size
+	ivec4 override_data; // x = override table, y = region slot
 } lpc;
 
 // Fine sample j sits at local coordinate (j - 3) / 2 cells, so j = 3 is the chunk origin and

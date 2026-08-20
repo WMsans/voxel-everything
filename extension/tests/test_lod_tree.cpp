@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 #include "lod/lod_tree.h"
 #include "lod/lod_grid.h"
+#include "lod/lod_arena.h"
 #include <cmath>
 #include <vector>
 
@@ -59,6 +60,21 @@ void make_ready_path(ve::LodTree *t, const ve::WorldBounds &bounds, const ve::IV
 		child = parent;
 	}
 	t->note_ready(ve::kLodLevels - 1, root, 1, 1);
+}
+
+// Builds a fully ready level-1 chunk: all eight level-0 children are ready with one page,
+// every ancestor on the path to the root is ready, and every other root is empty.
+void make_ready_full_level0(ve::LodTree *t, const ve::WorldBounds &bounds,
+		const ve::IVec3 &l1) {
+	ve::IVec3 root = l1;
+	for (int i = 1; i < ve::kLodLevels - 1; i++) root = ve::lod_parent(root);
+	const ve::IVec3 first_child = ve::lod_child_base(l1);
+	make_ready_path(t, bounds, root, first_child);
+	const ve::IVec3 base = first_child;
+	for (int k = 0; k < 8; k++) {
+		const ve::IVec3 child{base.x + (k & 1), base.y + ((k >> 1) & 1), base.z + ((k >> 2) & 1)};
+		t->note_ready(0, child, 1, 1);
+	}
 }
 
 // Drives a tree to a steady state by answering every request as a ready chunk.
@@ -631,6 +647,97 @@ TEST_CASE("an edit during an in-flight build survives stale note_empty") {
 	for (const ve::LodBuildRequest &q : after.requests)
 		if (q.level == d.level && q.coord == d.coord) re_requested = true;
 	CHECK(re_requested);
+}
+
+TEST_CASE("near-dense radius forces level 0 inside the radius even when SSE would accept level 1") {
+	ve::LodTreeConfig cfg;
+	cfg.bounds = demo_bounds();
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	const ve::IVec3 l1 = ve::lod_chunk_of_point(1, 800.0f, 51.0f, 500.0f);
+	make_ready_full_level0(&t, cfg.bounds, l1);
+
+	float lo[3], hi[3];
+	ve::lod_chunk_aabb(1, l1, lo, hi);
+	float smin[3], smax[3];
+	const float area = ve::lod_projected_area(c, lo, hi, smin, smax);
+	REQUIRE(area < ve::kLodSseAreaThresh);
+
+	ve::LodWalkResult r;
+	t.walk(c, &occ, 1u, &r);
+	bool l1_drawn = false;
+	int l0_drawn = 0;
+	for (const ve::LodDrawItem &d : r.draws) {
+		if (d.level == 1 && d.coord == l1) l1_drawn = true;
+		if (d.level == 0) l0_drawn++;
+	}
+	CHECK_FALSE(l1_drawn);
+	CHECK(l0_drawn == 8);
+}
+
+TEST_CASE("outside the near-dense radius the SSE threshold still decides") {
+	ve::LodTreeConfig cfg;
+	cfg.bounds = demo_bounds();
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	const ve::IVec3 l1 = ve::lod_chunk_of_point(1, 800.0f, 51.0f, 450.0f);
+	make_ready_full_level0(&t, cfg.bounds, l1);
+
+	float lo[3], hi[3];
+	ve::lod_chunk_aabb(1, l1, lo, hi);
+	float smin[3], smax[3];
+	const float area = ve::lod_projected_area(c, lo, hi, smin, smax);
+	REQUIRE(area < ve::kLodSseAreaThresh);
+
+	ve::LodWalkResult r;
+	t.walk(c, &occ, 1u, &r);
+	bool l1_drawn = false;
+	int l0_drawn = 0;
+	for (const ve::LodDrawItem &d : r.draws) {
+		if (d.level == 1 && d.coord == l1) l1_drawn = true;
+		if (d.level == 0) l0_drawn++;
+	}
+	CHECK(l1_drawn);
+	CHECK(l0_drawn == 0);
+}
+
+TEST_CASE("a starved arena refuses pages without dropping the near-dense walk's draw set") {
+	ve::LodTreeConfig cfg;
+	cfg.bounds = demo_bounds();
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	const ve::IVec3 l1 = ve::lod_chunk_of_point(1, 800.0f, 51.0f, 500.0f);
+	make_ready_full_level0(&t, cfg.bounds, l1);
+
+	ve::LodWalkResult r;
+	t.walk(c, &occ, 1u, &r);
+	REQUIRE(r.draws.size() == 8);
+
+	// Densifying costs pages: eight level-0 draws need eight pages. A four-page arena
+	// cannot fund the set; LodArena refuses the over-budget allocations instead of handing
+	// out a partial chunk.
+	ve::LodArena arena(4);
+	int refused = 0;
+	for (const ve::LodDrawItem &d : r.draws) {
+		std::vector<int> pages;
+		if (!arena.alloc(d.page_count, &pages)) {
+			refused++;
+			CHECK(pages.empty());
+		} else {
+			CHECK(pages.size() == size_t(d.page_count));
+		}
+	}
+	CHECK(refused > 0);
+	CHECK(arena.free_pages() == 0);
+
+	// The tree's answer is unchanged by arena pressure: the walk still returns the complete
+	// near-dense set, so VoxelWorld's upload path can keep the old pages drawable and retry.
+	ve::LodWalkResult again;
+	t.walk(c, &occ, 2u, &again);
+	CHECK(again.draws.size() == r.draws.size());
 }
 
 // Critical 1: the draw-list builder must use the chunk's actual page list, not the

@@ -12,7 +12,10 @@ layout(push_constant, std430) uniform Push {
 	ivec4 chunk;  // xyz = chunk coordinates (job identity only), w = job index in this batch
 	ivec4 params; // x = op count, y = max verts per job, z = max tris per job, w = lattice dim
 	vec4 grid;    // xyz = the chunk's world origin, w = cell size in metres
+	ivec4 override_data; // x = override table, y = region slot
 } pc;
+
+int override_table() { return pc.override_data.x; }
 
 int chunk_lattice() { return pc.params.w; }
 int chunk_mesh_cells() { return pc.params.w - 1; }

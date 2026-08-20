@@ -3,10 +3,12 @@
 #include <godot_cpp/variant/rid.hpp>
 #include <cstdint>
 #include <vector>
+#include <utility>
 #include "generator/edit_ops.h"
 #include "lod/lod_grid.h"
 #include "lod/lod_quad.h"
 #include "render/volume_pool.h"
+#include "render/override_pool.h"
 
 namespace godot {
 
@@ -18,6 +20,7 @@ struct LodBuildJob {
 	int level = 0;
 	ve::IVec3 coord{};
 	std::vector<ve::EditOp> ops;
+	int override_table = -1;
 };
 
 struct LodBuildResult {
@@ -39,6 +42,10 @@ public:
 	bool is_valid() const { return field_pipeline_.is_valid(); }
 	const LodBuildConfig &config() const { return cfg_; }
 	VolumePool &volumes() { return volumes_; }
+	OverridePool &overrides() { return *overrides_; }
+	void set_override_pool(OverridePool *pool) { overrides_ = pool; }
+	bool upload_override(int slot, const ve::OverrideBrick &brick) { return overrides_ && overrides_->upload(slot, brick); }
+	void set_override_table(int region_slot, int table, const std::vector<std::pair<int, int>> &entries);
 
 	// Diagnostics: the worker owns the textures, and the differential hook reads them back
 	// after build_sync.
@@ -84,6 +91,8 @@ private:
 	RID counts_;       // 2 uint per job: quad count, overflow flag
 	RID ops_;          // max_jobs * kMaxRegionOps EditOps
 	VolumePool volumes_;
+	OverridePool owned_overrides_;
+	OverridePool *overrides_ = nullptr;
 	RID field_shader_, field_pipeline_, field_uset_;
 	RID reduce_shader_, reduce_pipeline_, reduce_uset_;
 	RID frac_shader_, frac_pipeline_, frac_uset_;

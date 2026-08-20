@@ -33,6 +33,11 @@ func make_world() -> VoxelWorld:
 	w.residency_radius_m = 40.0
 	w.atlas_bricks = Vector3i(48, 24, 48)
 	w.max_region_slots = 64
+	# Connectivity tests deliberately exercise fail-soft full op lists. M7's async
+	# consolidation would otherwise bake those lists into override bricks and clear them
+	# before the re-merge/preflight runs, so give this suite a one-brick override pool that
+	# cannot absorb a real region bake and leaves the op lists full.
+	w.max_override_bricks = 1
 	w.physics_radius_m = 30.0
 	w.max_collider_chunks = 128
 	w.shape_builds_per_frame = 4
@@ -324,12 +329,13 @@ func test_more_than_two_loose_components_eventually_all_spawn(timeout := 180000)
 func test_body_pool_holes_after_merges_do_not_count_against_the_cap(timeout := 180000) -> void:
 	var w := make_world()
 	w.debug_set_merge_sleep_seconds(999.0) # keep the spawn phase from merging mid-test
-	# Shrink the guardrail so three spawns are enough to prove the slot-pool bug: with the
-	# old bodies_.size() check, three merged-away bodies leave three holes and the pool still
-	# reads "full" for ever.
+	# Shrink the guardrail so four loose tops are enough to prove the slot-pool bug: with the
+	# old bodies_.size() check, merged-away bodies leave holes and the pool still reads "full"
+	# for ever. M7's lattice occupancy no longer manufactures the 1-cell cut crumbs main used
+	# to count as a fourth component, so use four real pillars instead.
 	w.debug_set_max_dynamic_bodies(3)
 	var t := tool_of(w)
-	var xs := [PILLAR_X - 4.0, PILLAR_X, PILLAR_X + 4.0]
+	var xs := [PILLAR_X - 4.0, PILLAR_X, PILLAR_X + 4.0, PILLAR_X + 8.0]
 	for x in xs:
 		build_pillar(w, t, x)
 	for x in xs:

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bp82ljxd4ijm"
+path="res://.godot/imported/field_filter_probe.comp.glsl-38a2b53ed4a2ed34e79eadcfcec5b24b.res"
+
+[deps]
+
+source_file="res://shaders/field_filter_probe.comp.glsl"
+dest_files=["res://.godot/imported/field_filter_probe.comp.glsl-38a2b53ed4a2ed34e79eadcfcec5b24b.res"]
+
+[params]
+

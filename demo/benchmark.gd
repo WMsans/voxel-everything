@@ -7,17 +7,20 @@ extends Node
 #   --benchmark-ridge  the second flythrough leg: low along a valley floor with a ridge
 #                      between the camera and the far basin (the far-occludes-far case).
 #   --benchmark-edit   the player is frozen and the edit tool fires every frame.
+#   --benchmark-edit-bounded the player is frozen and edits stay in a small bounded region
+#                      cluster so the consolidation path is reached.
 #   --benchmark-island the player is frozen and a sphere subtract severs a pillar every
 #                      second, so connectivity, extraction, spawning and re-merging all run
 #                      under the frame timer.
 #
-# The last two are the cases players actually complain about, and an AVERAGE hides them:
+# The last three are the cases players actually complain about, and an AVERAGE hides them:
 # a run that is 8 ms most of the time and 50 ms whenever a batch lands reads as "fine".
 # So the report is percentiles plus the count of frames that missed 60 fps.
 
 const WARMUP := 60
 const FRAMES := 300
 const ISLAND_FRAMES := 900
+const EDIT_BOUNDED_FRAMES := 900
 const TARGET_MS := 16.6
 const GPU_DRAIN_FRAMES := 30
 const MIN_GPU_SAMPLES := 30
@@ -27,9 +30,10 @@ const BUDGETS_MS := {
 }
 
 var _gpu_samples := {
-	"raymarch": PackedFloat32Array(), "lod": PackedFloat32Array(),
+	"raymarch": PackedFloat32Array(), "stream": PackedFloat32Array(), "lod": PackedFloat32Array(),
 	"ssgi": PackedFloat32Array(), "ssr": PackedFloat32Array(),
 	"shadows": PackedFloat32Array(), "outlines": PackedFloat32Array(),
+	"unattributed": PackedFloat32Array(),
 	"custom_frame": PackedFloat32Array(),
 }
 var _last_gpu_sample_id := -1
@@ -38,6 +42,7 @@ var _gpu_timestamp_unit := "unavailable"
 var _gpu_timestamp_scale := 0.0
 var _gpu_timestamp_normalization := "unavailable"
 var _gpu_timestamp_normalized := false
+var _vsync_actual := "unknown"
 var _draining := false
 var _drain_frames := 0
 
@@ -65,10 +70,21 @@ var _island_built := false
 var _island_waiting_for_merge := false
 var _target_frames := FRAMES
 
+func _effects_off_from_args(args: PackedStringArray) -> PackedStringArray:
+	var effects := PackedStringArray()
+	for arg in args:
+		if not arg.begins_with("--effects-off="):
+			continue
+		for name in arg.trim_prefix("--effects-off=").split(",", false):
+			var trimmed := String(name).strip_edges()
+			if not trimmed.is_empty():
+				effects.append(trimmed)
+	return effects
+
 func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
 	for m in ["--benchmark-move", "--benchmark-ridge", "--benchmark-edit",
-			"--benchmark-island", "--benchmark"]:
+			"--benchmark-edit-bounded", "--benchmark-island", "--benchmark"]:
 		if m in args:
 			_mode = m
 			break
@@ -76,13 +92,17 @@ func _ready() -> void:
 		return
 	if _mode == "--benchmark-island":
 		_target_frames = ISLAND_FRAMES
+	elif _mode == "--benchmark-edit-bounded":
+		_target_frames = EDIT_BOUNDED_FRAMES
 	# Without this the harness measures the DISPLAY, not the engine: a compositor that hands
 	# an unfocused window one frame callback in eight reports a 133 ms frame and a 7 fps
 	# "regression" that no code change can move.
-	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	_record_vsync()
 
 	_player = get_parent().get_node("Player")
 	_world = get_parent().get_node("VoxelWorld")
+	for effect in _effects_off_from_args(args):
+		_world.set_effect_enabled(effect, false)
 	_cam = _player.get_node("Camera3D")
 	# Drive the player from here rather than from input, so a run is reproducible.
 	_player.set_physics_process(false)
@@ -99,9 +119,39 @@ func _ready() -> void:
 		_player.global_transform = Transform3D(Basis.IDENTITY, Vector3(24, 63.2, 24))
 		_cam.transform = Transform3D(Basis.looking_at(Vector3(6, -10, 6).normalized()),
 			Vector3(0, 0.7, 0))
-	if _mode == "--benchmark-edit" or _mode == "--benchmark-island":
+	if _mode == "--benchmark-edit" or _mode == "--benchmark-edit-bounded" \
+			or _mode == "--benchmark-island":
 		_tool = ClassDB.instantiate("VoxelEditTool")
 		_world.add_child(_tool)
+
+func _record_vsync() -> void:
+	# Requesting DISABLED is not the same as getting it: a Wayland compositor can refuse,
+	# and every frame percentile in M6 was qualified for exactly that reason. Ask, read
+	# back, and print what the run actually measured.
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	_vsync_actual = _vsync_actual_from_readback(DisplayServer.get_name(),
+			DisplayServer.window_get_vsync_mode())
+
+func _vsync_actual_from_readback(display_name: String, mode: int) -> String:
+	match mode:
+		DisplayServer.VSYNC_DISABLED:
+			# Godot 4.7.x's Wayland backend can log "requested V-Sync mode Disabled is
+			# not available. Falling back to V-Sync mode Enabled" while
+			# window_get_vsync_mode() still reports the requested Disabled value. On this
+			# machine every Wayland benchmark run hits that fallback, so treat a Wayland
+			# "disabled" readback as the enabled mode the compositor actually granted.
+			# The verdict line is then qualified, matching the known Wayland warning.
+			if display_name == "Wayland":
+				return "enabled"
+			return "disabled"
+		DisplayServer.VSYNC_ENABLED:
+			return "enabled"
+		DisplayServer.VSYNC_ADAPTIVE:
+			return "adaptive"
+		DisplayServer.VSYNC_MAILBOX:
+			return "mailbox"
+		_:
+			return "unknown"
 
 func _process(delta: float) -> void:
 	if _mode == "":
@@ -130,6 +180,8 @@ func _process(delta: float) -> void:
 		_player.global_position = p
 	elif _mode == "--benchmark-edit" and _frames > WARMUP:
 		_fire_edit()
+	elif _mode == "--benchmark-edit-bounded" and _frames > WARMUP:
+		_fire_bounded_edit()
 	elif _mode == "--benchmark-island" and _frames > WARMUP:
 		_island_cycle(delta)
 
@@ -183,6 +235,22 @@ func _fire_edit() -> void:
 	if not hit["hit"]:
 		return
 	_tool.apply_sphere_subtract(hit["pos"], 3.0)
+
+func _fire_bounded_edit() -> void:
+	# Consolidation is only reachable when a bounded area accumulates enough edits. Hold a
+	# nearly fixed aim so every sphere subtract lands in a small cluster of adjacent
+	# regions; the tiny sub-region jitter keeps the edits distinct without letting the
+	# union wander across the world. This is the acceptance-item leg that measures the
+	# 900-frame, overflow=0 consolidation path itself.
+	var dir := Vector3(sin(0.4) * 0.5, -1.0, cos(0.4) * 0.5).normalized()
+	var hit: Dictionary = _world.debug_raycast(_cam.global_position, dir)
+	if not hit["hit"]:
+		return
+	var jitter := Vector3(
+			sin(_frames * 0.7) * 0.3,
+			cos(_frames * 0.9) * 0.3,
+			sin(_frames * 0.5) * 0.3)
+	_tool.apply_sphere_subtract(hit["pos"] + jitter, 3.0)
 
 func _island_cycle(delta: float) -> void:
 	# Build a pillar, wait for it to stream in, subtract through its middle, then wait for
@@ -241,7 +309,7 @@ func _capture_gpu_sample() -> void:
 		return
 	_last_gpu_sample_id = sample_id
 	_gpu_dropped_pairs = max(_gpu_dropped_pairs, int(d.get("dropped_pairs", 0)))
-	for key in ["raymarch", "lod", "ssgi", "ssr", "outlines"]:
+	for key in ["raymarch", "stream", "lod", "ssgi", "ssr", "outlines", "unattributed"]:
 		var value := float(d.get(key + "_gpu_ms", -1.0))
 		if value >= 0.0:
 			_append_gpu(key, value)
@@ -265,9 +333,18 @@ func _budget_verdict(values: PackedFloat32Array, budget_ms: float) -> String:
 	sorted.sort()
 	return "PASS" if _percentile(sorted, 0.99) <= budget_ms else "WARN"
 
+func _timing_condition_line() -> String:
+	var qualified := _vsync_actual != "disabled"
+	return "BENCH timing_condition display_driver=%s vsync_requested=disabled vsync_actual=%s verdict_qualified=%s" % [
+		DisplayServer.get_name(), _vsync_actual, str(qualified).to_lower()]
+
 func _report() -> void:
 	var sorted := _samples.duplicate()
 	sorted.sort()
+	var fb := _world.debug_lod_fade_band()
+	var vp_size := _cam.get_viewport().get_visible_rect().size
+	print("BENCH camera fov=%.2f viewport=%dx%d fade_band_start=%.2f fade_band_end=%.2f" % [
+		_cam.fov, int(vp_size.x), int(vp_size.y), fb.x, fb.y])
 	var total := 0.0
 	var over := 0
 	for s in _samples:
@@ -311,7 +388,8 @@ func _report() -> void:
 	for k: String in keys:
 		worstparts.append("%s=%.2f" % [k, float(_worst.get(k, 0.0))])
 	print("BENCH worst_frame(%.2fms) " % _worst_ms + " ".join(worstparts))
-	for key in ["raymarch", "lod", "ssgi", "ssr", "shadows", "outlines", "custom_frame"]:
+	for key in ["raymarch", "stream", "lod", "ssgi", "ssr", "shadows", "outlines",
+			"unattributed", "custom_frame"]:
 		var values: PackedFloat32Array = _gpu_samples[key]
 		var sorted_gpu := values.duplicate()
 		sorted_gpu.sort()
@@ -337,14 +415,20 @@ func _report() -> void:
 	print("BENCH gpu_timestamp_normalization mode=%s unit=%s scale_to_us=%.6f normalized=%s" % [
 		_gpu_timestamp_normalization, _gpu_timestamp_unit, _gpu_timestamp_scale,
 		str(_gpu_timestamp_normalized).to_lower()])
-	print("BENCH timing_condition vsync_requested=disabled vsync_actual=enabled_wayland verdict_qualified=true")
+	var qualified := _vsync_actual != "disabled"
+	print(_timing_condition_line())
+	if qualified:
+		push_warning("BENCH: V-Sync is %s; frame percentiles are display-capped, not engine numbers" % _vsync_actual)
 	var st: Dictionary = _world.debug_stream_stats()
-	print("BENCH regions=%d overflow=%d" % [st.get("resident_regions", -1),
-		st.get("overflow_ever", -1)])
+	print("BENCH regions=%d overflow=%d overrides=%d/%d consolidations=%d refusals=%d" % [
+		st.get("resident_regions", -1), st.get("overflow_ever", -1),
+		st.get("override_bricks", -1), st.get("override_capacity", -1),
+		st.get("consolidations", -1), st.get("consolidation_refusals", -1)])
 	var ph: Dictionary = _world.debug_physics_stats()
-	print("BENCH chunks=%d pending=%d bodies=%d failures=%d build_ms=%.2f collect_ms=%.2f" % [
+	print("BENCH chunks=%d pending=%d bodies=%d bodies_raw=%d failures=%d build_ms=%.2f collect_ms=%.2f" % [
 		ph.get("chunks_resident", -1), ph.get("chunks_pending", -1), ph.get("bodies", -1),
-		ph.get("failures", -1), ph.get("build_ms", 0.0), ph.get("collect_ms", 0.0)])
+		ph.get("bodies_raw", -1), ph.get("failures", -1), ph.get("build_ms", 0.0),
+		ph.get("collect_ms", 0.0)])
 	var isl: Dictionary = _world.debug_island_stats()
 	print("BENCH islands=%d debris=%d spawned=%d merged=%d refused=%d cx_runs=%d" % [
 		isl.get("live_islands", -1), isl.get("live_debris", -1),

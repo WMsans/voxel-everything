@@ -4,7 +4,18 @@
 #define FIELD_OP_POOL_BINDING 7
 #define FIELD_VOLUME_SDF_BINDING 8
 #define FIELD_VOLUME_MAT_BINDING 9
+#define FIELD_OVERRIDE_SDF_BINDING 11
+#define FIELD_OVERRIDE_MAT_BINDING 12
+#define FIELD_OVERRIDE_TABLE_BINDING 13
+#define FIELD_OVERRIDE_REGION_BINDING 14
 #include "common.glslh"
+#define FIELD_OVERRIDE_TABLE(base) (field_override_region_map.table[int((base) / MAX_REGION_OPS)])
+// The region's ops that can reach THIS brick, in append order, as pool-relative indices.
+// The filter is compacted serially after the parallel keep test so CSG order is preserved.
+shared uint s_ops[256];
+shared uint s_op_n;
+shared uint s_keep[256];
+#define FIELD_OP_INDEX(base, i) ((base) + s_ops[i])
 #include "field.glslh"
 #include "brick_layout.glslh"
 
@@ -19,9 +30,15 @@ layout(set = 0, binding = 1, r8ui) writeonly uniform uimage3D mat_atlas;
 layout(set = 0, binding = 2, rg8ui) writeonly uniform uimage3D mip2_atlas;
 layout(set = 0, binding = 3, rg8ui) writeonly uniform uimage3D mip4_atlas;
 layout(set = 0, binding = 4, rg8ui) writeonly uniform uimage3D mip8_atlas;
-layout(set = 0, binding = 5, std430) writeonly buffer Palette { uint id[]; } palette_buf;
+layout(set = 0, binding = 5, std430) buffer Palette { uint id[]; } palette_buf;
 layout(set = 0, binding = 6, std430) readonly buffer Jobs { ivec4 v[]; } jobs;
 // binding 7 is the field op pool, declared by field.glslh
+layout(set = 0, binding = 10, std430) writeonly buffer BrickFlags { uint v[]; } brick_flags;
+layout(set = 0, binding = 15, std430) buffer RegionOccupancy { uint w[]; } occupancy;
+
+const uint CELL_AIR = 1u;
+const uint CELL_SOLID = 2u;
+const uint CELL_FULL = 3u;
 
 layout(push_constant, std430) uniform Push {
 	ivec4 atlas_bricks;
@@ -89,6 +106,22 @@ void main() {
 	uint op_base = uint(j1.x) * MAX_REGION_OPS;
 	uint op_count = uint(j1.y);
 
+	// Test in parallel, compact serially. atomicAdd would compact too, but it would also
+	// scramble the order, and an ordered CSG list whose order is gone is a different world.
+	vec3 brick_lo = vec3(brick) * BRICK_SIZE;
+	vec3 brick_hi = brick_lo + vec3(BRICK_SIZE);
+	if (tid < op_count)
+		s_keep[tid] = op_touches_aabb(op_base + tid, brick_lo, brick_hi, BRICK_FILTER_PAD) ? 1u : 0u;
+	if (tid == 0u) s_op_n = 0u;
+	barrier();
+	if (tid == 0u) {
+		uint n = 0u;
+		for (uint i = 0u; i < op_count; i++)
+			if (s_keep[i] != 0u) s_ops[n++] = i;
+		s_op_n = n;
+	}
+	barrier();
+
 	ivec3 sdf_base = atlas_base(slot, pc.atlas_bricks.xyz, BRICK_SDF_STRIDE);
 	ivec3 mat_base = atlas_base(slot, pc.atlas_bricks.xyz, BRICK_VOXELS);
 	vec3 bo = vec3(brick) * BRICK_SIZE;
@@ -100,7 +133,7 @@ void main() {
 		ivec3 v = cell_coord(i);
 		float sdf;
 		uint mat;
-		eval_field(bo + vec3(v) * VOXEL_SIZE, op_base, op_count, sdf, mat);
+		eval_field(bo + vec3(v) * VOXEL_SIZE, op_base, s_op_n, sdf, mat);
 		imageStore(sdf_atlas, sdf_base + v, vec4(quantise_sdf(sdf)));
 		s_mat[i] = mat;
 	}
@@ -118,7 +151,7 @@ void main() {
 		if (v.x < BRICK_VOXELS && v.y < BRICK_VOXELS && v.z < BRICK_VOXELS) continue;
 		float sdf;
 		uint mat;
-		eval_field(bo + vec3(v) * VOXEL_SIZE, op_base, op_count, sdf, mat);
+		eval_field(bo + vec3(v) * VOXEL_SIZE, op_base, s_op_n, sdf, mat);
 		imageStore(sdf_atlas, sdf_base + v, vec4(quantise_sdf(sdf)));
 		if (mat == 0u) continue;
 		ivec3 c = min(v, ivec3(BRICK_VOXELS - 1));
@@ -149,7 +182,7 @@ void main() {
 			// mat2 is a GLSL reserved word (the 2x2 matrix type), so the plan's variable
 			// name is rejected by glslang; renamed to matB, no semantic change.
 			uint matB;
-			eval_field(bo + vec3(v) * VOXEL_SIZE - g / len * t, op_base, op_count, sdf2, matB);
+			eval_field(bo + vec3(v) * VOXEL_SIZE - g / len * t, op_base, s_op_n, sdf2, matB);
 			s_mat[i] = matB;
 		}
 	}
@@ -180,6 +213,11 @@ void main() {
 			palette_buf.id[slot * 4 + a] = s_pal[order[a]];
 		}
 	}
+	// Palette is an SSBO: shared-memory fencing alone does not make tid 0's writes visible
+	// before the final flag publication (or to the later raymarch dispatch). Fence the buffer
+	// before the workgroup rendezvous; the renderer's dispatch barrier handles cross-dispatch
+	// visibility after this generator completes.
+	memoryBarrierBuffer();
 	memoryBarrierShared();
 	barrier();
 
@@ -241,5 +279,35 @@ void main() {
 					mx = max(mx, p & 255u);
 				}
 		imageStore(mip2_atlas, b2 + c, uvec4(mn, mx, 0u, 0u));
+	}
+
+	memoryBarrierShared();
+	barrier();
+	if (tid == 0u) {
+		uint mn = 255u, mx = 0u;
+		for (int i = 0; i < 64; i++) {
+			mn = min(mn, s_mip4[i] >> 8);
+			mx = max(mx, s_mip4[i] & 255u);
+		}
+		// Mirror of ve::brick_flags_from_mips: the same inclusive straddle test, and the
+		// same "palette slot 0 is id 0 means no material" rule the marcher's hit test uses.
+		uint f = 0u;
+		if (mn <= ENCODED_ZERO && mx >= ENCODED_ZERO) f |= BRICK_FLAG_HAS_SURFACE;
+		if (palette_buf.id[slot * 4] != 0u) f |= BRICK_FLAG_HAS_MATERIAL;
+		brick_flags.v[slot] = f;
+
+		// The occupancy grid is classified from the exact lattice this dispatch generated,
+		// not brick_mark's conservative 3x3x3 probe. The job already carries the region slot
+		// in j1.x, while the brick coordinate determines the stable index within that region.
+		uint state = mn > ENCODED_ZERO ? CELL_AIR :
+				(mx <= ENCODED_ZERO ? CELL_FULL : CELL_SOLID);
+		int rslot = j1.x;
+		int bi = (brick.x & (REGION_BRICKS - 1)) +
+				(brick.y & (REGION_BRICKS - 1)) * REGION_BRICKS +
+				(brick.z & (REGION_BRICKS - 1)) * REGION_BRICKS * REGION_BRICKS;
+		int occ_word = rslot * OCC_WORDS_PER_REGION + (bi >> 4);
+		uint occ_shift = (uint(bi) & 15u) * 2u;
+		atomicAnd(occupancy.w[occ_word], ~(3u << occ_shift));
+		atomicOr(occupancy.w[occ_word], (state & 3u) << occ_shift);
 	}
 }

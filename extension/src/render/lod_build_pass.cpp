@@ -147,14 +147,16 @@ bool LodBuildPass::initialize(RenderingDevice *rd, const LodBuildConfig &cfg) {
 	ops_ = rd->storage_buffer_create(static_cast<uint32_t>(ops_bytes),
 			zeroed(ops_bytes));
 
-	if (!volumes_.initialize(rd, ve::kMaxVolumes, ve::kIslandDim)) {
-		UtilityFunctions::printerr("LodBuildPass: volume pool creation failed");
+	if (!overrides_) overrides_ = &owned_overrides_;
+	if (!volumes_.initialize(rd, ve::kMaxVolumes, ve::kIslandDim) ||
+			(overrides_ == &owned_overrides_ && !owned_overrides_.initialize(rd, OverridePool::kDefaultCapacity))) {
+		UtilityFunctions::printerr("LodBuildPass: field pool creation failed");
 		teardown();
 		return false;
 	}
 	if (!fine_sdf_.is_valid() || !fine_mat_.is_valid() || !lat_sdf_.is_valid() ||
 			!lat_mat_.is_valid() || !frac_.is_valid() || !quads_.is_valid() ||
-			!counts_.is_valid() || !ops_.is_valid() || !volumes_.is_valid()) {
+			!counts_.is_valid() || !ops_.is_valid() || !volumes_.is_valid() || !overrides_->is_valid()) {
 		UtilityFunctions::printerr("LodBuildPass: buffer/texture creation failed");
 		teardown();
 		return false;
@@ -166,7 +168,9 @@ bool LodBuildPass::initialize(RenderingDevice *rd, const LodBuildConfig &cfg) {
 	}
 	field_uset_ = rd->uniform_set_create(Array::make(image(0, fine_sdf_), image(1, fine_mat_),
 			storage(2, ops_), storage(3, volumes_.sdf_buffer()),
-			storage(4, volumes_.mat_buffer())),
+			storage(4, volumes_.mat_buffer()), storage(5, overrides_->sdf_buffer()),
+			storage(6, overrides_->mat_buffer()), storage(7, overrides_->tables()),
+			storage(8, overrides_->region_table_map())),
 			field_shader_, 0);
 	if (!field_uset_.is_valid()) {
 		UtilityFunctions::printerr("LodBuildPass: field uniform set creation failed");
@@ -232,6 +236,8 @@ void LodBuildPass::teardown() {
 	free_if_valid(rd_, reduce_shader_);
 	free_if_valid(rd_, field_uset_);
 	volumes_.teardown();
+	if (overrides_ == &owned_overrides_) owned_overrides_.teardown();
+	overrides_ = nullptr;
 	free_if_valid(rd_, field_pipeline_);
 	free_if_valid(rd_, field_shader_);
 	free_if_valid(rd_, ops_);
@@ -265,7 +271,7 @@ void LodBuildPass::push(int64_t list, const LodBuildJob &job, int job_index) {
 	ve::lod_chunk_origin(job.level, job.coord, origin);
 	const float cell = ve::lod_cell_size(job.level);
 	PackedByteArray pc;
-	pc.resize(48);
+	pc.resize(64);
 	int32_t *p = reinterpret_cast<int32_t *>(pc.ptrw());
 	p[0] = job.coord.x;
 	p[1] = job.coord.y;
@@ -280,6 +286,10 @@ void LodBuildPass::push(int64_t list, const LodBuildJob &job, int job_index) {
 	f[9] = origin[1];
 	f[10] = origin[2];
 	f[11] = cell;
+	p[12] = job.override_table;
+	p[13] = -1;
+	p[14] = 0;
+	p[15] = 0;
 	rd_->compute_list_set_push_constant(list, pc, pc.size());
 }
 
@@ -324,6 +334,13 @@ void LodBuildPass::record_job(int64_t list, const LodBuildJob &job, int job_inde
 	rd_->compute_list_add_barrier(list);
 	record_quads(list, job, job_index);
 	rd_->compute_list_add_barrier(list);
+}
+
+void LodBuildPass::set_override_table(int region_slot, int table,
+		const std::vector<std::pair<int, int>> &entries) {
+	if (!overrides_ || !overrides_->is_valid()) return;
+	overrides_->set_region_table(rd_, region_slot, table);
+	for (const auto &entry : entries) overrides_->set_table_entry(rd_, table, entry.first, entry.second);
 }
 
 bool LodBuildPass::submit(const LodBuildJob *jobs, int count) {

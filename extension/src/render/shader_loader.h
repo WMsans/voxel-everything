@@ -13,4 +13,12 @@ std::string load_shader_source(const std::string &path, const std::string &inclu
 // followed by '['. Shared by every compute pass that keeps the annotation verbatim.
 std::string strip_shader_annotations(const std::string &src);
 
+// Test/dev override map consulted by load_shader_source. Keys are matched against the
+// full path and its basename, so a test can inject "raymarch.comp.glsl" without knowing
+// the absolute path. Used by the shader-reload pre-flight to prove a new source compiles
+// before tearing down the last-known-good pipelines.
+void set_shader_source_override(const std::string &key, const std::string &source);
+void clear_shader_source_override(const std::string &key);
+void clear_shader_source_overrides();
+
 } // namespace ve

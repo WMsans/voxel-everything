@@ -46,11 +46,9 @@ float chunk_distance(IVec3 c, float cx, float cy, float cz) {
 void op_chunk_range(const EditOp &op, IVec3 *lo, IVec3 *hi) {
 	float a[3], b[3];
 	op_world_aabb(op, a, b);
-	// Two mesh cells of pad: a CSG max/min changes the field far outside its own shape, but
-	// only INSIDE it can it flip a sample's sign, and a sample whose sign it cannot flip only
-	// shifts a vertex when it is itself within a cell of the surface. Two cells covers that
-	// and the mesh overlap plane below the chunk origin.
-	const float pad = 2.0f * kChunkCellSize;
+	// Stored mesh lattices retain the representable narrow band outside an op's own AABB;
+	// the shared lattice pad also covers the mesh overlap plane below the chunk origin.
+	const float pad = kLatticeFilterPad;
 	const auto cell = [](float v) { return static_cast<int>(std::floor(v / kChunkSize)); };
 	*lo = {cell(a[0] - pad), cell(a[1] - pad), cell(a[2] - pad)};
 	*hi = {cell(b[0] + pad), cell(b[1] + pad), cell(b[2] + pad)};

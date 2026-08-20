@@ -3,9 +3,11 @@
 #include <godot_cpp/variant/rid.hpp>
 #include <cstdint>
 #include <vector>
+#include <utility>
 #include "generator/edit_ops.h"
 #include "mesh/mesh_chunk.h"
 #include "render/volume_pool.h"
+#include "render/override_pool.h"
 #include "world/region.h"
 
 namespace godot {
@@ -14,6 +16,7 @@ struct MeshPassConfig {
 	int max_jobs = 2;      // chunks per batch
 	int max_verts = 16384; // a fully covered 6.4 m chunk holds ~4 100
 	int max_tris = 32768;  // ...and ~8 200 triangles; edits can carve well past that
+	int max_override_bricks = 8192;
 	// Buffers are sized for the largest lattice any consumer will ask for, so one pass can
 	// serve both the collision chunk and (Task 9) a LoD chunk without reallocating.
 	int max_lattice = ve::kChunkLattice;
@@ -28,6 +31,7 @@ struct MeshJob {
 	float origin[3] = {0.0f, 0.0f, 0.0f};
 	float cell_size = ve::kChunkCellSize;
 	int lattice = ve::kChunkLattice;
+	int override_table = -1;
 };
 
 struct MeshResult {
@@ -50,6 +54,14 @@ public:
 	bool is_valid() const { return field_pipeline_.is_valid(); }
 	const MeshPassConfig &config() const { return cfg_; }
 	VolumePool &volumes() { return volumes_; }
+	OverridePool &overrides() { return overrides_; }
+	bool upload_override(int slot, const ve::OverrideBrick &brick) { return overrides_.upload(slot, brick); }
+	void set_override_table(int region_slot, int table, const std::vector<std::pair<int, int>> &entries);
+	void clear_override_table(int table) { overrides_.clear_table(rd_, table); }
+	void clear_override_region(int region_slot) { overrides_.set_region_table(rd_, region_slot, -1); }
+	void set_override_entry(int table, int brick_index, int slot) {
+		overrides_.set_table_entry(rd_, table, brick_index, slot);
+	}
 
 	// Uploads one stored volume to THIS device. Called on the worker thread only (the device
 	// belongs to it); MeshService::submit_volume is the main thread's way in.
@@ -98,6 +110,7 @@ private:
 	RID ops_;         // max_jobs * kMaxRegionOps EditOps
 	VolumePool volumes_;
 	RID field_shader_, field_pipeline_, field_uset_;
+	OverridePool overrides_;
 	RID cells_shader_, cells_pipeline_, cells_uset_;
 	RID quads_shader_, quads_pipeline_, quads_uset_;
 
