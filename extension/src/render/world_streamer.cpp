@@ -533,7 +533,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 					region.z * ve::kRegionBricks};
 			const ve::IVec3 hi{lo.x + 31, lo.y + 31, lo.z + 31};
 			rd->compute_list_add_barrier(list);
-			region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true);
+			region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, true);
 			note_marked(region, seq);
 			any = true;
 		}
@@ -562,7 +562,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 				region.z * ve::kRegionBricks};
 		const ve::IVec3 hi{lo.x + 31, lo.y + 31, lo.z + 31};
 		rd->compute_list_add_barrier(list);
-		region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true);
+		region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, true);
 		note_marked(region, seq);
 		any = true;
 		repairs++;
