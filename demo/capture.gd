@@ -26,6 +26,11 @@ func _ready() -> void:
 	_active = true
 	Engine.max_fps = 0
 	_world = get_parent().get_node("VoxelWorld")
+	for arg in OS.get_cmdline_user_args():
+		if not arg.begins_with("--effects-off="):
+			continue
+		for name in arg.trim_prefix("--effects-off=").split(",", false):
+			_world.set_effect_enabled(String(name).strip_edges(), false)
 	_player = get_parent().get_node("Player")
 	_cam = _player.get_node("Camera3D")
 	_player.set_physics_process(false)
@@ -79,6 +84,11 @@ func events_at(frame: int) -> Array:
 func _process(_delta: float) -> void:
 	if not _active:
 		return
+	if _frame == -WARMUP:
+		# The benchmark harness calls debug_lod_stats() every frame, which is what triggers
+		# ensure_lod() and starts far-field builds. The capture rig has no benchmark loop, so
+		# kick the LoD once here; otherwise the portfolio capture would record near field only.
+		_world.debug_lod_stats()
 	_frame += 1
 	if _frame < 0:
 		return                    # warmup: stream, do not record

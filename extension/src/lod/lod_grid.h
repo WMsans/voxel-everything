@@ -33,6 +33,12 @@ inline constexpr float kLodTargetCellPx = 3.0f;
 inline constexpr float kLodSseAreaThresh =
 		float(kLodChunkCells) * kLodTargetCellPx * float(kLodChunkCells) * kLodTargetCellPx;
 
+// Spec §4's fade-band contingency: within this radius the walk forces level 0 even when the
+// SSE test would accept a coarser level. The original spec chose 300 m for a 0.2 m denser
+// band; with M5's 2x level table this is the existing finest level (0.4 m) kept dense
+// through the measured near-field handover. 0 disables the override.
+inline constexpr float kLodNearDenseRadiusM = 300.0f;
+
 // Engine spec section 3's near/far band. A chunk whose FARTHEST corner is nearer than the
 // fade start is discarded by the fragment shader on every pixel, so building it burns pages
 // to draw nothing.

@@ -305,6 +305,10 @@ func _timing_condition_line() -> String:
 func _report() -> void:
 	var sorted := _samples.duplicate()
 	sorted.sort()
+	var fb := _world.debug_lod_fade_band()
+	var vp_size := _cam.get_viewport().get_visible_rect().size
+	print("BENCH camera fov=%.2f viewport=%dx%d fade_band_start=%.2f fade_band_end=%.2f" % [
+		_cam.fov, int(vp_size.x), int(vp_size.y), fb.x, fb.y])
 	var total := 0.0
 	var over := 0
 	for s in _samples:

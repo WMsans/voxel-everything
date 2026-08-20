@@ -3663,5 +3663,160 @@ where this plan's text met reality and lost.
    - Slight texture smearing appears on steep slopes / gray surfaces.
    - Popping at the seam was not directly observable from sampled static frames; temporal
      popping could not be fully assessed from stills.
-9. _(Task 14, Step 2: fade-band verdict and the number it rests on — to be filled)_
-10. _(Task 14, Step 5: closing sweep, full record — to be filled)_
+9. **Task 14, Step 2: fade-band verdict — Densify**
+
+   Measurement command (before the densification change; Wayland backend, requested
+   2560×1440, actual viewport from the running camera):
+   ```text
+   timeout 900s env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/godot --path . --display-driver wayland --resolution 2560x1440 --disable-vsync demo/main.tscn -- --benchmark-ridge
+   ```
+   The ridge leg reported `BENCH camera fov=75.00 viewport=1152x1250 fade_band_start=44.80 fade_band_end=56.00` and `BENCH lod_summary ... draw_pages_p50=1251 draw_pages_p99=1940 culled_ratio_p50=0.034 culled_ratio_p99=0.329 chunks_resident_p50=855 chunks_resident_p99=1468 pages_used_p50=2966 pages_used_p99=4987`.
+
+   A level-0 cell is 0.4 m. At the measured fade end (56 m), with the running camera's 75°
+   vertical FOV and actual 1152×1250 viewport, it subtends
+   `0.4 / 56 * 1250 / (2 * tan(75°/2)) ≈ 5.8 px`. At the requested 1440p height it would be
+   `0.4 / 56 * 1440 / (2 * tan(75°/2)) ≈ 6.7 px`. That is above the ~5 px densify threshold.
+   Task 13's first capture also recorded visible dithering/zone-boundary bands in later
+   frames (520, 660).
+
+   **Verdict: Densify.** The number the decision rests on is **5.8 px per 0.4 m level-0 cell
+   at the measured 56 m fade end** (6.7 px at requested 1440p).
+
+   The densification implementation is the Step 3 near-dense walk clamp:
+   `ve::kLodNearDenseRadiusM = 300.0f`, with a chunk inside that radius forced to descend to
+   level 0 regardless of projected area. Native tests pin both directions and the starved
+   arena behavior (three new cases in `extension/tests/test_lod_tree.cpp`).
+
+   Screenshot pair at the same capture camera (frame 520), local ignored evidence:
+   - Normal (with both near and far fields after the capture rig's LoD init):
+     `reports/m7-task14/frame_00520.png` (1268×1376, 1,156,816 bytes)
+   - Near field forced off: `reports/m7-task14/frame_00520_nearoff.png` (1268×1376, 181,963 bytes)
+
+   To produce the near-off pair this task extended the existing `--effects-off` path to
+   accept `near_field` (raymarch max distance forced to 0 so the composite still writes sky
+   depth, while the LoD build gate/fragment fade are moved to a zero-start/infinite-end band)
+   and made the capture rig call `debug_lod_stats()` once during warmup so LoD actually
+   initializes in `--capture` runs. The normal capture now includes far-field LoD; the
+   near-off screenshot shows the far-field-only LoD surface without raymarched near-field
+   detail.
+
+10. **Task 14, Step 5: closing sweep — m7-final and m7-final-b**
+
+   Environment: Godot 4.7.2.stable.arch_linux.ed1daf0bf, Vulkan 1.4.341, NVIDIA GeForce RTX
+   4070 Laptop GPU, NVIDIA driver 610.57.04, High quality tier (default), requested
+   2560×1440, actual viewport 1152×1250, display driver Wayland, requested V-Sync disabled,
+   `vsync_actual=disabled` per the benchmark readback. Each timing line printed
+   `display_driver=Wayland vsync_requested=disabled vsync_actual=disabled
+   verdict_qualified=false`. Commands:
+   ```text
+   timeout 900s env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 tools/run_benchmarks.sh m7-final
+   timeout 900s env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 tools/run_benchmarks.sh m7-final-b
+   ```
+
+   **m7-final (all five processes exited 0):**
+
+   steady:
+   ```text
+   BENCH camera fov=75.00 viewport=1152x1250 fade_band_start=64.00 fade_band_end=80.00
+   BENCH p50=16.67 p95=19.44 p99=21.60 max=24.65 min_fps=40.6 over_16.6ms=220 (73.3%)
+   BENCH gpu_raymarch samples=287 p50_ms=6.836 p99_ms=8.918
+   BENCH gpu_stream samples=287 p50_ms=0.003 p99_ms=0.005
+   BENCH gpu_lod samples=287 p50_ms=0.044 p99_ms=0.051
+   BENCH gpu_ssgi samples=287 p50_ms=0.171 p99_ms=0.174
+   BENCH gpu_ssr samples=287 p50_ms=0.139 p99_ms=0.141
+   BENCH gpu_shadows samples=287 p50_ms=0.125 p99_ms=0.275
+   BENCH gpu_outlines samples=287 p50_ms=0.081 p99_ms=0.082
+   BENCH gpu_unattributed samples=287 p50_ms=0.133 p99_ms=0.294
+   BENCH gpu_custom_frame samples=287 p50_ms=7.880 p99_ms=10.132
+   BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   ```
+   move:
+   ```text
+   BENCH camera fov=75.00 viewport=1152x1250 fade_band_start=38.40 fade_band_end=48.00
+   BENCH p50=18.14 p95=23.00 p99=29.42 max=31.77 min_fps=31.5 over_16.6ms=277 (92.3%)
+   BENCH gpu_raymarch samples=287 p50_ms=6.716 p99_ms=8.506
+   BENCH gpu_stream samples=287 p50_ms=0.004 p99_ms=0.811
+   BENCH gpu_lod samples=287 p50_ms=0.070 p99_ms=0.195
+   BENCH gpu_ssgi samples=287 p50_ms=0.171 p99_ms=0.318
+   BENCH gpu_ssr samples=287 p50_ms=0.167 p99_ms=0.318
+   BENCH gpu_shadows samples=287 p50_ms=0.124 p99_ms=0.506
+   BENCH gpu_outlines samples=287 p50_ms=0.077 p99_ms=0.083
+   BENCH gpu_unattributed samples=287 p50_ms=0.147 p99_ms=0.295
+   BENCH gpu_custom_frame samples=287 p50_ms=7.956 p99_ms=10.388
+   BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   ```
+   ridge:
+   ```text
+   BENCH camera fov=75.00 viewport=1152x1250 fade_band_start=38.40 fade_band_end=48.00
+   BENCH p50=16.67 p95=23.28 p99=29.72 max=31.92 min_fps=31.3 over_16.6ms=243 (81.0%)
+   BENCH gpu_raymarch samples=287 p50_ms=5.197 p99_ms=8.762
+   BENCH gpu_stream samples=287 p50_ms=0.009 p99_ms=0.647
+   BENCH gpu_lod samples=287 p50_ms=0.188 p99_ms=0.298
+   BENCH gpu_ssgi samples=287 p50_ms=0.142 p99_ms=0.317
+   BENCH gpu_ssr samples=287 p50_ms=0.151 p99_ms=0.267
+   BENCH gpu_shadows samples=287 p50_ms=0.101 p99_ms=0.607
+   BENCH gpu_outlines samples=287 p50_ms=0.052 p99_ms=0.061
+   BENCH gpu_unattributed samples=287 p50_ms=0.155 p99_ms=0.295
+   BENCH gpu_custom_frame samples=287 p50_ms=6.479 p99_ms=9.849
+   BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   ```
+   edit:
+   ```text
+   BENCH camera fov=75.00 viewport=1152x1250 fade_band_start=32.00 fade_band_end=40.00
+   BENCH p50=27.68 p95=60.27 p99=83.78 max=116.49 min_fps=8.6 over_16.6ms=279 (93.0%)
+   BENCH gpu_raymarch samples=287 p50_ms=12.315 p99_ms=28.878
+   BENCH gpu_stream samples=287 p50_ms=0.448 p99_ms=12.267
+   BENCH gpu_lod samples=287 p50_ms=0.103 p99_ms=0.295
+   BENCH gpu_ssgi samples=287 p50_ms=0.155 p99_ms=0.303
+   BENCH gpu_ssr samples=287 p50_ms=0.166 p99_ms=0.315
+   BENCH gpu_shadows samples=287 p50_ms=0.128 p99_ms=0.492
+   BENCH gpu_outlines samples=287 p50_ms=0.079 p99_ms=0.223
+   BENCH gpu_unattributed samples=287 p50_ms=0.163 p99_ms=0.308
+   BENCH gpu_custom_frame samples=287 p50_ms=14.868 p99_ms=31.204
+   BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   BENCH regions=127 overflow=3 overrides=0/8192 consolidations=0 refusals=0
+   ```
+   island:
+   ```text
+   BENCH camera fov=75.00 viewport=1152x1250 fade_band_start=64.00 fade_band_end=80.00
+   BENCH p50=20.00 p95=25.00 p99=30.87 max=39.96 min_fps=25.0 over_16.6ms=863 (95.9%)
+   BENCH gpu_raymarch samples=807 p50_ms=6.965 p99_ms=9.249
+   BENCH gpu_stream samples=807 p50_ms=0.003 p99_ms=0.005
+   BENCH gpu_lod samples=807 p50_ms=0.043 p99_ms=0.050
+   BENCH gpu_ssgi samples=807 p50_ms=0.169 p99_ms=0.311
+   BENCH gpu_ssr samples=807 p50_ms=0.141 p99_ms=0.143
+   BENCH gpu_shadows samples=807 p50_ms=0.125 p99_ms=0.274
+   BENCH gpu_outlines samples=807 p50_ms=0.080 p99_ms=0.082
+   BENCH gpu_unattributed samples=807 p50_ms=0.132 p99_ms=0.161
+   BENCH gpu_custom_frame samples=807 p50_ms=8.009 p99_ms=10.476
+   BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   BENCH regions=154 overflow=0 overrides=0/8192 consolidations=0 refusals=0
+   ```
+   Every m7-final leg also printed `BENCH gpu_timing valid_samples=287|807
+   dropped_pairs=1 lod_source=timestamp lod_ms_source=cpu_record` and `BENCH
+   gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds
+   unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true`.
+
+   **m7-final-b stability run (all five processes exited 0):** every leg kept the same
+   `budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS
+   frame=WARN` and the same `timing_condition` line. Key frame/raymarch readings:
+
+   | leg | m7-final-b frame p50/p99 / over | m7-final-b gpu_raymarch p50/p99 |
+   |---|---|---:|
+   | steady | 16.67 / 21.10 / 218 (72.7%) | 6.836 / 8.974 |
+   | move | 19.05 / 29.57 / 275 (91.7%) | 6.787 / 8.300 |
+   | ridge | 16.67 / 30.20 / 204 (68.0%) | 5.151 / 8.080 |
+   | edit | 27.09 / 75.57 / 279 (93.0%) | 12.315 / 29.339 |
+   | island | 25.00 / 43.13 / 878 (97.6%) | 7.172 / 9.249 |
+
+   **Remaining WARNs, one sentence each:**
+   - `raymarch=WARN`: the GPU raymarch p99 exceeds the 6 ms budget on every leg, worst on the
+     edit leg (28.9–29.3 ms), so the next step is to reduce ray/shadow-ray cost under edit
+     stream pressure rather than change the budget.
+   - `frame=WARN`: every wall-frame p99 exceeds 16 ms (21–84 ms depending on leg), so the
+     next step is to attack the edit-stream/CPU spikes (`gpu_stream` p99 12.1–12.3 ms, island
+     `island_ms`/`phys_apply_ms` spikes) in a dedicated frame-budget task.
+   - `overflow=3` on the m7-final edit leg is the existing atlas brick-job overflow counter
+     (same value on m7-final-b), not an edit-log rejection; the focused consolidation suite
+     is the zero-overflow evidence, and a future edit benchmark must keep edits in one bounded
+     region to measure the consolidation path itself.
