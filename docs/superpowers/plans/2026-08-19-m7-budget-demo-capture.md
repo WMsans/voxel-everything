@@ -2193,12 +2193,12 @@ Splitting a chunk's triangles into eight octant bodies by **centroid** keeps the
   - `void ve::split_octants(const float *positions, const uint32_t *indices, int index_count, const float chunk_center[3], std::vector<uint32_t> out[ve::kColliderOctants])` — every input triangle appears in exactly one output bin, with its vertex order preserved.
   - `ColliderStreamer::active_bodies()` now counts **chunks in the space**, not bodies (the existing meaning every test asserts against); `bodies_in_space()` is the new raw count.
 
-- [ ] **Step 1: Write the failing native test**
+- [x] **Step 1: Write the failing native test**
 
 Create `extension/tests/test_octant_split.cpp`:
 
 ```cpp
-#include "doctest.h"
+#include <doctest/doctest.h>
 #include "mesh/octant_split.h"
 #include <set>
 
@@ -2257,21 +2257,21 @@ TEST_CASE("an empty bin is empty, not absent") {
 }
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd extension && scons test`
 Expected: FAIL — `mesh/octant_split.h: No such file or directory`.
 
-- [ ] **Step 3: Write the split**
+- [x] **Step 3: Write the split**
 
 `octant_split.cpp` is a single pass: for each triangle, average its three vertex positions, compare each axis against the chunk centre, and append the three indices to that bin. No sorting, no vertex remapping — bins hold indices into the *original* position array, and the streamer de-indexes them exactly as it does today.
 
-- [ ] **Step 4: Run the native tests to verify they pass**
+- [x] **Step 4: Run the native tests to verify they pass**
 
 Run: `cd extension && scons test`
 Expected: PASS.
 
-- [ ] **Step 5: Write the failing gdUnit test**
+- [x] **Step 5: Write the failing gdUnit test**
 
 Create `tests/test_collider_octants.gd`:
 
@@ -2335,12 +2335,12 @@ func test_no_single_build_carries_the_whole_chunk(timeout := 120000) -> void:
 	assert_int(int(st["max_build_tris"])).is_greater(0)
 ```
 
-- [ ] **Step 6: Run it to verify it fails**
+- [x] **Step 6: Run it to verify it fails**
 
 Run: `./gdunit_tests.sh -c -a res://tests/test_collider_octants.gd`
 Expected: FAIL — `max_build_tris` is not in `debug_physics_stats`.
 
-- [ ] **Step 7: Give each slot eight bodies**
+- [x] **Step 7: Give each slot eight bodies**
 
 In `ColliderStreamer`, `bodies_`, `shapes_` and `in_space_` become `slot * kColliderOctants + octant`-indexed (keep them as flat vectors sized `max_slots * 8` — the indexing helper is `int sub(int slot, int octant) { return slot * ve::kColliderOctants + octant; }`). `build_shape(slot, result)` becomes:
 
@@ -2360,7 +2360,7 @@ then the existing de-index-and-swap-winding loop runs once per non-empty bin, wi
 
 `active_bodies()` keeps its old meaning — **chunks with at least one body in the space** — because `tests/test_collider_stream.gd` asserts against it as a chunk count. Add `bodies_in_space()` for the raw number and print both in `debug_physics_stats()` (`bodies`, `bodies_raw`), plus `max_build_tris` (largest single `shape_set_data` this streamer has performed) and `max_chunk_tris` (largest whole-chunk triangle count) for the test above.
 
-- [ ] **Step 8: Run the physics suites**
+- [x] **Step 8: Run the physics suites**
 
 Run:
 ```bash
@@ -2373,12 +2373,12 @@ Run:
 ```
 Expected: PASS for all five.
 
-- [ ] **Step 9: Measure**
+- [x] **Step 9: Measure**
 
 Run: `tools/run_benchmarks.sh m7-task9`
 Record in **Errata entry 7**: `p99`, `max`, `over_16.6ms` and `BENCH max_ms build_ms` for the **move** and **edit** legs against Task 8's numbers, and quote `docs/todo/opti.md`'s 18.6 / 24.1 ms figures beside them. Then update `docs/todo/opti.md`: strike the octant-split paragraph and record the measured outcome underneath it.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add extension/src/mesh/octant_split.h extension/src/mesh/octant_split.cpp \
@@ -3597,7 +3597,52 @@ where this plan's text met reality and lost.
    suite and native sequence-tail test are the positive evidence; a future benchmark leg
    must keep edits in one bounded region and size the plan below the override capacity to
    measure consolidation itself.
-7. _(Task 9, Step 9: collider octant split measured delta — to be filled)_
+7. **Task 9, Step 9: collider octant split measured delta**
+
+   Environment: Godot 4.7.1, Vulkan 1.4.341, NVIDIA GeForce RTX 4070 Laptop GPU, Wayland,
+   requested 2560x1440, requested V-Sync disabled but compositor actual V-Sync enabled. The
+   benchmark line reports `vsync_actual=disabled` because Godot's Wayland readback is stale;
+   the runtime also printed `The requested V-Sync mode Disabled is not available. Falling
+   back to V-Sync mode Enabled.` These are qualified comparisons, not an unqualified display
+   budget claim. All five benchmark processes exited 0.
+
+   Command:
+   ```text
+   env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 tools/run_benchmarks.sh m7-task9
+   ```
+
+   The Task 8 comparison is the final 300-frame run (`reports/m7-task8-final`); the current
+   run is also 300 frames for move/edit. `phys_setdata_ms` in `BENCH max_ms` is the maximum
+   one-call Jolt shape build, i.e. the atomic spike this task splits.
+
+   | leg | Task 8 p99 / max / over 16.6 ms | Task 9 p99 / max / over 16.6 ms | Task 8 max shape build | Task 9 max shape build |
+   |---|---:|---:|---:|---:|
+   | move | 33.33 / 43.10 / 272 (90.7%) | 25.74 / 28.08 / 285 (95.0%) | 0.95 ms | 0.58 ms |
+   | edit | 56.09 / 77.43 / 298 (99.3%) | 56.45 / 70.19 / 293 (97.7%) | 22.41 ms | 0.51 ms |
+
+   Exact current evidence:
+   ```text
+   move: BENCH p50=19.61 p95=22.22 p99=25.74 max=28.08 min_fps=35.6 over_16.6ms=285 (95.0%)
+   move: BENCH max_ms ... phys_apply_ms=24.20 ... phys_setdata_ms=0.58 ... physics_tick_ms=25.26 ...
+   move: BENCH chunks=946 pending=875 bodies=71 failures=0 build_ms=0.07 collect_ms=0.41
+   edit: BENCH p50=22.22 p95=33.33 p99=56.45 max=70.19 min_fps=14.2 over_16.6ms=293 (97.7%)
+   edit: BENCH max_ms ... phys_apply_ms=30.37 ... phys_setdata_ms=0.51 ... physics_tick_ms=30.99 ...
+   edit: BENCH chunks=664 pending=566 bodies=98 failures=0 build_ms=0.33 collect_ms=0.82
+   ```
+
+   The split removes the one-call collider build spike (22.41 → 0.51 ms in the edit leg;
+   0.95 → 0.58 ms in the moving leg) and reduces the move frame p99 by 7.59 ms. The edit
+   frame p99 is unchanged within noise (+0.36 ms): its remaining spikes are not one fat
+   collider build (`island_ms` reached 41.47 ms and `phys_apply_ms` 30.37 ms). The task is
+   retained because the atomic Jolt build is gone, but it does not by itself close the
+   overall 16.6 ms frame budget. Every leg retained `raymarch=WARN lod=PASS ssgi=PASS
+   ssr=PASS shadows=PASS outlines=PASS frame=WARN`; the five timing lines reported
+   `display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false`.
+
+   The existing `BENCH max_ms` field calls the split's per-call measurement `phys_setdata_ms`;
+   the final `build_ms` field is only the last build in the run, not a maximum. This distinction
+   is intentional in this record so the 0.51 ms maximum is not confused with edit's 0.33 ms
+   final-build sample.
 8. _(Task 13, Step 6: first capture, defects observed — to be filled)_
 9. _(Task 14, Step 2: fade-band verdict and the number it rests on — to be filled)_
 10. _(Task 14, Step 5: closing sweep, full record — to be filled)_
