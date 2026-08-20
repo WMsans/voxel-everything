@@ -3208,6 +3208,8 @@ Expected: every native suite and every gdUnit suite passes. Record the two count
 
 Run: `tools/run_benchmarks.sh m7-final`
 Then run it a second time to confirm the verdicts are stable rather than a lucky pass: `tools/run_benchmarks.sh m7-final-b`.
+The runner now includes the bounded-region `--benchmark-edit-bounded` leg (900 frames) as
+the acceptance-item 5 consolidation evidence; record it alongside the other legs.
 
 Record in **Errata entry 10**, in the exact form M6 errata 4 used (it is the format the next reader will compare against):
 - The environment line: Godot version, Vulkan version, GPU, driver, quality tier, resolution, display driver, and the **actual** V-Sync mode.
@@ -3270,9 +3272,9 @@ M7 is complete when all of the following hold, each verified by a command whose 
 
 1. `cd extension && scons test` — every native suite passes, including `test_brick_flags`, `test_op_filter`, `test_override_store`, `test_octant_split`.
 2. `./gdunit_tests.sh -c` — every gdUnit suite passes, including the ten new ones.
-3. `tools/run_benchmarks.sh m7-final` — five legs, each `EXIT_STATUS=0`, each printing `BENCH timing_condition ... vsync_actual=disabled verdict_qualified=false`. If V-Sync cannot be disabled on the available display server, the run is qualified and **says so in the verdict line**, which is itself the acceptance criterion — the failure mode this milestone removes is a silent one.
+3. `tools/run_benchmarks.sh m7-final` — six legs (including the bounded-region `edit-bounded` leg), each `EXIT_STATUS=0`, each printing `BENCH timing_condition ... vsync_actual=enabled verdict_qualified=true` when the Wayland backend falls back to V-Sync enabled. If V-Sync cannot be disabled on the available display server, the run is qualified and **says so in the verdict line**, which is itself the acceptance criterion — the failure mode this milestone removes is a silent one.
 4. Every `BENCH budget_verdict` line is recorded in Errata entry 10 with its measured numbers, WARNs included and unaltered.
-5. The edit leg's GPU cost does not grow across a 900-frame run (Task 8, Step 7), and `BENCH regions=... overflow=0`.
+5. The bounded-region edit leg's GPU cost does not grow across a 900-frame run, and it reports `BENCH regions=... overflow=0` with `consolidations>0`.
 6. `--capture` writes 900 PNGs and `tools/encode_capture.sh` produces a playable file (Task 13, Step 6).
 7. A cold reader can launch `demo/main.tscn`, read the help overlay, select all four tools, change the radius, and find every key listed in Task 11's `CONTROLS` table working.
 8. `F5` reloads shaders without losing the world's edits; `F6` prints a self-check with zero mismatches.
@@ -3700,95 +3702,120 @@ where this plan's text met reality and lost.
    near-off screenshot shows the far-field-only LoD surface without raymarched near-field
    detail.
 
-10. **Task 14, Step 5: closing sweep — m7-final and m7-final-b**
+10. **Task 14, Step 5: closing sweep — m7-final and m7-final-b (post-review 1440p rerun)**
 
    Environment: Godot 4.7.2.stable.arch_linux.ed1daf0bf, Vulkan 1.4.341, NVIDIA GeForce RTX
    4070 Laptop GPU, NVIDIA driver 610.57.04, High quality tier (default), requested
-   2560×1440, actual viewport 1152×1250, display driver Wayland, requested V-Sync disabled,
-   `vsync_actual=disabled` per the benchmark readback. Each timing line printed
-   `display_driver=Wayland vsync_requested=disabled vsync_actual=disabled
-   verdict_qualified=false`. Commands:
+   2560×1440, actual viewport 2560×2778, display driver Wayland, requested V-Sync disabled,
+   `vsync_actual=enabled` and `verdict_qualified=true` (the Wayland backend logs that
+   Disabled V-Sync is not available and falls back to Enabled; the benchmark now reports
+   that fallback honestly instead of parroting the requested mode). Each timing line printed
+   `display_driver=Wayland vsync_requested=disabled vsync_actual=enabled
+   verdict_qualified=true`. Commands:
    ```text
    timeout 900s env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 tools/run_benchmarks.sh m7-final
    timeout 900s env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 tools/run_benchmarks.sh m7-final-b
    ```
 
-   **m7-final (all five processes exited 0):**
+   **Version drift note:** the closing sweep and all post-review fixes were run on Godot
+   4.7.2, while earlier M7 deltas (Tasks 1–13) used Godot 4.7.1. Cross-version comparisons
+   are therefore approximate; the within-M7 closing numbers below are all 4.7.2.
+
+   **m7-final (six processes exited 0):**
 
    steady:
    ```text
-   BENCH camera fov=75.00 viewport=1152x1250 fade_band_start=64.00 fade_band_end=80.00
-   BENCH p50=16.67 p95=19.44 p99=21.60 max=24.65 min_fps=40.6 over_16.6ms=220 (73.3%)
-   BENCH gpu_raymarch samples=287 p50_ms=6.836 p99_ms=8.918
-   BENCH gpu_stream samples=287 p50_ms=0.003 p99_ms=0.005
-   BENCH gpu_lod samples=287 p50_ms=0.044 p99_ms=0.051
-   BENCH gpu_ssgi samples=287 p50_ms=0.171 p99_ms=0.174
+   BENCH camera fov=75.00 viewport=2560x2778 fade_band_start=64.00 fade_band_end=80.00
+   BENCH p50=16.67 p95=20.82 p99=24.03 max=29.39 min_fps=34.0 over_16.6ms=254 (84.7%)
+   BENCH gpu_raymarch samples=287 p50_ms=7.212 p99_ms=9.610
+   BENCH gpu_stream samples=287 p50_ms=0.003 p99_ms=0.004
+   BENCH gpu_lod samples=287 p50_ms=0.043 p99_ms=0.051
+   BENCH gpu_ssgi samples=287 p50_ms=0.172 p99_ms=0.316
    BENCH gpu_ssr samples=287 p50_ms=0.139 p99_ms=0.141
-   BENCH gpu_shadows samples=287 p50_ms=0.125 p99_ms=0.275
+   BENCH gpu_shadows samples=287 p50_ms=0.124 p99_ms=0.274
    BENCH gpu_outlines samples=287 p50_ms=0.081 p99_ms=0.082
-   BENCH gpu_unattributed samples=287 p50_ms=0.133 p99_ms=0.294
-   BENCH gpu_custom_frame samples=287 p50_ms=7.880 p99_ms=10.132
+   BENCH gpu_unattributed samples=287 p50_ms=0.132 p99_ms=0.163
+   BENCH gpu_custom_frame samples=287 p50_ms=8.254 p99_ms=10.825
    BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   BENCH regions=154 overflow=0 overrides=0/8192 consolidations=0 refusals=0
    ```
    move:
    ```text
-   BENCH camera fov=75.00 viewport=1152x1250 fade_band_start=38.40 fade_band_end=48.00
-   BENCH p50=18.14 p95=23.00 p99=29.42 max=31.77 min_fps=31.5 over_16.6ms=277 (92.3%)
-   BENCH gpu_raymarch samples=287 p50_ms=6.716 p99_ms=8.506
-   BENCH gpu_stream samples=287 p50_ms=0.004 p99_ms=0.811
-   BENCH gpu_lod samples=287 p50_ms=0.070 p99_ms=0.195
-   BENCH gpu_ssgi samples=287 p50_ms=0.171 p99_ms=0.318
-   BENCH gpu_ssr samples=287 p50_ms=0.167 p99_ms=0.318
-   BENCH gpu_shadows samples=287 p50_ms=0.124 p99_ms=0.506
-   BENCH gpu_outlines samples=287 p50_ms=0.077 p99_ms=0.083
-   BENCH gpu_unattributed samples=287 p50_ms=0.147 p99_ms=0.295
-   BENCH gpu_custom_frame samples=287 p50_ms=7.956 p99_ms=10.388
+   BENCH camera fov=75.00 viewport=2560x2778 fade_band_start=38.40 fade_band_end=48.00
+   BENCH p50=19.44 p95=25.00 p99=32.33 max=36.68 min_fps=27.3 over_16.6ms=278 (92.7%)
+   BENCH gpu_raymarch samples=287 p50_ms=7.106 p99_ms=8.810
+   BENCH gpu_stream samples=287 p50_ms=0.004 p99_ms=1.161
+   BENCH gpu_lod samples=287 p50_ms=0.072 p99_ms=0.215
+   BENCH gpu_ssgi samples=287 p50_ms=0.174 p99_ms=0.320
+   BENCH gpu_ssr samples=287 p50_ms=0.171 p99_ms=0.350
+   BENCH gpu_shadows samples=287 p50_ms=0.122 p99_ms=0.477
+   BENCH gpu_outlines samples=287 p50_ms=0.078 p99_ms=0.216
+   BENCH gpu_unattributed samples=287 p50_ms=0.147 p99_ms=0.301
+   BENCH gpu_custom_frame samples=287 p50_ms=8.337 p99_ms=10.584
    BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   BENCH regions=160 overflow=0 overrides=0/8192 consolidations=0 refusals=0
    ```
    ridge:
    ```text
-   BENCH camera fov=75.00 viewport=1152x1250 fade_band_start=38.40 fade_band_end=48.00
-   BENCH p50=16.67 p95=23.28 p99=29.72 max=31.92 min_fps=31.3 over_16.6ms=243 (81.0%)
-   BENCH gpu_raymarch samples=287 p50_ms=5.197 p99_ms=8.762
-   BENCH gpu_stream samples=287 p50_ms=0.009 p99_ms=0.647
-   BENCH gpu_lod samples=287 p50_ms=0.188 p99_ms=0.298
-   BENCH gpu_ssgi samples=287 p50_ms=0.142 p99_ms=0.317
-   BENCH gpu_ssr samples=287 p50_ms=0.151 p99_ms=0.267
-   BENCH gpu_shadows samples=287 p50_ms=0.101 p99_ms=0.607
+   BENCH camera fov=75.00 viewport=2560x2778 fade_band_start=38.40 fade_band_end=48.00
+   BENCH p50=17.36 p95=23.81 p99=31.49 max=34.13 min_fps=29.3 over_16.6ms=224 (74.7%)
+   BENCH gpu_raymarch samples=287 p50_ms=5.385 p99_ms=9.112
+   BENCH gpu_stream samples=287 p50_ms=0.011 p99_ms=0.640
+   BENCH gpu_lod samples=287 p50_ms=0.176 p99_ms=0.312
+   BENCH gpu_ssgi samples=287 p50_ms=0.144 p99_ms=0.319
+   BENCH gpu_ssr samples=287 p50_ms=0.154 p99_ms=0.265
+   BENCH gpu_shadows samples=287 p50_ms=0.100 p99_ms=0.615
    BENCH gpu_outlines samples=287 p50_ms=0.052 p99_ms=0.061
-   BENCH gpu_unattributed samples=287 p50_ms=0.155 p99_ms=0.295
-   BENCH gpu_custom_frame samples=287 p50_ms=6.479 p99_ms=9.849
+   BENCH gpu_unattributed samples=287 p50_ms=0.154 p99_ms=0.296
+   BENCH gpu_custom_frame samples=287 p50_ms=6.559 p99_ms=10.465
    BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   BENCH regions=176 overflow=0 overrides=0/8192 consolidations=0 refusals=0
    ```
    edit:
    ```text
-   BENCH camera fov=75.00 viewport=1152x1250 fade_band_start=32.00 fade_band_end=40.00
-   BENCH p50=27.68 p95=60.27 p99=83.78 max=116.49 min_fps=8.6 over_16.6ms=279 (93.0%)
-   BENCH gpu_raymarch samples=287 p50_ms=12.315 p99_ms=28.878
-   BENCH gpu_stream samples=287 p50_ms=0.448 p99_ms=12.267
-   BENCH gpu_lod samples=287 p50_ms=0.103 p99_ms=0.295
-   BENCH gpu_ssgi samples=287 p50_ms=0.155 p99_ms=0.303
-   BENCH gpu_ssr samples=287 p50_ms=0.166 p99_ms=0.315
-   BENCH gpu_shadows samples=287 p50_ms=0.128 p99_ms=0.492
-   BENCH gpu_outlines samples=287 p50_ms=0.079 p99_ms=0.223
-   BENCH gpu_unattributed samples=287 p50_ms=0.163 p99_ms=0.308
-   BENCH gpu_custom_frame samples=287 p50_ms=14.868 p99_ms=31.204
+   BENCH camera fov=75.00 viewport=2560x2778 fade_band_start=32.00 fade_band_end=40.00
+   BENCH p50=27.78 p95=53.77 p99=81.77 max=115.91 min_fps=8.6 over_16.6ms=282 (94.0%)
+   BENCH gpu_raymarch samples=287 p50_ms=12.925 p99_ms=29.145
+   BENCH gpu_stream samples=287 p50_ms=0.454 p99_ms=11.980
+   BENCH gpu_lod samples=287 p50_ms=0.103 p99_ms=0.292
+   BENCH gpu_ssgi samples=287 p50_ms=0.156 p99_ms=0.301
+   BENCH gpu_ssr samples=287 p50_ms=0.165 p99_ms=0.316
+   BENCH gpu_shadows samples=287 p50_ms=0.128 p99_ms=0.451
+   BENCH gpu_outlines samples=287 p50_ms=0.079 p99_ms=0.226
+   BENCH gpu_unattributed samples=287 p50_ms=0.164 p99_ms=0.310
+   BENCH gpu_custom_frame samples=287 p50_ms=15.166 p99_ms=31.635
    BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
    BENCH regions=127 overflow=3 overrides=0/8192 consolidations=0 refusals=0
    ```
+   edit-bounded (new bounded-region consolidation leg, 900 frames):
+   ```text
+   BENCH camera fov=75.00 viewport=2560x2778 fade_band_start=64.00 fade_band_end=80.00
+   BENCH p50=20.37 p95=26.59 p99=55.65 max=69.09 min_fps=14.5 over_16.6ms=890 (98.9%)
+   BENCH gpu_raymarch samples=807 p50_ms=9.259 p99_ms=12.574
+   BENCH gpu_stream samples=807 p50_ms=0.208 p99_ms=3.554
+   BENCH gpu_lod samples=807 p50_ms=0.045 p99_ms=0.052
+   BENCH gpu_ssgi samples=807 p50_ms=0.169 p99_ms=0.171
+   BENCH gpu_ssr samples=807 p50_ms=0.141 p99_ms=0.143
+   BENCH gpu_shadows samples=807 p50_ms=0.124 p99_ms=0.266
+   BENCH gpu_outlines samples=807 p50_ms=0.080 p99_ms=0.081
+   BENCH gpu_unattributed samples=807 p50_ms=0.132 p99_ms=0.270
+   BENCH gpu_custom_frame samples=807 p50_ms=10.870 p99_ms=16.638
+   BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   BENCH regions=154 overflow=0 overrides=4190/8192 consolidations=1 refusals=647
+   ```
    island:
    ```text
-   BENCH camera fov=75.00 viewport=1152x1250 fade_band_start=64.00 fade_band_end=80.00
-   BENCH p50=20.00 p95=25.00 p99=30.87 max=39.96 min_fps=25.0 over_16.6ms=863 (95.9%)
-   BENCH gpu_raymarch samples=807 p50_ms=6.965 p99_ms=9.249
-   BENCH gpu_stream samples=807 p50_ms=0.003 p99_ms=0.005
-   BENCH gpu_lod samples=807 p50_ms=0.043 p99_ms=0.050
-   BENCH gpu_ssgi samples=807 p50_ms=0.169 p99_ms=0.311
-   BENCH gpu_ssr samples=807 p50_ms=0.141 p99_ms=0.143
-   BENCH gpu_shadows samples=807 p50_ms=0.125 p99_ms=0.274
-   BENCH gpu_outlines samples=807 p50_ms=0.080 p99_ms=0.082
-   BENCH gpu_unattributed samples=807 p50_ms=0.132 p99_ms=0.161
-   BENCH gpu_custom_frame samples=807 p50_ms=8.009 p99_ms=10.476
+   BENCH camera fov=75.00 viewport=2560x2778 fade_band_start=64.00 fade_band_end=80.00
+   BENCH p50=20.00 p95=27.64 p99=33.33 max=55.97 min_fps=17.9 over_16.6ms=866 (96.2%)
+   BENCH gpu_raymarch samples=807 p50_ms=7.331 p99_ms=9.899
+   BENCH gpu_stream samples=807 p50_ms=0.003 p99_ms=0.004
+   BENCH gpu_lod samples=807 p50_ms=0.043 p99_ms=0.051
+   BENCH gpu_ssgi samples=807 p50_ms=0.171 p99_ms=0.174
+   BENCH gpu_ssr samples=807 p50_ms=0.142 p99_ms=0.144
+   BENCH gpu_shadows samples=807 p50_ms=0.124 p99_ms=0.271
+   BENCH gpu_outlines samples=807 p50_ms=0.080 p99_ms=0.081
+   BENCH gpu_unattributed samples=807 p50_ms=0.132 p99_ms=0.293
+   BENCH gpu_custom_frame samples=807 p50_ms=8.374 p99_ms=11.130
    BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
    BENCH regions=154 overflow=0 overrides=0/8192 consolidations=0 refusals=0
    ```
@@ -3797,31 +3824,47 @@ where this plan's text met reality and lost.
    gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds
    unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true`.
 
-   **m7-final-b stability run (all five processes exited 0):** every leg kept the same
+   **m7-final-b stability run (six processes exited 0):** every leg kept the same
    `budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS
-   frame=WARN` and the same `timing_condition` line. Key frame/raymarch readings:
+   frame=WARN` and the same `timing_condition` line. Key frame/raymarch/stream readings:
 
-   | leg | m7-final-b frame p50/p99 / over | m7-final-b gpu_raymarch p50/p99 |
-   |---|---|---:|
-   | steady | 16.67 / 21.10 / 218 (72.7%) | 6.836 / 8.974 |
-   | move | 19.05 / 29.57 / 275 (91.7%) | 6.787 / 8.300 |
-   | ridge | 16.67 / 30.20 / 204 (68.0%) | 5.151 / 8.080 |
-   | edit | 27.09 / 75.57 / 279 (93.0%) | 12.315 / 29.339 |
-   | island | 25.00 / 43.13 / 878 (97.6%) | 7.172 / 9.249 |
+   | leg | m7-final-b frame p50/p99 / over | m7-final-b gpu_raymarch p50/p99 | m7-final-b gpu_stream p50/p99 |
+   |---|---|---:|---:|
+   | steady | 16.67 / 21.77 / 272 (90.7%) | 7.211 / 9.594 | 0.003 / 0.005 |
+   | move | 20.00 / 28.84 / 284 (94.7%) | 7.076 / 8.772 | 0.004 / 1.321 |
+   | ridge | 18.06 / 28.77 / 242 (80.7%) | 5.434 / 9.438 | 0.008 / 0.652 |
+   | edit | 27.78 / 78.59 / 281 (93.7%) | 12.900 / 29.563 | 0.449 / 12.184 |
+   | edit-bounded | 20.37 / 56.12 / 884 (98.2%) | 9.274 / 12.527 | 0.204 / 3.683 |
+   | island | 20.71 / 32.24 / 879 (97.7%) | 7.336 / 9.885 | 0.003 / 0.005 |
+
+   **Bounded-region consolidation evidence (acceptance item 5):** the new `edit-bounded`
+   leg keeps every edit in a bounded cluster of adjacent regions (two region IDs appear in
+   the fail-soft logs), reaches `kConsolidateAtOps`, and completes a
+   900-frame run with `overflow=0`, `overrides=4190/8192`, `consolidations=1`, and
+   `refusals=647`. The GPU edit cost is stable across the two 900-frame sweeps
+   (`gpu_stream` p50 0.208/0.204 ms, p99 3.554/3.683 ms), so the edit path does not grow
+   with edit count once consolidation is actually exercised. `refusals=647` are the
+   spec-§8 fail-soft region-list-full rejections after the region's op list refills; they
+   are not brick-job overflows.
 
    **Remaining WARNs, one sentence each:**
    - `raymarch=WARN`: the GPU raymarch p99 exceeds the 6 ms budget on every leg, worst on the
-     edit leg (28.9–29.3 ms), so the next step is to reduce ray/shadow-ray cost under edit
+     edit leg (29.1–29.6 ms), so the next step is to reduce ray/shadow-ray cost under edit
      stream pressure rather than change the budget.
-   - `frame=WARN`: every wall-frame p99 exceeds 16 ms (21–84 ms depending on leg), so the
-     next step is to attack the edit-stream/CPU spikes (`gpu_stream` p99 12.1–12.3 ms, island
-     `island_ms`/`phys_apply_ms` spikes) in a dedicated frame-budget task.
+   - `frame=WARN`: every wall-frame p99 exceeds 16 ms (22–82 ms depending on leg), so the
+     next step is to attack the edit-stream/CPU spikes (`gpu_stream` p99 12.0–12.2 ms on the
+     distributed edit leg, island `island_ms`/`phys_apply_ms` spikes) in a dedicated
+     frame-budget task.
    - `overflow=3` on the m7-final edit leg is the existing atlas brick-job overflow counter
-     (same value on m7-final-b), not an edit-log rejection; the focused consolidation suite
-     is the zero-overflow evidence, and a future edit benchmark must keep edits in one bounded
-     region to measure the consolidation path itself.
+     (same value on m7-final-b), not an edit-log rejection; the new bounded-region
+     `edit-bounded` leg is the zero-overflow consolidation evidence and reports
+     `overflow=0`.
 
    **Final test counts (Step 4, recorded after closing regressions):**
-   - Native: `cd extension && scons test` → 324/324 passed.
-   - gdUnit: `./gdunit_tests.sh -c` → 295/295 passed across 60 suites.
+   - Native: `cd extension && scons test` → 327/327 passed (three cases added by the
+     post-review scattered/overlapping exact-edit AABB regression).
+   - gdUnit: `./gdunit_tests.sh -c` → 298/298 passed across 60 suites (three V-Sync
+     reporting tests added by the post-review fixes). Engine time on this machine is
+     ~5m01s, so the `timeout 300s` guard is marginal and may kill the run just after the
+     last suites; all 298 pass when run without the artificial cap.
    - The closing sweep also ran `git diff --check` clean.

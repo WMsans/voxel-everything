@@ -40,14 +40,15 @@ below.
 
 **Resolved by M7 Tasks 1–8.** The raymarch and frame WARNs are now measured with
 per-pass GPU timestamps and a V-Sync readback that says exactly what the run got. The
-final closing sweep (`m7-final` / `m7-final-b`) still reports `raymarch=WARN` on every leg
-and `frame=WARN` on every leg; the raymarch p99 is worst on the edit leg (28.9 ms in
-`m7-final`, 29.3 ms in `m7-final-b`), and wall-frame p99 is worst on edit (83.8 ms /
-75.6 ms). These are the remaining open items, left open because closing them is a renderer
-budget project of its own (ray step count / shadow ray cost and the edit-stream/CPU spikes),
-not a follow-up that fits M7's closing-sweep task. All five legs exited 0 in both closing
-runs and every `BENCH timing_condition` line was `display_driver=Wayland
-vsync_requested=disabled vsync_actual=disabled verdict_qualified=false`.
+final closing sweep (`m7-final` / `m7-final-b`, post-review 1440p rerun) still reports
+`raymarch=WARN` on every leg and `frame=WARN` on every leg; the raymarch p99 is worst on
+the edit leg (29.1 ms in `m7-final`, 29.6 ms in `m7-final-b`), and wall-frame p99 is worst
+on edit (81.8 ms / 78.6 ms). These are the remaining open items, left open because closing
+them is a renderer budget project of its own (ray step count / shadow ray cost and the
+edit-stream/CPU spikes), not a follow-up that fits M7's closing-sweep task. All six legs
+exited 0 in both closing runs and every `BENCH timing_condition` line was
+`display_driver=Wayland vsync_requested=disabled vsync_actual=enabled
+verdict_qualified=true` (Wayland falls back to V-Sync enabled).
 
 The existing ObjectDB leak warning at exit remains a known Godot/GDExtension teardown
 diagnostic; it does not fail the suites or the benchmark runs.
