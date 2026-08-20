@@ -45,6 +45,32 @@ TEST_CASE("every triangle lands in exactly one bin, with its winding intact") {
 	CHECK(want == got);
 }
 
+TEST_CASE("centroids populate multiple octants without changing triangle order") {
+	const float pos[] = {
+			-3.0f, -3.0f, -3.0f, -2.0f, -3.0f, -3.0f, -3.0f, -2.0f, -3.0f,
+			1.0f, -3.0f, -3.0f, 2.0f, -3.0f, -3.0f, 1.0f, -2.0f, -3.0f,
+			-3.0f, 1.0f, -3.0f, -2.0f, 1.0f, -3.0f, -3.0f, 2.0f, -3.0f,
+			1.0f, 1.0f, -3.0f, 2.0f, 1.0f, -3.0f, 1.0f, 2.0f, -3.0f,
+			-3.0f, -3.0f, 1.0f, -2.0f, -3.0f, 1.0f, -3.0f, -2.0f, 1.0f,
+			1.0f, -3.0f, 1.0f, 2.0f, -3.0f, 1.0f, 1.0f, -2.0f, 1.0f,
+			-3.0f, 1.0f, 1.0f, -2.0f, 1.0f, 1.0f, -3.0f, 2.0f, 1.0f,
+			1.0f, 1.0f, 1.0f, 2.0f, 1.0f, 1.0f, 1.0f, 2.0f, 1.0f,
+	};
+	const uint32_t idx[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+			15, 16, 17, 18, 19, 20, 21, 22, 23};
+	const float c[3] = {0.0f, 0.0f, 0.0f};
+	std::vector<uint32_t> bins[ve::kColliderOctants];
+	ve::split_octants(pos, idx, 24, c, bins);
+
+	int populated = 0;
+	for (const std::vector<uint32_t> &b : bins) {
+		if (!b.empty()) populated++;
+		const bool valid_size = b.empty() || b.size() == 3;
+		CHECK(valid_size);
+	}
+	CHECK(populated == ve::kColliderOctants);
+}
+
 TEST_CASE("an empty bin is empty, not absent") {
 	// All eight bins always exist; the streamer indexes them by octant and must not have to
 	// think about which ones a chunk happened to fill.

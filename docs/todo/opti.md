@@ -3,10 +3,12 @@
 **Done in M7 Task 9.** `ColliderStreamer` bins each triangle by centroid into eight octants,
 stages fresh concave shapes, and swaps the complete set only after all octants are built.
 `active_bodies()` remains a chunk count; `bodies_in_space()` is the raw diagnostic count.
-The fresh Wayland benchmark reduced the maximum one-call `shape_set_data` build from 22.41
-ms to 0.51 ms in the edit leg and from 0.95 ms to 0.58 ms while moving. Move frame p99
-fell from 33.33 to 25.74 ms; edit frame p99 was unchanged at 56.45 ms, so the overall
-frame budget remains open for other spikes. Full evidence is in M7 Errata 7.
+The corrected Wayland benchmark reduced the maximum one-call `shape_set_data` build from
+22.41 ms to 0.34 ms in the edit leg and from 0.95 ms to 0.33 ms while moving. The true
+per-call `build_ms` maxima were 0.56 ms (edit) and 0.57 ms (move); these are reported in
+`BENCH max_ms`, not accumulated per-frame. Move frame p99 was 29.03 ms and edit frame p99
+was 63.21 ms, so the overall frame budget remains open for other spikes. Full evidence is
+in M7 Errata 7.
 
 Fix 1 properly: write occupancy from the generated brick's 5 cm lattice rather than the 3×3×3 probe — brick_gen.comp.glsl already reduces min/max over the 17³ lattice into s_mip8, and it knows rslot/brick from the job. brick_mark then writes occupancy only for !has_surface bricks (unambiguous). This is exact at the resolution you render, with no halo and no phantom-solid artifact.
 

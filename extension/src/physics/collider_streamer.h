@@ -76,11 +76,13 @@ public:
 	int last_submit_op_count(ve::IVec3 c) const;
 	int failures() const { return failures_; }
 	int queued_results() const { return static_cast<int>(inbox_.size()); }
+	// Maximum duration of one octant build call in the last frame; never a frame sum.
 	float last_build_ms() const { return last_build_ms_; }
 	float last_collect_ms() const;
 	RID body_of_slot(int slot) const;
 	// --- profiling (diagnostic only; see VoxelWorld::debug_perf_stats) ---
 	float last_faces_ms() const { return last_faces_ms_; }
+	// Maximum duration of one shape_set_data call in the last frame; never an octant sum.
 	float last_setdata_ms() const { return last_setdata_ms_; }
 	float last_body_ms() const { return last_body_ms_; }
 	int last_tris() const { return last_tris_; }

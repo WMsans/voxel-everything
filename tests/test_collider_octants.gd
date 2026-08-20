@@ -49,9 +49,46 @@ func test_split_colliders_still_match_the_field(timeout := 120000) -> void:
 			assert_float(float(hit["position"].y)).is_equal_approx(float(truth["pos"].y), 0.15)
 
 # The point of the split: no single build is the whole chunk any more.
+func chunk_for_point(point: Vector3) -> Vector3i:
+	return Vector3i(int(floor(point.x / 6.4)), int(floor(point.y / 6.4)),
+			int(floor(point.z / 6.4)))
+
 func test_no_single_build_carries_the_whole_chunk(timeout := 120000) -> void:
 	var w := make_world()
 	assert_bool(settle(w, Vector3(60.0, 55.0, 60.0))).is_true()
 	var st: Dictionary = w.debug_physics_stats()
 	assert_int(int(st["max_build_tris"])).is_less(int(st["max_chunk_tris"]))
 	assert_int(int(st["max_build_tris"])).is_greater(0)
+
+func test_octant_bodies_replace_atomically_and_report_diagnostics(timeout := 120000) -> void:
+	var w := make_world()
+	var center := Vector3(60.0, 55.0, 60.0)
+	assert_bool(settle(w, center)).is_true()
+	var before: Dictionary = w.debug_physics_stats()
+	# A chunk is represented by one body per populated octant, while `bodies` remains the
+	# historical chunk count. More than one raw body proves that the split is live, not merely
+	# a diagnostic rename of the old one-body path.
+	assert_int(int(before["bodies_raw"])).is_greater(int(before["bodies"]))
+	assert_int(int(before["bodies_raw"])).is_less_equal(int(before["bodies"]) * 8)
+
+	var truth: Dictionary = w.debug_raycast(Vector3(center.x, 80.0, center.z), Vector3(0, -1, 0))
+	assert_bool(bool(truth["hit"])).is_true()
+	var chunk := chunk_for_point(truth["pos"])
+	var old_info: Dictionary = w.debug_chunk_collider_info(chunk)
+	assert_int(int(old_info["slot"])).is_greater_equal(0)
+	var old_body: RID = w.debug_body_of_chunk(chunk)
+	assert_bool(old_body.is_valid()).is_true()
+
+	var tool: VoxelEditTool = ClassDB.instantiate("VoxelEditTool")
+	w.add_child(tool)
+	var result: Dictionary = tool.apply_sphere_subtract(truth["pos"], 1.5)
+	assert_array(result["rejected"]).is_empty()
+	assert_bool(settle(w, center)).is_true()
+	var new_info: Dictionary = w.debug_chunk_collider_info(chunk)
+	assert_int(int(new_info["build_count"])).is_greater(int(old_info["build_count"]))
+	# The replacement is committed only after every populated octant is built; diagnostics must
+	# still find a real body even when octant zero is empty.
+	var new_body: RID = w.debug_body_of_chunk(chunk)
+	assert_bool(new_body.is_valid()).is_true()
+	var after: Dictionary = w.debug_physics_stats()
+	assert_int(int(after["bodies_raw"])).is_greater_equal(int(after["bodies"]))
