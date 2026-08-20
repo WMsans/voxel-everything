@@ -1520,7 +1520,12 @@ Dictionary VoxelWorld::debug_physics_stats() {
 	d["chunks_resident"] = chunks_ ? chunks_->resident_count() : 0;
 	d["chunks_pending"] = chunks_ ? chunks_->pending_count() : 0;
 	d["probe_cache"] = chunks_ ? chunks_->probe_cache_size() : 0;
+	// `bodies` preserves the historical chunk count used by the physics tests and HUD.
+	// `bodies_raw` exposes the eight-way implementation detail for profiling only.
 	d["bodies"] = colliders_ ? colliders_->active_bodies() : 0;
+	d["bodies_raw"] = colliders_ ? colliders_->bodies_in_space() : 0;
+	d["max_build_tris"] = colliders_ ? colliders_->max_build_tris() : 0;
+	d["max_chunk_tris"] = colliders_ ? colliders_->max_chunk_tris() : 0;
 	d["builds"] = colliders_ ? colliders_->builds_last_frame() : 0;
 	d["queued"] = colliders_ ? colliders_->queued_results() : 0;
 	d["failures"] = colliders_ ? colliders_->failures() : 0;

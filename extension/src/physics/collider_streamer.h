@@ -1,11 +1,13 @@
 #pragma once
 #include <godot_cpp/classes/physics_server3d.hpp>
 #include <godot_cpp/variant/rid.hpp>
+#include <array>
 #include <deque>
 #include <mutex>
 #include <vector>
 #include "generator/generator.h"
 #include "mesh/chunk_residency.h"
+#include "mesh/octant_split.h"
 #include "render/mesh_service.h"
 #include "world/edit_log.h"
 
@@ -55,10 +57,15 @@ public:
 	// The player centre is always the first bubble; the extra centres extend the residency.
 	int run_frame(float cx, float cy, float cz, const float *extra_centers, int extra_count);
 
+	// A body's public meaning is a resident chunk, not the number of octant bodies used to
+	// represent it. The raw count is exposed separately for diagnostics and benchmarks.
 	int active_bodies() const { return active_bodies_; }
+	int bodies_in_space() const;
 	int builds_last_frame() const { return builds_last_frame_; }
-	// Diagnostic only: per-slot generation counter bumped on every build_shape call, and the
-	// residency state of a chunk, so a test can ask whether a chunk's collider ever got
+	int max_build_tris() const { return max_build_tris_; }
+	int max_chunk_tris() const { return max_chunk_tris_; }
+	// Diagnostic only: per-slot generation counter bumped for every submitted mesh result, and
+	// the residency state of a chunk, so a test can ask whether a chunk's collider ever got
 	// rebuilt after a given edit. `state` is the ChunkResidency slot_state char, -1 when the
 	// chunk is not resident.
 	int build_count_of_chunk(ve::IVec3 c) const;
@@ -85,9 +92,21 @@ public:
 private:
 	enum BuildOutcome { kBuilt, kEmpty, kFailed };
 
-	BuildOutcome build_shape(int slot, const MeshResult &r);
+	struct PendingBuild {
+		int slot = -1;
+		MeshResult result;
+		std::array<std::vector<uint32_t>, ve::kColliderOctants> bins;
+		std::array<RID, ve::kColliderOctants> staged_shapes;
+		int next_octant = 0;
+		int geometry_octants = 0;
+	};
+
+	BuildOutcome build_octant(PendingBuild &pending, int octant);
+	bool commit_pending(PendingBuild &pending);
+	void discard_pending(PendingBuild &pending);
 	void release_slot(int slot);
-	void apply_result(const MeshResult &r);
+	void enqueue_result(MeshResult &&r);
+	void free_slot_resources(int slot);
 
 	ve::ChunkResidency *chunks_ = nullptr;
 	ve::EditLog *edit_log_ = nullptr;
@@ -103,7 +122,8 @@ private:
 	std::vector<char> in_space_;
 	std::vector<int> build_counts_;
 	std::vector<int> last_submit_ops_;
-	std::deque<MeshResult> inbox_; // collected, not yet turned into shapes
+	std::deque<MeshResult> inbox_; // collected, not yet split into octant builds
+	std::deque<PendingBuild> pending_; // staged replacements; old bodies remain live until commit
 	int max_builds_per_frame_ = 2;
 	float bubble_radius_m_ = 12.0f;
 	float build_budget_ms_ = 4.0f;
@@ -111,6 +131,8 @@ private:
 	int builds_last_frame_ = 0;
 	int failures_ = 0;
 	int overflow_warnings_ = 0;
+	int max_build_tris_ = 0;
+	int max_chunk_tris_ = 0;
 	float last_build_ms_ = 0.0f;
 	float last_faces_ms_ = 0.0f;
 	float last_setdata_ms_ = 0.0f;

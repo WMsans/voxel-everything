@@ -18,15 +18,15 @@ float ms_since(Clock::time_point t0) {
 }
 
 // What handing Jolt one triangle of a concave shape costs, measured on the shipping backend
-// across 1k-64k triangle soups: the relationship is linear to within a few percent, and the
-// work lands on whichever call first needs the built shape (body_set_space for a new body,
-// shape_set_data for one already in the space). Only used to decide whether the NEXT chunk
-// fits in what is left of the frame's budget, so being off by a little just moves one build
-// to the next frame.
+// across 1k-64k triangle soups. This admits the NEXT octant build against the existing budget;
+// a first build always runs so a large octant cannot wedge the queue forever.
 constexpr float kShapeBuildMsPerTriangle = 0.00075f;
 
-// The residency's view of the world field. NOTE the qualification on ve::chunk_has_surface:
-// unqualified, the name would resolve to this override and recurse for ever.
+int sub_index(int slot, int octant) {
+	return slot * ve::kColliderOctants + octant;
+}
+
+// The residency's view of the world field.
 struct LogProbe : ve::ChunkProbe {
 	const ve::Generator *gen = nullptr;
 	ve::EditLog *log = nullptr;
@@ -52,11 +52,13 @@ void ColliderStreamer::initialize(ve::ChunkResidency *chunks, ve::EditLog *edit_
 	edit_log_ = edit_log;
 	edit_mutex_ = edit_mutex;
 	mesh_ = mesh;
-	bodies_.assign(static_cast<size_t>(std::max(0, max_slots)), RID());
-	shapes_.assign(static_cast<size_t>(std::max(0, max_slots)), RID());
-	in_space_.assign(static_cast<size_t>(std::max(0, max_slots)), 0);
-	build_counts_.assign(static_cast<size_t>(std::max(0, max_slots)), 0);
-	last_submit_ops_.assign(static_cast<size_t>(std::max(0, max_slots)), -1);
+	const size_t slots = static_cast<size_t>(std::max(0, max_slots));
+	const size_t bodies = slots * ve::kColliderOctants;
+	bodies_.assign(bodies, RID());
+	shapes_.assign(bodies, RID());
+	in_space_.assign(bodies, 0);
+	build_counts_.assign(slots, 0);
+	last_submit_ops_.assign(slots, -1);
 }
 
 void ColliderStreamer::teardown() {
@@ -69,14 +71,18 @@ void ColliderStreamer::teardown() {
 			}
 			if (shapes_[i].is_valid()) ps->free_rid(shapes_[i]);
 		}
+		for (PendingBuild &pending : pending_) discard_pending(pending);
 	}
 	bodies_.clear();
 	shapes_.clear();
 	in_space_.clear();
 	inbox_.clear();
+	pending_.clear();
 	active_bodies_ = 0;
 	failures_ = 0;
 	overflow_warnings_ = 0;
+	max_build_tris_ = 0;
+	max_chunk_tris_ = 0;
 	last_build_ms_ = 0.0f;
 	chunks_ = nullptr;
 	edit_log_ = nullptr;
@@ -90,7 +96,7 @@ void ColliderStreamer::set_space(RID space) {
 	PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
 	if (!ps) return;
 	// The space arrives once the node is in the tree, which can be after the first bodies
-	// exist; re-home whatever is already live.
+	// exist; re-home every live octant body.
 	for (size_t i = 0; i < bodies_.size(); i++)
 		if (in_space_[i] && bodies_[i].is_valid()) ps->body_set_space(bodies_[i], space_);
 }
@@ -99,14 +105,24 @@ float ColliderStreamer::last_collect_ms() const {
 	return mesh_ ? mesh_->last_collect_ms() : 0.0f;
 }
 
+int ColliderStreamer::bodies_in_space() const {
+	int count = 0;
+	for (char in_space : in_space_)
+		if (in_space) count++;
+	return count;
+}
+
 RID ColliderStreamer::body_of_slot(int slot) const {
-	return slot >= 0 && slot < static_cast<int>(bodies_.size()) ? bodies_[slot] : RID();
+	if (slot < 0 || slot >= static_cast<int>(build_counts_.size())) return RID();
+	return bodies_[static_cast<size_t>(sub_index(slot, 0))];
 }
 
 int ColliderStreamer::build_count_of_chunk(ve::IVec3 c) const {
 	if (!chunks_) return -1;
 	const int slot = chunks_->slot_of(c);
-	return slot >= 0 && slot < static_cast<int>(build_counts_.size()) ? build_counts_[slot] : -1;
+	return slot >= 0 && slot < static_cast<int>(build_counts_.size())
+			? build_counts_[static_cast<size_t>(slot)]
+			: -1;
 }
 
 int ColliderStreamer::chunk_state(ve::IVec3 c) const {
@@ -127,36 +143,64 @@ int ColliderStreamer::last_submit_op_count(ve::IVec3 c) const {
 			: -1;
 }
 
-ColliderStreamer::BuildOutcome ColliderStreamer::build_shape(int slot, const MeshResult &r) {
+void ColliderStreamer::free_slot_resources(int slot) {
+	if (slot < 0 || slot >= static_cast<int>(build_counts_.size())) return;
 	PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
-	if (!ps || slot < 0 || slot >= static_cast<int>(bodies_.size())) return kFailed;
-	build_counts_[static_cast<size_t>(slot)]++;
-	const Clock::time_point t_faces = Clock::now();
-	const int verts = static_cast<int>(r.positions.size() / 3);
+	if (!ps) return;
+	for (int octant = 0; octant < ve::kColliderOctants; octant++) {
+		const int index = sub_index(slot, octant);
+		if (bodies_[index].is_valid()) {
+			ps->body_set_space(bodies_[index], RID());
+			ps->free_rid(bodies_[index]);
+			bodies_[index] = RID();
+		}
+		if (shapes_[index].is_valid()) {
+			ps->free_rid(shapes_[index]);
+			shapes_[index] = RID();
+		}
+		in_space_[index] = 0;
+	}
+}
 
-	// ConcavePolygonShape3D takes a de-indexed triangle soup; Godot's own resource sends
-	// exactly this dictionary (scene/resources/3d/concave_polygon_shape_3d.cpp).
+void ColliderStreamer::discard_pending(PendingBuild &pending) {
+	PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
+	if (!ps) return;
+	for (RID &shape : pending.staged_shapes) {
+		if (shape.is_valid()) ps->free_rid(shape);
+		shape = RID();
+	}
+}
+
+ColliderStreamer::BuildOutcome ColliderStreamer::build_octant(PendingBuild &pending, int octant) {
+	PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
+	if (!ps || octant < 0 || octant >= ve::kColliderOctants) return kFailed;
+	const std::vector<uint32_t> &bin = pending.bins[static_cast<size_t>(octant)];
+	if (bin.empty()) return kEmpty;
+
+	const Clock::time_point t_faces = Clock::now();
+	const int verts = static_cast<int>(pending.result.positions.size() / 3);
 	PackedVector3Array faces;
-	faces.resize(static_cast<int64_t>(r.indices.size()));
+	faces.resize(static_cast<int64_t>(bin.size()));
 	Vector3 *fw = faces.ptrw();
 	int n = 0;
-	for (size_t t = 0; t + 2 < r.indices.size(); t += 3) {
+	for (size_t t = 0; t + 2 < bin.size(); t += 3) {
 		Vector3 v[3];
 		bool ok = true;
 		for (int k = 0; k < 3; k++) {
-			const uint32_t vi = r.indices[t + k];
-			if (static_cast<int>(vi) >= verts) { ok = false; break; }
-			v[k] = Vector3(r.positions[vi * 3], r.positions[vi * 3 + 1], r.positions[vi * 3 + 2]);
+			const uint32_t vi = bin[t + k];
+			if (static_cast<int>(vi) >= verts) {
+				ok = false;
+				break;
+			}
+			v[k] = Vector3(pending.result.positions[vi * 3],
+					pending.result.positions[vi * 3 + 1], pending.result.positions[vi * 3 + 2]);
 		}
 		if (!ok) continue;
-		// Two dual vertices can coincide to float precision on a flat run of cells. Jolt
-		// warns once per degenerate triangle it is handed, which would drown the log; drop
-		// them here, where it costs one cross product.
+		// Two dual vertices can coincide to float precision on a flat run of cells. Drop the
+		// degenerate triangle before Jolt sees it, as the old one-body path did.
 		if ((v[1] - v[0]).cross(v[2] - v[0]).length_squared() < 1e-12f) continue;
-		// The mesher's right-hand-rule winding (cross product points at air, verified by
-		// debug_mesh_diff) is the opposite of Jolt's front-face convention for one-sided
-		// concave shapes, so swap the last two vertices here. Without the swap a ray from
-		// above misses and a character would fall through the terrain.
+		// The mesher's right-hand-rule winding faces air; Jolt's one-sided concave convention
+		// is opposite, so preserve the established swap exactly in every octant.
 		fw[n++] = v[0];
 		fw[n++] = v[2];
 		fw[n++] = v[1];
@@ -164,69 +208,103 @@ ColliderStreamer::BuildOutcome ColliderStreamer::build_shape(int slot, const Mes
 	faces.resize(n);
 	last_faces_ms_ += ms_since(t_faces);
 	last_tris_ += n / 3;
+	max_build_tris_ = std::max(max_build_tris_, n / 3);
 	if (n < 3) return kEmpty;
 
 	Dictionary data;
 	data["faces"] = faces;
-	// Left false deliberately: the mesher's winding always faces the air, so one-sided
-	// collision is correct everywhere, including inside a carved cave. Jolt also does not
-	// implement the two-sided case.
 	data["backface_collision"] = false;
-
-	if (!shapes_[slot].is_valid()) shapes_[slot] = ps->concave_polygon_shape_create();
-	if (!shapes_[slot].is_valid()) return kFailed;
+	const RID shape = ps->concave_polygon_shape_create();
+	if (!shape.is_valid()) return kFailed;
 	const Clock::time_point t_set = Clock::now();
-	ps->shape_set_data(shapes_[slot], data);
+	ps->shape_set_data(shape, data);
 	last_setdata_ms_ += ms_since(t_set);
-
-	const Clock::time_point t_body = Clock::now();
-	if (!bodies_[slot].is_valid()) {
-		bodies_[slot] = ps->body_create();
-		if (!bodies_[slot].is_valid()) return kFailed;
-		ps->body_set_mode(bodies_[slot], PhysicsServer3D::BODY_MODE_STATIC);
-		ps->body_add_shape(bodies_[slot], shapes_[slot]);
-		ps->body_set_collision_layer(bodies_[slot], 1);
-		ps->body_set_collision_mask(bodies_[slot], 1);
-		// Explicit: both backends default a server-created body to ray-pickable, and the
-		// tests' intersect_ray depends on it.
-		ps->body_set_ray_pickable(bodies_[slot], true);
-		// Mesh positions are already world space, so the body never moves.
-		ps->body_set_state(bodies_[slot], PhysicsServer3D::BODY_STATE_TRANSFORM, Transform3D());
-	}
-	ps->body_set_shape_disabled(bodies_[slot], 0, false);
-	if (!in_space_[slot]) {
-		ps->body_set_space(bodies_[slot], space_);
-		in_space_[slot] = 1;
-		active_bodies_++;
-	}
-	last_body_ms_ += ms_since(t_body);
+	pending.staged_shapes[static_cast<size_t>(octant)] = shape;
+	pending.geometry_octants++;
 	return kBuilt;
 }
 
-void ColliderStreamer::release_slot(int slot) {
-	if (slot < 0 || slot >= static_cast<int>(bodies_.size())) return;
+bool ColliderStreamer::commit_pending(PendingBuild &pending) {
 	PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
-	if (!ps || !in_space_[slot]) return;
-	// The body and its shape RID are kept for reuse: walking in and out of the radius would
-	// otherwise churn server allocations every few seconds, and out of the space they cost
-	// Jolt nothing.
-	ps->body_set_space(bodies_[slot], RID());
-	in_space_[slot] = 0;
-	active_bodies_--;
+	if (!ps || !chunks_) return false;
+	const int slot = chunks_->slot_of(pending.result.chunk);
+	if (slot != pending.slot || chunks_->chunk_of_slot(slot) != pending.result.chunk ||
+			chunks_->slot_state_of(pending.result.chunk) != ve::ChunkResidency::kBuilding)
+		return false;
+
+	if (pending.geometry_octants == 0) {
+		const int freed = chunks_->note_empty(pending.result.chunk);
+		release_slot(freed);
+		return true;
+	}
+
+	std::array<RID, ve::kColliderOctants> new_bodies;
+	const Clock::time_point t_body = Clock::now();
+	for (int octant = 0; octant < ve::kColliderOctants; octant++) {
+		const RID shape = pending.staged_shapes[static_cast<size_t>(octant)];
+		if (!shape.is_valid()) continue;
+		RID body = ps->body_create();
+		if (!body.is_valid()) {
+			for (RID &created : new_bodies) {
+				if (created.is_valid()) ps->free_rid(created);
+				created = RID();
+			}
+			return false;
+		}
+		ps->body_set_mode(body, PhysicsServer3D::BODY_MODE_STATIC);
+		ps->body_add_shape(body, shape);
+		ps->body_set_collision_layer(body, 1);
+		ps->body_set_collision_mask(body, 1);
+		ps->body_set_ray_pickable(body, true);
+		ps->body_set_state(body, PhysicsServer3D::BODY_STATE_TRANSFORM, Transform3D());
+		new_bodies[static_cast<size_t>(octant)] = body;
+	}
+	last_body_ms_ += ms_since(t_body);
+
+	bool was_active = false;
+	for (int octant = 0; octant < ve::kColliderOctants; octant++)
+		if (in_space_[sub_index(slot, octant)]) was_active = true;
+	free_slot_resources(slot);
+	for (int octant = 0; octant < ve::kColliderOctants; octant++) {
+		const int index = sub_index(slot, octant);
+		bodies_[index] = new_bodies[static_cast<size_t>(octant)];
+		shapes_[index] = pending.staged_shapes[static_cast<size_t>(octant)];
+		pending.staged_shapes[static_cast<size_t>(octant)] = RID();
+		if (bodies_[index].is_valid()) {
+			ps->body_set_space(bodies_[index], space_);
+			in_space_[index] = 1;
+		}
+	}
+	if (!was_active) active_bodies_++;
+	chunks_->note_built(pending.result.chunk);
+	return true;
 }
 
-void ColliderStreamer::apply_result(const MeshResult &r) {
-	const int slot = chunks_->slot_of(r.chunk);
-	if (slot < 0) {
-		// Evicted/displaced while the mesh was in flight; there is no slot to attach it to.
-		// Still clear the outstanding-build marker, or the chunk can never be re-streamed.
-		chunks_->note_discarded(r.chunk);
+void ColliderStreamer::release_slot(int slot) {
+	if (slot < 0 || slot >= static_cast<int>(build_counts_.size())) return;
+	bool was_active = false;
+	PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
+	for (int octant = 0; octant < ve::kColliderOctants; octant++) {
+		const int index = sub_index(slot, octant);
+		if (in_space_[index]) {
+			was_active = true;
+			if (ps && bodies_[index].is_valid()) ps->body_set_space(bodies_[index], RID());
+			in_space_[index] = 0;
+		}
+	}
+	if (was_active) active_bodies_--;
+}
+
+void ColliderStreamer::enqueue_result(MeshResult &&r) {
+	const int slot = chunks_ ? chunks_->slot_of(r.chunk) : -1;
+	if (slot < 0 || !chunks_) {
+		if (chunks_) chunks_->note_discarded(r.chunk);
 		return;
 	}
 	if (r.failed) {
 		failures_++;
-		UtilityFunctions::printerr("ColliderStreamer: readback failed for chunk (",
-				r.chunk.x, ", ", r.chunk.y, ", ", r.chunk.z, ")");
+		UtilityFunctions::printerr("ColliderStreamer: readback failed for chunk (", r.chunk.x,
+				", ", r.chunk.y, ", ", r.chunk.z, ")");
 		chunks_->note_failed(r.chunk);
 		return;
 	}
@@ -235,38 +313,20 @@ void ColliderStreamer::apply_result(const MeshResult &r) {
 		UtilityFunctions::push_warning("ColliderStreamer: chunk (", r.chunk.x, ", ", r.chunk.y,
 				", ", r.chunk.z, ") hit a mesher cap; collider built from what fit");
 	}
-	const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
-	const BuildOutcome outcome = build_shape(slot, r);
-	last_build_ms_ =
-			static_cast<float>(Time::get_singleton()->get_ticks_usec() - t0) / 1000.0f;
-	switch (outcome) {
-		case kBuilt:
-			chunks_->note_built(r.chunk);
-			break;
-		case kEmpty:
-			if (r.overflow) {
-				// An overflowed mesh is missing pieces; "fewer than 3 triangles survived" is
-				// not proof the chunk is empty. Caching empty would hide the real surface, so
-				// fail and retry instead.
-				failures_++;
-				UtilityFunctions::printerr("ColliderStreamer: overflowed chunk (", r.chunk.x,
-						", ", r.chunk.y, ", ", r.chunk.z,
-						") left fewer than 3 triangles; treating as failed build");
-				chunks_->note_failed(r.chunk);
-			} else {
-				// The probe is conservative, so a chunk it passed can hold no triangles at all.
-				const int freed = chunks_->note_empty(r.chunk);
-				release_slot(freed);
-			}
-			break;
-		case kFailed:
-			// Spec §6's failure policy: log, keep the previous collider, retry next frame.
-			failures_++;
-			UtilityFunctions::printerr("ColliderStreamer: shape build failed for chunk (",
-					r.chunk.x, ", ", r.chunk.y, ", ", r.chunk.z, ")");
-			chunks_->note_failed(r.chunk);
-			break;
-	}
+
+	PendingBuild pending;
+	pending.slot = slot;
+	pending.result = std::move(r);
+	build_counts_[static_cast<size_t>(slot)]++;
+	max_chunk_tris_ = std::max(max_chunk_tris_,
+			static_cast<int>(pending.result.indices.size() / 3));
+	float origin[3];
+	ve::chunk_world_origin(pending.result.chunk, origin);
+	const float centre[3] = {origin[0] + ve::kChunkSize * 0.5f,
+			origin[1] + ve::kChunkSize * 0.5f, origin[2] + ve::kChunkSize * 0.5f};
+	ve::split_octants(pending.result.positions.data(), pending.result.indices.data(),
+			static_cast<int>(pending.result.indices.size()), centre, pending.bins.data());
+	pending_.push_back(std::move(pending));
 }
 
 int ColliderStreamer::run_frame(float cx, float cy, float cz) {
@@ -282,47 +342,74 @@ int ColliderStreamer::run_frame(float cx, float cy, float cz, const float *extra
 	last_submit_ms_ = 0.0f;
 	int actions = 0;
 
-	// 1. Land whatever the mesher thread has finished. Nothing here waits on the GPU: the
-	//    submit/sync/readback all happen on that thread, and this only drains its outbox.
+	// 1. Land whatever the mesher thread has finished. Nothing here waits on the GPU.
 	{
 		std::vector<MeshResult> collected;
 		mesh_->collect(&collected);
 		for (MeshResult &r : collected) inbox_.push_back(std::move(r));
 	}
 
-	// 2. Turn results into shapes, throttled by TIME rather than by a count. Handing Jolt a
-	//    triangle soup costs ~0.75 us per triangle (measured), and a chunk's triangle count
-	//    swings by 5x with how much surface crosses it — so "two chunks" is 12 ms one frame
-	//    and 60 ms the next, and the count that is safe for the worst chunk wastes most of
-	//    the budget on the best one. The budget is checked BEFORE each build, and the first
-	//    one always runs: a chunk that cannot fit the budget alone must still make progress,
-	//    or a slow chunk would wedge the queue for ever.
+	// 2. Split and build at most the configured number of octants. A PendingBuild owns fresh
+	// shapes while it is in this queue. The old bodies remain in the space until all eight
+	// octants have succeeded, so an edit cannot replace a live chunk with a half-collider.
 	const Clock::time_point t_apply = Clock::now();
 	last_faces_ms_ = 0.0f;
 	last_setdata_ms_ = 0.0f;
 	last_body_ms_ = 0.0f;
 	last_tris_ = 0;
+	last_build_ms_ = 0.0f;
 	builds_last_frame_ = 0;
-	while (!inbox_.empty() && builds_last_frame_ < max_builds_per_frame_) {
-		// Admit by ESTIMATED cost, not by elapsed time alone. Checking only what has already
-		// been spent lets a 3 ms chunk wave through a 20 ms one behind it, which is how a
-		// frame with a 4 ms budget ends up 23 ms long. The estimate is the measured
-		// per-triangle constant, and the triangle count is already in hand.
-		if (builds_last_frame_ > 0) {
-			const float est = static_cast<float>(inbox_.front().indices.size() / 3) *
-					kShapeBuildMsPerTriangle;
-			if (ms_since(t_apply) + est > build_budget_ms_) break;
+	while (builds_last_frame_ < max_builds_per_frame_) {
+		if (pending_.empty()) {
+			if (inbox_.empty()) break;
+			enqueue_result(std::move(inbox_.front()));
+			inbox_.pop_front();
+			if (pending_.empty()) continue; // failed or stale result
 		}
-		MeshResult r = std::move(inbox_.front());
-		inbox_.pop_front();
-		apply_result(r);
+		PendingBuild &pending = pending_.front();
+		if (chunks_->slot_of(pending.result.chunk) != pending.slot ||
+				chunks_->chunk_of_slot(pending.slot) != pending.result.chunk ||
+				chunks_->slot_state_of(pending.result.chunk) != ve::ChunkResidency::kBuilding) {
+			discard_pending(pending);
+			chunks_->note_discarded(pending.result.chunk);
+			pending_.pop_front();
+			continue;
+		}
+		if (pending.next_octant >= ve::kColliderOctants) {
+			if (!commit_pending(pending)) {
+				failures_++;
+				chunks_->note_failed(pending.result.chunk);
+				discard_pending(pending);
+			}
+			pending_.pop_front();
+			actions++;
+			continue;
+		}
+		const int octant = pending.next_octant++;
+		const std::vector<uint32_t> &bin = pending.bins[static_cast<size_t>(octant)];
+		if (bin.empty()) continue;
+		if (builds_last_frame_ > 0) {
+			const float est = static_cast<float>(bin.size() / 3) * kShapeBuildMsPerTriangle;
+			if (ms_since(t_apply) + est > build_budget_ms_) {
+				pending.next_octant--;
+				break;
+			}
+		}
+		const Clock::time_point t_build = Clock::now();
+		const BuildOutcome outcome = build_octant(pending, octant);
+		last_build_ms_ += ms_since(t_build);
 		builds_last_frame_++;
 		actions++;
+		if (outcome == kFailed) {
+			failures_++;
+			chunks_->note_failed(pending.result.chunk);
+			discard_pending(pending);
+			pending_.pop_front();
+		}
 	}
 	last_apply_ms_ = ms_since(t_apply);
 
-	// 3. Plan. No new work while a batch is in flight or results are still queued — the
-	//    mesher holds one batch at a time, and a chunk planned now would only be dropped.
+	// 3. Plan. No new work while a batch or staged replacement is in flight.
 	std::vector<float> centers;
 	std::vector<float> radii;
 	const int bubbles = std::max(0, extra_count);
@@ -331,10 +418,6 @@ int ColliderStreamer::run_frame(float cx, float cy, float cz, const float *extra
 	centers.push_back(cx);
 	centers.push_back(cy);
 	centers.push_back(cz);
-	// The player's ball is the configured radius; a body's is a SMALL bubble (see
-	// set_body_bubble_radius_m). Passing nullptr here — which is what this call used to do —
-	// gives every island body the player's full ball, and the plan cost then grows with the
-	// square of the live body count.
 	radii.push_back(chunks_->config().radius_m);
 	if (extra_centers && bubbles > 0) {
 		centers.insert(centers.end(), extra_centers, extra_centers + bubbles * 3);
@@ -344,7 +427,7 @@ int ColliderStreamer::run_frame(float cx, float cy, float cz, const float *extra
 	probe.gen = &gen_;
 	probe.log = edit_log_;
 	probe.mu = edit_mutex_;
-	const int build_cap = (mesh_->busy() || !inbox_.empty()) ? 0 : -1;
+	const int build_cap = (mesh_->busy() || !inbox_.empty() || !pending_.empty()) ? 0 : -1;
 	const Clock::time_point t_plan = Clock::now();
 	const ve::ChunkPlan plan = chunks_->update(centers.data(), radii.data(),
 			static_cast<int>(centers.size() / 3), probe, build_cap);
@@ -354,9 +437,8 @@ int ColliderStreamer::run_frame(float cx, float cy, float cz, const float *extra
 		actions++;
 	}
 
-	// 4. Mesh. Each chunk lies inside exactly one region, so one op list reconstructs it.
-	//    Each request OWNS its op list: the mesher thread reads it after this function has
-	//    returned, so it may not point into anything on this stack or into the edit log.
+	// 4. Mesh. Each request owns its copied op list and can only land after the staged queue
+	// has drained, keeping one replacement transaction per chunk in flight.
 	const Clock::time_point t_submit = Clock::now();
 	if (!plan.builds.empty()) {
 		std::vector<MeshRequest> requests;
