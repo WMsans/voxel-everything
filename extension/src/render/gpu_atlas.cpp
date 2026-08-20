@@ -136,7 +136,8 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 			static_cast<uint32_t>(cfg.max_region_slots) * ve::kOccupancyBlockBytes,
 			zeroed(static_cast<int64_t>(cfg.max_region_slots) * ve::kOccupancyBlockBytes));
 
-	if (!volumes_.initialize(rd, ve::kMaxVolumes, ve::kIslandDim)) {
+	if (!volumes_.initialize(rd, ve::kMaxVolumes, ve::kIslandDim) ||
+			!overrides_.initialize(rd, OverridePool::kDefaultCapacity, cfg_.max_region_slots)) {
 		teardown();
 		return false;
 	}
@@ -145,7 +146,8 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 			brick_flags_.is_valid() && region_map_.is_valid() && region_tables_.is_valid() && free_list_.is_valid() &&
 			counters_.is_valid() && frame_.is_valid() && dispatch_args_.is_valid() &&
 			jobs_.is_valid() && op_pool_.is_valid() && op_counts_.is_valid() &&
-			region_slot_counts_.is_valid() && region_occupancy_.is_valid() && volumes_.is_valid();
+			region_slot_counts_.is_valid() && region_occupancy_.is_valid() && volumes_.is_valid() &&
+			overrides_.is_valid();
 	for (int l = 0; l < ve::kMipLevels; l++) ok = ok && mips_[l].is_valid();
 	if (!ok) {
 		// Most likely cause: the driver refuses STORAGE usage on R8_UNORM / R8G8_UINT
@@ -160,6 +162,7 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 
 void GpuAtlas::teardown() {
 	volumes_.teardown();
+	overrides_.teardown();
 	if (!rd_) return;
 	free_if_valid(rd_, sdf_atlas_);
 	free_if_valid(rd_, mat_atlas_);
@@ -246,6 +249,14 @@ void GpuAtlas::set_region_map_entry(RenderingDevice *rd, int region_index, int r
 	b.resize(4);
 	*reinterpret_cast<int32_t *>(b.ptrw()) = region_slot;
 	rd->buffer_update(region_map_, static_cast<uint32_t>(region_index) * 4, 4, b);
+}
+
+void GpuAtlas::set_override_table(RenderingDevice *rd, int region_slot, int table,
+		const std::vector<std::pair<int, int>> &entries) {
+	if (!overrides_.is_valid()) return;
+	overrides_.set_region_table(rd, region_slot, table);
+	for (const auto &entry : entries)
+		overrides_.set_table_entry(rd, table, entry.first, entry.second);
 }
 
 void GpuAtlas::clear_region_map(RenderingDevice *rd) {

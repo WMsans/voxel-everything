@@ -4,9 +4,14 @@
 #define FIELD_OP_POOL_BINDING 2
 #define FIELD_VOLUME_SDF_BINDING 3
 #define FIELD_VOLUME_MAT_BINDING 4
+#define FIELD_OVERRIDE_SDF_BINDING 5
+#define FIELD_OVERRIDE_MAT_BINDING 6
+#define FIELD_OVERRIDE_TABLE_BINDING 7
+#define FIELD_OVERRIDE_REGION_BINDING 8
 #include "common.glslh"
-#include "field.glslh"
 #include "lod_common.glslh"
+#define FIELD_OVERRIDE_TABLE(base) (lpc.override_data.x)
+#include "field.glslh"
 
 // One thread per HALF-CELL sample. Spec section 4: the target lattice is built from samples
 // at half the level's cell size and tent-reduced, which is the mip cascade computed inside

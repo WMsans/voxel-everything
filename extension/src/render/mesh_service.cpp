@@ -29,6 +29,7 @@ bool MeshService::start(const MeshPassConfig &cfg) {
 		fail_extract_submit_.store(false, std::memory_order_release);
 		lod_busy_.store(false, std::memory_order_release);
 		lod_available_.store(false, std::memory_order_release);
+		consolidate_busy_.store(false, std::memory_order_release);
 	}
 	thread_ = std::thread([this] { run(); });
 	std::unique_lock<std::mutex> lock(mu_);
@@ -56,6 +57,8 @@ void MeshService::stop() {
 	extract_results_.clear();
 	pending_lod_.clear();
 	lod_results_.clear();
+	pending_consolidations_.clear();
+	consolidate_results_.clear();
 	pending_volumes_.clear();
 #ifdef DEBUG_ENABLED
 	submitted_volume_slots_.clear();
@@ -68,6 +71,7 @@ void MeshService::stop() {
 	fail_extract_submit_.store(false, std::memory_order_release);
 	lod_busy_.store(false, std::memory_order_release);
 	lod_available_.store(false, std::memory_order_release);
+	consolidate_busy_.store(false, std::memory_order_release);
 }
 
 bool MeshService::submit(std::vector<MeshRequest> requests) {
@@ -137,6 +141,44 @@ bool MeshService::submit_lod(std::vector<LodBuildJob> jobs) {
 	return true;
 }
 
+bool MeshService::submit_consolidations(std::vector<ConsolidateJob> jobs) {
+	if (jobs.empty() || !is_valid()) return false;
+	{
+		std::lock_guard<std::mutex> lock(mu_);
+		if (stopping_ || !pending_consolidations_.empty() ||
+				consolidate_busy_.load(std::memory_order_acquire)) return false;
+		pending_consolidations_ = std::move(jobs);
+		consolidate_busy_.store(true, std::memory_order_release);
+	}
+	cv_.notify_one();
+	return true;
+}
+
+bool MeshService::publish_override(int slot, const ve::OverrideBrick &brick, ve::IVec3 region,
+		int region_slot, int table, const std::vector<std::pair<int, int>> &entries) {
+	return run_sync([&](MeshPass &pass) {
+		pass.upload_override(slot, brick);
+		pass.set_override_table(region_slot, table, entries);
+		override_tables_[std::tuple<int, int, int>{region.x, region.y, region.z}] = table;
+		if (lod_) {
+			lod_->upload_override(slot, brick);
+			lod_->set_override_table(region_slot, table, entries);
+		}
+	});
+}
+
+int MeshService::collect_consolidations(std::vector<ConsolidateResult> *out) {
+	std::vector<ConsolidateResult> got;
+	{
+		std::lock_guard<std::mutex> lock(mu_);
+		got.swap(consolidate_results_);
+	}
+	const int n = static_cast<int>(got.size());
+	if (out)
+		for (ConsolidateResult &r : got) out->push_back(std::move(r));
+	return n;
+}
+
 int MeshService::collect_lod(std::vector<LodBuildResult> *out) {
 	std::vector<LodBuildResult> got;
 	{
@@ -189,8 +231,9 @@ bool MeshService::run_sync(const std::function<void(MeshPass &)> &fn) {
 	done_cv_.wait(lock, [this] {
 		return stopping_ || (!sync_pending_ && !busy_.load(std::memory_order_acquire) &&
 				!extract_busy_.load(std::memory_order_acquire) &&
-				!lod_busy_.load(std::memory_order_acquire) && pending_extract_.empty() &&
-				pending_lod_.empty() && pending_volumes_.empty());
+				!lod_busy_.load(std::memory_order_acquire) &&
+				!consolidate_busy_.load(std::memory_order_acquire) && pending_extract_.empty() &&
+				pending_lod_.empty() && pending_consolidations_.empty() && pending_volumes_.empty());
 	});
 	if (stopping_) return false;
 	sync_fn_ = &fn;
@@ -214,16 +257,16 @@ void MeshService::run() {
 	if (!rd) UtilityFunctions::printerr("MeshService: no local RenderingDevice for the mesher");
 	if (rd && ok) {
 		extract_ = new IslandExtractPass();
+		extract_->set_override_pool(&pass.overrides());
 		if (extract_->initialize(rd, &pass.volumes())) {
 			extract_available_.store(true, std::memory_order_release);
 		} else {
 			UtilityFunctions::printerr("MeshService: island extraction unavailable");
 			delete extract_;
 			extract_ = nullptr;
-			// Not fatal: collision meshing still works, and IslandManager drops connectivity
-			// work it knows can never make progress.
 		}
 		lod_ = new LodBuildPass();
+		lod_->set_override_pool(&pass.overrides());
 		LodBuildConfig lod_cfg;
 		lod_cfg.max_jobs = kLodMaxJobsPerBatch;
 		if (lod_->initialize(rd, lod_cfg)) {
@@ -232,8 +275,12 @@ void MeshService::run() {
 			UtilityFunctions::printerr("MeshService: LoD builds unavailable");
 			delete lod_;
 			lod_ = nullptr;
-			// Not fatal: collision meshing still works, and the far-field LoD chain simply
-			// cannot submit work.
+		}
+		consolidate_ = new ConsolidatePass();
+		if (!consolidate_->initialize(rd, &pass.overrides())) {
+			UtilityFunctions::printerr("MeshService: consolidation unavailable");
+			delete consolidate_;
+			consolidate_ = nullptr;
 		}
 	}
 	{
@@ -253,12 +300,14 @@ void MeshService::run() {
 		std::vector<IslandExtractJob> extracts;
 		std::vector<MeshRequest> batch;
 		std::vector<LodBuildJob> lod_jobs;
+		std::vector<ConsolidateJob> consolidate_jobs;
 		const std::function<void(MeshPass &)> *sync_fn = nullptr;
 		{
 			std::unique_lock<std::mutex> lock(mu_);
 			cv_.wait(lock, [this] {
 				return stopping_ || sync_pending_ || !pending_volumes_.empty() ||
-						!pending_extract_.empty() || !pending_.empty() || !pending_lod_.empty();
+						!pending_extract_.empty() || !pending_.empty() || !pending_lod_.empty() ||
+						!pending_consolidations_.empty();
 			});
 			if (stopping_) break;
 			if (sync_pending_) {
@@ -271,6 +320,8 @@ void MeshService::run() {
 				batch.swap(pending_);
 			} else if (!pending_lod_.empty()) {
 				lod_jobs.swap(pending_lod_);
+			} else if (!pending_consolidations_.empty()) {
+				consolidate_jobs.swap(pending_consolidations_);
 			}
 		}
 
@@ -295,6 +346,22 @@ void MeshService::run() {
 							vu.slot);
 			}
 			// run_sync waits on pending_volumes_ going empty as well as on its own turn.
+			done_cv_.notify_all();
+			continue;
+		}
+
+		if (!consolidate_jobs.empty()) {
+			std::vector<ConsolidateResult> consolidate_out;
+			for (const ConsolidateJob &job : consolidate_jobs) {
+				ConsolidateResult r;
+				if (!consolidate_ || !consolidate_->run(job, &r)) r.failed = true;
+				consolidate_out.push_back(std::move(r));
+			}
+			{
+				std::lock_guard<std::mutex> lock(mu_);
+				for (ConsolidateResult &r : consolidate_out) consolidate_results_.push_back(std::move(r));
+				consolidate_busy_.store(false, std::memory_order_release);
+			}
 			done_cv_.notify_all();
 			continue;
 		}
@@ -348,8 +415,11 @@ void MeshService::run() {
 			job.ops = r.ops.data();
 			job.op_count = static_cast<int>(r.ops.size());
 			ve::chunk_world_origin(r.chunk, job.origin);
+			const ve::IVec3 rr = ve::region_of_chunk(r.chunk);
 			job.cell_size = ve::kChunkCellSize;
 			job.lattice = ve::kChunkLattice;
+			auto table_it = override_tables_.find(std::tuple<int, int, int>{rr.x, rr.y, rr.z});
+			job.override_table = table_it == override_tables_.end() ? -1 : table_it->second;
 			jobs.push_back(job);
 		}
 
@@ -376,6 +446,14 @@ void MeshService::run() {
 		done_cv_.notify_all();
 
 		if (!lod_jobs.empty()) {
+			for (LodBuildJob &job : lod_jobs) {
+				float origin[3];
+				ve::lod_chunk_origin(job.level, job.coord, origin);
+				const ve::IVec3 rr = ve::WorldBounds::region_of_point(origin[0], origin[1], origin[2]);
+				auto table_it = override_tables_.find(std::tuple<int, int, int>{rr.x, rr.y, rr.z});
+				if (job.override_table < 0 && table_it != override_tables_.end())
+					job.override_table = table_it->second;
+			}
 			std::vector<LodBuildResult> lod_out;
 			if (lod_ && lod_->submit(lod_jobs.data(), static_cast<int>(lod_jobs.size()))) {
 				lod_->collect(&lod_out);
@@ -407,6 +485,10 @@ void MeshService::run() {
 	if (lod_) {
 		delete lod_;
 		lod_ = nullptr;
+	}
+	if (consolidate_) {
+		delete consolidate_;
+		consolidate_ = nullptr;
 	}
 	pass.teardown();
 	memdelete(rd);

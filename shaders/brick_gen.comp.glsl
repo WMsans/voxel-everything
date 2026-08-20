@@ -4,7 +4,12 @@
 #define FIELD_OP_POOL_BINDING 7
 #define FIELD_VOLUME_SDF_BINDING 8
 #define FIELD_VOLUME_MAT_BINDING 9
+#define FIELD_OVERRIDE_SDF_BINDING 11
+#define FIELD_OVERRIDE_MAT_BINDING 12
+#define FIELD_OVERRIDE_TABLE_BINDING 13
+#define FIELD_OVERRIDE_REGION_BINDING 14
 #include "common.glslh"
+#define FIELD_OVERRIDE_TABLE(base) (field_override_region_map.table[int((base) / MAX_REGION_OPS)])
 // The region's ops that can reach THIS brick, in append order, as pool-relative indices.
 // The filter is compacted serially after the parallel keep test so CSG order is preserved.
 shared uint s_ops[256];
