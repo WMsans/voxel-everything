@@ -154,17 +154,33 @@ bool MeshService::submit_consolidations(std::vector<ConsolidateJob> jobs) {
 	return true;
 }
 
+bool MeshService::publish_overrides(const std::vector<int> &slots,
+		const std::vector<ve::OverrideBrick> &bricks, ve::IVec3 region, int region_slot,
+		int table, const std::vector<std::pair<int, int>> &entries) {
+	if (slots.size() != bricks.size() || slots.empty() || region_slot < 0 || table < 0) return false;
+	bool uploaded = true;
+	const bool ran = run_sync([&](MeshPass &pass) {
+		for (size_t i = 0; i < slots.size(); i++) {
+			if (!pass.upload_override(slots[i], bricks[i]) ||
+					(lod_ && !lod_->upload_override(slots[i], bricks[i]))) {
+				uploaded = false;
+				return;
+			}
+		}
+		// Do not expose a table until the complete replacement is present on every worker
+		// consumer. A later retry may overwrite the uploaded bytes, but cannot observe a
+		// half-published region.
+		pass.set_override_table(region_slot, table, entries);
+		if (lod_) lod_->set_override_table(region_slot, table, entries);
+		override_tables_[std::tuple<int, int, int>{region.x, region.y, region.z}] = table;
+	});
+	return ran && uploaded;
+}
+
 bool MeshService::publish_override(int slot, const ve::OverrideBrick &brick, ve::IVec3 region,
 		int region_slot, int table, const std::vector<std::pair<int, int>> &entries) {
-	return run_sync([&](MeshPass &pass) {
-		pass.upload_override(slot, brick);
-		pass.set_override_table(region_slot, table, entries);
-		override_tables_[std::tuple<int, int, int>{region.x, region.y, region.z}] = table;
-		if (lod_) {
-			lod_->upload_override(slot, brick);
-			lod_->set_override_table(region_slot, table, entries);
-		}
-	});
+	return publish_overrides(std::vector<int>{slot}, std::vector<ve::OverrideBrick>{brick}, region,
+			region_slot, table, entries);
 }
 
 int MeshService::collect_consolidations(std::vector<ConsolidateResult> *out) {

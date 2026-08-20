@@ -16,9 +16,9 @@ layout(push_constant, std430) uniform Push {
 layout(local_size_x = 256) in;
 
 // A re-consolidation bakes previous override plus the ops since it, not G plus ops. The
-// CPU publishes the new table only after every brick has been read back intact.
-layout(set = 0, binding = 0, std430) readonly buffer ExistingSdf { uint w[]; } existing_sdf;
-layout(set = 0, binding = 1, std430) readonly buffer ExistingMat { uint w[]; } existing_mat;
+// CPU publishes the new table only after every brick has been read back intact. Bindings 0
+// and 1 are the existing override pool declared by field.glslh; bindings 3 and 4 are private
+// staging buffers and must never alias a published slot.
 // binding 8 is the consolidation op pool, declared by field.glslh
 layout(set = 0, binding = 3, std430) buffer BakedSdf { uint w[]; } baked_sdf;
 layout(set = 0, binding = 4, std430) buffer BakedMat { uint w[]; } baked_mat;

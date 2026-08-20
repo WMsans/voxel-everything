@@ -26,7 +26,9 @@ struct ConsolidateResult {
 class ConsolidatePass {
 public:
 	~ConsolidatePass();
-	bool initialize(RenderingDevice *rd, OverridePool *pool, int max_bricks = 32768);
+	// max_bricks is bounded by the override pool and controls only the transient staging
+	// buffers; staged output never aliases a published override slot.
+	bool initialize(RenderingDevice *rd, OverridePool *pool, int max_bricks = 0);
 	void teardown();
 	bool is_valid() const { return pipeline_.is_valid(); }
 	bool run(const ConsolidateJob &job, ConsolidateResult *out);
@@ -36,6 +38,7 @@ private:
 	OverridePool *pool_ = nullptr;
 	int max_bricks_ = 0;
 	RID shader_, pipeline_, uset_, ops_, jobs_;
+	RID staging_sdf_, staging_mat_;
 };
 
 } // namespace godot

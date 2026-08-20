@@ -2818,17 +2818,23 @@ bool VoxelWorld::debug_consolidate_region(Vector3i region) {
 	}
 	std::vector<std::pair<int, int>> entries;
 	entries.reserve(bricks.size());
-	for (size_t i = 0; i < bricks.size(); i++) {
-		*overrides_->data(slots[i]) = results[0].baked[i];
+	for (size_t i = 0; i < bricks.size(); i++)
 		entries.emplace_back(ve::WorldBounds::brick_index_in_region(bricks[i]), slots[i]);
+
+	// Publish the complete worker-side replacement before mutating the CPU store or the
+	// render atlas. If the worker cannot accept it, release only newly acquired slots and
+	// leave the edit log and every previously published consumer untouched.
+	if (!mesh_->publish_overrides(slots, results[0].baked, r, job.region_slot, table, entries)) {
+		for (const ve::IVec3 acquired : newly_acquired) overrides_->release(acquired);
+		return false;
 	}
-	for (size_t i = 0; i < bricks.size(); i++) {
-		if (atlas_) atlas_->overrides().upload(slots[i], results[0].baked[i]);
+	if (atlas_) {
+		for (size_t i = 0; i < slots.size(); i++)
+			atlas_->overrides().upload(slots[i], results[0].baked[i]);
+		atlas_->set_override_table(rd(), job.region_slot, table, entries);
 	}
-	if (atlas_) atlas_->set_override_table(rd(), job.region_slot, table, entries);
-	if (!mesh_->publish_override(slots[0], results[0].baked[0], r, job.region_slot, table, entries)) return false;
-	for (size_t i = 1; i < slots.size(); i++)
-		mesh_->publish_override(slots[i], results[0].baked[i], r, job.region_slot, table, entries);
+	for (size_t i = 0; i < slots.size(); i++)
+		*overrides_->data(slots[i]) = results[0].baked[i];
 	{
 		std::lock_guard<std::mutex> lock(edit_mutex_);
 		edit_log_->clear_region(r);

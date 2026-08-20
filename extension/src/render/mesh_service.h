@@ -78,6 +78,11 @@ public:
 
 	bool submit_consolidations(std::vector<ConsolidateJob> jobs);
 	int collect_consolidations(std::vector<ConsolidateResult> *out);
+	// Publishes all bricks for a region in one worker-thread transaction. The table is
+	// repointed only after every upload succeeds, so a partial bake remains invisible.
+	bool publish_overrides(const std::vector<int> &slots,
+			const std::vector<ve::OverrideBrick> &bricks, ve::IVec3 region, int region_slot,
+			int table, const std::vector<std::pair<int, int>> &entries);
 	bool publish_override(int slot, const ve::OverrideBrick &brick, ve::IVec3 region,
 			int region_slot, int table, const std::vector<std::pair<int, int>> &entries);
 	// True when the worker has a live LodBuildPass.
