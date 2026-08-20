@@ -19,6 +19,13 @@ void brick_world_origin(IVec3 b, float out[3]) {
 	out[2] = static_cast<float>(b.z) * kBrickSize;
 }
 
+void brick_world_aabb(IVec3 b, float lo[3], float hi[3]) {
+	brick_world_origin(b, lo);
+	hi[0] = lo[0] + kBrickSize;
+	hi[1] = lo[1] + kBrickSize;
+	hi[2] = lo[2] + kBrickSize;
+}
+
 IVec3 WorldBounds::size_bricks() const {
 	return {size_regions.x * kRegionBricks, size_regions.y * kRegionBricks,
 			size_regions.z * kRegionBricks};

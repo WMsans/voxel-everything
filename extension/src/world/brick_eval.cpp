@@ -1,4 +1,5 @@
 #include "world/brick_eval.h"
+#include "world/override_store.h"
 #include "world/palette.h"
 #include <algorithm>
 #include <cmath>
@@ -38,7 +39,8 @@ std::vector<EditOp> ops_for_brick(const EditOp *ops, int op_count, IVec3 brick) 
 // palette slot 0, which palette_occupancy_order() guarantees is the brick's dominant
 // material. No flood fill is needed, and the GPU can run this pass thread-per-cell.
 void spread_materials(uint16_t *mat, const Brick &b, const Generator &gen,
-		const EditOp *ops, int op_count, const float bo[3], const VolumeStore *volumes) {
+		const EditOp *ops, int op_count, const float bo[3], const VolumeStore *volumes,
+		const OverrideSource *overrides) {
 	auto lat = [&b](int x, int y, int z) { return decode_sdf(b.sdf[sdf_index(x, y, z)]); };
 	// Central difference along one axis, divided by the span actually sampled. On a brick's
 	// outer planes the lattice has no neighbour on one side, so the difference is one-sided
@@ -76,7 +78,7 @@ void spread_materials(uint16_t *mat, const Brick &b, const Generator &gen,
 					mat[i] = eval_field(gen, ops, op_count,
 							bo[0] + x * kVoxelSize - gx / len * t,
 							bo[1] + y * kVoxelSize - gy / len * t,
-							bo[2] + z * kVoxelSize - gz / len * t, volumes).material;
+							bo[2] + z * kVoxelSize - gz / len * t, volumes, overrides).material;
 				}
 			}
 }
@@ -88,7 +90,7 @@ namespace {
 // The 3^3 activation probe, reduced. Both brick_has_surface and cell_state_field read it,
 // and shaders/brick_mark.comp.glsl computes exactly this once per brick and uses it twice.
 void brick_probe(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,
-		const VolumeStore *volumes, float *mn, float *mx) {
+		const VolumeStore *volumes, const OverrideSource *overrides, float *mn, float *mx) {
 	const std::vector<EditOp> kept = ops_for_brick(ops, op_count, brick);
 	const EditOp *filtered = kept.data();
 	const int filtered_count = static_cast<int>(kept.size());
@@ -102,7 +104,7 @@ void brick_probe(const Generator &gen, const EditOp *ops, int op_count, IVec3 br
 				const float d = eval_field(gen, filtered, filtered_count,
 						bo[0] + sx * (kBrickVoxels / 2) * kVoxelSize,
 						bo[1] + sy * (kBrickVoxels / 2) * kVoxelSize,
-						bo[2] + sz * (kBrickVoxels / 2) * kVoxelSize, volumes).sdf;
+						bo[2] + sz * (kBrickVoxels / 2) * kVoxelSize, volumes, overrides).sdf;
 				*mn = std::min(*mn, d);
 				*mx = std::max(*mx, d);
 			}
@@ -111,27 +113,29 @@ void brick_probe(const Generator &gen, const EditOp *ops, int op_count, IVec3 br
 } // namespace
 
 Sample eval_field(const Generator &gen, const EditOp *ops, int op_count,
-		float x, float y, float z, const VolumeStore *volumes) {
-	return apply_ops(gen.sample(x, y, z), ops, op_count, x, y, z, volumes);
+		float x, float y, float z, const VolumeStore *volumes, const OverrideSource *overrides) {
+	Sample s{};
+	if (!overrides || !overrides->sample(x, y, z, &s)) s = gen.sample(x, y, z);
+	return apply_ops(s, ops, op_count, x, y, z, volumes);
 }
 
 bool brick_has_surface(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,
-		const VolumeStore *volumes) {
+		const VolumeStore *volumes, const OverrideSource *overrides) {
 	float mn = 0.0f, mx = 0.0f;
-	brick_probe(gen, ops, op_count, brick, volumes, &mn, &mx);
+	brick_probe(gen, ops, op_count, brick, volumes, overrides, &mn, &mx);
 	return mn < kActivationPad && mx > -kActivationPad;
 }
 
 CellState cell_state_field(const Generator &gen, const EditOp *ops, int op_count, IVec3 cell,
-		const VolumeStore *volumes) {
+		const VolumeStore *volumes, const OverrideSource *overrides) {
 	float mn = 0.0f, mx = 0.0f;
-	brick_probe(gen, ops, op_count, cell, volumes, &mn, &mx);
+	brick_probe(gen, ops, op_count, cell, volumes, overrides, &mn, &mx);
 	if (mn > 0.0f) return kCellAir;
 	return mx <= 0.0f ? kCellFull : kCellSolid;
 }
 
 void eval_brick(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,
-		BrickEval *out, const VolumeStore *volumes) {
+		BrickEval *out, const VolumeStore *volumes, const OverrideSource *overrides) {
 	*out = BrickEval{};
 	Brick &b = out->brick;
 	float bo[3];
@@ -161,7 +165,7 @@ void eval_brick(const Generator &gen, const EditOp *ops, int op_count, IVec3 bri
 				if (!apron || mat[ci] == 0) mat[ci] = s.material; // a cell's own sample wins
 			}
 
-	spread_materials(mat, b, gen, filtered, filtered_count, bo, volumes);
+	spread_materials(mat, b, gen, filtered, filtered_count, bo, volumes, overrides);
 
 	uint16_t pal[kBrickPaletteSize] = {};
 	int counts[kBrickPaletteSize] = {};

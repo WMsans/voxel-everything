@@ -31,6 +31,7 @@ public:
 	// Parallel to ops(): the global append sequence number of every op in that region list.
 	const std::vector<uint64_t> &seqs(IVec3 region) const;
 	int op_count(IVec3 region) const { return static_cast<int>(ops(region).size()); }
+	void clear_region(IVec3 region);
 	int region_count() const { return static_cast<int>(lists_.size()); }
 	const WorldBounds &bounds() const { return bounds_; }
 	void clear() {
