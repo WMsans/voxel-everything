@@ -3547,7 +3547,56 @@ where this plan's text met reality and lost.
    Compared with the prior Task 5 measurement, the edit stream leg is effectively unchanged
    (0.236 / 2.968 versus 0.236 / 2.977), so the pad correction changes correctness coverage,
    not the benchmark conclusion. The edit leg still reported `regions=133 overflow=1`.
-6. _(Task 8, Step 7: consolidation measured delta and overflow verdict — to be filled)_
+6. **Task 8, Step 7: consolidation measured delta and overflow verdict**
+
+   Environment: Godot 4.7.1, Vulkan 1.4.341, NVIDIA GeForce RTX 4070 Laptop GPU, Wayland,
+   requested 2560x1440, requested V-Sync disabled but compositor actual V-Sync enabled;
+   therefore `verdict_qualified=false`. The benchmark processes exited 0. The Task 5 fixed
+   edit baseline was `gpu_stream p50/p99=0.236/2.968 ms`, `gpu_raymarch=11.022/15.934 ms`,
+   `gpu_custom_frame=12.293/19.378 ms`.
+
+   Task 8's five-leg command was:
+
+   ```text
+   WAYLAND_DISPLAY=wayland-1 tools/run_benchmarks.sh m7-task8-final
+   ```
+
+   The edit leg reported:
+
+   ```text
+   BENCH gpu_stream samples=287 p50_ms=0.243 p99_ms=2.998
+   BENCH gpu_raymarch samples=287 p50_ms=11.052 p99_ms=15.944
+   BENCH gpu_custom_frame samples=287 p50_ms=12.342 p99_ms=19.436
+   BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false
+   BENCH regions=133 overflow=1 overrides=0/8192 consolidations=0 refusals=0
+   ```
+
+   The `overflow=1` value is the existing atlas brick-job overflow counter, not an edit-log
+   rejection: the run emitted no `region op list full` diagnostic. This benchmark's moving
+   aim distributes its edits across regions, so no region reached a successful 192-op bake;
+   the Task 8 policy and the zero-overflow path are instead pinned by the focused 300-edit
+   test, which passed with `overflow_ever=0`, `consolidations=2`, and `override_bricks=432`.
+
+   The required 3x edit run was made by temporarily setting `FRAMES` to 900 in
+   `demo/benchmark.gd` and restoring it afterwards:
+
+   ```text
+   BENCH gpu_stream samples=807 p50_ms=0.241 p99_ms=0.974
+   BENCH gpu_raymarch samples=807 p50_ms=14.969 p99_ms=20.259
+   BENCH gpu_custom_frame samples=807 p50_ms=16.663 p99_ms=22.061
+   BENCH budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN
+   BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false
+   BENCH regions=124 overflow=1 overrides=0/8192 consolidations=0 refusals=39
+   ```
+
+   The aggregate 900-frame edit leg does not support the claim that cost stops growing: its
+   distributed edit workload never publishes an override and its GPU p50/p99 are higher
+   than the 300-frame leg. The implementation therefore reports the policy as measured,
+   retains fail-soft refusals, and does not claim a Task 8 benchmark PASS. The focused policy
+   suite and native sequence-tail test are the positive evidence; a future benchmark leg
+   must keep edits in one bounded region and size the plan below the override capacity to
+   measure consolidation itself.
 7. _(Task 9, Step 9: collider octant split measured delta — to be filled)_
 8. _(Task 13, Step 6: first capture, defects observed — to be filled)_
 9. _(Task 14, Step 2: fade-band verdict and the number it rests on — to be filled)_

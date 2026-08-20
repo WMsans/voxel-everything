@@ -12,6 +12,7 @@
 #include <godot_cpp/variant/rid.hpp>
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/vector2.hpp>
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <map>
@@ -28,6 +29,7 @@
 #include "physics/island_manager.h"
 #include "render/island_atlas.h"
 #include "render/gpu_timings.h"
+#include "render/consolidate_pass.h"
 #include "shade/beauty_settings.h"
 #include "world/edit_log.h"
 #include "world/raycast.h"
@@ -97,6 +99,7 @@ class VoxelWorld : public Node3D {
 	Vector3i atlas_bricks_ = Vector3i(64, 32, 32);
 	int max_region_slots_ = 512;
 	int max_brick_jobs_ = 16384;
+	int max_override_bricks_ = 8192;
 	Vector3i world_origin_bricks_ = Vector3i(0, -64, 0);
 	Vector3i world_size_regions_ = Vector3i(64, 8, 64);
 	float residency_radius_m_ = 96.0f;
@@ -156,6 +159,20 @@ class VoxelWorld : public Node3D {
 	std::vector<PendingEdit> pending_edits_;  // appended by tools, drained by the streamer
 	int overflow_seen_ = 0;                   // sticky OR of frame overflow bits (tests)
 
+	// Consolidation is deliberately one-region-at-a-time. The worker owns the bake; the main
+	// thread owns this queue and publishes the completed transaction between frames.
+	std::vector<ve::IVec3> consolidation_queue_;
+	bool consolidation_in_flight_ = false;
+	ConsolidateJob consolidation_job_;
+	int consolidation_table_ = -1;
+	int consolidation_old_table_ = -1;
+	std::vector<std::pair<int, int>> consolidation_old_entries_;
+	std::vector<std::pair<int, int>> consolidation_entries_;
+	std::vector<int> consolidation_old_slots_;
+	std::vector<ve::OverrideBrick> consolidation_old_bricks_;
+	int consolidation_count_ = 0;
+	int consolidation_refusals_ = 0;
+
 	ve::OccupancyGrid occupancy_;              // main thread only
 	std::mutex occupancy_mutex_;               // guards occupancy_inbox_
 	std::vector<OccupancyBlock> occupancy_inbox_;
@@ -165,6 +182,8 @@ class VoxelWorld : public Node3D {
 	// the blast.
 	std::atomic<int64_t> edit_seq_{0};
 	void drain_occupancy();                    // inbox -> grid
+	void pump_consolidation();
+	bool queue_consolidation(ve::IVec3 region);
 	bool render_probe_pixel(Vector3 origin, Vector3 dir);
 
 	// The mesher runs on its own thread and owns its local RenderingDevice there; see
@@ -266,6 +285,8 @@ public:
 	int get_max_region_slots() const { return max_region_slots_; }
 	void set_max_brick_jobs(int v) { max_brick_jobs_ = v; }
 	int get_max_brick_jobs() const { return max_brick_jobs_; }
+	void set_max_override_bricks(int v) { max_override_bricks_ = std::max(v, 0); }
+	int get_max_override_bricks() const { return max_override_bricks_; }
 	void set_world_origin_bricks(Vector3i v) { world_origin_bricks_ = v; }
 	Vector3i get_world_origin_bricks() const { return world_origin_bricks_; }
 	void set_world_size_regions(Vector3i v) { world_size_regions_ = v; }
@@ -542,6 +563,7 @@ public:
 	Dictionary debug_mesh_diff(Vector3i chunk);
 	Dictionary debug_consolidate_diff(Vector3i region);
 	bool debug_consolidate_region(Vector3i region);
+	void debug_pump_consolidation();
 	int debug_region_op_count(Vector3i region);
 	int debug_override_used() const;
 	// Test-only fixture: publish one valid table containing every override slot, exhausting

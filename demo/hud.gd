@@ -17,9 +17,10 @@ func _process(_delta: float) -> void:
 	var s := "world: booting"
 	if _world and _world.is_initialized():
 		var st: Dictionary = _world.debug_stream_stats()
-		s = "regions %d  edits %d  ovf %d" % [
+		s = "regions %d  edits %d  ovf %d  ovr %d/%d  cons %d" % [
 			st.get("resident_regions", 0), st.get("frame_edits", 0),
-			st.get("overflow_ever", 0)]
+			st.get("overflow_ever", 0), st.get("override_bricks", 0),
+			st.get("override_capacity", 0), st.get("consolidations", 0)]
 	var p := ""
 	var isl := ""
 	var lod := ""
