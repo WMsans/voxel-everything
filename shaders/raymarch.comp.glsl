@@ -384,7 +384,10 @@ Hit march_bricks(vec3 ro, vec3 rd, float t_begin, float t_end, inout int steps_l
 	for (int i = 0; i < 1024; i++) {
 		float t_exit = min(side.x, min(side.y, side.z));
 		g_brick_cells++;
-		if (t_exit > segment_length) break;
+		// Compare the brick ENTRY against the segment end. The segment end is itself a brick
+		// face; testing `t_exit > segment_length` can drop that final brick by a float ULP,
+		// leaving isolated holes at the far edge of a region.
+		if (t_prev > segment_length) break;
 
 		int slot = slot_at(map);
 		if (slot >= 0 && brick_may_have_surface(slot)) {
