@@ -294,3 +294,63 @@ Commit: `5c51fa5 fix: propagate exact-edit occupancy through recovery and repair
   overflow/repair re-mark path. A follow-up could replay the original edit AABB (or
   otherwise bound exact-edit mode) for recovery/repair marks, and decide whether plain
   stream-in of a region with a probe-missed edit should also carry exact-edit intent.
+
+## Round 3 fix
+
+Resolved the review finding that overflow recovery and repair-queue re-marks still re-marked whole 32³ regions with exact-edit mode. Recovery/repair now issue a plain full-region force-regen first (to heal ordinary dropped/stale bricks) and, only when the region actually has edit ops, replay the bounded union AABB of those ops with `generate_probe_misses=true`. Regions with no exact-edit AABB use the original plain force-regen (`generate_probe_misses=false`), so no region is ever exact-re-marked across all 32768 bricks.
+
+### Fix
+
+`extension/src/render/world_streamer.cpp`:
+
+- Added `exact_edit_aabb()`: clamps every op's `op_brick_range()` to the region and returns the union AABB.
+- Overflow recovery and repair queue both use:
+  1. full-region plain force-regen (`true, false`) to re-enqueue ordinary surface bricks, then
+  2. bounded exact-edit AABB (`true, true`) to keep probe-missed edit bricks resident/generated.
+- The `else` branch (no exact AABB) now uses plain force-regen only (`true, false`), matching the pre-Round-2 behavior.
+
+`tests/test_repro_thin_sheet.gd`:
+
+- Kept the end-to-end bounded-AABB regression but fixed it to isolate the whole-region exact re-mark bug:
+  - `max_brick_jobs` is now 4096 (above the single resident region's ordinary surface count, below the 32768 whole-region worst case).
+  - 80 overlapping radius-1.5 sphere-add ops stay under the 256-op region log while their per-op padded AABBs overflow the 4096 job list; their union AABB remains far below 4096, so a correct bounded exact re-mark lets the overflow bit clear.
+- The previous `max_brick_jobs=64` variant was discarded: even the full-region PLAIN force-regen overflowed 64 jobs, so the overflow bit could never clear regardless of exact re-mark bounding.
+
+Test approach choice: end-to-end GDScript regression, not a native helper-only test. The fixed test directly exercises the overflow recovery/repair paths and the actual convergence criterion (job-list overflow bit clears), and it passed reliably; a native AABB-union test would not prove the streamer uses the bounded range.
+
+### Verification
+
+```text
+./build.sh -j$(nproc)
+==> Build OK: 4.7M libvoxel_everything.linux.template_debug.x86_64.so
+
+timeout 10s ./gdunit_tests.sh -c -a res://tests/test_repro_thin_sheet.gd
+3 test cases | 0 errors | 0 failures | PASSED
+
+timeout 10s ./gdunit_tests.sh -c -a res://tests/test_occupancy_lattice.gd
+3 test cases | 0 errors | 0 failures | PASSED
+
+timeout 10s ./gdunit_tests.sh -c -a res://tests/test_occupancy.gd
+4 test cases | 0 errors | 0 failures | PASSED
+
+cd extension && scons test
+321 test cases | 321 passed | 0 failed
+
+git diff --check
+# clean
+```
+
+Connectivity took longer than the default guard, so it was run with a 120 s timeout (the full suite finishes in about 1 min 19 s; 60 s was not enough):
+
+```text
+timeout 120s ./gdunit_tests.sh -c -a res://tests/test_connectivity.gd
+33 test cases | 0 errors | 12 failures | 0 flaky | 0 skipped
+```
+
+The 12 connectivity failures are the known pre-existing re-merge/body-pool baseline documented in the earlier report; this diff did not introduce new connectivity failures.
+
+### Concerns
+
+- The bounded exact AABB is the union of every edit op in the region log, not the exact original edit AABB from the frame that overflowed. It is correct and bounded, but if a region accumulates many separate edits over time the union can grow. It is still capped by the region (32³), and no recovery/repair path ever exact-marks a region with zero edit ops.
+- The new regression uses a high-air single-region world so the plain full-region force-regen has few ordinary surface bricks; this isolates the exact-re-mark overflow behavior without terrain-surface interference.
+- Commit: `3f1f6db fix: bound exact-edit re-marks in overflow and repair paths` (report committed separately).
