@@ -12,6 +12,21 @@ in M7 Errata 7.
 
 Fix 1 properly: write occupancy from the generated brick's 5 cm lattice rather than the 3×3×3 probe — brick_gen.comp.glsl already reduces min/max over the 17³ lattice into s_mip8, and it knows rslot/brick from the job. brick_mark then writes occupancy only for !has_surface bricks (unambiguous). This is exact at the resolution you render, with no halo and no phantom-solid artifact.
 
+**Done in M7 Task 10.** `brick_gen.comp.glsl` now classifies each generated brick from the
+17³, 5 cm SDF lattice reduction and writes the exact two-bit state to the region occupancy
+buffer. `brick_mark.comp.glsl` retains only the unambiguous air/full writes for bricks it
+does not generate; generated bricks are not exposed through the probe's conservative estimate.
+The CPU reference mirrors the encoded lattice and retains `cell_state_probe` for the mark
+semantics. Occupancy now has no probe halo or phantom-solid state at render resolution.
+
+Task 10's fresh five-leg Wayland benchmark (`m7-task10-final`) remained qualified because the
+compositor rejected disabled V-Sync: steady/move/ridge/edit/island frame p99 was
+23.71/31.66/32.04/73.17/31.05 ms; `brick_gen` `build_ms` maxima were
+0.50/0.65/0.37/0.61/0.50 ms, and all five runs exited 0. GPU raymarch p99 was
+8.94/8.37/8.90/15.84/9.20 ms, so the existing raymarch/frame warnings remain; this change
+adds no claim of a 60-fps budget closure. See `.superpowers/sdd/2026-08-19-m7-budget-demo-capture/task-10-report.md`
+for the full evidence and Errata 8.
+
 ## M6 beautification benchmark follow-ups
 
 - **Raymarch GPU p99 exceeds the 6 ms budget:** steady 7.955 ms, move 7.989 ms, ridge 8.736 ms, edit 14.226 ms, island 8.527 ms.

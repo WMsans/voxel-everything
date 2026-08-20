@@ -14,7 +14,6 @@ layout(set = 0, binding = 2, std430) buffer Counters {
 // region, so the count goes to zero rather than being decremented brick by brick.
 layout(set = 0, binding = 3, std430) buffer RegionSlotCounts { int n[]; } region_counts;
 layout(set = 0, binding = 4, std430) buffer RegionOccupancy { uint w[]; } occupancy;
-const int OCC_WORDS_PER_REGION = REGION_BRICK_COUNT / 16; // 2048
 
 layout(push_constant, std430) uniform Push {
 	ivec4 cfg; // x = region slot

@@ -34,6 +34,11 @@ layout(set = 0, binding = 5, std430) buffer Palette { uint id[]; } palette_buf;
 layout(set = 0, binding = 6, std430) readonly buffer Jobs { ivec4 v[]; } jobs;
 // binding 7 is the field op pool, declared by field.glslh
 layout(set = 0, binding = 10, std430) writeonly buffer BrickFlags { uint v[]; } brick_flags;
+layout(set = 0, binding = 15, std430) buffer RegionOccupancy { uint w[]; } occupancy;
+
+const uint CELL_AIR = 1u;
+const uint CELL_SOLID = 2u;
+const uint CELL_FULL = 3u;
 
 layout(push_constant, std430) uniform Push {
 	ivec4 atlas_bricks;
@@ -290,5 +295,19 @@ void main() {
 		if (mn <= ENCODED_ZERO && mx >= ENCODED_ZERO) f |= BRICK_FLAG_HAS_SURFACE;
 		if (palette_buf.id[slot * 4] != 0u) f |= BRICK_FLAG_HAS_MATERIAL;
 		brick_flags.v[slot] = f;
+
+		// The occupancy grid is classified from the exact lattice this dispatch generated,
+		// not brick_mark's conservative 3x3x3 probe. The job already carries the region slot
+		// in j1.x, while the brick coordinate determines the stable index within that region.
+		uint state = mn > ENCODED_ZERO ? CELL_AIR :
+				(mx <= ENCODED_ZERO ? CELL_FULL : CELL_SOLID);
+		int rslot = j1.x;
+		int bi = (brick.x & (REGION_BRICKS - 1)) +
+				(brick.y & (REGION_BRICKS - 1)) * REGION_BRICKS +
+				(brick.z & (REGION_BRICKS - 1)) * REGION_BRICKS * REGION_BRICKS;
+		int occ_word = rslot * OCC_WORDS_PER_REGION + (bi >> 4);
+		uint occ_shift = (uint(bi) & 15u) * 2u;
+		atomicAnd(occupancy.w[occ_word], ~(3u << occ_shift));
+		atomicOr(occupancy.w[occ_word], (state & 3u) << occ_shift);
 	}
 }

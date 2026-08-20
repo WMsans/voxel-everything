@@ -69,6 +69,28 @@ TEST_CASE("an edit makes a previously-solid brick a surface brick") {
 	CHECK(ve::brick_has_surface(gen, &op, 1, brick));
 }
 
+TEST_CASE("cell_state_field follows the generated lattice for a thin carve") {
+	ve::AnalyticGenerator gen;
+	const ve::IVec3 cell{10, 20, 10};
+	ve::EditOp cut{};
+	cut.type = ve::kOpSphereSubtract;
+	cut.pos[0] = 8.2f;
+	cut.pos[1] = 16.2f;
+	cut.pos[2] = 8.2f;
+	cut.radius = 0.25f;
+	ve::BrickEval e{};
+	ve::eval_brick(gen, &cut, 1, cell, &e);
+	uint8_t mn = 255, mx = 0;
+	for (int i = 0; i < ve::kBrickSdfCount; i++) {
+		mn = std::min(mn, e.brick.sdf[i]);
+		mx = std::max(mx, e.brick.sdf[i]);
+	}
+	const ve::CellState expected = mn > ve::encode_sdf(0.0f)
+			? ve::kCellAir
+			: (mx <= ve::encode_sdf(0.0f) ? ve::kCellFull : ve::kCellSolid);
+		CHECK(ve::cell_state_field(gen, &cut, 1, cell) == expected);
+}
+
 TEST_CASE("eval_brick produces a signed lattice, a dominant-first palette and mips") {
 	ve::AnalyticGenerator gen;
 	// Pick a real surface brick. The pad probe can flag a brick whose top face merely
