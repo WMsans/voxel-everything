@@ -1386,15 +1386,41 @@ void VoxelWorld::teardown_physics() {
 		island_descs_.clear();
 		island_descs_dirty_ = false;
 	}
-	// An in-flight bake is discarded with the worker, but its edit-log prefix is still live;
-	// put the region back at the front so a reinitialized worker can retry it.
+	// The worker is going away, but the render atlas and CPU store survive physics teardown.
+	// An in-flight transaction may already have acquired slots and staged new bytes there;
+	// restore the old consumer state before releasing those speculative slots. Never leave a
+	// new table pointing at bytes whose CPU transaction is about to be discarded.
 	{
 		if (consolidation_in_flight_) {
 			const ve::IVec3 region = consolidation_job_.region;
+			bool render_restored = true;
+			if (atlas_) {
+				for (size_t i = 0; i < consolidation_old_slots_.size(); i++)
+					if (!atlas_->upload_override(rd(), consolidation_old_slots_[i],
+							consolidation_old_bricks_[i])) render_restored = false;
+				if (consolidation_table_ >= 0)
+					atlas_->overrides().clear_table(rd(), consolidation_table_);
+				if (consolidation_job_.region_slot >= 0) {
+					if (render_restored)
+						atlas_->set_override_table(rd(), consolidation_job_.region_slot,
+								consolidation_old_table_, consolidation_old_entries_);
+					else
+						// A failed byte restore must not expose the partial new table. The CPU
+						// store/map remain authoritative and reinit will replay them.
+						atlas_->set_override_table(rd(), consolidation_job_.region_slot, -1, {});
+				}
+			}
+			if (!render_restored)
+				UtilityFunctions::printerr(
+						"VoxelWorld: render override rollback failed during physics teardown; invalidated table");
+			for (const ve::IVec3 brick : consolidation_newly_acquired_)
+				overrides_->release(brick);
 			if (edit_log_ && edit_log_->op_count(region) > 0)
 				consolidation_queue_.insert(consolidation_queue_.begin(), region);
 			consolidation_in_flight_ = false;
 			consolidation_job_ = ConsolidateJob{};
+			consolidation_table_ = -1;
+			consolidation_old_table_ = -1;
 			consolidation_old_entries_.clear();
 			consolidation_entries_.clear();
 			consolidation_old_slots_.clear();
@@ -2829,9 +2855,15 @@ bool VoxelWorld::debug_fill_override_pool() {
 	std::unique_lock<std::mutex> edit_lock(edit_mutex_);
 	if (!atlas_ || !mesh_ || !overrides_ || overrides_->used() != 0) return false;
 	const ve::IVec3 region = world_bounds().origin_regions();
+	const int region_slot = residency_ ? residency_->slot_of(region) : -1;
+	// This hook is allowed to fill only the target region's actual tenant. Slot 0 is a
+	// valid visible tenant for some other region; using it as an off-screen fallback can
+	// overwrite unrelated rendered state while the test is trying to exhaust the pool.
+	if (region_slot < 0) return false;
 	const ve::IVec3 base{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
 			region.z * ve::kRegionBricks};
 	std::vector<int> slots;
+	std::vector<ve::IVec3> acquired_bricks;
 	std::vector<ve::OverrideBrick> bricks;
 	std::vector<std::pair<int, int>> entries;
 	slots.reserve(overrides_->capacity());
@@ -2841,21 +2873,44 @@ bool VoxelWorld::debug_fill_override_pool() {
 		const ve::IVec3 brick{base.x + (i & 31), base.y + ((i >> 5) & 31),
 				base.z + ((i >> 10) & 31)};
 		const int slot = overrides_->acquire(brick);
-		if (slot < 0) return false;
+		if (slot < 0) {
+			for (const ve::IVec3 acquired : acquired_bricks) overrides_->release(acquired);
+			return false;
+		}
 		const ve::OverrideBrick *data = overrides_->data(slot);
-		if (!data) return false;
+		if (!data) {
+			for (const ve::IVec3 acquired : acquired_bricks) overrides_->release(acquired);
+			overrides_->release(brick);
+			return false;
+		}
 		slots.push_back(slot);
+		acquired_bricks.push_back(brick);
 		bricks.push_back(*data);
 		entries.emplace_back(i, slot);
 	}
-	const int region_slot = residency_ && residency_->slot_of(region) >= 0
-			? residency_->slot_of(region) : 0;
+	auto discard = [&]() {
 		if (atlas_) {
-			for (size_t i = 0; i < slots.size(); i++)
-				if (!atlas_->upload_override(rd(), slots[i], bricks[i])) return false;
-			atlas_->set_override_table(rd(), region_slot, 0, entries);
+			atlas_->overrides().clear_table(rd(), 0);
+			atlas_->set_override_table(rd(), region_slot, -1, {});
 		}
-	if (!mesh_->publish_overrides(slots, bricks, region, region_slot, 0, entries)) return false;
+		for (const ve::IVec3 brick : acquired_bricks) overrides_->release(brick);
+	};
+	if (atlas_) {
+		for (size_t i = 0; i < slots.size(); i++) {
+			if (!atlas_->upload_override(rd(), slots[i], bricks[i])) {
+				discard();
+				return false;
+			}
+		}
+		atlas_->set_override_table(rd(), region_slot, 0, entries);
+	}
+	if (!mesh_->publish_overrides(slots, bricks, region, region_slot, 0, entries)) {
+		// The worker publication is synchronous here, but it can still fail after a
+		// partial upload. Replay its empty old transaction before releasing the slots.
+		mesh_->restore_overrides({}, {}, region, region_slot, 0, -1, {});
+		discard();
+		return false;
+	}
 	override_tables_[std::tuple<int, int, int>{region.x, region.y, region.z}] = 0;
 	return true;
 }
@@ -2937,13 +2992,23 @@ void VoxelWorld::pump_consolidation() {
 		}
 		return ok;
 	};
-	const auto refuse_transaction = [&](bool retry) {
+	const auto refuse_transaction = [&](bool retry, bool rebuild_worker) {
 		const ve::IVec3 region = consolidation_job_.region;
 		const bool restored = rollback_render();
 		for (const ve::IVec3 brick : consolidation_newly_acquired_) overrides_->release(brick);
-		if (!restored) UtilityFunctions::printerr("VoxelWorld: render override rollback failed; retaining old edit state");
+		if (!restored)
+			UtilityFunctions::printerr(
+					"VoxelWorld: render override rollback failed; retaining old edit state");
+		// A worker rollback failure means its bytes are not authoritative. Rebuild from the
+		// CPU store/table map after releasing the speculative slots and before any requeue.
+		bool worker_rebuilt = true;
+		if (rebuild_worker)
+			worker_rebuilt = mesh_->replay_overrides(*overrides_, override_tables_);
+		if (!worker_rebuilt)
+			UtilityFunctions::printerr(
+					"VoxelWorld: worker override rebuild failed; refusing requeue");
 		consolidation_refusals_++;
-		if (retry) requeue(region);
+		if (retry && worker_rebuilt) requeue(region);
 		reset_transaction();
 	};
 
@@ -2953,7 +3018,8 @@ void VoxelWorld::pump_consolidation() {
 			std::vector<OverridePublicationResult> results;
 			if (mesh_->collect_override_publications(&results) == 0) return;
 			if (results.empty() || !results.front().success) {
-				refuse_transaction(true);
+				const bool rebuild_worker = !results.empty() && !results.front().worker_state_valid;
+				refuse_transaction(true, rebuild_worker);
 				return;
 			}
 			// The worker transaction is complete. CPU bytes are committed only now; the old
@@ -2965,7 +3031,7 @@ void VoxelWorld::pump_consolidation() {
 			// them from the publication command's result is unnecessary because acquire slots
 			// were populated before submission below.
 			if (residency_->slot_of(r) != consolidation_job_.region_slot) {
-				refuse_transaction(true);
+				refuse_transaction(true, false);
 				return;
 			}
 			if (atlas_)
@@ -3011,7 +3077,7 @@ void VoxelWorld::pump_consolidation() {
 			const bool present = overrides_->slot_of(brick) >= 0;
 			const int slot = overrides_->acquire(brick);
 			if (slot < 0) {
-				refuse_transaction(true);
+				refuse_transaction(true, false);
 				return;
 			}
 			if (!present) consolidation_newly_acquired_.push_back(brick);
@@ -3026,7 +3092,7 @@ void VoxelWorld::pump_consolidation() {
 			consolidation_entries_.emplace_back(bi, consolidation_slots_[i]);
 		}
 		if (residency_->slot_of(region) != consolidation_job_.region_slot) {
-			refuse_transaction(true);
+			refuse_transaction(true, false);
 			return;
 		}
 		bool render_ok = true;
@@ -3034,7 +3100,7 @@ void VoxelWorld::pump_consolidation() {
 			for (size_t i = 0; i < consolidation_slots_.size(); i++)
 				if (!atlas_->upload_override(rd(), consolidation_slots_[i], result.baked[i])) render_ok = false;
 		if (!render_ok) {
-			refuse_transaction(true);
+			refuse_transaction(true, false);
 			return;
 		}
 		OverridePublication publication;
@@ -3049,7 +3115,7 @@ void VoxelWorld::pump_consolidation() {
 		publication.entries = consolidation_entries_;
 		publication.old_entries = consolidation_old_entries_;
 		if (!mesh_->submit_override_publication(std::move(publication))) {
-			refuse_transaction(true);
+			refuse_transaction(true, false);
 			return;
 		}
 		consolidation_publish_in_flight_ = true;

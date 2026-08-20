@@ -108,3 +108,64 @@ The moving benchmark does not reach a successful consolidation because its edits
 - The benchmark's `overflow=1` is the existing atlas/job overflow counter; the focused 300-edit policy test reports `overflow_ever=0` and no edit-log rejection.
 - Automatic consolidation only publishes resident regions by design; off-screen queued work is deferred and retried rather than guessing a region slot.
 - The benchmark remains over the frame target under this Wayland/V-Sync environment; no unrelated physics/renderer tuning was attempted.
+
+## Round 2 re-review — resolved
+
+The re-review items are addressed as follows:
+
+1. `WorldStreamer::run_frame()` now reads the override table ID and scans the matching override entries in one `edit_mutex_` critical section. Atlas/worker publication happens only after that coherent snapshot is complete.
+2. `teardown_physics()` restores staged old atlas bytes/table, invalidates the region table if byte restoration fails, releases every newly acquired override brick, then clears transaction state and requeues the still-live edit prefix.
+3. Worker async publication rollback now replays the retained old bytes/table, with an initial attempt plus three retries. If all attempts fail, the worker is marked non-authoritative and refuses work; the main thread rebuilds it from the CPU store/table map before requeueing. Corrupted worker bytes are never treated as authoritative.
+4. `debug_fill_override_pool()` refuses when its target region has no resident slot; it no longer substitutes slot 0. Partial fixture setup is also released/cleared on failure.
+
+Added regression coverage:
+- `test_debug_fill_refuses_offscreen_region_without_touching_slot_zero`
+- `test_teardown_releases_staged_override_slots_before_reinit`
+
+## Round 2 fresh verification
+
+Exact command result lines from this round:
+
+```text
+./build.sh -j$(nproc)
+==> Build OK: 4.7M libvoxel_everything.linux.template_debug.x86_64.so
+==> Done.
+
+cd extension && scons test
+[doctest] test cases:     315 |     315 passed | 0 failed | 0 skipped
+[doctest] assertions: 3962244 | 3962244 passed | 0 failed |
+[doctest] Status: SUCCESS!
+scons: done building targets.
+
+./gdunit_tests.sh -c -a res://tests/test_consolidation.gd
+Statistics: 16 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED
+Overall Summary: 16 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
+
+./gdunit_tests.sh -c -a res://tests/test_streaming.gd
+Statistics: 6 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED
+Overall Summary: 6 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
+
+./gdunit_tests.sh -c -a res://tests/test_island_render.gd
+Statistics: 14 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED
+Overall Summary: 14 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
+
+./gdunit_tests.sh -c -a res://tests/test_collider_edits.gd
+Statistics: 3 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED
+Overall Summary: 3 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
+
+./gdunit_tests.sh -c -a res://tests/test_lod_stream.gd
+Statistics: 3 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED
+Overall Summary: 3 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
+```
+
+The first LoD command was bounded at 240 seconds and timed out while its intentionally expensive first case was still running; it was rerun with a 600-second timeout and completed successfully in `4min 32s 262ms`. No source change was made for that pre-existing duration. The existing `test_edit_pipeline.gd` failures from round 1 were not rerun or changed.

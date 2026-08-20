@@ -42,6 +42,10 @@ struct OverridePublication {
 
 struct OverridePublicationResult {
 	bool success = false;
+	// False means the worker could not restore its old bytes/table after a failed
+	// publication. The main thread must rebuild the worker from CPU-authoritative state
+	// before it requeues the transaction or submits any override-dependent work.
+	bool worker_state_valid = true;
 };
 
 // The collision mesher, moved off the main thread.
@@ -228,6 +232,8 @@ private:
 	std::atomic<bool> fail_consolidations_{false};
 	std::atomic<bool> fail_consolidate_uploads_{false};
 	std::atomic<bool> fail_next_restore_{false};
+	std::atomic<bool> worker_state_valid_{true};
+	std::atomic<bool> rebuilding_worker_{false};
 	std::map<std::tuple<int, int, int>, int> override_tables_;
 	const std::function<void(MeshPass &)> *sync_fn_ = nullptr;
 	bool sync_pending_ = false;

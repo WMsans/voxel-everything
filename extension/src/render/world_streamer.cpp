@@ -366,21 +366,6 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		std::lock_guard<std::mutex> lock(*edit_mutex_);
 		forced_regen.swap(forced_regen_);
 	}
-	const auto override_entries = [&](ve::IVec3 region, int table) {
-		std::vector<std::pair<int, int>> entries;
-		std::lock_guard<std::mutex> lock(*edit_mutex_);
-		if (!overrides_ || table < 0) return entries;
-		const ve::IVec3 base{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
-				region.z * ve::kRegionBricks};
-		for (int z = 0; z < ve::kRegionBricks; z++)
-			for (int y = 0; y < ve::kRegionBricks; y++)
-				for (int x = 0; x < ve::kRegionBricks; x++) {
-					const ve::IVec3 b{base.x + x, base.y + y, base.z + z};
-					const int slot = overrides_->slot_of(b);
-					if (slot >= 0) entries.emplace_back(ve::WorldBounds::brick_index_in_region(b), slot);
-				}
-		return entries;
-	};
 	// Clear evicted tenants before assigning any reused slot to a load in this same frame.
 	// The ordering matters: clearing after the load would erase the replacement table map.
 	for (const auto &e : plan.evicts) {
@@ -406,14 +391,31 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 			atlas_->upload_region_ops(rd, l.slot, ops.data(), op_count);
 		}
 		atlas_->set_region_map_entry(rd, l.map_index, l.slot);
+		// The table ID and its slot entries are one publication snapshot. Consolidation may
+		// replace both under edit_mutex_; reading them in separate critical sections could
+		// pair a new table with old entries (or vice versa) for one stream-in.
 		int table = -1;
-		if (override_tables_) {
+		std::vector<std::pair<int, int>> entries;
+		{
 			std::lock_guard<std::mutex> lock(*edit_mutex_);
-			const auto table_it = override_tables_->find(
-					std::tuple<int, int, int>{l.region.x, l.region.y, l.region.z});
-			if (table_it != override_tables_->end()) table = table_it->second;
+			if (override_tables_) {
+				const auto table_it = override_tables_->find(
+						std::tuple<int, int, int>{l.region.x, l.region.y, l.region.z});
+				if (table_it != override_tables_->end()) table = table_it->second;
+			}
+			if (overrides_ && table >= 0) {
+				const ve::IVec3 base{l.region.x * ve::kRegionBricks,
+						l.region.y * ve::kRegionBricks, l.region.z * ve::kRegionBricks};
+				for (int z = 0; z < ve::kRegionBricks; z++)
+					for (int y = 0; y < ve::kRegionBricks; y++)
+						for (int x = 0; x < ve::kRegionBricks; x++) {
+							const ve::IVec3 b{base.x + x, base.y + y, base.z + z};
+							const int slot = overrides_->slot_of(b);
+							if (slot >= 0)
+								entries.emplace_back(ve::WorldBounds::brick_index_in_region(b), slot);
+						}
+			}
 		}
-		const std::vector<std::pair<int, int>> entries = override_entries(l.region, table);
 		atlas_->set_override_table(rd, l.slot, table, entries);
 		if (mesh_ && table >= 0) mesh_->set_override_region(l.region, l.slot, table, entries);
 		load_jobs.push_back({l.region, l.slot, op_count, seq});
