@@ -317,6 +317,8 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_island_body_info", "index"), &VoxelWorld::debug_island_body_info);
 	ClassDB::bind_method(D_METHOD("debug_body_of_chunk", "chunk"), &VoxelWorld::debug_body_of_chunk);
 	ClassDB::bind_method(D_METHOD("debug_chunk_collider_info", "chunk"), &VoxelWorld::debug_chunk_collider_info);
+	ClassDB::bind_method(D_METHOD("debug_chunk_collider_octants", "chunk"),
+			&VoxelWorld::debug_chunk_collider_octants);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_pixel", "origin", "dir"), &VoxelWorld::debug_raymarch_pixel);
@@ -1869,6 +1871,11 @@ Dictionary VoxelWorld::debug_chunk_collider_info(Vector3i chunk) {
 	d["build_count"] = colliders_->build_count_of_chunk(c);
 	d["last_ops"] = colliders_->last_submit_op_count(c);
 	return d;
+}
+
+Dictionary VoxelWorld::debug_chunk_collider_octants(Vector3i chunk) {
+	if (!chunks_ || !colliders_) return Dictionary();
+	return colliders_->debug_chunk_octants({chunk.x, chunk.y, chunk.z});
 }
 
 bool VoxelWorld::debug_init_physics() {

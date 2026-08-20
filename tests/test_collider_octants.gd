@@ -101,34 +101,80 @@ func test_throttled_remesh_keeps_old_collider_until_commit(timeout := 120000) ->
 	assert_bool(w.debug_body_of_chunk(chunk).is_valid()).is_true()
 
 func test_octant_bodies_replace_atomically_and_report_diagnostics(timeout := 120000) -> void:
-	var w := make_world()
-	var center := Vector3(60.0, 55.0, 60.0)
+	var w := make_world(1)
+	# This exact chunk contains the deterministic cave and the terrain surface crossing all
+	# three octant midpoint planes; its committed collider exposes all eight stable body slots,
+	# including slots whose geometry bin is empty.
+	var center := Vector3(35.0, 55.0, 35.0)
 	assert_bool(settle(w, center)).is_true()
-	var before: Dictionary = w.debug_physics_stats()
-	# A chunk is represented by one body per populated octant, while `bodies` remains the
-	# historical chunk count. More than one raw body proves that the split is live, not merely
-	# a diagnostic rename of the old one-body path.
-	assert_int(int(before["bodies_raw"])).is_greater(int(before["bodies"]))
-	assert_int(int(before["bodies_raw"])).is_less_equal(int(before["bodies"]) * 8)
 
 	var truth: Dictionary = w.debug_raycast(Vector3(center.x, 80.0, center.z), Vector3(0, -1, 0))
 	assert_bool(bool(truth["hit"])).is_true()
 	var chunk := chunk_for_point(truth["pos"])
-	var old_info: Dictionary = w.debug_chunk_collider_info(chunk)
-	assert_int(int(old_info["slot"])).is_greater_equal(0)
-	var old_body: RID = w.debug_body_of_chunk(chunk)
-	assert_bool(old_body.is_valid()).is_true()
+	var old_diag: Dictionary = w.debug_chunk_collider_octants(chunk)
+	assert_int(int(old_diag["slot"])).is_greater_equal(0)
+	assert_bool(bool(old_diag["staged"])).is_false()
+	assert_int(int(old_diag["octants"].size())).is_equal(8)
+	var old_ids := PackedInt64Array()
+	for i in range(8):
+		var octant: Dictionary = old_diag["octants"][i]
+		assert_int(int(octant["octant"])).is_equal(i)
+		assert_int(int(octant["slot"])).is_equal(int(old_diag["slot"]) * 8 + i)
+		assert_bool(bool(octant["valid"])).is_true()
+		assert_int(int(octant["rid_id"])).is_greater(0)
+		old_ids.append(int(octant["rid_id"]))
 
+	var old_build_count := int(old_diag["build_count"])
 	var tool: VoxelEditTool = ClassDB.instantiate("VoxelEditTool")
 	w.add_child(tool)
 	var result: Dictionary = tool.apply_sphere_subtract(truth["pos"], 1.5)
 	assert_array(result["rejected"]).is_empty()
+
+	var saw_staging := false
+	var saw_replacement_build := false
+	var saw_commit := false
+	var max_staged_built_octants := 0
+	for i in range(1600):
+		w.debug_physics_frame(center)
+		var diag: Dictionary = w.debug_chunk_collider_octants(chunk)
+		if bool(diag["staged"]):
+			saw_staging = true
+			# This is the required red-zone observation: at least one replacement octant has
+			# actually built, but the exact old eight-body set is still live.
+			assert_int(int(diag["staged_built_octants"])).is_greater(0)
+			max_staged_built_octants = maxi(max_staged_built_octants,
+					int(diag["staged_built_octants"]))
+			saw_replacement_build = true
+			for octant in diag["octants"]:
+				var live: Dictionary = octant
+				assert_bool(bool(live["valid"])).is_true()
+				assert_int(int(live["rid_id"])).is_equal(int(old_ids[int(live["octant"])]))
+		else:
+			if saw_staging and int(diag["build_count"]) > old_build_count:
+				saw_commit = true
+				break
+	assert_bool(saw_staging).override_failure_message(
+			"the edit completed without exposing a staged octant replacement").is_true()
+	assert_bool(saw_replacement_build).override_failure_message(
+			"no replacement octant build was observed while the replacement was staged").is_true()
+	assert_bool(saw_commit).override_failure_message(
+			"the staged replacement did not commit after all octants were built").is_true()
+
 	assert_bool(settle(w, center)).is_true()
-	var new_info: Dictionary = w.debug_chunk_collider_info(chunk)
-	assert_int(int(new_info["build_count"])).is_greater(int(old_info["build_count"]))
-	# The replacement is committed only after every populated octant is built; diagnostics must
-	# still find a real body even when octant zero is empty.
-	var new_body: RID = w.debug_body_of_chunk(chunk)
-	assert_bool(new_body.is_valid()).is_true()
-	var after: Dictionary = w.debug_physics_stats()
-	assert_int(int(after["bodies_raw"])).is_greater_equal(int(after["bodies"]))
+	var new_diag: Dictionary = w.debug_chunk_collider_octants(chunk)
+	assert_bool(bool(new_diag["staged"])).is_false()
+	assert_int(int(new_diag["build_count"])).is_greater(old_build_count)
+	assert_int(int(new_diag["octants"].size())).is_equal(8)
+	var changed := 0
+	var new_ids := PackedInt64Array()
+	for i in range(8):
+		var octant: Dictionary = new_diag["octants"][i]
+		assert_int(int(octant["octant"])).is_equal(i)
+		assert_bool(bool(octant["valid"])).is_true()
+		new_ids.append(int(octant["rid_id"]))
+		if int(octant["rid_id"]) != int(old_ids[i]):
+			changed += 1
+	print("COLLIDER_OCTANT_PROOF chunk=", chunk, " slot=", old_diag["slot"],
+			" old_rids=", old_ids, " new_rids=", new_ids,
+			" max_staged_built_octants=", max_staged_built_octants)
+	assert_int(changed).is_equal(8)

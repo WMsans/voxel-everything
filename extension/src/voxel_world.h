@@ -572,6 +572,7 @@ public:
 	// benchmark read it to say WHERE a frame went, rather than that it was slow.
 	Dictionary debug_perf_stats();
 	RID debug_body_of_chunk(Vector3i chunk);
+	Dictionary debug_chunk_collider_octants(Vector3i chunk);
 
 	// --- Task 5 hook ---
 	Dictionary debug_mesh_diff(Vector3i chunk);
