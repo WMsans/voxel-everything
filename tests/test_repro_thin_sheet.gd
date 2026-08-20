@@ -33,6 +33,25 @@ func make_world(max_jobs := 16384, stream_radius := 40.0) -> VoxelWorld:
 	assert_bool(w.debug_init_physics()).is_true()
 	return w
 
+func make_tall_world(max_jobs := 16384, stream_radius := 40.0) -> VoxelWorld:
+	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	w.use_local_device = true
+	w.max_brick_jobs = max_jobs
+	w.physics_enabled = false
+	w.world_origin_bricks = Vector3i(0, -64, 0)
+	w.world_size_regions = Vector3i(8, 7, 8)
+	w.residency_radius_m = stream_radius
+	w.atlas_bricks = Vector3i(48, 24, 48)
+	w.max_region_slots = 64
+	w.physics_radius_m = 30.0
+	w.max_collider_chunks = 128
+	w.shape_builds_per_frame = 4
+	add_child(w)
+	_worlds.append(w)
+	assert_bool(w.debug_init_atlas()).is_true()
+	assert_bool(w.debug_init_physics()).is_true()
+	return w
+
 func tool_of(w: VoxelWorld) -> VoxelEditTool:
 	var t: VoxelEditTool = ClassDB.instantiate("VoxelEditTool")
 	w.add_child(t)
@@ -76,6 +95,40 @@ func test_edit_overflow_repair_preserves_thin_sheet_occupancy(timeout := 300000)
 		w.debug_stream_frame(sheet)
 	assert_int(w.debug_occupancy_state(cell)).override_failure_message(
 		"overflow/repair recovery reverted the thin sheet to probe-only occupancy").is_equal(2)
+
+func test_bounded_exact_edit_recovery_does_not_requeue_whole_region(timeout := 300000) -> void:
+	# 4096 is above the single resident region's ordinary surface-brick count, so the
+	# full-region PLAIN force-regen mark in recovery fits. It is far below the 32768-brick
+	# whole-region exact-edit worst case, so an over-broad exact re-mark would overflow
+	# again on every recovery frame and this test would never see the overflow bit clear.
+	var w := make_tall_world(4096, 5.0)
+	var t := tool_of(w)
+	var c := Vector3(20.2, 90.0, 20.2)
+	step(w, 30)
+	# A chain of overlapping exact-edit ops in one high-air region, staying under the
+	# 256-op region log. The normal edit path queues each op's own padded brick AABB, so
+	# the same small set of bricks is queued many times and overflows the 4096 job list;
+	# their union AABB stays far below 4096. That is exactly the overflow case a
+	# whole-region exact re-mark would make unrecoverable (32768 > 4096), while the
+	# bounded AABB re-mark fits.
+	for i in range(80):
+		t.apply_sphere_add(c + Vector3(0.0, i * 0.05, 0.0), 1.5, 4)
+	w.debug_stream_frame(c)
+	var overflow_seen := 0
+	for i in range(5):
+		w.debug_stream_frame(c)
+		overflow_seen |= int(w.debug_stream_stats()["overflow_ever"])
+	assert_int(overflow_seen & 2).override_failure_message(
+		"the tiny exact-edit job list did not overflow").is_not_equal(0)
+	var cleared := false
+	for i in range(90):
+		w.debug_stream_frame(c)
+		if (int(w.debug_atlas_stats()["overflow"]) & 2) == 0:
+			cleared = true
+			break
+	assert_bool(cleared).override_failure_message(
+		"overflow recovery kept re-queueing the whole region instead of the bounded exact-edit AABB"
+		).is_true()
 
 func test_a_sheet_thinner_than_the_probe_spacing_is_generated(timeout := 300000) -> void:
 	var w := make_world()
