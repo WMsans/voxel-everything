@@ -132,6 +132,56 @@ func test_mesh_consumer_replays_consolidated_override_after_worker_reinit(timeou
 	assert_int(int(lod_after["fine_max_diff"])).is_less_equal(1)
 	assert_int(int(lod_after["reduced_max_diff"])).is_less_equal(1)
 
+# The wall M2 and M4 both left standing: op 257 in one region used to be rejected and logged.
+# It must now land, because the list consolidates itself out of the way first.
+func test_three_hundred_edits_in_one_region_all_land(timeout := 120000) -> void:
+	var w := make_world()
+	var center := Vector3(24.0, 51.5, 24.0)
+	for i in range(300):
+		var a := float(i) * 0.21
+		w.debug_apply_sphere_subtract(center + Vector3(cos(a) * 2.0, sin(a * 0.7) * 1.5, sin(a) * 2.0), 0.9)
+		w.debug_pump_consolidation() # what _process does once a frame
+	var st: Dictionary = w.debug_stream_stats()
+	assert_int(int(st["overflow_ever"])).is_equal(0)
+	assert_int(int(st["consolidations"])).is_greater(0)
+	assert_int(int(st["override_bricks"])).is_greater(0)
+
+# Consolidation must not change what the world looks like. The oracle is the raycast the
+# edit tool aims with -- the same field the renderer marches.
+func test_consolidation_preserves_the_surface(timeout := 120000) -> void:
+	var w := make_world()
+	for i in range(40):
+		w.debug_apply_sphere_subtract(Vector3(24.0 + float(i % 7) * 0.4, 51.5, 24.0), 1.0)
+	var before: Array = []
+	for i in range(16):
+		var p := Vector3(22.0 + float(i) * 0.3, 70.0, 24.0)
+		before.append(w.debug_raycast(p, Vector3(0, -1, 0)))
+	assert_bool(w.debug_consolidate_region(Vector3i(0, 2, 0))).is_true()
+	for i in range(16):
+		var p := Vector3(22.0 + float(i) * 0.3, 70.0, 24.0)
+		var after: Dictionary = w.debug_raycast(p, Vector3(0, -1, 0))
+		var was: Dictionary = before[i]
+		assert_bool(after["hit"]).is_equal(was["hit"])
+		if bool(was["hit"]):
+			assert_float(float(after["pos"].y)).is_equal_approx(float(was["pos"].y), 0.06)
+
+# A full pool must leave the world exactly as it was.
+func test_a_full_pool_refuses_and_changes_nothing(timeout := 60000) -> void:
+	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	w.use_local_device = true
+	w.physics_enabled = false
+	w.max_override_bricks = 4
+	w.world_origin_bricks = Vector3i(0, -64, 0)
+	w.world_size_regions = Vector3i(8, 5, 8)
+	add_child(w)
+	_worlds.append(w)
+	w.ensure_initialized()
+	w.debug_apply_sphere_subtract(Vector3(24.4, 51.4, 24.4), 2.0)
+	var ops_before: int = w.debug_region_op_count(Vector3i(0, 2, 0))
+	assert_bool(w.debug_consolidate_region(Vector3i(0, 2, 0))).is_false()
+	assert_int(w.debug_region_op_count(Vector3i(0, 2, 0))).is_equal(ops_before)
+	assert_int(int(w.debug_stream_stats()["consolidation_refusals"])).is_greater(0)
+
 func test_render_pool_replays_consolidated_override_after_atlas_reinit() -> void:
 	var w := make_world()
 	w.debug_apply_sphere_subtract(Vector3(24.4, 51.4, 24.4), 2.0)

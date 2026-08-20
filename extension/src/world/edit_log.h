@@ -13,6 +13,7 @@ namespace ve {
 // consolidation (see the plan's Deliberate Deferrals): a full region rejects the op and the
 // caller logs it — spec §8's fail-soft rule, "warn + no-op".
 inline constexpr int kMaxRegionOps = 256;
+inline constexpr int kConsolidateAtOps = 192;
 
 // The ordered CSG op lists that turn G into the current world (spec §2). An op is appended
 // to EVERY region it touches, so reconstructing any brick needs only that brick's own
@@ -32,6 +33,10 @@ public:
 	const std::vector<uint64_t> &seqs(IVec3 region) const;
 	int op_count(IVec3 region) const { return static_cast<int>(ops(region).size()); }
 	void clear_region(IVec3 region);
+	// Remove only the prefix captured by an asynchronous consolidation. Edits appended after
+	// the bake began remain in the region list and are evaluated against the newly published
+	// override on the next bake.
+	void clear_region_through(IVec3 region, uint64_t seq);
 	int region_count() const { return static_cast<int>(lists_.size()); }
 	const WorldBounds &bounds() const { return bounds_; }
 	void clear() {

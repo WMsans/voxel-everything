@@ -444,14 +444,16 @@ void MeshService::run() {
 				override_updates.swap(pending_override_updates_);
 			} else if (!pending_volumes_.empty()) {
 				volumes_to_upload.swap(pending_volumes_);
+			} else if (!pending_consolidations_.empty()) {
+				// A region at the 192-op trigger has only the spare cap window left. Do not let
+				// a steady stream of mesh batches starve the bake until the edit log overflows.
+				consolidate_jobs.swap(pending_consolidations_);
 			} else if (!pending_extract_.empty()) {
 				extracts.swap(pending_extract_);
 			} else if (!pending_.empty()) {
 				batch.swap(pending_);
 			} else if (!pending_lod_.empty()) {
 				lod_jobs.swap(pending_lod_);
-			} else if (!pending_consolidations_.empty()) {
-				consolidate_jobs.swap(pending_consolidations_);
 			}
 		}
 

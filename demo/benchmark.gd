@@ -380,8 +380,10 @@ func _report() -> void:
 	if qualified:
 		push_warning("BENCH: V-Sync is %s; frame percentiles are display-capped, not engine numbers" % _vsync_actual)
 	var st: Dictionary = _world.debug_stream_stats()
-	print("BENCH regions=%d overflow=%d" % [st.get("resident_regions", -1),
-		st.get("overflow_ever", -1)])
+	print("BENCH regions=%d overflow=%d overrides=%d/%d consolidations=%d refusals=%d" % [
+		st.get("resident_regions", -1), st.get("overflow_ever", -1),
+		st.get("override_bricks", -1), st.get("override_capacity", -1),
+		st.get("consolidations", -1), st.get("consolidation_refusals", -1)])
 	var ph: Dictionary = _world.debug_physics_stats()
 	print("BENCH chunks=%d pending=%d bodies=%d failures=%d build_ms=%.2f collect_ms=%.2f" % [
 		ph.get("chunks_resident", -1), ph.get("chunks_pending", -1), ph.get("bodies", -1),

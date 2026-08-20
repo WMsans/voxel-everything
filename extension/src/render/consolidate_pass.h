@@ -12,6 +12,7 @@ namespace godot {
 struct ConsolidateJob {
 	ve::IVec3 region{};
 	int region_slot = -1;
+	uint64_t through_seq = 0;
 	std::vector<ve::IVec3> bricks;
 	std::vector<ve::EditOp> ops;
 };

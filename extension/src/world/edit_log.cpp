@@ -59,4 +59,21 @@ void EditLog::clear_region(IVec3 region) {
 	seqs_.erase(key);
 }
 
+void EditLog::clear_region_through(IVec3 region, uint64_t seq) {
+	const Key key{region.x, region.y, region.z};
+	auto ops_it = lists_.find(key);
+	auto seqs_it = seqs_.find(key);
+	if (ops_it == lists_.end() || seqs_it == seqs_.end()) return;
+	std::vector<EditOp> &ops = ops_it->second;
+	std::vector<uint64_t> &seqs = seqs_it->second;
+	const size_t n = std::min(ops.size(), seqs.size());
+	size_t cut = 0;
+	while (cut < n && seqs[cut] <= seq) cut++;
+	if (cut == 0) return;
+	ops.erase(ops.begin(), ops.begin() + static_cast<ptrdiff_t>(cut));
+	seqs.erase(seqs.begin(), seqs.begin() + static_cast<ptrdiff_t>(cut));
+	if (ops.empty()) lists_.erase(ops_it);
+	if (seqs.empty()) seqs_.erase(seqs_it);
+}
+
 } // namespace ve
