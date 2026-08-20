@@ -3,6 +3,8 @@
 #include <godot_cpp/variant/rid.hpp>
 #include <vector>
 #include <utility>
+#include <map>
+#include <tuple>
 #include "connectivity/occupancy.h"
 #include "generator/edit_ops.h"
 #include "render/volume_pool.h"
@@ -10,6 +12,7 @@
 #include "world/brick_flags.h"
 #include "world/edit_log.h"
 #include "world/region.h"
+#include "world/override_store.h"
 
 namespace godot {
 
@@ -68,10 +71,15 @@ public:
 	const VolumePool &volumes() const { return volumes_; }
 	OverridePool &overrides() { return overrides_; }
 	const OverridePool &overrides() const { return overrides_; }
-	void upload_override(RenderingDevice *rd, int slot, const ve::OverrideBrick &brick) {
-		if (overrides_.is_valid()) overrides_.upload(slot, brick);
+	bool upload_override(RenderingDevice *rd, int slot, const ve::OverrideBrick &brick) {
+		return overrides_.is_valid() && overrides_.upload(slot, brick);
 	}
 	void set_override_table(RenderingDevice *rd, int region_slot, int table, const std::vector<std::pair<int, int>> &entries);
+	// Replays the CPU-authoritative override bytes and all table entries after this device's
+	// resources have been recreated. Region-slot bindings are restored by WorldStreamer when
+	// the regions stream back in.
+	bool replay_overrides(RenderingDevice *rd, const ve::OverrideStore &store,
+			const std::map<std::tuple<int, int, int>, int> &tables);
 
 	void reset_frame_counters(RenderingDevice *rd);
 	void clear_overflow(RenderingDevice *rd);

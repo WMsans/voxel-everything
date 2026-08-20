@@ -1,5 +1,6 @@
 #include "render/world_streamer.h"
 #include "voxel_world.h" // godot::PendingEdit
+#include "render/mesh_service.h"
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <algorithm>
 #include <chrono>
@@ -58,7 +59,9 @@ using namespace godot;
 void WorldStreamer::initialize(ve::RegionResidency *residency, ve::EditLog *edit_log,
 		std::mutex *edit_mutex, std::vector<PendingEdit> *pending, GpuAtlas *atlas,
 		RegionPass *region_pass, BrickGenPass *brick_gen, std::mutex *occ_mutex,
-		std::vector<OccupancyBlock> *occ_inbox, std::atomic<int64_t> *edit_seq) {
+		std::vector<OccupancyBlock> *occ_inbox, std::atomic<int64_t> *edit_seq,
+		const ve::OverrideStore *overrides,
+		const std::map<std::tuple<int, int, int>, int> *override_tables) {
 	residency_ = residency;
 	edit_log_ = edit_log;
 	edit_mutex_ = edit_mutex;
@@ -66,6 +69,9 @@ void WorldStreamer::initialize(ve::RegionResidency *residency, ve::EditLog *edit
 	atlas_ = atlas;
 	region_pass_ = region_pass;
 	brick_gen_ = brick_gen;
+	mesh_ = nullptr;
+	overrides_ = overrides;
+	override_tables_ = override_tables;
 	occ_mutex_ = occ_mutex;
 	occ_inbox_ = occ_inbox;
 	edit_seq_ = edit_seq;
@@ -82,6 +88,12 @@ void WorldStreamer::initialize(ve::RegionResidency *residency, ve::EditLog *edit
 	committed_base_ = 0;
 	region_slot_costs_.assign(
 			static_cast<size_t>(atlas_ ? atlas_->config().max_region_slots : 0), 0);
+}
+
+void WorldStreamer::queue_region_regeneration(ve::IVec3 region) {
+	if (!edit_mutex_) return;
+	std::lock_guard<std::mutex> lock(*edit_mutex_);
+	forced_regen_.push_back(region);
 }
 
 void WorldStreamer::note_marked(ve::IVec3 region, int64_t seq) {
@@ -344,6 +356,32 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 	// count is captured here too so the mark loop below needs no second (locked) read.
 	struct LoadJob { ve::IVec3 region; int slot; int op_count; int64_t seq; };
 	std::vector<LoadJob> load_jobs;
+	std::vector<ve::IVec3> forced_regen;
+	{
+		std::lock_guard<std::mutex> lock(*edit_mutex_);
+		forced_regen.swap(forced_regen_);
+	}
+	const auto override_entries = [&](ve::IVec3 region, int table) {
+		std::vector<std::pair<int, int>> entries;
+		if (!overrides_ || table < 0) return entries;
+		const ve::IVec3 base{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
+				region.z * ve::kRegionBricks};
+		for (int z = 0; z < ve::kRegionBricks; z++)
+			for (int y = 0; y < ve::kRegionBricks; y++)
+				for (int x = 0; x < ve::kRegionBricks; x++) {
+					const ve::IVec3 b{base.x + x, base.y + y, base.z + z};
+					const int slot = overrides_->slot_of(b);
+					if (slot >= 0) entries.emplace_back(ve::WorldBounds::brick_index_in_region(b), slot);
+				}
+		return entries;
+	};
+	// Clear evicted tenants before assigning any reused slot to a load in this same frame.
+	// The ordering matters: clearing after the load would erase the replacement table map.
+	for (const auto &e : plan.evicts) {
+		atlas_->set_region_map_entry(rd, e.map_index, -1);
+		atlas_->set_override_table(rd, e.slot, -1, {});
+		if (mesh_) mesh_->clear_override_region(e.slot);
+	}
 	for (const auto &l : plan.loads) {
 		int op_count = 0;
 		int64_t seq = 0;
@@ -362,10 +400,35 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 			atlas_->upload_region_ops(rd, l.slot, ops.data(), op_count);
 		}
 		atlas_->set_region_map_entry(rd, l.map_index, l.slot);
+		int table = -1;
+		if (override_tables_) {
+			const auto table_it = override_tables_->find(
+					std::tuple<int, int, int>{l.region.x, l.region.y, l.region.z});
+			if (table_it != override_tables_->end()) table = table_it->second;
+		}
+		const std::vector<std::pair<int, int>> entries = override_entries(l.region, table);
+		atlas_->set_override_table(rd, l.slot, table, entries);
+		if (mesh_ && table >= 0) mesh_->set_override_region(l.region, l.slot, table, entries);
 		load_jobs.push_back({l.region, l.slot, op_count, seq});
 	}
-	for (const auto &e : plan.evicts)
-		atlas_->set_region_map_entry(rd, e.map_index, -1);
+	// Consolidation has no EditOp left to drive the normal mark path. Force a full-region
+	// mark for any resident region explicitly queued by the publication transaction.
+	for (const ve::IVec3 region : forced_regen) {
+		const int slot = residency_->slot_of(region);
+		if (slot < 0) continue;
+		bool duplicate = false;
+		for (const LoadJob &j : load_jobs) if (j.region == region) { duplicate = true; break; }
+		if (duplicate) continue;
+		int op_count = 0;
+		int64_t seq = 0;
+		{
+			std::lock_guard<std::mutex> lock(*edit_mutex_);
+			op_count = static_cast<int>(edit_log_->ops(region).size());
+			seq = edit_seq_ ? edit_seq_->load(std::memory_order_relaxed) : 0;
+			atlas_->upload_region_ops(rd, slot, edit_log_->ops(region).data(), op_count);
+		}
+		load_jobs.push_back({region, slot, op_count, seq});
+	}
 
 	// Edits re-mark only the op's brick AABB clamped to each touched region. An op that
 	// touches a region's APRON plane is in that region's list by construction (Task 2's

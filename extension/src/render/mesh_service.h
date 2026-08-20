@@ -78,6 +78,14 @@ public:
 
 	bool submit_consolidations(std::vector<ConsolidateJob> jobs);
 	int collect_consolidations(std::vector<ConsolidateResult> *out);
+	bool set_override_region(ve::IVec3 region, int region_slot, int table,
+			const std::vector<std::pair<int, int>> &entries);
+	void clear_override_region(int region_slot);
+	bool replay_overrides(const ve::OverrideStore &store,
+			const std::map<std::tuple<int, int, int>, int> &tables);
+	bool restore_overrides(const std::vector<int> &slots,
+			const std::vector<ve::OverrideBrick> &bricks, ve::IVec3 region, int region_slot,
+			int table, int old_table, const std::vector<std::pair<int, int>> &old_entries);
 	// Publishes all bricks for a region in one worker-thread transaction. The table is
 	// repointed only after every upload succeeds, so a partial bake remains invisible.
 	bool publish_overrides(const std::vector<int> &slots,
@@ -105,12 +113,20 @@ public:
 	void debug_set_fail_extract_submit(bool v) {
 		fail_extract_submit_.store(v, std::memory_order_release);
 	}
+	void debug_set_fail_consolidations(bool v) {
+		fail_consolidations_.store(v, std::memory_order_release);
+	}
+	void debug_set_fail_consolidate_uploads(bool v) {
+		fail_consolidate_uploads_.store(v, std::memory_order_release);
+	}
 #else
 	// Fail-injection hooks are debug-only: release builds must not be able to drive the
 	// mesh service into artificial failure states.
 	void debug_set_extraction_available(bool v) { (void)v; }
 	void debug_set_fail_extractions(bool v) { (void)v; }
 	void debug_set_fail_extract_submit(bool v) { (void)v; }
+	void debug_set_fail_consolidations(bool v) { (void)v; }
+	void debug_set_fail_consolidate_uploads(bool v) { (void)v; }
 #endif
 
 	// Copies one stored volume into THIS device's pool, on the worker thread. The main
@@ -171,6 +187,8 @@ private:
 	std::atomic<bool> lod_busy_{false};
 	std::atomic<bool> lod_available_{false};
 	std::atomic<bool> consolidate_busy_{false};
+	std::atomic<bool> fail_consolidations_{false};
+	std::atomic<bool> fail_consolidate_uploads_{false};
 	std::map<std::tuple<int, int, int>, int> override_tables_;
 	const std::function<void(MeshPass &)> *sync_fn_ = nullptr;
 	bool sync_pending_ = false;
