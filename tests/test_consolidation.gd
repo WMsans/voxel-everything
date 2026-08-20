@@ -42,3 +42,23 @@ func test_overridden_brick_reads_through_eval_field(timeout := 60000) -> void:
 	var hit: Dictionary = w.debug_raycast(Vector3(24.4, 70.0, 24.4), Vector3(0, -1, 0))
 	assert_bool(hit["hit"]).is_true()
 	assert_float(float(hit["pos"].y)).is_less(51.4 - 1.0)
+
+# A second bake must read the first bake as its base. This catches staging output that aliases
+# a live override slot: the first crater would otherwise be silently restored or corrupted.
+func test_reconsolidation_preserves_previous_bake(timeout := 120000) -> void:
+	var w := make_world()
+	w.debug_apply_sphere_subtract(Vector3(24.4, 51.4, 24.4), 2.0)
+	assert_bool(w.debug_consolidate_region(Vector3i(0, 2, 0))).is_true()
+	w.debug_apply_sphere_subtract(Vector3(27.0, 51.4, 24.4), 1.5)
+	var d: Dictionary = w.debug_consolidate_diff(Vector3i(0, 2, 0))
+	assert_int(int(d["bricks"])).is_greater(0)
+	assert_int(int(d["sdf_mismatches"])).is_equal(0)
+	assert_int(int(d["mat_mismatches"])).is_equal(0)
+	assert_bool(w.debug_consolidate_region(Vector3i(0, 2, 0))).is_true()
+	assert_int(w.debug_region_op_count(Vector3i(0, 2, 0))).is_equal(0)
+	var first: Dictionary = w.debug_raycast(Vector3(24.4, 70.0, 24.4), Vector3(0, -1, 0))
+	var second: Dictionary = w.debug_raycast(Vector3(27.0, 70.0, 24.4), Vector3(0, -1, 0))
+	assert_bool(first["hit"]).is_true()
+	assert_bool(second["hit"]).is_true()
+	assert_float(float(first["pos"].y)).is_less(50.4)
+	assert_float(float(second["pos"].y)).is_less(50.8)

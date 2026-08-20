@@ -38,13 +38,26 @@ ConsolidatePass::~ConsolidatePass() { teardown(); }
 
 bool ConsolidatePass::initialize(RenderingDevice *rd, OverridePool *pool, int max_bricks) {
 	teardown();
-	if (!rd || !pool || !pool->is_valid() || max_bricks <= 0) return false;
+	if (!rd || !pool || !pool->is_valid()) return false;
+	max_bricks = max_bricks > 0 ? max_bricks : pool->capacity();
+	if (max_bricks <= 0 || max_bricks > pool->capacity()) return false;
 	rd_ = rd;
 	pool_ = pool;
 	max_bricks_ = max_bricks;
 	ops_ = rd_->storage_buffer_create(ve::kMaxRegionOps * 32, zeroed(ve::kMaxRegionOps * 32));
 	jobs_ = rd_->storage_buffer_create(static_cast<uint32_t>(max_bricks_) * 32,
 			zeroed(static_cast<int64_t>(max_bricks_) * 32));
+	// Consolidation reads the currently published override through the pool, then writes the
+	// replacement into private transient storage. Writing into the pool's high slots looked
+	// like double buffering, but those slots can already hold live bricks after releases and
+	// would race the read side of a re-consolidation. The staging buffers are bounded by the
+	// pool capacity and are never visible to field consumers.
+	staging_sdf_ = rd_->storage_buffer_create(
+			static_cast<uint32_t>(max_bricks_) * kSdfStride,
+			zeroed(static_cast<int64_t>(max_bricks_) * kSdfStride));
+	staging_mat_ = rd_->storage_buffer_create(
+			static_cast<uint32_t>(max_bricks_) * kMatStride,
+			zeroed(static_cast<int64_t>(max_bricks_) * kMatStride));
 	ProjectSettings *ps = ProjectSettings::get_singleton();
 	const String path = ps->globalize_path("res://shaders/brick_consolidate.comp.glsl");
 	const String inc = ps->globalize_path("res://shaders");
@@ -74,8 +87,8 @@ bool ConsolidatePass::initialize(RenderingDevice *rd, OverridePool *pool, int ma
 		return false;
 	}
 	uset_ = rd_->uniform_set_create(Array::make(
-			storage(0, pool_->sdf_buffer()), storage(1, pool_->mat_buffer()), storage(3, pool_->sdf_buffer()),
-			storage(4, pool_->mat_buffer()), storage(5, jobs_), storage(6, pool_->tables()),
+			storage(0, pool_->sdf_buffer()), storage(1, pool_->mat_buffer()), storage(3, staging_sdf_),
+			storage(4, staging_mat_), storage(5, jobs_), storage(6, pool_->tables()),
 			storage(7, pool_->region_table_map()), storage(8, ops_)), shader_, 0);
 	if (!uset_.is_valid()) {
 		teardown();
@@ -91,6 +104,8 @@ void ConsolidatePass::teardown() {
 	free_if_valid(rd_, shader_);
 	free_if_valid(rd_, jobs_);
 	free_if_valid(rd_, ops_);
+	free_if_valid(rd_, staging_sdf_);
+	free_if_valid(rd_, staging_mat_);
 	rd_ = nullptr;
 	pool_ = nullptr;
 	max_bricks_ = 0;
@@ -115,9 +130,9 @@ bool ConsolidatePass::run(const ConsolidateJob &job, ConsolidateResult *out) {
 		j[i * 8 + 0] = job.bricks[static_cast<size_t>(i)].x;
 		j[i * 8 + 1] = job.bricks[static_cast<size_t>(i)].y;
 		j[i * 8 + 2] = job.bricks[static_cast<size_t>(i)].z;
-		// The staging slots are disjoint from the low slots used by OverrideStore in the
-		// normal path. This also leaves the old table intact until the caller publishes it.
-		j[i * 8 + 3] = pool_->capacity() - n + i;
+		// Output slots belong to the private staging buffers, not the published override pool.
+		// This remains disjoint even when the CPU store has reused arbitrary live slots.
+		j[i * 8 + 3] = i;
 	}
 	rd_->buffer_update(jobs_, 0, static_cast<uint32_t>(jb.size()), jb);
 	if (!job.ops.empty()) {
@@ -143,10 +158,10 @@ bool ConsolidatePass::run(const ConsolidateJob &job, ConsolidateResult *out) {
 	rd_->sync();
 	out->baked.resize(static_cast<size_t>(n));
 	for (int i = 0; i < n; i++) {
-		const int slot = pool_->capacity() - n + i;
-		const PackedByteArray sb = rd_->buffer_get_data(pool_->sdf_buffer(),
+		const int slot = i;
+		const PackedByteArray sb = rd_->buffer_get_data(staging_sdf_,
 				static_cast<uint32_t>(slot * kSdfStride), kSdfStride);
-		const PackedByteArray mb = rd_->buffer_get_data(pool_->mat_buffer(),
+		const PackedByteArray mb = rd_->buffer_get_data(staging_mat_,
 				static_cast<uint32_t>(slot * kMatStride), kMatStride);
 		if (sb.size() < kSdfStride || mb.size() < kMatStride) {
 			out->baked.clear();
