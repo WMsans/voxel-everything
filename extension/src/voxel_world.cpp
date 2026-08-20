@@ -368,6 +368,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_occupancy_state", "cell"), &VoxelWorld::debug_occupancy_state);
 	ClassDB::bind_method(D_METHOD("debug_pump_occupancy"), &VoxelWorld::debug_pump_occupancy);
 	ClassDB::bind_method(D_METHOD("debug_occupancy_diff", "region"), &VoxelWorld::debug_occupancy_diff);
+	ClassDB::bind_method(D_METHOD("debug_occupancy_fallback_diff", "region"), &VoxelWorld::debug_occupancy_fallback_diff);
 	ClassDB::bind_method(D_METHOD("debug_cell_state", "cell"), &VoxelWorld::debug_cell_state);
 	ClassDB::bind_method(D_METHOD("debug_field_sdf", "p"), &VoxelWorld::debug_field_sdf);
 	ClassDB::bind_method(D_METHOD("debug_occupancy_stats", "center"), &VoxelWorld::debug_occupancy_stats);
@@ -5856,8 +5857,70 @@ int VoxelWorld::debug_occupancy_state(Vector3i cell) {
 }
 
 void VoxelWorld::debug_pump_occupancy() {
+	// Contract: harvest already-issued async GPU readbacks and fold their inbox blocks; this
+	// helper does not advance the streamer or issue a mark. Tests must drive frames separately
+	// when they need a fresh mark, so harvesting cannot hide which mark branch ran.
 	ensure_initialized();
+	if (streamer_ && rd()) streamer_->harvest_occupancy(rd());
 	drain_occupancy();
+}
+
+Dictionary VoxelWorld::debug_occupancy_fallback_diff(Vector3i region) {
+	Dictionary d;
+	d["compared"] = 0;
+	d["fallback"] = 0;
+	d["mismatches"] = 0;
+	d["first_mismatch_brick"] = Vector3i(-1, -1, -1);
+	ensure_initialized();
+	if (!rd() || !atlas_ || !edit_log_ || !region_pass_) return d;
+	debug_stream_region(region);
+	const int rslot = debug_region_map_entry(region);
+	if (rslot < 0) return d;
+
+	std::vector<ve::EditOp> ops;
+	{
+		std::lock_guard<std::mutex> lock(edit_mutex_);
+		ops = edit_log_->ops({region.x, region.y, region.z});
+	}
+	const ve::IVec3 lo{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
+			region.z * ve::kRegionBricks};
+	const ve::IVec3 hi{lo.x + ve::kRegionBricks - 1, lo.y + ve::kRegionBricks - 1,
+			lo.z + ve::kRegionBricks - 1};
+	// force=false is intentional: this records only the plain mark path, where a no-surface
+	// brick has no generator job and must be classified by the 27-sample fallback.
+	debug_mark_region(region, rslot, Vector3i(lo.x, lo.y, lo.z),
+			Vector3i(hi.x, hi.y, hi.z), static_cast<int>(ops.size()), false);
+	const uint32_t block_bytes = GpuAtlas::occupancy_block_bytes();
+	const PackedByteArray gpu = rd()->buffer_get_data(atlas_->region_occupancy(),
+			static_cast<uint32_t>(rslot) * block_bytes, block_bytes);
+	if (gpu.size() < static_cast<int>(block_bytes)) return d;
+
+	ve::AnalyticGenerator gen;
+	int compared = 0, fallback = 0, mismatches = 0;
+	Vector3i first(-1, -1, -1);
+	for (int bi = 0; bi < ve::kRegionBrickCount; bi++) {
+		const ve::IVec3 brick{
+				region.x * ve::kRegionBricks + (bi & (ve::kRegionBricks - 1)),
+				region.y * ve::kRegionBricks + ((bi >> 5) & (ve::kRegionBricks - 1)),
+				region.z * ve::kRegionBricks + (bi >> 10)};
+		if (ve::brick_has_surface(gen, ops.data(), static_cast<int>(ops.size()), brick,
+				&volumes_, overrides_)) continue;
+		fallback++;
+		const int got = ve::OccupancyGrid::read_packed(
+				reinterpret_cast<const uint8_t *>(gpu.ptr()), bi);
+		const int want = static_cast<int>(ve::cell_state_probe(gen, ops.data(),
+				static_cast<int>(ops.size()), brick, &volumes_, overrides_));
+		compared++;
+		if (got != want) {
+			mismatches++;
+			if (mismatches == 1) first = Vector3i(brick.x, brick.y, brick.z);
+		}
+	}
+	d["compared"] = compared;
+	d["fallback"] = fallback;
+	d["mismatches"] = mismatches;
+	d["first_mismatch_brick"] = first;
+	return d;
 }
 
 Dictionary VoxelWorld::debug_occupancy_diff(Vector3i region) {

@@ -1,15 +1,8 @@
 extends GdUnitTestSuite
 
-# DIAGNOSTIC ONLY. Hypothesis under test:
-#
-#   ve::cell_state_field (and shaders/brick_mark.comp.glsl, which computes the same thing)
-#   decides a 0.8 m cell's state from a 3x3x3 lattice of SDF samples -- a 0.4 m spacing.
-#   A cell reads kCellAir when ALL 27 samples are positive. Matter thinner than that spacing
-#   can contain no sample point at all, so a thin sheet reads AIR.
-#
-#   Everything downstream believes it: ve::flood_anchored only walks `solid` cells, so the
-#   sheet is never in any labelled component, is never carved, and is left standing as static
-#   terrain after the island around it becomes a body.
+# Regression coverage for a sheet thinner than the 27-sample activation spacing. The
+# streaming/occupancy path must generate the touched bricks from the edit range so the exact
+# 5 cm lattice, not a missed activation sample, describes the resulting cells.
 
 const CENTER := Vector3(20.0, 56.0, 20.0)
 
@@ -47,12 +40,10 @@ func tool_of(w: VoxelWorld) -> VoxelEditTool:
 func step(w: VoxelWorld, frames: int, center: Vector3 = CENTER) -> void:
 	for i in range(frames):
 		w.debug_stream_frame(center)
-		w.debug_physics_frame(center)
-		w.debug_island_frame(1.0 / 60.0, center)
 
 # A shell thinner than the probe spacing: add a ball, subtract a slightly smaller ball at the
 # same centre. What survives is a spherical skin `radius - inner` thick.
-func test_a_sheet_thinner_than_the_probe_spacing_reads_as_air(timeout := 300000) -> void:
+func test_a_sheet_thinner_than_the_probe_spacing_is_generated(timeout := 300000) -> void:
 	var w := make_world()
 	var t := tool_of(w)
 	# Well clear of the terrain so nothing else is in these cells.
@@ -72,11 +63,10 @@ func test_a_sheet_thinner_than_the_probe_spacing_reads_as_air(timeout := 300000)
 	prints("field samples inside the 10 cm skin:", on_shell, "/ 64")
 	assert_int(on_shell).override_failure_message("the skin was never built").is_greater(0)
 
-	# ...and the occupancy grid cannot see it.
+	# The exact occupancy grid must retain the lattice cells containing the skin.
 	var air := 0
 	var solid := 0
 	var cells := 0
-	var probe_mins := []
 	var lo := Vector3i(int(floor((c.x - 2.4) / 0.8)), int(floor((c.y - 2.4) / 0.8)),
 		int(floor((c.z - 2.4) / 0.8)))
 	var hi := Vector3i(int(floor((c.x + 2.4) / 0.8)), int(floor((c.y + 2.4) / 0.8)),
@@ -104,31 +94,11 @@ func test_a_sheet_thinner_than_the_probe_spacing_reads_as_air(timeout := 300000)
 				cells += 1
 				if w.debug_cell_state(cell) == 1:
 					air += 1
-					# ve::brick_probe, recomputed here: 3^3 samples at 0.4 m spacing. How far
-					# does the closest of them clear zero? That is the pad the air verdict
-					# would need in order to catch this cell.
-					var mn := 1e30
-					for sx in range(3):
-						for sy in range(3):
-							for sz in range(3):
-								mn = minf(mn, w.debug_field_sdf(Vector3(
-									(cx * 0.8) + sx * 0.4, (cy * 0.8) + sy * 0.4,
-									(cz * 0.8) + sz * 0.4)))
-					probe_mins.append(mn)
 				else:
 					solid += 1
-	prints("cells holding matter:", cells, " reported AIR by the 3^3 probe:", air,
+	prints("cells holding matter:", cells, " reported AIR:", air,
 		" reported solid/full:", solid)
-	probe_mins.sort()
-	if probe_mins.size() > 0:
-		prints("probe_mn over the missed cells: min %.4f  median %.4f  max %.4f" % [
-			probe_mins[0], probe_mins[probe_mins.size() / 2],
-			probe_mins[probe_mins.size() - 1]])
-		var within := 0
-		for m in probe_mins:
-			if m <= 0.15:
-				within += 1
-		prints("missed cells that ACTIVATION_PAD (0.15) would catch:", within, "/",
-			probe_mins.size())
-	assert_int(air).override_failure_message(
-		"the 3^3 probe saw every cell of a 10 cm skin; hypothesis is wrong").is_greater(0)
+	assert_int(cells).is_greater(0)
+	assert_int(solid).override_failure_message(
+		"the exact lattice did not retain any cell containing the 10 cm skin").is_greater(0)
+	assert_int(air).is_equal(0)

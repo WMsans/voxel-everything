@@ -111,15 +111,18 @@ sources changed in this task. The prior Task 9 repository-wide gate already reco
 connectivity suite as failing outside its affected collider set. They remain an open branch
 baseline concern, not claimed as Task 10 regressions.
 
-### Errata 8 — thin-sheet repro remains a limitation
+### Errata 8 — round 1 activation correction
 
-`test_repro_thin_sheet.gd` still reports that the 10 cm sheet was never built and that the
-probe did not see the intended sheet. This task deliberately changes occupancy for bricks
-that *are generated*; it does not change the activation decision. A feature narrower than
-probe spacing can still be rejected by `brick_mark` as no-surface and therefore never reach
-`brick_gen`. The exact-lattice rule fixes phantom occupancy in generated bricks, but it is not
-a remedy for sub-probe geometry that is never resident. This is recorded rather than hidden;
-Task 10 makes no claim that the thin-sheet repro passes.
+The original report was incomplete: exact occupancy alone did not fix a probe-missed edit,
+because `brick_mark` returned before `brick_gen`. Round 1 adds a distinct edit mark mode that
+keeps the touched brick resident and queues it even when the 27-sample activation probe misses
+the surface. The generator then owns the occupancy result from its 17³ lattice. Plain
+stream-in still uses the probe only for the unambiguous no-surface fallback.
+
+The focused 10 cm sheet regression now passes with 64/64 shell samples negative and 98
+matter-containing cells reported solid/full, with zero reported air cells. The test disables
+physics/island stepping so body extraction does not intentionally remove the diagnostic shell;
+connectivity behavior remains covered by its separate suites.
 
 ## Benchmark / Errata 9
 
@@ -186,4 +189,32 @@ git diff --check
 # clean
 ```
 
-The known connectivity/thin-sheet failures are explicitly not represented as green.
+### Round 1 review response
+
+- Activation false negative: fixed by the edit-only mark mode described in Errata 8; stream-in
+  mode remains probe-based and does not allocate probe-missed empty bricks.
+- Lattice regression: `test_occupancy_lattice.gd` now places a 0.25 m carve at a 0.2 m lattice
+  offset from the brick origin, 0.346 m from the nearest probe sample, and asserts literal
+  `kCellSolid` plus the CPU rule.
+- Fallback parity: `debug_occupancy_fallback_diff` force=false marks a resident region,
+  synchronously reads the occupancy block before generation, and compares every no-surface
+  result with `cell_state_probe`; the test requires >100 fallback cells and zero mismatches.
+- Pump contract: `debug_pump_occupancy` harvests already-issued async readbacks and folds them;
+  it does not advance streaming or issue a mark. Tests drive frames separately.
+
+The known connectivity failures are explicitly not represented as green; they remain the
+pre-existing re-merge/body-pool failures documented below.
+
+Fresh round 1 verification after the helper-boundary fix:
+
+```text
+./build.sh -j$(nproc)                         Build OK
+./gdunit_tests.sh -c -a res://tests/test_occupancy_lattice.gd   3 passed, 0 failed
+./gdunit_tests.sh -c -a res://tests/test_occupancy.gd            4 passed, 0 failed
+./gdunit_tests.sh -c -a res://tests/test_repro_thin_sheet.gd    1 passed, 0 failed
+./gdunit_tests.sh -c -a res://tests/test_connectivity.gd        33 cases, 12 failures (known baseline)
+./gdunit_tests.sh -c -a res://tests/test_repro_pillar_debris.gd 1 passed, 0 failed
+./gdunit_tests.sh -c -a res://tests/test_island_body.gd         5 passed, 0 failed
+cd extension && scons test                              321 passed, 0 failed
+git diff --check                                      clean
+```

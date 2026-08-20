@@ -18,8 +18,11 @@ public:
 
 	// Records into an OPEN compute list. lo/hi are inclusive GLOBAL brick coordinates and
 	// must lie inside `region`; force_regen re-enqueues bricks that are already resident.
+	// generate_probe_misses is reserved for edit ranges whose exact lattice must supersede
+	// the coarse activation probe.
 	void mark(RenderingDevice *rd, int64_t list, ve::IVec3 region, int region_slot,
-			ve::IVec3 lo, ve::IVec3 hi, int op_count, bool force_regen);
+			ve::IVec3 lo, ve::IVec3 hi, int op_count, bool force_regen,
+			bool generate_probe_misses = false);
 	void release_region(RenderingDevice *rd, int64_t list, int region_slot);
 	void write_dispatch_args(RenderingDevice *rd, int64_t list);
 
