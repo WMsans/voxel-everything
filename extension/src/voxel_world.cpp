@@ -57,6 +57,9 @@
 #include <godot_cpp/classes/rd_uniform.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/world3d.hpp>
+#include <godot_cpp/classes/camera3d.hpp>
+#include <godot_cpp/classes/dir_access.hpp>
+#include <godot_cpp/classes/viewport.hpp>
 #include <godot_cpp/core/memory.hpp>
 #include <godot_cpp/variant/projection.hpp>
 #include <godot_cpp/variant/callable.hpp>
@@ -339,6 +342,12 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_sdf_atlas"), &VoxelWorld::debug_sdf_atlas);
 	ClassDB::bind_method(D_METHOD("debug_local_rd"), &VoxelWorld::debug_local_rd);
 	ClassDB::bind_method(D_METHOD("debug_load_shader", "res_path"), &VoxelWorld::debug_load_shader);
+	ClassDB::bind_method(D_METHOD("request_shader_reload"), &VoxelWorld::request_shader_reload);
+	ClassDB::bind_method(D_METHOD("debug_pump_shader_reload"), &VoxelWorld::debug_pump_shader_reload);
+	ClassDB::bind_method(D_METHOD("debug_shader_reload_stats"), &VoxelWorld::debug_shader_reload_stats);
+	ClassDB::bind_method(D_METHOD("debug_set_shader_override", "name", "source"),
+			&VoxelWorld::debug_set_shader_override);
+	ClassDB::bind_method(D_METHOD("debug_self_check"), &VoxelWorld::debug_self_check);
 	ClassDB::bind_method(D_METHOD("debug_store_volume", "slot", "sdf", "mat", "dim"), &VoxelWorld::debug_store_volume);
 	ClassDB::bind_method(D_METHOD("debug_eval_field", "p", "ops", "op_count"), &VoxelWorld::debug_eval_field);
 	ClassDB::bind_method(D_METHOD("debug_init_atlas"), &VoxelWorld::debug_init_atlas);
@@ -888,7 +897,12 @@ void VoxelWorld::_process(double delta) {
 			anchor->get_global_position());
 }
 
-VoxelWorld::~VoxelWorld() {}
+VoxelWorld::~VoxelWorld() {
+	// Test-only shader overrides are global (they are consulted by ve::load_shader_source);
+	// clear them when a world goes away so a broken override from one suite cannot leak into
+	// the next world created in the same process.
+	ve::clear_shader_source_overrides();
+}
 
 bool VoxelWorld::initialize_downsample(RenderingDevice *rd) {
 	teardown_downsample();
@@ -5385,6 +5399,229 @@ String VoxelWorld::debug_load_shader(const String &res_path) const {
 		return String();
 	}
 	return String(code.c_str());
+}
+
+bool VoxelWorld::preflight_shaders(RenderingDevice *rd, String *out_error) {
+	if (!rd) {
+		if (out_error) *out_error = "shader reload pre-flight: no RenderingDevice";
+		return false;
+	}
+	ProjectSettings *ps = ProjectSettings::get_singleton();
+	const String inc = ps->globalize_path("res://shaders");
+	Ref<DirAccess> dir = DirAccess::open("res://shaders");
+	if (dir.is_null()) {
+		if (out_error) *out_error = "shader reload pre-flight: cannot open res://shaders";
+		return false;
+	}
+	dir->list_dir_begin();
+	String file = dir->get_next();
+	bool ok = true;
+	while (!file.is_empty()) {
+		if (!dir->current_is_dir() && file.ends_with(".glsl")) {
+			const String res = "res://shaders/" + file;
+			const String path = ps->globalize_path(res);
+			std::string err;
+			const std::string code = ve::strip_shader_annotations(
+					ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err));
+			if (code.empty()) {
+				if (out_error) *out_error = res + String(": ") + String(err.c_str());
+				ok = false;
+				break;
+			}
+			Ref<RDShaderSource> src;
+			src.instantiate();
+			src->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
+			RenderingDevice::ShaderStage stage = RenderingDevice::SHADER_STAGE_COMPUTE;
+			if (file.ends_with(".vert.glsl")) stage = RenderingDevice::SHADER_STAGE_VERTEX;
+			else if (file.ends_with(".frag.glsl")) stage = RenderingDevice::SHADER_STAGE_FRAGMENT;
+			src->set_stage_source(stage, String(code.c_str()));
+			Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(src);
+			const String compile_err = spirv->get_stage_compile_error(stage);
+			if (!compile_err.is_empty()) {
+				if (out_error) *out_error = res + String(": ") + compile_err;
+				ok = false;
+				break;
+			}
+		}
+		file = dir->get_next();
+	}
+	dir->list_dir_end();
+	return ok;
+}
+
+void VoxelWorld::request_shader_reload() {
+	// A latch, not the work: shaders are compiled and pipelines created on the device that
+	// owns them, and for the shipping world that device belongs to the render thread.
+	reload_requested_.store(true, std::memory_order_release);
+}
+
+void VoxelWorld::pump_shader_reload() {
+	if (!reload_requested_.exchange(false, std::memory_order_acq_rel)) return;
+	{
+		std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
+		if (render_shutting_down_) return;
+	}
+	{
+		std::lock_guard<std::mutex> lock(reload_mutex_);
+		reload_count_++;
+	}
+	if (!initialized_) {
+		ensure_initialized();
+		std::lock_guard<std::mutex> lock(reload_mutex_);
+		reload_last_ok_ = initialized_;
+		reload_last_error_ = initialized_ ? String() : String("shader reload re-init failed");
+		return;
+	}
+	String error;
+	if (!preflight_shaders(rd(), &error)) {
+		// Fail-soft (spec §8): a shader that will not compile must not take down the
+		// pipelines that are already running. Keep the old GPU objects untouched.
+		std::lock_guard<std::mutex> lock(reload_mutex_);
+		reload_last_ok_ = false;
+		reload_last_error_ = error;
+		UtilityFunctions::printerr("VoxelWorld: shader reload pre-flight failed; keeping old pipelines: ",
+				error);
+		return;
+	}
+	// teardown_gpu() frees every GPU object and leaves the CPU cores -- edit log, residency,
+	// override store, LoD tree -- untouched, so ensure_initialized() re-streams the same
+	// world. This is the whole hot reload.
+	teardown_gpu();
+	ensure_initialized();
+	{
+		std::lock_guard<std::mutex> lock(reload_mutex_);
+		reload_last_ok_ = initialized_;
+		reload_last_error_ = initialized_ ? String() : String("shader reload re-init failed");
+	}
+}
+
+Dictionary VoxelWorld::debug_shader_reload_stats() {
+	Dictionary d;
+	std::lock_guard<std::mutex> lock(reload_mutex_);
+	d["reloads"] = reload_count_;
+	d["last_ok"] = reload_last_ok_;
+	d["last_error"] = reload_last_error_;
+	return d;
+}
+
+void VoxelWorld::debug_set_shader_override(const String &name, const String &source) {
+	ve::set_shader_source_override(name.utf8().get_data(), source.utf8().get_data());
+}
+
+Dictionary VoxelWorld::debug_self_check() {
+	Dictionary d;
+	d["field_mismatches"] = 0;
+	d["brick_mismatches"] = 0;
+	d["mesh_mismatches"] = 0;
+	d["lod_mismatches"] = 0;
+	d["occupancy_mismatches"] = 0;
+	const auto start = std::chrono::steady_clock::now();
+
+	// Use the live camera when there is one; the self-check keybind is for the running demo.
+	Vector3 center(24.0f, 64.0f, 24.0f);
+	Viewport *vp = get_viewport();
+	if (vp) {
+		Camera3D *cam = vp->get_camera_3d();
+		if (cam) center = cam->get_global_position();
+	}
+
+	// Field/raymarch differential: a handful of probes from just above the camera against
+	// the analytic CPU raycast. The raymarch shader evaluates the same field on the GPU, so
+	// a hit/position disagreement is a live field drift.
+	int field_mismatches = 0;
+	const Vector3 origin = center + Vector3(0.0f, 20.0f, 0.0f);
+	const Vector3 dirs[] = {
+		Vector3(0.0f, -1.0f, 0.0f),
+		Vector3(0.10f, -1.0f, 0.05f).normalized(),
+		Vector3(-0.10f, -1.0f, -0.05f).normalized(),
+		Vector3(0.05f, -1.0f, -0.10f).normalized(),
+		Vector3(-0.05f, -1.0f, 0.10f).normalized(),
+	};
+	for (const Vector3 &dir : dirs) {
+		const Dictionary cpu = debug_raycast(origin, dir);
+		const Dictionary gpu = debug_raymarch_probe(origin, dir);
+		const bool cpu_hit = cpu.has("hit") && bool(cpu["hit"]);
+		const bool gpu_hit = gpu.has("hit") && bool(gpu["hit"]);
+		if (cpu_hit != gpu_hit) {
+			field_mismatches++;
+			continue;
+		}
+		if (cpu_hit && gpu_hit && cpu.has("pos") && gpu.has("pos")) {
+			const Vector3 a = cpu["pos"];
+			const Vector3 b = gpu["pos"];
+			if (a.distance_to(b) > 0.5f) field_mismatches++;
+		}
+	}
+	d["field_mismatches"] = field_mismatches;
+
+	// Brick differential on a small spread of resident bricks near the camera/centre.
+	const ve::IVec3 region = ve::WorldBounds::region_of_point(center.x, center.y, center.z);
+	int brick_mismatches = 0;
+	const int rslot = debug_region_map_entry(Vector3i(region.x, region.y, region.z));
+	if (rslot >= 0) {
+		std::vector<ve::EditOp> ops_vec;
+		{
+			std::lock_guard<std::mutex> lock(edit_mutex_);
+			if (edit_log_) ops_vec = edit_log_->ops(region);
+		}
+		PackedByteArray ops;
+		const int op_count = static_cast<int>(ops_vec.size());
+		if (op_count > 0) {
+			ops.resize(static_cast<int64_t>(op_count) * static_cast<int64_t>(sizeof(ve::EditOp)));
+			std::memcpy(ops.ptrw(), ops_vec.data(), static_cast<size_t>(ops.size()));
+		}
+		int checked = 0;
+		for (int dz = -1; dz <= 1 && checked < 6; dz++)
+			for (int dy = -1; dy <= 1 && checked < 6; dy++)
+				for (int dx = -1; dx <= 1 && checked < 6; dx++) {
+					const ve::IVec3 b = ve::WorldBounds::brick_of_point(
+							center.x + dx * 4.0f, center.y + dy * 4.0f, center.z + dz * 4.0f);
+					const Dictionary bd = debug_brick_diff(Vector3i(b.x, b.y, b.z), rslot, ops, op_count);
+					if (!bd.has("slot") || int(bd["slot"]) < 0) continue;
+					brick_mismatches += int(bd["sdf_diff_over_one"]);
+					brick_mismatches += int(bd["mat_near_mismatch"]);
+					brick_mismatches += int(bd["mip_mismatch"]);
+					if (!bool(bd["palette_match"])) brick_mismatches++;
+					checked++;
+				}
+	}
+	d["brick_mismatches"] = brick_mismatches;
+
+	// Mesh differential on the chunk under the camera/centre.
+	const ve::IVec3 mc = ve::chunk_of_point(center.x, center.y, center.z);
+	const Dictionary md = debug_mesh_diff(Vector3i(mc.x, mc.y, mc.z));
+	int mesh_mismatches = 0;
+	if (md.has("lattice_diff_over_one")) mesh_mismatches += int(md["lattice_diff_over_one"]);
+	for (const char *key : {"cells_only_cpu", "cells_only_gpu", "tri_only_cpu",
+			"tri_only_gpu", "verts_off_10cm", "winding_bad"}) {
+		if (md.has(String(key))) mesh_mismatches += int(md[key]);
+	}
+	d["mesh_mismatches"] = mesh_mismatches;
+
+	// LoD differential at level 2 on the chunk under the camera/centre.
+	const int lod_level = 2;
+	const ve::IVec3 lc = ve::lod_chunk_of_point(lod_level, center.x, center.y, center.z);
+	const Dictionary ld = debug_lod_diff(lod_level, Vector3i(lc.x, lc.y, lc.z));
+	int lod_mismatches = 0;
+	if (ld.has("material_mismatches")) lod_mismatches += int(ld["material_mismatches"]);
+	if (ld.has("quads_only_cpu")) lod_mismatches += int(ld["quads_only_cpu"]);
+	if (ld.has("quads_only_gpu")) lod_mismatches += int(ld["quads_only_gpu"]);
+	if (ld.has("fine_max_diff") && int(ld["fine_max_diff"]) > 1) lod_mismatches++;
+	if (ld.has("reduced_max_diff") && int(ld["reduced_max_diff"]) > 1) lod_mismatches++;
+	if (ld.has("corner_max_diff") && int(ld["corner_max_diff"]) > 0) lod_mismatches++;
+	d["lod_mismatches"] = lod_mismatches;
+
+	// Occupancy differential on the camera/centre region.
+	const Dictionary od = debug_occupancy_diff(Vector3i(region.x, region.y, region.z));
+	const int occupancy_mismatches = od.has("mismatches") ? int(od["mismatches"]) : 0;
+	d["occupancy_mismatches"] = occupancy_mismatches;
+
+	const double elapsed_ms = std::chrono::duration<double, std::milli>(
+			std::chrono::steady_clock::now() - start).count();
+	d["elapsed_ms"] = elapsed_ms;
+	d["ok"] = field_mismatches == 0 && brick_mismatches == 0 &&
+			mesh_mismatches == 0 && lod_mismatches == 0 && occupancy_mismatches == 0;
+	return d;
 }
 
 void VoxelWorld::debug_store_volume(int slot, const PackedByteArray &sdf,

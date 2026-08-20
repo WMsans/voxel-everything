@@ -1,9 +1,31 @@
 #include "render/shader_loader.h"
 #include <fstream>
+#include <iterator>
+#include <map>
+#include <mutex>
 #include <set>
 #include <sstream>
 
 namespace ve {
+
+namespace {
+std::mutex g_shader_override_mutex;
+std::map<std::string, std::string> g_shader_overrides;
+
+bool find_override(const std::string &path, std::string *out) {
+	std::lock_guard<std::mutex> lock(g_shader_override_mutex);
+	auto it = g_shader_overrides.find(path);
+	if (it == g_shader_overrides.end()) {
+		const size_t slash = path.find_last_of("/\\");
+		const std::string base = slash == std::string::npos
+				? path : path.substr(slash + 1);
+		it = g_shader_overrides.find(base);
+	}
+	if (it == g_shader_overrides.end()) return false;
+	if (out) *out = it->second;
+	return true;
+}
+} // namespace
 
 // `stack` is the ancestry of the file being expanded and detects cycles; `included` is every
 // file already emitted anywhere and gives `#pragma once` semantics. Both are needed: common
@@ -17,15 +39,26 @@ static bool expand(const std::string &path, const std::string &include_dir,
 		return false;
 	}
 	if (included.count(path)) return true; // already emitted: skip, not an error
-	std::ifstream f(path);
-	if (!f) {
-		if (error) *error = "cannot open " + path;
-		return false;
+
+	std::string content;
+	std::string override_source;
+	if (find_override(path, &override_source)) {
+		content = std::move(override_source);
+	} else {
+		std::ifstream f(path);
+		if (!f) {
+			if (error) *error = "cannot open " + path;
+			return false;
+		}
+		content.assign(std::istreambuf_iterator<char>(f),
+				std::istreambuf_iterator<char>());
 	}
+
 	stack.insert(path);
 	included.insert(path);
+	std::istringstream in(content);
 	std::string line;
-	while (std::getline(f, line)) {
+	while (std::getline(in, line)) {
 		const std::string key = "#include \"";
 		const auto pos = line.find(key);
 		if (pos != std::string::npos) {
@@ -67,6 +100,21 @@ std::string strip_shader_annotations(const std::string &src) {
 		if (!annotation) out << line << '\n';
 	}
 	return out.str();
+}
+
+void set_shader_source_override(const std::string &key, const std::string &source) {
+	std::lock_guard<std::mutex> lock(g_shader_override_mutex);
+	g_shader_overrides[key] = source;
+}
+
+void clear_shader_source_override(const std::string &key) {
+	std::lock_guard<std::mutex> lock(g_shader_override_mutex);
+	g_shader_overrides.erase(key);
+}
+
+void clear_shader_source_overrides() {
+	std::lock_guard<std::mutex> lock(g_shader_override_mutex);
+	g_shader_overrides.clear();
 }
 
 } // namespace ve
