@@ -66,6 +66,7 @@ func test_reconsolidation_preserves_previous_bake(timeout := 120000) -> void:
 
 func test_full_pool_refusal_preserves_edit_log_after_actual_exhaustion() -> void:
 	var w := make_world()
+	w.debug_stream_region(Vector3i(0, -2, 0))
 	assert_bool(w.debug_fill_override_pool()).is_true()
 	assert_int(w.debug_override_used()).is_equal(8192)
 	w.debug_apply_sphere_subtract(Vector3(12.8, 51.2, 12.8), 2.0)
@@ -74,6 +75,13 @@ func test_full_pool_refusal_preserves_edit_log_after_actual_exhaustion() -> void
 	assert_bool(w.debug_consolidate_region(Vector3i(0, 2, 0))).is_false()
 	assert_int(w.debug_override_used()).is_equal(8192)
 	assert_int(w.debug_region_op_count(Vector3i(0, 2, 0))).is_equal(before)
+
+func test_debug_fill_refuses_offscreen_region_without_touching_slot_zero() -> void:
+	var w := make_world()
+	w.debug_stream_frame(Vector3(1000.0, 1000.0, 1000.0))
+	assert_int(w.debug_slot_of_region(Vector3i(0, 2, 0))).is_equal(-1)
+	assert_bool(w.debug_fill_override_pool()).is_false()
+	assert_int(w.debug_override_used()).is_equal(0)
 
 func test_failed_consolidation_preserves_old_publication() -> void:
 	var w := make_world()
@@ -111,6 +119,27 @@ func test_restore_failure_rolls_back_cpu_and_both_gpu_pools() -> void:
 	var lod: Dictionary = w.debug_lod_diff(0, Vector3i(1, 4, 1))
 	assert_int(int(lod["fine_max_diff"])).is_less_equal(1)
 	assert_int(int(lod["reduced_max_diff"])).is_less_equal(1)
+
+func test_teardown_releases_staged_override_slots_before_reinit() -> void:
+	var w := make_world()
+	w.debug_apply_sphere_subtract(Vector3(24.4, 51.4, 24.4), 2.0)
+	assert_bool(w.debug_consolidate_region(Vector3i(0, 2, 0))).is_true()
+	var used_before := w.debug_override_used()
+	for i in range(192):
+		w.debug_apply_sphere_subtract(Vector3(8.4 + float(i % 3) * 0.2, 51.4, 8.4), 1.5)
+	w.debug_set_fail_consolidate_uploads(true)
+	w.debug_pump_consolidation_async()
+	var staged := false
+	for i in range(100):
+		OS.delay_msec(5)
+		w.debug_pump_consolidation_async()
+		if w.debug_override_used() > used_before:
+			staged = true
+			break
+	assert_bool(staged).override_failure_message("transaction never reached publication staging").is_true()
+	w.debug_teardown_physics()
+	assert_int(w.debug_override_used()).is_equal(used_before)
+	assert_int(w.debug_region_op_count(Vector3i(0, 2, 0))).is_greater_equal(1)
 
 func test_mesh_consumer_replays_consolidated_override_after_worker_reinit(timeout := 120000) -> void:
 	var w := make_world()

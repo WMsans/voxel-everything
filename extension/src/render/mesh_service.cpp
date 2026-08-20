@@ -34,6 +34,8 @@ bool MeshService::start(const MeshPassConfig &cfg) {
 		fail_consolidations_.store(false, std::memory_order_release);
 		fail_consolidate_uploads_.store(false, std::memory_order_release);
 		fail_next_restore_.store(false, std::memory_order_release);
+		worker_state_valid_.store(true, std::memory_order_release);
+		rebuilding_worker_.store(false, std::memory_order_release);
 	}
 	thread_ = std::thread([this] { run(); });
 	std::unique_lock<std::mutex> lock(mu_);
@@ -83,10 +85,12 @@ void MeshService::stop() {
 	fail_consolidations_.store(false, std::memory_order_release);
 	fail_consolidate_uploads_.store(false, std::memory_order_release);
 	fail_next_restore_.store(false, std::memory_order_release);
+	worker_state_valid_.store(true, std::memory_order_release);
+	rebuilding_worker_.store(false, std::memory_order_release);
 }
 
 bool MeshService::submit(std::vector<MeshRequest> requests) {
-	if (requests.empty() || !is_valid()) return false;
+	if (requests.empty() || !is_valid() || !worker_state_valid_.load(std::memory_order_acquire)) return false;
 	{
 		std::lock_guard<std::mutex> lock(mu_);
 		if (stopping_ || !pending_.empty() || busy_.load(std::memory_order_acquire)) return false;
@@ -113,7 +117,7 @@ int MeshService::collect(std::vector<MeshResult> *out) {
 }
 
 bool MeshService::submit_extracts(std::vector<IslandExtractJob> jobs) {
-	if (jobs.empty() || !is_valid()) return false;
+	if (jobs.empty() || !is_valid() || !worker_state_valid_.load(std::memory_order_acquire)) return false;
 	if (fail_extract_submit_.load(std::memory_order_acquire)) return false;
 	{
 		std::lock_guard<std::mutex> lock(mu_);
@@ -140,7 +144,7 @@ int MeshService::collect_extracts(std::vector<IslandExtractResult> *out) {
 }
 
 bool MeshService::submit_lod(std::vector<LodBuildJob> jobs) {
-	if (jobs.empty() || !is_valid()) return false;
+	if (jobs.empty() || !is_valid() || !worker_state_valid_.load(std::memory_order_acquire)) return false;
 	{
 		std::lock_guard<std::mutex> lock(mu_);
 		if (stopping_ || !pending_lod_.empty() || lod_busy_.load(std::memory_order_acquire))
@@ -153,7 +157,7 @@ bool MeshService::submit_lod(std::vector<LodBuildJob> jobs) {
 }
 
 bool MeshService::submit_consolidations(std::vector<ConsolidateJob> jobs) {
-	if (jobs.empty() || !is_valid()) return false;
+	if (jobs.empty() || !is_valid() || !worker_state_valid_.load(std::memory_order_acquire)) return false;
 	{
 		std::lock_guard<std::mutex> lock(mu_);
 		if (stopping_ || !pending_consolidations_.empty() ||
@@ -168,7 +172,7 @@ bool MeshService::submit_consolidations(std::vector<ConsolidateJob> jobs) {
 bool MeshService::set_override_region(ve::IVec3 region, int region_slot, int table,
 		const std::vector<std::pair<int, int>> &entries) {
 	if (region_slot < 0 || table < -1 || table >= OverridePool::kMaxOverrideTables ||
-			!is_valid()) return false;
+			!is_valid() || !worker_state_valid_.load(std::memory_order_acquire)) return false;
 	{
 		std::lock_guard<std::mutex> lock(mu_);
 		if (stopping_) return false;
@@ -184,7 +188,7 @@ bool MeshService::set_override_region(ve::IVec3 region, int region_slot, int tab
 }
 
 void MeshService::clear_override_region(int region_slot) {
-	if (region_slot < 0 || !is_valid()) return;
+	if (region_slot < 0 || !is_valid() || !worker_state_valid_.load(std::memory_order_acquire)) return;
 	{
 		std::lock_guard<std::mutex> lock(mu_);
 		if (stopping_) return;
@@ -199,6 +203,7 @@ void MeshService::clear_override_region(int region_slot) {
 bool MeshService::replay_overrides(const ve::OverrideStore &store,
 		const std::map<std::tuple<int, int, int>, int> &tables) {
 	bool uploaded = true;
+	rebuilding_worker_.store(true, std::memory_order_release);
 	const bool ran = run_sync([&](MeshPass &pass) {
 		for (int table = 0; table < OverridePool::kMaxOverrideTables; table++)
 			pass.clear_override_table(table);
@@ -229,8 +234,15 @@ bool MeshService::replay_overrides(const ve::OverrideStore &store,
 			// stream-in, while the table bytes are safe to replay globally.
 		}
 	});
-	if (ran && uploaded) override_tables_ = tables;
-	return ran && uploaded;
+	rebuilding_worker_.store(false, std::memory_order_release);
+	const bool ok = ran && uploaded;
+	if (ok) {
+		override_tables_ = tables;
+		worker_state_valid_.store(true, std::memory_order_release);
+	} else {
+		worker_state_valid_.store(false, std::memory_order_release);
+	}
+	return ok;
 }
 
 bool MeshService::restore_overrides(const std::vector<int> &slots,
@@ -311,7 +323,7 @@ int MeshService::collect_consolidations(std::vector<ConsolidateResult> *out) {
 
 bool MeshService::submit_override_publication(OverridePublication publication) {
 	if (publication.slots.empty() || publication.slots.size() != publication.bricks.size() ||
-			!is_valid()) return false;
+			!is_valid() || !worker_state_valid_.load(std::memory_order_acquire)) return false;
 	{
 		std::lock_guard<std::mutex> lock(mu_);
 		if (stopping_ || !pending_override_publications_.empty() ||
@@ -348,7 +360,7 @@ int MeshService::collect_lod(std::vector<LodBuildResult> *out) {
 }
 
 bool MeshService::submit_volume(int slot, ve::VolumeData data) {
-	if (!is_valid() || !data.valid()) return false;
+	if (!is_valid() || !worker_state_valid_.load(std::memory_order_acquire) || !data.valid()) return false;
 	{
 		std::lock_guard<std::mutex> lock(mu_);
 		if (stopping_) return false;
@@ -378,7 +390,8 @@ std::vector<int> MeshService::debug_submitted_volume_slots() const {
 }
 
 bool MeshService::run_sync(const std::function<void(MeshPass &)> &fn) {
-	if (!is_valid()) return false;
+	if (!is_valid() || (!worker_state_valid_.load(std::memory_order_acquire) &&
+			!rebuilding_worker_.load(std::memory_order_acquire))) return false;
 	std::unique_lock<std::mutex> lock(mu_);
 	if (stopping_) return false;
 	// One at a time, and never while a batch, an extraction, a LoD build, or a queued volume
@@ -472,6 +485,11 @@ void MeshService::run() {
 						!pending_override_publications_.empty();
 			});
 			if (stopping_) break;
+			// A failed rollback makes the worker bytes non-authoritative. Do not let any
+			// already-queued job consume them; replay_overrides() is the only path allowed
+			// to wake this state back up.
+			if (!worker_state_valid_.load(std::memory_order_acquire) && !sync_pending_)
+				continue;
 			if (sync_pending_) {
 				sync_fn = sync_fn_;
 			} else if (!pending_override_updates_.empty()) {
@@ -560,7 +578,6 @@ void MeshService::run() {
 				for (size_t i = 0; uploaded && i < publication.slots.size(); i++)
 					uploaded = pass.upload_override(publication.slots[i], publication.bricks[i]) &&
 							(!lod_ || lod_->upload_override(publication.slots[i], publication.bricks[i]));
-				bool restored = true;
 				if (uploaded) {
 					pass.clear_override_table(publication.table);
 					pass.set_override_table(publication.region_slot, publication.table,
@@ -570,26 +587,42 @@ void MeshService::run() {
 					override_tables_[std::tuple<int, int, int>{publication.region.x,
 							publication.region.y, publication.region.z}] = publication.table;
 					result.success = true;
-				} else if (!fail_next_restore_.exchange(false, std::memory_order_acq_rel)) {
-					for (size_t i = 0; restored && i < publication.old_slots.size(); i++)
-						restored = pass.upload_override(publication.old_slots[i],
-								publication.old_bricks[i]) &&
-								(!lod_ || lod_->upload_override(publication.old_slots[i],
-										publication.old_bricks[i]));
-					pass.clear_override_table(publication.table);
-					pass.set_override_table(publication.region_slot, publication.old_table,
+				} else {
+					// Restore every old byte and the old table as one replayable transaction.
+					// A transient/injected failure must not make a partial worker mirror
+					// authoritative, so retry the complete restore rather than publishing a
+					// false failure and continuing with mixed bytes.
+					auto restore = [&]() {
+						for (size_t i = 0; i < publication.old_slots.size(); i++) {
+							if (!pass.upload_override(publication.old_slots[i],
+									publication.old_bricks[i]) ||
+									(lod_ && !lod_->upload_override(publication.old_slots[i],
+											publication.old_bricks[i])))
+								return false;
+						}
+						pass.clear_override_table(publication.table);
+						pass.set_override_table(publication.region_slot, publication.old_table,
 							publication.old_entries);
-					if (lod_) lod_->set_override_table(publication.region_slot,
-							publication.old_table, publication.old_entries);
-					if (publication.old_table < 0)
-						override_tables_.erase(std::tuple<int, int, int>{publication.region.x,
-								publication.region.y, publication.region.z});
-					else
-						override_tables_[std::tuple<int, int, int>{publication.region.x,
-							publication.region.y, publication.region.z}] = publication.old_table;
+						if (lod_) lod_->set_override_table(publication.region_slot,
+								publication.old_table, publication.old_entries);
+						if (publication.old_table < 0)
+							override_tables_.erase(std::tuple<int, int, int>{publication.region.x,
+									publication.region.y, publication.region.z});
+						else
+							override_tables_[std::tuple<int, int, int>{publication.region.x,
+								publication.region.y, publication.region.z}] = publication.old_table;
+						return true;
+					};
+					bool restored = false;
+					if (!fail_next_restore_.exchange(false, std::memory_order_acq_rel)) restored = restore();
+					for (int attempt = 0; !restored && attempt < 3; attempt++) restored = restore();
+					result.worker_state_valid = restored;
+					if (!restored) {
+						worker_state_valid_.store(false, std::memory_order_release);
+						UtilityFunctions::printerr(
+								"MeshService: async override rollback failed; worker state invalid");
+					}
 				}
-				if (!uploaded && !restored)
-					UtilityFunctions::printerr("MeshService: async override rollback failed");
 				publication_out.push_back(std::move(result));
 			}
 			{
