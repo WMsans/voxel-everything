@@ -412,6 +412,7 @@ public:
 	void debug_set_fail_extract_submit(bool v);
 	void debug_set_fail_consolidations(bool v);
 	void debug_set_fail_consolidate_uploads(bool v);
+	void debug_set_fail_restore_overrides(bool v);
 	void debug_set_merge_sleep_seconds(float v);
 	// Test hook: lower the dynamic-body guardrail so a small test can prove slot-pool holes
 	// after merges do not count against the cap.
@@ -542,6 +543,11 @@ public:
 	Dictionary debug_consolidate_diff(Vector3i region);
 	bool debug_consolidate_region(Vector3i region);
 	int debug_region_op_count(Vector3i region);
+	int debug_override_used() const;
+	// Test-only fixture: publish one valid table containing every override slot, exhausting
+	// the real 8192-slot store so refusal tests do not rely on an oversized plan shortcut.
+	bool debug_fill_override_pool();
+	Dictionary debug_override_render_state(Vector3i brick);
 	int debug_override_region_table(int region_slot) const;
 
 	// --- M5 Task 9 hooks ---

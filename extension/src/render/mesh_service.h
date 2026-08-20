@@ -78,6 +78,8 @@ public:
 
 	bool submit_consolidations(std::vector<ConsolidateJob> jobs);
 	int collect_consolidations(std::vector<ConsolidateResult> *out);
+	// Queues an override table update for the worker-owned pass. These calls never wait for
+	// the worker; the update is drained before any later mesh/LoD/consolidation job.
 	bool set_override_region(ve::IVec3 region, int region_slot, int table,
 			const std::vector<std::pair<int, int>> &entries);
 	void clear_override_region(int region_slot);
@@ -119,6 +121,9 @@ public:
 	void debug_set_fail_consolidate_uploads(bool v) {
 		fail_consolidate_uploads_.store(v, std::memory_order_release);
 	}
+	void debug_set_fail_restore_overrides(bool v) {
+		fail_next_restore_.store(v, std::memory_order_release);
+	}
 #else
 	// Fail-injection hooks are debug-only: release builds must not be able to drive the
 	// mesh service into artificial failure states.
@@ -127,6 +132,7 @@ public:
 	void debug_set_fail_extract_submit(bool v) { (void)v; }
 	void debug_set_fail_consolidations(bool v) { (void)v; }
 	void debug_set_fail_consolidate_uploads(bool v) { (void)v; }
+	void debug_set_fail_restore_overrides(bool v) { (void)v; }
 #endif
 
 	// Copies one stored volume into THIS device's pool, on the worker thread. The main
@@ -172,6 +178,14 @@ private:
 	ConsolidatePass *consolidate_ = nullptr;       // worker thread only
 	std::vector<LodBuildJob> pending_lod_;
 	std::vector<LodBuildResult> lod_results_;
+	struct OverrideUpdate {
+		bool clear = false;
+		ve::IVec3 region{};
+		int region_slot = -1;
+		int table = -1;
+		std::vector<std::pair<int, int>> entries;
+	};
+	std::vector<OverrideUpdate> pending_override_updates_;
 	std::vector<ConsolidateJob> pending_consolidations_;
 	std::vector<ConsolidateResult> consolidate_results_;
 	std::vector<VolumeUpload> pending_volumes_;
@@ -189,6 +203,7 @@ private:
 	std::atomic<bool> consolidate_busy_{false};
 	std::atomic<bool> fail_consolidations_{false};
 	std::atomic<bool> fail_consolidate_uploads_{false};
+	std::atomic<bool> fail_next_restore_{false};
 	std::map<std::tuple<int, int, int>, int> override_tables_;
 	const std::function<void(MeshPass &)> *sync_fn_ = nullptr;
 	bool sync_pending_ = false;
