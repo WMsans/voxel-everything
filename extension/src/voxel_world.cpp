@@ -1721,7 +1721,7 @@ void VoxelWorld::gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::Edit
 	if (!edit_log_) return;
 	float lo[3], hi[3];
 	ve::lod_chunk_aabb(level, coord, lo, hi);
-	const float pad = 2.0f * ve::lod_cell_size(level);
+	const float pad = std::max(2.0f * ve::lod_cell_size(level), ve::kLatticeFilterPad);
 	for (int a = 0; a < 3; a++) {
 		lo[a] -= pad;
 		hi[a] += pad;

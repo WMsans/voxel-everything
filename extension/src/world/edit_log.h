@@ -58,9 +58,9 @@ private:
 // Collects every region op that can influence a world-space AABB, for use when an extraction
 // or differential probe evaluates one component. A component can straddle a region boundary
 // even when it is smaller than a region, so the caller cannot assume one region's op list is
-// enough. Ops are appended to every region they touch (with the same activation/voxel pad the
-// append path uses); this helper gathers all overlapping regions' lists, keeps only ops whose
-// own world AABB touches the queried AABB (plus a small pad, so boundary-touching ops are
+// enough. The collector uses kLatticeFilterPad for stored-lattice consumers (the append path
+// remains on the brick residency pad); it gathers all overlapping regions' lists, keeps only
+// ops whose own world AABB touches the queried AABB (plus that pad, so boundary-touching ops are
 // not dropped), and emits them in GLOBAL append order.
 //
 // Sequence numbers let us reconstruct the order across region boundaries: each region list is
@@ -72,7 +72,7 @@ inline void collect_ops_for_aabb(const EditLog &log, const float lo[3], const fl
 	out->clear();
 	if (!lo || !hi || lo[0] > hi[0] || lo[1] > hi[1] || lo[2] > hi[2]) return;
 
-	constexpr float kPad = kActivationPad + kVoxelSize;
+	constexpr float kPad = kLatticeFilterPad;
 	constexpr float kInvRegion = 1.0f / kRegionSize;
 	int rlo_a[3] = {0, 0, 0}, rhi_a[3] = {0, 0, 0};
 	for (int a = 0; a < 3; a++) {
@@ -86,12 +86,7 @@ inline void collect_ops_for_aabb(const EditLog &log, const float lo[3], const fl
 	const ve::IVec3 rhi{rhi_a[0], rhi_a[1], rhi_a[2]};
 
 	const auto intersects = [&](const EditOp &op) {
-		float olo[3], ohi[3];
-		op_world_aabb(op, olo, ohi);
-		for (int a = 0; a < 3; a++) {
-			if (ohi[a] < lo[a] - kPad || olo[a] > hi[a] + kPad) return false;
-		}
-		return true;
+		return op_touches_aabb(op, lo, hi, kPad);
 	};
 
 	struct SeqOp {

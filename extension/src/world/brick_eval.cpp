@@ -16,7 +16,7 @@ std::vector<EditOp> ops_for_brick(const EditOp *ops, int op_count, IVec3 brick) 
 	std::vector<EditOp> kept;
 	kept.reserve(static_cast<size_t>(count));
 	for (int i = 0; i < count; i++)
-		if (op_touches_aabb(ops[i], lo, hi, kActivationPad + kVoxelSize))
+		if (op_touches_aabb(ops[i], lo, hi, kBrickFilterPad))
 			kept.push_back(ops[i]);
 	return kept;
 }

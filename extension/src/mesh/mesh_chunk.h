@@ -51,11 +51,9 @@ void chunk_world_origin(IVec3 chunk, float out[3]);
 // Distance from a point to the chunk's world AABB; 0 inside.
 float chunk_distance(IVec3 chunk, float cx, float cy, float cz);
 
-// Inclusive chunk range whose stored triangles an op can move. Only the op's own shape plus
-// two mesh cells: a CSG max/min changes the field far outside the shape, but only INSIDE it
-// can it flip a sample's sign, and a sample whose sign it cannot flip only shifts a vertex
-// when it is itself within a cell of the surface — i.e. within a cell of the shape. Two
-// cells of pad covers that and the mesh overlap plane below the chunk origin.
+// Inclusive chunk range whose stored triangles an op can move. The stored lattice can retain
+// the op's narrow-band influence outside its own AABB, so use the shared lattice pad rather
+// than the brick residency pad; it also covers the mesh overlap plane below the chunk origin.
 void op_chunk_range(const EditOp &op, IVec3 *lo, IVec3 *hi);
 
 // Conservative "this chunk may contain a surface". Unlike brick_has_surface's empirical

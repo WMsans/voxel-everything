@@ -103,3 +103,91 @@ pressure and is not attributed to the AABB filter.
   Task 5 does not touch that pipeline.
 - The benchmark's edit leg still reports `overflow=1`, so the result should not be read as
   closure of Task 8's consolidation work.
+
+## Round-1 review fix report
+
+The fix separates the consumer pads: `kBrickFilterPad = 0.20 m` remains for brick
+residency/generation, while `kLatticeFilterPad = kVoxelSize + kSdfRange = 0.69 m` is used by
+volume extraction, mesh invalidation/collection, and LoD collection. CPU collection and GLSL
+filter probes use the same AABB overlap predicate and append/iterate in chronological order.
+Shared shader symbols replace the duplicated activation literal.
+
+### TDD and verification commands
+
+```text
+cd extension && scons test
+[doctest] test cases:     306 |     306 passed | 0 failed | 0 skipped
+[doctest] assertions: 3961922 | 3961922 passed | 0 failed |
+[doctest] Status: SUCCESS!
+
+./build.sh -j$(nproc)
+==> Build OK: 4.6M libvoxel_everything.linux.template_debug.x86_64.so
+==> Done.
+
+./gdunit_tests.sh -c -a res://tests/test_op_filter_gpu.gd
+4 test cases | 0 errors | 0 failures | 0 skipped | 0 orphans
+Exit code: 0
+
+./gdunit_tests.sh -c -a res://tests/test_brick_diff.gd
+6 test cases | 0 errors | 0 failures | 0 skipped | 0 orphans
+Exit code: 0
+
+./gdunit_tests.sh -c -a res://tests/test_field_diff.gd
+5 test cases | 0 errors | 0 failures | 0 skipped | 0 orphans
+Exit code: 0
+
+./gdunit_tests.sh -c -a res://tests/test_field_volume_diff.gd
+5 test cases | 0 errors | 0 failures | 0 skipped | 0 orphans
+Exit code: 0
+
+./gdunit_tests.sh -c -a res://tests/test_occupancy.gd
+4 test cases | 0 errors | 0 failures | 0 skipped | 0 orphans
+Exit code: 0
+
+./gdunit_tests.sh -c -a res://tests/test_mesh_lattice.gd
+3 test cases | 0 errors | 0 failures | 0 skipped | 0 orphans
+Exit code: 0
+
+./gdunit_tests.sh -c -a res://tests/test_mesh_diff.gd
+4 test cases | 0 errors | 0 failures | 0 skipped | 0 orphans
+Exit code: 0
+
+./gdunit_tests.sh -c -a res://tests/test_lod_mesh_diff.gd
+3 test cases | 0 errors | 0 failures | 0 skipped | 0 orphans
+Exit code: 0
+
+./gdunit_tests.sh -c -a res://tests/test_edit_pipeline.gd
+8 test cases | 1 errors | 2 failures | 0 skipped | 0 orphans
+Exit code: 100
+SCRIPT ERROR: Invalid access to property or key 'pos' on a base object of type 'Dictionary'.
+```
+
+The edit-pipeline result is the pre-existing `test_sphere_add_places_material_4_in_open_sky`
+dictionary-shape failure; no edit-pipeline file was changed.
+
+### Fix benchmark
+
+```text
+WAYLAND_DISPLAY=wayland-1 tools/run_benchmarks.sh m7-task5
+```
+
+All five legs exited 0. The exact fresh lines were:
+
+```text
+steady: BENCH gpu_stream samples=287 p50_ms=0.003 p99_ms=0.004
+        BENCH gpu_raymarch samples=287 p50_ms=6.837 p99_ms=8.966
+move:   BENCH gpu_stream samples=287 p50_ms=0.004 p99_ms=1.156
+        BENCH gpu_raymarch samples=287 p50_ms=6.775 p99_ms=8.360
+ridge:  BENCH gpu_stream samples=287 p50_ms=0.012 p99_ms=0.868
+        BENCH gpu_raymarch samples=287 p50_ms=5.535 p99_ms=8.557
+edit:   BENCH gpu_stream samples=287 p50_ms=0.236 p99_ms=2.968
+        BENCH gpu_raymarch samples=287 p50_ms=11.022 p99_ms=15.934
+island: BENCH gpu_stream samples=807 p50_ms=0.003 p99_ms=0.261
+        BENCH gpu_raymarch samples=807 p50_ms=7.229 p99_ms=9.243
+BENCH timing_condition display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false
+BENCH regions=133 overflow=1
+EXIT_STATUS=0 (all five legs)
+```
+
+The edit stream result is effectively unchanged from the prior measurement; the correction
+expands correctness coverage without changing the benchmark conclusion.
