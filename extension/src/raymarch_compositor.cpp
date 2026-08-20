@@ -60,6 +60,7 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	// ensure_initialized() is a no-op after the first frame.
 	world->ensure_initialized();
 	if (!world->is_initialized()) return;
+	const bool near_field_enabled = world->get_effect_enabled("near_field");
 
 	RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
 	RenderSceneBuffersRD *rsb = Object::cast_to<RenderSceneBuffersRD>(render_data->get_render_scene_buffers().ptr());
@@ -94,7 +95,8 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	cp.cam_right[0] = right.x; cp.cam_right[1] = right.y; cp.cam_right[2] = right.z;
 	cp.cam_up[0] = up.x; cp.cam_up[1] = up.y; cp.cam_up[2] = up.z;
 	cp.cam_fwd[0] = fwd.x; cp.cam_fwd[1] = fwd.y; cp.cam_fwd[2] = fwd.z;
-	cp.params[0] = tan_x; cp.params[1] = tan_y; cp.params[2] = 200.0f;
+	cp.params[0] = tan_x; cp.params[1] = tan_y;
+	cp.params[2] = near_field_enabled ? 200.0f : 0.0f; // 0 = no near-field hits
 	const Vector3i sr = world->get_world_size_regions();
 	cp.dims[0] = sr.x; cp.dims[1] = sr.y; cp.dims[2] = sr.z;
 	cp.dims[3] = world->island_slot_count();
@@ -142,7 +144,6 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 		abort_frame();
 		return;
 	}
-
 	float edit_state[6] = {0, 0, 0, 0, 0, 0};
 	if (st && st->last_edit_radius() > 0.0f) {
 		edit_state[0] = st->last_edit_center()[0];
@@ -153,6 +154,21 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 		edit_state[5] = static_cast<float>(st->last_edit_material());
 	}
 
+	// Master-API note: rsb->get_color_texture()/get_depth_texture() exist on godot-cpp master
+	// (render_scene_buffers_rd.hpp) and return the non-MSAA internal color/depth textures —
+	// the same RIDs the engine's own framebuffers use when MSAA is disabled (verified against
+	// render_forward_clustered.cpp), so the composite writes into the actual scene buffers.
+	// Both fields fade at the SAME two distances, and those distances follow how far the
+	// near field's bricks actually reach this frame -- not the spec's 120/150, which assumes
+	// an atlas three times this one. Read once here so the composite and every far-field
+	// draw below cannot disagree within a frame.
+	float fade_start = ve::kLodFadeStartM;
+	float fade_end = ve::kLodFadeEndM;
+	world->lod_fade_band(&fade_start, &fade_end);
+	if (!gb->ensure(rd, rsb, size)) {
+		abort_frame();
+		return;
+	}
 	const int rw = static_cast<int>(size.x * 0.66f);
 	const int rh = static_cast<int>(size.y * 0.66f);
 	if (rw <= 0 || rh <= 0) {
@@ -184,21 +200,6 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	}
 	timings->end(rd, "raymarch");
 
-	// Master-API note: rsb->get_color_texture()/get_depth_texture() exist on godot-cpp master
-	// (render_scene_buffers_rd.hpp) and return the non-MSAA internal color/depth textures —
-	// the same RIDs the engine's own framebuffers use when MSAA is disabled (verified against
-	// render_forward_clustered.cpp), so the composite writes into the actual scene buffers.
-	// Both fields fade at the SAME two distances, and those distances follow how far the
-	// near field's bricks actually reach this frame -- not the spec's 120/150, which assumes
-	// an atlas three times this one. Read once here so the composite and every far-field
-	// draw below cannot disagree within a frame.
-	float fade_start = ve::kLodFadeStartM;
-	float fade_end = ve::kLodFadeEndM;
-	world->lod_fade_band(&fade_start, &fade_end);
-	if (!gb->ensure(rd, rsb, size)) {
-		abort_frame();
-		return;
-	}
 	timings->begin(rd, "composite");
 	cmp->draw(rd, *gb, rmp->albedo_texture(), rmp->surface_texture(), rmp->hitpos_texture(),
 			view_proj, *materials, cam_pos, fade_start, fade_end);
@@ -211,9 +212,11 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 
 	// Build HiZ from the near field's G-buffer depth before the LoD producer runs. The
 	// deferred pass consumes both producers below, so neither field is shaded twice.
+	// With the near field off there is no pre-LoD depth yet; skipping HiZ lets the LoD draw
+	// every page instead of culling against an empty pyramid.
 	HizPass *hiz = world->hiz_pass();
 	bool hiz_built = false;
-	if (hiz) hiz_built = hiz->build(rd, gb->depth(), size);
+	if (near_field_enabled && hiz) hiz_built = hiz->build(rd, gb->depth(), size);
 	LodRasterPass *lod_raster = world->lod_raster_pass();
 	LodCullPass *lod_cull = world->lod_cull_pass();
 	SunShadowPass *sun = world->sun_shadow_pass();

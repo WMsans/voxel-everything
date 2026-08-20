@@ -444,6 +444,10 @@ void VoxelWorld::set_effect_enabled(const String &name, bool on) {
 		islands_enabled_.store(on, std::memory_order_relaxed);
 		return;
 	}
+	if (name == "near_field") {
+		near_field_enabled_.store(on, std::memory_order_relaxed);
+		return;
+	}
 	std::lock_guard<std::mutex> lock(beauty_mutex_);
 	bool *f = beauty_field(beauty_, name);
 	if (!f) return; // fail-soft: an unknown name in a debug menu is not a crash
@@ -453,6 +457,7 @@ void VoxelWorld::set_effect_enabled(const String &name, bool on) {
 
 bool VoxelWorld::get_effect_enabled(const String &name) const {
 	if (name == "islands") return islands_enabled_.load(std::memory_order_relaxed);
+	if (name == "near_field") return near_field_enabled_.load(std::memory_order_relaxed);
 	std::lock_guard<std::mutex> lock(beauty_mutex_);
 	ve::BeautySettings copy = beauty_;
 	const bool *f = beauty_field(copy, name);
@@ -1939,6 +1944,14 @@ void VoxelWorld::ensure_lod() {
 }
 
 void VoxelWorld::lod_fade_band(float *fade_start, float *fade_end) const {
+	// With the near field forced off the far field owns every distance: move the seam to
+	// zero and make the fade span essentially infinite so the LoD build gate requests the
+	// near chunks and the fragment shader keeps every far-field fragment.
+	if (!near_field_enabled_.load(std::memory_order_relaxed)) {
+		if (fade_start) *fade_start = 0.0f;
+		if (fade_end) *fade_end = 1.0e9f;
+		return;
+	}
 	// Until the streamer has run a frame there is nothing measured, and before the first
 	// regions land the measurement is "complete out to 0 m" -- both would swing the seam.
 	// Fall back to the CONFIGURED radius there: the seam then starts where the near field

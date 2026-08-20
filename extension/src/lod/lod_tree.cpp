@@ -311,7 +311,13 @@ void LodTree::visit(int level, IVec3 c, const LodCamera &cam, const LodOcclusion
 		return;
 	}
 
-	const bool want_finer = level > 0 && area > cfg_.sse_area_thresh;
+	// Spec §4's fade-band contingency. The screen-space-error test is the right rule
+	// everywhere except the band where the near field hands over: there, the eye compares
+	// the two fields directly, and the LoD side loses at any error the SSE test tolerates.
+	const float chunk_distance_m = lod_chunk_distance(level, c, last_cam_pos_);
+	const bool near_dense = kLodNearDenseRadiusM > 0.0f && level > 0 &&
+			chunk_distance_m < kLodNearDenseRadiusM;
+	const bool want_finer = level > 0 && (near_dense || area > cfg_.sse_area_thresh);
 	if (want_finer && children_ready(level, c)) {
 		const IVec3 base = lod_child_base(c);
 		for (int k = 0; k < 8; k++)
