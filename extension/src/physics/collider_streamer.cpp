@@ -114,7 +114,13 @@ int ColliderStreamer::bodies_in_space() const {
 
 RID ColliderStreamer::body_of_slot(int slot) const {
 	if (slot < 0 || slot >= static_cast<int>(build_counts_.size())) return RID();
-	return bodies_[static_cast<size_t>(sub_index(slot, 0))];
+	// Octant zero is allowed to be empty. Diagnostics must identify the chunk through any
+	// populated octant, otherwise a valid multi-body collider looks absent at random.
+	for (int octant = 0; octant < ve::kColliderOctants; octant++) {
+		const RID body = bodies_[static_cast<size_t>(sub_index(slot, octant))];
+		if (body.is_valid()) return body;
+	}
+	return RID();
 }
 
 int ColliderStreamer::build_count_of_chunk(ve::IVec3 c) const {
@@ -188,7 +194,7 @@ ColliderStreamer::BuildOutcome ColliderStreamer::build_octant(PendingBuild &pend
 		bool ok = true;
 		for (int k = 0; k < 3; k++) {
 			const uint32_t vi = bin[t + k];
-			if (static_cast<int>(vi) >= verts) {
+			if (vi >= static_cast<uint32_t>(verts)) {
 				ok = false;
 				break;
 			}
@@ -208,8 +214,9 @@ ColliderStreamer::BuildOutcome ColliderStreamer::build_octant(PendingBuild &pend
 	faces.resize(n);
 	last_faces_ms_ += ms_since(t_faces);
 	last_tris_ += n / 3;
-	max_build_tris_ = std::max(max_build_tris_, n / 3);
 	if (n < 3) return kEmpty;
+	// This is the largest single shape_set_data payload, not the frame's sum of octants.
+	max_build_tris_ = std::max(max_build_tris_, n / 3);
 
 	Dictionary data;
 	data["faces"] = faces;
@@ -218,7 +225,7 @@ ColliderStreamer::BuildOutcome ColliderStreamer::build_octant(PendingBuild &pend
 	if (!shape.is_valid()) return kFailed;
 	const Clock::time_point t_set = Clock::now();
 	ps->shape_set_data(shape, data);
-	last_setdata_ms_ += ms_since(t_set);
+	last_setdata_ms_ = std::max(last_setdata_ms_, ms_since(t_set));
 	pending.staged_shapes[static_cast<size_t>(octant)] = shape;
 	pending.geometry_octants++;
 	return kBuilt;
@@ -233,6 +240,17 @@ bool ColliderStreamer::commit_pending(PendingBuild &pending) {
 		return false;
 
 	if (pending.geometry_octants == 0) {
+		// An overflowed result is incomplete evidence, including when every surviving triangle
+		// was degenerate. Never cache it as empty: retain the previous bodies and put the chunk
+		// back in the retry queue.
+		if (pending.result.overflow) {
+			failures_++;
+			UtilityFunctions::printerr("ColliderStreamer: overflowed chunk (", pending.result.chunk.x,
+					", ", pending.result.chunk.y, ", ", pending.result.chunk.z,
+					") produced no valid collider geometry; keeping the previous collider and retrying");
+			chunks_->note_failed(pending.result.chunk);
+			return true;
+		}
 		const int freed = chunks_->note_empty(pending.result.chunk);
 		release_slot(freed);
 		return true;
@@ -320,12 +338,54 @@ void ColliderStreamer::enqueue_result(MeshResult &&r) {
 	build_counts_[static_cast<size_t>(slot)]++;
 	max_chunk_tris_ = std::max(max_chunk_tris_,
 			static_cast<int>(pending.result.indices.size() / 3));
+
+	// MeshResult indices originate in a GPU readback. Validate every index before the centroid
+	// splitter can touch positions; a wrapped uint32_t must not become a negative signed check.
+	// Keep complete valid triangles so a bad triangle cannot crash or poison the whole result.
+	const int verts = static_cast<int>(pending.result.positions.size() / 3);
+	const bool had_indices = !pending.result.indices.empty();
+	std::vector<uint32_t> valid_indices;
+	valid_indices.reserve(pending.result.indices.size());
+	for (size_t t = 0; t + 2 < pending.result.indices.size(); t += 3) {
+		bool valid = true;
+		for (size_t k = 0; k < 3; k++) {
+			if (pending.result.indices[t + k] >= static_cast<uint32_t>(verts)) {
+				valid = false;
+				break;
+			}
+		}
+		if (valid) {
+			valid_indices.push_back(pending.result.indices[t]);
+			valid_indices.push_back(pending.result.indices[t + 1]);
+			valid_indices.push_back(pending.result.indices[t + 2]);
+		}
+	}
+	pending.result.indices.swap(valid_indices);
+	if (pending.result.indices.empty() && had_indices) {
+		failures_++;
+		UtilityFunctions::printerr("ColliderStreamer: invalid mesh indices for chunk (",
+				pending.result.chunk.x, ", ", pending.result.chunk.y, ", ",
+				pending.result.chunk.z, "); keeping the previous collider and retrying");
+		chunks_->note_failed(pending.result.chunk);
+		return;
+	}
 	float origin[3];
 	ve::chunk_world_origin(pending.result.chunk, origin);
 	const float centre[3] = {origin[0] + ve::kChunkSize * 0.5f,
 			origin[1] + ve::kChunkSize * 0.5f, origin[2] + ve::kChunkSize * 0.5f};
 	ve::split_octants(pending.result.positions.data(), pending.result.indices.data(),
 			static_cast<int>(pending.result.indices.size()), centre, pending.bins.data());
+	bool populated = false;
+	for (const auto &bin : pending.bins)
+		if (!bin.empty()) populated = true;
+	if (!populated && pending.result.overflow) {
+		failures_++;
+		UtilityFunctions::printerr("ColliderStreamer: overflowed chunk (", pending.result.chunk.x,
+				", ", pending.result.chunk.y, ", ", pending.result.chunk.z,
+				") produced no triangles; keeping the previous collider and retrying");
+		chunks_->note_failed(pending.result.chunk);
+		return;
+	}
 	pending_.push_back(std::move(pending));
 }
 
@@ -397,7 +457,7 @@ int ColliderStreamer::run_frame(float cx, float cy, float cz, const float *extra
 		}
 		const Clock::time_point t_build = Clock::now();
 		const BuildOutcome outcome = build_octant(pending, octant);
-		last_build_ms_ += ms_since(t_build);
+		last_build_ms_ = std::max(last_build_ms_, ms_since(t_build));
 		builds_last_frame_++;
 		actions++;
 		if (outcome == kFailed) {

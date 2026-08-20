@@ -1477,6 +1477,9 @@ Dictionary VoxelWorld::debug_perf_stats() {
 	d["phys_apply_ms"] = colliders_ ? colliders_->last_apply_ms() : 0.0f;
 	d["phys_faces_ms"] = colliders_ ? colliders_->last_faces_ms() : 0.0f;
 	d["phys_setdata_ms"] = colliders_ ? colliders_->last_setdata_ms() : 0.0f;
+	// `build_ms` is the maximum one octant build call in the measured physics frame, not
+	// the sum of all octant calls. This is the value exported into BENCH max_ms.
+	d["build_ms"] = colliders_ ? colliders_->last_build_ms() : 0.0f;
 	d["phys_body_ms"] = colliders_ ? colliders_->last_body_ms() : 0.0f;
 	d["phys_tris"] = colliders_ ? colliders_->last_tris() : 0;
 	d["phys_plan_ms"] = colliders_ ? colliders_->last_plan_ms() : 0.0f;

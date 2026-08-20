@@ -88,6 +88,10 @@ func test_colliders_appear_around_the_player(timeout := 60000) -> void:
 	assert_int(st["chunks_resident"]).is_greater(3)
 	assert_int(st["chunks_pending"]).is_equal(0)
 	assert_int(st["bodies"]).is_greater(3)
+	# `bodies` is deliberately the resident-chunk count for compatibility; the octant body
+	# count is separate and must be at least as large, but never more than eight per chunk.
+	assert_int(st["bodies_raw"]).is_greater_equal(st["bodies"])
+	assert_int(st["bodies_raw"]).is_less_equal(st["bodies"] * 8)
 	assert_int(st["failures"]).is_equal(0)
 	# Every resident chunk is inside the radius, so the pool never filled up here.
 	assert_int(st["chunks_resident"]).is_less(512)
@@ -114,6 +118,7 @@ func test_walking_away_releases_the_far_colliders(timeout := 90000) -> void:
 	settle(w, CENTER)
 	var before: Dictionary = w.debug_physics_stats()
 	assert_int(before["bodies"]).is_greater(3)
+	assert_int(before["bodies_raw"]).is_greater_equal(before["bodies"])
 
 	var far := CENTER + Vector3(80.0, 0.0, 0.0)
 	settle(w, far)
@@ -121,6 +126,7 @@ func test_walking_away_releases_the_far_colliders(timeout := 90000) -> void:
 	var after: Dictionary = w.debug_physics_stats()
 	# The set is bounded by the radius, not by how far the player has walked.
 	assert_int(after["bodies"]).is_less_equal(before["bodies"] + 4)
+	assert_int(after["bodies_raw"]).is_greater_equal(after["bodies"])
 	# ...and the ground the player left is no longer collidable.
 	assert_bool(ray(Vector3(CENTER.x, 80.0, CENTER.z),
 		Vector3(CENTER.x, 20.0, CENTER.z)).is_empty()).is_true()

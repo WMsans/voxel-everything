@@ -385,9 +385,10 @@ func _report() -> void:
 		st.get("override_bricks", -1), st.get("override_capacity", -1),
 		st.get("consolidations", -1), st.get("consolidation_refusals", -1)])
 	var ph: Dictionary = _world.debug_physics_stats()
-	print("BENCH chunks=%d pending=%d bodies=%d failures=%d build_ms=%.2f collect_ms=%.2f" % [
+	print("BENCH chunks=%d pending=%d bodies=%d bodies_raw=%d failures=%d build_ms=%.2f collect_ms=%.2f" % [
 		ph.get("chunks_resident", -1), ph.get("chunks_pending", -1), ph.get("bodies", -1),
-		ph.get("failures", -1), ph.get("build_ms", 0.0), ph.get("collect_ms", 0.0)])
+		ph.get("bodies_raw", -1), ph.get("failures", -1), ph.get("build_ms", 0.0),
+		ph.get("collect_ms", 0.0)])
 	var isl: Dictionary = _world.debug_island_stats()
 	print("BENCH islands=%d debris=%d spawned=%d merged=%d refused=%d cx_runs=%d" % [
 		isl.get("live_islands", -1), isl.get("live_debris", -1),

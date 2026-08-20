@@ -3597,52 +3597,48 @@ where this plan's text met reality and lost.
    suite and native sequence-tail test are the positive evidence; a future benchmark leg
    must keep edits in one bounded region and size the plan below the override capacity to
    measure consolidation itself.
-7. **Task 9, Step 9: collider octant split measured delta**
+7. **Task 9, Step 9: collider octant split measured delta and round-1 instrumentation correction**
 
    Environment: Godot 4.7.1, Vulkan 1.4.341, NVIDIA GeForce RTX 4070 Laptop GPU, Wayland,
-   requested 2560x1440, requested V-Sync disabled but compositor actual V-Sync enabled. The
-   benchmark line reports `vsync_actual=disabled` because Godot's Wayland readback is stale;
-   the runtime also printed `The requested V-Sync mode Disabled is not available. Falling
-   back to V-Sync mode Enabled.` These are qualified comparisons, not an unqualified display
-   budget claim. All five benchmark processes exited 0.
+   requested 2560x1440, requested V-Sync disabled but compositor actual V-Sync enabled. Godot
+   reports `vsync_actual=disabled` while also logging `The requested V-Sync mode Disabled is
+   not available. Falling back to V-Sync mode Enabled.` These frame comparisons are therefore
+   qualified. All five benchmark processes exited 0.
 
    Command:
    ```text
-   env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 tools/run_benchmarks.sh m7-task9
+   env WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 tools/run_benchmarks.sh m7-task9-round1-final
    ```
 
-   The Task 8 comparison is the final 300-frame run (`reports/m7-task8-final`); the current
-   run is also 300 frames for move/edit. `phys_setdata_ms` in `BENCH max_ms` is the maximum
-   one-call Jolt shape build, i.e. the atomic spike this task splits.
+   Task 8's comparison is the final 300-frame run in `reports/m7-task8-final`; move and edit
+   are also 300 frames here. Task 8's `phys_setdata_ms` was a per-frame accumulated value. The
+   corrected Task 9 instrumentation reports both `build_ms` (maximum one octant build call) and
+   `phys_setdata_ms` (maximum one `shape_set_data` call) per frame, so the `BENCH max_ms` line
+   now contains a true per-call `build_ms` maximum rather than a frame sum.
 
-   | leg | Task 8 p99 / max / over 16.6 ms | Task 9 p99 / max / over 16.6 ms | Task 8 max shape build | Task 9 max shape build |
+   | leg | Task 8 p99 / max / over 16.6 ms | Task 9 p99 / max / over 16.6 ms | Task 8 max `phys_setdata_ms` | Task 9 max `build_ms` / `phys_setdata_ms` |
    |---|---:|---:|---:|---:|
-   | move | 33.33 / 43.10 / 272 (90.7%) | 25.74 / 28.08 / 285 (95.0%) | 0.95 ms | 0.58 ms |
-   | edit | 56.09 / 77.43 / 298 (99.3%) | 56.45 / 70.19 / 293 (97.7%) | 22.41 ms | 0.51 ms |
+   | move | 33.33 / 43.10 / 272 (90.7%) | 29.03 / 47.76 / 277 (92.3%) | 0.95 ms | 0.57 / 0.33 ms |
+   | edit | 56.09 / 77.43 / 298 (99.3%) | 63.21 / 66.67 / 291 (97.0%) | 22.41 ms | 0.56 / 0.34 ms |
 
    Exact current evidence:
    ```text
-   move: BENCH p50=19.61 p95=22.22 p99=25.74 max=28.08 min_fps=35.6 over_16.6ms=285 (95.0%)
-   move: BENCH max_ms ... phys_apply_ms=24.20 ... phys_setdata_ms=0.58 ... physics_tick_ms=25.26 ...
-   move: BENCH chunks=946 pending=875 bodies=71 failures=0 build_ms=0.07 collect_ms=0.41
-   edit: BENCH p50=22.22 p95=33.33 p99=56.45 max=70.19 min_fps=14.2 over_16.6ms=293 (97.7%)
-   edit: BENCH max_ms ... phys_apply_ms=30.37 ... phys_setdata_ms=0.51 ... physics_tick_ms=30.99 ...
-   edit: BENCH chunks=664 pending=566 bodies=98 failures=0 build_ms=0.33 collect_ms=0.82
+   move: BENCH p50=18.75 p95=23.86 p99=29.03 max=47.76 min_fps=20.9 over_16.6ms=277 (92.3%)
+   move: BENCH max_ms build_ms=0.57 island_ms=0.02 lod_ms=0.08 phys_apply_ms=25.04 phys_body_ms=0.05 phys_collect_ms=1.01 phys_faces_ms=0.41 phys_plan_ms=4.02 phys_setdata_ms=0.33 phys_submit_ms=0.01 phys_tris=7625.00 physics_tick_ms=26.52 stream_readback_ms=0.05 stream_total_ms=0.30
+   move: BENCH chunks=941 pending=871 bodies=70 bodies_raw=294 failures=0 build_ms=0.28 collect_ms=0.55
+   edit: BENCH p50=22.92 p95=33.33 p99=63.21 max=66.67 min_fps=15.0 over_16.6ms=291 (97.0%)
+   edit: BENCH max_ms build_ms=0.56 island_ms=38.26 lod_ms=0.06 phys_apply_ms=25.83 phys_body_ms=0.08 phys_collect_ms=1.23 phys_faces_ms=0.35 phys_plan_ms=1.85 phys_setdata_ms=0.34 phys_submit_ms=0.01 phys_tris=8519.00 physics_tick_ms=26.30 stream_readback_ms=0.02 stream_total_ms=0.25
+   edit: BENCH chunks=664 pending=566 bodies=98 bodies_raw=460 failures=0 build_ms=0.37 collect_ms=0.69
    ```
 
-   The split removes the one-call collider build spike (22.41 → 0.51 ms in the edit leg;
-   0.95 → 0.58 ms in the moving leg) and reduces the move frame p99 by 7.59 ms. The edit
-   frame p99 is unchanged within noise (+0.36 ms): its remaining spikes are not one fat
-   collider build (`island_ms` reached 41.47 ms and `phys_apply_ms` 30.37 ms). The task is
-   retained because the atomic Jolt build is gone, but it does not by itself close the
-   overall 16.6 ms frame budget. Every leg retained `raymarch=WARN lod=PASS ssgi=PASS
-   ssr=PASS shadows=PASS outlines=PASS frame=WARN`; the five timing lines reported
-   `display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false`.
-
-   The existing `BENCH max_ms` field calls the split's per-call measurement `phys_setdata_ms`;
-   the final `build_ms` field is only the last build in the run, not a maximum. This distinction
-   is intentional in this record so the 0.51 ms maximum is not confused with edit's 0.33 ms
-   final-build sample.
+   The split removes the one-call Jolt shape-build spike: Task 8's 22.41 ms edit maximum
+   versus Task 9's 0.34 ms maximum `shape_set_data` call; the corresponding move values are
+   0.95 ms versus 0.33 ms. The overall frame p99 is noisy and remains above 16.6 ms; edit's
+   remaining spikes include `island_ms=38.26` and `phys_apply_ms=25.83`, not one fat collider
+   build. The task is retained for eliminating the atomic collider build and for the chunk/body
+   diagnostics, not as a claim that the full frame budget is closed. Every leg retained
+   `raymarch=WARN lod=PASS ssgi=PASS ssr=PASS outlines=PASS frame=WARN`, and each timing line
+   was `display_driver=Wayland vsync_requested=disabled vsync_actual=disabled verdict_qualified=false`.
 8. _(Task 13, Step 6: first capture, defects observed — to be filled)_
 9. _(Task 14, Step 2: fade-band verdict and the number it rests on — to be filled)_
 10. _(Task 14, Step 5: closing sweep, full record — to be filled)_
