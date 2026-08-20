@@ -3820,3 +3820,8 @@ where this plan's text met reality and lost.
      (same value on m7-final-b), not an edit-log rejection; the focused consolidation suite
      is the zero-overflow evidence, and a future edit benchmark must keep edits in one bounded
      region to measure the consolidation path itself.
+
+   **Final test counts (Step 4, recorded after closing regressions):**
+   - Native: `cd extension && scons test` → 324/324 passed.
+   - gdUnit: `./gdunit_tests.sh -c` → 295/295 passed across 60 suites.
+   - The closing sweep also ran `git diff --check` clean.
