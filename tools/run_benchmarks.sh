@@ -19,7 +19,7 @@ if [ -z "${DISPLAY:-}" ]; then
 		"V-Sync-capped and every frame verdict is qualified." >&2
 fi
 
-LEGS=(--benchmark --benchmark-move --benchmark-ridge --benchmark-edit --benchmark-island)
+LEGS=(--benchmark --benchmark-move --benchmark-ridge --benchmark-edit --benchmark-edit-bounded --benchmark-island)
 for leg in "${LEGS[@]}"; do
 	name="${leg#--benchmark}"
 	name="${name#-}"

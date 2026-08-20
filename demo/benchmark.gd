@@ -7,17 +7,20 @@ extends Node
 #   --benchmark-ridge  the second flythrough leg: low along a valley floor with a ridge
 #                      between the camera and the far basin (the far-occludes-far case).
 #   --benchmark-edit   the player is frozen and the edit tool fires every frame.
+#   --benchmark-edit-bounded the player is frozen and edits stay in a small bounded region
+#                      cluster so the consolidation path is reached.
 #   --benchmark-island the player is frozen and a sphere subtract severs a pillar every
 #                      second, so connectivity, extraction, spawning and re-merging all run
 #                      under the frame timer.
 #
-# The last two are the cases players actually complain about, and an AVERAGE hides them:
+# The last three are the cases players actually complain about, and an AVERAGE hides them:
 # a run that is 8 ms most of the time and 50 ms whenever a batch lands reads as "fine".
 # So the report is percentiles plus the count of frames that missed 60 fps.
 
 const WARMUP := 60
 const FRAMES := 300
 const ISLAND_FRAMES := 900
+const EDIT_BOUNDED_FRAMES := 900
 const TARGET_MS := 16.6
 const GPU_DRAIN_FRAMES := 30
 const MIN_GPU_SAMPLES := 30
@@ -81,7 +84,7 @@ func _effects_off_from_args(args: PackedStringArray) -> PackedStringArray:
 func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
 	for m in ["--benchmark-move", "--benchmark-ridge", "--benchmark-edit",
-			"--benchmark-island", "--benchmark"]:
+			"--benchmark-edit-bounded", "--benchmark-island", "--benchmark"]:
 		if m in args:
 			_mode = m
 			break
@@ -89,6 +92,8 @@ func _ready() -> void:
 		return
 	if _mode == "--benchmark-island":
 		_target_frames = ISLAND_FRAMES
+	elif _mode == "--benchmark-edit-bounded":
+		_target_frames = EDIT_BOUNDED_FRAMES
 	# Without this the harness measures the DISPLAY, not the engine: a compositor that hands
 	# an unfocused window one frame callback in eight reports a 133 ms frame and a 7 fps
 	# "regression" that no code change can move.
@@ -114,7 +119,8 @@ func _ready() -> void:
 		_player.global_transform = Transform3D(Basis.IDENTITY, Vector3(24, 63.2, 24))
 		_cam.transform = Transform3D(Basis.looking_at(Vector3(6, -10, 6).normalized()),
 			Vector3(0, 0.7, 0))
-	if _mode == "--benchmark-edit" or _mode == "--benchmark-island":
+	if _mode == "--benchmark-edit" or _mode == "--benchmark-edit-bounded" \
+			or _mode == "--benchmark-island":
 		_tool = ClassDB.instantiate("VoxelEditTool")
 		_world.add_child(_tool)
 
@@ -123,17 +129,29 @@ func _record_vsync() -> void:
 	# and every frame percentile in M6 was qualified for exactly that reason. Ask, read
 	# back, and print what the run actually measured.
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
-	match DisplayServer.window_get_vsync_mode():
+	_vsync_actual = _vsync_actual_from_readback(DisplayServer.get_name(),
+			DisplayServer.window_get_vsync_mode())
+
+func _vsync_actual_from_readback(display_name: String, mode: int) -> String:
+	match mode:
 		DisplayServer.VSYNC_DISABLED:
-			_vsync_actual = "disabled"
+			# Godot 4.7.x's Wayland backend can log "requested V-Sync mode Disabled is
+			# not available. Falling back to V-Sync mode Enabled" while
+			# window_get_vsync_mode() still reports the requested Disabled value. On this
+			# machine every Wayland benchmark run hits that fallback, so treat a Wayland
+			# "disabled" readback as the enabled mode the compositor actually granted.
+			# The verdict line is then qualified, matching the known Wayland warning.
+			if display_name == "Wayland":
+				return "enabled"
+			return "disabled"
 		DisplayServer.VSYNC_ENABLED:
-			_vsync_actual = "enabled"
+			return "enabled"
 		DisplayServer.VSYNC_ADAPTIVE:
-			_vsync_actual = "adaptive"
+			return "adaptive"
 		DisplayServer.VSYNC_MAILBOX:
-			_vsync_actual = "mailbox"
+			return "mailbox"
 		_:
-			_vsync_actual = "unknown"
+			return "unknown"
 
 func _process(delta: float) -> void:
 	if _mode == "":
@@ -162,6 +180,8 @@ func _process(delta: float) -> void:
 		_player.global_position = p
 	elif _mode == "--benchmark-edit" and _frames > WARMUP:
 		_fire_edit()
+	elif _mode == "--benchmark-edit-bounded" and _frames > WARMUP:
+		_fire_bounded_edit()
 	elif _mode == "--benchmark-island" and _frames > WARMUP:
 		_island_cycle(delta)
 
@@ -215,6 +235,22 @@ func _fire_edit() -> void:
 	if not hit["hit"]:
 		return
 	_tool.apply_sphere_subtract(hit["pos"], 3.0)
+
+func _fire_bounded_edit() -> void:
+	# Consolidation is only reachable when a bounded area accumulates enough edits. Hold a
+	# nearly fixed aim so every sphere subtract lands in a small cluster of adjacent
+	# regions; the tiny sub-region jitter keeps the edits distinct without letting the
+	# union wander across the world. This is the acceptance-item leg that measures the
+	# 900-frame, overflow=0 consolidation path itself.
+	var dir := Vector3(sin(0.4) * 0.5, -1.0, cos(0.4) * 0.5).normalized()
+	var hit: Dictionary = _world.debug_raycast(_cam.global_position, dir)
+	if not hit["hit"]:
+		return
+	var jitter := Vector3(
+			sin(_frames * 0.7) * 0.3,
+			cos(_frames * 0.9) * 0.3,
+			sin(_frames * 0.5) * 0.3)
+	_tool.apply_sphere_subtract(hit["pos"] + jitter, 3.0)
 
 func _island_cycle(delta: float) -> void:
 	# Build a pillar, wait for it to stream in, subtract through its middle, then wait for
