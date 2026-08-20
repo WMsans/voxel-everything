@@ -54,6 +54,43 @@ constexpr int kRepairRegionsPerFrame = 2;
 // single starved frame does not visibly shorten the horizon.
 constexpr int kShrinkRegionsPerFrame = 2;
 
+// Union AABB of every edit op in a region's log, clamped to that region. The normal edit
+// path marks this exact range with generate_probe_misses=true; overflow/repair re-marks must
+// replay that same bounded range instead of re-running exact-edit mode across the whole 32^3
+// region (which can queue up to kRegionBrickCount bricks per region against max_brick_jobs).
+bool exact_edit_aabb(const ve::IVec3 &region, const std::vector<ve::EditOp> &ops,
+		ve::IVec3 *lo, ve::IVec3 *hi) {
+	const ve::IVec3 r0{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
+			region.z * ve::kRegionBricks};
+	const ve::IVec3 r1{r0.x + ve::kRegionBricks - 1, r0.y + ve::kRegionBricks - 1,
+			r0.z + ve::kRegionBricks - 1};
+	bool any = false;
+	for (const ve::EditOp &op : ops) {
+		ve::IVec3 blo{}, bhi{};
+		ve::op_brick_range(op, &blo, &bhi);
+		blo.x = std::max(blo.x, r0.x);
+		blo.y = std::max(blo.y, r0.y);
+		blo.z = std::max(blo.z, r0.z);
+		bhi.x = std::min(bhi.x, r1.x);
+		bhi.y = std::min(bhi.y, r1.y);
+		bhi.z = std::min(bhi.z, r1.z);
+		if (blo.x > bhi.x || blo.y > bhi.y || blo.z > bhi.z) continue;
+		if (!any) {
+			*lo = blo;
+			*hi = bhi;
+			any = true;
+		} else {
+			lo->x = std::min(lo->x, blo.x);
+			lo->y = std::min(lo->y, blo.y);
+			lo->z = std::min(lo->z, blo.z);
+			hi->x = std::max(hi->x, bhi.x);
+			hi->y = std::max(hi->y, bhi.y);
+			hi->z = std::max(hi->z, bhi.z);
+		}
+	}
+	return any;
+}
+
 using namespace godot;
 
 void WorldStreamer::initialize(ve::RegionResidency *residency, ve::EditLog *edit_log,
@@ -524,16 +561,33 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 			if (slot < 0) continue;
 			int op_count = 0;
 			int64_t seq = 0;
+			ve::IVec3 exact_lo{}, exact_hi{};
+			bool has_exact = false;
 			{
 				std::lock_guard<std::mutex> lock(*edit_mutex_);
-				op_count = static_cast<int>(edit_log_->ops(region).size());
+				const std::vector<ve::EditOp> &ops = edit_log_->ops(region);
+				op_count = static_cast<int>(ops.size());
 				seq = edit_seq_ ? edit_seq_->load(std::memory_order_relaxed) : 0;
+				has_exact = exact_edit_aabb(region, ops, &exact_lo, &exact_hi);
 			}
 			const ve::IVec3 lo{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
 					region.z * ve::kRegionBricks};
 			const ve::IVec3 hi{lo.x + 31, lo.y + 31, lo.z + 31};
 			rd->compute_list_add_barrier(list);
-			region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, true);
+			if (has_exact) {
+				// Keep the full-region force-regen for ordinary dropped/stale surface
+				// bricks, then replay only the edit AABB with exact-edit mode so the thin
+				// probe-missed result is not undone (and the whole 32^3 region is not
+				// re-queued as exact-edit bricks every recovery frame).
+				region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, false);
+				rd->compute_list_add_barrier(list);
+				region_pass_->mark(rd, list, region, slot, exact_lo, exact_hi, op_count,
+						true, true);
+			} else {
+				// No exact edit range: this is the original plain force-regen recovery.
+				// Exact-edit mode would re-queue every brick in the 32^3 region.
+				region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, false);
+			}
 			note_marked(region, seq);
 			any = true;
 		}
@@ -553,16 +607,30 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		if (slot < 0) continue; // evicted since: it regenerates on stream-in
 		int op_count = 0;
 		int64_t seq = 0;
+		ve::IVec3 exact_lo{}, exact_hi{};
+		bool has_exact = false;
 		{
 			std::lock_guard<std::mutex> lock(*edit_mutex_);
-			op_count = static_cast<int>(edit_log_->ops(region).size());
+			const std::vector<ve::EditOp> &ops = edit_log_->ops(region);
+			op_count = static_cast<int>(ops.size());
 			seq = edit_seq_ ? edit_seq_->load(std::memory_order_relaxed) : 0;
+			has_exact = exact_edit_aabb(region, ops, &exact_lo, &exact_hi);
 		}
 		const ve::IVec3 lo{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
 				region.z * ve::kRegionBricks};
 		const ve::IVec3 hi{lo.x + 31, lo.y + 31, lo.z + 31};
 		rd->compute_list_add_barrier(list);
-		region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, true);
+		if (has_exact) {
+			// Full-region force-regen first for general dropped/stale bricks; the bounded
+			// exact-edit AABB second so probe-missed edits stay resident and generated.
+			region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, false);
+			rd->compute_list_add_barrier(list);
+			region_pass_->mark(rd, list, region, slot, exact_lo, exact_hi, op_count,
+					true, true);
+		} else {
+			// No exact edit range: plain force-regen only, as in the pre-Round-2 path.
+			region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, false);
+		}
 		note_marked(region, seq);
 		any = true;
 		repairs++;
