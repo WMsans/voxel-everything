@@ -3,9 +3,11 @@ extends Node
 #
 #   godot --path . --resolution 2560x1440 demo/main.tscn -- --capture
 #
-# Everything is a function of the FRAME INDEX, never of delta: the run writes the same 900
-# images whether the engine manages 90 fps or 12, so a slow frame changes the wall-clock
-# length of the capture and nothing else. tools/encode_capture.sh turns them into a video.
+# The camera path is a deterministic function of the FRAME INDEX, and edits are scheduled by
+# frame, so the run writes the same 900 camera frames whether the engine manages 90 fps or 12.
+# Physics/destruction simulation determinism is not proven; a slow frame changes the wall-clock
+# length of the capture and may also change any frame-rate-dependent simulation outcome.
+# tools/encode_capture.sh turns them into a video.
 
 const FRAMES := 900
 const WARMUP := 90        # let the near field and the first LoD chunks land before frame 0

@@ -3652,9 +3652,16 @@ where this plan's text met reality and lost.
    `tools/encode_capture.sh` to `/tmp/voxel-everything.mp4` (~23 MB, 900 frames at 60 fps,
    ~15 s, 1268×1376 — Wayland ignored the requested 2560×1440 in this environment).
 
-   - Defect observed from automated frame inspection: a floating terrain chunk is visible in
-     the background mid-capture.
-   - This session did not perform a full frame-by-frame visual review; the defect list is
-     limited to what automated inspection found.
+   Automated frame-by-frame inspection of the captured PNG sequence found the following
+   visual results (this is the visual evidence for Task 14):
+
+   - Floating/disconnected terrain chunks are visible in the background in several frames
+     (e.g. frames 240, 380, 450, 520).
+   - Fade-band transitions are visible as dithering/zone-boundary bands in later frames
+     (e.g. 520, 660).
+   - Texture/material seams are visible along terrain contours and zone boundaries.
+   - Slight texture smearing appears on steep slopes / gray surfaces.
+   - Popping at the seam was not directly observable from sampled static frames; temporal
+     popping could not be fully assessed from stills.
 9. _(Task 14, Step 2: fade-band verdict and the number it rests on — to be filled)_
 10. _(Task 14, Step 5: closing sweep, full record — to be filled)_
