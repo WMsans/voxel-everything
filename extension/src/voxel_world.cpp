@@ -291,6 +291,8 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::debug_set_fail_consolidate_uploads);
 	ClassDB::bind_method(D_METHOD("debug_set_fail_restore_overrides", "v"),
 			&VoxelWorld::debug_set_fail_restore_overrides);
+	ClassDB::bind_method(D_METHOD("debug_set_fail_restore_overrides_always", "v"),
+			&VoxelWorld::debug_set_fail_restore_overrides_always);
 	ClassDB::bind_method(D_METHOD("debug_set_merge_sleep_seconds", "v"), &VoxelWorld::debug_set_merge_sleep_seconds);
 #ifdef DEBUG_ENABLED
 	// These hooks can change the production 64-body cap or mark atlas slots used; keep them
@@ -1724,6 +1726,11 @@ void VoxelWorld::debug_set_fail_consolidate_uploads(bool v) {
 void VoxelWorld::debug_set_fail_restore_overrides(bool v) {
 	ensure_physics_initialized();
 	if (mesh_) mesh_->debug_set_fail_restore_overrides(v);
+}
+
+void VoxelWorld::debug_set_fail_restore_overrides_always(bool v) {
+	ensure_physics_initialized();
+	if (mesh_) mesh_->debug_set_fail_restore_overrides_always(v);
 }
 
 int VoxelWorld::debug_island_frame(float dt, Vector3 center) {

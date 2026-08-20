@@ -445,6 +445,7 @@ public:
 	void debug_set_fail_consolidations(bool v);
 	void debug_set_fail_consolidate_uploads(bool v);
 	void debug_set_fail_restore_overrides(bool v);
+	void debug_set_fail_restore_overrides_always(bool v);
 	void debug_set_merge_sleep_seconds(float v);
 	// Test hook: lower the dynamic-body guardrail so a small test can prove slot-pool holes
 	// after merges do not count against the cap.

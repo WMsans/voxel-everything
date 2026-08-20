@@ -110,6 +110,10 @@ public:
 	void clear_override_region(int region_slot);
 	bool replay_overrides(const ve::OverrideStore &store,
 			const std::map<std::tuple<int, int, int>, int> &tables);
+	// A failed publication invalidates the worker bytes. Cancel work that was queued behind
+	// that publication before the recovery sync runs; otherwise the invalid-state worker will
+	// refuse to drain it and run_sync() can never become eligible.
+	void cancel_queued_work_for_rebuild();
 	bool restore_overrides(const std::vector<int> &slots,
 			const std::vector<ve::OverrideBrick> &bricks, ve::IVec3 region, int region_slot,
 			int table, int old_table, const std::vector<std::pair<int, int>> &old_entries);
@@ -149,6 +153,9 @@ public:
 	void debug_set_fail_restore_overrides(bool v) {
 		fail_next_restore_.store(v, std::memory_order_release);
 	}
+	void debug_set_fail_restore_overrides_always(bool v) {
+		fail_restore_overrides_.store(v, std::memory_order_release);
+	}
 #else
 	// Fail-injection hooks are debug-only: release builds must not be able to drive the
 	// mesh service into artificial failure states.
@@ -158,6 +165,7 @@ public:
 	void debug_set_fail_consolidations(bool v) { (void)v; }
 	void debug_set_fail_consolidate_uploads(bool v) { (void)v; }
 	void debug_set_fail_restore_overrides(bool v) { (void)v; }
+	void debug_set_fail_restore_overrides_always(bool v) { (void)v; }
 #endif
 
 	// Copies one stored volume into THIS device's pool, on the worker thread. The main
@@ -232,6 +240,7 @@ private:
 	std::atomic<bool> fail_consolidations_{false};
 	std::atomic<bool> fail_consolidate_uploads_{false};
 	std::atomic<bool> fail_next_restore_{false};
+	std::atomic<bool> fail_restore_overrides_{false};
 	std::atomic<bool> worker_state_valid_{true};
 	std::atomic<bool> rebuilding_worker_{false};
 	std::map<std::tuple<int, int, int>, int> override_tables_;
