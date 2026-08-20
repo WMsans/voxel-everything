@@ -8,7 +8,6 @@ extends Node
 # length of the capture and nothing else. tools/encode_capture.sh turns them into a video.
 
 const FRAMES := 900
-const STEP := 1.0 / 60.0
 const WARMUP := 90        # let the near field and the first LoD chunks land before frame 0
 const OUT_DIR := "user://capture"
 
@@ -92,11 +91,7 @@ func _process(_delta: float) -> void:
 	_player.global_position = xform.origin
 	_cam.global_transform = xform
 	for e in events_at(_frame):
-		match e[0]:
-			"subtract": _tool.apply_sphere_subtract(e[1], e[2])
-			"drill":
-				for i in range(10):
-					_tool.apply_sphere_subtract(e[1] + Vector3.DOWN * (0.6 * i), e[2])
+		_tool.apply_sphere_subtract(e[1], e[2])
 
 	# The image has to be read AFTER the frame it belongs to has been drawn.
 	await RenderingServer.frame_post_draw

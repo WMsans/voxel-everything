@@ -3645,6 +3645,16 @@ where this plan's text met reality and lost.
    closed. Every leg retained `raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS
    outlines=PASS frame=WARN`, and each timing line was `display_driver=Wayland
    vsync_requested=disabled vsync_actual=disabled verdict_qualified=false`.
-8. _(Task 13, Step 6: first capture, defects observed — to be filled)_
+8. **Task 13, Step 6: first capture**
+
+   Completed the first `--capture` run: 900 frames written to
+   `/home/jeremy/.local/share/godot/app_userdata/Voxel Everything/capture`, encoded by
+   `tools/encode_capture.sh` to `/tmp/voxel-everything.mp4` (~23 MB, 900 frames at 60 fps,
+   ~15 s, 1268×1376 — Wayland ignored the requested 2560×1440 in this environment).
+
+   - Defect observed from automated frame inspection: a floating terrain chunk is visible in
+     the background mid-capture.
+   - This session did not perform a full frame-by-frame visual review; the defect list is
+     limited to what automated inspection found.
 9. _(Task 14, Step 2: fade-band verdict and the number it rests on — to be filled)_
 10. _(Task 14, Step 5: closing sweep, full record — to be filled)_
