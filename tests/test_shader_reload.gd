@@ -17,7 +17,18 @@ func make_world() -> VoxelWorld:
 	add_child(w)
 	_worlds.append(w)
 	w.ensure_initialized()
+	settle(w, Vector3(24.0, 56.0, 24.0))
 	return w
+
+# Settled means several consecutive quiet frames: the streamer paces stream-in against an
+# atlas free count it reads back a frame or more behind the GPU, so a single frame with
+# nothing to do is that pause, not the end of the work (six > its in-flight window).
+func settle(w: VoxelWorld, cam: Vector3, frames := 120) -> void:
+	var quiet := 0
+	for i in range(frames):
+		quiet = quiet + 1 if w.debug_stream_frame(cam) == 0 else 0
+		if quiet >= 6:
+			return
 
 # A reload must leave a working world behind, not merely survive: the same probe answers the
 # same way before and after, because the CPU cores that describe the world never went away.
