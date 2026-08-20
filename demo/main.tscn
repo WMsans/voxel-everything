@@ -1,4 +1,4 @@
-[gd_scene load_steps=16 format=3 uid="uid://dx2akrpw2s62k"]
+[gd_scene load_steps=17 format=3 uid="uid://dx2akrpw2s62k"]
 
 [ext_resource type="Script" path="res://demo/player.gd" id="1"]
 [ext_resource type="Script" path="res://demo/hud.gd" id="2"]
@@ -8,6 +8,7 @@
 [ext_resource type="Script" path="res://demo/debug_menu.gd" id="6"]
 [ext_resource type="Script" path="res://demo/help.gd" id="7"]
 [ext_resource type="Script" path="res://demo/dev_tools.gd" id="8"]
+[ext_resource type="Script" path="res://demo/capture.gd" id="9"]
 
 [sub_resource type="RaymarchCompositor" id="1"]
 world_path = NodePath("/root/Main/VoxelWorld")
@@ -116,3 +117,6 @@ player_path = NodePath("/root/Main/Player")
 [node name="DevTools" type="Node" parent="."]
 script = ExtResource("8")
 world_path = NodePath("/root/Main/VoxelWorld")
+
+[node name="Capture" type="Node" parent="."]
+script = ExtResource("9")
