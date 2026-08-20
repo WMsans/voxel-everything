@@ -14,13 +14,14 @@ func after_test() -> void:
 			w.free()
 	_worlds.clear()
 
-func make_world() -> VoxelWorld:
+func make_world(max_jobs := 16384, stream_radius := 40.0) -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
+	w.max_brick_jobs = max_jobs
 	w.physics_enabled = false
 	w.world_origin_bricks = Vector3i(0, -64, 0)
 	w.world_size_regions = Vector3i(8, 5, 8)
-	w.residency_radius_m = 40.0
+	w.residency_radius_m = stream_radius
 	w.atlas_bricks = Vector3i(48, 24, 48)
 	w.max_region_slots = 64
 	w.physics_radius_m = 30.0
@@ -43,6 +44,39 @@ func step(w: VoxelWorld, frames: int, center: Vector3 = CENTER) -> void:
 
 # A shell thinner than the probe spacing: add a ball, subtract a slightly smaller ball at the
 # same centre. What survives is a spherical skin `radius - inner` thick.
+func test_edit_overflow_repair_preserves_thin_sheet_occupancy(timeout := 300000) -> void:
+	var w := make_world(4096, 5.0)
+	var t := tool_of(w)
+	var sheet := Vector3(20.2, 62.2, 20.2)
+	# First generate a 10 cm shell whose exact edit range is exactly eight bricks. Its
+	# occupancy is solid even though every 27-sample probe lands more than the activation
+	# pad away from the shell (a true probe miss, not just a probe sample outside the skin).
+	step(w, 30)
+	t.apply_sphere_add(sheet, 0.19, 4)
+	step(w, 12)
+	t.apply_sphere_subtract(sheet, 0.09)
+	step(w, 12)
+	var cell := Vector3i(25, 77, 25)
+	assert_int(w.debug_cell_state(cell)).is_equal(2)
+	assert_int(w.debug_occupancy_state(cell)).is_equal(2)
+	# A separate paint edit in the same region expands the exact edit job list beyond 4096.
+	# It changes no SDF, so the sheet remains a probe-missed thin surface while overflow
+	# triggers the region recovery/repair paths.
+	t.apply_sphere_paint(Vector3(23.0, 62.0, 23.0), 8.0, 4)
+	# The overflow word is read back asynchronously, so poll a few frames for the sticky
+	# job-list overflow bit. The single resident region keeps the re-mark from also forcing
+	# eviction/reload, so this exercises the overflow/repair re-mark path itself.
+	var overflow_seen := 0
+	for i in range(5):
+		w.debug_stream_frame(sheet)
+		overflow_seen |= int(w.debug_stream_stats()["overflow_ever"])
+	assert_int(overflow_seen & 2).override_failure_message(
+		"the expanded exact-edit list did not overflow").is_not_equal(0)
+	for i in range(90):
+		w.debug_stream_frame(sheet)
+	assert_int(w.debug_occupancy_state(cell)).override_failure_message(
+		"overflow/repair recovery reverted the thin sheet to probe-only occupancy").is_equal(2)
+
 func test_a_sheet_thinner_than_the_probe_spacing_is_generated(timeout := 300000) -> void:
 	var w := make_world()
 	var t := tool_of(w)
