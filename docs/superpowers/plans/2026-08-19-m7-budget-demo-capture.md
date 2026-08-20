@@ -3522,6 +3522,31 @@ where this plan's text met reality and lost.
    `lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN`. The edit run also
    reported `regions=133 overflow=1`; the overflow is the existing edit benchmark's
    stream/job pressure and is not attributed to the filter.
+
+   **Round-1 fix remeasurement:** the review fix changed stored-lattice consumers from the
+   0.20 m brick pad to the shared `pitch + kSdfRange` pad (0.69 m at the 5 cm lattice), while
+   brick residency/generation remains on the exact 0.20 m pad. The benchmark was rerun with:
+
+   ```text
+   WAYLAND_DISPLAY=wayland-1 tools/run_benchmarks.sh m7-task5
+   ```
+
+   All five legs exited 0. The display reported `vsync_requested=disabled`,
+   `vsync_actual=disabled`, and `verdict_qualified=false`; every leg remained
+   `raymarch=WARN lod=PASS ssgi=PASS ssr=PASS shadows=PASS outlines=PASS frame=WARN`.
+   The fresh stream/raymarch p50/p99 readings (ms) are:
+
+   | leg | fixed gpu_stream p50/p99 | fixed gpu_raymarch p50/p99 |
+   |---|---:|---:|
+   | steady | 0.003 / 0.004 | 6.837 / 8.966 |
+   | move | 0.004 / 1.156 | 6.775 / 8.360 |
+   | ridge | 0.012 / 0.868 | 5.535 / 8.557 |
+   | edit | 0.236 / 2.968 | 11.022 / 15.934 |
+   | island | 0.003 / 0.261 | 7.229 / 9.243 |
+
+   Compared with the prior Task 5 measurement, the edit stream leg is effectively unchanged
+   (0.236 / 2.968 versus 0.236 / 2.977), so the pad correction changes correctness coverage,
+   not the benchmark conclusion. The edit leg still reported `regions=133 overflow=1`.
 6. _(Task 8, Step 7: consolidation measured delta and overflow verdict — to be filled)_
 7. _(Task 9, Step 9: collider octant split measured delta — to be filled)_
 8. _(Task 13, Step 6: first capture, defects observed — to be filled)_

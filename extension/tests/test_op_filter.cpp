@@ -1,6 +1,9 @@
 #include <doctest/doctest.h>
 #include "generator/edit_ops.h"
+#include "generator/volume_set.h"
 #include "world/brick.h"
+#include "world/edit_log.h"
+#include "world/brick_eval.h"
 #include <cmath>
 #include <vector>
 
@@ -24,7 +27,8 @@ TEST_CASE("an op that overlaps the box is kept") {
 
 TEST_CASE("an op that clears the box by more than the pad is dropped") {
 	const float lo[3] = {0.0f, 0.0f, 0.0f}, hi[3] = {0.8f, 0.8f, 0.8f};
-	CHECK_FALSE(ve::op_touches_aabb(sphere(20.0f, 0.4f, 0.4f, 1.0f), lo, hi, 0.2f));
+	CHECK_FALSE(ve::op_touches_aabb(sphere(20.0f, 0.4f, 0.4f, 1.0f), lo, hi,
+			ve::kBrickFilterPad));
 }
 
 TEST_CASE("the pad is what keeps a grazing op") {
@@ -33,8 +37,68 @@ TEST_CASE("the pad is what keeps a grazing op") {
 	// far. Dropping it is the failure mode that puts a seam on a brick boundary.
 	const float lo[3] = {0.0f, 0.0f, 0.0f}, hi[3] = {0.8f, 0.8f, 0.8f};
 	const ve::EditOp op = sphere(0.4f, 0.4f, 0.8f + 1.0f + 0.19f, 1.0f);
-	CHECK(ve::op_touches_aabb(op, lo, hi, 0.2f));
+	CHECK(ve::op_touches_aabb(op, lo, hi, ve::kBrickFilterPad));
 	CHECK_FALSE(ve::op_touches_aabb(op, lo, hi, 0.0f));
+}
+
+TEST_CASE("the lattice pad keeps a box at its boundary") {
+	const float lo[3] = {0.0f, 0.0f, 0.0f}, hi[3] = {0.8f, 0.8f, 0.8f};
+	ve::EditOp op{};
+	op.type = ve::kOpBoxSubtract;
+	op.pos[0] = 0.8f + 0.69f - 0.001f;
+	op.pos[1] = 0.0f;
+	op.pos[2] = 0.0f;
+	op.aux[0] = ve::pack_extent3(1, 1, 1);
+	CHECK(ve::op_touches_aabb(op, lo, hi, ve::kLatticeFilterPad));
+	CHECK_FALSE(ve::op_touches_aabb(op, lo, hi, ve::kBrickFilterPad));
+}
+
+TEST_CASE("filtered box evaluation agrees with the unfiltered oracle") {
+	ve::AnalyticGenerator gen;
+	const ve::EditOp op = [] {
+		ve::EditOp v{};
+		v.type = ve::kOpBoxSubtract;
+		v.pos[0] = 1.4f; v.pos[1] = 40.0f; v.pos[2] = 0.0f;
+		v.aux[0] = ve::pack_extent3(1, 1, 1);
+		return v;
+	}();
+	ve::EditLog log({{0, 0, 0}, {4, 8, 4}});
+	log.append(op);
+	const float lo[3] = {0.0f, 40.0f, 0.0f}, hi[3] = {0.8f, 40.8f, 0.8f};
+	std::vector<ve::EditOp> filtered;
+	ve::collect_ops_for_aabb(log, lo, hi, &filtered);
+	REQUIRE(filtered.size() == 1);
+	const float x = 0.8f, y = 40.0f, z = 0.0f;
+	const ve::Sample oracle = ve::eval_field(gen, &op, 1, x, y, z);
+	const ve::Sample got = ve::eval_field(gen, filtered.data(), static_cast<int>(filtered.size()),
+			x, y, z);
+	CHECK(got.sdf == doctest::Approx(oracle.sdf).epsilon(0.0001));
+	CHECK(got.material == oracle.material);
+}
+
+TEST_CASE("filtered volume evaluation agrees with the unfiltered oracle") {
+	ve::AnalyticGenerator gen;
+	ve::VolumeSet volumes;
+	const int slot = volumes.allocate();
+	ve::VolumeData data;
+	data.dim = 2;
+	data.sdf.assign(8, ve::encode_sdf(ve::kSdfRange));
+	data.mat.assign(8, 0);
+	REQUIRE(volumes.store(slot, std::move(data)));
+	const float origin[3] = {1.4f, 80.0f, 0.0f};
+	const ve::EditOp op = ve::make_volume_add(slot, origin, 0.05f, 2);
+	ve::EditLog log({{0, 0, 0}, {4, 8, 4}});
+	log.append(op);
+	const float lo[3] = {0.0f, 80.0f, 0.0f}, hi[3] = {0.8f, 80.8f, 0.8f};
+	std::vector<ve::EditOp> filtered;
+	ve::collect_ops_for_aabb(log, lo, hi, &filtered);
+	REQUIRE(filtered.size() == 1);
+	const float x = 0.8f, y = 80.0f, z = 0.0f;
+	const ve::Sample oracle = ve::eval_field(gen, &op, 1, x, y, z, &volumes);
+	const ve::Sample got = ve::eval_field(gen, filtered.data(), static_cast<int>(filtered.size()),
+			x, y, z, &volumes);
+	CHECK(got.sdf == doctest::Approx(oracle.sdf).epsilon(0.0001));
+	CHECK(got.material == oracle.material);
 }
 
 TEST_CASE("filtering never changes an evaluated sample inside the box") {

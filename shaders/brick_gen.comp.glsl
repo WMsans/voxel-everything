@@ -101,8 +101,7 @@ void main() {
 	vec3 brick_lo = vec3(brick) * BRICK_SIZE;
 	vec3 brick_hi = brick_lo + vec3(BRICK_SIZE);
 	if (tid < op_count)
-		s_keep[tid] = op_touches_aabb(op_base + tid, brick_lo, brick_hi,
-				0.15 + VOXEL_SIZE) ? 1u : 0u;
+		s_keep[tid] = op_touches_aabb(op_base + tid, brick_lo, brick_hi, BRICK_FILTER_PAD) ? 1u : 0u;
 	if (tid == 0u) s_op_n = 0u;
 	barrier();
 	if (tid == 0u) {

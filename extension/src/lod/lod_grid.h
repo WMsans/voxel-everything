@@ -79,11 +79,9 @@ bool lod_chunk_in_bounds(const WorldBounds &b, int level, IVec3 c);
 // Inclusive root-level chunk range covering the whole world.
 void lod_root_range(const WorldBounds &b, IVec3 *lo, IVec3 *hi);
 
-// Inclusive chunk range whose stored quads an op can move: the op's own world AABB plus two
-// cells. A CSG max/min changes the field far outside the shape, but only inside it can it
-// flip a sample's sign, and a sample whose sign it cannot flip only shifts a vertex when it
-// is itself within a cell of the surface. Two cells covers that and the mesh overlap plane
-// below the chunk origin. (Same argument as ve::op_chunk_range at 0.1 m.)
+// Inclusive chunk range whose stored quads an op can move. LoD field consumers use the
+// shared lattice pad (or the larger two-cell LoD overlap pad) so narrow-band influence is not
+// lost at a chunk boundary. (Same conservative argument as ve::op_chunk_range.)
 void op_lod_chunk_range(const EditOp &op, int level, IVec3 *lo, IVec3 *hi);
 
 } // namespace ve

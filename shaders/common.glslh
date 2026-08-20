@@ -5,6 +5,10 @@ const int BRICK_VOXELS = 16;
 const float VOXEL_SIZE = 0.05;
 const float BRICK_SIZE = 0.8;         // 16 * 0.05
 const float SDF_RANGE = 0.64;         // uint8 unorm <-> [-0.64, 0.64]
+// Mirrors ve::kActivationPad and the CPU consumer-specific filter pads in world/brick.h.
+const float ACTIVATION_PAD = 0.15;
+const float BRICK_FILTER_PAD = ACTIVATION_PAD + VOXEL_SIZE;
+const float LATTICE_FILTER_PAD = VOXEL_SIZE + SDF_RANGE;
 const int REGION_BRICKS = 32;
 const float REGION_SIZE = 25.6;       // 32 * 0.8
 const int REGION_BRICK_COUNT = 32768; // 32^3

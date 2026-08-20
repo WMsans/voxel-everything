@@ -29,6 +29,12 @@ inline constexpr int kBrickSdfCount = kBrickSdfStride * kBrickSdfStride * kBrick
 // It lives here, at the bottom of the include graph, because the generator side (edit_ops)
 // and the world side (brick_eval) both need it and neither may include the other.
 inline constexpr float kActivationPad = 0.15f;
+// Brick residency and generation use the probe's activation margin plus the positive lattice
+// apron. This is the only consumer pad that is 0.20 m.
+inline constexpr float kBrickFilterPad = kActivationPad + kVoxelSize;
+// Mesh, LoD, and stored-volume consumers evaluate a lattice whose representable narrow band
+// reaches kSdfRange beyond an op's own AABB. Include one 5 cm lattice pitch as well.
+inline constexpr float kLatticeFilterPad = kVoxelSize + kSdfRange; // 0.69 m
 
 uint8_t encode_sdf(float d);
 float decode_sdf(uint8_t v);

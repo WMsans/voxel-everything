@@ -62,7 +62,6 @@ layout(push_constant, std430) uniform Push {
 
 // ve::kActivationPad. The probe samples every 8 voxels, so the field can dip across zero
 // between samples; a brick counts as empty only when all 27 probes clear zero by this much.
-const float ACTIVATION_PAD = 0.15;
 
 // Mirror of ve::brick_probe (extension/src/world/brick_eval.cpp).
 void brick_probe(ivec3 brick, uint op_base, uint op_count, out float mn, out float mx) {
@@ -108,7 +107,7 @@ void main() {
 	uint op_count = uint(clamp(pc.cfg.x, 0, int(MAX_REGION_OPS)));
 	if (gl_LocalInvocationID.x < op_count)
 		s_keep[gl_LocalInvocationID.x] = op_touches_aabb(op_base + gl_LocalInvocationID.x,
-				slab_lo, slab_hi, ACTIVATION_PAD) ? 1u : 0u;
+				slab_lo, slab_hi, BRICK_FILTER_PAD) ? 1u : 0u;
 	if (gl_LocalInvocationID.x == 0u) s_op_n = 0u;
 	barrier();
 	if (gl_LocalInvocationID.x == 0u) {

@@ -88,7 +88,7 @@ void lod_root_range(const WorldBounds &b, IVec3 *lo, IVec3 *hi) {
 void op_lod_chunk_range(const EditOp &op, int level, IVec3 *lo, IVec3 *hi) {
 	float olo[3], ohi[3];
 	op_world_aabb(op, olo, ohi);
-	const float pad = 2.0f * lod_cell_size(level);
+	const float pad = std::max(2.0f * lod_cell_size(level), kLatticeFilterPad);
 	const float p0[3] = {olo[0] - pad, olo[1] - pad, olo[2] - pad};
 	const float p1[3] = {ohi[0] + pad, ohi[1] + pad, ohi[2] + pad};
 	*lo = lod_chunk_of_point(level, p0[0], p0[1], p0[2]);

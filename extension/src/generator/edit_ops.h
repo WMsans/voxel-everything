@@ -80,7 +80,7 @@ void unpack_extent3(uint32_t v, int *nx, int *ny, int *nz);
 // freed island then wedges against. A small positive margin turns those faces into air.
 // The op's world AABB deliberately does NOT see the margin: connectivity's cell-exact
 // bookkeeping (component freshness, region ranges, re-mark coverage) is unchanged, and the
-// existing pads (kActivationPad + kVoxelSize, or 2 mesh cells) already cover it.
+// brick bookkeeping uses kBrickFilterPad; lattice consumers use kLatticeFilterPad.
 EditOp make_box_subtract(IVec3 lo_cell, IVec3 hi_cell, float margin = 0.0f);
 EditOp make_volume_add(int slot, const float origin[3], float voxel, int dim);
 
