@@ -71,6 +71,26 @@ TEST_CASE("centroids populate multiple octants without changing triangle order")
 	CHECK(populated == ve::kColliderOctants);
 }
 
+TEST_CASE("a centre centroid uses the positive side and ignores an incomplete tail") {
+	const float pos[] = {
+			0.0f, 0.0f, 0.0f,
+			0.0f, 0.0f, 0.0f,
+			0.0f, 0.0f, 0.0f,
+			-1.0f, -1.0f, -1.0f,
+			1.0f, 1.0f, 1.0f,
+	};
+	const uint32_t idx[] = {0, 1, 2, 3, 4};
+	const float centre[3] = {0.0f, 0.0f, 0.0f};
+	std::vector<uint32_t> bins[ve::kColliderOctants];
+	bins[0].push_back(99);
+	ve::split_octants(pos, idx, 5, centre, bins);
+
+	// `>=` makes a centroid exactly on the chunk centre belong to the positive x/y/z bin,
+	// while the trailing two indices cannot form a second triangle.
+	CHECK(bins[7] == std::vector<uint32_t>({0, 1, 2}));
+	for (int i = 0; i < 7; i++) CHECK(bins[i].empty());
+}
+
 TEST_CASE("an empty bin is empty, not absent") {
 	// All eight bins always exist; the streamer indexes them by octant and must not have to
 	// think about which ones a chunk happened to fill.
