@@ -4,7 +4,7 @@ Destructible smooth-SDF voxel terrain in Godot 4.7 — 5 cm voxels, raymarched n
 meshed far field out to 4 km, one deferred cel-shading stack over both.
 
 ## What it does
-- **Near field (raymarched; designed 0–150 m, measured seam 40–80 m):** compute-only
+- **Near field (raymarched; designed 0–150 m, measured seam 32–80 m across benchmark legs):** compute-only
   sphere tracing through a sparse 0.8 m brick atlas. The atlas, not a residency radius, is
   the real budget; the seam follows how far the near field is actually complete this frame
   instead of trusting a configured radius.
