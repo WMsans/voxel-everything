@@ -67,7 +67,8 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 	cfg_ = cfg;
 	if (!rd) return false;
 	const int slots = atlas_slot_count();
-	if (slots <= 0 || cfg_.max_region_slots <= 0 || cfg_.max_brick_jobs <= 0) {
+	if (slots <= 0 || cfg_.max_region_slots <= 0 || cfg_.max_brick_jobs <= 0 ||
+			cfg_.max_override_bricks <= 0) {
 		UtilityFunctions::printerr("GpuAtlas: degenerate configuration");
 		return false;
 	}
@@ -137,7 +138,7 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 			zeroed(static_cast<int64_t>(cfg.max_region_slots) * ve::kOccupancyBlockBytes));
 
 	if (!volumes_.initialize(rd, ve::kMaxVolumes, ve::kIslandDim) ||
-			!overrides_.initialize(rd, OverridePool::kDefaultCapacity, cfg_.max_region_slots)) {
+			!overrides_.initialize(rd, cfg_.max_override_bricks, cfg_.max_region_slots)) {
 		teardown();
 		return false;
 	}

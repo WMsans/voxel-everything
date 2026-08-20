@@ -93,6 +93,11 @@ void WorldStreamer::initialize(ve::RegionResidency *residency, ve::EditLog *edit
 void WorldStreamer::queue_region_regeneration(ve::IVec3 region) {
 	if (!edit_mutex_) return;
 	std::lock_guard<std::mutex> lock(*edit_mutex_);
+	queue_region_regeneration_locked(region);
+}
+
+void WorldStreamer::queue_region_regeneration_locked(ve::IVec3 region) {
+	if (!edit_mutex_) return;
 	forced_regen_.push_back(region);
 }
 
@@ -363,6 +368,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 	}
 	const auto override_entries = [&](ve::IVec3 region, int table) {
 		std::vector<std::pair<int, int>> entries;
+		std::lock_guard<std::mutex> lock(*edit_mutex_);
 		if (!overrides_ || table < 0) return entries;
 		const ve::IVec3 base{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
 				region.z * ve::kRegionBricks};
@@ -402,6 +408,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		atlas_->set_region_map_entry(rd, l.map_index, l.slot);
 		int table = -1;
 		if (override_tables_) {
+			std::lock_guard<std::mutex> lock(*edit_mutex_);
 			const auto table_it = override_tables_->find(
 					std::tuple<int, int, int>{l.region.x, l.region.y, l.region.z});
 			if (table_it != override_tables_->end()) table = table_it->second;

@@ -170,8 +170,15 @@ class VoxelWorld : public Node3D {
 	std::vector<std::pair<int, int>> consolidation_entries_;
 	std::vector<int> consolidation_old_slots_;
 	std::vector<ve::OverrideBrick> consolidation_old_bricks_;
+	std::vector<ve::IVec3> consolidation_newly_acquired_;
+	std::vector<int> consolidation_slots_;
+	std::vector<ve::OverrideBrick> consolidation_baked_;
+	bool consolidation_publish_in_flight_ = false;
 	int consolidation_count_ = 0;
 	int consolidation_refusals_ = 0;
+	int consolidation_queue_refusals_ = 0;
+	int edit_rejections_ = 0;
+	bool consolidation_queue_refusal_logged_ = false;
 
 	ve::OccupancyGrid occupancy_;              // main thread only
 	std::mutex occupancy_mutex_;               // guards occupancy_inbox_
@@ -183,7 +190,8 @@ class VoxelWorld : public Node3D {
 	std::atomic<int64_t> edit_seq_{0};
 	void drain_occupancy();                    // inbox -> grid
 	void pump_consolidation();
-	bool queue_consolidation(ve::IVec3 region);
+	bool queue_consolidation(ve::IVec3 region); // edit_mutex_ must be held
+	void requeue_consolidation_locked(ve::IVec3 region);
 	bool render_probe_pixel(Vector3 origin, Vector3 dir);
 
 	// The mesher runs on its own thread and owns its local RenderingDevice there; see
@@ -285,7 +293,10 @@ public:
 	int get_max_region_slots() const { return max_region_slots_; }
 	void set_max_brick_jobs(int v) { max_brick_jobs_ = v; }
 	int get_max_brick_jobs() const { return max_brick_jobs_; }
-	void set_max_override_bricks(int v) { max_override_bricks_ = std::max(v, 0); }
+	void set_max_override_bricks(int v) {
+		const int requested = std::max(v, 0);
+		max_override_bricks_ = overrides_ ? std::min(requested, overrides_->capacity()) : requested;
+	}
 	int get_max_override_bricks() const { return max_override_bricks_; }
 	void set_world_origin_bricks(Vector3i v) { world_origin_bricks_ = v; }
 	Vector3i get_world_origin_bricks() const { return world_origin_bricks_; }
@@ -564,6 +575,8 @@ public:
 	Dictionary debug_consolidate_diff(Vector3i region);
 	bool debug_consolidate_region(Vector3i region);
 	void debug_pump_consolidation();
+	void debug_pump_consolidation_async();
+	void debug_wait_consolidation();
 	int debug_region_op_count(Vector3i region);
 	int debug_override_used() const;
 	// Test-only fixture: publish one valid table containing every override slot, exhausting

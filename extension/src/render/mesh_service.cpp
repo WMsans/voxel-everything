@@ -30,6 +30,7 @@ bool MeshService::start(const MeshPassConfig &cfg) {
 		lod_busy_.store(false, std::memory_order_release);
 		lod_available_.store(false, std::memory_order_release);
 		consolidate_busy_.store(false, std::memory_order_release);
+		override_publication_busy_.store(false, std::memory_order_release);
 		fail_consolidations_.store(false, std::memory_order_release);
 		fail_consolidate_uploads_.store(false, std::memory_order_release);
 		fail_next_restore_.store(false, std::memory_order_release);
@@ -63,6 +64,8 @@ void MeshService::stop() {
 	pending_override_updates_.clear();
 	pending_consolidations_.clear();
 	consolidate_results_.clear();
+	pending_override_publications_.clear();
+	override_publication_results_.clear();
 	pending_volumes_.clear();
 #ifdef DEBUG_ENABLED
 	submitted_volume_slots_.clear();
@@ -76,6 +79,7 @@ void MeshService::stop() {
 	lod_busy_.store(false, std::memory_order_release);
 	lod_available_.store(false, std::memory_order_release);
 	consolidate_busy_.store(false, std::memory_order_release);
+	override_publication_busy_.store(false, std::memory_order_release);
 	fail_consolidations_.store(false, std::memory_order_release);
 	fail_consolidate_uploads_.store(false, std::memory_order_release);
 	fail_next_restore_.store(false, std::memory_order_release);
@@ -305,6 +309,32 @@ int MeshService::collect_consolidations(std::vector<ConsolidateResult> *out) {
 	return n;
 }
 
+bool MeshService::submit_override_publication(OverridePublication publication) {
+	if (publication.slots.empty() || publication.slots.size() != publication.bricks.size() ||
+			!is_valid()) return false;
+	{
+		std::lock_guard<std::mutex> lock(mu_);
+		if (stopping_ || !pending_override_publications_.empty() ||
+				override_publication_busy_.load(std::memory_order_acquire)) return false;
+		pending_override_publications_.push_back(std::move(publication));
+		override_publication_busy_.store(true, std::memory_order_release);
+	}
+	cv_.notify_one();
+	return true;
+}
+
+int MeshService::collect_override_publications(std::vector<OverridePublicationResult> *out) {
+	std::vector<OverridePublicationResult> got;
+	{
+		std::lock_guard<std::mutex> lock(mu_);
+		got.swap(override_publication_results_);
+	}
+	const int n = static_cast<int>(got.size());
+	if (out)
+		for (OverridePublicationResult &r : got) out->push_back(std::move(r));
+	return n;
+}
+
 int MeshService::collect_lod(std::vector<LodBuildResult> *out) {
 	std::vector<LodBuildResult> got;
 	{
@@ -358,9 +388,11 @@ bool MeshService::run_sync(const std::function<void(MeshPass &)> &fn) {
 		return stopping_ || (!sync_pending_ && !busy_.load(std::memory_order_acquire) &&
 				!extract_busy_.load(std::memory_order_acquire) &&
 				!lod_busy_.load(std::memory_order_acquire) &&
-				!consolidate_busy_.load(std::memory_order_acquire) && pending_extract_.empty() &&
-				pending_lod_.empty() && pending_override_updates_.empty() &&
-				pending_consolidations_.empty() && pending_volumes_.empty());
+				!consolidate_busy_.load(std::memory_order_acquire) &&
+				!override_publication_busy_.load(std::memory_order_acquire) &&
+				pending_extract_.empty() && pending_lod_.empty() &&
+				pending_override_updates_.empty() && pending_consolidations_.empty() &&
+				pending_override_publications_.empty() && pending_volumes_.empty());
 	});
 	if (stopping_) return false;
 	sync_fn_ = &fn;
@@ -429,13 +461,15 @@ void MeshService::run() {
 		std::vector<LodBuildJob> lod_jobs;
 		std::vector<OverrideUpdate> override_updates;
 		std::vector<ConsolidateJob> consolidate_jobs;
+		std::vector<OverridePublication> override_publications;
 		const std::function<void(MeshPass &)> *sync_fn = nullptr;
 		{
 			std::unique_lock<std::mutex> lock(mu_);
 			cv_.wait(lock, [this] {
 				return stopping_ || sync_pending_ || !pending_volumes_.empty() ||
 						!pending_extract_.empty() || !pending_.empty() || !pending_lod_.empty() ||
-						!pending_override_updates_.empty() || !pending_consolidations_.empty();
+						!pending_override_updates_.empty() || !pending_consolidations_.empty() ||
+						!pending_override_publications_.empty();
 			});
 			if (stopping_) break;
 			if (sync_pending_) {
@@ -444,16 +478,16 @@ void MeshService::run() {
 				override_updates.swap(pending_override_updates_);
 			} else if (!pending_volumes_.empty()) {
 				volumes_to_upload.swap(pending_volumes_);
-			} else if (!pending_consolidations_.empty()) {
-				// A region at the 192-op trigger has only the spare cap window left. Do not let
-				// a steady stream of mesh batches starve the bake until the edit log overflows.
-				consolidate_jobs.swap(pending_consolidations_);
 			} else if (!pending_extract_.empty()) {
 				extracts.swap(pending_extract_);
 			} else if (!pending_.empty()) {
 				batch.swap(pending_);
 			} else if (!pending_lod_.empty()) {
 				lod_jobs.swap(pending_lod_);
+			} else if (!pending_consolidations_.empty()) {
+				consolidate_jobs.swap(pending_consolidations_);
+			} else if (!pending_override_publications_.empty()) {
+				override_publications.swap(pending_override_publications_);
 			}
 		}
 
@@ -512,6 +546,57 @@ void MeshService::run() {
 				std::lock_guard<std::mutex> lock(mu_);
 				for (ConsolidateResult &r : consolidate_out) consolidate_results_.push_back(std::move(r));
 				consolidate_busy_.store(false, std::memory_order_release);
+			}
+			done_cv_.notify_all();
+			continue;
+		}
+
+		if (!override_publications.empty()) {
+			std::vector<OverridePublicationResult> publication_out;
+			publication_out.reserve(override_publications.size());
+			for (const OverridePublication &publication : override_publications) {
+				OverridePublicationResult result;
+				bool uploaded = !fail_consolidate_uploads_.load(std::memory_order_acquire);
+				for (size_t i = 0; uploaded && i < publication.slots.size(); i++)
+					uploaded = pass.upload_override(publication.slots[i], publication.bricks[i]) &&
+							(!lod_ || lod_->upload_override(publication.slots[i], publication.bricks[i]));
+				bool restored = true;
+				if (uploaded) {
+					pass.clear_override_table(publication.table);
+					pass.set_override_table(publication.region_slot, publication.table,
+							publication.entries);
+					if (lod_) lod_->set_override_table(publication.region_slot, publication.table,
+							publication.entries);
+					override_tables_[std::tuple<int, int, int>{publication.region.x,
+							publication.region.y, publication.region.z}] = publication.table;
+					result.success = true;
+				} else if (!fail_next_restore_.exchange(false, std::memory_order_acq_rel)) {
+					for (size_t i = 0; restored && i < publication.old_slots.size(); i++)
+						restored = pass.upload_override(publication.old_slots[i],
+								publication.old_bricks[i]) &&
+								(!lod_ || lod_->upload_override(publication.old_slots[i],
+										publication.old_bricks[i]));
+					pass.clear_override_table(publication.table);
+					pass.set_override_table(publication.region_slot, publication.old_table,
+							publication.old_entries);
+					if (lod_) lod_->set_override_table(publication.region_slot,
+							publication.old_table, publication.old_entries);
+					if (publication.old_table < 0)
+						override_tables_.erase(std::tuple<int, int, int>{publication.region.x,
+								publication.region.y, publication.region.z});
+					else
+						override_tables_[std::tuple<int, int, int>{publication.region.x,
+							publication.region.y, publication.region.z}] = publication.old_table;
+				}
+				if (!uploaded && !restored)
+					UtilityFunctions::printerr("MeshService: async override rollback failed");
+				publication_out.push_back(std::move(result));
+			}
+			{
+				std::lock_guard<std::mutex> lock(mu_);
+				for (OverridePublicationResult &r : publication_out)
+					override_publication_results_.push_back(std::move(r));
+				override_publication_busy_.store(false, std::memory_order_release);
 			}
 			done_cv_.notify_all();
 			continue;
