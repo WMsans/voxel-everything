@@ -5,6 +5,8 @@
 
 namespace ve {
 
+struct OverrideSource;
+
 struct RayHit {
 	bool hit = false;
 	float pos[3] = {0.0f, 0.0f, 0.0f};
@@ -16,6 +18,7 @@ struct RayHit {
 // GPU. Used by the edit tool to place ops on the main thread without stalling the renderer,
 // and as the oracle in tests. dir need not be normalised.
 RayHit raycast(const Generator &gen, const EditLog &log, const float origin[3],
-		const float dir[3], float max_dist, const VolumeStore *volumes = nullptr);
+		const float dir[3], float max_dist, const VolumeStore *volumes = nullptr,
+		const OverrideSource *overrides = nullptr);
 
 } // namespace ve

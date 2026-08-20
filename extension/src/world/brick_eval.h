@@ -16,24 +16,28 @@ struct BrickEval {
 	BrickMips mips;
 };
 
-// The world field: the generator with this point's region ops applied in order (spec §2).
+struct OverrideSource;
+
+// The world field: an override replaces the generator base, then the region ops apply in order.
 Sample eval_field(const Generator &gen, const EditOp *ops, int op_count,
-		float x, float y, float z, const VolumeStore *volumes = nullptr);
+		float x, float y, float z, const VolumeStore *volumes = nullptr,
+		const OverrideSource *overrides = nullptr);
 
 // Coarse residency probe. Mirrored exactly by shaders/brick_mark.comp.glsl — a brick is
 // resident iff this returns true, on both sides.
 bool brick_has_surface(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,
-		const VolumeStore *volumes = nullptr);
+		const VolumeStore *volumes = nullptr, const OverrideSource *overrides = nullptr);
 
 // The occupancy classification shaders/brick_mark.comp.glsl writes, as a pure function: the
 // same 3^3 probe brick_has_surface uses, reduced to spec §5's two bits. Never returns
 // kCellUnknown -- the field always answers; only the GRID has a "nobody looked" state.
 CellState cell_state_field(const Generator &gen, const EditOp *ops, int op_count, IVec3 cell,
-		const VolumeStore *volumes = nullptr);
+		const VolumeStore *volumes = nullptr, const OverrideSource *overrides = nullptr);
 
 // Full brick contents at L0. This is BOTH the path WorldData walks and the CPU reference
 // the GPU differential test diffs against (spec §8).
 void eval_brick(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,
-		BrickEval *out, const VolumeStore *volumes = nullptr);
+		BrickEval *out, const VolumeStore *volumes = nullptr,
+		const OverrideSource *overrides = nullptr);
 
 } // namespace ve

@@ -53,4 +53,10 @@ const std::vector<uint64_t> &EditLog::seqs(IVec3 region) const {
 	return it == seqs_.end() ? kEmptySeqs : it->second;
 }
 
+void EditLog::clear_region(IVec3 region) {
+	const Key key{region.x, region.y, region.z};
+	lists_.erase(key);
+	seqs_.erase(key);
+}
+
 } // namespace ve
