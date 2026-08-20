@@ -152,7 +152,7 @@ void eval_brick(const Generator &gen, const EditOp *ops, int op_count, IVec3 bri
 		for (int vy = 0; vy < kBrickSdfStride; vy++)
 			for (int vx = 0; vx < kBrickSdfStride; vx++) {
 				const Sample s = eval_field(gen, filtered, filtered_count, bo[0] + vx * kVoxelSize,
-						bo[1] + vy * kVoxelSize, bo[2] + vz * kVoxelSize, volumes);
+						bo[1] + vy * kVoxelSize, bo[2] + vz * kVoxelSize, volumes, overrides);
 				b.sdf[sdf_index(vx, vy, vz)] = encode_sdf(s.sdf);
 				if (s.material == 0) continue;
 				// An apron sample seeds the cell the shader's clamp folds it into: a brick

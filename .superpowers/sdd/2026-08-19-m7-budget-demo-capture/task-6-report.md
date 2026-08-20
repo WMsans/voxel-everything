@@ -85,8 +85,73 @@ All five legs exited 0. Wayland reported `vsync_requested=disabled`, `vsync_actu
 
 The task brief does not assign benchmark measurements to an Errata entry, so no Errata entry was added.
 
+## Round 1 fix — override propagation and cap boundary
+
+### Root cause
+
+`eval_brick` accepted `const OverrideSource *overrides`, and its material projection already forwarded it, but the 17³ SDF/material lattice loop called `eval_field` with only `volumes`. After consolidation cleared the op list, brick generation therefore evaluated `G` instead of the stored override base. The fix forwards `overrides` through that lattice evaluation.
+
+### Regression TDD evidence
+
+The native regression test was added before the production fix:
+
+```text
+$ cd extension && scons test
+[doctest] test cases:     314 |     313 passed | 1 failed | 0 skipped
+[doctest] assertions: 3962241 | 3962240 passed | 1 failed |
+[doctest] Status: FAILURE!
+tests/test_override_store.cpp:157: ERROR: CHECK( evaluated.brick.sdf[ve::sdf_index(0, 0, 0)] == ve::encode_sdf(-0.5f) ) is NOT correct!
+  values: CHECK( 255 == 28 )
+scons: *** [test] Error 1
+```
+
+After the one-line propagation fix:
+
+```text
+$ cd extension && scons test
+[doctest] test cases:     314 |     314 passed | 0 failed | 0 skipped
+[doctest] assertions: 3962241 | 3962241 passed | 0 failed |
+[doctest] Status: SUCCESS!
+scons: done building targets.
+```
+
+### Fresh fix verification
+
+```text
+$ ./build.sh -j$(nproc)
+==> Build OK: 4.6M libvoxel_everything.linux.template_debug.x86_64.so
+==> Done.
+
+$ ./gdunit_tests.sh -c -a res://tests/test_op_filter_gpu.gd
+Overall Summary: 4 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+
+$ ./gdunit_tests.sh -c -a res://tests/test_brick_diff.gd
+Overall Summary: 6 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+
+$ ./gdunit_tests.sh -c -a res://tests/test_field_diff.gd
+Overall Summary: 5 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+
+$ ./gdunit_tests.sh -c -a res://tests/test_field_volume_diff.gd
+Overall Summary: 5 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+
+$ ./gdunit_tests.sh -c -a res://tests/test_occupancy.gd
+Overall Summary: 4 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+```
+
+All focused suites used the NVIDIA Vulkan device. Godot emitted the existing X11-to-Wayland fallback and two ObjectDB leak warnings; each command exited 0 with zero test errors/failures.
+
+### 32-region cap boundary
+
+The M7 plan's fixed number is 32 simultaneous consolidated regions (`kMaxOverrideTables`), but the Task 6 brief does not expose a region-table or region-allocation API. Task 7 owns the render/worker override tables and their publication; Task 8 owns the consolidation queue cap, trigger, and fail-soft refusal/statistics. Task 6 therefore keeps its fail-soft `OverrideStore` capacity refusal at the **brick-pool** level and does not invent or duplicate a 32-region API. The Task 7/8 implementation must enforce the 32-table boundary before clearing an op list.
+
 ## Concerns
 
 - `test_edit_pipeline.gd` retains the pre-existing 1-error/2-failure dictionary-shape issue; no edit-pipeline code was changed.
 - Benchmark timing is Wayland-qualified because the available display falls back to V-Sync; all benchmark legs nevertheless exited 0.
 - The provided sampling fixture's raw expected SDF is outside the representable `[-kSdfRange, +kSdfRange]` byte range; the test records the required encoded-storage comparison rather than claiming lossless representation outside that range.
+- Task 6 does not implement Task 7 GPU integration or the Task 8 32-region queue/table policy; that boundary is recorded above.

@@ -143,6 +143,20 @@ TEST_CASE("eval_field prefers an override over the generator") {
 	CHECK(s.material == 2u);
 }
 
+TEST_CASE("eval_brick keeps an override after the op list is cleared") {
+	ve::AnalyticGenerator gen;
+	const ve::IVec3 brick{30, 64, 30};
+	ve::OverrideStore store(4);
+	const int slot = store.acquire(brick);
+	for (int i = 0; i < ve::kBrickSdfCount; i++)
+		store.data(slot)->sdf[i] = ve::encode_sdf(-0.5f);
+	for (int i = 0; i < ve::kBrickVoxelCount; i++) store.data(slot)->mat[i] = 2;
+
+	ve::BrickEval evaluated{};
+	ve::eval_brick(gen, nullptr, 0, brick, &evaluated, nullptr, &store);
+	CHECK(evaluated.brick.sdf[ve::sdf_index(0, 0, 0)] == ve::encode_sdf(-0.5f));
+}
+
 TEST_CASE("ops still apply on top of an override") {
 	// Consolidation clears the list, but the NEXT edit lands on the baked base. If ops were
 	// applied to G instead, every edit after a consolidation would undo it.
