@@ -16,35 +16,40 @@ meshed far field out to 4 km, one deferred cel-shading stack over both.
 - **Islands:** severed pieces become Jolt bodies, land, sleep, and merge back into terrain;
   collider builds are split into octants so one fat chunk cannot stall the frame.
 
-## Measured (RTX 4070 Laptop, 1440p requested; Wayland actual viewport 1152×1250)
+## Measured (RTX 4070 Laptop, 1440p requested; Wayland actual viewport 2560×2778)
 
 Steady leg, `m7-final` run. Full per-leg numbers, WARNs included, are in M7 Errata 10.
 
 | Pass | Budget | p50 | p99 |
 |---|---:|---:|---:|
-| GPU raymarch | 6.0 ms | 6.836 ms | 8.918 ms |
-| GPU stream | — | 0.003 ms | 0.005 ms |
-| GPU LoD | 2.0 ms | 0.044 ms | 0.051 ms |
-| GPU SSGI | 1.5 ms | 0.171 ms | 0.174 ms |
+| GPU raymarch | 6.0 ms | 7.212 ms | 9.610 ms |
+| GPU stream | — | 0.003 ms | 0.004 ms |
+| GPU LoD | 2.0 ms | 0.043 ms | 0.051 ms |
+| GPU SSGI | 1.5 ms | 0.172 ms | 0.316 ms |
 | GPU SSR | 1.5 ms | 0.139 ms | 0.141 ms |
-| GPU shadows | 1.0 ms | 0.125 ms | 0.275 ms |
+| GPU shadows | 1.0 ms | 0.124 ms | 0.274 ms |
 | GPU outlines | 0.3 ms | 0.081 ms | 0.082 ms |
-| Custom GPU frame | 16.0 ms | 7.880 ms | 10.132 ms |
-| Wall frame | 16.0 ms | 16.67 ms | 21.60 ms |
+| Custom GPU frame | 16.0 ms | 8.254 ms | 10.825 ms |
+| Wall frame | 16.0 ms | 16.67 ms | 24.03 ms |
 
 | Leg | GPU raymarch p50/p99 | Wall p50/p99 | over 16.6 ms |
 |---|---:|---:|---:|
-| steady | 6.836 / 8.918 | 16.67 / 21.60 | 220 / 300 (73.3%) |
-| move | 6.716 / 8.506 | 18.14 / 29.42 | 277 / 300 (92.3%) |
-| ridge | 5.197 / 8.762 | 16.67 / 29.72 | 243 / 300 (81.0%) |
-| edit | 12.315 / 28.878 | 27.68 / 83.78 | 279 / 300 (93.0%) |
-| island | 6.965 / 9.249 | 20.00 / 30.87 | 863 / 900 (95.9%) |
+| steady | 7.212 / 9.610 | 16.67 / 24.03 | 254 / 300 (84.7%) |
+| move | 7.106 / 8.810 | 19.44 / 32.33 | 278 / 300 (92.7%) |
+| ridge | 5.385 / 9.112 | 17.36 / 31.49 | 224 / 300 (74.7%) |
+| edit | 12.925 / 29.145 | 27.78 / 81.77 | 282 / 300 (94.0%) |
+| edit-bounded (900f) | 9.259 / 12.574 | 20.37 / 55.65 | 890 / 900 (98.9%) |
+| island | 7.331 / 9.899 | 20.00 / 33.33 | 866 / 900 (96.2%) |
 
 Every leg prints `budget_verdict raymarch=WARN lod=PASS ssgi=PASS ssr=PASS
 shadows=PASS outlines=PASS frame=WARN` and `timing_condition display_driver=Wayland
-vsync_requested=disabled vsync_actual=disabled verdict_qualified=false`. The raymarch WARN
+vsync_requested=disabled vsync_actual=enabled verdict_qualified=true`. The raymarch WARN
 is the edit leg's p99 over the 6 ms GPU budget; the frame WARN is the wall-clock p99 over
-16 ms in every leg. A second run (`m7-final-b`) reproduced the same verdicts.
+16 ms in every leg. A second run (`m7-final-b`) reproduced the same verdicts. The
+`edit-bounded` leg is the 900-frame bounded-region consolidation run (a small cluster of
+adjacent regions): `overflow=0`,
+`consolidations=1`, and stable `gpu_stream` p50/p99 (0.208/3.554 ms in `m7-final`,
+0.204/3.683 ms in `m7-final-b`).
 
 ## Build and run
 
