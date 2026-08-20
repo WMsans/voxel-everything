@@ -69,24 +69,59 @@ $ ./build.sh -j$(nproc)
 BUILD_EXIT=0
 
 $ ./gdunit_tests.sh -c -a res://tests/test_consolidation.gd
-Statistics: 8 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans
-Overall Summary: 8 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans
+Statistics: 8 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED 10s 800ms
+Overall Summary: 8 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
 CONSOLIDATION_EXIT=0
 
 $ ./gdunit_tests.sh -c -a res://tests/test_brick_diff.gd
-Statistics: 6 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans
+Statistics: 6 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED 3s 423ms
+Overall Summary: 6 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
 
 $ ./gdunit_tests.sh -c -a res://tests/test_mesh_diff.gd
-Statistics: 4 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans
+Statistics: 4 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED 2s 129ms
+Overall Summary: 4 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
 
 $ ./gdunit_tests.sh -c -a res://tests/test_lod_mesh_diff.gd
-Statistics: 3 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans
+Statistics: 3 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED 5s 359ms
+Overall Summary: 3 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
 
 $ ./gdunit_tests.sh -c -a res://tests/test_island_extract.gd
-Statistics: 5 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans
+Statistics: 5 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED 2s 563ms
+Overall Summary: 5 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
 
 $ ./gdunit_tests.sh -c -a res://tests/test_field_diff.gd
-Statistics: 5 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans
+Statistics: 5 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED 1s 207ms
+Overall Summary: 5 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
+
+$ ./gdunit_tests.sh -c -a res://tests/test_mesh_stream.gd
+Statistics: 5 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED 2s 519ms
+Overall Summary: 5 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
+
+$ ./gdunit_tests.sh -c -a res://tests/test_lod_stream.gd
+Statistics: 3 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED 13s 266ms
+Overall Summary: 3 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
+
+$ ./gdunit_tests.sh -c -a res://tests/test_streaming.gd
+Statistics: 6 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED 3s 415ms
+Overall Summary: 6 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
 
 $ (cd extension && scons test)
 [doctest] test cases:     314 |     314 passed | 0 failed | 0 skipped
@@ -94,3 +129,15 @@ $ (cd extension && scons test)
 [doctest] Status: SUCCESS!
 NATIVE_EXIT=0
 ```
+
+## Round 3 changes
+
+- `MeshService` override table changes now use a non-blocking worker queue; `WorldStreamer::run_frame()` contains no `run_sync()` call and queued replay/invalidation is ordered ahead of worker consumers.
+- Consolidation rollback checks `restore_overrides()`, restores both mesh and LoD worker consumers, retries a failure without releasing new CPU slots, and has a one-shot failure-injection assertion.
+- Full-pool coverage publishes all 8192 override slots before refusal; render replay compares table entry plus SDF/material bytes, and LoD replay compares generated lattice data.
+- Automatic consolidation scheduling remains deferred to Task 8.
+
+## Round 3 concerns
+
+- GPU suites use the existing Wayland fallback and emit the pre-existing X11/GTK/FIFO warnings; shutdown still reports two ObjectDB leaks while all suites exit 0.
+- The restore failure-injection test intentionally logs `VoxelWorld: worker override rollback failed; retrying` before the compensating retry succeeds.
