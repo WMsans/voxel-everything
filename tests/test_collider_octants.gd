@@ -8,7 +8,7 @@ func after_test() -> void:
 			w.free()
 	_worlds.clear()
 
-func make_world() -> VoxelWorld:
+func make_world(shape_builds_per_frame := 4) -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.physics_enabled = false
@@ -16,6 +16,7 @@ func make_world() -> VoxelWorld:
 	w.world_size_regions = Vector3i(8, 5, 8)
 	w.physics_radius_m = 25.0
 	w.max_collider_chunks = 512
+	w.shape_builds_per_frame = shape_builds_per_frame
 	add_child(w)
 	_worlds.append(w)
 	assert_bool(w.debug_init_physics()).is_true()
@@ -59,6 +60,45 @@ func test_no_single_build_carries_the_whole_chunk(timeout := 120000) -> void:
 	var st: Dictionary = w.debug_physics_stats()
 	assert_int(int(st["max_build_tris"])).is_less(int(st["max_chunk_tris"]))
 	assert_int(int(st["max_build_tris"])).is_greater(0)
+
+func test_throttled_remesh_keeps_old_collider_until_commit(timeout := 120000) -> void:
+	var w := make_world(1)
+	var center := Vector3(60.0, 55.0, 60.0)
+	assert_bool(settle(w, center)).is_true()
+	var before: Dictionary = w.debug_physics_stats()
+	var truth: Dictionary = w.debug_raycast(Vector3(center.x, 80.0, center.z), Vector3(0, -1, 0))
+	assert_bool(bool(truth["hit"])).is_true()
+	var chunk := chunk_for_point(truth["pos"])
+	var old_body: RID = w.debug_body_of_chunk(chunk)
+	assert_bool(old_body.is_valid()).is_true()
+	var old_raw := int(before["bodies_raw"])
+	var tool: VoxelEditTool = ClassDB.instantiate("VoxelEditTool")
+	w.add_child(tool)
+	var result: Dictionary = tool.apply_sphere_subtract(truth["pos"], 1.5)
+	assert_array(result["rejected"]).is_empty()
+
+	var saw_staging := false
+	for i in range(1200):
+		w.debug_physics_frame(center)
+		var st: Dictionary = w.debug_physics_stats()
+		if int(st["chunks_pending"]) > 0:
+			saw_staging = true
+			# One octant is allowed to build per frame, but no replacement may expose a partial
+			# collider: the old body remains live until the staged octants commit as a set.
+			assert_int(int(st["builds"])).is_less_equal(1)
+			assert_int(int(st["bodies_raw"])).is_equal(old_raw)
+			assert_bool(w.debug_body_of_chunk(chunk).is_valid()).is_true()
+			var live_hit := get_tree().root.world_3d.direct_space_state.intersect_ray(
+					PhysicsRayQueryParameters3D.create(
+							Vector3(center.x, 80.0, center.z), Vector3(center.x, 20.0, center.z)))
+			assert_bool(live_hit.is_empty()).is_false()
+			break
+	assert_bool(saw_staging).override_failure_message(
+			"the edit completed without exposing a throttled staging window").is_true()
+	assert_bool(settle(w, center)).is_true()
+	var after: Dictionary = w.debug_physics_stats()
+	assert_int(int(after["bodies_raw"])).is_greater_equal(int(after["bodies"]))
+	assert_bool(w.debug_body_of_chunk(chunk).is_valid()).is_true()
 
 func test_octant_bodies_replace_atomically_and_report_diagnostics(timeout := 120000) -> void:
 	var w := make_world()

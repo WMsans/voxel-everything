@@ -170,3 +170,58 @@ now record this qualified result and the per-call-vs-frame-sum distinction.
   ObjectDB-leak warnings at Godot exit; no unrelated environment or renderer fixes were made.
 - Benchmark reports under `reports/` are ignored by the repository; the exact benchmark
   evidence is reproduced above and the tracked Errata/report files contain it.
+
+## Round 2 — test-design coverage
+
+Round 2 adds the missing proof around the split's throttled replacement contract without
+changing production code:
+
+- `test_octant_split.cpp` now pins exact-centre tie-breaking (`>=` maps to octant 7), clears
+  pre-existing output bins, and ignores an incomplete trailing index pair.
+- `test_collider_octants.gd` now runs an edit with `shape_builds_per_frame = 1`, observes the
+  in-flight staging window, and asserts that no partial octant set becomes visible: the old
+  body remains valid, `bodies_raw` is unchanged, and at most one octant build is performed in
+  that frame. It then waits for the complete replacement to settle.
+
+Files touched in round 2:
+
+- `extension/tests/test_octant_split.cpp`
+- `tests/test_collider_octants.gd`
+- `.superpowers/sdd/2026-08-19-m7-budget-demo-capture/task-9-report.md`
+
+## Round 2 verification
+
+Fresh commands:
+
+```text
+cd extension && scons test
+[doctest] test cases:     320 |     320 passed | 0 failed | 0 skipped
+[doctest] assertions: 3962273 | 3962273 passed | 0 failed |
+[doctest] Status: SUCCESS!
+
+./gdunit_tests.sh -c -a res://tests/test_collider_octants.gd
+Statistics: 4 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED
+Overall Summary: 4 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+```
+
+The Godot run retained the existing X11 fallback, GTK theme, FIFO, and ObjectDB-leak
+warnings; no test failures or script errors occurred.
+
+Final affected-suite verification after the report update:
+
+```text
+./build.sh -j$(nproc)
+==> Build OK: 4.7M libvoxel_everything.linux.template_debug.x86_64.so
+
+cd extension && scons test
+[doctest] test cases:     320 |     320 passed | 0 failed | 0 skipped
+[doctest] assertions: 3962273 | 3962273 passed | 0 failed |
+
+./gdunit_tests.sh -c -a res://tests/test_collider_octants.gd  # 4/4 passed
+./gdunit_tests.sh -c -a res://tests/test_collider_stream.gd   # 6/6 passed
+./gdunit_tests.sh -c -a res://tests/test_collider_edits.gd    # 3/3 passed
+./gdunit_tests.sh -c -a res://tests/test_player_kick.gd       # 1/1 passed
+./gdunit_tests.sh -c -a res://tests/test_island_body.gd      # 5/5 passed
+git diff --check                                             # clean
+```
