@@ -34,6 +34,7 @@ bool MeshService::start(const MeshPassConfig &cfg) {
 		fail_consolidations_.store(false, std::memory_order_release);
 		fail_consolidate_uploads_.store(false, std::memory_order_release);
 		fail_next_restore_.store(false, std::memory_order_release);
+		fail_restore_overrides_.store(false, std::memory_order_release);
 		worker_state_valid_.store(true, std::memory_order_release);
 		rebuilding_worker_.store(false, std::memory_order_release);
 	}
@@ -85,6 +86,7 @@ void MeshService::stop() {
 	fail_consolidations_.store(false, std::memory_order_release);
 	fail_consolidate_uploads_.store(false, std::memory_order_release);
 	fail_next_restore_.store(false, std::memory_order_release);
+	fail_restore_overrides_.store(false, std::memory_order_release);
 	worker_state_valid_.store(true, std::memory_order_release);
 	rebuilding_worker_.store(false, std::memory_order_release);
 }
@@ -200,9 +202,61 @@ void MeshService::clear_override_region(int region_slot) {
 	cv_.notify_one();
 }
 
+void MeshService::cancel_queued_work_for_rebuild() {
+	std::lock_guard<std::mutex> lock(mu_);
+	// The worker cannot be running another operation when it reports an invalid publication:
+	// its loop is serial, and the publication result is emitted only after that operation has
+	// finished. Convert queued jobs into ordinary failure results so every producer clears its
+	// in-flight state instead of silently losing the request.
+	for (const MeshRequest &request : pending_) {
+		MeshResult result;
+		result.chunk = request.chunk;
+		result.failed = true;
+		results_.push_back(std::move(result));
+	}
+	pending_.clear();
+	busy_.store(false, std::memory_order_release);
+	for (const IslandExtractJob &job : pending_extract_) {
+		IslandExtractResult result;
+		result.id = job.id;
+		result.kind = job.kind;
+		result.failed = true;
+		extract_results_.push_back(std::move(result));
+	}
+	pending_extract_.clear();
+	extract_busy_.store(false, std::memory_order_release);
+	for (const LodBuildJob &job : pending_lod_) {
+		LodBuildResult result;
+		result.level = job.level;
+		result.coord = job.coord;
+		result.failed = true;
+		lod_results_.push_back(std::move(result));
+	}
+	pending_lod_.clear();
+	lod_busy_.store(false, std::memory_order_release);
+	// Consolidation has no independent scheduler-facing in-flight marker: the world owns the
+	// transaction that is currently recovering. Discard queued bake requests rather than
+	// manufacturing a result that could be mistaken for the recovering transaction's result
+	// on its next retry.
+	pending_consolidations_.clear();
+	consolidate_busy_.store(false, std::memory_order_release);
+	pending_override_updates_.clear();
+	pending_override_publications_.clear();
+	override_publication_busy_.store(false, std::memory_order_release);
+	// Volume uploads are retained. They are authoritative CPU snapshots and can safely land
+	// after replay_overrides() has restored the worker's override base; unlike mesh/extract/LoD
+	// jobs, dropping them would make a later field-volume op observe missing data.
+	done_cv_.notify_all();
+	cv_.notify_all();
+}
+
 bool MeshService::replay_overrides(const ve::OverrideStore &store,
 		const std::map<std::tuple<int, int, int>, int> &tables) {
 	bool uploaded = true;
+	const bool recovering_invalid_worker = !worker_state_valid_.load(std::memory_order_acquire);
+	if (recovering_invalid_worker) cancel_queued_work_for_rebuild();
+	// Set this before run_sync: the invalid worker is allowed to take exactly this recovery
+	// sync, while all ordinary work remains blocked until the replay makes it authoritative.
 	rebuilding_worker_.store(true, std::memory_order_release);
 	const bool ran = run_sync([&](MeshPass &pass) {
 		for (int table = 0; table < OverridePool::kMaxOverrideTables; table++)
@@ -405,7 +459,8 @@ bool MeshService::run_sync(const std::function<void(MeshPass &)> &fn) {
 				!override_publication_busy_.load(std::memory_order_acquire) &&
 				pending_extract_.empty() && pending_lod_.empty() &&
 				pending_override_updates_.empty() && pending_consolidations_.empty() &&
-				pending_override_publications_.empty() && pending_volumes_.empty());
+				pending_override_publications_.empty() &&
+				(rebuilding_worker_.load(std::memory_order_acquire) || pending_volumes_.empty()));
 	});
 	if (stopping_) return false;
 	sync_fn_ = &fn;
@@ -614,8 +669,13 @@ void MeshService::run() {
 						return true;
 					};
 					bool restored = false;
-					if (!fail_next_restore_.exchange(false, std::memory_order_acq_rel)) restored = restore();
-					for (int attempt = 0; !restored && attempt < 3; attempt++) restored = restore();
+					const bool force_restore_failure =
+							fail_restore_overrides_.load(std::memory_order_acquire);
+					if (!force_restore_failure &&
+							!fail_next_restore_.exchange(false, std::memory_order_acq_rel))
+						restored = restore();
+					for (int attempt = 0; !restored && attempt < 3 && !force_restore_failure; attempt++)
+						restored = restore();
 					result.worker_state_valid = restored;
 					if (!restored) {
 						worker_state_valid_.store(false, std::memory_order_release);

@@ -169,3 +169,76 @@ Run tests ends with 0
 ```
 
 The first LoD command was bounded at 240 seconds and timed out while its intentionally expensive first case was still running; it was rerun with a 600-second timeout and completed successfully in `4min 32s 262ms`. No source change was made for that pre-existing duration. The existing `test_edit_pipeline.gd` failures from round 1 were not rerun or changed.
+
+## Round 3 re-review — resolved
+
+Root cause: after worker publication rollback failed, `MeshService::run()` refused all ordinary queued work while `worker_state_valid_` was false, while `run_sync()` waited for those same queues and busy flags to drain. `replay_overrides()` could therefore wait forever with pre-existing mesh/extract/LoD work queued.
+
+`MeshService::cancel_queued_work_for_rebuild()` now converts queued mesh, extract, and LoD jobs into failed results so their producer-side in-flight state is released; queued consolidation requests are discarded because the world-owned transaction is the recovery owner; stale override updates/publications are discarded; authoritative volume uploads remain queued. Recovery allows the worker to service only the replay sync while invalid, and `run_sync()` does not wait for retained volume uploads during that rebuild. Once replay succeeds, normal scheduling resumes. The old render/CPU publication remains untouched until a successful retry.
+
+Added regression coverage:
+- `test_publication_failure_recovers_with_queued_worker_work`
+- debug-only persistent restore-failure injection to force the invalid-worker branch
+
+## Round 3 TDD evidence
+
+RED command:
+
+```text
+./gdunit_tests.sh -c -a res://tests/test_consolidation.gd
+```
+
+The new test reached its intended failure before the hook/fix existed:
+
+```text
+SCRIPT ERROR: Invalid call. Nonexistent function 'debug_set_fail_restore_overrides_always' in base 'VoxelWorld'.
+Exit code: 100
+```
+
+## Round 3 fresh verification
+
+Exact command result lines:
+
+```text
+./build.sh -j$(nproc)
+==> Build OK: 4.7M libvoxel_everything.linux.template_debug.x86_64.so
+==> Done.
+
+cd extension && scons test
+[doctest] test cases:     315 |     315 passed | 0 failed | 0 skipped
+[doctest] assertions: 3962244 | 3962244 passed | 0 failed |
+[doctest] Status: SUCCESS!
+scons: done building targets.
+
+./gdunit_tests.sh -c -a res://tests/test_consolidation.gd
+Statistics: 17 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED
+Overall Summary: 17 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
+
+./gdunit_tests.sh -c -a res://tests/test_collider_edits.gd
+Statistics: 3 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED
+Overall Summary: 3 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
+
+./gdunit_tests.sh -c -a res://tests/test_lod_stream.gd
+Statistics: 3 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED
+Overall Summary: 3 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
+
+./gdunit_tests.sh -c -a res://tests/test_streaming.gd
+Statistics: 6 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED
+Overall Summary: 6 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
+
+./gdunit_tests.sh -c -a res://tests/test_render_shutdown.gd
+Statistics: 1 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED
+Overall Summary: 1 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
+```
+
+The runner reported the existing environment warnings (X11 unavailable then Wayland fallback, GTK theme/FIFO warnings) and the existing two ObjectDB leak warnings at exit; all requested commands exited `0`.
