@@ -178,6 +178,12 @@ void WorldStreamer::drain_readbacks(RenderingDevice *rd) {
 		if (r.read.is_valid()) r.read->drain(rd);
 }
 
+void WorldStreamer::harvest_occupancy(RenderingDevice *rd) {
+	if (!rd) return;
+	drain_readbacks(rd);
+	pump_occupancy(rd);
+}
+
 int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) {
 	const Clock::time_point t_start = Clock::now();
 	last_readback_ms_ = 0.0f;
@@ -504,7 +510,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		// each job keeps one job's release phase from racing the previous job's allocate
 		// phase when two edits share bricks (the race the phase split exists to avoid).
 		rd->compute_list_add_barrier(list);
-		region_pass_->mark(rd, list, j.region, j.slot, j.lo, j.hi, j.op_count, true);
+		region_pass_->mark(rd, list, j.region, j.slot, j.lo, j.hi, j.op_count, true, true);
 		note_marked(j.region, j.seq);
 		any = true;
 	}

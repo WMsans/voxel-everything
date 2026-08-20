@@ -50,6 +50,9 @@ public:
 	// RenderingDevice has no async-readback cancellation. Called on the owning render thread
 	// before atlas buffers are freed so every pending Callable target is completed first.
 	void drain_readbacks(RenderingDevice *rd);
+	// Debug/test hook: harvest occupancy readbacks and queue the next reads without running a
+	// streaming mark or opening a compute list.
+	void harvest_occupancy(RenderingDevice *rd);
 
 	int last_frame_edits() const { return frame_edits_; }
 	// --- profiling (diagnostic only; see VoxelWorld::debug_perf_stats) ---

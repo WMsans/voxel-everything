@@ -135,17 +135,18 @@ void main() {
 	brick_probe(brick, op_base, s_op_n, probe_mn, probe_mx);
 	// `active` is a GLSL reserved word (M2 errata 5); this local is has_surface.
 	bool has_surface = probe_mn < ACTIVATION_PAD && probe_mx > -ACTIVATION_PAD;
-	// Only the unambiguous no-surface case is written here. A brick with a surface is
-	// generated immediately below and brick_gen writes the exact answer from its lattice;
-	// publishing this conservative estimate first would expose a one-frame lie to
-	// connectivity.
-	if (pc.cfg.y == 1 && !has_surface)
+	// A plain stream-in has no generated lattice for a no-surface brick, so publish only
+	// the unambiguous probe fallback there. An edit uses mark mode 2: every touched brick
+	// gets a generator job, including a thin surface between probe samples, and brick_gen
+	// publishes the exact lattice answer instead.
+	const bool exact_edit = pc.cfg.w == 2;
+	if (pc.cfg.y == 1 && !has_surface && !exact_edit)
 		write_occupancy(rslot, bi, probe_mn > 0.0 ? CELL_AIR : CELL_FULL);
 
 	if (pc.cfg.y == 0) {
 		// Release phase. Kept in its own dispatch: a push at index free_count and a pop at
 		// free_count - 1 running concurrently can collide and lose or duplicate a slot.
-		if (!has_surface && cur >= 0) {
+		if (!has_surface && !exact_edit && cur >= 0) {
 			region_tables.slot[idx] = -1;
 			int k = atomicAdd(counters.free_count, 1);
 			free_list.slot[k] = cur;
@@ -154,7 +155,7 @@ void main() {
 		return;
 	}
 
-	if (!has_surface) return;
+	if (!has_surface && !exact_edit) return;
 
 	int slot = cur;
 	if (slot < 0) {

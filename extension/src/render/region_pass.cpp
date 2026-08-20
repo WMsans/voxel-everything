@@ -114,7 +114,8 @@ void RegionPass::teardown() {
 }
 
 void RegionPass::mark(RenderingDevice *rd, int64_t list, ve::IVec3 region, int region_slot,
-		ve::IVec3 lo, ve::IVec3 hi, int op_count, bool force_regen) {
+		ve::IVec3 lo, ve::IVec3 hi, int op_count, bool force_regen,
+		bool generate_probe_misses) {
 	if (!mark_pipeline_.is_valid()) return;
 	const int64_t total = static_cast<int64_t>(hi.x - lo.x + 1) * (hi.y - lo.y + 1) *
 			(hi.z - lo.z + 1);
@@ -127,7 +128,10 @@ void RegionPass::mark(RenderingDevice *rd, int64_t list, ve::IVec3 region, int r
 	p[0] = region.x; p[1] = region.y; p[2] = region.z; p[3] = region_slot;
 	p[4] = lo.x; p[5] = lo.y; p[6] = lo.z; p[7] = 0;
 	p[8] = hi.x; p[9] = hi.y; p[10] = hi.z; p[11] = 0;
-	p[12] = op_count; p[13] = 0; p[14] = max_brick_jobs_; p[15] = force_regen ? 1 : 0;
+	p[12] = op_count; p[13] = 0; p[14] = max_brick_jobs_;
+	// 0 = plain stream-in, 1 = force resident regeneration, 2 = edit: generate every
+	// touched brick so the exact lattice, rather than the activation probe, owns occupancy.
+	p[15] = generate_probe_misses ? 2 : (force_regen ? 1 : 0);
 
 	rd->compute_list_bind_compute_pipeline(list, mark_pipeline_);
 	rd->compute_list_bind_uniform_set(list, mark_uset_, 0);
