@@ -1,7 +1,9 @@
 #include "physics/collider_streamer.h"
 #include "mesh/mesh_chunk.h"
 #include <godot_cpp/classes/time.hpp>
+#include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
+#include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 #include <godot_cpp/variant/transform3d.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
@@ -114,13 +116,56 @@ int ColliderStreamer::bodies_in_space() const {
 
 RID ColliderStreamer::body_of_slot(int slot) const {
 	if (slot < 0 || slot >= static_cast<int>(build_counts_.size())) return RID();
-	// Octant zero is allowed to be empty. Diagnostics must identify the chunk through any
-	// populated octant, otherwise a valid multi-body collider looks absent at random.
+	// Every committed chunk has eight body slots; return the first stable slot as the
+	// historical one-body diagnostic representative.
 	for (int octant = 0; octant < ve::kColliderOctants; octant++) {
 		const RID body = bodies_[static_cast<size_t>(sub_index(slot, octant))];
 		if (body.is_valid()) return body;
 	}
 	return RID();
+}
+
+Dictionary ColliderStreamer::debug_chunk_octants(ve::IVec3 c) const {
+	Dictionary out;
+	const int slot = chunks_ ? chunks_->slot_of(c) : -1;
+	out["slot"] = slot;
+	out["state"] = chunks_ ? chunks_->slot_state_of(c) : -1;
+	out["in_flight"] = chunks_ ? chunks_->build_in_flight(c) : false;
+	out["build_count"] = slot >= 0 && slot < static_cast<int>(build_counts_.size())
+			? build_counts_[static_cast<size_t>(slot)]
+			: -1;
+	out["staged"] = false;
+	out["staged_next_octant"] = -1;
+	out["staged_built_octants"] = 0;
+	out["staged_populated_octants"] = PackedInt32Array();
+
+	Array octants;
+	octants.resize(ve::kColliderOctants);
+	for (int octant = 0; octant < ve::kColliderOctants; octant++) {
+		Dictionary entry;
+		const int raw_slot = slot >= 0 ? sub_index(slot, octant) : -1;
+		const RID body = raw_slot >= 0 ? bodies_[static_cast<size_t>(raw_slot)] : RID();
+		entry["octant"] = octant;
+		entry["slot"] = raw_slot;
+		entry["rid"] = body;
+		entry["rid_id"] = static_cast<int64_t>(body.is_valid() ? body.get_id() : 0);
+		entry["valid"] = body.is_valid();
+		octants[octant] = entry;
+	}
+	out["octants"] = octants;
+
+	for (const PendingBuild &pending : pending_) {
+		if (pending.result.chunk != c) continue;
+		out["staged"] = true;
+		out["staged_next_octant"] = pending.next_octant;
+		out["staged_built_octants"] = pending.geometry_octants;
+		PackedInt32Array populated;
+		for (int octant = 0; octant < ve::kColliderOctants; octant++)
+			if (!pending.bins[static_cast<size_t>(octant)].empty()) populated.push_back(octant);
+		out["staged_populated_octants"] = populated;
+		break;
+	}
+	return out;
 }
 
 int ColliderStreamer::build_count_of_chunk(ve::IVec3 c) const {
@@ -260,7 +305,9 @@ bool ColliderStreamer::commit_pending(PendingBuild &pending) {
 	const Clock::time_point t_body = Clock::now();
 	for (int octant = 0; octant < ve::kColliderOctants; octant++) {
 		const RID shape = pending.staged_shapes[static_cast<size_t>(octant)];
-		if (!shape.is_valid()) continue;
+		// Keep one stable body slot per octant, including an empty geometry bin. Empty bodies
+		// carry no shape and therefore no collision cost, but make the eight-way transaction
+		// directly observable and keep slot/RID identity deterministic for diagnostics.
 		RID body = ps->body_create();
 		if (!body.is_valid()) {
 			for (RID &created : new_bodies) {
@@ -270,7 +317,7 @@ bool ColliderStreamer::commit_pending(PendingBuild &pending) {
 			return false;
 		}
 		ps->body_set_mode(body, PhysicsServer3D::BODY_MODE_STATIC);
-		ps->body_add_shape(body, shape);
+		if (shape.is_valid()) ps->body_add_shape(body, shape);
 		ps->body_set_collision_layer(body, 1);
 		ps->body_set_collision_mask(body, 1);
 		ps->body_set_ray_pickable(body, true);

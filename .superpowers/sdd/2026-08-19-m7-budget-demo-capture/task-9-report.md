@@ -225,3 +225,66 @@ cd extension && scons test
 ./gdunit_tests.sh -c -a res://tests/test_island_body.gd      # 5/5 passed
 git diff --check                                             # clean
 ```
+
+## Round 3 — deterministic eight-slot/RID and staged-replacement proof
+
+Round 3 closes the review gap with a read-only `VoxelWorld::debug_chunk_collider_octants`
+API. For one exact chunk it reports all eight raw body slots, each body RID and RID ID, plus
+`staged`, `staged_next_octant`, `staged_built_octants`, and populated staged octants. Committed
+chunks now retain all eight stable body RIDs; an empty geometry bin receives a body without a
+shape, so it adds no collision geometry while making the slot invariant observable. The
+existing staged-shape build and atomic old-body swap are unchanged; all PhysicsServer3D/Jolt
+creation remains on the calling thread and the established M3 winding swap remains intact.
+
+The test uses the deterministic cave/terrain chunk selected by `debug_raycast`, runs with
+`shape_builds_per_frame = 1`, asserts all eight old slots are valid, asserts every staged
+snapshot retains the exact old RID set after `staged_built_octants > 0`, then asserts all eight
+replacement RIDs are valid and changed after commit.
+
+### Round 3 RED
+
+After writing the stronger test before the API, the focused command failed at the missing hook:
+
+```text
+./gdunit_tests.sh -c -a res://tests/test_collider_octants.gd
+Invalid call. Nonexistent function 'debug_chunk_collider_octants' in base 'VoxelWorld'.
+Statistics: 4 test cases | 1 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 100
+```
+
+### Round 3 GREEN evidence
+
+Fresh focused proof output:
+
+```text
+COLLIDER_OCTANT_PROOF chunk=(5, 8, 5) slot=0 old_rids=[21071109554991, 21075404522286, 21079699489581, 21083994456876, 21088289424171, 21092584391466, 21096879358761, 21101174326056] new_rids=[27195732919240, 27200027886537, 27204322853834, 27208617821131, 27212912788428, 27217207755725, 27221502723022, 27225797690319] max_staged_built_octants=6
+Statistics: 4 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED
+Overall Summary: 4 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+```
+
+Final fresh affected verification:
+
+```text
+./build.sh -j$(nproc)
+==> Build OK: 4.7M libvoxel_everything.linux.template_debug.x86_64.so
+
+cd extension && scons test
+[doctest] test cases:     320 |     320 passed | 0 failed | 0 skipped
+[doctest] assertions: 3962273 | 3962273 passed | 0 failed |
+[doctest] Status: SUCCESS!
+
+./gdunit_tests.sh -c -a res://tests/test_collider_octants.gd \
+  -a res://tests/test_collider_stream.gd \
+  -a res://tests/test_collider_edits.gd \
+  -a res://tests/test_player_kick.gd \
+  -a res://tests/test_island_body.gd
+Overall Summary: 19 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Executed test suites: (5/5)
+Executed test cases : (19/19)
+Exit code: 0
+```
+
+The Godot run retained the existing X11-unavailable to Wayland fallback, GTK theme/FIFO
+warnings, and two ObjectDB leak warnings at shutdown; these are environment/runtime concerns,
+not test failures.

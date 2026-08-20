@@ -1,5 +1,6 @@
 #pragma once
 #include <godot_cpp/classes/physics_server3d.hpp>
+#include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <array>
 #include <deque>
@@ -18,8 +19,9 @@ namespace godot {
 // ~64 m radius around the player"). Owns the physics RIDs and nothing else; every pointer is
 // borrowed from VoxelWorld.
 //
-// One single-shape static body per pool slot rather than one body carrying every chunk's
-// shape: Jolt rebuilds a body's compound whenever a sub-shape changes, so a 160-shape body
+// One single-shape static body per octant slot rather than one body carrying every chunk's
+// shape: empty octants retain a body slot but no shape, and Jolt rebuilds a body's compound
+// whenever a sub-shape changes, so a 160-shape body
 // would rebuild itself two or three times a second while streaming, and body_remove_shape
 // renumbers everything after it. See the plan's Deliberate Decisions.
 //
@@ -80,6 +82,9 @@ public:
 	float last_build_ms() const { return last_build_ms_; }
 	float last_collect_ms() const;
 	RID body_of_slot(int slot) const;
+	// Diagnostic-only snapshot for one chunk: the eight raw body slots/RIDs and any staged
+	// replacement progress. It has no production-path side effects.
+	Dictionary debug_chunk_octants(ve::IVec3 c) const;
 	// --- profiling (diagnostic only; see VoxelWorld::debug_perf_stats) ---
 	float last_faces_ms() const { return last_faces_ms_; }
 	// Maximum duration of one shape_set_data call in the last frame; never an octant sum.
