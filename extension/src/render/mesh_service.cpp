@@ -30,6 +30,8 @@ bool MeshService::start(const MeshPassConfig &cfg) {
 		lod_busy_.store(false, std::memory_order_release);
 		lod_available_.store(false, std::memory_order_release);
 		consolidate_busy_.store(false, std::memory_order_release);
+		fail_consolidations_.store(false, std::memory_order_release);
+		fail_consolidate_uploads_.store(false, std::memory_order_release);
 	}
 	thread_ = std::thread([this] { run(); });
 	std::unique_lock<std::mutex> lock(mu_);
@@ -72,6 +74,8 @@ void MeshService::stop() {
 	lod_busy_.store(false, std::memory_order_release);
 	lod_available_.store(false, std::memory_order_release);
 	consolidate_busy_.store(false, std::memory_order_release);
+	fail_consolidations_.store(false, std::memory_order_release);
+	fail_consolidate_uploads_.store(false, std::memory_order_release);
 }
 
 bool MeshService::submit(std::vector<MeshRequest> requests) {
@@ -154,12 +158,86 @@ bool MeshService::submit_consolidations(std::vector<ConsolidateJob> jobs) {
 	return true;
 }
 
+bool MeshService::set_override_region(ve::IVec3 region, int region_slot, int table,
+		const std::vector<std::pair<int, int>> &entries) {
+	if (region_slot < 0 || table < -1 || table >= OverridePool::kMaxOverrideTables) return false;
+	const bool ran = run_sync([&](MeshPass &pass) {
+		pass.set_override_table(region_slot, table, entries);
+		if (table < 0)
+			override_tables_.erase(std::tuple<int, int, int>{region.x, region.y, region.z});
+		else
+			override_tables_[std::tuple<int, int, int>{region.x, region.y, region.z}] = table;
+	});
+	return ran;
+}
+
+void MeshService::clear_override_region(int region_slot) {
+	if (region_slot < 0) return;
+	run_sync([&](MeshPass &pass) { pass.clear_override_region(region_slot); });
+}
+
+bool MeshService::replay_overrides(const ve::OverrideStore &store,
+		const std::map<std::tuple<int, int, int>, int> &tables) {
+	bool uploaded = true;
+	const bool ran = run_sync([&](MeshPass &pass) {
+		for (int table = 0; table < OverridePool::kMaxOverrideTables; table++)
+			pass.clear_override_table(table);
+		for (const auto &region_table : tables) {
+			const ve::IVec3 region{std::get<0>(region_table.first), std::get<1>(region_table.first),
+					std::get<2>(region_table.first)};
+			const int table = region_table.second;
+			if (table < 0 || table >= OverridePool::kMaxOverrideTables) {
+				uploaded = false;
+				return;
+			}
+			const ve::IVec3 base{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
+					region.z * ve::kRegionBricks};
+			for (int z = 0; z < ve::kRegionBricks; z++)
+				for (int y = 0; y < ve::kRegionBricks; y++)
+					for (int x = 0; x < ve::kRegionBricks; x++) {
+						const ve::IVec3 brick{base.x + x, base.y + y, base.z + z};
+						const int slot = store.slot_of(brick);
+						if (slot < 0) continue;
+						const ve::OverrideBrick *data = store.data(slot);
+						if (!data || !pass.upload_override(slot, *data)) {
+							uploaded = false;
+							return;
+						}
+						pass.set_override_entry(table, ve::WorldBounds::brick_index_in_region(brick), slot);
+					}
+			// The region-slot map is intentionally not guessed here; residency restores it on
+			// stream-in, while the table bytes are safe to replay globally.
+		}
+	});
+	if (ran && uploaded) override_tables_ = tables;
+	return ran && uploaded;
+}
+
+bool MeshService::restore_overrides(const std::vector<int> &slots,
+		const std::vector<ve::OverrideBrick> &bricks, ve::IVec3 region, int region_slot,
+		int table, int old_table, const std::vector<std::pair<int, int>> &old_entries) {
+	if (slots.size() != bricks.size() || region_slot < 0) return false;
+	bool uploaded = true;
+	const bool ran = run_sync([&](MeshPass &pass) {
+		for (size_t i = 0; i < slots.size(); i++)
+			if (!pass.upload_override(slots[i], bricks[i])) { uploaded = false; return; }
+		pass.clear_override_table(table);
+		pass.set_override_table(region_slot, old_table, old_entries);
+		if (old_table < 0)
+			override_tables_.erase(std::tuple<int, int, int>{region.x, region.y, region.z});
+		else
+			override_tables_[std::tuple<int, int, int>{region.x, region.y, region.z}] = old_table;
+	});
+	return ran && uploaded;
+}
+
 bool MeshService::publish_overrides(const std::vector<int> &slots,
 		const std::vector<ve::OverrideBrick> &bricks, ve::IVec3 region, int region_slot,
 		int table, const std::vector<std::pair<int, int>> &entries) {
 	if (slots.size() != bricks.size() || slots.empty() || region_slot < 0 || table < 0) return false;
-	bool uploaded = true;
+	bool uploaded = !fail_consolidate_uploads_.load(std::memory_order_acquire);
 	const bool ran = run_sync([&](MeshPass &pass) {
+		if (!uploaded) return;
 		for (size_t i = 0; i < slots.size(); i++) {
 			if (!pass.upload_override(slots[i], bricks[i]) ||
 					(lod_ && !lod_->upload_override(slots[i], bricks[i]))) {
@@ -370,7 +448,8 @@ void MeshService::run() {
 			std::vector<ConsolidateResult> consolidate_out;
 			for (const ConsolidateJob &job : consolidate_jobs) {
 				ConsolidateResult r;
-				if (!consolidate_ || !consolidate_->run(job, &r)) r.failed = true;
+				if (fail_consolidations_.load(std::memory_order_acquire) || !consolidate_ ||
+						!consolidate_->run(job, &r)) r.failed = true;
 				consolidate_out.push_back(std::move(r));
 			}
 			{

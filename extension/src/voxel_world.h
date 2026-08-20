@@ -410,6 +410,8 @@ public:
 	// Test hook: make the mesher reject extraction submits even when it is idle, so the
 	// island manager's submit rollback path can be exercised deterministically.
 	void debug_set_fail_extract_submit(bool v);
+	void debug_set_fail_consolidations(bool v);
+	void debug_set_fail_consolidate_uploads(bool v);
 	void debug_set_merge_sleep_seconds(float v);
 	// Test hook: lower the dynamic-body guardrail so a small test can prove slot-pool holes
 	// after merges do not count against the cap.
@@ -449,6 +451,8 @@ public:
 	// it removes was already labelled UNANCHORED, so nothing that was holding on can be
 	// loosened by its going, and enqueueing a window would relabel the same neighbourhood
 	// every time a speck of sub-voxel dust is swept up.
+	int override_table_for_region(ve::IVec3 region) const;
+
 	ve::EditLog::AppendResult append_edit_locked(const ve::EditOp &op,
 			bool notify_islands = true);
 
@@ -538,6 +542,7 @@ public:
 	Dictionary debug_consolidate_diff(Vector3i region);
 	bool debug_consolidate_region(Vector3i region);
 	int debug_region_op_count(Vector3i region);
+	int debug_override_region_table(int region_slot) const;
 
 	// --- M5 Task 9 hooks ---
 	Dictionary debug_lod_diff(int level, Vector3i coord);

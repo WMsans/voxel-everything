@@ -304,6 +304,8 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 			}
 			ve::collect_ops_for_aabb(*world_->edit_log(), wlo, whi, &job.ops);
 		}
+		job.override_table = world_->override_table_for_region(
+				ve::WorldBounds::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
 		// Refuse before allocating a volume slot or submitting: the extraction pass cannot
 		// evaluate more than kMaxRegionOps ops, so this component can never be carved by the
 		// current field/worker limits. Fail-soft leaves it attached.

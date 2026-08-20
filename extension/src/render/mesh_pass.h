@@ -56,6 +56,11 @@ public:
 	OverridePool &overrides() { return overrides_; }
 	bool upload_override(int slot, const ve::OverrideBrick &brick) { return overrides_.upload(slot, brick); }
 	void set_override_table(int region_slot, int table, const std::vector<std::pair<int, int>> &entries);
+	void clear_override_table(int table) { overrides_.clear_table(rd_, table); }
+	void clear_override_region(int region_slot) { overrides_.set_region_table(rd_, region_slot, -1); }
+	void set_override_entry(int table, int brick_index, int slot) {
+		overrides_.set_table_entry(rd_, table, brick_index, slot);
+	}
 
 	// Uploads one stored volume to THIS device. Called on the worker thread only (the device
 	// belongs to it); MeshService::submit_volume is the main thread's way in.

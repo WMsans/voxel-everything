@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented the GPU mirror and worker-device consolidation path. The render atlas and worker meshing device now expose packed override SDF/material pools, 32 region tables, and a region-to-table map. The worker runs `brick_consolidate.comp.glsl`, reads back baked `OverrideBrick` values, and the world publishes them to CPU, render, mesh, and LoD consumers. Consolidated edits are cleared only after a successful bake/publication; overrides replace the analytic base and do not consume the edit-op list.
+Implemented the GPU mirror and worker-device consolidation path. The render atlas and worker meshing device now expose packed override SDF/material pools, 32 region tables, and a region-to-table map. CPU overrides are replayed into both newly created pools after render/physics reinit; eviction clears the render and worker region-slot mappings before reuse. Production island extraction now carries its override table. Consolidation publication is transactional across render and worker uploads, with fail-soft rollback, explicit region regeneration, collision dirtying, and LoD-chain invalidation. Consolidated edits are cleared only after a successful bake/publication; overrides replace the analytic base and do not consume the edit-op list.
 
 The prescribed GdUnit test required one compatibility adjustment: the existing Task 2–6 `debug_op_counts()` API returns its SSBO `RID` and is consumed by existing tests, while the brief's snippet treats it as a Dictionary. The new test uses `debug_region_op_count()` for the same post-consolidation assertion without changing the established API.
 
@@ -12,10 +12,11 @@ The prescribed GdUnit test required one compatibility adjustment: the existing T
 - `extension/src/render/consolidate_pass.h/.cpp` — worker compute pass and baked-brick readback.
 - `extension/src/render/gpu_atlas.*` — render-device override resources.
 - `extension/src/render/mesh_pass.*`, `lod_build_pass.*`, `island_extract_pass.*` — worker override bindings and shared worker pool.
-- `extension/src/render/mesh_service.*` — consolidation queue, worker execution, collection and publication.
-- `extension/src/voxel_world.*` — CPU override store, debug bake/diff/consolidate hooks and CPU field/raycast threading.
+- `extension/src/render/mesh_service.*` — consolidation queue, worker execution, collection, replay, eviction reset, and transactional publication.
+- `extension/src/render/world_streamer.*` — override table replay on load, stale mapping clear on eviction/reuse, and forced post-consolidation regeneration.
+- `extension/src/voxel_world.*` — CPU override store, device replay, debug bake/diff/consolidate hooks, rollback, dirty fan-out, and CPU field/raycast threading.
 - `shaders/field.glslh`, `brick_consolidate.comp.glsl`, `brick_gen.comp.glsl`, `brick_mark.comp.glsl`, `mesh_field.comp.glsl`, `lod_field.comp.glsl`, `island_extract.comp.glsl`, plus push-constant common headers.
-- `tests/test_consolidation.gd` — bake and post-consolidation raycast coverage.
+- `tests/test_consolidation.gd` — bake, reconsolidation, full-pool refusal, fail-bake/fail-publication rollback, render-pool replay, worker-pool replay, and GPU mesh-consumer coverage.
 
 ## TDD evidence
 
@@ -34,7 +35,7 @@ The first attempt also exposed the pre-existing `debug_op_counts()` RID-vs-Dicti
 
 ```text
 ./gdunit_tests.sh -c -a res://tests/test_consolidation.gd
-2 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped
+3 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped
 Exit code: 0
 ```
 
@@ -42,16 +43,14 @@ Exit code: 0
 
 | command | result |
 |---|---|
-| `./build.sh -j$(nproc)` | Build OK, 4.6M debug GDExtension |
+| `./build.sh -j$(nproc)` | Build OK, 4.7M debug GDExtension |
 | `cd extension && scons test` | 314/314 doctest cases; 3,962,241/3,962,241 assertions |
-| `test_consolidation.gd` | 2/2 passed |
-| `test_brick_diff.gd` | 6/6 passed |
-| `test_mesh_diff.gd` | 4/4 passed |
-| `test_lod_mesh_diff.gd` | 3/3 passed |
-| `test_island_extract.gd` | 5/5 passed |
-| `test_field_diff.gd` | 5/5 passed |
-| `test_op_filter_gpu.gd` | 4/4 passed |
-| `test_field_volume_diff.gd` | 5/5 passed |
+| `./gdunit_tests.sh -c -a res://tests/test_consolidation.gd` | 8/8 passed |
+| `./gdunit_tests.sh -c -a res://tests/test_brick_diff.gd` | 6/6 passed |
+| `./gdunit_tests.sh -c -a res://tests/test_mesh_diff.gd` | 4/4 passed |
+| `./gdunit_tests.sh -c -a res://tests/test_lod_mesh_diff.gd` | 3/3 passed |
+| `./gdunit_tests.sh -c -a res://tests/test_island_extract.gd` | 5/5 passed |
+| `./gdunit_tests.sh -c -a res://tests/test_field_diff.gd` | 5/5 passed |
 | `git diff --check` | clean |
 
 No benchmark was assigned by the Task 7 brief, so no benchmark measurement was recorded.
@@ -61,3 +60,37 @@ No benchmark was assigned by the Task 7 brief, so no benchmark measurement was r
 - GPU tests use the available NVIDIA Vulkan device through the Wayland fallback; Godot emits the existing X11-unavailable/GTK/FIFO warnings and two ObjectDB leak warnings at test shutdown, but each suite exits 0 with zero test errors/failures.
 - The brief's `debug_op_counts()` Dictionary example conflicts with the established RID-returning API used by Task 2–6 tests; the compatibility hook avoids breaking those consumers.
 - The fixed pool is fail-soft at 8192 bricks and the CPU publication path enforces the 32-table cap. Future automatic consolidation scheduling remains Task 8 work.
+
+## Round 2 fresh command output
+
+```text
+$ ./build.sh -j$(nproc)
+==> Build OK: 4.7M libvoxel_everything.linux.template_debug.x86_64.so
+BUILD_EXIT=0
+
+$ ./gdunit_tests.sh -c -a res://tests/test_consolidation.gd
+Statistics: 8 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans
+Overall Summary: 8 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans
+CONSOLIDATION_EXIT=0
+
+$ ./gdunit_tests.sh -c -a res://tests/test_brick_diff.gd
+Statistics: 6 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans
+
+$ ./gdunit_tests.sh -c -a res://tests/test_mesh_diff.gd
+Statistics: 4 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans
+
+$ ./gdunit_tests.sh -c -a res://tests/test_lod_mesh_diff.gd
+Statistics: 3 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans
+
+$ ./gdunit_tests.sh -c -a res://tests/test_island_extract.gd
+Statistics: 5 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans
+
+$ ./gdunit_tests.sh -c -a res://tests/test_field_diff.gd
+Statistics: 5 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans
+
+$ (cd extension && scons test)
+[doctest] test cases:     314 |     314 passed | 0 failed | 0 skipped
+[doctest] assertions: 3962241 | 3962241 passed | 0 failed |
+[doctest] Status: SUCCESS!
+NATIVE_EXIT=0
+```

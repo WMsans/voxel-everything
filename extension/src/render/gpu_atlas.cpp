@@ -259,6 +259,31 @@ void GpuAtlas::set_override_table(RenderingDevice *rd, int region_slot, int tabl
 		overrides_.set_table_entry(rd, table, entry.first, entry.second);
 }
 
+bool GpuAtlas::replay_overrides(RenderingDevice *rd, const ve::OverrideStore &store,
+		const std::map<std::tuple<int, int, int>, int> &tables) {
+	if (!rd || !overrides_.is_valid()) return false;
+	for (const auto &region_table : tables) {
+		const ve::IVec3 region{std::get<0>(region_table.first), std::get<1>(region_table.first),
+				std::get<2>(region_table.first)};
+		const int table = region_table.second;
+		if (table < 0 || table >= OverridePool::kMaxOverrideTables) return false;
+		const ve::IVec3 base{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
+				region.z * ve::kRegionBricks};
+		for (int z = 0; z < ve::kRegionBricks; z++)
+			for (int y = 0; y < ve::kRegionBricks; y++)
+				for (int x = 0; x < ve::kRegionBricks; x++) {
+					const ve::IVec3 brick{base.x + x, base.y + y, base.z + z};
+					const int slot = store.slot_of(brick);
+					if (slot < 0) continue;
+					const ve::OverrideBrick *data = store.data(slot);
+					if (!data || !overrides_.upload(slot, *data)) return false;
+					overrides_.set_table_entry(rd, table,
+						ve::WorldBounds::brick_index_in_region(brick), slot);
+				}
+		}
+	return true;
+}
+
 void GpuAtlas::clear_region_map(RenderingDevice *rd) {
 	if (region_map_.is_valid()) {
 		const PackedByteArray b = filled_i32(region_map_entries(), -1);
