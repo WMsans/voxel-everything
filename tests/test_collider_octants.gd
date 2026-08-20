@@ -102,11 +102,14 @@ func test_throttled_remesh_keeps_old_collider_until_commit(timeout := 120000) ->
 
 func test_octant_bodies_replace_atomically_and_report_diagnostics(timeout := 120000) -> void:
 	var w := make_world(1)
-	# This exact chunk contains the deterministic cave and the terrain surface crossing all
-	# three octant midpoint planes; its committed collider exposes all eight stable body slots,
-	# including slots whose geometry bin is empty.
+	# This exact chunk contains the deterministic cave and terrain surface in several, but not
+	# all, centroid octants. Empty octants must remain empty raw slots: diagnostic proof must
+	# not manufacture shape-less PhysicsServer bodies.
 	var center := Vector3(35.0, 55.0, 35.0)
 	assert_bool(settle(w, center)).is_true()
+	var before: Dictionary = w.debug_physics_stats()
+	assert_int(int(before["bodies_raw"])).is_greater(int(before["bodies"]))
+	assert_int(int(before["bodies_raw"])).is_less(int(before["bodies"]) * 8)
 
 	var truth: Dictionary = w.debug_raycast(Vector3(center.x, 80.0, center.z), Vector3(0, -1, 0))
 	assert_bool(bool(truth["hit"])).is_true()
@@ -116,13 +119,18 @@ func test_octant_bodies_replace_atomically_and_report_diagnostics(timeout := 120
 	assert_bool(bool(old_diag["staged"])).is_false()
 	assert_int(int(old_diag["octants"].size())).is_equal(8)
 	var old_ids := PackedInt64Array()
+	var old_populated := 0
 	for i in range(8):
 		var octant: Dictionary = old_diag["octants"][i]
 		assert_int(int(octant["octant"])).is_equal(i)
 		assert_int(int(octant["slot"])).is_equal(int(old_diag["slot"]) * 8 + i)
-		assert_bool(bool(octant["valid"])).is_true()
-		assert_int(int(octant["rid_id"])).is_greater(0)
-		old_ids.append(int(octant["rid_id"]))
+		var rid_id := int(octant["rid_id"])
+		assert_bool(bool(octant["valid"])).is_equal(rid_id > 0)
+		old_ids.append(rid_id)
+		if rid_id > 0:
+			old_populated += 1
+	assert_int(old_populated).is_greater(1)
+	assert_int(old_populated).is_less(8)
 
 	var old_build_count := int(old_diag["build_count"])
 	var tool: VoxelEditTool = ClassDB.instantiate("VoxelEditTool")
@@ -139,16 +147,17 @@ func test_octant_bodies_replace_atomically_and_report_diagnostics(timeout := 120
 		var diag: Dictionary = w.debug_chunk_collider_octants(chunk)
 		if bool(diag["staged"]):
 			saw_staging = true
-			# This is the required red-zone observation: at least one replacement octant has
-			# actually built, but the exact old eight-body set is still live.
+			# At least one replacement shape has built, but every live raw slot -- populated or
+			# empty -- must still be the exact old sparse set until the transaction commits.
 			assert_int(int(diag["staged_built_octants"])).is_greater(0)
 			max_staged_built_octants = maxi(max_staged_built_octants,
 					int(diag["staged_built_octants"]))
 			saw_replacement_build = true
 			for octant in diag["octants"]:
 				var live: Dictionary = octant
-				assert_bool(bool(live["valid"])).is_true()
-				assert_int(int(live["rid_id"])).is_equal(int(old_ids[int(live["octant"])]))
+				var index := int(live["octant"])
+				assert_int(int(live["rid_id"])).is_equal(int(old_ids[index]))
+				assert_bool(bool(live["valid"])).is_equal(int(old_ids[index]) > 0)
 		else:
 			if saw_staging and int(diag["build_count"]) > old_build_count:
 				saw_commit = true
@@ -165,16 +174,20 @@ func test_octant_bodies_replace_atomically_and_report_diagnostics(timeout := 120
 	assert_bool(bool(new_diag["staged"])).is_false()
 	assert_int(int(new_diag["build_count"])).is_greater(old_build_count)
 	assert_int(int(new_diag["octants"].size())).is_equal(8)
-	var changed := 0
 	var new_ids := PackedInt64Array()
+	var new_populated := 0
 	for i in range(8):
 		var octant: Dictionary = new_diag["octants"][i]
 		assert_int(int(octant["octant"])).is_equal(i)
-		assert_bool(bool(octant["valid"])).is_true()
-		new_ids.append(int(octant["rid_id"]))
-		if int(octant["rid_id"]) != int(old_ids[i]):
-			changed += 1
+		var rid_id := int(octant["rid_id"])
+		assert_bool(bool(octant["valid"])).is_equal(rid_id > 0)
+		new_ids.append(rid_id)
+		if rid_id > 0:
+			new_populated += 1
+			assert_bool(old_ids.has(rid_id)).override_failure_message(
+					"a replacement octant retained an old body RID").is_false()
+	assert_int(new_populated).is_greater(1)
+	assert_int(new_populated).is_less(8)
 	print("COLLIDER_OCTANT_PROOF chunk=", chunk, " slot=", old_diag["slot"],
 			" old_rids=", old_ids, " new_rids=", new_ids,
 			" max_staged_built_octants=", max_staged_built_octants)
-	assert_int(changed).is_equal(8)

@@ -116,8 +116,8 @@ int ColliderStreamer::bodies_in_space() const {
 
 RID ColliderStreamer::body_of_slot(int slot) const {
 	if (slot < 0 || slot >= static_cast<int>(build_counts_.size())) return RID();
-	// Every committed chunk has eight body slots; return the first stable slot as the
-	// historical one-body diagnostic representative.
+	// Empty octants have no body. Return the first populated slot as the historical
+	// one-body diagnostic representative.
 	for (int octant = 0; octant < ve::kColliderOctants; octant++) {
 		const RID body = bodies_[static_cast<size_t>(sub_index(slot, octant))];
 		if (body.is_valid()) return body;
@@ -305,9 +305,9 @@ bool ColliderStreamer::commit_pending(PendingBuild &pending) {
 	const Clock::time_point t_body = Clock::now();
 	for (int octant = 0; octant < ve::kColliderOctants; octant++) {
 		const RID shape = pending.staged_shapes[static_cast<size_t>(octant)];
-		// Keep one stable body slot per octant, including an empty geometry bin. Empty bodies
-		// carry no shape and therefore no collision cost, but make the eight-way transaction
-		// directly observable and keep slot/RID identity deterministic for diagnostics.
+		// Empty centroid bins stay empty: the flat eight-slot arrays provide stable indexing,
+		// but bodies_in_space() counts only bodies that carry real collision geometry.
+		if (!shape.is_valid()) continue;
 		RID body = ps->body_create();
 		if (!body.is_valid()) {
 			for (RID &created : new_bodies) {
@@ -317,7 +317,7 @@ bool ColliderStreamer::commit_pending(PendingBuild &pending) {
 			return false;
 		}
 		ps->body_set_mode(body, PhysicsServer3D::BODY_MODE_STATIC);
-		if (shape.is_valid()) ps->body_add_shape(body, shape);
+		ps->body_add_shape(body, shape);
 		ps->body_set_collision_layer(body, 1);
 		ps->body_set_collision_mask(body, 1);
 		ps->body_set_ray_pickable(body, true);

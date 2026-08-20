@@ -19,9 +19,9 @@ namespace godot {
 // ~64 m radius around the player"). Owns the physics RIDs and nothing else; every pointer is
 // borrowed from VoxelWorld.
 //
-// One single-shape static body per octant slot rather than one body carrying every chunk's
-// shape: empty octants retain a body slot but no shape, and Jolt rebuilds a body's compound
-// whenever a sub-shape changes, so a 160-shape body
+// One single-shape static body per populated octant slot rather than one body carrying every
+// chunk's shape: empty octants retain only their flat-vector slot, with no PhysicsServer body.
+// Jolt rebuilds a body's compound whenever a sub-shape changes, so a 160-shape body
 // would rebuild itself two or three times a second while streaming, and body_remove_shape
 // renumbers everything after it. See the plan's Deliberate Decisions.
 //
