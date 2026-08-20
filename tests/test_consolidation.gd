@@ -17,6 +17,7 @@ func make_world() -> VoxelWorld:
 	add_child(w)
 	_worlds.append(w)
 	w.ensure_initialized()
+	w.debug_stream_region(Vector3i(0, 2, 0))
 	return w
 
 # The bake has to reproduce the field it replaces. debug_consolidate_diff bakes one region's
@@ -143,8 +144,12 @@ func test_three_hundred_edits_in_one_region_all_land(timeout := 120000) -> void:
 		w.debug_pump_consolidation() # what _process does once a frame
 	var st: Dictionary = w.debug_stream_stats()
 	assert_int(int(st["overflow_ever"])).is_equal(0)
+	assert_int(int(st["edit_rejections"])).is_equal(0)
 	assert_int(int(st["consolidations"])).is_greater(0)
 	assert_int(int(st["override_bricks"])).is_greater(0)
+	assert_int(w.debug_region_op_count(Vector3i(0, 2, 0))).is_less(192)
+	var final_surface: Dictionary = w.debug_raycast(center + Vector3(0, 20, 0), Vector3(0, -1, 0))
+	assert_bool(final_surface["hit"]).is_true()
 
 # Consolidation must not change what the world looks like. The oracle is the raycast the
 # edit tool aims with -- the same field the renderer marches.
@@ -166,6 +171,42 @@ func test_consolidation_preserves_the_surface(timeout := 120000) -> void:
 			assert_float(float(after["pos"].y)).is_equal_approx(float(was["pos"].y), 0.06)
 
 # A full pool must leave the world exactly as it was.
+func test_automatic_consolidation_refuses_without_resident_slot() -> void:
+	var w := make_world()
+	var region := Vector3i(1, 2, 1)
+	w.debug_apply_sphere_subtract(Vector3(56.4, 51.4, 56.4), 2.0)
+	var ops_before := w.debug_region_op_count(region)
+	assert_int(w.debug_slot_of_region(region)).is_equal(-1)
+	assert_bool(w.debug_consolidate_region(region)).is_false()
+	assert_int(w.debug_region_op_count(region)).is_equal(ops_before)
+
+func test_async_consolidation_keeps_edits_appended_during_bake(timeout := 120000) -> void:
+	var w := make_world()
+	var center := Vector3(24.0, 53.0, 24.0)
+	for i in range(192):
+		var a := float(i) * 0.21
+		w.debug_apply_sphere_subtract(center + Vector3(cos(a) * 2.0, 0.0, sin(a) * 2.0), 0.9)
+	w.debug_pump_consolidation_async()
+	w.debug_apply_sphere_subtract(Vector3(24.0, 53.0, 24.0), 0.9)
+	w.debug_wait_consolidation()
+	var async_stats: Dictionary = w.debug_stream_stats()
+	assert_int(int(async_stats["consolidations"])).is_equal(1)
+	assert_int(w.debug_region_op_count(Vector3i(0, 2, 0))).is_equal(1)
+	assert_int(int(async_stats["edit_rejections"])).is_equal(0)
+	var surface: Dictionary = w.debug_raycast(Vector3(24.0, 70.0, 24.0), Vector3(0, -1, 0))
+	assert_bool(surface["hit"]).is_true()
+
+func test_invalid_override_capacity_fails_softly() -> void:
+	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	w.use_local_device = true
+	w.physics_enabled = false
+	w.max_override_bricks = -1
+	add_child(w)
+	_worlds.append(w)
+	w.ensure_initialized()
+	assert_int(w.get_max_override_bricks()).is_equal(0)
+	assert_int(int(w.debug_stream_stats().get("override_capacity", 0))).is_equal(0)
+
 func test_a_full_pool_refuses_and_changes_nothing(timeout := 60000) -> void:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
@@ -176,6 +217,7 @@ func test_a_full_pool_refuses_and_changes_nothing(timeout := 60000) -> void:
 	add_child(w)
 	_worlds.append(w)
 	w.ensure_initialized()
+	assert_int(int(w.debug_stream_stats()["override_capacity"])).is_equal(4)
 	w.debug_apply_sphere_subtract(Vector3(24.4, 51.4, 24.4), 2.0)
 	var ops_before: int = w.debug_region_op_count(Vector3i(0, 2, 0))
 	assert_bool(w.debug_consolidate_region(Vector3i(0, 2, 0))).is_false()

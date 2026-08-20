@@ -20,6 +20,7 @@ struct GpuAtlasConfig {
 	ve::IVec3 atlas_bricks{64, 32, 32};
 	int max_region_slots = 512;
 	int max_brick_jobs = 16384;
+	int max_override_bricks = OverridePool::kDefaultCapacity;
 	ve::WorldBounds bounds{};
 };
 

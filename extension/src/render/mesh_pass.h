@@ -16,6 +16,7 @@ struct MeshPassConfig {
 	int max_jobs = 2;      // chunks per batch
 	int max_verts = 16384; // a fully covered 6.4 m chunk holds ~4 100
 	int max_tris = 32768;  // ...and ~8 200 triangles; edits can carve well past that
+	int max_override_bricks = 8192;
 	// Buffers are sized for the largest lattice any consumer will ask for, so one pass can
 	// serve both the collision chunk and (Task 9) a LoD chunk without reallocating.
 	int max_lattice = ve::kChunkLattice;

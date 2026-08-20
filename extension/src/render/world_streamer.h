@@ -35,6 +35,8 @@ public:
 	// A consolidation changes the base bytes without leaving an edit for the normal edit
 	// fan-out. Queue a full-region force mark so the render atlas cannot retain pre-bake data.
 	void queue_region_regeneration(ve::IVec3 region);
+	// Caller holds edit_mutex_; used by the atomic consolidation commit.
+	void queue_region_regeneration_locked(ve::IVec3 region);
 
 	// Eight reads in flight. buffer_get_data_async costs the frame that asks nothing, but
 	// the bytes turn up a few frames later, so the only way to shorten the delay between an

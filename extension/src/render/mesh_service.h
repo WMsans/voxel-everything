@@ -25,6 +25,25 @@ struct MeshRequest {
 	std::vector<ve::EditOp> ops;
 };
 
+// An asynchronous worker-owned override publication. The old bytes are part of the command so
+// a partial upload can be rolled back on the worker without blocking the frame pump.
+struct OverridePublication {
+	std::vector<int> slots;
+	std::vector<ve::OverrideBrick> bricks;
+	std::vector<int> old_slots;
+	std::vector<ve::OverrideBrick> old_bricks;
+	ve::IVec3 region{};
+	int region_slot = -1;
+	int table = -1;
+	int old_table = -1;
+	std::vector<std::pair<int, int>> entries;
+	std::vector<std::pair<int, int>> old_entries;
+};
+
+struct OverridePublicationResult {
+	bool success = false;
+};
+
 // The collision mesher, moved off the main thread.
 //
 // MeshPass drives its own local RenderingDevice: submit(), sync() and buffer_get_data() are
@@ -78,6 +97,8 @@ public:
 
 	bool submit_consolidations(std::vector<ConsolidateJob> jobs);
 	int collect_consolidations(std::vector<ConsolidateResult> *out);
+	bool submit_override_publication(OverridePublication publication);
+	int collect_override_publications(std::vector<OverridePublicationResult> *out);
 	// Queues an override table update for the worker-owned pass. These calls never wait for
 	// the worker; the update is drained before any later mesh/LoD/consolidation job.
 	bool set_override_region(ve::IVec3 region, int region_slot, int table,
@@ -188,6 +209,8 @@ private:
 	std::vector<OverrideUpdate> pending_override_updates_;
 	std::vector<ConsolidateJob> pending_consolidations_;
 	std::vector<ConsolidateResult> consolidate_results_;
+	std::vector<OverridePublication> pending_override_publications_;
+	std::vector<OverridePublicationResult> override_publication_results_;
 	std::vector<VolumeUpload> pending_volumes_;
 #ifdef DEBUG_ENABLED
 	// Debug-only: accepted volume upload slots, used by debug_submitted_volume_slots().
@@ -201,6 +224,7 @@ private:
 	std::atomic<bool> lod_busy_{false};
 	std::atomic<bool> lod_available_{false};
 	std::atomic<bool> consolidate_busy_{false};
+	std::atomic<bool> override_publication_busy_{false};
 	std::atomic<bool> fail_consolidations_{false};
 	std::atomic<bool> fail_consolidate_uploads_{false};
 	std::atomic<bool> fail_next_restore_{false};

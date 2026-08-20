@@ -93,7 +93,8 @@ bool MeshPass::initialize(RenderingDevice *rd, const MeshPassConfig &cfg) {
 	teardown();
 	rd_ = rd;
 	cfg_ = cfg;
-	if (!rd || cfg.max_jobs <= 0 || cfg.max_verts <= 0 || cfg.max_tris <= 0) {
+	if (!rd || cfg.max_jobs <= 0 || cfg.max_verts <= 0 || cfg.max_tris <= 0 ||
+			cfg.max_override_bricks <= 0) {
 		UtilityFunctions::printerr("MeshPass: degenerate configuration");
 		return false;
 	}
@@ -130,7 +131,7 @@ bool MeshPass::initialize(RenderingDevice *rd, const MeshPassConfig &cfg) {
 			static_cast<uint32_t>(cfg_.max_jobs) * ve::kMaxRegionOps * 32,
 			zeroed(static_cast<int64_t>(cfg_.max_jobs) * ve::kMaxRegionOps * 32));
 	if (!volumes_.initialize(rd, ve::kMaxVolumes, ve::kIslandDim) ||
-			!overrides_.initialize(rd, OverridePool::kDefaultCapacity)) {
+			!overrides_.initialize(rd, cfg_.max_override_bricks)) {
 		UtilityFunctions::printerr("MeshPass: field pool creation failed");
 		teardown();
 		return false;
