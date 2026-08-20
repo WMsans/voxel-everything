@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include "render/edit_aabb.h"
+#include <algorithm>
 #include <vector>
 
 namespace {
@@ -16,6 +17,29 @@ int64_t volume(const ve::EditAabb &a) {
 	return static_cast<int64_t>(a.hi.x - a.lo.x + 1) *
 			static_cast<int64_t>(a.hi.y - a.lo.y + 1) *
 			static_cast<int64_t>(a.hi.z - a.lo.z + 1);
+}
+
+// The exact per-op brick range used by exact_edit_aabbs, clamped to the region.
+ve::EditAabb input_range(const ve::IVec3 &region, const ve::EditOp &op) {
+	ve::IVec3 lo{}, hi{};
+	ve::op_brick_range(op, &lo, &hi);
+	const ve::IVec3 r0{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
+			region.z * ve::kRegionBricks};
+	const ve::IVec3 r1{r0.x + ve::kRegionBricks - 1, r0.y + ve::kRegionBricks - 1,
+			r0.z + ve::kRegionBricks - 1};
+	lo.x = std::max(lo.x, r0.x);
+	lo.y = std::max(lo.y, r0.y);
+	lo.z = std::max(lo.z, r0.z);
+	hi.x = std::min(hi.x, r1.x);
+	hi.y = std::min(hi.y, r1.y);
+	hi.z = std::min(hi.z, r1.z);
+	return {lo, hi};
+}
+
+bool covers(const ve::EditAabb &outer, const ve::EditAabb &inner) {
+	return outer.lo.x <= inner.lo.x && outer.hi.x >= inner.hi.x &&
+			outer.lo.y <= inner.lo.y && outer.hi.y >= inner.hi.y &&
+			outer.lo.z <= inner.lo.z && outer.hi.z >= inner.hi.z;
 }
 
 } // namespace
@@ -60,6 +84,38 @@ TEST_CASE("overlapping exact edit ops merge into one bounded AABB") {
 	REQUIRE(ve::exact_edit_aabbs(region, ops, &boxes));
 	CHECK(boxes.size() == 1);
 	CHECK(volume(boxes[0]) < 4096);
+}
+
+TEST_CASE("exact-edit AABB cap splits an overlapping chain across a region") {
+	// Forty small spheres along the region diagonal touch/overlap in a transitive chain.
+	// Without the cap the merged AABB spans nearly the whole 32^3 region; with the cap the
+	// result must be several bounded AABBs that still cover every op's own brick range.
+	const ve::IVec3 region{0, 0, 0};
+	const int steps = 40;
+	std::vector<ve::EditOp> ops;
+	for (int i = 0; i < steps; i++) {
+		const float t = static_cast<float>(i) / static_cast<float>(steps - 1);
+		const float p = 0.5f + t * (31.0f * 0.8f);
+		ops.push_back(sphere(p, p, p, 1.0f));
+	}
+
+	std::vector<ve::EditAabb> boxes;
+	REQUIRE(ve::exact_edit_aabbs(region, ops, &boxes));
+	CHECK(boxes.size() > 1);
+	for (const auto &b : boxes) {
+		CHECK(ve::aabb_volume(b) <= ve::kMaxExactEditAabbBricks);
+	}
+	for (const ve::EditOp &op : ops) {
+		const ve::EditAabb range = input_range(region, op);
+		bool covered = false;
+		for (const auto &b : boxes) {
+			if (covers(b, range)) {
+				covered = true;
+				break;
+			}
+		}
+		CHECK(covered);
+	}
 }
 
 TEST_CASE("empty edit log has no exact edit AABB") {
