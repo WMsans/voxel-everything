@@ -242,3 +242,157 @@ Run tests ends with 0
 ```
 
 The runner reported the existing environment warnings (X11 unavailable then Wayland fallback, GTK theme/FIFO warnings) and the existing two ObjectDB leak warnings at exit; all requested commands exited `0`.
+
+## Round 4 re-review — deterministic queued-work regression
+
+The prior regression submitted mesh and LoD jobs before publication. That did not establish the deadlock precondition: the worker's extract -> mesh -> LoD -> consolidation -> publication priority could drain those jobs before the publication failed, and the test omitted extract work and never inspected each result's `failed` field.
+
+The revised regression uses a debug-only worker barrier that pauses after the publication has been dequeued. It then submits two real mesh jobs, one valid field-extraction job, and one LoD job through the normal queue APIs before releasing the publication into injected upload/rollback failure. The test asserts exact result identities and `failed == true` for every cancelled mesh/extract/LoD job, verifies the 192-op prefix remains after failure, then clears injection and requires both a new consolidation completion and an empty target-region op list. Production cancellation/replay behavior was not changed.
+
+Minimal debug hooks added:
+- publication pause/set-and-observe controls in `MeshService`, compiled into the worker loop only under `DEBUG_ENABLED`;
+- extraction submit/collect diagnostics in `VoxelWorld`, building the same complete field-extraction job shape used by the existing extraction differential hook.
+
+### Round 4 TDD evidence
+
+RED command:
+
+```text
+./gdunit_tests.sh -c -a res://tests/test_consolidation.gd
+```
+
+After correcting a GDScript type-inference parse error in the new test, the intended RED result was:
+
+```text
+SCRIPT ERROR: Invalid call. Nonexistent function 'debug_set_pause_override_publication' in base 'VoxelWorld'.
+Statistics: 17 test cases | 1 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED 19s 504ms
+Overall Summary: 17 test cases | 1 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 100
+```
+
+The first post-hook run exposed a fixture error: edits centred at `y = 51.4` with radius `0.8` crossed the region boundary at `y = 51.2`, allowing the global consolidation counter to advance for a second touched region. The exact failure was:
+
+```text
+Expecting:
+ 0
+ but was
+ 192
+ at 'test_publication_failure_recovers_with_queued_worker_work' in res://tests/test_consolidation.gd:212
+Statistics: 17 test cases | 0 errors | 1 failures | 0 flaky | 0 skipped | 0 orphans | PASSED 19s 645ms
+Exit code: 100
+```
+
+The fixture now stays inside region `(0,2,0)` and compares completion against a captured consolidation-counter baseline.
+
+### Round 4 fresh verification
+
+Exact command/result lines:
+
+```text
+./build.sh -j$(nproc)
+==> Build OK: 4.7M libvoxel_everything.linux.template_debug.x86_64.so
+==> Done.
+
+cd extension && scons test
+[doctest] test cases:     315 |     315 passed | 0 failed | 0 skipped
+[doctest] assertions: 3962244 | 3962244 passed | 0 failed |
+[doctest] Status: SUCCESS!
+scons: done building targets.
+
+for run in 1 2 3; do
+  echo "===== consolidation determinism run $run ====="
+  ./gdunit_tests.sh -c -a res://tests/test_consolidation.gd || exit $?
+done
+===== consolidation determinism run 1 =====
+Statistics: 17 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED 19s 751ms
+Overall Summary: 17 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
+===== consolidation determinism run 2 =====
+Statistics: 17 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED 19s 697ms
+Overall Summary: 17 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
+===== consolidation determinism run 3 =====
+Statistics: 17 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED 19s 640ms
+Overall Summary: 17 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
+
+for suite in test_mesh_stream.gd test_island_extract.gd test_lod_build.gd test_render_shutdown.gd; do
+  echo "===== $suite ====="
+  ./gdunit_tests.sh -c -a "res://tests/$suite" || exit $?
+done
+===== test_mesh_stream.gd =====
+Statistics: 5 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED 2s 524ms
+Exit code: 0
+Run tests ends with 0
+===== test_island_extract.gd =====
+Statistics: 5 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED 2s 613ms
+Exit code: 0
+Run tests ends with 0
+===== test_lod_build.gd =====
+Statistics: 5 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED 2s 560ms
+Exit code: 0
+Run tests ends with 0
+===== test_render_shutdown.gd =====
+Statistics: 1 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED 679ms
+Exit code: 0
+Run tests ends with 0
+```
+
+All GdUnit commands emitted the existing X11-to-Wayland fallback, GTK theme/FIFO warnings, and two ObjectDB leak warnings. The injected recovery test emitted the expected `MeshService: async override rollback failed; worker state invalid` diagnostic before passing.
+
+### Round 4 mutation check and final restore verification
+
+Removing only `if (recovering_invalid_worker) cancel_queued_work_for_rebuild();`, rebuilding, and bounding the regression command reproduced the original wait at the intended test:
+
+```text
+./build.sh -j$(nproc) >/tmp/task8-round4-mutation-build.log 2>&1 && \
+  timeout --signal=TERM --kill-after=10s 45s \
+  ./gdunit_tests.sh -c -a res://tests/test_consolidation.gd \
+  >/tmp/task8-round4-mutation-test.log 2>&1; \
+  code=$?; echo "mutation_exit=$code"; \
+  tail -45 /tmp/task8-round4-mutation-test.log; exit 0
+mutation_exit=124
+test_teardown_releases_staged_override_slots_before_reinit PASSED
+test_publication_failure_recovers_with_queued_worker_work STARTED
+MeshService: async override rollback failed; worker state invalid
+```
+
+The cancellation line was restored. Fresh final verification command:
+
+```text
+set -o pipefail
+{
+  echo '===== build ====='
+  ./build.sh -j$(nproc)
+  echo '===== native ====='
+  (cd extension && scons test)
+  echo '===== consolidation ====='
+  ./gdunit_tests.sh -c -a res://tests/test_consolidation.gd
+  echo '===== diff check ====='
+  git diff --check
+} 2>&1 | tee /tmp/task8-round4-final-verification.log
+```
+
+Exact result lines:
+
+```text
+==> Build OK: 4.7M libvoxel_everything.linux.template_debug.x86_64.so
+==> Done.
+[doctest] test cases:     315 |     315 passed | 0 failed | 0 skipped
+[doctest] assertions: 3962244 | 3962244 passed | 0 failed |
+[doctest] Status: SUCCESS!
+Statistics: 17 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans | PASSED 19s 613ms
+Overall Summary: 17 test cases | 0 errors | 0 failures | 0 flaky | 0 skipped | 0 orphans |
+Exit code: 0
+Run tests ends with 0
+git diff --check: no output (clean)
+
+cd extension && scons target=template_release -j$(nproc)
+Compiling shared src/voxel_world.cpp ...
+Compiling shared src/render/mesh_service.cpp ...
+Linking Shared Library bin/libvoxel_everything.linux.template_release.x86_64.so ...
+scons: done building targets.
+```
