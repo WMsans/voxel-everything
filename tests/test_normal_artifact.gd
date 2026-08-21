@@ -78,6 +78,17 @@ func hills(x: float, z: float) -> float:
         + 3.0 * sin(x * 0.031 + 1.7) * sin(z * 0.043) \
         + 1.0 * sin(x * 0.23 + z * 0.19)
 
+# Analytic mirror of shaders/field.glslh base_field_gradient: the unedited procedural
+# terrain gradient. The test uses it to prove a no-normal bake is NOT shaded with it.
+func base_gradient_at(p: Vector3) -> Vector3:
+    var dhdx := 0.66 * cos(p.x * 0.11) * cos(p.z * 0.13) \
+        + 0.093 * cos(p.x * 0.031 + 1.7) * sin(p.z * 0.043) \
+        + 0.23 * cos(p.x * 0.23 + p.z * 0.19)
+    var dhdz := -0.78 * sin(p.x * 0.11) * sin(p.z * 0.13) \
+        + 0.129 * sin(p.x * 0.031 + 1.7) * cos(p.z * 0.043) \
+        + 0.19 * cos(p.x * 0.23 + p.z * 0.19)
+    return Vector3(-dhdx, 1.0, -dhdz)
+
 # A sphere ADD shades from the exact procedural gradient of its winning CSG branch.
 # Rays whose winning branch is at least 0.02 m from a tie must align with the CPU
 # source-field normal to within oct/float noise (alignment > 0.995).
@@ -175,6 +186,71 @@ func test_a_consolidated_region_shades_from_override_normals(timeout := 120000) 
         ).is_less_equal(0.003)
     assert_float(result.get("cel_mismatch_fraction", 1.0)).is_less(0.001)
     assert_int(result.get("largest_mismatch_component", 999999)).is_less_equal(8)
+
+# The designed-for fail-soft state (brief Step 6): a bake published WITHOUT compact
+# normals (GPU offset -1, CPU normal_oct empty) must (a) never reject the geometry or the
+# edits that produced it, and (b) shade through the wide R8 fallback -- never the
+# unedited procedural gradient that the old base-fallback path reported as exact.
+#
+# The fixture reaches that state through the REAL publication path: a tiny sphere ADD
+# whose center sits exactly on a brick-lattice point makes consolidation's normal capture
+# hit the degenerate center, so those bricks bake and publish with no normal span.
+func test_a_baked_override_without_normals_uses_the_r8_fallback(timeout := 120000) -> void:
+    var world := make_world()
+    disable_effects(world)
+    # One lattice-point-centered dome per corner of a 2x2 brick block: each fails its
+    # bricks' normal capture, and the whole dome surface lies inside the no-normal bricks.
+    var centers: Array[Vector3] = []
+    for dz in range(2):
+        for dx in range(2):
+            centers.append(Vector3(24.0 + dx * 0.8, 53.2, 24.0 + dz * 0.8))
+    for c in centers:
+        world.debug_apply_sphere_add(c, 0.35, 4)
+    assert_bool(world.debug_consolidate_region(Vector3i(0, 2, 0))).is_true()
+    quiet_stream(world, Vector3(25.7, 56.2, 24.4))
+
+    # (a) No rejection: the no-normal bake is still published -- table entry and SDF bytes
+    # match the CPU store exactly as a normal bake's would.
+    var st: Dictionary = world.debug_override_render_state(Vector3i(30, 66, 30))
+    assert_int(st.get("table_slot", -1)).override_failure_message(
+        "no-normal bake was not published; fail-soft must never reject geometry").is_greater_equal(0)
+    assert_bool(st.get("sdf_match", false)).is_true()
+
+    # (b) Shading through the R8 fallback: a ray onto a dome's side must (i) report an
+    # INEXACT CPU gradient with a zero gradient (the fix's contract, mirrored by GLSL), and
+    # (ii) render a normal that is NOT the unedited procedural base gradient -- only the
+    # wide R8 fallback shades a no-normal bake.
+    var fallback_proof := 0
+    for c in centers:
+        var probe: Dictionary = world.debug_raymarch_gbuffer(c + Vector3(0.3, 8.5, 0.0), Vector3(0, -1, 0))
+        if not probe.get("hit", false):
+            continue
+        var pos: Vector3 = probe["position"]
+        var cpu: Dictionary = world.debug_eval_field_gradient(pos, PackedByteArray(), 0)
+        if bool(cpu.get("exact", true)):
+            continue # hit landed off the no-normal dome surface
+        var gzero: float = Vector3(cpu["gradient"]).length()
+        if gzero > 1e-6:
+            continue # the inexact path must carry a zero gradient, not a stale base one
+        var n: Vector3 = probe["normal"]
+        var base_n: Vector3 = base_gradient_at(pos).normalized()
+        if n.dot(base_n) < 0.8:
+            fallback_proof += 1
+    assert_int(fallback_proof).override_failure_message(
+        "no dome ray shaded through the R8 fallback; bake-without-normals got a base-exact normal?").is_greater(0)
+
+    # Whole-view probe: the world still renders (hits), the metrics stay inside the
+    # R8-fallback artifact bounds, and the no-normal baked hits are skipped by the CPU
+    # reference (considered < hits) -- the fallback path shaded them.
+    var result: Dictionary = world.debug_raymarch_normal_probe(
+        Vector3(25.7, 70.0, 24.4), Vector3(0, -1, 0), 160, 120)
+    assert_bool(result.get("ran", false)).is_true()
+    assert_int(result.get("hits", 0)).is_greater(4000)
+    assert_float(result.get("rms_ndl", 1.0)).is_less_equal(0.003)
+    assert_float(result.get("cel_mismatch_fraction", 1.0)).is_less(0.001)
+    assert_int(result.get("largest_mismatch_component", 999999)).is_less_equal(8)
+    assert_int(result.get("considered", 999999)).override_failure_message(
+        "baked no-normal hits were compared instead of skipped; no R8 fallback happened").is_less(result.get("hits", 0))
 
 # A placed, rotated island shades from its OWN compact normals in the body frame.
 func test_a_placed_rotated_island_shades_from_body_normals(timeout := 90000) -> void:

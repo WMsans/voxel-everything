@@ -98,7 +98,20 @@ bool OverrideStore::sample_gradient(float x, float y, float z, FieldSample *out)
 	const int slot = slot_of(brick);
 	if (slot < 0) return false;
 	const OverrideBrick &b = bricks_[static_cast<size_t>(slot)];
-	if (b.normal_oct.size() != static_cast<size_t>(kBrickSdfCount)) return false;
+	if (b.normal_oct.size() != static_cast<size_t>(kBrickSdfCount)) {
+		// The bake exists but its normal lattice is missing (normal_oct empty -- the
+		// designed fail-soft state from the brief's Step 6). Keep the baked value/material
+		// but report an inexact ZERO gradient, mirroring the volume path's no-normals
+		// branch, so the caller's terrain_source_normal shades through the wide R8
+		// fallback instead of the unedited procedural gradient.
+		out->sdf = base.sdf;
+		out->material = base.material;
+		out->gradient[0] = 0.0f;
+		out->gradient[1] = 0.0f;
+		out->gradient[2] = 0.0f;
+		out->exact_gradient = false;
+		return true;
+	}
 	out->sdf = base.sdf;
 	out->material = base.material;
 	// trilinear blend of 17^3 normal lattice

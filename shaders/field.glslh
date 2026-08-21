@@ -294,7 +294,12 @@ bool sample_field_override_gradient(vec3 p, uint op_base, out float sdf, out uin
 	ivec3 i1 = min(i0 + ivec3(1), ivec3(BRICK_VOXELS));
 	vec3 f = local - vec3(i0);
 	int off = field_override_normal_offsets.slot[slot];
-	if (off < 0) return false;
+	// The bake exists but no compact-normal span was published for it (offset -1 is the
+	// designed fail-soft state from the brief's Step 6). Keep the baked value/material but
+	// report an inexact ZERO gradient -- mirror of sample_field_volume_gradient's no-span
+	// branch -- so the caller's terrain_source_normal shades through the wide R8 fallback
+	// instead of the unedited procedural gradient.
+	if (off < 0) { sdf = osdf; mat = omat; grad = vec3(0.0); exact = false; return true; }
 	int base = off >> 2;
 	int stride = BRICK_SDF_STRIDE;
 	vec3 n000 = oct_decode_snorm8(pool_normal16(base, i0.x + i0.y * stride + i0.z * stride * stride));

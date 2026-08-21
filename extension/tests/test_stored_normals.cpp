@@ -111,7 +111,7 @@ TEST_CASE("resample_volume rotates stored compact normals") {
     CHECK(dot > 0.999f);
 }
 
-TEST_CASE("override returns compact normal rather than differentiating R8") {
+TEST_CASE("override normals: compact when present, inexact fallback when absent") {
     OverrideStore store(4);
     IVec3 brick{0,0,0};
     int slot = store.acquire(brick);
@@ -129,6 +129,9 @@ TEST_CASE("override returns compact normal rather than differentiating R8") {
     CHECK(out.exact_gradient);
     float dot = out.gradient[0]*0.0f + out.gradient[1]*1.0f + out.gradient[2]*0.0f;
     CHECK(dot > 0.999f);
+    // A bake whose normal span is MISSING (empty normal_oct -- the designed fail-soft
+    // state) keeps its baked value/material but reports an INEXACT zero gradient, so the
+    // caller reaches the wide R8 fallback instead of the unedited procedural gradient.
     OverrideStore store2(4);
     int slot2 = store2.acquire(brick);
     REQUIRE(slot2 >=0);
@@ -137,8 +140,16 @@ TEST_CASE("override returns compact normal rather than differentiating R8") {
     for (int i=0;i<kBrickVoxelCount;i++) b2->mat[i] = 1;
     FieldSample out2{};
     bool ok2 = store2.sample_gradient(x,y,z, &out2);
-    CHECK_FALSE(ok2);
+    CHECK(ok2);
+    CHECK_FALSE(out2.exact_gradient);
+    CHECK(out2.gradient[0] == doctest::Approx(0.0f));
+    CHECK(out2.gradient[1] == doctest::Approx(0.0f));
+    CHECK(out2.gradient[2] == doctest::Approx(0.0f));
+    CHECK(out2.sdf == doctest::Approx(-0.1f).epsilon(0.02));
+    // Same for a MALFORMED span (wrong length): inexact, never a stale base gradient.
     b2->normal_oct.assign(kBrickSdfCount-1, enc);
     FieldSample out3{};
-    CHECK_FALSE(store2.sample_gradient(x,y,z, &out3));
+    bool ok3 = store2.sample_gradient(x,y,z, &out3);
+    CHECK(ok3);
+    CHECK_FALSE(out3.exact_gradient);
 }

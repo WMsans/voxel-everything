@@ -5041,6 +5041,7 @@ Dictionary VoxelWorld::debug_raymarch_normal_probe(Vector3 origin, Vector3 dir, 
 	}
 	d["ran"] = true;
 	d["hits"] = total_hits;
+	d["considered"] = considered; // hits whose CPU reference gradient was exact and compared
 	d["rms_ndl"] = rms;
 	d["cel_mismatch_fraction"] = frac;
 	d["largest_mismatch_component"] = largest;
@@ -5232,6 +5233,7 @@ Dictionary VoxelWorld::debug_island_normal_probe(int island_slot, Vector3 origin
 	}
 	d["ran"] = true;
 	d["hits"] = total_hits;
+	d["considered"] = considered; // hits whose CPU reference gradient was exact and compared
 	d["rms_ndl"] = rms;
 	d["cel_mismatch_fraction"] = frac;
 	d["largest_mismatch_component"] = largest;
