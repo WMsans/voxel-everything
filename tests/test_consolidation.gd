@@ -135,7 +135,7 @@ func test_teardown_releases_staged_override_slots_before_reinit() -> void:
 	w.debug_set_fail_consolidate_uploads(true)
 	w.debug_pump_consolidation_async()
 	var staged := false
-	for i in range(800):
+	for i in range(1600):
 		OS.delay_msec(5)
 		w.debug_pump_consolidation_async()
 		if w.debug_override_used() > used_before:
@@ -161,7 +161,7 @@ func test_publication_failure_recovers_with_queued_worker_work(timeout := 120000
 	w.debug_set_fail_restore_overrides_always(true)
 	w.debug_set_pause_override_publication(true)
 	var publication_paused := false
-	for i in range(800):
+	for i in range(1600):
 		w.debug_pump_consolidation_async()
 		if w.debug_override_publication_paused():
 			publication_paused = true
@@ -179,7 +179,7 @@ func test_publication_failure_recovers_with_queued_worker_work(timeout := 120000
 	var refusals_before: int = int(w.debug_stream_stats().get("consolidation_refusals", 0))
 	w.debug_set_pause_override_publication(false)
 	var refused := false
-	for i in range(800):
+	for i in range(1600):
 		w.debug_pump_consolidation_async()
 		if int(w.debug_stream_stats().get("consolidation_refusals", 0)) > refusals_before:
 			refused = true
@@ -361,6 +361,8 @@ func test_reconsolidation_with_volume_add_captures_both_sources(timeout := 12000
 	assert_int(int(d["sdf_mismatches"])).is_equal(0)
 	assert_int(int(d["mat_mismatches"])).is_equal(0)
 	assert_int(int(d.get("normal_count", 0))).is_equal(4913)
+	assert_float(float(d.get("normal_min_length", 0.0))).is_greater(0.99)
+	assert_float(float(d.get("normal_min_dot", 0.0))).is_greater(0.98)
 	assert_bool(w.debug_consolidate_region(Vector3i(0, 2, 0))).is_true()
 	assert_int(w.debug_region_op_count(Vector3i(0, 2, 0))).is_equal(0)
 

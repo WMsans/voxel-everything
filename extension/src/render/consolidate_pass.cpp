@@ -188,12 +188,18 @@ bool ConsolidatePass::run(const ConsolidateJob &job, ConsolidateResult *out) {
 					const ve::IVec3 brick = job.bricks[bi];
 					float bo[3];
 					ve::brick_world_origin(brick, bo);
-					// Filter ops per brick like eval_brick does
-					float lo[3]={bo[0]-ve::kBrickFilterPad, bo[1]-ve::kBrickFilterPad, bo[2]-ve::kBrickFilterPad};
-					float hi[3]={bo[0]+ve::kBrickSize+ve::kBrickFilterPad, bo[1]+ve::kBrickSize+ve::kBrickFilterPad, bo[2]+ve::kBrickSize+ve::kBrickFilterPad};
+					// Per-brick op filter, but NOT the value bake's kBrickFilterPad: encode_sdf clamps, so an
+					// excluded op can win the field without changing any encoded byte while flipping the
+					// gradient. Two soundness rules: kOpVolumeAdd is NEVER filtered -- its lattice sampler
+					// clamps out-of-box points onto the stored lattice and returns winnable samples in an
+					// unbounded region; local sphere/box ops use the documented lattice-consumer pad
+					// (kLatticeFilterPad), which covers the representable SDF band plus one pitch.
+					float lo[3]={bo[0]-ve::kLatticeFilterPad, bo[1]-ve::kLatticeFilterPad, bo[2]-ve::kLatticeFilterPad};
+					float hi[3]={bo[0]+ve::kBrickSize+ve::kLatticeFilterPad, bo[1]+ve::kBrickSize+ve::kLatticeFilterPad, bo[2]+ve::kBrickSize+ve::kLatticeFilterPad};
 					std::vector<ve::EditOp> filtered;
 					filtered.reserve(job.ops.size());
-					for (auto &op : job.ops) if (ve::op_touches_aabb(op, lo, hi, 0.0f)) filtered.push_back(op);
+					for (auto &op : job.ops)
+						if (op.type == ve::kOpVolumeAdd || ve::op_touches_aabb(op, lo, hi, 0.0f)) filtered.push_back(op);
 					std::vector<uint16_t> normals;
 					normals.reserve(ve::kBrickSdfCount);
 					bool ok = true;
@@ -203,6 +209,7 @@ bool ConsolidatePass::run(const ConsolidateJob &job, ConsolidateResult *out) {
 								float px = bo[0] + x * ve::kVoxelSize;
 								float py = bo[1] + y * ve::kVoxelSize;
 								float pz = bo[2] + z * ve::kVoxelSize;
+								// Filtered per brick as above: volume ops always kept, locals at lattice pad.
 								ve::FieldSample fs = ve::eval_field_gradient(gen, filtered.data(), static_cast<int>(filtered.size()), px, py, pz, &volume_set, &base_store);
 								if (!fs.exact_gradient) { ok = false; break; }
 								float len = std::sqrt(fs.gradient[0]*fs.gradient[0] + fs.gradient[1]*fs.gradient[1] + fs.gradient[2]*fs.gradient[2]);

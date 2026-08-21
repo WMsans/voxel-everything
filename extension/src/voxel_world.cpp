@@ -3265,6 +3265,8 @@ void VoxelWorld::pump_consolidation() {
 	job.through_seq = seqs.empty() ? 0 : seqs.back();
 	ve::plan_consolidation(job.ops.data(), static_cast<int>(job.ops.size()), region, &job.bricks);
 	if (!job.bricks.empty()) {
+		// Spec requires collect + snapshot while edit_mutex_ is held: edit_lock above spans this
+		// whole function, so overrides_, edit_log_, and volumes_ are read in one consistent state.
 		ve::IVec3 lo = job.bricks[0], hi = job.bricks[0];
 		for (const auto &b : job.bricks) { lo.x = std::min(lo.x, b.x); lo.y = std::min(lo.y, b.y); lo.z = std::min(lo.z, b.z); hi.x = std::max(hi.x, b.x); hi.y = std::max(hi.y, b.y); hi.z = std::max(hi.z, b.z); }
 		if (!snapshot_field_sources(job.ops, lo, hi, &job.source)) {
