@@ -311,6 +311,10 @@ void VoxelWorld::_bind_methods() {
 	// out of release ClassDB so release scripts cannot call them.
 	ClassDB::bind_method(D_METHOD("debug_set_max_dynamic_bodies", "v"), &VoxelWorld::debug_set_max_dynamic_bodies);
 	ClassDB::bind_method(D_METHOD("debug_set_atlas_slot_used", "slot", "used"), &VoxelWorld::debug_set_atlas_slot_used);
+	ClassDB::bind_method(D_METHOD("debug_set_normal_pool_budget", "bytes"), &VoxelWorld::debug_set_normal_pool_budget);
+	ClassDB::bind_method(D_METHOD("debug_stored_normal_stats"), &VoxelWorld::debug_stored_normal_stats);
+	ClassDB::bind_method(D_METHOD("debug_normal_upload_override", "slot", "packed_normals"), &VoxelWorld::debug_normal_upload_override);
+	ClassDB::bind_method(D_METHOD("debug_normal_release_override", "slot"), &VoxelWorld::debug_normal_release_override);
 #endif
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_spawn", "fail"), &VoxelWorld::debug_set_fail_next_spawn);
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_restore", "fail"), &VoxelWorld::debug_set_fail_next_restore);
@@ -1151,6 +1155,7 @@ void VoxelWorld::ensure_initialized() {
 	cfg.max_brick_jobs = max_brick_jobs_;
 	cfg.max_override_bricks = max_override_bricks_;
 	cfg.bounds = world_bounds();
+	if (normal_pool_bytes_ > 0) cfg.normal_pool_bytes = normal_pool_bytes_; // test initializer
 	if (!atlas_->initialize(device, cfg)) { delete atlas_; atlas_ = nullptr; return; }
 	islands_ = new IslandAtlas();
 	if (!islands_->initialize(device)) { teardown_gpu(); return; }
@@ -1418,7 +1423,7 @@ void VoxelWorld::teardown_physics() {
 		std::vector<IslandUpload> keep;
 		keep.reserve(island_uploads_.size());
 		for (IslandUpload &u : island_uploads_)
-			if (!u.to_island_atlas && volumes_.pinned(u.slot))
+			if (!u.to_island_atlas && volumes_.pinned(u.volume_slot))
 				keep.push_back(std::move(u));
 		island_uploads_.swap(keep);
 		island_descs_.clear();
@@ -1566,15 +1571,16 @@ Dictionary VoxelWorld::debug_physics_stats() {
 	return d;
 }
 
-void VoxelWorld::queue_island_upload(int slot, const ve::VolumeData &d) {
+void VoxelWorld::queue_island_upload(int atlas_slot, int volume_slot,
+		const ve::VolumeData &d) {
 	std::lock_guard<std::mutex> lock(island_mutex_);
-	island_uploads_.push_back(IslandUpload{slot, true, d});
+	island_uploads_.push_back(IslandUpload{atlas_slot, volume_slot, true, d});
 }
 
 void VoxelWorld::queue_field_volume_upload(int slot, const ve::VolumeData &d) {
 	{
 		std::lock_guard<std::mutex> lock(island_mutex_);
-		island_uploads_.push_back(IslandUpload{slot, false, d});
+		island_uploads_.push_back(IslandUpload{-1, slot, false, d});
 	}
 	// The worker's volume pool must see the paste before its next field job, otherwise the
 	// mesher's collision against the new rubble lags a frame (or more) behind the main copy.
@@ -1587,7 +1593,7 @@ void VoxelWorld::discard_field_volume_upload(int slot) {
 		island_uploads_.erase(
 				std::remove_if(island_uploads_.begin(), island_uploads_.end(),
 						[slot](const IslandUpload &u) {
-							return !u.to_island_atlas && u.slot == slot;
+							return !u.to_island_atlas && u.volume_slot == slot;
 						}),
 				island_uploads_.end());
 	}
@@ -1623,31 +1629,55 @@ ve::RayHit VoxelWorld::analytic_raycast_down(const float xz[2]) {
 	return ve::raycast(gen, *edit_log_, o, dir, 400.0f, &volumes_, overrides_);
 }
 
+bool VoxelWorld::release_volume_slot(int slot) {
+	// The authoritative copy goes first; only a successful release (never a pinned slot --
+	// a pasted volume-add still names it) queues the GPU-side normal teardown.
+	const bool freed = volumes_.release(slot);
+	if (freed) {
+		std::lock_guard<std::mutex> lock(island_mutex_);
+		pending_normal_releases_.push_back(slot);
+	}
+	return freed;
+}
+
 int VoxelWorld::drain_island_uploads(RenderingDevice *device) {
 	if (!device) return 0;
 	std::vector<IslandUpload> uploads;
+	std::vector<int> normal_releases;
 	std::vector<IslandSlotDesc> descs;
 	bool dirty = false;
 	{
 		std::lock_guard<std::mutex> lock(island_mutex_);
 		uploads.swap(island_uploads_);
+		normal_releases.swap(pending_normal_releases_);
 		descs = island_descs_;
 		dirty = island_descs_dirty_;
 		island_descs_dirty_ = false;
 	}
+	for (const int slot : normal_releases) {
+		if (atlas_) atlas_->stored_normals().release_volume(device, slot);
+	}
 	for (const IslandUpload &u : uploads) {
-		if (u.to_island_atlas) {
-			if (islands_ && !islands_->upload(device, u.slot, u.data))
-				UtilityFunctions::printerr("VoxelWorld: island atlas upload failed for slot ",
-						u.slot);
-		} else {
-			if (atlas_ && !atlas_->volumes().upload(device, u.slot, u.data))
+		// SDF/material and compact normals land ONCE, in the shared authoritative pools,
+		// indexed by the volume slot. An island upload additionally refreshes its mip at
+		// the atlas slot; a field-volume upload follows the identical volume/normal path
+		// without one. A missing/malformed/failed normal payload is fail-soft: the pool
+		// publishes -1 and the shader falls back to differentiating the R8 atlas.
+		if (atlas_ && u.volume_slot >= 0) {
+			if (!atlas_->volumes().upload(device, u.volume_slot, u.data))
 				UtilityFunctions::printerr("VoxelWorld: field volume upload failed for slot ",
-						u.slot);
-			// Count attempts, not successes: a stale rejected-paste upload that reaches the
-			// GPU is the bug this hook exists to detect, even if the upload call itself failed.
-			debug_field_volume_upload_count_.fetch_add(1, std::memory_order_relaxed);
+						u.volume_slot);
+			atlas_->stored_normals().upload_volume(device, u.volume_slot, u.data);
+		} else if (!atlas_ && u.to_island_atlas) {
+			UtilityFunctions::printerr("VoxelWorld: no GpuAtlas for island upload of slot ",
+					u.volume_slot);
 		}
+		if (u.to_island_atlas && islands_ && u.atlas_slot >= 0 &&
+				!islands_->upload_mip(device, u.atlas_slot, u.data))
+			UtilityFunctions::printerr("VoxelWorld: island mip upload failed for slot ",
+					u.atlas_slot);
+		if (!u.to_island_atlas)
+			debug_field_volume_upload_count_.fetch_add(1, std::memory_order_relaxed);
 	}
 	if (dirty && islands_)
 		islands_->upload_descriptors(device, descs.data(), static_cast<int>(descs.size()));
@@ -1695,7 +1725,7 @@ void VoxelWorld::debug_queue_test_island_upload(int slot, const PackedByteArray 
 	d.mat.assign(mat.ptr(), mat.ptr() + n);
 	for (int64_t i = 0; i < n; i++)
 		if (ve::decode_sdf(d.sdf[static_cast<size_t>(i)]) <= 0.0f) d.solid_voxels++;
-	queue_island_upload(slot, d);
+	queue_island_upload(slot, slot, d); // test fixture: atlas slot == volume slot
 }
 
 void VoxelWorld::debug_queue_test_island_descriptors() {
@@ -1739,7 +1769,7 @@ void VoxelWorld::debug_queue_committed_field_volume_upload(int slot,
 		if (len>1e-6f) { float n2[3]={px/len, py/len, pz/len}; d.normal_oct[static_cast<size_t>(i)]=ve::oct_encode_snorm8(n2);} else d.normal_oct[static_cast<size_t>(i)]=ve::oct_encode_snorm8(up);
 	}
 	if (!volumes_.store(slot, d) || !volumes_.pin(slot)) {
-		volumes_.release(slot);
+		release_volume_slot(slot);
 		UtilityFunctions::printerr(
 				"debug_queue_committed_field_volume_upload: store/pin failed for slot ", slot);
 		return;
@@ -1748,7 +1778,7 @@ void VoxelWorld::debug_queue_committed_field_volume_upload(int slot,
 	// ensure_physics_initialized()'s pinned-volume replay after teardown/reinit.
 	{
 		std::lock_guard<std::mutex> lock(island_mutex_);
-		island_uploads_.push_back(IslandUpload{slot, false, d});
+		island_uploads_.push_back(IslandUpload{-1, slot, false, d});
 	}
 	if (mesh_) {
 		mesh_->submit_volume(slot, d);
@@ -1759,6 +1789,39 @@ void VoxelWorld::debug_queue_committed_field_volume_upload(int slot,
 void VoxelWorld::debug_set_extraction_available(bool v) {
 	ensure_physics_initialized();
 	if (mesh_) mesh_->debug_set_extraction_available(v);
+}
+
+Dictionary VoxelWorld::debug_stored_normal_stats() {
+	Dictionary d;
+	if (!atlas_ || !atlas_->is_valid()) return d;
+	const StoredNormalStats s = atlas_->stored_normals().stats();
+	d["capacity_bytes"] = static_cast<int64_t>(s.capacity_bytes);
+	d["live_bytes"] = static_cast<int64_t>(s.live_bytes);
+	d["high_water_bytes"] = static_cast<int64_t>(s.high_water_bytes);
+	d["allocation_failures"] = static_cast<int64_t>(s.allocation_failures);
+	d["fallback_hits"] = static_cast<int64_t>(s.fallback_hits);
+	return d;
+}
+
+int64_t VoxelWorld::debug_normal_upload_override(int slot,
+		const PackedByteArray &packed_normals) {
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!device || !atlas_ || !atlas_->is_valid()) return -1;
+	if (slot < 0) return -1;
+	if (packed_normals.is_empty() || packed_normals.size() % 2 != 0) {
+		// Malformed payload: exercise the pool's fallback path rather than uploading junk.
+		return atlas_->stored_normals().upload_override(device, slot, nullptr, 0);
+	}
+	return atlas_->stored_normals().upload_override(device, slot,
+			reinterpret_cast<const uint16_t *>(packed_normals.ptr()),
+			static_cast<int>(packed_normals.size() / 2));
+}
+
+void VoxelWorld::debug_normal_release_override(int slot) {
+	RenderingDevice *device = rd();
+	if (!device || !atlas_ || !atlas_->is_valid()) return;
+	atlas_->stored_normals().release_override(device, slot);
 }
 
 void VoxelWorld::debug_set_fail_extractions(bool v) {
@@ -4234,7 +4297,11 @@ Dictionary VoxelWorld::debug_place_test_island_rotated(int slot, Vector3i lo_cel
 		}
 	}
 
-	if (!islands_->upload(device, slot, volume)) return d;
+	if (!atlas_->volumes().upload(device, slot, volume)) return d;
+	// Task 6: compact normals share the pool; the test fixture's radial lattice is real
+	// render-reachable payload, not a fallback source.
+	atlas_->stored_normals().upload_volume(device, slot, volume);
+	if (!islands_->upload_mip(device, slot, volume)) return d;
 
 	// The body's local frame is the birth world frame shifted so the body origin is the
 	// lattice's centre -- the same convention IslandManager uses (Task 13), so the rotation
@@ -4258,6 +4325,7 @@ Dictionary VoxelWorld::debug_place_test_island_rotated(int slot, Vector3i lo_cel
 	desc.origin[1] += offset.y;
 	desc.origin[2] += offset.z;
 	desc.recompute_world_aabb();
+	desc.volume_slot = slot;
 
 	all[slot] = desc;
 	islands_->upload_descriptors(device, all, kMaxIslands);
@@ -4298,7 +4366,7 @@ Dictionary VoxelWorld::debug_spawn_test_body(Vector3i lo_cell, Vector3i hi_cell,
 	const int slot = volumes_.allocate();
 	if (slot < 0) return d;
 	if (!volumes_.store(slot, volume)) {
-		volumes_.release(slot);
+		release_volume_slot(slot);
 		return d;
 	}
 
@@ -4331,7 +4399,7 @@ Dictionary VoxelWorld::debug_spawn_test_body(Vector3i lo_cell, Vector3i hi_cell,
 	if (!b->spawn(w3.is_valid() ? w3->get_space() : RID(),
 				w3.is_valid() ? w3->get_scenario() : RID(), info, &volume)) {
 		delete b;
-		volumes_.release(slot);
+		release_volume_slot(slot);
 		return d;
 	}
 	test_bodies_.push_back(b);
@@ -6090,6 +6158,12 @@ Dictionary VoxelWorld::debug_atlas_stats() {
 	d["region_map_entries"] = atlas_->region_map_entries();
 	d["job_count"] = atlas_->read_job_count(device);
 	d["overflow"] = static_cast<int>(atlas_->read_overflow(device));
+	// Memory bounds (Task 6): the R8 atlas byte count is pinned so a regression that
+	// resizes it fails loudly next to the normal-pool capacity assertion.
+	const ve::IVec3 ab = atlas_->config().atlas_bricks;
+	const int64_t sdf_bytes = static_cast<int64_t>(ab.x) * ve::kBrickSdfStride *
+			(ab.y * ve::kBrickSdfStride) * (ab.z * ve::kBrickSdfStride);
+	d["sdf_atlas_bytes"] = sdf_bytes;
 	return d;
 }
 

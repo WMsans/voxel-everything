@@ -205,13 +205,22 @@ class VoxelWorld : public Node3D {
 	mutable std::mutex island_mutex_; // also guards island_manager_ and island_slots_
 	// Bytes on their way to a GPU pool. Filled on the main thread, drained on the render
 	// thread by the compositor before it runs the streamer -- an op that names a volume must
-	// never be evaluated before the volume is there.
+	// never be evaluated before the volume is there. Since Task 6 the SDF/material/normal
+	// bytes land ONCE in GpuAtlas's shared pools, indexed by the authoritative VOLUME slot;
+	// an island upload additionally carries the atlas slot for its descriptor/mip entries.
 	struct IslandUpload {
-		int slot = -1;
-		bool to_island_atlas = false; // false = the field volume pool
+		int atlas_slot = -1;    // island mip/descriptor entry; -1 = field-volume only
+		int volume_slot = -1;   // authoritative ve::VolumeSet slot (SDF/mat/normals stride)
+		bool to_island_atlas = false; // true = also upload the island min-max mip
 		ve::VolumeData data;
 	};
 	std::vector<IslandUpload> island_uploads_;
+	// Volume slots whose compact-normal allocation must be freed on the render thread
+	// (queued by release_volume_slot() when the authoritative copy is released).
+	std::vector<int> pending_normal_releases_;
+	// Debug-settable compact-normal budget; 0 = GpuAtlasConfig's default 32 MiB. Must be
+	// set BEFORE the atlas is created; the pool never resizes after that.
+	uint32_t normal_pool_bytes_ = 0;
 	std::vector<IslandSlotDesc> island_descs_;
 	bool island_descs_dirty_ = false;
 	std::vector<float> physics_bubble_centers_;
@@ -420,7 +429,11 @@ public:
 	void finish_beauty_frame(const float view_proj[16]);
 	std::mutex &edit_mutex() { return edit_mutex_; }
 	MeshService *mesh_service() { return mesh_; }
-	void queue_island_upload(int slot, const ve::VolumeData &d);
+	// Releases an authoritative volume slot AND queues the render-thread teardown of its
+	// compact-normal allocation. Pinned slots are refused by VolumeSet::release() and keep
+	// their normals (a pasted volume-add still names them). Returns release()'s result.
+	bool release_volume_slot(int slot);
+	void queue_island_upload(int atlas_slot, int volume_slot, const ve::VolumeData &d);
 	void queue_field_volume_upload(int slot, const ve::VolumeData &d);
 	// Removes a queued field-volume upload for `slot` (render handoff and worker pending
 	// queue). Used when a re-merge paste is fully rejected before the uploads drain: the
@@ -451,6 +464,17 @@ public:
 	PackedInt32Array debug_mesh_volume_slots();
 	void debug_queue_test_island_upload(int slot, const PackedByteArray &sdf,
 			const PackedByteArray &mat, int dim);
+	// --- Task 6 hooks: fixed-capacity stored-normal pool ---
+	// Debug initializer: shrink the normal-pool budget BEFORE debug_init_atlas(). The
+	// pool's size is otherwise fixed at exactly 32 MiB and never resizes.
+	void debug_set_normal_pool_budget(int bytes) {
+		normal_pool_bytes_ = bytes > 0 ? static_cast<uint32_t>(bytes) : 0u;
+	}
+	Dictionary debug_stored_normal_stats();
+	// Upload one override brick's packed uint16 normals; returns its published byte offset
+	// into normal_buffer(), or -1 when the source entered the wide-R8 fallback.
+	int64_t debug_normal_upload_override(int slot, const PackedByteArray &packed_normals);
+	void debug_normal_release_override(int slot);
 	void debug_queue_test_island_descriptors();
 	// Test hook: store, pin, and queue a field-volume upload the way a committed re-merge or
 	// restore does. Teardown must preserve this upload across physics re-init because an edit

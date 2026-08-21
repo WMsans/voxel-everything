@@ -138,8 +138,10 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 	}
 	u[12]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
 	u[12]->set_binding(12); u[12]->add_id(edits_ubo_);
-	// 13-17: island sdf, material, min-max chain, descriptors, tile mask.
-	const RID island_bufs[5] = {islands->sdf_buffer(), islands->mat_buffer(),
+	// 13-17: shared authoritative volume SDF/material (indexed by Island.volume_slot since
+	// Task 6), island min-max chain, descriptors, tile mask. Atlas slot still selects the
+	// descriptor/mip/tile-mask entries.
+	const RID island_bufs[5] = {atlas.volumes().sdf_buffer(), atlas.volumes().mat_buffer(),
 			islands->mip_buffer(), islands->desc_buffer(),
 			tile_mask.is_valid() ? tile_mask : islands->fallback_mask()};
 	for (int i = 13; i <= 17; i++) {

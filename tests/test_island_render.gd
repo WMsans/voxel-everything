@@ -392,3 +392,17 @@ func test_no_ray_across_a_freed_island_resolves_to_error_magenta(timeout := 9000
 	assert_int(magenta).override_failure_message(
 		"%d of %d island hits shaded as error magenta (material 0)" % [magenta, hits]
 		).is_equal(0)
+
+func test_shared_storage_bounds_hold_for_an_island_render_world() -> void:
+	# Task 6: islands render from the shared authoritative volume buffers, and the
+	# compact-normal pool is a fixed 32 MiB (payload + both offset tables) that never
+	# grows. This suite's world shrinks the atlas to 32x16x32 bricks, so the pinned R8
+	# byte count here is 544 x 272 x 544; the DEFAULT 1088 x 544 x 544 count is asserted
+	# by tests/test_stored_normal_pool.gd.
+	var w := make_world()
+	var stats: Dictionary = w.debug_stored_normal_stats()
+	assert_int(stats["capacity_bytes"]).is_equal(33554432)
+	assert_int(stats["live_bytes"]).is_less_equal(33554432)
+	assert_int(stats["high_water_bytes"]).is_less_equal(33554432)
+	var atlas: Dictionary = w.debug_atlas_stats()
+	assert_int(atlas["sdf_atlas_bytes"]).is_equal(544 * 272 * 544)

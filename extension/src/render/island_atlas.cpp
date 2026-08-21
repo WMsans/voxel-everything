@@ -47,10 +47,6 @@ bool IslandAtlas::initialize(RenderingDevice *rd) {
 	teardown();
 	if (!rd) return false;
 	rd_ = rd;
-	if (!volumes_.initialize(rd, kMaxIslands, ve::kIslandDim)) {
-		teardown();
-		return false;
-	}
 	PackedByteArray zero;
 	zero.resize(static_cast<int64_t>(kMaxIslands) * kMipPerSlot * 2);
 	zero.fill(0);
@@ -72,7 +68,6 @@ bool IslandAtlas::initialize(RenderingDevice *rd) {
 }
 
 void IslandAtlas::teardown() {
-	volumes_.teardown();
 	if (rd_) {
 		for (RID *r : {&mip_, &desc_, &fallback_mask_})
 			if (r->is_valid()) rd_->free_rid(*r);
@@ -85,9 +80,8 @@ void IslandAtlas::teardown() {
 	for (bool &live : slot_live_) live = false;
 }
 
-bool IslandAtlas::upload(RenderingDevice *rd, int slot, const ve::VolumeData &data) {
+bool IslandAtlas::upload_mip(RenderingDevice *rd, int slot, const ve::VolumeData &data) {
 	if (!rd || !is_valid() || slot < 0 || slot >= kMaxIslands) return false;
-	if (!volumes_.upload(rd, slot, data)) return false;
 	std::vector<uint8_t> mip;
 	ve::build_volume_mip(data, &mip);
 	if (static_cast<int>(mip.size()) != kMipPerSlot * 2) return false;
@@ -124,7 +118,7 @@ void IslandAtlas::upload_descriptors(RenderingDevice *rd, const IslandSlotDesc *
 		f[base + 14] = d.lattice_origin[2];
 		f[base + 15] = d.voxel;
 		i[base + 16] = d.live ? d.dim : 0; // dim 0 == dead, tested by the shader
-		i[base + 17] = 0;
+		i[base + 17] = d.volume_slot; // the shared volume buffer's stride index
 		i[base + 18] = 0;
 		i[base + 19] = 0;
 		slot_live_[s] = d.live;

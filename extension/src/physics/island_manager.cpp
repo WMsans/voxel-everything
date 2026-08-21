@@ -118,15 +118,15 @@ void IslandManager::initialize(VoxelWorld *world) {
 void IslandManager::teardown() {
 	for (IslandBody *b : bodies_) {
 		if (!b) continue;
-		if (world_) world_->volumes().release(b->info().volume_slot);
+		if (world_) world_->release_volume_slot(b->info().volume_slot);
 		delete b;
 	}
 	bodies_.clear();
 	for (const InFlight &f : in_flight_)
-		if (world_) world_->volumes().release(f.volume_slot);
+		if (world_) world_->release_volume_slot(f.volume_slot);
 	in_flight_.clear();
 	for (const Merging &m : merging_)
-		if (world_) world_->volumes().release(m.out_slot);
+		if (world_) world_->release_volume_slot(m.out_slot);
 	merging_.clear();
 	merge_retries_.clear();
 	{
@@ -386,7 +386,7 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 		// back and keeping the originating window alive for a later retry.
 		for (int i = 0; i < submitted; i++) {
 			const InFlight &f = in_flight_.back();
-			world_->volumes().release(f.volume_slot);
+			world_->release_volume_slot(f.volume_slot);
 			in_flight_.pop_back();
 		}
 		queue_retry_window(pw);
@@ -585,7 +585,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		empty = true;
 	}
 	if (r.failed || empty) {
-		world_->volumes().release(f.volume_slot);
+		world_->release_volume_slot(f.volume_slot);
 		if (r.failed) {
 			note_extract_failure(f.window);
 			return;
@@ -632,7 +632,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 			// the time we learn the atlas is full, so re-queue it or the edit is lost when a
 			// slot later frees.
 			refused_++; DBG_LAND(atlas_full);
-			world_->volumes().release(f.volume_slot);
+			world_->release_volume_slot(f.volume_slot);
 			queue_retry_window(f.window);
 			return;
 		}
@@ -643,7 +643,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 
 	if (!world_->volumes().store(f.volume_slot, r.data)) {
 		if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
-		world_->volumes().release(f.volume_slot);
+		world_->release_volume_slot(f.volume_slot);
 		refused_++; DBG_LAND(store_failed);
 		return; // nothing carved yet: the piece stays attached in the field
 	}
@@ -709,13 +709,13 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		std::lock_guard<std::mutex> lock(world_->edit_mutex());
 		if (!world_->edit_log()) {
 			if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
-			world_->volumes().release(f.volume_slot);
+			world_->release_volume_slot(f.volume_slot);
 			refused_++; DBG_LAND(no_edit_log);
 			return;
 		}
 		if (!has_restore_headroom()) {
 			if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
-			world_->volumes().release(f.volume_slot);
+			world_->release_volume_slot(f.volume_slot);
 			refused_++; DBG_LAND(preflight);
 			return; // preflight refused: no carve, no hole, the component stays attached
 		}
@@ -772,7 +772,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 							});
 			if (stale) {
 				if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
-				world_->volumes().release(f.volume_slot);
+				world_->release_volume_slot(f.volume_slot);
 				queue_retry_window(f.window);
 				refused_++; DBG_LAND(stale);
 				return; // stale extraction: no carve, the component stays attached
@@ -784,7 +784,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		// before any hole exists, so the stored slot can still be released.
 		if (!world_->volumes().pin(f.volume_slot)) {
 			if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
-			world_->volumes().release(f.volume_slot);
+			world_->release_volume_slot(f.volume_slot);
 			refused_++; DBG_LAND(pin_failed);
 			return; // no carve happened: the component stays attached
 		}
@@ -803,7 +803,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		bool restore_referenced_slot = false;
 		const auto release_unreferenced_birth_slot = [&]() {
 			world_->volumes().unpin(f.volume_slot);
-			world_->volumes().release(f.volume_slot);
+			world_->release_volume_slot(f.volume_slot);
 		};
 
 		// 1. Spawn (spec §5 step 3, reordered). A live body must exist before any carve is
@@ -947,8 +947,10 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 	if (debris) debris_spawned_++;
 	else islands_spawned_++;
 
-	// 4. The raymarcher needs the bytes (spec §3's dense per-island texture).
-	if (atlas_slot >= 0) world_->queue_island_upload(atlas_slot, r.data);
+	// 4. The raymarcher needs the bytes (spec §3's dense per-island texture). The upload
+	//    carries BOTH slots: atlas slot for descriptor/mip entries, volume slot for the
+	//    shared SDF/material/normal buffers (Task 6).
+	if (atlas_slot >= 0) world_->queue_island_upload(atlas_slot, f.volume_slot, r.data);
 }
 
 void IslandManager::start_merges() {
@@ -1064,7 +1066,7 @@ void IslandManager::start_merges() {
 		const bool reuses_birth_slot = m.body_index >= 0 &&
 				m.body_index < static_cast<int>(bodies_.size()) && bodies_[m.body_index] &&
 				m.out_slot == bodies_[m.body_index]->info().volume_slot;
-		if (!reuses_birth_slot) world_->volumes().release(m.out_slot);
+		if (!reuses_birth_slot) world_->release_volume_slot(m.out_slot);
 		merging_.pop_back();
 	}
 }
@@ -1082,7 +1084,7 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 		// A failed resample never stored into the out-slot. When that slot is the live
 		// body's birth slot it must stay allocated; only a separately allocated out-slot is
 		// released.
-		if (!reuses_birth_slot) world_->volumes().release(m.out_slot);
+		if (!reuses_birth_slot) world_->release_volume_slot(m.out_slot);
 		if (!invalid_body) {
 			// A failed resample is not a paste rejection, but it must still back off: without
 			// a merge-retry entry the same body would be resubmitted every frame.
@@ -1098,7 +1100,7 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 	// where it was. Keep the body alive and back off instead.
 	if (bodies_[m.body_index]->asleep_seconds() <= 0.0f ||
 			!same_rest_pose(bodies_[m.body_index]->transform(), m.submitted_transform)) {
-		if (!reuses_birth_slot) world_->volumes().release(m.out_slot);
+		if (!reuses_birth_slot) world_->release_volume_slot(m.out_slot);
 		note_merge_rejected(m.body_index, ve::EditLog::AppendResult{});
 		refused_++;
 		return; // stale rest pose: no paste, no despawn, the body stays a body
@@ -1141,7 +1143,7 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 			// No store or pin happened, so a reused birth slot still holds the body's
 			// original volume. A separately allocated out-slot is unreferenced and can be
 			// released.
-			if (!reuses_birth_slot) world_->volumes().release(m.out_slot);
+			if (!reuses_birth_slot) world_->release_volume_slot(m.out_slot);
 			note_merge_rejected(m.body_index, preflight);
 			refused_++;
 			return;
@@ -1158,7 +1160,7 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 			if (reuses_birth_slot) {
 				if (stored) world_->volumes().store(m.out_slot, m.source);
 			} else {
-				world_->volumes().release(m.out_slot);
+				world_->release_volume_slot(m.out_slot);
 			}
 			refused_++;
 			return;
@@ -1191,7 +1193,7 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 				if (reuses_birth_slot) {
 					world_->volumes().store(m.out_slot, m.source);
 				} else {
-					world_->volumes().release(m.out_slot);
+					world_->release_volume_slot(m.out_slot);
 				}
 			} else if (reuses_birth_slot) {
 				block_merge_permanently(m.body_index);
@@ -1217,6 +1219,9 @@ void IslandManager::publish_descriptors() {
 		d.live = true;
 		d.dim = b->info().dim;
 		d.voxel = b->info().voxel;
+		// Task 6: the raymarcher strides the shared authoritative volume buffers with THIS
+		// slot, not the atlas slot.
+		d.volume_slot = b->info().volume_slot;
 		// COLUMN major: basis[a] is the world direction of local +a, which is what
 		// Basis::get_column returns and what the shader's mat3(c0, c1, c2) expects.
 		for (int a = 0; a < 3; a++) {
@@ -1330,7 +1335,7 @@ void IslandManager::despawn(int index) {
 	// paste op now pins it and it must stay for ever; release() would refuse it anyway, but
 	// do not even try to free a slot the field owns.
 	if (!world_->volumes().pinned(b->info().volume_slot))
-		world_->volumes().release(b->info().volume_slot);
+		world_->release_volume_slot(b->info().volume_slot);
 	delete b;
 	bodies_[index] = nullptr; // a hole, not an erase: Merging::body_index must stay valid
 	merge_retries_.erase(std::remove_if(merge_retries_.begin(), merge_retries_.end(),
