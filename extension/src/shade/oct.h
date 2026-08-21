@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 namespace ve {
 
@@ -10,5 +11,8 @@ namespace ve {
 // round trip against this one and fails when they drift.
 void oct_encode(const float n[3], float out[2]);
 void oct_decode(const float e[2], float out[3]);
+
+uint16_t oct_encode_snorm8(const float n[3]);
+void oct_decode_snorm8(uint16_t packed, float normal[3]);
 
 } // namespace ve

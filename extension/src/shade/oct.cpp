@@ -1,5 +1,7 @@
 #include "shade/oct.h"
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace {
 
@@ -50,6 +52,20 @@ void oct_decode(const float e[2], float out[3]) {
 	out[0] = x * inv;
 	out[1] = y * inv;
 	out[2] = z * inv;
+}
+
+uint16_t oct_encode_snorm8(const float n[3]) {
+	float e[2]; oct_encode(n, e);
+	const int8_t x = static_cast<int8_t>(std::lround(std::clamp(e[0], -1.0f, 1.0f) * 127.0f));
+	const int8_t y = static_cast<int8_t>(std::lround(std::clamp(e[1], -1.0f, 1.0f) * 127.0f));
+	return static_cast<uint8_t>(x) | (static_cast<uint16_t>(static_cast<uint8_t>(y)) << 8);
+}
+
+void oct_decode_snorm8(uint16_t packed, float normal[3]) {
+	int8_t sx = static_cast<int8_t>(packed & 0xFF);
+	int8_t sy = static_cast<int8_t>((packed >> 8) & 0xFF);
+	float e[2] = { static_cast<float>(sx) / 127.0f, static_cast<float>(sy) / 127.0f };
+	oct_decode(e, normal);
 }
 
 } // namespace ve

@@ -13,6 +13,7 @@ namespace ve {
 struct OverrideBrick {
 	uint8_t sdf[kBrickSdfCount]{};
 	uint8_t mat[kBrickVoxelCount]{};
+	std::vector<uint16_t> normal_oct; // optional 17^3 oct snorm8, empty until consolidated
 };
 
 // How eval_field asks whether a point's BASE field has been baked. The interface keeps storage
@@ -44,6 +45,7 @@ public:
 	// Trilinear SDF reconstruction over the stored lattice, with the containing cell's
 	// material. False when the point is in no override brick.
 	bool sample(float x, float y, float z, Sample *out) const override;
+	bool sample_gradient(float x, float y, float z, FieldSample *out) const override;
 
 private:
 	struct Key {

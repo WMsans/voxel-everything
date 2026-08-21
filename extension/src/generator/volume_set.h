@@ -37,6 +37,7 @@ struct VolumeData {
 	int dim = kIslandDim;
 	std::vector<uint8_t> sdf; // dim^3, ve::encode_sdf
 	std::vector<uint8_t> mat; // dim^3, 0 = air
+	std::vector<uint16_t> normal_oct; // dim^3 oct snorm8, optional
 	int solid_voxels = 0;     // how many samples read solid; the island's mass comes from it
 
 	// A volume is usable only when 2 <= dim <= kIslandDim and both lattices are
@@ -46,9 +47,16 @@ struct VolumeData {
 	bool valid() const {
 		if (dim < 2 || dim > kIslandDim) return false;
 		const size_t expected = static_cast<size_t>(voxel_count());
-		return sdf.size() == expected && mat.size() == expected;
+		if (sdf.size() != expected || mat.size() != expected) return false;
+		if (!normal_oct.empty() && normal_oct.size() != expected) return false;
+		return true;
 	}
 	bool empty() const { return !valid(); }
+	bool has_normals() const {
+		if (dim < 2 || dim > kIslandDim) return false;
+		const size_t expected = static_cast<size_t>(voxel_count());
+		return normal_oct.size() == expected;
+	}
 	// Mirrors valid()'s bounds: a dim outside [2, kIslandDim] has no meaningful
 	// lattice count and reports 0 rather than overflowing or aliasing.
 	int voxel_count() const {
@@ -92,6 +100,10 @@ void build_volume_mip(const VolumeData &v, std::vector<uint8_t> *out);
 // value is a conservative lower bound on the lattice's own value, not an exact match.
 bool sample_volume_lattice(const uint8_t *sdf, const uint8_t *mat, int dim,
 		const float origin[3], float voxel, float x, float y, float z, VolumeSample *out);
+
+bool sample_volume_gradient_lattice(const uint8_t *sdf, const uint8_t *mat,
+		const uint16_t *normal_oct, int dim, const float origin[3], float voxel,
+		float x, float y, float z, FieldSample *out);
 
 // The pool of stored volumes, and the VolumeStore every field evaluation consults. The CPU
 // copy is AUTHORITATIVE: the render device, the mesher's worker device and ve::raycast all
@@ -137,6 +149,8 @@ public:
 	bool has(int slot) const override;
 	bool sample(int slot, float x, float y, float z, const EditOp &op,
 			VolumeSample *out) const override;
+	bool sample_gradient(int slot, float x, float y, float z, const EditOp &op,
+			FieldSample *out) const override;
 
 	static int voxel_index(int dim, int x, int y, int z) {
 		return x + y * dim + z * dim * dim; // x fastest, as everywhere else

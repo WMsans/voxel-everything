@@ -1,5 +1,6 @@
 #include "generator/volume_set.h"
 #include "connectivity/components.h"
+#include "shade/oct.h"
 #include "world/brick_eval.h"
 #include <algorithm>
 #include <cmath>
@@ -84,6 +85,66 @@ bool sample_volume_lattice(const uint8_t *sdf, const uint8_t *mat, int dim,
 			static_cast<int>(l[2] + 0.5f)};
 	out->material = mat[VolumeSet::voxel_index(dim, std::min(m[0], dim - 1),
 			std::min(m[1], dim - 1), std::min(m[2], dim - 1))];
+	return true;
+}
+
+bool sample_volume_gradient_lattice(const uint8_t *sdf, const uint8_t *mat,
+		const uint16_t *normal_oct, int dim, const float origin[3], float voxel,
+		float x, float y, float z, FieldSample *out) {
+	if (!sdf || !mat || !out || dim < 2 || !(voxel > 0.0f)) return false;
+	const float span = static_cast<float>(dim - 1) * voxel;
+	float lo[3] = {origin[0], origin[1], origin[2]};
+	float hi[3] = {origin[0] + span, origin[1] + span, origin[2] + span};
+	const float outside = box_sdf(lo, hi, x, y, z);
+	if (outside > 0.0f) {
+		VolumeSample vs{};
+		// Reuse lattice value for material/sdf but override gradient with exact box gradient
+		if (!sample_volume_lattice(sdf, mat, dim, origin, voxel, x, y, z, &vs)) return false;
+		out->sdf = vs.sdf;
+		out->material = vs.material;
+		box_sdf_gradient(lo, hi, x, y, z, out->gradient);
+		out->exact_gradient = true;
+		return true;
+	}
+	// Inside: reuse sample_volume_lattice for value/material
+	VolumeSample vs{};
+	if (!sample_volume_lattice(sdf, mat, dim, origin, voxel, x, y, z, &vs)) return false;
+	out->sdf = vs.sdf;
+	out->material = vs.material;
+	if (!normal_oct) {
+		out->gradient[0] = 0.0f; out->gradient[1] = 0.0f; out->gradient[2] = 0.0f;
+		out->exact_gradient = false;
+		return true;
+	}
+	float l[3];
+	{
+		float p[3]={x,y,z};
+		for (int a = 0; a < 3; a++) l[a] = std::min(std::max((p[a] - lo[a]) / voxel, 0.0f), static_cast<float>(dim - 1));
+	}
+	const int i0[3] = {static_cast<int>(l[0]), static_cast<int>(l[1]), static_cast<int>(l[2])};
+	const int i1[3] = {std::min(i0[0] + 1, dim - 1), std::min(i0[1] + 1, dim - 1), std::min(i0[2] + 1, dim - 1)};
+	const float f[3] = {l[0] - i0[0], l[1] - i0[1], l[2] - i0[2]};
+	float n000[3], n100[3], n010[3], n110[3], n001[3], n101[3], n011[3], n111[3];
+	oct_decode_snorm8(normal_oct[VolumeSet::voxel_index(dim, i0[0], i0[1], i0[2])], n000);
+	oct_decode_snorm8(normal_oct[VolumeSet::voxel_index(dim, i1[0], i0[1], i0[2])], n100);
+	oct_decode_snorm8(normal_oct[VolumeSet::voxel_index(dim, i0[0], i1[1], i0[2])], n010);
+	oct_decode_snorm8(normal_oct[VolumeSet::voxel_index(dim, i1[0], i1[1], i0[2])], n110);
+	oct_decode_snorm8(normal_oct[VolumeSet::voxel_index(dim, i0[0], i0[1], i1[2])], n001);
+	oct_decode_snorm8(normal_oct[VolumeSet::voxel_index(dim, i1[0], i0[1], i1[2])], n101);
+	oct_decode_snorm8(normal_oct[VolumeSet::voxel_index(dim, i0[0], i1[1], i1[2])], n011);
+	oct_decode_snorm8(normal_oct[VolumeSet::voxel_index(dim, i1[0], i1[1], i1[2])], n111);
+	// trilinear blend
+	float nx00[3] = { n000[0]*(1-f[0]) + n100[0]*f[0], n000[1]*(1-f[0]) + n100[1]*f[0], n000[2]*(1-f[0]) + n100[2]*f[0] };
+	float nx10[3] = { n010[0]*(1-f[0]) + n110[0]*f[0], n010[1]*(1-f[0]) + n110[1]*f[0], n010[2]*(1-f[0]) + n110[2]*f[0] };
+	float nx01[3] = { n001[0]*(1-f[0]) + n101[0]*f[0], n001[1]*(1-f[0]) + n101[1]*f[0], n001[2]*(1-f[0]) + n101[2]*f[0] };
+	float nx11[3] = { n011[0]*(1-f[0]) + n111[0]*f[0], n011[1]*(1-f[0]) + n111[1]*f[0], n011[2]*(1-f[0]) + n111[2]*f[0] };
+	float nxy0[3] = { nx00[0]*(1-f[1]) + nx10[0]*f[1], nx00[1]*(1-f[1]) + nx10[1]*f[1], nx00[2]*(1-f[1]) + nx10[2]*f[1] };
+	float nxy1[3] = { nx01[0]*(1-f[1]) + nx11[0]*f[1], nx01[1]*(1-f[1]) + nx11[1]*f[1], nx01[2]*(1-f[1]) + nx11[2]*f[1] };
+	float nxyz[3] = { nxy0[0]*(1-f[2]) + nxy1[0]*f[2], nxy0[1]*(1-f[2]) + nxy1[1]*f[2], nxy0[2]*(1-f[2]) + nxy1[2]*f[2] };
+	float len = std::sqrt(nxyz[0]*nxyz[0] + nxyz[1]*nxyz[1] + nxyz[2]*nxyz[2]);
+	if (len > 1e-6f) { out->gradient[0]=nxyz[0]/len; out->gradient[1]=nxyz[1]/len; out->gradient[2]=nxyz[2]/len; }
+	else { out->gradient[0]=0; out->gradient[1]=1; out->gradient[2]=0; }
+	out->exact_gradient = true;
 	return true;
 }
 
@@ -172,6 +233,14 @@ bool VolumeSet::sample(int slot, float x, float y, float z, const EditOp &op,
 			x, y, z, out);
 }
 
+bool VolumeSet::sample_gradient(int slot, float x, float y, float z, const EditOp &op,
+		FieldSample *out) const {
+	const VolumeData *v = get(slot);
+	if (!v) return false;
+	const uint16_t *norm = v->has_normals() ? v->normal_oct.data() : nullptr;
+	return sample_volume_gradient_lattice(v->sdf.data(), v->mat.data(), norm, v->dim, op.pos, op.radius, x, y, z, out);
+}
+
 bool resample_volume(const VolumeData &src, const EditOp &src_op, const float basis[9],
 		const float origin[3], int slot, int dim, VolumeData *out, EditOp *out_op) {
 	// The inverse-by-transpose below only holds for an orthonormal basis, and the pitch
@@ -225,7 +294,9 @@ bool resample_volume(const VolumeData &src, const EditOp &src_op, const float ba
 	out->dim = dim;
 	out->sdf.assign(static_cast<size_t>(dim) * dim * dim, encode_sdf(kSdfRange));
 	out->mat.assign(static_cast<size_t>(dim) * dim * dim, 0);
+	out->normal_oct.assign(static_cast<size_t>(dim) * dim * dim, 0);
 	out->solid_voxels = 0;
+	const bool src_has_normals = src.has_normals();
 	for (int z = 0; z < dim; z++)
 		for (int y = 0; y < dim; y++)
 			for (int x = 0; x < dim; x++) {
@@ -244,6 +315,29 @@ bool resample_volume(const VolumeData &src, const EditOp &src_op, const float ba
 				out->sdf[i] = encode_sdf(s.sdf);
 				out->mat[i] = static_cast<uint8_t>(s.material);
 				if (s.sdf <= 0.0f) out->solid_voxels++;
+				// sample source compact normal, rotate by row-major basis into world, normalize, encode
+				if (src_has_normals) {
+					FieldSample gs{};
+					const uint16_t *norm_ptr = src.normal_oct.data();
+					if (sample_volume_gradient_lattice(src.sdf.data(), src.mat.data(), norm_ptr, src.dim, src_op.pos, src_op.radius, q[0], q[1], q[2], &gs)) {
+						float n_in[3] = {gs.gradient[0], gs.gradient[1], gs.gradient[2]};
+						// rotate by basis: world = basis * local
+						float n_world[3] = {
+							basis[0*3+0]*n_in[0] + basis[0*3+1]*n_in[1] + basis[0*3+2]*n_in[2],
+							basis[1*3+0]*n_in[0] + basis[1*3+1]*n_in[1] + basis[1*3+2]*n_in[2],
+							basis[2*3+0]*n_in[0] + basis[2*3+1]*n_in[1] + basis[2*3+2]*n_in[2]
+						};
+						float len = std::sqrt(n_world[0]*n_world[0] + n_world[1]*n_world[1] + n_world[2]*n_world[2]);
+						if (len > 1e-6f) { n_world[0]/=len; n_world[1]/=len; n_world[2]/=len; } else { n_world[0]=0; n_world[1]=1; n_world[2]=0; }
+						out->normal_oct[static_cast<size_t>(i)] = oct_encode_snorm8(n_world);
+					} else {
+						float fallback[3]={0,1,0};
+						out->normal_oct[static_cast<size_t>(i)] = oct_encode_snorm8(fallback);
+					}
+				} else {
+					float fallback[3]={0,1,0};
+					out->normal_oct[static_cast<size_t>(i)] = oct_encode_snorm8(fallback);
+				}
 			}
 
 	*out_op = make_volume_add(slot, o, pitch, dim);
@@ -271,6 +365,7 @@ void extract_island_volume(const Generator &gen, const EditOp *ops, int op_count
 	out->dim = dim;
 	out->sdf.assign(static_cast<size_t>(dim) * dim * dim, 0);
 	out->mat.assign(static_cast<size_t>(dim) * dim * dim, 0);
+	out->normal_oct.assign(static_cast<size_t>(dim) * dim * dim, 0);
 	out->solid_voxels = 0;
 
 	// The island IS the solid field intersected with the union of its cells, so the mask is
@@ -324,7 +419,22 @@ void extract_island_volume(const Generator &gen, const EditOp *ops, int op_count
 										   .material;
 					}
 				}
+				// winning gradient of masked field at p before quantization
+				FieldSample gs = eval_field_gradient(gen, ops, op_count, p[0], p[1], p[2], volumes, nullptr);
+				float bu = 1e30f;
+				int bu_idx = -1;
+				for (int b = 0; b < box_count; b++) {
+					float cur = box_sdf(&box_aabbs[static_cast<size_t>(b) * 6 + 0], &box_aabbs[static_cast<size_t>(b) * 6 + 3], p[0], p[1], p[2]);
+					if (cur < bu) { bu = cur; bu_idx = b; }
+				}
+				float grad[3] = {gs.gradient[0], gs.gradient[1], gs.gradient[2]};
+				if (bu_idx >= 0 && bu > gs.sdf) {
+					box_sdf_gradient(&box_aabbs[static_cast<size_t>(bu_idx) * 6 + 0], &box_aabbs[static_cast<size_t>(bu_idx) * 6 + 3], p[0], p[1], p[2], grad);
+				}
+				float len = std::sqrt(grad[0]*grad[0] + grad[1]*grad[1] + grad[2]*grad[2]);
+				if (!(len > 1e-6f)) { grad[0]=0; grad[1]=1; grad[2]=0; len=1.0f; } else { grad[0]/=len; grad[1]/=len; grad[2]/=len; }
 				const int i = VolumeSet::voxel_index(dim, x, y, z);
+				out->normal_oct[static_cast<size_t>(i)] = oct_encode_snorm8(grad);
 				out->sdf[i] = encode_sdf(d);
 				out->mat[i] = static_cast<uint8_t>(material > 255 ? 255 : material);
 				if (d <= 0.0f) out->solid_voxels++;
