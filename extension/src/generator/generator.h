@@ -15,10 +15,21 @@ struct Sample {
 	uint16_t material; // 0 = air, 1 = grass, 2 = rock, 3 = dirt
 };
 
+struct FieldSample {
+	float sdf = 0;
+	uint16_t material = 0;
+	float gradient[3] = {0, 1, 0};
+	bool exact_gradient = false;
+};
+
+uint16_t oct_encode_snorm8(const float normal[3]);
+void oct_decode_snorm8(uint16_t packed, float normal[3]);
+
 class Generator {
 public:
 	virtual ~Generator() = default;
 	virtual Sample sample(float x, float y, float z) const = 0;
+	virtual FieldSample sample_gradient(float x, float y, float z) const;
 
 	// Upper bound on |grad(sdf)| of the field this generator returns. The generator's
 	// `y - h(x, z)` OVER-estimates true distance on a slope, so a sphere tracer that
@@ -33,6 +44,7 @@ class AnalyticGenerator : public Generator {
 public:
 	explicit AnalyticGenerator(uint32_t seed = 1337) : seed_(seed) {}
 	Sample sample(float x, float y, float z) const override;
+	FieldSample sample_gradient(float x, float y, float z) const override;
 
 	// |grad(y - hills)| = sqrt(1 + |grad hills|^2); the amplitude-times-frequency sum of
 	// hills() is below 1.0 per axis, so 2.0 is comfortably conservative. The cave is a

@@ -119,6 +119,16 @@ Sample eval_field(const Generator &gen, const EditOp *ops, int op_count,
 	return apply_ops(s, ops, op_count, x, y, z, volumes);
 }
 
+FieldSample eval_field_gradient(const Generator &gen, const EditOp *ops, int op_count,
+		float x, float y, float z, const VolumeStore *volumes, const OverrideSource *overrides) {
+	FieldSample s{};
+	if (overrides && overrides->sample_gradient(x, y, z, &s)) {
+	} else {
+		s = gen.sample_gradient(x, y, z);
+	}
+	return apply_ops_gradient(s, ops, op_count, x, y, z, volumes);
+}
+
 bool brick_has_surface(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,
 		const VolumeStore *volumes, const OverrideSource *overrides) {
 	float mn = 0.0f, mx = 0.0f;

@@ -20,6 +20,10 @@ struct OverrideBrick {
 struct OverrideSource {
 	virtual ~OverrideSource() = default;
 	virtual bool sample(float x, float y, float z, Sample *out) const = 0;
+	virtual bool sample_gradient(float x, float y, float z, FieldSample *out) const {
+		(void)x; (void)y; (void)z; (void)out;
+		return false;
+	}
 };
 
 // Fixed-capacity pool of baked bricks with a brick-coordinate index. There is no eviction:
