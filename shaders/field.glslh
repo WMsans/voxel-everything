@@ -54,6 +54,62 @@ float op_box_sdf(vec3 lo, vec3 hi, vec3 p) {
 	return length(max(q, vec3(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
 }
 
+// Mirror of ve::box_sdf_gradient (extension/src/generator/edit_ops.cpp).
+void op_box_sdf_gradient(vec3 lo, vec3 hi, vec3 p, out vec3 g) {
+	vec3 c = 0.5 * (lo + hi);
+	vec3 h = 0.5 * (hi - lo);
+	vec3 d = p - c;
+	vec3 s = vec3(d.x >= 0.0 ? 1.0 : -1.0, d.y >= 0.0 ? 1.0 : -1.0, d.z >= 0.0 ? 1.0 : -1.0);
+	vec3 q = abs(d) - h;
+	bool outside = q.x > 0.0 || q.y > 0.0 || q.z > 0.0;
+	if (outside) {
+		vec3 v = vec3(0.0);
+		if (q.x > 0.0) v.x = q.x * s.x;
+		if (q.y > 0.0) v.y = q.y * s.y;
+		if (q.z > 0.0) v.z = q.z * s.z;
+		float len = length(v);
+		if (len < 1e-6) g = vec3(0.0, 1.0, 0.0);
+		else g = v / len;
+	} else {
+		int best = 0;
+		float best_q = q.x;
+		if (q.y > best_q) { best_q = q.y; best = 1; }
+		if (q.z > best_q) { best_q = q.z; best = 2; }
+		g = vec3(0.0);
+		g[best] = s[best];
+	}
+}
+
+void base_field_gradient(vec3 p, out float sdf, out uint mat, out vec3 grad, out bool exact) {
+	float h = hills(p.x, p.z);
+	float terrain_sdf = p.y - SURFACE_Y - h;
+	const float cx = 30.0, cz = 30.0;
+	float cy = SURFACE_Y + hills(cx, cz) - 2.0;
+	vec3 d = p - vec3(cx, cy, cz);
+	float len = length(d);
+	float sphere = len - 5.0;
+	sdf = max(terrain_sdf, -sphere);
+	mat = 0u;
+	if (sdf <= 0.0) mat = h > 4.0 ? 2u : (h > 1.0 ? 1u : 3u);
+	float dhdx = 0.66 * cos(p.x * 0.11) * cos(p.z * 0.13)
+			+ 0.093 * cos(p.x * 0.031 + 1.7) * sin(p.z * 0.043)
+			+ 0.23 * cos(p.x * 0.23 + p.z * 0.19);
+	float dhdz = -0.78 * sin(p.x * 0.11) * sin(p.z * 0.13)
+			+ 0.129 * sin(p.x * 0.031 + 1.7) * cos(p.z * 0.043)
+			+ 0.19 * cos(p.x * 0.23 + p.z * 0.19);
+	grad = vec3(-dhdx, 1.0, -dhdz);
+	exact = true;
+	if (-sphere > terrain_sdf) {
+		if (len < 1e-6) {
+			grad = vec3(0.0, 1.0, 0.0);
+			exact = false;
+		} else {
+			grad = -(d / len);
+			exact = true;
+		}
+	}
+}
+
 // The stored-volume pool. Two buffers rather than one so a slot's byte offset is
 // slot * VOLUME_VOXELS in BOTH of them: a test can then stand up a one-slot pool without
 // knowing how many slots the shipping pool has. Bytes are unpacked by hand out of uint
@@ -115,6 +171,55 @@ void sample_field_volume(int slot, vec3 origin, float voxel, int dim, vec3 p,
 	ivec3 m = min(ivec3(l + 0.5), ivec3(dim - 1));
 	mat = volume_mat_byte(base + m.x + m.y * sy + m.z * sz);
 }
+
+#ifdef FIELD_NORMAL_VOLUME_BINDING
+layout(set = 0, binding = FIELD_NORMAL_VOLUME_BINDING, std430) readonly buffer FieldVolumeNormal {
+	uint n[];
+} field_volume_normal;
+bool sample_field_volume_gradient(int slot, vec3 origin, float voxel, int dim, vec3 p,
+		out float sdf, out uint mat, out vec3 grad, out bool exact) {
+	if (slot < 0 || slot >= 64 || dim < 2 || dim > 64 || !(voxel > 0.0)) return false;
+	float span = float(dim - 1) * voxel;
+	vec3 lo = origin, hi = origin + vec3(span);
+	float outside = op_box_sdf(lo, hi, p);
+	if (outside > 0.0) {
+		float vsdf; uint vmat;
+		sample_field_volume(slot, origin, voxel, dim, p, vsdf, vmat);
+		sdf = vsdf; mat = vmat;
+		op_box_sdf_gradient(lo, hi, p, grad);
+		exact = true;
+		return true;
+	}
+	float vsdf; uint vmat;
+	sample_field_volume(slot, origin, voxel, dim, p, vsdf, vmat);
+	sdf = vsdf; mat = vmat;
+	vec3 l = clamp((p - lo) / voxel, vec3(0.0), vec3(float(dim - 1)));
+	ivec3 i0 = ivec3(l);
+	ivec3 i1 = min(i0 + 1, ivec3(dim - 1));
+	vec3 f = l - vec3(i0);
+	int base = slot * VOLUME_VOXELS;
+	int sy = dim, sz = dim * dim;
+	vec3 n000 = oct_decode_snorm8(field_volume_normal.n[base + i0.x + i0.y * sy + i0.z * sz]);
+	vec3 n100 = oct_decode_snorm8(field_volume_normal.n[base + i1.x + i0.y * sy + i0.z * sz]);
+	vec3 n010 = oct_decode_snorm8(field_volume_normal.n[base + i0.x + i1.y * sy + i0.z * sz]);
+	vec3 n110 = oct_decode_snorm8(field_volume_normal.n[base + i1.x + i1.y * sy + i0.z * sz]);
+	vec3 n001 = oct_decode_snorm8(field_volume_normal.n[base + i0.x + i0.y * sy + i1.z * sz]);
+	vec3 n101 = oct_decode_snorm8(field_volume_normal.n[base + i1.x + i0.y * sy + i1.z * sz]);
+	vec3 n011 = oct_decode_snorm8(field_volume_normal.n[base + i0.x + i1.y * sy + i0.z * sz]);
+	vec3 n111 = oct_decode_snorm8(field_volume_normal.n[base + i1.x + i1.y * sy + i1.z * sz]);
+	vec3 nx00 = mix(n000, n100, f.x);
+	vec3 nx10 = mix(n010, n110, f.x);
+	vec3 nx01 = mix(n001, n101, f.x);
+	vec3 nx11 = mix(n011, n111, f.x);
+	vec3 nxy0 = mix(nx00, nx10, f.y);
+	vec3 nxy1 = mix(nx01, nx11, f.y);
+	vec3 nxyz = mix(nxy0, nxy1, f.z);
+	float len = length(nxyz);
+	if (len > 1e-6) grad = nxyz / len; else grad = vec3(0.0, 1.0, 0.0);
+	exact = true;
+	return true;
+}
+#endif
 #endif
 
 #ifdef FIELD_OVERRIDE_SDF_BINDING
@@ -137,6 +242,47 @@ uint override_sdf_byte(int i) {
 uint override_mat_byte(int i) {
 	return (field_override_mat.w[i >> 2] >> ((uint(i) & 3u) * 8u)) & 0xFFu;
 }
+
+#ifdef FIELD_NORMAL_OVERRIDE_BINDING
+layout(set = 0, binding = FIELD_NORMAL_OVERRIDE_BINDING, std430) readonly buffer FieldOverrideNormal {
+	uint n[];
+} field_override_normal;
+bool sample_field_override_gradient(vec3 p, uint op_base, out float sdf, out uint mat, out vec3 grad, out bool exact) {
+	float osdf; uint omat;
+	if (!sample_field_override(p, op_base, osdf, omat)) return false;
+	int table = FIELD_OVERRIDE_TABLE(op_base);
+	if (table < 0 || table >= 32) return false;
+	ivec3 brick = ivec3(floor(p / BRICK_SIZE));
+	int bi = (brick.x & 31) + (brick.y & 31) * REGION_BRICKS + (brick.z & 31) * REGION_BRICKS * REGION_BRICKS;
+	int slot = field_override_tables.slot[table * REGION_BRICK_COUNT + bi];
+	if (slot < 0) return false;
+	vec3 local = clamp((p - vec3(brick) * BRICK_SIZE) / VOXEL_SIZE, vec3(0.0), vec3(BRICK_SDF_MAX));
+	ivec3 i0 = ivec3(floor(local));
+	ivec3 i1 = min(i0 + ivec3(1), ivec3(BRICK_VOXELS));
+	vec3 f = local - vec3(i0);
+	int base = slot * 4916;
+	int stride = BRICK_SDF_STRIDE;
+	vec3 n000 = oct_decode_snorm8(field_override_normal.n[base + i0.x + i0.y * stride + i0.z * stride * stride]);
+	vec3 n100 = oct_decode_snorm8(field_override_normal.n[base + i1.x + i0.y * stride + i0.z * stride * stride]);
+	vec3 n010 = oct_decode_snorm8(field_override_normal.n[base + i0.x + i1.y * stride + i0.z * stride * stride]);
+	vec3 n110 = oct_decode_snorm8(field_override_normal.n[base + i1.x + i1.y * stride + i0.z * stride * stride]);
+	vec3 n001 = oct_decode_snorm8(field_override_normal.n[base + i0.x + i0.y * stride + i1.z * stride * stride]);
+	vec3 n101 = oct_decode_snorm8(field_override_normal.n[base + i1.x + i0.y * stride + i1.z * stride * stride]);
+	vec3 n011 = oct_decode_snorm8(field_override_normal.n[base + i0.x + i1.y * stride + i1.z * stride * stride]);
+	vec3 n111 = oct_decode_snorm8(field_override_normal.n[base + i1.x + i1.y * stride + i1.z * stride * stride]);
+	vec3 nx00 = mix(n000, n100, f.x);
+	vec3 nx10 = mix(n010, n110, f.x);
+	vec3 nx01 = mix(n001, n101, f.x);
+	vec3 nx11 = mix(n011, n111, f.x);
+	vec3 nxy0 = mix(nx00, nx10, f.y);
+	vec3 nxy1 = mix(nx01, nx11, f.y);
+	vec3 nxyz = mix(nxy0, nxy1, f.z);
+	float len = length(nxyz);
+	if (len > 1e-6) grad = nxyz / len; else grad = vec3(0.0, 1.0, 0.0);
+	sdf = osdf; mat = omat; exact = true;
+	return true;
+}
+#endif
 
 bool sample_field_override(vec3 p, uint op_base, out float sdf, out uint mat) {
 	sdf = 0.0;
@@ -271,4 +417,77 @@ void eval_field(vec3 p, uint op_base, uint op_count, out float sdf, out uint mat
 #endif
 	for (uint i = 0u; i < op_count; i++)
 		apply_field_op(FIELD_OP_INDEX(op_base, i), p, sdf, mat);
+}
+
+void apply_field_op_gradient(uint index, vec3 p, inout float sdf, inout uint mat, inout vec3 grad, inout bool exact) {
+	uvec4 a = field_op_pool.v[index * 2u + 0u];
+	uvec4 b = field_op_pool.v[index * 2u + 1u];
+	uint type = a.x;
+	uint material = a.y;
+	vec3 c = vec3(uintBitsToFloat(a.z), uintBitsToFloat(a.w), uintBitsToFloat(b.x));
+	float radius = uintBitsToFloat(b.y);
+	if (type == OP_BOX_SUBTRACT) {
+		vec3 n = vec3(float(b.z & 0x3FFu), float((b.z >> 10) & 0x3FFu), float((b.z >> 20) & 0x3FFu));
+		float m = max(radius, 0.0);
+		float bd = op_box_sdf(c - vec3(m), c + n * OCCUPANCY_CELL_SIZE + vec3(m), p);
+		if (-bd > sdf) {
+			sdf = -bd;
+			if (sdf > 0.0) mat = 0u;
+			vec3 g;
+			op_box_sdf_gradient(c - vec3(m), c + n * OCCUPANCY_CELL_SIZE + vec3(m), p, g);
+			grad = -g;
+			exact = true;
+		}
+		return;
+	}
+	if (type == OP_VOLUME_ADD) {
+#ifdef FIELD_VOLUME_SDF_BINDING
+#ifdef FIELD_NORMAL_VOLUME_BINDING
+		float vd; uint vm; vec3 vg; bool ve;
+		if (sample_field_volume_gradient(int(b.z), c, radius, int(b.w), p, vd, vm, vg, ve)) {
+			if (vd < sdf) { sdf = vd; if (sdf <= 0.0 && vm != 0u) mat = vm; grad = vg; exact = ve; }
+			return;
+		}
+#endif
+		float vd; uint vm;
+		sample_field_volume(int(b.z), c, radius, int(b.w), p, vd, vm);
+		if (vd < sdf) { sdf = vd; if (sdf <= 0.0 && vm != 0u) mat = vm; grad = vec3(0.0); exact = false; }
+#endif
+		return;
+	}
+	float sp = length(p - c) - radius;
+	if (type == OP_SPHERE_SUBTRACT) {
+		if (-sp > sdf) {
+			vec3 d = p - c; float len = length(d);
+			vec3 g; bool e;
+			if (len < 1e-6) { g = vec3(0.0, 1.0, 0.0); e = false; }
+			else { g = d / len; e = true; }
+			sdf = -sp; if (sdf > 0.0) mat = 0u; grad = -g; exact = e; if (!e) grad = vec3(0.0, 1.0, 0.0);
+		}
+	} else if (type == OP_SPHERE_ADD) {
+		if (sp < sdf) {
+			vec3 d = p - c; float len = length(d);
+			vec3 g; bool e;
+			if (len < 1e-6) { g = vec3(0.0, 1.0, 0.0); e = false; }
+			else { g = d / len; e = true; }
+			sdf = sp; if (sdf <= 0.0) mat = material; grad = g; exact = e; if (!e) grad = vec3(0.0, 1.0, 0.0);
+		}
+	} else if (type == OP_SPHERE_PAINT) {
+		if (sp <= 0.0 && sdf <= 0.0) mat = material;
+	}
+}
+
+void eval_field_gradient(vec3 p, uint op_base, uint op_count, out float sdf, out uint mat, out vec3 grad, out bool exact) {
+#ifdef FIELD_OVERRIDE_SDF_BINDING
+#ifdef FIELD_NORMAL_OVERRIDE_BINDING
+	vec3 og; bool oe;
+	if (sample_field_override_gradient(p, op_base, sdf, mat, og, oe)) { grad = og; exact = oe; } else { base_field_gradient(p, sdf, mat, grad, exact); }
+#else
+	if (!sample_field_override(p, op_base, sdf, mat)) base_field_gradient(p, sdf, mat, grad, exact); else { grad = vec3(0.0); exact = false; }
+#endif
+#else
+	base_field_gradient(p, sdf, mat, grad, exact);
+#endif
+	for (uint i = 0u; i < op_count; i++)
+		apply_field_op_gradient(FIELD_OP_INDEX(op_base, i), p, sdf, mat, grad, exact);
 }

@@ -352,6 +352,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_self_check"), &VoxelWorld::debug_self_check);
 	ClassDB::bind_method(D_METHOD("debug_store_volume", "slot", "sdf", "mat", "dim"), &VoxelWorld::debug_store_volume);
 	ClassDB::bind_method(D_METHOD("debug_eval_field", "p", "ops", "op_count"), &VoxelWorld::debug_eval_field);
+	ClassDB::bind_method(D_METHOD("debug_eval_field_gradient", "p", "ops", "op_count"), &VoxelWorld::debug_eval_field_gradient);
 	ClassDB::bind_method(D_METHOD("debug_init_atlas"), &VoxelWorld::debug_init_atlas);
 	ClassDB::bind_method(D_METHOD("debug_teardown_atlas"), &VoxelWorld::debug_teardown_atlas);
 	ClassDB::bind_method(D_METHOD("debug_atlas_stats"), &VoxelWorld::debug_atlas_stats);
@@ -5829,6 +5830,25 @@ Vector2 VoxelWorld::debug_eval_field(Vector3 p, const PackedByteArray &ops, int 
 	}
 	const ve::Sample s = ve::eval_field(gen, ptr, op_count, p.x, p.y, p.z, &volumes_, overrides_);
 	return Vector2(s.sdf, static_cast<float>(s.material));
+}
+
+Dictionary VoxelWorld::debug_eval_field_gradient(Vector3 p, const PackedByteArray &ops, int op_count) {
+	ve::AnalyticGenerator gen;
+	const ve::EditOp *ptr = nullptr;
+	if (op_count > 0) {
+		if (ops.size() < op_count * static_cast<int64_t>(sizeof(ve::EditOp))) {
+			UtilityFunctions::printerr("debug_eval_field_gradient: op buffer too small");
+			return Dictionary();
+		}
+		ptr = reinterpret_cast<const ve::EditOp *>(ops.ptr());
+	}
+	const ve::FieldSample s = ve::eval_field_gradient(gen, ptr, op_count, p.x, p.y, p.z, &volumes_, overrides_);
+	Dictionary d;
+	d["sdf"] = s.sdf;
+	d["material"] = int(s.material);
+	d["gradient"] = Vector3(s.gradient[0], s.gradient[1], s.gradient[2]);
+	d["exact"] = s.exact_gradient;
+	return d;
 }
 
 Dictionary VoxelWorld::debug_material_atlas_stats() {

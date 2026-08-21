@@ -31,6 +31,19 @@ vec3 oct_decode(vec2 e) {
 	return l > 0.0 ? v / l : vec3(0.0, 0.0, 1.0);
 }
 
+uint oct_encode_snorm8(vec3 n) {
+	ivec2 q = ivec2(round(clamp(oct_encode(n), vec2(-1.0), vec2(1.0)) * 127.0));
+	return (uint(q.x) & 0xFFu) | ((uint(q.y) & 0xFFu) << 8);
+}
+vec3 oct_decode_snorm8(uint p) {
+	int x = int(p & 0xFFu);
+	int y = int((p >> 8) & 0xFFu);
+	if (x >= 128) x -= 256;
+	if (y >= 128) y -= 256;
+	ivec2 q = ivec2(x, y);
+	return oct_decode(vec2(q) / 127.0);
+}
+
 // ---- ve::CelParams / ve::cel_shade ---------------------------------------------------
 const int CEL_BANDS = 4;
 const float CEL_BAND_EDGE[3] = float[3](0.08, 0.32, 0.66);

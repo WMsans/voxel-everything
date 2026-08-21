@@ -519,6 +519,7 @@ public:
 	void debug_store_volume(int slot, const PackedByteArray &sdf, const PackedByteArray &mat,
 			int dim);
 	Vector2 debug_eval_field(Vector3 p, const PackedByteArray &ops, int op_count);
+	Dictionary debug_eval_field_gradient(Vector3 p, const PackedByteArray &ops, int op_count);
 	bool debug_init_atlas();
 	void debug_teardown_atlas();
 	Dictionary debug_atlas_stats();
