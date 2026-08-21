@@ -172,41 +172,67 @@ void sample_field_volume(int slot, vec3 origin, float voxel, int dim, vec3 p,
 	mat = volume_mat_byte(base + m.x + m.y * sy + m.z * sz);
 }
 
-#ifdef FIELD_NORMAL_VOLUME_BINDING
-layout(set = 0, binding = FIELD_NORMAL_VOLUME_BINDING, std430) readonly buffer FieldVolumeNormal {
+#ifdef FIELD_VOLUME_NORMAL_BINDING
+// The compact-normal PAYLOAD: one uint16 oct pair per sample, shared by stored volumes
+// AND override bricks. Spans live at dynamically allocated byte offsets published in
+// offset tables -- never at a fixed slot stride.
+layout(set = 0, binding = FIELD_VOLUME_NORMAL_BINDING, std430) readonly buffer FieldVolumeNormal {
 	uint n[];
 } field_volume_normal;
+#endif
+#ifdef FIELD_VOLUME_NORMAL_OFFSET_BINDING
+layout(set = 0, binding = FIELD_VOLUME_NORMAL_OFFSET_BINDING, std430) readonly buffer FieldVolumeNormalOffsets {
+	int slot[];
+} field_volume_normal_offsets;
+#endif
+
+// One packed oct pair is TWO bytes, so the pool stores two samples per uint32 word.
+// `base` is the word index of a span's start (span byte offset >> 2); `i` is the linear
+// SAMPLE index inside that span -- byte address base*4 + 2*i, i.e. word base + (i >> 1),
+// low half for even i, high half for odd i. Only compiled where the shared payload is
+// declared: the probe/brick/mesh shaders include this file without the normal binding and
+// must not see a dangling reference.
+#ifdef FIELD_VOLUME_NORMAL_BINDING
+uint pool_normal16(int base, int i) {
+	uint w = field_volume_normal.n[base + (i >> 1)];
+	return (i & 1) != 0 ? (w >> 16) : (w & 0xFFFFu);
+}
+#endif
+
+#if defined(FIELD_VOLUME_SDF_BINDING) && defined(FIELD_VOLUME_NORMAL_BINDING) && defined(FIELD_VOLUME_NORMAL_OFFSET_BINDING)
 bool sample_field_volume_gradient(int slot, vec3 origin, float voxel, int dim, vec3 p,
 		out float sdf, out uint mat, out vec3 grad, out bool exact) {
 	if (slot < 0 || slot >= 64 || dim < 2 || dim > 64 || !(voxel > 0.0)) return false;
 	float span = float(dim - 1) * voxel;
 	vec3 lo = origin, hi = origin + vec3(span);
+	float vsdf; uint vmat;
+	sample_field_volume(slot, origin, voxel, dim, p, vsdf, vmat);
+	sdf = vsdf; mat = vmat;
 	float outside = op_box_sdf(lo, hi, p);
 	if (outside > 0.0) {
-		float vsdf; uint vmat;
-		sample_field_volume(slot, origin, voxel, dim, p, vsdf, vmat);
-		sdf = vsdf; mat = vmat;
 		op_box_sdf_gradient(lo, hi, p, grad);
 		exact = true;
 		return true;
 	}
-	float vsdf; uint vmat;
-	sample_field_volume(slot, origin, voxel, dim, p, vsdf, vmat);
-	sdf = vsdf; mat = vmat;
+	// The payload is a dynamic span of the shared pool; its 4-aligned byte offset lives
+	// in the volume offsets table. -1 means "no normals bound": the caller differentiates
+	// the stored SDF instead of reading stale or zero bytes.
+	int off = field_volume_normal_offsets.slot[slot];
+	if (off < 0) return false;
+	int base = off >> 2;
 	vec3 l = clamp((p - lo) / voxel, vec3(0.0), vec3(float(dim - 1)));
 	ivec3 i0 = ivec3(l);
 	ivec3 i1 = min(i0 + 1, ivec3(dim - 1));
 	vec3 f = l - vec3(i0);
-	int base = slot * VOLUME_VOXELS;
 	int sy = dim, sz = dim * dim;
-	vec3 n000 = oct_decode_snorm8(field_volume_normal.n[base + i0.x + i0.y * sy + i0.z * sz]);
-	vec3 n100 = oct_decode_snorm8(field_volume_normal.n[base + i1.x + i0.y * sy + i0.z * sz]);
-	vec3 n010 = oct_decode_snorm8(field_volume_normal.n[base + i0.x + i1.y * sy + i0.z * sz]);
-	vec3 n110 = oct_decode_snorm8(field_volume_normal.n[base + i1.x + i1.y * sy + i0.z * sz]);
-	vec3 n001 = oct_decode_snorm8(field_volume_normal.n[base + i0.x + i0.y * sy + i1.z * sz]);
-	vec3 n101 = oct_decode_snorm8(field_volume_normal.n[base + i1.x + i0.y * sy + i1.z * sz]);
-	vec3 n011 = oct_decode_snorm8(field_volume_normal.n[base + i0.x + i1.y * sy + i0.z * sz]);
-	vec3 n111 = oct_decode_snorm8(field_volume_normal.n[base + i1.x + i1.y * sy + i1.z * sz]);
+	vec3 n000 = oct_decode_snorm8(pool_normal16(base, i0.x + i0.y * sy + i0.z * sz));
+	vec3 n100 = oct_decode_snorm8(pool_normal16(base, i1.x + i0.y * sy + i0.z * sz));
+	vec3 n010 = oct_decode_snorm8(pool_normal16(base, i0.x + i1.y * sy + i0.z * sz));
+	vec3 n110 = oct_decode_snorm8(pool_normal16(base, i1.x + i1.y * sy + i0.z * sz));
+	vec3 n001 = oct_decode_snorm8(pool_normal16(base, i0.x + i0.y * sy + i1.z * sz));
+	vec3 n101 = oct_decode_snorm8(pool_normal16(base, i1.x + i0.y * sy + i1.z * sz));
+	vec3 n011 = oct_decode_snorm8(pool_normal16(base, i0.x + i1.y * sy + i1.z * sz));
+	vec3 n111 = oct_decode_snorm8(pool_normal16(base, i1.x + i1.y * sy + i1.z * sz));
 	vec3 nx00 = mix(n000, n100, f.x);
 	vec3 nx10 = mix(n010, n110, f.x);
 	vec3 nx01 = mix(n001, n101, f.x);
@@ -243,10 +269,17 @@ uint override_mat_byte(int i) {
 	return (field_override_mat.w[i >> 2] >> ((uint(i) & 3u) * 8u)) & 0xFFu;
 }
 
+// Forward declaration: sample_field_override_gradient (below) reads the same baked base.
+bool sample_field_override(vec3 p, uint op_base, out float sdf, out uint mat);
+
 #ifdef FIELD_NORMAL_OVERRIDE_BINDING
-layout(set = 0, binding = FIELD_NORMAL_OVERRIDE_BINDING, std430) readonly buffer FieldOverrideNormal {
-	uint n[];
-} field_override_normal;
+// Binding for the OVERRIDE half of the offsets table. The payload itself is the shared
+// FieldVolumeNormal buffer above; this table says where each override brick slot's span
+// starts (byte offset, 4-aligned; -1 = no normals bound, fall back to SDF taps).
+layout(set = 0, binding = FIELD_NORMAL_OVERRIDE_BINDING, std430) readonly buffer FieldOverrideNormalOffsets {
+	int slot[];
+} field_override_normal_offsets;
+#ifdef FIELD_VOLUME_NORMAL_BINDING
 bool sample_field_override_gradient(vec3 p, uint op_base, out float sdf, out uint mat, out vec3 grad, out bool exact) {
 	float osdf; uint omat;
 	if (!sample_field_override(p, op_base, osdf, omat)) return false;
@@ -260,16 +293,18 @@ bool sample_field_override_gradient(vec3 p, uint op_base, out float sdf, out uin
 	ivec3 i0 = ivec3(floor(local));
 	ivec3 i1 = min(i0 + ivec3(1), ivec3(BRICK_VOXELS));
 	vec3 f = local - vec3(i0);
-	int base = slot * 4916;
+	int off = field_override_normal_offsets.slot[slot];
+	if (off < 0) return false;
+	int base = off >> 2;
 	int stride = BRICK_SDF_STRIDE;
-	vec3 n000 = oct_decode_snorm8(field_override_normal.n[base + i0.x + i0.y * stride + i0.z * stride * stride]);
-	vec3 n100 = oct_decode_snorm8(field_override_normal.n[base + i1.x + i0.y * stride + i0.z * stride * stride]);
-	vec3 n010 = oct_decode_snorm8(field_override_normal.n[base + i0.x + i1.y * stride + i0.z * stride * stride]);
-	vec3 n110 = oct_decode_snorm8(field_override_normal.n[base + i1.x + i1.y * stride + i0.z * stride * stride]);
-	vec3 n001 = oct_decode_snorm8(field_override_normal.n[base + i0.x + i0.y * stride + i1.z * stride * stride]);
-	vec3 n101 = oct_decode_snorm8(field_override_normal.n[base + i1.x + i0.y * stride + i1.z * stride * stride]);
-	vec3 n011 = oct_decode_snorm8(field_override_normal.n[base + i0.x + i1.y * stride + i1.z * stride * stride]);
-	vec3 n111 = oct_decode_snorm8(field_override_normal.n[base + i1.x + i1.y * stride + i1.z * stride * stride]);
+	vec3 n000 = oct_decode_snorm8(pool_normal16(base, i0.x + i0.y * stride + i0.z * stride * stride));
+	vec3 n100 = oct_decode_snorm8(pool_normal16(base, i1.x + i0.y * stride + i0.z * stride * stride));
+	vec3 n010 = oct_decode_snorm8(pool_normal16(base, i0.x + i1.y * stride + i0.z * stride * stride));
+	vec3 n110 = oct_decode_snorm8(pool_normal16(base, i1.x + i1.y * stride + i0.z * stride * stride));
+	vec3 n001 = oct_decode_snorm8(pool_normal16(base, i0.x + i0.y * stride + i1.z * stride * stride));
+	vec3 n101 = oct_decode_snorm8(pool_normal16(base, i1.x + i0.y * stride + i1.z * stride * stride));
+	vec3 n011 = oct_decode_snorm8(pool_normal16(base, i0.x + i1.y * stride + i1.z * stride * stride));
+	vec3 n111 = oct_decode_snorm8(pool_normal16(base, i1.x + i1.y * stride + i1.z * stride * stride));
 	vec3 nx00 = mix(n000, n100, f.x);
 	vec3 nx10 = mix(n010, n110, f.x);
 	vec3 nx01 = mix(n001, n101, f.x);
@@ -282,6 +317,7 @@ bool sample_field_override_gradient(vec3 p, uint op_base, out float sdf, out uin
 	sdf = osdf; mat = omat; exact = true;
 	return true;
 }
+#endif
 #endif
 
 bool sample_field_override(vec3 p, uint op_base, out float sdf, out uint mat) {
@@ -442,12 +478,15 @@ void apply_field_op_gradient(uint index, vec3 p, inout float sdf, inout uint mat
 	}
 	if (type == OP_VOLUME_ADD) {
 #ifdef FIELD_VOLUME_SDF_BINDING
-#ifdef FIELD_NORMAL_VOLUME_BINDING
-		float vd; uint vm; vec3 vg; bool ve;
-		if (sample_field_volume_gradient(int(b.z), c, radius, int(b.w), p, vd, vm, vg, ve)) {
-			if (vd < sdf) { sdf = vd; if (sdf <= 0.0 && vm != 0u) mat = vm; grad = vg; exact = ve; }
+#if defined(FIELD_VOLUME_NORMAL_BINDING) && defined(FIELD_VOLUME_NORMAL_OFFSET_BINDING)
+		float gvd; uint gvm; vec3 gvg; bool gve;
+		if (sample_field_volume_gradient(int(b.z), c, radius, int(b.w), p, gvd, gvm, gvg, gve)) {
+			if (gvd < sdf) { sdf = gvd; if (sdf <= 0.0 && gvm != 0u) mat = gvm; grad = gvg; exact = gve; }
 			return;
 		}
+		// No compact-normal span for this slot: fall through to the plain sample below, which
+		// contributes the stored SDF with an inexact gradient -- mirror of
+		// ve::apply_op_gradient's no-normals branch. The caller's R8 fallback then shades.
 #endif
 		float vd; uint vm;
 		sample_field_volume(int(b.z), c, radius, int(b.w), p, vd, vm);

@@ -594,9 +594,17 @@ public:
 	Dictionary debug_raymarch_gbuffer(Vector3 origin, Vector3 dir);
 	Dictionary debug_raymarch_hole_probe(Vector3 origin, Vector3 dir, int w, int h);
 	Dictionary debug_raymarch_normal_probe(Vector3 origin, Vector3 dir, int w, int h);
+	// Task 7: same five metrics as the terrain probe, but the reference normal for every
+	// hit inside the island's local lattice comes from that body's own VolumeData::normal_oct
+	// (trilinearly blended in the body frame, then rotated by the body basis).
+	Dictionary debug_island_normal_probe(int island_slot, Vector3 origin, Vector3 dir,
+			int w, int h);
 	// --- M5 Task 11 hooks ---
 	Dictionary debug_material_atlas_stats();
 	Color debug_material_probe(int mat, Vector3 p, Vector3 n);
+	// Task 7: rewrites one material layer's normal-map texels (surface array RG) so tests
+	// can prove the G-buffer normal never depends on the material normal map.
+	bool debug_poke_material_normal(int layer);
 	int debug_stream_frame(Vector3 cam);
 	Dictionary debug_stream_stats();
 	int debug_slot_of_region(Vector3i region) const;
@@ -645,6 +653,9 @@ public:
 	// --- M5 Task 9 hooks ---
 	Dictionary debug_lod_diff(int level, Vector3i coord);
 	void debug_apply_sphere_subtract(Vector3 centre, float radius);
+	// Task 7 fixture hook: a sphere-ADD op so the artifact tests can exercise the
+	// procedural CSG-add branch of the source-field normal path.
+	void debug_apply_sphere_add(Vector3 centre, float radius, int material);
 	bool snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo, ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const;
 	void debug_apply_volume_add(int slot, Vector3 origin, float voxel, int dim);
 

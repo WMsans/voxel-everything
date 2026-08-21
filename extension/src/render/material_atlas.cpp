@@ -141,7 +141,8 @@ bool MaterialAtlas::initialize(RenderingDevice *rd) {
 	f->set_array_layers(kMaterialLayers);
 	f->set_mipmaps(kMaterialMipmaps);
 	f->set_usage_bits(RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
-			RenderingDevice::TEXTURE_USAGE_CAN_UPDATE_BIT);
+			RenderingDevice::TEXTURE_USAGE_CAN_UPDATE_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT);
 	Ref<RDTextureView> v;
 	v.instantiate();
 	albedo_array_ = rd->texture_create(f, v, albedo_data);

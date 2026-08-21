@@ -166,3 +166,20 @@ func test_the_march_leaves_no_isolated_holes_in_the_gbuffer() -> void:
 	assert_int(d["hit_pixels"]).override_failure_message(
 		"the view hit nothing, so the hole count below proves nothing").is_greater(20000)
 	assert_int(d["isolated_misses"]).is_equal(0)
+
+# Task 7's invariance contract: the G-buffer normal comes from the source field (or its
+# R8 fallback), NEVER from the material normal map. Rewriting a material layer's normal-
+# map texels with a hard tilt must not move the decoded normal by one bit.
+func test_material_normal_map_bytes_do_not_change_gbuffer_normals() -> void:
+	var w := make_world()
+	var before := probe_ground(w)
+	assert_bool(before["hit"]).is_true()
+	var mat: int = before["material"]
+	assert_bool(w.debug_poke_material_normal(mat)).is_true()
+	var after := probe_ground(w)
+	assert_int(after["material"]).is_equal(mat)
+	var n0: Vector3 = before["normal"]
+	var n1: Vector3 = after["normal"]
+	assert_float((n0 - n1).length()).override_failure_message(
+		"G-buffer normal moved when the material normal map changed: %s -> %s" % [n0, n1]
+		).is_equal_approx(0.0, 0.0001)
