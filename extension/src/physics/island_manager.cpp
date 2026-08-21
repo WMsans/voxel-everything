@@ -303,6 +303,14 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 				continue;
 			}
 			ve::collect_ops_for_aabb(*world_->edit_log(), wlo, whi, &job.ops);
+			float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
+			ve::IVec3 blo = ve::WorldBounds::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
+			ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
+			if (!world_->snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) {
+				refused_++;
+				refused_op_cap_++;
+				continue;
+			}
 		}
 		job.override_table = world_->override_table_for_region(
 				ve::WorldBounds::region_of_point(job.origin[0], job.origin[1], job.origin[2]));

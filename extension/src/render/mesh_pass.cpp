@@ -224,7 +224,9 @@ void MeshPass::set_override_table(int region_slot, int table,
 bool MeshPass::upload_volume(int slot, const ve::VolumeData &data) {
 	// buffer_update is device-level and must not land inside an open compute list; the
 	// worker only ever calls this between jobs, which is where that is guaranteed.
-	return rd_ && !in_flight_ && volumes_.upload(rd_, slot, data);
+	bool ok = rd_ && !in_flight_ && volumes_.upload(rd_, slot, data);
+	if (!ok) UtilityFunctions::printerr("upload_volume failed slot ", slot, " dim ", data.dim, " valid ", data.valid(), " in_flight ", in_flight_, " rd ", rd_ != nullptr, " pool_valid ", volumes_.is_valid());
+	return ok;
 }
 
 // The same 48-byte block for all three passes, so one helper serves them all.

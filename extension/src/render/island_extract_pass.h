@@ -6,6 +6,7 @@
 #include "generator/edit_ops.h"
 #include "generator/volume_set.h"
 #include "mesh/box_merge.h"         // ve::kMaxIslandBoxes
+#include "world/field_source_snapshot.h"
 
 namespace godot {
 
@@ -29,6 +30,7 @@ struct IslandExtractJob {
 	int dim = ve::kIslandDim;
 	std::vector<ve::EditOp> ops;
 	std::vector<ve::CellBox> boxes;
+	ve::FieldSourceSnapshot snapshot;
 
 	// kResampleVolume only.
 	ve::VolumeData source;

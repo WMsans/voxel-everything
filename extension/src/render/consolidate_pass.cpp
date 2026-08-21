@@ -1,5 +1,10 @@
 #include "render/consolidate_pass.h"
 #include "render/shader_loader.h"
+#include "render/volume_pool.h"
+#include "generator/generator.h"
+#include "world/brick.h"
+#include "world/brick_eval.h"
+#include "shade/oct.h"
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rd_shader_source.hpp>
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
@@ -36,9 +41,9 @@ constexpr int kMatStride = 4096;
 
 ConsolidatePass::~ConsolidatePass() { teardown(); }
 
-bool ConsolidatePass::initialize(RenderingDevice *rd, OverridePool *pool, int max_bricks) {
+bool ConsolidatePass::initialize(RenderingDevice *rd, OverridePool *pool, VolumePool *volumes, int max_bricks) {
 	teardown();
-	if (!rd || !pool || !pool->is_valid()) return false;
+	if (!rd || !pool || !volumes || !pool->is_valid() || !volumes->is_valid()) return false;
 	max_bricks = max_bricks > 0 ? max_bricks : pool->capacity();
 	if (max_bricks <= 0 || max_bricks > pool->capacity()) return false;
 	rd_ = rd;
@@ -89,7 +94,8 @@ bool ConsolidatePass::initialize(RenderingDevice *rd, OverridePool *pool, int ma
 	uset_ = rd_->uniform_set_create(Array::make(
 			storage(0, pool_->sdf_buffer()), storage(1, pool_->mat_buffer()), storage(3, staging_sdf_),
 			storage(4, staging_mat_), storage(5, jobs_), storage(6, pool_->tables()),
-			storage(7, pool_->region_table_map()), storage(8, ops_)), shader_, 0);
+			storage(7, pool_->region_table_map()), storage(8, ops_),
+			storage(9, volumes->sdf_buffer()), storage(10, volumes->mat_buffer())), shader_, 0);
 	if (!uset_.is_valid()) {
 		teardown();
 		return false;
@@ -170,6 +176,46 @@ bool ConsolidatePass::run(const ConsolidateJob &job, ConsolidateResult *out) {
 		std::memcpy(out->baked[static_cast<size_t>(i)].sdf, sb.ptr(), ve::kBrickSdfCount);
 		std::memcpy(out->baked[static_cast<size_t>(i)].mat, mb.ptr(), ve::kBrickVoxelCount);
 	}
+	// Encode consolidation normals from exact CPU source after readback.
+	{
+		ve::OverrideStore base_store(static_cast<int>(job.source.overrides.size()));
+		ve::VolumeSet volume_set;
+		if (!job.source.materialize(&base_store, &volume_set)) {
+			for (auto &b : out->baked) b.normal_oct.clear();
+		} else {
+				ve::AnalyticGenerator gen;
+				for (size_t bi = 0; bi < out->baked.size(); bi++) {
+					const ve::IVec3 brick = job.bricks[bi];
+					float bo[3];
+					ve::brick_world_origin(brick, bo);
+					// Filter ops per brick like eval_brick does
+					float lo[3]={bo[0]-ve::kBrickFilterPad, bo[1]-ve::kBrickFilterPad, bo[2]-ve::kBrickFilterPad};
+					float hi[3]={bo[0]+ve::kBrickSize+ve::kBrickFilterPad, bo[1]+ve::kBrickSize+ve::kBrickFilterPad, bo[2]+ve::kBrickSize+ve::kBrickFilterPad};
+					std::vector<ve::EditOp> filtered;
+					filtered.reserve(job.ops.size());
+					for (auto &op : job.ops) if (ve::op_touches_aabb(op, lo, hi, 0.0f)) filtered.push_back(op);
+					std::vector<uint16_t> normals;
+					normals.reserve(ve::kBrickSdfCount);
+					bool ok = true;
+					for (int z = 0; z < ve::kBrickSdfStride; z++)
+						for (int y = 0; y < ve::kBrickSdfStride; y++)
+							for (int x = 0; x < ve::kBrickSdfStride; x++) {
+								float px = bo[0] + x * ve::kVoxelSize;
+								float py = bo[1] + y * ve::kVoxelSize;
+								float pz = bo[2] + z * ve::kVoxelSize;
+								ve::FieldSample fs = ve::eval_field_gradient(gen, filtered.data(), static_cast<int>(filtered.size()), px, py, pz, &volume_set, &base_store);
+								if (!fs.exact_gradient) { ok = false; break; }
+								float len = std::sqrt(fs.gradient[0]*fs.gradient[0] + fs.gradient[1]*fs.gradient[1] + fs.gradient[2]*fs.gradient[2]);
+								if (!(len > 1e-8f)) { ok = false; break; }
+								float n[3] = {fs.gradient[0]/len, fs.gradient[1]/len, fs.gradient[2]/len};
+								normals.push_back(ve::oct_encode_snorm8(n));
+							}
+					if (!ok) normals.clear();
+					if (normals.size() != ve::kBrickSdfCount) normals.clear();
+					out->baked[bi].normal_oct = std::move(normals);
+				}
+			}
+		}
 	out->failed = false;
 	return true;
 }

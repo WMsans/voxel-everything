@@ -36,6 +36,7 @@
 #include "world/region.h"
 #include "world/override_store.h"
 #include "world/residency.h"
+#include "world/field_source_snapshot.h"
 
 namespace godot {
 
@@ -620,6 +621,8 @@ public:
 	// --- M5 Task 9 hooks ---
 	Dictionary debug_lod_diff(int level, Vector3i coord);
 	void debug_apply_sphere_subtract(Vector3 centre, float radius);
+	bool snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo, ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const;
+	void debug_apply_volume_add(int slot, Vector3 origin, float voxel, int dim);
 
 	// --- Task 9 hook ---
 	Dictionary debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_cell);

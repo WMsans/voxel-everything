@@ -6,6 +6,8 @@
 #define FIELD_OVERRIDE_MAT_BINDING 1
 #define FIELD_OVERRIDE_TABLE_BINDING 6
 #define FIELD_OVERRIDE_REGION_BINDING 7
+#define FIELD_VOLUME_SDF_BINDING 9
+#define FIELD_VOLUME_MAT_BINDING 10
 #include "common.glslh"
 layout(push_constant, std430) uniform Push {
 	ivec4 params;

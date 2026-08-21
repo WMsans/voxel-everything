@@ -253,6 +253,8 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_lod_diff", "level", "coord"), &VoxelWorld::debug_lod_diff);
 	ClassDB::bind_method(D_METHOD("debug_apply_sphere_subtract", "centre", "radius"),
 			&VoxelWorld::debug_apply_sphere_subtract);
+	ClassDB::bind_method(D_METHOD("debug_apply_volume_add", "slot", "origin", "voxel", "dim"),
+			&VoxelWorld::debug_apply_volume_add);
 	ClassDB::bind_method(D_METHOD("debug_island_extract_diff", "lo_cell", "hi_cell"), &VoxelWorld::debug_island_extract_diff);
 	ClassDB::bind_method(D_METHOD("debug_place_test_island", "slot", "lo_cell", "hi_cell", "offset"), &VoxelWorld::debug_place_test_island);
 	ClassDB::bind_method(D_METHOD("debug_place_test_island_rotated", "slot", "lo_cell", "hi_cell", "offset", "yaw"), &VoxelWorld::debug_place_test_island_rotated);
@@ -1724,8 +1726,18 @@ void VoxelWorld::debug_queue_committed_field_volume_upload(int slot,
 	d.dim = dim;
 	d.sdf.assign(sdf.ptr(), sdf.ptr() + n);
 	d.mat.assign(mat.ptr(), mat.ptr() + n);
-	for (int64_t i = 0; i < n; i++)
+	d.normal_oct.assign(static_cast<size_t>(n), 0);
+	float center2 = 0.5f * (dim - 1) * 0.05f;
+	for (int64_t i = 0; i < n; i++) {
 		if (ve::decode_sdf(d.sdf[static_cast<size_t>(i)]) <= 0.0f) d.solid_voxels++;
+		float up[3]={0,1,0};
+		int z = static_cast<int>(i / (dim*dim));
+		int y = static_cast<int>((i/dim)%dim);
+		int x = static_cast<int>(i % dim);
+		float px = x*0.05f-center2, py=y*0.05f-center2, pz=z*0.05f-center2;
+		float len=std::sqrt(px*px+py*py+pz*pz);
+		if (len>1e-6f) { float n2[3]={px/len, py/len, pz/len}; d.normal_oct[static_cast<size_t>(i)]=ve::oct_encode_snorm8(n2);} else d.normal_oct[static_cast<size_t>(i)]=ve::oct_encode_snorm8(up);
+	}
 	if (!volumes_.store(slot, d) || !volumes_.pin(slot)) {
 		volumes_.release(slot);
 		UtilityFunctions::printerr(
@@ -1737,6 +1749,10 @@ void VoxelWorld::debug_queue_committed_field_volume_upload(int slot,
 	{
 		std::lock_guard<std::mutex> lock(island_mutex_);
 		island_uploads_.push_back(IslandUpload{slot, false, d});
+	}
+	if (mesh_) {
+		mesh_->submit_volume(slot, d);
+		mesh_->run_sync([](MeshPass &){});
 	}
 }
 
@@ -1929,6 +1945,36 @@ void VoxelWorld::gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::Edit
 	// prefix is a valid world state; a suffix could apply an add without the subtract that
 	// made room for it.
 	if (out->size() > ve::kMaxRegionOps) out->resize(ve::kMaxRegionOps);
+}
+
+bool VoxelWorld::snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo, ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const {
+	if (!out || !overrides_) return false;
+	out->overrides.clear();
+	out->volumes.clear();
+	// Copy only prior overrides inside inclusive brick range
+	for (int z = brick_lo.z; z <= brick_hi.z; z++)
+		for (int y = brick_lo.y; y <= brick_hi.y; y++)
+			for (int x = brick_lo.x; x <= brick_hi.x; x++) {
+				ve::IVec3 b{x, y, z};
+				int slot = overrides_->slot_of(b);
+				if (slot >= 0) {
+					const ve::OverrideBrick *data = overrides_->data(slot);
+					if (!data) return false;
+					if (!data->normal_oct.empty() && data->normal_oct.size() != ve::kBrickSdfCount) return false;
+					out->overrides.push_back({b, *data});
+				}
+			}
+	std::set<int> seen;
+	for (const auto &op : ops) {
+		if (op.type != ve::kOpVolumeAdd) continue;
+		int slot = static_cast<int>(op.aux[0]);
+		if (seen.count(slot)) continue;
+		seen.insert(slot);
+		const ve::VolumeData *vd = volumes_.get(slot);
+		if (!vd || !vd->valid()) return false;
+		out->volumes.push_back({slot, *vd});
+	}
+	return true;
 }
 
 void VoxelWorld::ensure_lod() {
@@ -2902,6 +2948,13 @@ void VoxelWorld::debug_apply_sphere_subtract(Vector3 centre, float radius) {
 	append_edit(op);
 }
 
+void VoxelWorld::debug_apply_volume_add(int slot, Vector3 origin, float voxel, int dim) {
+	if (!edit_log_) ensure_physics_initialized();
+	float o[3] = {origin.x, origin.y, origin.z};
+	ve::EditOp op = ve::make_volume_add(slot, o, voxel, dim);
+	append_edit(op);
+}
+
 int VoxelWorld::debug_region_op_count(Vector3i region) {
 	if (!edit_log_) return 0;
 	std::lock_guard<std::mutex> lock(edit_mutex_);
@@ -3211,6 +3264,15 @@ void VoxelWorld::pump_consolidation() {
 	const std::vector<uint64_t> &seqs = edit_log_->seqs(region);
 	job.through_seq = seqs.empty() ? 0 : seqs.back();
 	ve::plan_consolidation(job.ops.data(), static_cast<int>(job.ops.size()), region, &job.bricks);
+	if (!job.bricks.empty()) {
+		ve::IVec3 lo = job.bricks[0], hi = job.bricks[0];
+		for (const auto &b : job.bricks) { lo.x = std::min(lo.x, b.x); lo.y = std::min(lo.y, b.y); lo.z = std::min(lo.z, b.z); hi.x = std::max(hi.x, b.x); hi.y = std::max(hi.y, b.y); hi.z = std::max(hi.z, b.z); }
+		if (!snapshot_field_sources(job.ops, lo, hi, &job.source)) {
+			consolidation_refusals_++;
+			requeue(region);
+			return;
+		}
+	}
 	int needed_slots = 0;
 	for (const ve::IVec3 brick : job.bricks) if (overrides_->slot_of(brick) < 0) needed_slots++;
 	if (job.bricks.empty() || needed_slots > overrides_->capacity() - overrides_->used()) {
@@ -3310,6 +3372,11 @@ Dictionary VoxelWorld::debug_consolidate_diff(Vector3i region) {
 	if (job.region_slot < 0) return d;
 	job.bricks = bricks;
 	job.ops = ops;
+	if (!bricks.empty()) {
+		ve::IVec3 lo = bricks[0], hi = bricks[0];
+		for (auto &b : bricks) { lo.x = std::min(lo.x, b.x); lo.y = std::min(lo.y, b.y); lo.z = std::min(lo.z, b.z); hi.x = std::max(hi.x, b.x); hi.y = std::max(hi.y, b.y); hi.z = std::max(hi.z, b.z); }
+		if (!snapshot_field_sources(ops, lo, hi, &job.source)) return d;
+	}
 	const int existing_table = override_table_for_region(r);
 	if (existing_table >= 0) {
 		std::vector<std::pair<int, int>> existing_entries;
@@ -3347,7 +3414,7 @@ Dictionary VoxelWorld::debug_consolidate_diff(Vector3i region) {
 					const uint8_t actual = b.sdf[ve::sdf_index(x, y, z)];
 					if (expected != actual) {
 						sdf_mismatches++;
-						if (first.is_empty()) { first["brick"] = Vector3i(brick.x, brick.y, brick.z); first["lattice"] = Vector3i(x, y, z); }
+						if (first.is_empty()) { first["brick"] = Vector3i(brick.x, brick.y, brick.z); first["lattice"] = Vector3i(x, y, z); first["expected"] = int(expected); first["actual"] = int(actual); }
 					}
 				}
 			for (int z = 0; z < ve::kBrickVoxels; z++)
@@ -3362,6 +3429,43 @@ Dictionary VoxelWorld::debug_consolidate_diff(Vector3i region) {
 	d["sdf_mismatches"] = sdf_mismatches;
 	d["mat_mismatches"] = mat_mismatches;
 	d["first_mismatch"] = first;
+	// Normal payload checks: every baked override should carry 4913 compact normals, lengths >0.99, dot>0.98 at >=64 deterministic points
+	int normal_count = 0;
+	float norm_min_len = 2.0f, norm_min_dot = 2.0f;
+	bool normals_ok = true;
+	for (size_t bi = 0; bi < results[0].baked.size(); bi++) {
+		const auto &b = results[0].baked[bi];
+		if (b.normal_oct.size() != ve::kBrickSdfCount) { normals_ok = false; break; }
+		if (normal_count == 0) normal_count = static_cast<int>(b.normal_oct.size());
+		// sample 64 deterministic points: 4x4x4 grid
+		ve::IVec3 brick = bricks[bi];
+		float bo[3]; ve::brick_world_origin(brick, bo);
+		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
+			int lx = x * 4; int ly = y * 4; int lz = z * 4;
+			int idx = ve::sdf_index(lx, ly, lz);
+			float dec[3]; ve::oct_decode_snorm8(b.normal_oct[idx], dec);
+			float len = std::sqrt(dec[0]*dec[0]+dec[1]*dec[1]+dec[2]*dec[2]);
+			norm_min_len = std::min(norm_min_len, len);
+			float px = bo[0] + lx * ve::kVoxelSize;
+			float py = bo[1] + ly * ve::kVoxelSize;
+			float pz = bo[2] + lz * ve::kVoxelSize;
+			ve::FieldSample fs = ve::eval_field_gradient(gen, ops.data(), static_cast<int>(ops.size()), px, py, pz, &volumes_, overrides_);
+			if (!fs.exact_gradient) { norm_min_dot = -1.0f; continue; }
+			float elen = std::sqrt(fs.gradient[0]*fs.gradient[0]+fs.gradient[1]*fs.gradient[1]+fs.gradient[2]*fs.gradient[2]);
+			if (!(elen>1e-6f)) continue;
+			float eg[3]={fs.gradient[0]/elen, fs.gradient[1]/elen, fs.gradient[2]/elen};
+			float dot = dec[0]*eg[0]+dec[1]*eg[1]+dec[2]*eg[2];
+			norm_min_dot = std::min(norm_min_dot, dot);
+		}
+	}
+	if (!normals_ok) { normal_count = 0; norm_min_len = 0.0f; norm_min_dot = 0.0f; }
+	if (norm_min_len > 1.0f) norm_min_len = 1.0f;
+	if (norm_min_dot > 1.0f) norm_min_dot = 1.0f;
+	d["normal_count"] = normal_count;
+	d["normal_min_length"] = norm_min_len;
+	d["normal_min_dot"] = norm_min_dot;
+	// Also expose per-brick count for test that checks every baked override
+	d["baked_count"] = static_cast<int>(results[0].baked.size());
 	return d;
 }
 
@@ -3414,6 +3518,11 @@ bool VoxelWorld::debug_consolidate_region(Vector3i region) {
 	job.region_slot = resident_slot;
 	job.bricks = bricks;
 	job.ops = ops;
+	if (!bricks.empty()) {
+		ve::IVec3 lo = bricks[0], hi = bricks[0];
+		for (auto &b : bricks) { lo.x = std::min(lo.x, b.x); lo.y = std::min(lo.y, b.y); lo.z = std::min(lo.z, b.z); hi.x = std::max(hi.x, b.x); hi.y = std::max(hi.y, b.y); hi.z = std::max(hi.z, b.z); }
+		if (!snapshot_field_sources(ops, lo, hi, &job.source)) return refuse();
+	}
 	// A reused worker region slot must see the old table while the bake reads its base.
 	if (!mesh_->set_override_region(r, job.region_slot, old_table, old_entries)) return refuse();
 	if (!mesh_->submit_consolidations({job})) return refuse();
@@ -3922,6 +4031,10 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 		std::lock_guard<std::mutex> lock(edit_mutex_);
 		if (!edit_log_) return false;
 		ve::collect_ops_for_aabb(*edit_log_, wlo, whi, &job->ops);
+		float lattice_hi[3] = {job->origin[0] + (job->dim - 1) * job->voxel, job->origin[1] + (job->dim - 1) * job->voxel, job->origin[2] + (job->dim - 1) * job->voxel};
+		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job->origin[0], job->origin[1], job->origin[2]);
+		ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
+		if (!snapshot_field_sources(job->ops, blo, bhi, &job->snapshot)) return false;
 	}
 
 	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
@@ -3981,6 +4094,10 @@ Dictionary VoxelWorld::debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_c
 	{
 		std::lock_guard<std::mutex> lock(edit_mutex_);
 		ve::collect_ops_for_aabb(*edit_log_, wlo, whi, &job.ops);
+		float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
+		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
+		ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
+		if (!snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) return d;
 	}
 
 	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
@@ -4024,6 +4141,42 @@ Dictionary VoxelWorld::debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_c
 	d["cpu_solid"] = cpu.solid_voxels;
 	d["voxel"] = job.voxel;
 	d["boxes"] = static_cast<int>(boxes.size());
+	d["dim"] = job.dim;
+	d["normal_count"] = static_cast<int>(gpu.normal_oct.size());
+	// Compute normal length and alignment vs CPU masked gradient
+	float min_len = 2.0f, min_align = 2.0f;
+	if (!gpu.normal_oct.empty()) {
+		ve::AnalyticGenerator agen;
+		for (size_t i = 0; i < gpu.normal_oct.size(); i++) {
+			float dec[3];
+			ve::oct_decode_snorm8(gpu.normal_oct[i], dec);
+			float len = std::sqrt(dec[0]*dec[0] + dec[1]*dec[1] + dec[2]*dec[2]);
+			min_len = std::min(min_len, len);
+			int z = static_cast<int>(i / (job.dim * job.dim));
+			int y = static_cast<int>((i / job.dim) % job.dim);
+			int x = static_cast<int>(i % job.dim);
+			float px = job.origin[0] + x * job.voxel;
+			float py = job.origin[1] + y * job.voxel;
+			float pz = job.origin[2] + z * job.voxel;
+			ve::FieldSample fs = ve::eval_field_gradient(agen, job.ops.data(), static_cast<int>(job.ops.size()), px, py, pz, &volumes_, overrides_);
+			float bu = 1e30f; float bu_grad[3]={0,1,0}; bool has_bu=false;
+			for (auto &b : boxes) { float lo[3], hi[3]; b.world_aabb(lo,hi); float d = ve::box_sdf(lo,hi,px,py,pz); if (!has_bu || d < bu) { bu=d; ve::box_sdf_gradient(lo,hi,px,py,pz,bu_grad); has_bu=true; } }
+			float exp_g[3]={fs.gradient[0],fs.gradient[1],fs.gradient[2]}; bool exp_exact=fs.exact_gradient;
+			if (has_bu && bu > fs.sdf) { exp_g[0]=bu_grad[0]; exp_g[1]=bu_grad[1]; exp_g[2]=bu_grad[2]; exp_exact=true; }
+			if (!exp_exact) continue;
+			float elen = std::sqrt(exp_g[0]*exp_g[0]+exp_g[1]*exp_g[1]+exp_g[2]*exp_g[2]);
+			if (!(elen>1e-6f)) continue;
+			exp_g[0]/=elen; exp_g[1]/=elen; exp_g[2]/=elen;
+			float dot = dec[0]*exp_g[0] + dec[1]*exp_g[1] + dec[2]*exp_g[2];
+			min_align = std::min(min_align, dot);
+		}
+		if (min_len > 1.0f) min_len = 1.0f;
+		if (min_align > 1.0f) min_align = 1.0f;
+	} else {
+		min_len = 0.0f; min_align = 0.0f;
+	}
+	d["normal_min_length"] = min_len;
+	d["normal_min_alignment"] = min_align;
 	return d;
 }
 
@@ -4353,6 +4506,10 @@ bool VoxelWorld::debug_extract_submit(int id, Vector3i lo_cell, Vector3i hi_cell
 	{
 		std::lock_guard<std::mutex> lock(edit_mutex_);
 		ve::collect_ops_for_aabb(*edit_log_, wlo, whi, &job.ops);
+		float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
+		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
+		ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
+		if (!snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) return false;
 	}
 	std::vector<IslandExtractJob> jobs;
 	jobs.push_back(std::move(job));
@@ -5813,9 +5970,26 @@ void VoxelWorld::debug_store_volume(int slot, const PackedByteArray &sdf,
 	d.dim = dim;
 	d.sdf.assign(sdf.ptr(), sdf.ptr() + n);
 	d.mat.assign(mat.ptr(), mat.ptr() + n);
-	for (int64_t i = 0; i < n; i++)
+	d.normal_oct.assign(static_cast<size_t>(n), 0);
+	float center = 0.5f * (dim - 1) * 0.05f;
+	for (int64_t i = 0; i < n; i++) {
 		if (ve::decode_sdf(d.sdf[static_cast<size_t>(i)]) <= 0.0f) d.solid_voxels++;
-	volumes_.store(slot, std::move(d));
+		float up[3] = {0, 1, 0};
+		int z = static_cast<int>(i / (dim * dim));
+		int y = static_cast<int>((i / dim) % dim);
+		int x = static_cast<int>(i % dim);
+		float px = x * 0.05f - center;
+		float py = y * 0.05f - center;
+		float pz = z * 0.05f - center;
+		float len = std::sqrt(px*px + py*py + pz*pz);
+		if (len > 1e-6f) { float n[3]={px/len, py/len, pz/len}; d.normal_oct[static_cast<size_t>(i)] = ve::oct_encode_snorm8(n); }
+		else d.normal_oct[static_cast<size_t>(i)] = ve::oct_encode_snorm8(up);
+	}
+	ve::VolumeData to_upload = d;
+	if (volumes_.store(slot, std::move(d)) && mesh_) {
+		mesh_->submit_volume(slot, to_upload);
+		mesh_->run_sync([](MeshPass &){});
+	}
 }
 
 Vector2 VoxelWorld::debug_eval_field(Vector3 p, const PackedByteArray &ops, int op_count) {

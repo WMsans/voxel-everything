@@ -3,6 +3,10 @@
 #include "render/volume_pool.h"
 #include "render/override_pool.h"
 #include "world/edit_log.h"
+#include "generator/generator.h"
+#include "world/brick_eval.h"
+#include "shade/oct.h"
+#include <cmath>
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rd_shader_source.hpp>
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
@@ -183,11 +187,63 @@ bool IslandExtractPass::extract(const IslandExtractJob &job, IslandExtractResult
 	out->data.dim = job.dim;
 	out->data.sdf.resize(static_cast<size_t>(voxels));
 	out->data.mat.resize(static_cast<size_t>(voxels));
+	out->data.normal_oct.resize(static_cast<size_t>(voxels));
 	out->data.solid_voxels = 0;
+	bool has_sentinel = false;
 	for (int64_t i = 0; i < voxels; i++) {
 		out->data.sdf[static_cast<size_t>(i)] = static_cast<uint8_t>(w[i] & 0xFFu);
 		out->data.mat[static_cast<size_t>(i)] = static_cast<uint8_t>((w[i] >> 8) & 0xFFu);
+		uint16_t packed = static_cast<uint16_t>((w[i] >> 16) & 0xFFFFu);
+		out->data.normal_oct[static_cast<size_t>(i)] = packed;
+		if (packed == 0x8080u) has_sentinel = true;
 	}
+	if (has_sentinel) {
+		ve::OverrideStore base_store(static_cast<int>(job.snapshot.overrides.size()));
+		ve::VolumeSet volume_set;
+		if (!job.snapshot.materialize(&base_store, &volume_set)) {
+			out->data.normal_oct.clear();
+		} else {
+			ve::AnalyticGenerator gen;
+			bool any_fail = false;
+			for (int64_t i = 0; i < voxels; i++) {
+				uint16_t packed = out->data.normal_oct[static_cast<size_t>(i)];
+				if (packed != 0x8080u) continue;
+				int z = static_cast<int>(i / (job.dim * job.dim));
+				int y = static_cast<int>((i / job.dim) % job.dim);
+				int x = static_cast<int>(i % job.dim);
+				float px = job.origin[0] + x * job.voxel;
+				float py = job.origin[1] + y * job.voxel;
+				float pz = job.origin[2] + z * job.voxel;
+				ve::FieldSample fs = ve::eval_field_gradient(gen, job.ops.data(), static_cast<int>(job.ops.size()), px, py, pz, &volume_set, &base_store);
+				float bu = 1e30f;
+				float bu_grad[3] = {0, 1, 0};
+				bool has_bu = false;
+				for (const auto &b : job.boxes) {
+					float lo[3], hi[3];
+					b.world_aabb(lo, hi);
+					float d = ve::box_sdf(lo, hi, px, py, pz);
+					if (!has_bu || d < bu) {
+						bu = d;
+						ve::box_sdf_gradient(lo, hi, px, py, pz, bu_grad);
+						has_bu = true;
+					}
+				}
+				float grad[3] = {fs.gradient[0], fs.gradient[1], fs.gradient[2]};
+				bool exact = fs.exact_gradient;
+				if (has_bu && bu > fs.sdf) {
+					grad[0] = bu_grad[0]; grad[1] = bu_grad[1]; grad[2] = bu_grad[2];
+					exact = true;
+				}
+				float len = std::sqrt(grad[0]*grad[0] + grad[1]*grad[1] + grad[2]*grad[2]);
+				if (!exact || !(len > 1e-8f)) { any_fail = true; break; }
+				grad[0] /= len; grad[1] /= len; grad[2] /= len;
+				out->data.normal_oct[static_cast<size_t>(i)] = ve::oct_encode_snorm8(grad);
+			}
+			if (any_fail) out->data.normal_oct.clear();
+		}
+	}
+	// Validate that no sentinel remains; if any sentinel leaked, clear
+	for (uint16_t v : out->data.normal_oct) if (v == 0x8080u) { out->data.normal_oct.clear(); break; }
 	const PackedByteArray cb = rd_->buffer_get_data(counts_, 0, 16);
 	if (cb.size() >= 16)
 		out->data.solid_voxels =
