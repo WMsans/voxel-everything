@@ -116,7 +116,10 @@ float sdf_near(vec3 p, ivec3 anchor, int anchor_slot) {
 vec3 calc_normal(vec3 p, ivec3 anchor, int anchor_slot, inout int steps_left) {
 	if (steps_left < 6) return vec3(0.0, 1.0, 0.0);
 	steps_left -= 6;
-	const float e = 0.01;
+	// Differentiate across one stored voxel. Shorter taps expose the R8 SDF quantisation and
+	// the piecewise-trilinear cell boundaries as contour-like changes in lighting and in the
+	// triplanar blend, even though the underlying surface is smooth.
+	const float e = VOXEL_SIZE;
 	return normalize(vec3(
 		sdf_near(p + vec3(e, 0, 0), anchor, anchor_slot) - sdf_near(p - vec3(e, 0, 0), anchor, anchor_slot),
 		sdf_near(p + vec3(0, e, 0), anchor, anchor_slot) - sdf_near(p - vec3(0, e, 0), anchor, anchor_slot),
@@ -338,7 +341,9 @@ void march_island(int slot, vec3 ro, vec3 rd, inout Hit best, inout int steps_le
 			q = ro_l + rd_l * t;
 			if (steps_left < 6) return;
 			steps_left -= 6;
-			const float e = 0.5 * 0.05;
+			// Match the finite-difference radius to this island's stored lattice. Islands use
+			// either 5 cm or 10 cm voxels, and shorter taps expose the R8/trilinear cell pattern.
+			float e = isl.voxel;
 			vec3 n_l = normalize(vec3(
 				island_sdf_at(slot, isl, q + vec3(e, 0, 0)) -
 					island_sdf_at(slot, isl, q - vec3(e, 0, 0)),
