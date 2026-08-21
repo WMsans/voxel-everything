@@ -22,9 +22,6 @@ struct FieldSample {
 	bool exact_gradient = false;
 };
 
-uint16_t oct_encode_snorm8(const float normal[3]);
-void oct_decode_snorm8(uint16_t packed, float normal[3]);
-
 class Generator {
 public:
 	virtual ~Generator() = default;

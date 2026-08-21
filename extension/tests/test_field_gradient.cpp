@@ -16,13 +16,16 @@ TEST_CASE("analytic hill gradient matches a double precision difference") {
 	const float x = 25.73f, z = 26.41f;
 	const ve::FieldSample got = gen.sample_gradient(x, 55.0f, z);
 	const double e = 1e-4;
-	const double dx = (gen.sample(x + e, 55.0, z).sdf - gen.sample(x - e, 55.0, z).sdf) / (2 * e);
-	const double dz = (gen.sample(x, 55.0, z + e).sdf - gen.sample(x, 55.0, z - e).sdf) / (2 * e);
+	const float xp = x + float(e);
+	const float xm = x - float(e);
+	const float zp = z + float(e);
+	const float zm = z - float(e);
+	const double dx = (gen.sample(xp, 55.0f, z).sdf - gen.sample(xm, 55.0f, z).sdf) / double(xp - xm);
+	const double dz = (gen.sample(x, 55.0f, zp).sdf - gen.sample(x, 55.0f, zm).sdf) / double(zp - zm);
 	CHECK(got.exact_gradient);
-	// Brief epsilon 2e-3 is too tight for float quantization at x~25 (delta 0.000198 vs 0.0002 => 0.8% error) -> actual relative ~1.1% ; use 2e-2 to accommodate float precision while still validating analytic
-	CHECK(got.gradient[0] == doctest::Approx(dx).epsilon(2e-2));
+	CHECK(got.gradient[0] == doctest::Approx(dx).epsilon(2e-3));
 	CHECK(got.gradient[1] == doctest::Approx(1.0f));
-	CHECK(got.gradient[2] == doctest::Approx(dz).epsilon(2e-2));
+	CHECK(got.gradient[2] == doctest::Approx(dz).epsilon(2e-3));
 }
 
 TEST_CASE("CSG keeps the previous gradient on an exact tie") {
@@ -54,12 +57,11 @@ TEST_CASE("cave negated sphere gradient") {
 	float terrain_sdf = (y - ve::kSurfaceY) - h;
 	float dx = x - cx, dy = y - cy, dz = z - cz;
 	float len = std::sqrt(dx*dx + dy*dy + dz*dz);
-	if (-(len - 5.0f) > terrain_sdf) {
-		CHECK(got.exact_gradient);
-		CHECK(got.gradient[0] == doctest::Approx(-dx / len).epsilon(1e-5));
-		CHECK(got.gradient[1] == doctest::Approx(-dy / len).epsilon(1e-5));
-		CHECK(got.gradient[2] == doctest::Approx(-dz / len).epsilon(1e-5));
-	}
+	REQUIRE(-(len - 5.0f) > terrain_sdf);
+	CHECK(got.exact_gradient);
+	CHECK(got.gradient[0] == doctest::Approx(-dx / len).epsilon(1e-5));
+	CHECK(got.gradient[1] == doctest::Approx(-dy / len).epsilon(1e-5));
+	CHECK(got.gradient[2] == doctest::Approx(-dz / len).epsilon(1e-5));
 	// Zero-length at exact cave center should be (0,1,0) and exact false
 	ve::FieldSample center = gen.sample_gradient(cx, cy, cz);
 	CHECK_FALSE(center.exact_gradient);

@@ -1,5 +1,4 @@
 #include "generator/generator.h"
-#include <algorithm>
 #include <cmath>
 
 namespace ve {
@@ -24,18 +23,6 @@ FieldSample Generator::sample_gradient(float x, float y, float z) const {
 	fs.gradient[2] = dz;
 	fs.exact_gradient = false;
 	return fs;
-}
-
-uint16_t oct_encode_snorm8(const float normal[3]) {
-	(void)normal;
-	return 0;
-}
-
-void oct_decode_snorm8(uint16_t packed, float normal[3]) {
-	(void)packed;
-	normal[0] = 0;
-	normal[1] = 1;
-	normal[2] = 0;
 }
 
 Sample AnalyticGenerator::sample(float x, float y, float z) const {
