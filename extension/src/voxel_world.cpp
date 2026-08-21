@@ -331,6 +331,8 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_raymarch_gbuffer", "origin", "dir"), &VoxelWorld::debug_raymarch_gbuffer);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_hole_probe", "origin", "dir", "w", "h"),
 			&VoxelWorld::debug_raymarch_hole_probe);
+	ClassDB::bind_method(D_METHOD("debug_raymarch_normal_probe", "origin", "dir", "w", "h"),
+			&VoxelWorld::debug_raymarch_normal_probe);
 	ClassDB::bind_method(D_METHOD("debug_cel_diff", "albedo", "ambient", "ndl", "ndv", "ndh",
 			"shadow", "ao", "gloss"), &VoxelWorld::debug_cel_diff);
 	ClassDB::bind_method(D_METHOD("debug_cel_reference", "albedo", "ambient", "ndl", "ndv", "ndh",
@@ -4614,6 +4616,153 @@ Dictionary VoxelWorld::debug_raymarch_hole_probe(Vector3 origin, Vector3 dir, in
 	d["ran"] = true;
 	d["hit_pixels"] = hits;
 	d["isolated_misses"] = isolated;
+	return d;
+}
+
+Dictionary VoxelWorld::debug_raymarch_normal_probe(Vector3 origin, Vector3 dir, int w, int h) {
+	Dictionary d;
+	d["ran"] = false;
+	d["hits"] = 0;
+	d["rms_ndl"] = 0.0;
+	d["cel_mismatch_fraction"] = 0.0;
+	d["largest_mismatch_component"] = 0;
+	if (w <= 0 || h <= 0) return d;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_) return d;
+	const float aspect = static_cast<float>(w) / static_cast<float>(h);
+	const float tan_y = std::tan(1.0471975512f * 0.5f);
+	ve::CameraParams cam = ve::CameraParams::looking_at(
+			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
+	cam.params[0] = tan_y * aspect;
+	cam.params[1] = tan_y;
+	cam.params[2] = 200.0f;
+	const ve::WorldBounds wb = world_bounds();
+	const ve::IVec3 ro = wb.origin_regions();
+	cam.dims[0] = world_size_regions_.x; cam.dims[1] = world_size_regions_.y;
+	cam.dims[2] = world_size_regions_.z; cam.dims[3] = island_slot_count();
+	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
+	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
+	cam.atlas_bricks[2] = atlas_bricks_.z;
+	const uint32_t flags = ve::pack_flags(beauty_settings());
+	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
+	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, w, h, kNoEdit)) return d;
+	device->submit();
+	device->sync();
+	const PackedByteArray surface = device->texture_get_data(raymarch_pass_->surface_texture(), 0);
+	const PackedByteArray hitpos = device->texture_get_data(raymarch_pass_->hitpos_texture(), 0);
+	if (surface.size() < static_cast<int64_t>(w) * h * 8) return d;
+	if (hitpos.size() < static_cast<int64_t>(w) * h * 16) return d;
+	const uint16_t *s = reinterpret_cast<const uint16_t *>(surface.ptr());
+	const float *hp = reinterpret_cast<const float *>(hitpos.ptr());
+	constexpr float kSun[3] = {0.5746958f, 0.7662610f, 0.2873479f};
+	constexpr float kEdges[3] = {0.08f, 0.32f, 0.66f};
+	auto band = [](float ndl) { return ndl > 0.66f ? 3 : ndl > 0.32f ? 2 : ndl > 0.08f ? 1 : 0; };
+	// Analytic helpers mirroring generator.cpp hills and Task 2 gradient.
+	auto hills = [](float x, float z) -> float {
+		return 6.0f * sinf(x * 0.11f) * cosf(z * 0.13f)
+			 + 3.0f * sinf(x * 0.031f + 1.7f) * sinf(z * 0.043f)
+			 + 1.0f * sinf(x * 0.23f + z * 0.19f);
+	};
+	const float cave_hills = hills(30.0f, 30.0f);
+	const float cave_cy = ve::kSurfaceY + cave_hills - 2.0f;
+	int total_hits = 0;
+	for (int i = 0; i < w * h; i++) if (hp[i * 4 + 3] > 0.5f) total_hits++;
+	std::vector<uint8_t> mismatch(static_cast<size_t>(w) * h, 0);
+	double sum_sq = 0.0;
+	int considered = 0;
+	int mismatches = 0;
+	for (int y = 0; y < h; y++) {
+		for (int x = 0; x < w; x++) {
+			const int i = y * w + x;
+			if (hp[i * 4 + 3] <= 0.5f) continue;
+			// Decode hit normal from surface texture.
+			const float e[2] = {half_to_float(s[i * 4 + 0]), half_to_float(s[i * 4 + 1])};
+			float rn[3];
+			ve::oct_decode(e, rn);
+			float rlen = std::sqrt(rn[0]*rn[0] + rn[1]*rn[1] + rn[2]*rn[2]);
+			if (rlen > 1e-8f) { rn[0]/=rlen; rn[1]/=rlen; rn[2]/=rlen; }
+			const float hitx = hp[i * 4 + 0];
+			const float hity = hp[i * 4 + 1];
+			const float hitz = hp[i * 4 + 2];
+			// Analytic gradient.
+			float dhdx = 0.66f * cosf(hitx * 0.11f) * cosf(hitz * 0.13f)
+				+ 0.093f * cosf(hitx * 0.031f + 1.7f) * sinf(hitz * 0.043f)
+				+ 0.23f * cosf(hitx * 0.23f + hitz * 0.19f);
+			float dhdz = -0.78f * sinf(hitx * 0.11f) * sinf(hitz * 0.13f)
+				+ 0.129f * sinf(hitx * 0.031f + 1.7f) * cosf(hitz * 0.043f)
+				+ 0.19f * cosf(hitx * 0.23f + hitz * 0.19f);
+			float gx = -dhdx;
+			float gy = 1.0f;
+			float gz = -dhdz;
+			float terrain_sdf = (hity - ve::kSurfaceY) - hills(hitx, hitz);
+			float dx = hitx - 30.0f;
+			float dy = hity - cave_cy;
+			float dz = hitz - 30.0f;
+			float len = std::sqrt(dx*dx + dy*dy + dz*dz);
+			float sphere = len - 5.0f;
+			bool exact = true;
+			if (-sphere > terrain_sdf) {
+				if (len < 1e-6f) {
+					exact = false;
+					gx = 0.0f; gy = 1.0f; gz = 0.0f;
+				} else {
+					gx = -(dx / len);
+					gy = -(dy / len);
+					gz = -(dz / len);
+				}
+			}
+			if (!exact) continue;
+			float alen = std::sqrt(gx*gx + gy*gy + gz*gz);
+			if (alen < 1e-8f) continue;
+			float an[3] = {gx/alen, gy/alen, gz/alen};
+			float ndl_render = rn[0]*kSun[0] + rn[1]*kSun[1] + rn[2]*kSun[2];
+			float ndl_analytic = an[0]*kSun[0] + an[1]*kSun[1] + an[2]*kSun[2];
+			double diff = double(ndl_render) - double(ndl_analytic);
+			sum_sq += diff * diff;
+			considered++;
+			bool far_from_edges = true;
+			for (int eidx = 0; eidx < 3; eidx++) if (std::fabs(ndl_analytic - kEdges[eidx]) < 0.01f) far_from_edges = false;
+			if (!far_from_edges) continue;
+			if (band(ndl_render) != band(ndl_analytic)) {
+				mismatch[static_cast<size_t>(i)] = 1;
+				mismatches++;
+			}
+		}
+	}
+	double rms = considered > 0 ? std::sqrt(sum_sq / double(considered)) : 0.0;
+	double frac = considered > 0 ? double(mismatches) / double(considered) : 0.0;
+	int largest = 0;
+	std::vector<uint8_t> visited(static_cast<size_t>(w) * h, 0);
+	std::vector<int> stack;
+	stack.reserve(1024);
+	for (int y = 0; y < h; y++) {
+		for (int x = 0; x < w; x++) {
+			const int idx = y * w + x;
+			if (!mismatch[static_cast<size_t>(idx)] || visited[static_cast<size_t>(idx)]) continue;
+			int comp = 0;
+			stack.clear();
+			stack.push_back(idx);
+			visited[static_cast<size_t>(idx)] = 1;
+			while (!stack.empty()) {
+				int cur = stack.back(); stack.pop_back();
+				comp++;
+				int cx = cur % w;
+				int cy = cur / w;
+				if (cx > 0) { int nb = cur - 1; if (mismatch[static_cast<size_t>(nb)] && !visited[static_cast<size_t>(nb)]) { visited[static_cast<size_t>(nb)] = 1; stack.push_back(nb); } }
+				if (cx + 1 < w) { int nb = cur + 1; if (mismatch[static_cast<size_t>(nb)] && !visited[static_cast<size_t>(nb)]) { visited[static_cast<size_t>(nb)] = 1; stack.push_back(nb); } }
+				if (cy > 0) { int nb = cur - w; if (mismatch[static_cast<size_t>(nb)] && !visited[static_cast<size_t>(nb)]) { visited[static_cast<size_t>(nb)] = 1; stack.push_back(nb); } }
+				if (cy + 1 < h) { int nb = cur + w; if (mismatch[static_cast<size_t>(nb)] && !visited[static_cast<size_t>(nb)]) { visited[static_cast<size_t>(nb)] = 1; stack.push_back(nb); } }
+			}
+			if (comp > largest) largest = comp;
+		}
+	}
+	d["ran"] = true;
+	d["hits"] = total_hits;
+	d["rms_ndl"] = rms;
+	d["cel_mismatch_fraction"] = frac;
+	d["largest_mismatch_component"] = largest;
 	return d;
 }
 
