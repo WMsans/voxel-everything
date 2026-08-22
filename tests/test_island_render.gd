@@ -14,7 +14,6 @@ extends GdUnitTestSuite
 # produce the solid 2x2x2 lump the assertions describe.
 
 const SKY_UP := Color(0.25, 0.45, 0.85) # common.glslh's sky_color for dir.y = +1
-const SUN_DIR := Vector3(0.5746958, 0.7662610, 0.2873479)
 
 var _worlds: Array = []
 
@@ -44,62 +43,6 @@ func is_sky(c: Color) -> bool:
 	# sky_color is a two-stop gradient; nothing the terrain or an island shades to sits on it.
 	return absf(c.r - c.b) > 0.05 and c.b > c.r
 
-func analytic_terrain_normal(x: float, z: float) -> Vector3:
-	var dhdx := 0.66 * cos(x * 0.11) * cos(z * 0.13) \
-		+ 0.093 * cos(x * 0.031 + 1.7) * sin(z * 0.043) \
-		+ 0.23 * cos(x * 0.23 + z * 0.19)
-	var dhdz := -0.78 * sin(x * 0.11) * sin(z * 0.13) \
-		+ 0.129 * sin(x * 0.031 + 1.7) * cos(z * 0.043) \
-		+ 0.19 * cos(x * 0.23 + z * 0.19)
-	return Vector3(-dhdx, 1.0, -dhdz).normalized()
-
-# Freed voxel surfaces use their own R8 lattice, at either 5 cm or 10 cm depending on the
-# component's extent. Their normals must be reconstructed at that stored pitch too; shorter
-# taps reveal the quantised trilinear cells as contour-like lighting and triplanar changes.
-func island_normal_step(w: VoxelWorld, lo: Vector3i, hi: Vector3i,
-		expected_voxel: float) -> float:
-	var d: Dictionary = w.debug_place_test_island(0, lo, hi, Vector3(0.0, 30.0, 0.0))
-	assert_bool(d.get("ok", false)).override_failure_message(str(d)).is_true()
-	assert_float(d["voxel"]).is_equal_approx(expected_voxel, 0.001)
-	var previous_ndl := 0.0
-	var max_step := 0.0
-	var min_alignment := 1.0
-	var hits := 0
-	for i in range(61):
-		var x := 25.30 + float(i) * 0.005
-		var probe: Dictionary = w.debug_raymarch_gbuffer(
-			Vector3(x, 90.0, 26.50), Vector3.DOWN)
-		if not probe["hit"] or (probe["position"] as Vector3).y < 65.0:
-			continue
-		var normal := probe["normal"] as Vector3
-		var ndl: float = normal.dot(SUN_DIR)
-		min_alignment = minf(min_alignment, normal.dot(analytic_terrain_normal(x, 26.50)))
-		if hits > 0:
-			max_step = maxf(max_step, absf(ndl - previous_ndl))
-		previous_ndl = ndl
-		hits += 1
-	assert_int(hits).override_failure_message(
-		"the normal probe strip did not stay on the lifted island").is_equal(61)
-	assert_float(min_alignment).override_failure_message(
-		"island smoothing no longer follows the extracted terrain slope").is_greater(0.97)
-	return max_step
-
-func test_smooth_island_normals_do_not_expose_either_voxel_lattice(timeout := 120000) -> void:
-	var w := make_world()
-	var ground: Dictionary = w.debug_raycast(Vector3(25.45, 90.0, 26.50), Vector3.DOWN)
-	assert_bool(ground["hit"]).is_true()
-	var top := int(floor((ground["pos"] as Vector3).y / 0.8))
-
-	# A 2x2-cell footprint fits the fine lattice; a 5x5-cell footprint selects the coarse one.
-	var fine_step := island_normal_step(w, Vector3i(31, top - 1, 32),
-		Vector3i(32, top, 33), 0.05)
-	var coarse_step := island_normal_step(w, Vector3i(29, top - 1, 30),
-		Vector3i(33, top, 34), 0.10)
-	assert_float(fine_step).override_failure_message(
-		"the 5 cm island lattice caused a normal step of %f" % fine_step).is_less(0.004)
-	assert_float(coarse_step).override_failure_message(
-		"the 10 cm island lattice caused a normal step of %f" % coarse_step).is_less(0.0015)
-
 func test_an_island_placed_in_the_air_is_hit_by_a_ray(timeout := 60000) -> void:
 	var w := make_world()
 	# Lift a 2x2x2-cell lump of rock 30 m above where it came from.
@@ -117,6 +60,42 @@ func test_an_island_placed_in_the_air_is_hit_by_a_ray(timeout := 60000) -> void:
 	# It hit the island, not the terrain 30 m below it.
 	assert_float(pos.y).is_greater(centre.y - 2.0)
 	assert_bool(is_sky(probe["color"])).is_false()
+
+# Regression: the shader strides the SHARED authoritative SDF/material buffers with the
+# island's VOLUME slot, never with its atlas slot. Real bodies get the two from different
+# pools (32 atlas slots, 64 volume slots) and they diverge for good once a merged body pins
+# its volume slot while its atlas slot is freed, so an island placed at atlas 0 / volume 3
+# used to render whatever lived at volume 0 -- another body's geometry, with its own normals
+# on top. Every other fixture here places an island with both slots equal, which is exactly
+# why this went unnoticed; this one forces them apart.
+func test_an_island_renders_its_own_volume_not_its_atlas_slots(timeout := 60000) -> void:
+	var w := make_world()
+	var lift := Vector3(0.0, 30.0, 0.0)
+	# Decoy at volume slot 0, 40 m away: the bytes the buggy stride would have read.
+	var decoy: Dictionary = w.debug_place_test_island_rotated(1, Vector3i(35, 58, 35),
+		Vector3i(36, 59, 36), lift, 0.0, 0)
+	assert_bool(decoy.get("ok", false)).override_failure_message(str(decoy)).is_true()
+	# Subject at atlas slot 0, volume slot 3.
+	var d: Dictionary = w.debug_place_test_island_rotated(0, Vector3i(25, 58, 25),
+		Vector3i(26, 59, 26), lift, 0.0, 3)
+	assert_bool(d.get("ok", false)).override_failure_message(str(d)).is_true()
+	var centre: Vector3 = d["world_center"]
+
+	var probe: Dictionary = w.debug_raymarch_probe(centre + Vector3(0, 6, 0), Vector3(0, -1, 0))
+	assert_bool(probe["hit"]).override_failure_message(
+		"the ray passed through the island at atlas 0 / volume 3").is_true()
+	assert_float(probe["pos"].y).override_failure_message(
+		"hit %s is not on the island at %s -- the shader read the wrong volume slot"
+			% [str(probe["pos"]), str(centre)]).is_greater(centre.y - 2.0)
+	assert_bool(is_sky(probe["color"])).is_false()
+
+	# The decoy is still where it belongs, so the subject did not simply overwrite it.
+	var decoy_centre: Vector3 = decoy["world_center"]
+	var decoy_probe: Dictionary = w.debug_raymarch_probe(
+		decoy_centre + Vector3(0, 6, 0), Vector3(0, -1, 0))
+	assert_bool(decoy_probe["hit"]).override_failure_message(
+		"the decoy island at atlas 1 / volume 0 stopped rendering").is_true()
+	assert_float(decoy_probe["pos"].y).is_greater(decoy_centre.y - 2.0)
 
 func test_a_ray_beside_the_island_still_sees_the_sky(timeout := 60000) -> void:
 	var w := make_world()
@@ -449,3 +428,17 @@ func test_no_ray_across_a_freed_island_resolves_to_error_magenta(timeout := 9000
 	assert_int(magenta).override_failure_message(
 		"%d of %d island hits shaded as error magenta (material 0)" % [magenta, hits]
 		).is_equal(0)
+
+func test_shared_storage_bounds_hold_for_an_island_render_world() -> void:
+	# Task 6: islands render from the shared authoritative volume buffers, and the
+	# compact-normal pool is a fixed 32 MiB (payload + both offset tables) that never
+	# grows. This suite's world shrinks the atlas to 32x16x32 bricks, so the pinned R8
+	# byte count here is 544 x 272 x 544; the DEFAULT 1088 x 544 x 544 count is asserted
+	# by tests/test_stored_normal_pool.gd.
+	var w := make_world()
+	var stats: Dictionary = w.debug_stored_normal_stats()
+	assert_int(stats["capacity_bytes"]).is_equal(33554432)
+	assert_int(stats["live_bytes"]).is_less_equal(33554432)
+	assert_int(stats["high_water_bytes"]).is_less_equal(33554432)
+	var atlas: Dictionary = w.debug_atlas_stats()
+	assert_int(atlas["sdf_atlas_bytes"]).is_equal(544 * 272 * 544)

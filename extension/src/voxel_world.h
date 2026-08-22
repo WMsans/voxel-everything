@@ -36,6 +36,7 @@
 #include "world/region.h"
 #include "world/override_store.h"
 #include "world/residency.h"
+#include "world/field_source_snapshot.h"
 
 namespace godot {
 
@@ -204,13 +205,22 @@ class VoxelWorld : public Node3D {
 	mutable std::mutex island_mutex_; // also guards island_manager_ and island_slots_
 	// Bytes on their way to a GPU pool. Filled on the main thread, drained on the render
 	// thread by the compositor before it runs the streamer -- an op that names a volume must
-	// never be evaluated before the volume is there.
+	// never be evaluated before the volume is there. Since Task 6 the SDF/material/normal
+	// bytes land ONCE in GpuAtlas's shared pools, indexed by the authoritative VOLUME slot;
+	// an island upload additionally carries the atlas slot for its descriptor/mip entries.
 	struct IslandUpload {
-		int slot = -1;
-		bool to_island_atlas = false; // false = the field volume pool
+		int atlas_slot = -1;    // island mip/descriptor entry; -1 = field-volume only
+		int volume_slot = -1;   // authoritative ve::VolumeSet slot (SDF/mat/normals stride)
+		bool to_island_atlas = false; // true = also upload the island min-max mip
 		ve::VolumeData data;
 	};
 	std::vector<IslandUpload> island_uploads_;
+	// Volume slots whose compact-normal allocation must be freed on the render thread
+	// (queued by release_volume_slot() when the authoritative copy is released).
+	std::vector<int> pending_normal_releases_;
+	// Debug-settable compact-normal budget; 0 = GpuAtlasConfig's default 32 MiB. Must be
+	// set BEFORE the atlas is created; the pool never resizes after that.
+	uint32_t normal_pool_bytes_ = 0;
 	std::vector<IslandSlotDesc> island_descs_;
 	bool island_descs_dirty_ = false;
 	std::vector<float> physics_bubble_centers_;
@@ -419,7 +429,11 @@ public:
 	void finish_beauty_frame(const float view_proj[16]);
 	std::mutex &edit_mutex() { return edit_mutex_; }
 	MeshService *mesh_service() { return mesh_; }
-	void queue_island_upload(int slot, const ve::VolumeData &d);
+	// Releases an authoritative volume slot AND queues the render-thread teardown of its
+	// compact-normal allocation. Pinned slots are refused by VolumeSet::release() and keep
+	// their normals (a pasted volume-add still names them). Returns release()'s result.
+	bool release_volume_slot(int slot);
+	void queue_island_upload(int atlas_slot, int volume_slot, const ve::VolumeData &d);
 	void queue_field_volume_upload(int slot, const ve::VolumeData &d);
 	// Removes a queued field-volume upload for `slot` (render handoff and worker pending
 	// queue). Used when a re-merge paste is fully rejected before the uploads drain: the
@@ -450,6 +464,22 @@ public:
 	PackedInt32Array debug_mesh_volume_slots();
 	void debug_queue_test_island_upload(int slot, const PackedByteArray &sdf,
 			const PackedByteArray &mat, int dim);
+	// --- Task 6 hooks: fixed-capacity stored-normal pool ---
+	// Debug initializer: shrink the normal-pool budget BEFORE debug_init_atlas(). The
+	// pool's size is otherwise fixed at exactly 32 MiB and never resizes.
+	void debug_set_normal_pool_budget(int bytes) {
+		normal_pool_bytes_ = bytes > 0 ? static_cast<uint32_t>(bytes) : 0u;
+	}
+	Dictionary debug_stored_normal_stats();
+	// Task 8 teardown telemetry: RID validity plus the CPU mirror of the two offset
+	// tables (an entry is non-minus-one exactly while a live span is published for that
+	// slot, so "all_minus_one" is exactly "no spans published"). After render teardown
+	// all three RIDs must be invalid; after reinitialization both tables must be -1.
+	Dictionary debug_normal_pool_state();
+	// Upload one override brick's packed uint16 normals; returns its published byte offset
+	// into normal_buffer(), or -1 when the source entered the wide-R8 fallback.
+	int64_t debug_normal_upload_override(int slot, const PackedByteArray &packed_normals);
+	void debug_normal_release_override(int slot);
 	void debug_queue_test_island_descriptors();
 	// Test hook: store, pin, and queue a field-volume upload the way a committed re-merge or
 	// restore does. Teardown must preserve this upload across physics re-init because an edit
@@ -519,6 +549,7 @@ public:
 	void debug_store_volume(int slot, const PackedByteArray &sdf, const PackedByteArray &mat,
 			int dim);
 	Vector2 debug_eval_field(Vector3 p, const PackedByteArray &ops, int op_count);
+	Dictionary debug_eval_field_gradient(Vector3 p, const PackedByteArray &ops, int op_count);
 	bool debug_init_atlas();
 	void debug_teardown_atlas();
 	Dictionary debug_atlas_stats();
@@ -567,9 +598,18 @@ public:
 	Dictionary debug_raymarch_cost_probe(Vector3 origin, Vector3 dir);
 	Dictionary debug_raymarch_gbuffer(Vector3 origin, Vector3 dir);
 	Dictionary debug_raymarch_hole_probe(Vector3 origin, Vector3 dir, int w, int h);
+	Dictionary debug_raymarch_normal_probe(Vector3 origin, Vector3 dir, int w, int h);
+	// Task 7: same five metrics as the terrain probe, but the reference normal for every
+	// hit inside the island's local lattice comes from that body's own VolumeData::normal_oct
+	// (trilinearly blended in the body frame, then rotated by the body basis).
+	Dictionary debug_island_normal_probe(int island_slot, Vector3 origin, Vector3 dir,
+			int w, int h);
 	// --- M5 Task 11 hooks ---
 	Dictionary debug_material_atlas_stats();
 	Color debug_material_probe(int mat, Vector3 p, Vector3 n);
+	// Task 7: rewrites one material layer's normal-map texels (surface array RG) so tests
+	// can prove the G-buffer normal never depends on the material normal map.
+	bool debug_poke_material_normal(int layer);
 	int debug_stream_frame(Vector3 cam);
 	Dictionary debug_stream_stats();
 	int debug_slot_of_region(Vector3i region) const;
@@ -618,6 +658,11 @@ public:
 	// --- M5 Task 9 hooks ---
 	Dictionary debug_lod_diff(int level, Vector3i coord);
 	void debug_apply_sphere_subtract(Vector3 centre, float radius);
+	// Task 7 fixture hook: a sphere-ADD op so the artifact tests can exercise the
+	// procedural CSG-add branch of the source-field normal path.
+	void debug_apply_sphere_add(Vector3 centre, float radius, int material);
+	bool snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo, ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const;
+	void debug_apply_volume_add(int slot, Vector3 origin, float voxel, int dim);
 
 	// --- Task 9 hook ---
 	Dictionary debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_cell);
@@ -626,7 +671,7 @@ public:
 	Dictionary debug_place_test_island(int slot, Vector3i lo_cell, Vector3i hi_cell,
 			Vector3 offset);
 	Dictionary debug_place_test_island_rotated(int slot, Vector3i lo_cell, Vector3i hi_cell,
-			Vector3 offset, float yaw);
+			Vector3 offset, float yaw, int volume_slot = -1);
 	void debug_clear_test_island(int slot);
 	PackedInt32Array debug_island_tile_mask(Vector3 origin, Vector3 dir, float tan_x,
 			float tan_y, int width, int height);

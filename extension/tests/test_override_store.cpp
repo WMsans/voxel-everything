@@ -2,6 +2,7 @@
 #include "world/override_store.h"
 #include "world/brick_eval.h"
 #include "generator/generator.h"
+#include "shade/oct.h"
 #include <cmath>
 
 namespace {
@@ -155,6 +156,66 @@ TEST_CASE("eval_brick keeps an override after the op list is cleared") {
 	ve::BrickEval evaluated{};
 	ve::eval_brick(gen, nullptr, 0, brick, &evaluated, nullptr, &store);
 	CHECK(evaluated.brick.sdf[ve::sdf_index(0, 0, 0)] == ve::encode_sdf(-0.5f));
+}
+
+TEST_CASE("a baked override without compact normals reports an inexact gradient") {
+	// The designed-for fail-soft state (Task 7 Step 6): an override bake is published
+	// whose normal span could not be allocated (GPU offset -1, CPU normal_oct empty). It
+	// must keep its baked value/material but report an INEXACT zero gradient, so the
+	// caller's terrain_source_normal shades through the wide R8 fallback instead of the
+	// unedited procedural gradient. Mirror of the volume path's no-normals branch.
+	ve::AnalyticGenerator gen;
+	const ve::IVec3 brick{30, 64, 30};
+	ve::OverrideStore store(4);
+	const int slot = store.acquire(brick);
+	// Bake "solid rock everywhere", which the generator would never produce there, so
+	// the bake-vs-base distinction is unmistakable.
+	for (int i = 0; i < ve::kBrickSdfCount; i++) store.data(slot)->sdf[i] = ve::encode_sdf(-0.5f);
+	for (int i = 0; i < ve::kBrickVoxelCount; i++) store.data(slot)->mat[i] = 2;
+	CHECK(store.data(slot)->normal_oct.empty());
+
+	const float px = static_cast<float>(brick.x) * ve::kBrickSize + 0.4f;
+	const float py = static_cast<float>(brick.y) * ve::kBrickSize + 0.4f;
+	const float pz = static_cast<float>(brick.z) * ve::kBrickSize + 0.4f;
+	const ve::FieldSample fs =
+			ve::eval_field_gradient(gen, nullptr, 0, px, py, pz, nullptr, &store);
+	// NOT the unedited base-gradient-exact normal the old fallback reported.
+	CHECK_FALSE(fs.exact_gradient);
+	CHECK(fs.gradient[0] == doctest::Approx(0.0f));
+	CHECK(fs.gradient[1] == doctest::Approx(0.0f));
+	CHECK(fs.gradient[2] == doctest::Approx(0.0f));
+	// The baked value and material survive for the caller.
+	CHECK(fs.sdf == doctest::Approx(-0.5f).epsilon(0.02));
+	CHECK(fs.material == 2u);
+}
+
+TEST_CASE("a bake with compact normals stays exact; a no-bake point uses the base") {
+	ve::AnalyticGenerator gen;
+	const ve::IVec3 brick{30, 64, 30};
+	const float px = static_cast<float>(brick.x) * ve::kBrickSize + 0.4f;
+	const float py = static_cast<float>(brick.y) * ve::kBrickSize + 0.4f;
+	const float pz = static_cast<float>(brick.z) * ve::kBrickSize + 0.4f;
+
+	// No bake at all: the base generator gradient may remain (that state is fine).
+	const ve::FieldSample base =
+			ve::eval_field_gradient(gen, nullptr, 0, px, py, pz, nullptr, nullptr);
+	CHECK(base.exact_gradient);
+	CHECK(std::sqrt(base.gradient[0] * base.gradient[0] +
+					base.gradient[1] * base.gradient[1] +
+					base.gradient[2] * base.gradient[2]) > 1e-8f);
+
+	// Bake the same solid rock WITH a complete compact-normal lattice: exact again.
+	ve::OverrideStore store(4);
+	const int slot = store.acquire(brick);
+	for (int i = 0; i < ve::kBrickSdfCount; i++) store.data(slot)->sdf[i] = ve::encode_sdf(-0.5f);
+	for (int i = 0; i < ve::kBrickVoxelCount; i++) store.data(slot)->mat[i] = 2;
+	const float up[3] = {0.0f, 1.0f, 0.0f};
+	const uint16_t packed = ve::oct_encode_snorm8(up);
+	store.data(slot)->normal_oct.assign(static_cast<size_t>(ve::kBrickSdfCount), packed);
+	const ve::FieldSample fs =
+			ve::eval_field_gradient(gen, nullptr, 0, px, py, pz, nullptr, &store);
+	CHECK(fs.exact_gradient);
+	CHECK(fs.gradient[1] == doctest::Approx(1.0f).epsilon(0.01));
 }
 
 TEST_CASE("ops still apply on top of an override") {

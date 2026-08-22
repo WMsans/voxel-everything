@@ -6,6 +6,7 @@
 #include "world/region.h"
 #include "world/edit_log.h"
 #include "generator/edit_ops.h"
+#include "world/field_source_snapshot.h"
 
 namespace godot {
 
@@ -15,6 +16,7 @@ struct ConsolidateJob {
 	uint64_t through_seq = 0;
 	std::vector<ve::IVec3> bricks;
 	std::vector<ve::EditOp> ops;
+	ve::FieldSourceSnapshot source;
 };
 
 struct ConsolidateResult {
@@ -24,12 +26,13 @@ struct ConsolidateResult {
 	bool failed = false;
 };
 
+class VolumePool;
 class ConsolidatePass {
 public:
 	~ConsolidatePass();
 	// max_bricks is bounded by the override pool and controls only the transient staging
 	// buffers; staged output never aliases a published override slot.
-	bool initialize(RenderingDevice *rd, OverridePool *pool, int max_bricks = 0);
+	bool initialize(RenderingDevice *rd, OverridePool *pool, VolumePool *volumes, int max_bricks = 0);
 	void teardown();
 	bool is_valid() const { return pipeline_.is_valid(); }
 	bool run(const ConsolidateJob &job, ConsolidateResult *out);

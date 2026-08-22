@@ -31,6 +31,9 @@ func test_bake_reproduces_the_field(timeout := 60000) -> void:
 	assert_int(int(d["bricks"])).is_greater(0)
 	assert_int(int(d["sdf_mismatches"])).is_equal(0)
 	assert_int(int(d["mat_mismatches"])).is_equal(0)
+	assert_int(int(d.get("normal_count", 0))).is_equal(4913)
+	assert_float(float(d.get("normal_min_length", 0.0))).is_greater(0.99)
+	assert_float(float(d.get("normal_min_dot", 0.0))).is_greater(0.98)
 
 # An overridden brick must read back through the FIELD, not just out of the pool: the whole
 # point is that every consumer sees the same base.
@@ -55,6 +58,8 @@ func test_reconsolidation_preserves_previous_bake(timeout := 120000) -> void:
 	assert_int(int(d["bricks"])).is_greater(0)
 	assert_int(int(d["sdf_mismatches"])).is_equal(0)
 	assert_int(int(d["mat_mismatches"])).is_equal(0)
+	assert_int(int(d.get("normal_count", 0))).is_equal(4913)
+	assert_float(float(d.get("normal_min_dot", 0.0))).is_greater(0.98)
 	assert_bool(w.debug_consolidate_region(Vector3i(0, 2, 0))).is_true()
 	assert_int(w.debug_region_op_count(Vector3i(0, 2, 0))).is_equal(0)
 	var first: Dictionary = w.debug_raycast(Vector3(24.4, 70.0, 24.4), Vector3(0, -1, 0))
@@ -130,7 +135,7 @@ func test_teardown_releases_staged_override_slots_before_reinit() -> void:
 	w.debug_set_fail_consolidate_uploads(true)
 	w.debug_pump_consolidation_async()
 	var staged := false
-	for i in range(100):
+	for i in range(1600):
 		OS.delay_msec(5)
 		w.debug_pump_consolidation_async()
 		if w.debug_override_used() > used_before:
@@ -156,7 +161,7 @@ func test_publication_failure_recovers_with_queued_worker_work(timeout := 120000
 	w.debug_set_fail_restore_overrides_always(true)
 	w.debug_set_pause_override_publication(true)
 	var publication_paused := false
-	for i in range(400):
+	for i in range(1600):
 		w.debug_pump_consolidation_async()
 		if w.debug_override_publication_paused():
 			publication_paused = true
@@ -174,7 +179,7 @@ func test_publication_failure_recovers_with_queued_worker_work(timeout := 120000
 	var refusals_before: int = int(w.debug_stream_stats().get("consolidation_refusals", 0))
 	w.debug_set_pause_override_publication(false)
 	var refused := false
-	for i in range(400):
+	for i in range(1600):
 		w.debug_pump_consolidation_async()
 		if int(w.debug_stream_stats().get("consolidation_refusals", 0)) > refusals_before:
 			refused = true
@@ -326,6 +331,40 @@ func test_a_full_pool_refuses_and_changes_nothing(timeout := 60000) -> void:
 	assert_bool(w.debug_consolidate_region(Vector3i(0, 2, 0))).is_false()
 	assert_int(w.debug_region_op_count(Vector3i(0, 2, 0))).is_equal(ops_before)
 	assert_int(int(w.debug_stream_stats()["consolidation_refusals"])).is_greater(0)
+
+func test_reconsolidation_with_volume_add_captures_both_sources(timeout := 120000) -> void:
+	var w := make_world()
+	w.debug_apply_sphere_subtract(Vector3(24.4, 51.4, 24.4), 1.5)
+	assert_bool(w.debug_consolidate_region(Vector3i(0, 2, 0))).is_true()
+	# Create a small volume and paste it - dim 64 to match worker pool
+	var sdf := PackedByteArray()
+	var mat := PackedByteArray()
+	var dim := 64
+	var n := dim*dim*dim
+	sdf.resize(n)
+	mat.resize(n)
+	for i in range(n):
+		sdf[i] = 255
+		mat[i] = 0
+	for z in range(dim): for y in range(dim): for x in range(dim):
+		var p := Vector3(x, y, z) * 0.05 - Vector3(1.575, 1.575, 1.575)
+		var d: float = p.length() - 0.5
+		var idx := x + y*dim + z*dim*dim
+		if d <= 0.0:
+			sdf[idx] = 100
+			mat[idx] = 2
+	w.debug_store_volume(1, sdf, mat, dim)
+	w.debug_apply_volume_add(1, Vector3(10.01, 60.01, 10.01), 0.05, dim)
+	w.debug_apply_sphere_subtract(Vector3(20.01, 60.01, 20.01), 1.0)
+	var d: Dictionary = w.debug_consolidate_diff(Vector3i(0, 2, 0))
+	assert_int(int(d["bricks"])).is_greater(0)
+	assert_int(int(d["sdf_mismatches"])).is_equal(0)
+	assert_int(int(d["mat_mismatches"])).is_equal(0)
+	assert_int(int(d.get("normal_count", 0))).is_equal(4913)
+	assert_float(float(d.get("normal_min_length", 0.0))).is_greater(0.99)
+	assert_float(float(d.get("normal_min_dot", 0.0))).is_greater(0.98)
+	assert_bool(w.debug_consolidate_region(Vector3i(0, 2, 0))).is_true()
+	assert_int(w.debug_region_op_count(Vector3i(0, 2, 0))).is_equal(0)
 
 func test_render_pool_replays_consolidated_override_after_atlas_reinit() -> void:
 	var w := make_world()

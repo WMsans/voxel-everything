@@ -9,6 +9,7 @@
 #include "generator/edit_ops.h"
 #include "render/volume_pool.h"
 #include "render/override_pool.h"
+#include "render/stored_normal_pool.h"
 #include "world/brick_flags.h"
 #include "world/edit_log.h"
 #include "world/region.h"
@@ -21,6 +22,8 @@ struct GpuAtlasConfig {
 	int max_region_slots = 512;
 	int max_brick_jobs = 16384;
 	int max_override_bricks = OverridePool::kDefaultCapacity;
+	// Hard total for the compact-normal pool (packed payload + both offset tables).
+	uint32_t normal_pool_bytes = StoredNormalPool::kDefaultBudgetBytes;
 	ve::WorldBounds bounds{};
 };
 
@@ -72,6 +75,10 @@ public:
 	const VolumePool &volumes() const { return volumes_; }
 	OverridePool &overrides() { return overrides_; }
 	const OverridePool &overrides() const { return overrides_; }
+	// The render device's compact-normal store. Owned here so teardown order lives in
+	// exactly one place, like every other RID in the world path.
+	StoredNormalPool &stored_normals() { return stored_normals_; }
+	const StoredNormalPool &stored_normals() const { return stored_normals_; }
 	bool upload_override(RenderingDevice *rd, int slot, const ve::OverrideBrick &brick) {
 		return overrides_.is_valid() && overrides_.upload(slot, brick);
 	}
@@ -109,6 +116,7 @@ private:
 	RID region_occupancy_;
 	VolumePool volumes_;
 	OverridePool overrides_;
+	StoredNormalPool stored_normals_;
 };
 
 } // namespace godot

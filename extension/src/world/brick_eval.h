@@ -23,6 +23,10 @@ Sample eval_field(const Generator &gen, const EditOp *ops, int op_count,
 		float x, float y, float z, const VolumeStore *volumes = nullptr,
 		const OverrideSource *overrides = nullptr);
 
+FieldSample eval_field_gradient(const Generator &gen, const EditOp *ops, int op_count,
+		float x, float y, float z, const VolumeStore *volumes = nullptr,
+		const OverrideSource *overrides = nullptr);
+
 // Coarse residency probe. Mirrored exactly by shaders/brick_mark.comp.glsl — a brick is
 // resident iff this returns true, on both sides.
 bool brick_has_surface(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,

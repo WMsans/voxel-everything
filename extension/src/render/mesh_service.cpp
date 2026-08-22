@@ -512,7 +512,7 @@ void MeshService::run() {
 			lod_ = nullptr;
 		}
 		consolidate_ = new ConsolidatePass();
-		if (!consolidate_->initialize(rd, &pass.overrides())) {
+		if (!consolidate_->initialize(rd, &pass.overrides(), &pass.volumes())) {
 			UtilityFunctions::printerr("MeshService: consolidation unavailable");
 			delete consolidate_;
 			consolidate_ = nullptr;

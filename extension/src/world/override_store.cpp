@@ -1,4 +1,5 @@
 #include "world/override_store.h"
+#include "shade/oct.h"
 #include <algorithm>
 #include <cmath>
 
@@ -86,6 +87,63 @@ bool OverrideStore::sample(float x, float y, float z, Sample *out) const {
 			std::min(static_cast<int>(std::floor(local[1])), kBrickVoxels - 1),
 			std::min(static_cast<int>(std::floor(local[2])), kBrickVoxels - 1)};
 	out->material = b.mat[voxel_index(cell[0], cell[1], cell[2])];
+	return true;
+}
+
+bool OverrideStore::sample_gradient(float x, float y, float z, FieldSample *out) const {
+	if (!out) return false;
+	Sample base{};
+	if (!sample(x, y, z, &base)) return false;
+	const IVec3 brick = WorldBounds::brick_of_point(x, y, z);
+	const int slot = slot_of(brick);
+	if (slot < 0) return false;
+	const OverrideBrick &b = bricks_[static_cast<size_t>(slot)];
+	if (b.normal_oct.size() != static_cast<size_t>(kBrickSdfCount)) {
+		// The bake exists but its normal lattice is missing (normal_oct empty -- the
+		// designed fail-soft state from the brief's Step 6). Keep the baked value/material
+		// but report an inexact ZERO gradient, mirroring the volume path's no-normals
+		// branch, so the caller's terrain_source_normal shades through the wide R8
+		// fallback instead of the unedited procedural gradient.
+		out->sdf = base.sdf;
+		out->material = base.material;
+		out->gradient[0] = 0.0f;
+		out->gradient[1] = 0.0f;
+		out->gradient[2] = 0.0f;
+		out->exact_gradient = false;
+		return true;
+	}
+	out->sdf = base.sdf;
+	out->material = base.material;
+	// trilinear blend of 17^3 normal lattice
+	float origin[3];
+	brick_world_origin(brick, origin);
+	const float local[3] = {
+			std::clamp((x - origin[0]) / kVoxelSize, 0.0f, static_cast<float>(kBrickVoxels)),
+			std::clamp((y - origin[1]) / kVoxelSize, 0.0f, static_cast<float>(kBrickVoxels)),
+			std::clamp((z - origin[2]) / kVoxelSize, 0.0f, static_cast<float>(kBrickVoxels))};
+	const int i0[3] = {static_cast<int>(std::floor(local[0])), static_cast<int>(std::floor(local[1])), static_cast<int>(std::floor(local[2]))};
+	const int i1[3] = {std::min(i0[0] + 1, kBrickVoxels), std::min(i0[1] + 1, kBrickVoxels), std::min(i0[2] + 1, kBrickVoxels)};
+	const float f[3] = {local[0] - i0[0], local[1] - i0[1], local[2] - i0[2]};
+	float n000[3], n100[3], n010[3], n110[3], n001[3], n101[3], n011[3], n111[3];
+	oct_decode_snorm8(b.normal_oct[static_cast<size_t>(sdf_index(i0[0], i0[1], i0[2]))], n000);
+	oct_decode_snorm8(b.normal_oct[static_cast<size_t>(sdf_index(i1[0], i0[1], i0[2]))], n100);
+	oct_decode_snorm8(b.normal_oct[static_cast<size_t>(sdf_index(i0[0], i1[1], i0[2]))], n010);
+	oct_decode_snorm8(b.normal_oct[static_cast<size_t>(sdf_index(i1[0], i1[1], i0[2]))], n110);
+	oct_decode_snorm8(b.normal_oct[static_cast<size_t>(sdf_index(i0[0], i0[1], i1[2]))], n001);
+	oct_decode_snorm8(b.normal_oct[static_cast<size_t>(sdf_index(i1[0], i0[1], i1[2]))], n101);
+	oct_decode_snorm8(b.normal_oct[static_cast<size_t>(sdf_index(i0[0], i1[1], i1[2]))], n011);
+	oct_decode_snorm8(b.normal_oct[static_cast<size_t>(sdf_index(i1[0], i1[1], i1[2]))], n111);
+	float nx00[3] = { n000[0]*(1-f[0]) + n100[0]*f[0], n000[1]*(1-f[0]) + n100[1]*f[0], n000[2]*(1-f[0]) + n100[2]*f[0] };
+	float nx10[3] = { n010[0]*(1-f[0]) + n110[0]*f[0], n010[1]*(1-f[0]) + n110[1]*f[0], n010[2]*(1-f[0]) + n110[2]*f[0] };
+	float nx01[3] = { n001[0]*(1-f[0]) + n101[0]*f[0], n001[1]*(1-f[0]) + n101[1]*f[0], n001[2]*(1-f[0]) + n101[2]*f[0] };
+	float nx11[3] = { n011[0]*(1-f[0]) + n111[0]*f[0], n011[1]*(1-f[0]) + n111[1]*f[0], n011[2]*(1-f[0]) + n111[2]*f[0] };
+	float nxy0[3] = { nx00[0]*(1-f[1]) + nx10[0]*f[1], nx00[1]*(1-f[1]) + nx10[1]*f[1], nx00[2]*(1-f[1]) + nx10[2]*f[1] };
+	float nxy1[3] = { nx01[0]*(1-f[1]) + nx11[0]*f[1], nx01[1]*(1-f[1]) + nx11[1]*f[1], nx01[2]*(1-f[1]) + nx11[2]*f[1] };
+	float nxyz[3] = { nxy0[0]*(1-f[2]) + nxy1[0]*f[2], nxy0[1]*(1-f[2]) + nxy1[1]*f[2], nxy0[2]*(1-f[2]) + nxy1[2]*f[2] };
+	float len = std::sqrt(nxyz[0]*nxyz[0] + nxyz[1]*nxyz[1] + nxyz[2]*nxyz[2]);
+	if (len > 1e-6f) { out->gradient[0]=nxyz[0]/len; out->gradient[1]=nxyz[1]/len; out->gradient[2]=nxyz[2]/len; }
+	else { out->gradient[0]=0; out->gradient[1]=1; out->gradient[2]=0; }
+	out->exact_gradient = true;
 	return true;
 }
 

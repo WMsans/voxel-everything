@@ -59,12 +59,22 @@ struct VolumeStore {
 	// to decide whether a region's kOpVolumeAdd can actually contribute a field value,
 	// because apply_op fail-softs a missing slot and leaves the field identical.
 	virtual bool has(int slot) const = 0;
+	virtual bool sample_gradient(int slot, float x, float y, float z, const EditOp &op,
+			FieldSample *out) const {
+		(void)slot; (void)x; (void)y; (void)z; (void)op; (void)out;
+		return false;
+	}
 };
 
 Sample apply_op(Sample s, const EditOp &op, float x, float y, float z,
 		const VolumeStore *volumes = nullptr);
 Sample apply_ops(Sample s, const EditOp *ops, int count, float x, float y, float z,
 		const VolumeStore *volumes = nullptr);
+
+FieldSample apply_op_gradient(FieldSample s, const EditOp &op, float x, float y, float z,
+		const VolumeStore *volumes = nullptr);
+FieldSample apply_ops_gradient(FieldSample s, const EditOp *ops, int count, float x,
+		float y, float z, const VolumeStore *volumes = nullptr);
 
 // 3 x 10 bits, values 1..1023 (0 is never a legal extent). An island cell box is at most 8
 // cells on a side, so the range is enormous headroom; it exists because M5's LoD bakery will
@@ -95,6 +105,7 @@ bool op_touches_aabb(const EditOp &op, const float lo[3], const float hi[3], flo
 
 // Exact signed distance to an axis-aligned box. Mirrored in shaders/field.glslh.
 float box_sdf(const float lo[3], const float hi[3], float x, float y, float z);
+void box_sdf_gradient(const float lo[3], const float hi[3], float x, float y, float z, float out[3]);
 
 // Inclusive lattice ranges an op can change, padded by one voxel: a brick's SDF lattice
 // carries a one-voxel apron on its positive faces, so an op that only reaches the apron

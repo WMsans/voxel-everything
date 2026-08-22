@@ -143,12 +143,21 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 		return false;
 	}
 
+	// 32 MiB at default settings, INCLUDING both offset tables. Metadata that does not
+	// fit is an initialization failure, never an implicit growth.
+	if (!stored_normals_.initialize(rd, cfg_.normal_pool_bytes, ve::kMaxVolumes,
+			cfg_.max_override_bricks)) {
+		UtilityFunctions::printerr("GpuAtlas: stored-normal pool does not fit its budget");
+		teardown();
+		return false;
+	}
+
 	bool ok = sdf_atlas_.is_valid() && mat_atlas_.is_valid() && palette_.is_valid() &&
 			brick_flags_.is_valid() && region_map_.is_valid() && region_tables_.is_valid() && free_list_.is_valid() &&
 			counters_.is_valid() && frame_.is_valid() && dispatch_args_.is_valid() &&
 			jobs_.is_valid() && op_pool_.is_valid() && op_counts_.is_valid() &&
 			region_slot_counts_.is_valid() && region_occupancy_.is_valid() && volumes_.is_valid() &&
-			overrides_.is_valid();
+			overrides_.is_valid() && stored_normals_.is_valid();
 	for (int l = 0; l < ve::kMipLevels; l++) ok = ok && mips_[l].is_valid();
 	if (!ok) {
 		// Most likely cause: the driver refuses STORAGE usage on R8_UNORM / R8G8_UINT
@@ -162,6 +171,9 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 }
 
 void GpuAtlas::teardown() {
+	// The pool first: its buffers are referenced by consumer uniform sets (raymarch
+	// bindings), and teardown order must live in exactly one place.
+	stored_normals_.teardown();
 	volumes_.teardown();
 	overrides_.teardown();
 	if (!rd_) return;
@@ -278,6 +290,16 @@ bool GpuAtlas::replay_overrides(RenderingDevice *rd, const ve::OverrideStore &st
 					if (slot < 0) continue;
 					const ve::OverrideBrick *data = store.data(slot);
 					if (!data || !overrides_.upload(slot, *data)) return false;
+					// The pool this replays into is freshly initialized, so every override
+					// offset is -1. Without re-uploading the compact normals here, an atlas
+					// teardown/reinit silently drops every consolidated brick back to R8
+					// taps -- the artifact this whole feature removes -- and the CPU
+					// fallback counter never sees it, because publication succeeded.
+					if (data->normal_oct.size() == ve::kBrickSdfCount)
+						stored_normals_.upload_override(rd, slot, data->normal_oct.data(),
+								ve::kBrickSdfCount);
+					else
+						stored_normals_.release_override(rd, slot);
 					overrides_.set_table_entry(rd, table,
 						ve::WorldBounds::brick_index_in_region(brick), slot);
 				}

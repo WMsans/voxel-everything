@@ -116,6 +116,41 @@ float box_sdf(const float lo[3], const float hi[3], float x, float y, float z) {
 	return outside + inside;
 }
 
+void box_sdf_gradient(const float lo[3], const float hi[3], float x, float y, float z, float out[3]) {
+	const float p[3] = {x, y, z};
+	float q[3];
+	float sign[3];
+	for (int a = 0; a < 3; a++) {
+		const float c = 0.5f * (lo[a] + hi[a]);
+		const float h = 0.5f * (hi[a] - lo[a]);
+		const float d = p[a] - c;
+		sign[a] = d >= 0 ? 1.0f : -1.0f;
+		q[a] = std::fabs(d) - h;
+	}
+	const bool outside = q[0] > 0 || q[1] > 0 || q[2] > 0;
+	if (outside) {
+		float v[3] = {0, 0, 0};
+		for (int a = 0; a < 3; a++) {
+			if (q[a] > 0) v[a] = q[a] * sign[a];
+		}
+		float len = std::sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+		if (len < 1e-6f) {
+			out[0]=0; out[1]=1; out[2]=0;
+		} else {
+			out[0]=v[0]/len; out[1]=v[1]/len; out[2]=v[2]/len;
+		}
+	} else {
+		// inside: largest signed extent with X/Y/Z priority
+		int best = 0;
+		float best_q = q[0];
+		for (int a = 1; a < 3; a++) {
+			if (q[a] > best_q) { best_q = q[a]; best = a; }
+		}
+		out[0]=0; out[1]=0; out[2]=0;
+		out[best] = sign[best];
+	}
+}
+
 Sample apply_op(Sample s, const EditOp &op, float x, float y, float z,
 		const VolumeStore *volumes) {
 	switch (op.type) {
@@ -183,6 +218,105 @@ Sample apply_op(Sample s, const EditOp &op, float x, float y, float z,
 Sample apply_ops(Sample s, const EditOp *ops, int count, float x, float y, float z,
 		const VolumeStore *volumes) {
 	for (int i = 0; i < count; i++) s = apply_op(s, ops[i], x, y, z, volumes);
+	return s;
+}
+
+static void sphere_gradient(const EditOp &op, float x, float y, float z, float out[3], bool &exact) {
+	float dx = x - op.pos[0], dy = y - op.pos[1], dz = z - op.pos[2];
+	float len = std::sqrt(dx*dx + dy*dy + dz*dz);
+	if (len < 1e-6f) {
+		out[0]=0; out[1]=1; out[2]=0;
+		exact=false;
+	} else {
+		out[0]=dx/len; out[1]=dy/len; out[2]=dz/len;
+		exact=true;
+	}
+}
+
+FieldSample apply_op_gradient(FieldSample s, const EditOp &op, float x, float y, float z,
+		const VolumeStore *volumes) {
+	switch (op.type) {
+		case kOpSphereSubtract: {
+			const float sp = sphere_sdf(op, x, y, z);
+			if (-sp > s.sdf) {
+				float g[3]; bool exact;
+				sphere_gradient(op, x, y, z, g, exact);
+				s.sdf = -sp;
+				if (s.sdf > 0.0f) s.material = 0;
+				s.gradient[0] = -g[0]; s.gradient[1] = -g[1]; s.gradient[2] = -g[2];
+				s.exact_gradient = exact;
+				if (!exact) { s.gradient[0]=0; s.gradient[1]=1; s.gradient[2]=0; }
+			}
+			return s;
+		}
+		case kOpSphereAdd: {
+			const float sp = sphere_sdf(op, x, y, z);
+			if (sp < s.sdf) {
+				float g[3]; bool exact;
+				sphere_gradient(op, x, y, z, g, exact);
+				s.sdf = sp;
+				if (s.sdf <= 0.0f) s.material = static_cast<uint16_t>(op.material);
+				s.gradient[0]=g[0]; s.gradient[1]=g[1]; s.gradient[2]=g[2];
+				s.exact_gradient = exact;
+				if (!exact) { s.gradient[0]=0; s.gradient[1]=1; s.gradient[2]=0; }
+			}
+			return s;
+		}
+		case kOpSpherePaint: {
+			const float sp = sphere_sdf(op, x, y, z);
+			if (sp <= 0.0f && s.sdf <= 0.0f) s.material = static_cast<uint16_t>(op.material);
+			return s;
+		}
+		case kOpBoxSubtract: {
+			float lo[3], hi[3];
+			op_world_aabb(op, lo, hi);
+			const float m = op.radius > 0.0f ? op.radius : 0.0f;
+			for (int a = 0; a < 3; a++) { lo[a]-=m; hi[a]+=m; }
+			const float bd = box_sdf(lo, hi, x, y, z);
+			if (-bd > s.sdf) {
+				s.sdf = -bd;
+				if (s.sdf > 0.0f) s.material = 0;
+				float g[3];
+				box_sdf_gradient(lo, hi, x, y, z, g);
+				s.gradient[0] = -g[0]; s.gradient[1] = -g[1]; s.gradient[2] = -g[2];
+				s.exact_gradient = true;
+			}
+			return s;
+		}
+		case kOpVolumeAdd: {
+			FieldSample vs{};
+			if (volumes && volumes->sample_gradient(static_cast<int>(op.aux[0]), x, y, z, op, &vs)) {
+				if (vs.sdf < s.sdf) {
+					// Same material rule as apply_op and as field.glslh's mirror: the
+					// operand's material is taken only where the result is solid AND the
+					// operand names one. A wholesale copy also stamped material 0 through
+					// air, which is a CPU/GLSL divergence the differential gate exists for.
+					const uint16_t previous_material = s.material;
+					s = vs;
+					s.material = (s.sdf <= 0.0f && vs.material != 0) ? vs.material
+																	 : previous_material;
+				}
+				return s;
+			}
+			VolumeSample vso{};
+			if (!volumes || !volumes->sample(static_cast<int>(op.aux[0]), x, y, z, op, &vso))
+				return s;
+			if (vso.sdf < s.sdf) {
+				s.sdf = vso.sdf;
+				if (s.sdf <= 0.0f && vso.material != 0) s.material = vso.material;
+				s.gradient[0]=0; s.gradient[1]=0; s.gradient[2]=0;
+				s.exact_gradient=false;
+			}
+			return s;
+		}
+		default:
+			return s;
+	}
+}
+
+FieldSample apply_ops_gradient(FieldSample s, const EditOp *ops, int count, float x, float y, float z,
+		const VolumeStore *volumes) {
+	for (int i=0; i<count; i++) s = apply_op_gradient(s, ops[i], x, y, z, volumes);
 	return s;
 }
 

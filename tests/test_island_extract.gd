@@ -38,6 +38,14 @@ func check_extract(w: VoxelWorld, lo: Vector3i, hi: Vector3i, label: String) -> 
 		).is_less(MAX_STEPS)
 	assert_int(d["mat_mismatch"]).override_failure_message(
 		"%s: %d material mismatches" % [label, d["mat_mismatch"]]).is_equal(0)
+	var dim: int = int(d.get("dim", 64))
+	var expected := dim * dim * dim
+	assert_int(int(d.get("normal_count", 0))).override_failure_message(
+		"%s: expected %d normals got %s" % [label, expected, d.get("normal_count", 0)]).is_equal(expected)
+	assert_float(float(d.get("normal_min_length", 0.0))).override_failure_message(
+		"%s: normal length too small %s" % [label, d.get("normal_min_length", 0.0)]).is_greater(0.99)
+	assert_float(float(d.get("normal_min_alignment", 0.0))).override_failure_message(
+		"%s: normal alignment too low %s" % [label, d.get("normal_min_alignment", 0.0)]).is_greater(0.98)
 	return d
 
 func test_a_single_cell_extracts_to_the_same_volume_on_both_sides(timeout := 60000) -> void:

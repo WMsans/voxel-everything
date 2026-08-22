@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bus2md5qvwrmy"
+path="res://.godot/imported/field_gradient_probe.comp.glsl-a68d767c62f6e872ca4d2763ce2ea3db.res"
+
+[deps]
+
+source_file="res://shaders/field_gradient_probe.comp.glsl"
+dest_files=["res://.godot/imported/field_gradient_probe.comp.glsl-a68d767c62f6e872ca4d2763ce2ea3db.res"]
+
+[params]
+

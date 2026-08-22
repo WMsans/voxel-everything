@@ -67,6 +67,7 @@
 #include <chrono>
 #include <thread>
 #include <cmath>
+#include <set>
 #include <cstring>
 #include <algorithm>
 #include <array>
@@ -253,9 +254,13 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_lod_diff", "level", "coord"), &VoxelWorld::debug_lod_diff);
 	ClassDB::bind_method(D_METHOD("debug_apply_sphere_subtract", "centre", "radius"),
 			&VoxelWorld::debug_apply_sphere_subtract);
+	ClassDB::bind_method(D_METHOD("debug_apply_sphere_add", "centre", "radius", "material"),
+			&VoxelWorld::debug_apply_sphere_add);
+	ClassDB::bind_method(D_METHOD("debug_apply_volume_add", "slot", "origin", "voxel", "dim"),
+			&VoxelWorld::debug_apply_volume_add);
 	ClassDB::bind_method(D_METHOD("debug_island_extract_diff", "lo_cell", "hi_cell"), &VoxelWorld::debug_island_extract_diff);
 	ClassDB::bind_method(D_METHOD("debug_place_test_island", "slot", "lo_cell", "hi_cell", "offset"), &VoxelWorld::debug_place_test_island);
-	ClassDB::bind_method(D_METHOD("debug_place_test_island_rotated", "slot", "lo_cell", "hi_cell", "offset", "yaw"), &VoxelWorld::debug_place_test_island_rotated);
+	ClassDB::bind_method(D_METHOD("debug_place_test_island_rotated", "slot", "lo_cell", "hi_cell", "offset", "yaw", "volume_slot"), &VoxelWorld::debug_place_test_island_rotated, DEFVAL(-1));
 	ClassDB::bind_method(D_METHOD("debug_clear_test_island", "slot"), &VoxelWorld::debug_clear_test_island);
 	ClassDB::bind_method(D_METHOD("debug_island_tile_mask", "origin", "dir", "tan_x", "tan_y",
 			"width", "height"), &VoxelWorld::debug_island_tile_mask);
@@ -309,6 +314,11 @@ void VoxelWorld::_bind_methods() {
 	// out of release ClassDB so release scripts cannot call them.
 	ClassDB::bind_method(D_METHOD("debug_set_max_dynamic_bodies", "v"), &VoxelWorld::debug_set_max_dynamic_bodies);
 	ClassDB::bind_method(D_METHOD("debug_set_atlas_slot_used", "slot", "used"), &VoxelWorld::debug_set_atlas_slot_used);
+	ClassDB::bind_method(D_METHOD("debug_set_normal_pool_budget", "bytes"), &VoxelWorld::debug_set_normal_pool_budget);
+	ClassDB::bind_method(D_METHOD("debug_stored_normal_stats"), &VoxelWorld::debug_stored_normal_stats);
+	ClassDB::bind_method(D_METHOD("debug_normal_pool_state"), &VoxelWorld::debug_normal_pool_state);
+	ClassDB::bind_method(D_METHOD("debug_normal_upload_override", "slot", "packed_normals"), &VoxelWorld::debug_normal_upload_override);
+	ClassDB::bind_method(D_METHOD("debug_normal_release_override", "slot"), &VoxelWorld::debug_normal_release_override);
 #endif
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_spawn", "fail"), &VoxelWorld::debug_set_fail_next_spawn);
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_restore", "fail"), &VoxelWorld::debug_set_fail_next_restore);
@@ -331,6 +341,10 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_raymarch_gbuffer", "origin", "dir"), &VoxelWorld::debug_raymarch_gbuffer);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_hole_probe", "origin", "dir", "w", "h"),
 			&VoxelWorld::debug_raymarch_hole_probe);
+	ClassDB::bind_method(D_METHOD("debug_raymarch_normal_probe", "origin", "dir", "w", "h"),
+			&VoxelWorld::debug_raymarch_normal_probe);
+	ClassDB::bind_method(D_METHOD("debug_island_normal_probe", "island_slot", "origin", "dir", "w", "h"),
+			&VoxelWorld::debug_island_normal_probe);
 	ClassDB::bind_method(D_METHOD("debug_cel_diff", "albedo", "ambient", "ndl", "ndv", "ndh",
 			"shadow", "ao", "gloss"), &VoxelWorld::debug_cel_diff);
 	ClassDB::bind_method(D_METHOD("debug_cel_reference", "albedo", "ambient", "ndl", "ndv", "ndh",
@@ -339,6 +353,7 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::debug_deferred_probe);
 	ClassDB::bind_method(D_METHOD("debug_material_atlas_stats"), &VoxelWorld::debug_material_atlas_stats);
 	ClassDB::bind_method(D_METHOD("debug_material_probe", "mat", "p", "n"), &VoxelWorld::debug_material_probe);
+	ClassDB::bind_method(D_METHOD("debug_poke_material_normal", "layer"), &VoxelWorld::debug_poke_material_normal);
 	ClassDB::bind_method(D_METHOD("debug_sdf_atlas"), &VoxelWorld::debug_sdf_atlas);
 	ClassDB::bind_method(D_METHOD("debug_local_rd"), &VoxelWorld::debug_local_rd);
 	ClassDB::bind_method(D_METHOD("debug_load_shader", "res_path"), &VoxelWorld::debug_load_shader);
@@ -350,6 +365,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_self_check"), &VoxelWorld::debug_self_check);
 	ClassDB::bind_method(D_METHOD("debug_store_volume", "slot", "sdf", "mat", "dim"), &VoxelWorld::debug_store_volume);
 	ClassDB::bind_method(D_METHOD("debug_eval_field", "p", "ops", "op_count"), &VoxelWorld::debug_eval_field);
+	ClassDB::bind_method(D_METHOD("debug_eval_field_gradient", "p", "ops", "op_count"), &VoxelWorld::debug_eval_field_gradient);
 	ClassDB::bind_method(D_METHOD("debug_init_atlas"), &VoxelWorld::debug_init_atlas);
 	ClassDB::bind_method(D_METHOD("debug_teardown_atlas"), &VoxelWorld::debug_teardown_atlas);
 	ClassDB::bind_method(D_METHOD("debug_atlas_stats"), &VoxelWorld::debug_atlas_stats);
@@ -1146,6 +1162,7 @@ void VoxelWorld::ensure_initialized() {
 	cfg.max_brick_jobs = max_brick_jobs_;
 	cfg.max_override_bricks = max_override_bricks_;
 	cfg.bounds = world_bounds();
+	if (normal_pool_bytes_ > 0) cfg.normal_pool_bytes = normal_pool_bytes_; // test initializer
 	if (!atlas_->initialize(device, cfg)) { delete atlas_; atlas_ = nullptr; return; }
 	islands_ = new IslandAtlas();
 	if (!islands_->initialize(device)) { teardown_gpu(); return; }
@@ -1394,13 +1411,22 @@ void VoxelWorld::teardown_physics() {
 	// append_edit_locked() reading island_manager_ to call note_edit(). Also take
 	// island_mutex_ so the render thread's island_slot_count() cannot dereference a manager
 	// that is being destroyed (lock order: edit_mutex_ -> island_mutex_).
+	//
+	// Detach under the lock, then tear down outside it: teardown() releases every body's,
+	// in-flight extraction's and merge's volume slot through release_volume_slot(), which
+	// takes island_mutex_ to queue the GPU-side normal release. Running it under the lock
+	// re-entered a non-recursive std::mutex and hung the process. The render thread is
+	// still safe -- it sees a null manager the instant the lock is dropped -- and the tool
+	// thread cannot observe the detached pointer because edit_mutex_ is held throughout.
+	IslandManager *manager = nullptr;
 	{
 		std::lock_guard<std::mutex> island_lock(island_mutex_);
-		if (island_manager_) {
-			island_manager_->teardown();
-			delete island_manager_;
-			island_manager_ = nullptr;
-		}
+		manager = island_manager_;
+		island_manager_ = nullptr;
+	}
+	if (manager) {
+		manager->teardown();
+		delete manager;
 	}
 	physics_bubble_centers_.clear();
 	// Drop any uploads/descriptors the previous manager queued before the GPU pools are torn
@@ -1413,7 +1439,7 @@ void VoxelWorld::teardown_physics() {
 		std::vector<IslandUpload> keep;
 		keep.reserve(island_uploads_.size());
 		for (IslandUpload &u : island_uploads_)
-			if (!u.to_island_atlas && volumes_.pinned(u.slot))
+			if (!u.to_island_atlas && volumes_.pinned(u.volume_slot))
 				keep.push_back(std::move(u));
 		island_uploads_.swap(keep);
 		island_descs_.clear();
@@ -1428,9 +1454,21 @@ void VoxelWorld::teardown_physics() {
 			const ve::IVec3 region = consolidation_job_.region;
 			bool render_restored = true;
 			if (atlas_) {
-				for (size_t i = 0; i < consolidation_old_slots_.size(); i++)
+				for (size_t i = 0; i < consolidation_old_slots_.size(); i++) {
 					if (!atlas_->upload_override(rd(), consolidation_old_slots_[i],
 							consolidation_old_bricks_[i])) render_restored = false;
+					// Restore the NORMAL handle alongside the bytes, exactly as
+					// rollback_render() does. Leaving the new bake's normals bound to a slot
+					// holding the old brick's SDF/material shades a surface that is not there.
+					const ve::OverrideBrick &old_brick = consolidation_old_bricks_[i];
+					if (old_brick.normal_oct.size() == ve::kBrickSdfCount)
+						atlas_->stored_normals().upload_override(rd(),
+								consolidation_old_slots_[i], old_brick.normal_oct.data(),
+								ve::kBrickSdfCount);
+					else
+						atlas_->stored_normals().release_override(rd(),
+								consolidation_old_slots_[i]);
+				}
 				if (consolidation_table_ >= 0)
 					atlas_->overrides().clear_table(rd(), consolidation_table_);
 				if (consolidation_job_.region_slot >= 0) {
@@ -1446,8 +1484,11 @@ void VoxelWorld::teardown_physics() {
 			if (!render_restored)
 				UtilityFunctions::printerr(
 						"VoxelWorld: render override rollback failed during physics teardown; invalidated table");
-			for (const ve::IVec3 brick : consolidation_newly_acquired_)
+			for (const ve::IVec3 brick : consolidation_newly_acquired_) {
+				const int slot = overrides_ ? overrides_->slot_of(brick) : -1;
+				if (slot >= 0 && atlas_) atlas_->stored_normals().release_override(rd(), slot);
 				overrides_->release(brick);
+			}
 			if (edit_log_ && edit_log_->op_count(region) > 0)
 				consolidation_queue_.insert(consolidation_queue_.begin(), region);
 			consolidation_in_flight_ = false;
@@ -1561,15 +1602,16 @@ Dictionary VoxelWorld::debug_physics_stats() {
 	return d;
 }
 
-void VoxelWorld::queue_island_upload(int slot, const ve::VolumeData &d) {
+void VoxelWorld::queue_island_upload(int atlas_slot, int volume_slot,
+		const ve::VolumeData &d) {
 	std::lock_guard<std::mutex> lock(island_mutex_);
-	island_uploads_.push_back(IslandUpload{slot, true, d});
+	island_uploads_.push_back(IslandUpload{atlas_slot, volume_slot, true, d});
 }
 
 void VoxelWorld::queue_field_volume_upload(int slot, const ve::VolumeData &d) {
 	{
 		std::lock_guard<std::mutex> lock(island_mutex_);
-		island_uploads_.push_back(IslandUpload{slot, false, d});
+		island_uploads_.push_back(IslandUpload{-1, slot, false, d});
 	}
 	// The worker's volume pool must see the paste before its next field job, otherwise the
 	// mesher's collision against the new rubble lags a frame (or more) behind the main copy.
@@ -1582,7 +1624,7 @@ void VoxelWorld::discard_field_volume_upload(int slot) {
 		island_uploads_.erase(
 				std::remove_if(island_uploads_.begin(), island_uploads_.end(),
 						[slot](const IslandUpload &u) {
-							return !u.to_island_atlas && u.slot == slot;
+							return !u.to_island_atlas && u.volume_slot == slot;
 						}),
 				island_uploads_.end());
 	}
@@ -1618,31 +1660,55 @@ ve::RayHit VoxelWorld::analytic_raycast_down(const float xz[2]) {
 	return ve::raycast(gen, *edit_log_, o, dir, 400.0f, &volumes_, overrides_);
 }
 
+bool VoxelWorld::release_volume_slot(int slot) {
+	// The authoritative copy goes first; only a successful release (never a pinned slot --
+	// a pasted volume-add still names it) queues the GPU-side normal teardown.
+	const bool freed = volumes_.release(slot);
+	if (freed) {
+		std::lock_guard<std::mutex> lock(island_mutex_);
+		pending_normal_releases_.push_back(slot);
+	}
+	return freed;
+}
+
 int VoxelWorld::drain_island_uploads(RenderingDevice *device) {
 	if (!device) return 0;
 	std::vector<IslandUpload> uploads;
+	std::vector<int> normal_releases;
 	std::vector<IslandSlotDesc> descs;
 	bool dirty = false;
 	{
 		std::lock_guard<std::mutex> lock(island_mutex_);
 		uploads.swap(island_uploads_);
+		normal_releases.swap(pending_normal_releases_);
 		descs = island_descs_;
 		dirty = island_descs_dirty_;
 		island_descs_dirty_ = false;
 	}
+	for (const int slot : normal_releases) {
+		if (atlas_) atlas_->stored_normals().release_volume(device, slot);
+	}
 	for (const IslandUpload &u : uploads) {
-		if (u.to_island_atlas) {
-			if (islands_ && !islands_->upload(device, u.slot, u.data))
-				UtilityFunctions::printerr("VoxelWorld: island atlas upload failed for slot ",
-						u.slot);
-		} else {
-			if (atlas_ && !atlas_->volumes().upload(device, u.slot, u.data))
+		// SDF/material and compact normals land ONCE, in the shared authoritative pools,
+		// indexed by the volume slot. An island upload additionally refreshes its mip at
+		// the atlas slot; a field-volume upload follows the identical volume/normal path
+		// without one. A missing/malformed/failed normal payload is fail-soft: the pool
+		// publishes -1 and the shader falls back to differentiating the R8 atlas.
+		if (atlas_ && u.volume_slot >= 0) {
+			if (!atlas_->volumes().upload(device, u.volume_slot, u.data))
 				UtilityFunctions::printerr("VoxelWorld: field volume upload failed for slot ",
-						u.slot);
-			// Count attempts, not successes: a stale rejected-paste upload that reaches the
-			// GPU is the bug this hook exists to detect, even if the upload call itself failed.
-			debug_field_volume_upload_count_.fetch_add(1, std::memory_order_relaxed);
+						u.volume_slot);
+			atlas_->stored_normals().upload_volume(device, u.volume_slot, u.data);
+		} else if (!atlas_ && u.to_island_atlas) {
+			UtilityFunctions::printerr("VoxelWorld: no GpuAtlas for island upload of slot ",
+					u.volume_slot);
 		}
+		if (u.to_island_atlas && islands_ && u.atlas_slot >= 0 &&
+				!islands_->upload_mip(device, u.atlas_slot, u.data))
+			UtilityFunctions::printerr("VoxelWorld: island mip upload failed for slot ",
+					u.atlas_slot);
+		if (!u.to_island_atlas)
+			debug_field_volume_upload_count_.fetch_add(1, std::memory_order_relaxed);
 	}
 	if (dirty && islands_)
 		islands_->upload_descriptors(device, descs.data(), static_cast<int>(descs.size()));
@@ -1690,7 +1756,7 @@ void VoxelWorld::debug_queue_test_island_upload(int slot, const PackedByteArray 
 	d.mat.assign(mat.ptr(), mat.ptr() + n);
 	for (int64_t i = 0; i < n; i++)
 		if (ve::decode_sdf(d.sdf[static_cast<size_t>(i)]) <= 0.0f) d.solid_voxels++;
-	queue_island_upload(slot, d);
+	queue_island_upload(slot, slot, d); // test fixture: atlas slot == volume slot
 }
 
 void VoxelWorld::debug_queue_test_island_descriptors() {
@@ -1721,10 +1787,20 @@ void VoxelWorld::debug_queue_committed_field_volume_upload(int slot,
 	d.dim = dim;
 	d.sdf.assign(sdf.ptr(), sdf.ptr() + n);
 	d.mat.assign(mat.ptr(), mat.ptr() + n);
-	for (int64_t i = 0; i < n; i++)
+	d.normal_oct.assign(static_cast<size_t>(n), 0);
+	float center2 = 0.5f * (dim - 1) * 0.05f;
+	for (int64_t i = 0; i < n; i++) {
 		if (ve::decode_sdf(d.sdf[static_cast<size_t>(i)]) <= 0.0f) d.solid_voxels++;
+		float up[3]={0,1,0};
+		int z = static_cast<int>(i / (dim*dim));
+		int y = static_cast<int>((i/dim)%dim);
+		int x = static_cast<int>(i % dim);
+		float px = x*0.05f-center2, py=y*0.05f-center2, pz=z*0.05f-center2;
+		float len=std::sqrt(px*px+py*py+pz*pz);
+		if (len>1e-6f) { float n2[3]={px/len, py/len, pz/len}; d.normal_oct[static_cast<size_t>(i)]=ve::oct_encode_snorm8(n2);} else d.normal_oct[static_cast<size_t>(i)]=ve::oct_encode_snorm8(up);
+	}
 	if (!volumes_.store(slot, d) || !volumes_.pin(slot)) {
-		volumes_.release(slot);
+		release_volume_slot(slot);
 		UtilityFunctions::printerr(
 				"debug_queue_committed_field_volume_upload: store/pin failed for slot ", slot);
 		return;
@@ -1733,13 +1809,71 @@ void VoxelWorld::debug_queue_committed_field_volume_upload(int slot,
 	// ensure_physics_initialized()'s pinned-volume replay after teardown/reinit.
 	{
 		std::lock_guard<std::mutex> lock(island_mutex_);
-		island_uploads_.push_back(IslandUpload{slot, false, d});
+		island_uploads_.push_back(IslandUpload{-1, slot, false, d});
+	}
+	if (mesh_) {
+		mesh_->submit_volume(slot, d);
+		mesh_->run_sync([](MeshPass &){});
 	}
 }
 
 void VoxelWorld::debug_set_extraction_available(bool v) {
 	ensure_physics_initialized();
 	if (mesh_) mesh_->debug_set_extraction_available(v);
+}
+
+Dictionary VoxelWorld::debug_stored_normal_stats() {
+	Dictionary d;
+	if (!atlas_ || !atlas_->is_valid()) return d;
+	const StoredNormalStats s = atlas_->stored_normals().stats();
+	d["capacity_bytes"] = static_cast<int64_t>(s.capacity_bytes);
+	d["live_bytes"] = static_cast<int64_t>(s.live_bytes);
+	d["high_water_bytes"] = static_cast<int64_t>(s.high_water_bytes);
+	d["allocation_failures"] = static_cast<int64_t>(s.allocation_failures);
+	d["fallback_hits"] = static_cast<int64_t>(s.fallback_hits);
+	// Task 8: the exact telemetry keys the HUD and the teardown/telemetry tests read.
+	d["normal_capacity_bytes"] = static_cast<int64_t>(s.capacity_bytes);
+	d["normal_live_bytes"] = static_cast<int64_t>(s.live_bytes);
+	d["normal_high_water_bytes"] = static_cast<int64_t>(s.high_water_bytes);
+	d["normal_allocation_failures"] = static_cast<int64_t>(s.allocation_failures);
+	d["normal_fallback_hits"] = static_cast<int64_t>(s.fallback_hits);
+	return d;
+}
+
+Dictionary VoxelWorld::debug_normal_pool_state() {
+	Dictionary d;
+	const bool have_pool = atlas_ && atlas_->is_valid();
+	const StoredNormalPool *p = have_pool ? &atlas_->stored_normals() : nullptr;
+	d["pool_valid"] = p && p->is_valid();
+	d["normal_rid_valid"] = p && p->normal_buffer().is_valid();
+	d["volume_offsets_rid_valid"] = p && p->volume_offsets_buffer().is_valid();
+	d["override_offsets_rid_valid"] = p && p->override_offsets_buffer().is_valid();
+	d["volume_offsets_all_minus_one"] =
+			p && p->is_valid() && p->volume_offsets_all_minus_one();
+	d["override_offsets_all_minus_one"] =
+			p && p->is_valid() && p->override_offsets_all_minus_one();
+	return d;
+}
+
+int64_t VoxelWorld::debug_normal_upload_override(int slot,
+		const PackedByteArray &packed_normals) {
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!device || !atlas_ || !atlas_->is_valid()) return -1;
+	if (slot < 0) return -1;
+	if (packed_normals.is_empty() || packed_normals.size() % 2 != 0) {
+		// Malformed payload: exercise the pool's fallback path rather than uploading junk.
+		return atlas_->stored_normals().upload_override(device, slot, nullptr, 0);
+	}
+	return atlas_->stored_normals().upload_override(device, slot,
+			reinterpret_cast<const uint16_t *>(packed_normals.ptr()),
+			static_cast<int>(packed_normals.size() / 2));
+}
+
+void VoxelWorld::debug_normal_release_override(int slot) {
+	RenderingDevice *device = rd();
+	if (!device || !atlas_ || !atlas_->is_valid()) return;
+	atlas_->stored_normals().release_override(device, slot);
 }
 
 void VoxelWorld::debug_set_fail_extractions(bool v) {
@@ -1926,6 +2060,36 @@ void VoxelWorld::gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::Edit
 	// prefix is a valid world state; a suffix could apply an add without the subtract that
 	// made room for it.
 	if (out->size() > ve::kMaxRegionOps) out->resize(ve::kMaxRegionOps);
+}
+
+bool VoxelWorld::snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo, ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const {
+	if (!out || !overrides_) return false;
+	out->overrides.clear();
+	out->volumes.clear();
+	// Copy only prior overrides inside inclusive brick range
+	for (int z = brick_lo.z; z <= brick_hi.z; z++)
+		for (int y = brick_lo.y; y <= brick_hi.y; y++)
+			for (int x = brick_lo.x; x <= brick_hi.x; x++) {
+				ve::IVec3 b{x, y, z};
+				int slot = overrides_->slot_of(b);
+				if (slot >= 0) {
+					const ve::OverrideBrick *data = overrides_->data(slot);
+					if (!data) return false;
+					if (!data->normal_oct.empty() && data->normal_oct.size() != ve::kBrickSdfCount) return false;
+					out->overrides.push_back({b, *data});
+				}
+			}
+	std::set<int> seen;
+	for (const auto &op : ops) {
+		if (op.type != ve::kOpVolumeAdd) continue;
+		int slot = static_cast<int>(op.aux[0]);
+		if (seen.count(slot)) continue;
+		seen.insert(slot);
+		const ve::VolumeData *vd = volumes_.get(slot);
+		if (!vd || !vd->valid()) return false;
+		out->volumes.push_back({slot, *vd});
+	}
+	return true;
 }
 
 void VoxelWorld::ensure_lod() {
@@ -2899,6 +3063,25 @@ void VoxelWorld::debug_apply_sphere_subtract(Vector3 centre, float radius) {
 	append_edit(op);
 }
 
+void VoxelWorld::debug_apply_sphere_add(Vector3 centre, float radius, int material) {
+	if (!edit_log_) ensure_physics_initialized();
+	ve::EditOp op;
+	op.type = ve::kOpSphereAdd;
+	op.material = static_cast<uint16_t>(material);
+	op.pos[0] = centre.x;
+	op.pos[1] = centre.y;
+	op.pos[2] = centre.z;
+	op.radius = radius;
+	append_edit(op);
+}
+
+void VoxelWorld::debug_apply_volume_add(int slot, Vector3 origin, float voxel, int dim) {
+	if (!edit_log_) ensure_physics_initialized();
+	float o[3] = {origin.x, origin.y, origin.z};
+	ve::EditOp op = ve::make_volume_add(slot, o, voxel, dim);
+	append_edit(op);
+}
+
 int VoxelWorld::debug_region_op_count(Vector3i region) {
 	if (!edit_log_) return 0;
 	std::lock_guard<std::mutex> lock(edit_mutex_);
@@ -2969,6 +3152,18 @@ bool VoxelWorld::debug_fill_override_pool() {
 				discard();
 				return false;
 			}
+		}
+		// Task 7: compact normals ride the SAME transaction -- payload bytes are on the
+		// device before the table entry that names them lands. A failed normal upload
+		// publishes -1 (the shader falls back to R8 taps) but never rejects the geometry;
+		// StoredNormalPool counts the allocation failure/fallback hit itself.
+		for (size_t i = 0; i < slots.size(); i++) {
+			const ve::OverrideBrick &brick = bricks[i];
+			if (brick.normal_oct.size() == ve::kBrickSdfCount)
+				atlas_->stored_normals().upload_override(rd(), slots[i],
+						brick.normal_oct.data(), ve::kBrickSdfCount);
+			else
+				atlas_->stored_normals().release_override(rd(), slots[i]);
 		}
 		atlas_->set_override_table(rd(), region_slot, 0, entries);
 	}
@@ -3053,6 +3248,17 @@ void VoxelWorld::pump_consolidation() {
 			for (size_t i = 0; i < consolidation_old_slots_.size(); i++)
 				if (!atlas_->upload_override(rd(), consolidation_old_slots_[i],
 						consolidation_old_bricks_[i])) ok = false;
+			// Restore the previous NORMAL handles alongside the previous override bytes:
+			// re-upload each old brick's compact normals, or park -1 where the old brick
+			// had none, so a rolled-back table never names stale spans.
+			for (size_t i = 0; i < consolidation_old_slots_.size(); i++) {
+				const ve::OverrideBrick &old = consolidation_old_bricks_[i];
+				if (old.normal_oct.size() == ve::kBrickSdfCount)
+					atlas_->stored_normals().upload_override(rd(), consolidation_old_slots_[i],
+							old.normal_oct.data(), ve::kBrickSdfCount);
+				else
+					atlas_->stored_normals().release_override(rd(), consolidation_old_slots_[i]);
+			}
 			if (consolidation_table_ >= 0) atlas_->overrides().clear_table(rd(), consolidation_table_);
 			if (consolidation_job_.region_slot >= 0)
 				atlas_->set_override_table(rd(), consolidation_job_.region_slot,
@@ -3063,7 +3269,14 @@ void VoxelWorld::pump_consolidation() {
 	const auto refuse_transaction = [&](bool retry, bool rebuild_worker) {
 		const ve::IVec3 region = consolidation_job_.region;
 		const bool restored = rollback_render();
-		for (const ve::IVec3 brick : consolidation_newly_acquired_) overrides_->release(brick);
+		for (const ve::IVec3 brick : consolidation_newly_acquired_) {
+			// The speculative slot's normal span was staged before the table entry naming
+			// it. Releasing the slot without releasing the span leaks payload out of the
+			// fixed 32 MiB pool for the rest of the process.
+			const int slot = overrides_ ? overrides_->slot_of(brick) : -1;
+			if (slot >= 0 && atlas_) atlas_->stored_normals().release_override(rd(), slot);
+			overrides_->release(brick);
+		}
 		if (!restored)
 			UtilityFunctions::printerr(
 					"VoxelWorld: render override rollback failed; retaining old edit state");
@@ -3167,6 +3380,18 @@ void VoxelWorld::pump_consolidation() {
 		if (atlas_)
 			for (size_t i = 0; i < consolidation_slots_.size(); i++)
 				if (!atlas_->upload_override(rd(), consolidation_slots_[i], result.baked[i])) render_ok = false;
+		// Task 7: stage the baked compact normals in the SAME transaction, before the
+		// table entry that names them is published. A failed normal upload parks -1 and
+		// the shader falls back to R8 taps -- geometry is never rejected.
+		if (atlas_)
+			for (size_t i = 0; i < consolidation_slots_.size(); i++) {
+				const ve::OverrideBrick &brick = consolidation_baked_[i];
+				if (brick.normal_oct.size() == ve::kBrickSdfCount)
+					atlas_->stored_normals().upload_override(rd(), consolidation_slots_[i],
+							brick.normal_oct.data(), ve::kBrickSdfCount);
+				else
+					atlas_->stored_normals().release_override(rd(), consolidation_slots_[i]);
+			}
 		if (!render_ok) {
 			refuse_transaction(true, false);
 			return;
@@ -3208,6 +3433,17 @@ void VoxelWorld::pump_consolidation() {
 	const std::vector<uint64_t> &seqs = edit_log_->seqs(region);
 	job.through_seq = seqs.empty() ? 0 : seqs.back();
 	ve::plan_consolidation(job.ops.data(), static_cast<int>(job.ops.size()), region, &job.bricks);
+	if (!job.bricks.empty()) {
+		// Spec requires collect + snapshot while edit_mutex_ is held: edit_lock above spans this
+		// whole function, so overrides_, edit_log_, and volumes_ are read in one consistent state.
+		ve::IVec3 lo = job.bricks[0], hi = job.bricks[0];
+		for (const auto &b : job.bricks) { lo.x = std::min(lo.x, b.x); lo.y = std::min(lo.y, b.y); lo.z = std::min(lo.z, b.z); hi.x = std::max(hi.x, b.x); hi.y = std::max(hi.y, b.y); hi.z = std::max(hi.z, b.z); }
+		if (!snapshot_field_sources(job.ops, lo, hi, &job.source)) {
+			consolidation_refusals_++;
+			requeue(region);
+			return;
+		}
+	}
 	int needed_slots = 0;
 	for (const ve::IVec3 brick : job.bricks) if (overrides_->slot_of(brick) < 0) needed_slots++;
 	if (job.bricks.empty() || needed_slots > overrides_->capacity() - overrides_->used()) {
@@ -3307,6 +3543,11 @@ Dictionary VoxelWorld::debug_consolidate_diff(Vector3i region) {
 	if (job.region_slot < 0) return d;
 	job.bricks = bricks;
 	job.ops = ops;
+	if (!bricks.empty()) {
+		ve::IVec3 lo = bricks[0], hi = bricks[0];
+		for (auto &b : bricks) { lo.x = std::min(lo.x, b.x); lo.y = std::min(lo.y, b.y); lo.z = std::min(lo.z, b.z); hi.x = std::max(hi.x, b.x); hi.y = std::max(hi.y, b.y); hi.z = std::max(hi.z, b.z); }
+		if (!snapshot_field_sources(ops, lo, hi, &job.source)) return d;
+	}
 	const int existing_table = override_table_for_region(r);
 	if (existing_table >= 0) {
 		std::vector<std::pair<int, int>> existing_entries;
@@ -3344,7 +3585,7 @@ Dictionary VoxelWorld::debug_consolidate_diff(Vector3i region) {
 					const uint8_t actual = b.sdf[ve::sdf_index(x, y, z)];
 					if (expected != actual) {
 						sdf_mismatches++;
-						if (first.is_empty()) { first["brick"] = Vector3i(brick.x, brick.y, brick.z); first["lattice"] = Vector3i(x, y, z); }
+						if (first.is_empty()) { first["brick"] = Vector3i(brick.x, brick.y, brick.z); first["lattice"] = Vector3i(x, y, z); first["expected"] = int(expected); first["actual"] = int(actual); }
 					}
 				}
 			for (int z = 0; z < ve::kBrickVoxels; z++)
@@ -3359,6 +3600,43 @@ Dictionary VoxelWorld::debug_consolidate_diff(Vector3i region) {
 	d["sdf_mismatches"] = sdf_mismatches;
 	d["mat_mismatches"] = mat_mismatches;
 	d["first_mismatch"] = first;
+	// Normal payload checks: every baked override should carry 4913 compact normals, lengths >0.99, dot>0.98 at >=64 deterministic points
+	int normal_count = 0;
+	float norm_min_len = 2.0f, norm_min_dot = 2.0f;
+	bool normals_ok = true;
+	for (size_t bi = 0; bi < results[0].baked.size(); bi++) {
+		const auto &b = results[0].baked[bi];
+		if (b.normal_oct.size() != ve::kBrickSdfCount) { normals_ok = false; break; }
+		if (normal_count == 0) normal_count = static_cast<int>(b.normal_oct.size());
+		// sample 64 deterministic points: 4x4x4 grid
+		ve::IVec3 brick = bricks[bi];
+		float bo[3]; ve::brick_world_origin(brick, bo);
+		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
+			int lx = x * 4; int ly = y * 4; int lz = z * 4;
+			int idx = ve::sdf_index(lx, ly, lz);
+			float dec[3]; ve::oct_decode_snorm8(b.normal_oct[idx], dec);
+			float len = std::sqrt(dec[0]*dec[0]+dec[1]*dec[1]+dec[2]*dec[2]);
+			norm_min_len = std::min(norm_min_len, len);
+			float px = bo[0] + lx * ve::kVoxelSize;
+			float py = bo[1] + ly * ve::kVoxelSize;
+			float pz = bo[2] + lz * ve::kVoxelSize;
+			ve::FieldSample fs = ve::eval_field_gradient(gen, ops.data(), static_cast<int>(ops.size()), px, py, pz, &volumes_, overrides_);
+			if (!fs.exact_gradient) { norm_min_dot = -1.0f; continue; }
+			float elen = std::sqrt(fs.gradient[0]*fs.gradient[0]+fs.gradient[1]*fs.gradient[1]+fs.gradient[2]*fs.gradient[2]);
+			if (!(elen>1e-6f)) continue;
+			float eg[3]={fs.gradient[0]/elen, fs.gradient[1]/elen, fs.gradient[2]/elen};
+			float dot = dec[0]*eg[0]+dec[1]*eg[1]+dec[2]*eg[2];
+			norm_min_dot = std::min(norm_min_dot, dot);
+		}
+	}
+	if (!normals_ok) { normal_count = 0; norm_min_len = 0.0f; norm_min_dot = 0.0f; }
+	if (norm_min_len > 1.0f) norm_min_len = 1.0f;
+	if (norm_min_dot > 1.0f) norm_min_dot = 1.0f;
+	d["normal_count"] = normal_count;
+	d["normal_min_length"] = norm_min_len;
+	d["normal_min_dot"] = norm_min_dot;
+	// Also expose per-brick count for test that checks every baked override
+	d["baked_count"] = static_cast<int>(results[0].baked.size());
 	return d;
 }
 
@@ -3411,6 +3689,11 @@ bool VoxelWorld::debug_consolidate_region(Vector3i region) {
 	job.region_slot = resident_slot;
 	job.bricks = bricks;
 	job.ops = ops;
+	if (!bricks.empty()) {
+		ve::IVec3 lo = bricks[0], hi = bricks[0];
+		for (auto &b : bricks) { lo.x = std::min(lo.x, b.x); lo.y = std::min(lo.y, b.y); lo.z = std::min(lo.z, b.z); hi.x = std::max(hi.x, b.x); hi.y = std::max(hi.y, b.y); hi.z = std::max(hi.z, b.z); }
+		if (!snapshot_field_sources(ops, lo, hi, &job.source)) return refuse();
+	}
 	// A reused worker region slot must see the old table while the bake reads its base.
 	if (!mesh_->set_override_region(r, job.region_slot, old_table, old_entries)) return refuse();
 	if (!mesh_->submit_consolidations({job})) return refuse();
@@ -3442,6 +3725,16 @@ bool VoxelWorld::debug_consolidate_region(Vector3i region) {
 	if (atlas_) {
 		for (size_t i = 0; i < slots.size(); i++)
 			if (!atlas_->upload_override(rd(), slots[i], results[0].baked[i])) render_ok = false;
+		// Task 7: normals share the transaction -- payload before table publication.
+		if (render_ok)
+			for (size_t i = 0; i < slots.size(); i++) {
+				const ve::OverrideBrick &brick = results[0].baked[i];
+				if (brick.normal_oct.size() == ve::kBrickSdfCount)
+					atlas_->stored_normals().upload_override(rd(), slots[i],
+							brick.normal_oct.data(), ve::kBrickSdfCount);
+				else
+					atlas_->stored_normals().release_override(rd(), slots[i]);
+			}
 		if (render_ok) atlas_->set_override_table(rd(), job.region_slot, table, entries);
 	}
 	const auto rollback_publication = [&]() {
@@ -3449,6 +3742,15 @@ bool VoxelWorld::debug_consolidate_region(Vector3i region) {
 		if (atlas_) {
 			for (size_t i = 0; i < old_slots.size(); i++)
 				if (!atlas_->upload_override(rd(), old_slots[i], old_bricks[i])) render_restored = false;
+			// Restore the previous NORMAL handles alongside the previous override bytes.
+			for (size_t i = 0; i < old_slots.size(); i++) {
+				const ve::OverrideBrick &old = old_bricks[i];
+				if (old.normal_oct.size() == ve::kBrickSdfCount)
+					atlas_->stored_normals().upload_override(rd(), old_slots[i],
+							old.normal_oct.data(), ve::kBrickSdfCount);
+				else
+					atlas_->stored_normals().release_override(rd(), old_slots[i]);
+			}
 			atlas_->overrides().clear_table(rd(), table);
 			atlas_->set_override_table(rd(), job.region_slot, old_table, old_entries);
 		}
@@ -3919,6 +4221,10 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 		std::lock_guard<std::mutex> lock(edit_mutex_);
 		if (!edit_log_) return false;
 		ve::collect_ops_for_aabb(*edit_log_, wlo, whi, &job->ops);
+		float lattice_hi[3] = {job->origin[0] + (job->dim - 1) * job->voxel, job->origin[1] + (job->dim - 1) * job->voxel, job->origin[2] + (job->dim - 1) * job->voxel};
+		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job->origin[0], job->origin[1], job->origin[2]);
+		ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
+		if (!snapshot_field_sources(job->ops, blo, bhi, &job->snapshot)) return false;
 	}
 
 	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
@@ -3978,6 +4284,10 @@ Dictionary VoxelWorld::debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_c
 	{
 		std::lock_guard<std::mutex> lock(edit_mutex_);
 		ve::collect_ops_for_aabb(*edit_log_, wlo, whi, &job.ops);
+		float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
+		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
+		ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
+		if (!snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) return d;
 	}
 
 	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
@@ -4021,11 +4331,47 @@ Dictionary VoxelWorld::debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_c
 	d["cpu_solid"] = cpu.solid_voxels;
 	d["voxel"] = job.voxel;
 	d["boxes"] = static_cast<int>(boxes.size());
+	d["dim"] = job.dim;
+	d["normal_count"] = static_cast<int>(gpu.normal_oct.size());
+	// Compute normal length and alignment vs CPU masked gradient
+	float min_len = 2.0f, min_align = 2.0f;
+	if (!gpu.normal_oct.empty()) {
+		ve::AnalyticGenerator agen;
+		for (size_t i = 0; i < gpu.normal_oct.size(); i++) {
+			float dec[3];
+			ve::oct_decode_snorm8(gpu.normal_oct[i], dec);
+			float len = std::sqrt(dec[0]*dec[0] + dec[1]*dec[1] + dec[2]*dec[2]);
+			min_len = std::min(min_len, len);
+			int z = static_cast<int>(i / (job.dim * job.dim));
+			int y = static_cast<int>((i / job.dim) % job.dim);
+			int x = static_cast<int>(i % job.dim);
+			float px = job.origin[0] + x * job.voxel;
+			float py = job.origin[1] + y * job.voxel;
+			float pz = job.origin[2] + z * job.voxel;
+			ve::FieldSample fs = ve::eval_field_gradient(agen, job.ops.data(), static_cast<int>(job.ops.size()), px, py, pz, &volumes_, overrides_);
+			float bu = 1e30f; float bu_grad[3]={0,1,0}; bool has_bu=false;
+			for (auto &b : boxes) { float lo[3], hi[3]; b.world_aabb(lo,hi); float d = ve::box_sdf(lo,hi,px,py,pz); if (!has_bu || d < bu) { bu=d; ve::box_sdf_gradient(lo,hi,px,py,pz,bu_grad); has_bu=true; } }
+			float exp_g[3]={fs.gradient[0],fs.gradient[1],fs.gradient[2]}; bool exp_exact=fs.exact_gradient;
+			if (has_bu && bu > fs.sdf) { exp_g[0]=bu_grad[0]; exp_g[1]=bu_grad[1]; exp_g[2]=bu_grad[2]; exp_exact=true; }
+			if (!exp_exact) continue;
+			float elen = std::sqrt(exp_g[0]*exp_g[0]+exp_g[1]*exp_g[1]+exp_g[2]*exp_g[2]);
+			if (!(elen>1e-6f)) continue;
+			exp_g[0]/=elen; exp_g[1]/=elen; exp_g[2]/=elen;
+			float dot = dec[0]*exp_g[0] + dec[1]*exp_g[1] + dec[2]*exp_g[2];
+			min_align = std::min(min_align, dot);
+		}
+		if (min_len > 1.0f) min_len = 1.0f;
+		if (min_align > 1.0f) min_align = 1.0f;
+	} else {
+		min_len = 0.0f; min_align = 0.0f;
+	}
+	d["normal_min_length"] = min_len;
+	d["normal_min_alignment"] = min_align;
 	return d;
 }
 
 Dictionary VoxelWorld::debug_place_test_island_rotated(int slot, Vector3i lo_cell,
-		Vector3i hi_cell, Vector3 offset, float yaw) {
+		Vector3i hi_cell, Vector3 offset, float yaw, int volume_slot) {
 	Dictionary d;
 	d["ok"] = false;
 	ensure_initialized();
@@ -4063,6 +4409,10 @@ Dictionary VoxelWorld::debug_place_test_island_rotated(int slot, Vector3i lo_cel
 			IslandSlotDesc &d = all[s];
 			d.live = true;
 			d.dim = i[16];
+			// Lane 17 is the authoritative volume slot the shader strides the shared
+			// SDF/material/normal buffers with. Dropping it here parked a preserved island
+			// on the "no volume" path and made it vanish from the next placement onward.
+			d.volume_slot = i[17];
 			d.voxel = f[15];
 			for (int a = 0; a < 3; a++) {
 				d.basis[a * 3 + 0] = f[a * 4 + 0];
@@ -4076,7 +4426,20 @@ Dictionary VoxelWorld::debug_place_test_island_rotated(int slot, Vector3i lo_cel
 		}
 	}
 
-	if (!islands_->upload(device, slot, volume)) return d;
+	// The atlas slot selects descriptor/mip/tile-mask entries; the volume slot strides the
+	// SHARED SDF/material/normal buffers. Real bodies get them from two different pools and
+	// they diverge, so a test may pass its own volume slot to reproduce that.
+	const int vslot = volume_slot >= 0 ? volume_slot : slot;
+	if (vslot >= ve::kMaxVolumes) return d;
+	if (!atlas_->volumes().upload(device, vslot, volume)) return d;
+	// Task 7: keep the CPU-authoritative copy too (the same thing IslandManager does for
+	// real bodies), so debug_island_normal_probe reads the same normals the GPU holds.
+	volumes_.reserve(vslot);
+	if (!volumes_.store(vslot, volume)) return d;
+	// Task 6: compact normals share the pool; the test fixture's radial lattice is real
+	// render-reachable payload, not a fallback source.
+	atlas_->stored_normals().upload_volume(device, vslot, volume);
+	if (!islands_->upload_mip(device, slot, volume)) return d;
 
 	// The body's local frame is the birth world frame shifted so the body origin is the
 	// lattice's centre -- the same convention IslandManager uses (Task 13), so the rotation
@@ -4100,6 +4463,7 @@ Dictionary VoxelWorld::debug_place_test_island_rotated(int slot, Vector3i lo_cel
 	desc.origin[1] += offset.y;
 	desc.origin[2] += offset.z;
 	desc.recompute_world_aabb();
+	desc.volume_slot = vslot;
 
 	all[slot] = desc;
 	islands_->upload_descriptors(device, all, kMaxIslands);
@@ -4140,7 +4504,7 @@ Dictionary VoxelWorld::debug_spawn_test_body(Vector3i lo_cell, Vector3i hi_cell,
 	const int slot = volumes_.allocate();
 	if (slot < 0) return d;
 	if (!volumes_.store(slot, volume)) {
-		volumes_.release(slot);
+		release_volume_slot(slot);
 		return d;
 	}
 
@@ -4173,7 +4537,7 @@ Dictionary VoxelWorld::debug_spawn_test_body(Vector3i lo_cell, Vector3i hi_cell,
 	if (!b->spawn(w3.is_valid() ? w3->get_space() : RID(),
 				w3.is_valid() ? w3->get_scenario() : RID(), info, &volume)) {
 		delete b;
-		volumes_.release(slot);
+		release_volume_slot(slot);
 		return d;
 	}
 	test_bodies_.push_back(b);
@@ -4350,6 +4714,10 @@ bool VoxelWorld::debug_extract_submit(int id, Vector3i lo_cell, Vector3i hi_cell
 	{
 		std::lock_guard<std::mutex> lock(edit_mutex_);
 		ve::collect_ops_for_aabb(*edit_log_, wlo, whi, &job.ops);
+		float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
+		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
+		ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
+		if (!snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) return false;
 	}
 	std::vector<IslandExtractJob> jobs;
 	jobs.push_back(std::move(job));
@@ -4614,6 +4982,324 @@ Dictionary VoxelWorld::debug_raymarch_hole_probe(Vector3 origin, Vector3 dir, in
 	d["ran"] = true;
 	d["hit_pixels"] = hits;
 	d["isolated_misses"] = isolated;
+	return d;
+}
+
+Dictionary VoxelWorld::debug_raymarch_normal_probe(Vector3 origin, Vector3 dir, int w, int h) {
+	Dictionary d;
+	d["ran"] = false;
+	d["hits"] = 0;
+	d["rms_ndl"] = 0.0;
+	d["cel_mismatch_fraction"] = 0.0;
+	d["largest_mismatch_component"] = 0;
+	if (w <= 0 || h <= 0) return d;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_) return d;
+	const float aspect = static_cast<float>(w) / static_cast<float>(h);
+	const float tan_y = std::tan(1.0471975512f * 0.5f);
+	ve::CameraParams cam = ve::CameraParams::looking_at(
+			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
+	cam.params[0] = tan_y * aspect;
+	cam.params[1] = tan_y;
+	cam.params[2] = 200.0f;
+	const ve::WorldBounds wb = world_bounds();
+	const ve::IVec3 ro = wb.origin_regions();
+	cam.dims[0] = world_size_regions_.x; cam.dims[1] = world_size_regions_.y;
+	cam.dims[2] = world_size_regions_.z; cam.dims[3] = island_slot_count();
+	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
+	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
+	cam.atlas_bricks[2] = atlas_bricks_.z;
+	const uint32_t flags = ve::pack_flags(beauty_settings());
+	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
+	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, w, h, kNoEdit)) return d;
+	device->submit();
+	device->sync();
+	const PackedByteArray surface = device->texture_get_data(raymarch_pass_->surface_texture(), 0);
+	const PackedByteArray hitpos = device->texture_get_data(raymarch_pass_->hitpos_texture(), 0);
+	if (surface.size() < static_cast<int64_t>(w) * h * 8) return d;
+	if (hitpos.size() < static_cast<int64_t>(w) * h * 16) return d;
+	const uint16_t *s = reinterpret_cast<const uint16_t *>(surface.ptr());
+	const float *hp = reinterpret_cast<const float *>(hitpos.ptr());
+	constexpr float kSun[3] = {0.5746958f, 0.7662610f, 0.2873479f};
+	constexpr float kEdges[3] = {0.08f, 0.32f, 0.66f};
+	auto band = [](float ndl) { return ndl > 0.66f ? 3 : ndl > 0.32f ? 2 : ndl > 0.08f ? 1 : 0; };
+	int total_hits = 0;
+	for (int i = 0; i < w * h; i++) if (hp[i * 4 + 3] > 0.5f) total_hits++;
+	std::vector<uint8_t> mismatch(static_cast<size_t>(w) * h, 0);
+	double sum_sq = 0.0;
+	int considered = 0;
+	int mismatches = 0;
+	// Task 7: the reference normal comes from the CPU field evaluator over the hit
+	// point's own region op span, consulting the same VolumeSet / OverrideStore the
+	// GPU's authoritative buffers mirror -- not from an inline analytic formula, so
+	// edits, stored volumes and consolidated overrides are all covered. For a pure
+	// procedural hit this reduces exactly to Task 1's analytic gradient.
+	ve::AnalyticGenerator gen;
+	std::lock_guard<std::mutex> edit_lock(edit_mutex_);
+	for (int y = 0; y < h; y++) {
+		for (int x = 0; x < w; x++) {
+			const int i = y * w + x;
+			if (hp[i * 4 + 3] <= 0.5f) continue;
+			// Decode hit normal from surface texture.
+			const float e[2] = {half_to_float(s[i * 4 + 0]), half_to_float(s[i * 4 + 1])};
+			float rn[3];
+			ve::oct_decode(e, rn);
+			float rlen = std::sqrt(rn[0]*rn[0] + rn[1]*rn[1] + rn[2]*rn[2]);
+			if (rlen > 1e-8f) { rn[0]/=rlen; rn[1]/=rlen; rn[2]/=rlen; }
+			const float hitx = hp[i * 4 + 0];
+			const float hity = hp[i * 4 + 1];
+			const float hitz = hp[i * 4 + 2];
+			// CPU reference gradient over this region's op span.
+			const std::vector<ve::EditOp> &ops =
+					edit_log_->ops(ve::WorldBounds::region_of_point(hitx, hity, hitz));
+			const ve::FieldSample fs = ve::eval_field_gradient(gen, ops.data(),
+					static_cast<int>(ops.size()), hitx, hity, hitz, &volumes_, overrides_);
+			if (!fs.exact_gradient) continue;
+			const float gx = fs.gradient[0], gy = fs.gradient[1], gz = fs.gradient[2];
+			float alen = std::sqrt(gx*gx + gy*gy + gz*gz);
+			if (alen < 1e-8f) continue;
+			float an[3] = {gx/alen, gy/alen, gz/alen};
+			float ndl_render = rn[0]*kSun[0] + rn[1]*kSun[1] + rn[2]*kSun[2];
+			float ndl_analytic = an[0]*kSun[0] + an[1]*kSun[1] + an[2]*kSun[2];
+			double diff = double(ndl_render) - double(ndl_analytic);
+			sum_sq += diff * diff;
+			considered++;
+			bool far_from_edges = true;
+			for (int eidx = 0; eidx < 3; eidx++) if (std::fabs(ndl_analytic - kEdges[eidx]) < 0.01f) far_from_edges = false;
+			if (!far_from_edges) continue;
+			if (band(ndl_render) != band(ndl_analytic)) {
+				mismatch[static_cast<size_t>(i)] = 1;
+				mismatches++;
+			}
+		}
+	}
+	double rms = considered > 0 ? std::sqrt(sum_sq / double(considered)) : 0.0;
+	double frac = considered > 0 ? double(mismatches) / double(considered) : 0.0;
+	int largest = 0;
+	std::vector<uint8_t> visited(static_cast<size_t>(w) * h, 0);
+	std::vector<int> stack;
+	stack.reserve(1024);
+	for (int y = 0; y < h; y++) {
+		for (int x = 0; x < w; x++) {
+			const int idx = y * w + x;
+			if (!mismatch[static_cast<size_t>(idx)] || visited[static_cast<size_t>(idx)]) continue;
+			int comp = 0;
+			stack.clear();
+			stack.push_back(idx);
+			visited[static_cast<size_t>(idx)] = 1;
+			while (!stack.empty()) {
+				int cur = stack.back(); stack.pop_back();
+				comp++;
+				int cx = cur % w;
+				int cy = cur / w;
+				if (cx > 0) { int nb = cur - 1; if (mismatch[static_cast<size_t>(nb)] && !visited[static_cast<size_t>(nb)]) { visited[static_cast<size_t>(nb)] = 1; stack.push_back(nb); } }
+				if (cx + 1 < w) { int nb = cur + 1; if (mismatch[static_cast<size_t>(nb)] && !visited[static_cast<size_t>(nb)]) { visited[static_cast<size_t>(nb)] = 1; stack.push_back(nb); } }
+				if (cy > 0) { int nb = cur - w; if (mismatch[static_cast<size_t>(nb)] && !visited[static_cast<size_t>(nb)]) { visited[static_cast<size_t>(nb)] = 1; stack.push_back(nb); } }
+				if (cy + 1 < h) { int nb = cur + w; if (mismatch[static_cast<size_t>(nb)] && !visited[static_cast<size_t>(nb)]) { visited[static_cast<size_t>(nb)] = 1; stack.push_back(nb); } }
+			}
+			if (comp > largest) largest = comp;
+		}
+	}
+	d["ran"] = true;
+	d["hits"] = total_hits;
+	d["considered"] = considered; // hits whose CPU reference gradient was exact and compared
+	d["rms_ndl"] = rms;
+	d["cel_mismatch_fraction"] = frac;
+	d["largest_mismatch_component"] = largest;
+	return d;
+}
+
+// Task 7: the island counterpart of debug_raymarch_normal_probe. Every hit inside the
+// body's local lattice box is compared against a trilinear blend of that body's OWN
+// compact normals (VolumeData::normal_oct, CPU authoritative), rotated into the world by
+// the body basis -- the same numbers the shader decodes at an island hit. Same five
+// metrics as the terrain probe.
+Dictionary VoxelWorld::debug_island_normal_probe(int island_slot, Vector3 origin, Vector3 dir,
+		int w, int h) {
+	Dictionary d;
+	d["ran"] = false;
+	d["hits"] = 0;
+	d["rms_ndl"] = 0.0;
+	d["cel_mismatch_fraction"] = 0.0;
+	d["largest_mismatch_component"] = 0;
+	if (w <= 0 || h <= 0 || island_slot < 0 || island_slot >= kMaxIslands) return d;
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_) return d;
+	// The descriptor the SHADER sees is the one on the device: test-placed islands are
+	// uploaded directly, so read it back rather than trusting any cached copy.
+	const int64_t desc_bytes = static_cast<int64_t>(kMaxIslands) * 128;
+	const PackedByteArray desc =
+			device->buffer_get_data(islands_->desc_buffer(), 0, static_cast<uint32_t>(desc_bytes));
+	if (desc.size() != desc_bytes) return d;
+	const uint8_t *src = desc.ptr() + static_cast<int64_t>(island_slot) * 128;
+	const float *f = reinterpret_cast<const float *>(src);
+	const int32_t *di = reinterpret_cast<const int32_t *>(src);
+	const int dim = di[16];
+	const int volume_slot = di[17];
+	if (dim < 2 || volume_slot < 0 || volume_slot >= ve::kMaxVolumes) return d;
+	float basis[9];   // column major: basis[a*3+c] = world direction component c of local +a
+	float body_origin[3], lattice_lo[3];
+	for (int a = 0; a < 3; a++) {
+		basis[a * 3 + 0] = f[a * 4 + 0];
+		basis[a * 3 + 1] = f[a * 4 + 1];
+		basis[a * 3 + 2] = f[a * 4 + 2];
+		body_origin[a] = f[a * 4 + 3];
+		lattice_lo[a] = f[12 + a];
+	}
+	const float voxel = f[15];
+	if (!(voxel > 0.0f)) return d;
+	const ve::VolumeData *vol = volumes_.get(volume_slot);
+	if (!vol || !vol->has_normals() || vol->dim != dim) return d;
+
+	const float aspect = static_cast<float>(w) / static_cast<float>(h);
+	const float tan_y = std::tan(1.0471975512f * 0.5f);
+	ve::CameraParams cam = ve::CameraParams::looking_at(
+			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
+	cam.params[0] = tan_y * aspect;
+	cam.params[1] = tan_y;
+	cam.params[2] = 200.0f;
+	const ve::WorldBounds wb = world_bounds();
+	const ve::IVec3 ro = wb.origin_regions();
+	cam.dims[0] = world_size_regions_.x; cam.dims[1] = world_size_regions_.y;
+	cam.dims[2] = world_size_regions_.z; cam.dims[3] = island_slot_count();
+	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
+	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
+	cam.atlas_bricks[2] = atlas_bricks_.z;
+	const uint32_t flags = ve::pack_flags(beauty_settings());
+	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
+	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
+	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, w, h, kNoEdit)) return d;
+	device->submit();
+	device->sync();
+	const PackedByteArray surface = device->texture_get_data(raymarch_pass_->surface_texture(), 0);
+	const PackedByteArray hitpos = device->texture_get_data(raymarch_pass_->hitpos_texture(), 0);
+	if (surface.size() < static_cast<int64_t>(w) * h * 8) return d;
+	if (hitpos.size() < static_cast<int64_t>(w) * h * 16) return d;
+	const uint16_t *s = reinterpret_cast<const uint16_t *>(surface.ptr());
+	const float *hp = reinterpret_cast<const float *>(hitpos.ptr());
+	constexpr float kSun[3] = {0.5746958f, 0.7662610f, 0.2873479f};
+	constexpr float kEdges[3] = {0.08f, 0.32f, 0.66f};
+	auto band = [](float ndl) { return ndl > 0.66f ? 3 : ndl > 0.32f ? 2 : ndl > 0.08f ? 1 : 0; };
+
+	int total_hits = 0;
+	for (int i = 0; i < w * h; i++) if (hp[i * 4 + 3] > 0.5f) total_hits++;
+	std::vector<uint8_t> mismatch(static_cast<size_t>(w) * h, 0);
+	double sum_sq = 0.0;
+	int considered = 0;
+	int mismatches = 0;
+	const float span = static_cast<float>(dim - 1) * voxel;
+	const int sy = dim, sz = dim * dim;
+	for (int y = 0; y < h; y++) {
+		for (int x = 0; x < w; x++) {
+			const int i = y * w + x;
+			if (hp[i * 4 + 3] <= 0.5f) continue;
+			const Vector3 hit(hp[i * 4 + 0], hp[i * 4 + 1], hp[i * 4 + 2]);
+			// World -> local -> lattice coordinates.
+			const float rel[3] = {hit.x - body_origin[0], hit.y - body_origin[1],
+					hit.z - body_origin[2]};
+			// Orthonormal basis: inverse is its transpose.
+			float q_l[3];
+			for (int a = 0; a < 3; a++)
+				q_l[a] = basis[a * 3 + 0] * rel[0] + basis[a * 3 + 1] * rel[1]
+						+ basis[a * 3 + 2] * rel[2];
+			bool inside = true;
+			float lcoord[3];
+			for (int a = 0; a < 3; a++) {
+				lcoord[a] = (q_l[a] - lattice_lo[a]) / voxel;
+				if (lcoord[a] < -1e-4f || lcoord[a] > static_cast<float>(dim - 1) + 1e-4f)
+					inside = false;
+			}
+			if (!inside) continue; // terrain (or another body) behind/around the island
+			// Trilinear blend of the compact normals at the same coords/fractions the
+			// shader's island_sdf_at uses.
+			int i0[3], i1[3];
+			float fr[3];
+			for (int a = 0; a < 3; a++) {
+				lcoord[a] = std::min(std::max(lcoord[a], 0.0f), static_cast<float>(dim - 1));
+				i0[a] = static_cast<int>(std::floor(lcoord[a]));
+				i1[a] = std::min(i0[a] + 1, dim - 1);
+				fr[a] = lcoord[a] - static_cast<float>(i0[a]);
+			}
+			float n_acc[3] = {0.0f, 0.0f, 0.0f};
+			for (int c = 0; c < 8; c++) {
+				const int cx = (c & 1) ? i1[0] : i0[0];
+				const int cy = (c & 2) ? i1[1] : i0[1];
+				const int cz = (c & 4) ? i1[2] : i0[2];
+				float wx = (c & 1) ? fr[0] : 1.0f - fr[0];
+				float wy = (c & 2) ? fr[1] : 1.0f - fr[1];
+				float wz = (c & 4) ? fr[2] : 1.0f - fr[2];
+				float dec[3];
+				ve::oct_decode_snorm8(vol->normal_oct[static_cast<size_t>(cx + cy * sy + cz * sz)], dec);
+				for (int a = 0; a < 3; a++) n_acc[a] += wx * wy * wz * dec[a];
+			}
+			// Local -> world through the body basis. basis[a*3+c] is the world component c
+			// of local axis a, so world[c] = sum over local axes a of basis[a*3+c] * n[a]
+			// (the same column convention march_island's mat3 multiply uses).
+			float wn[3] = {0.0f, 0.0f, 0.0f};
+			for (int a = 0; a < 3; a++) {
+				const float na = n_acc[a];
+				wn[0] += basis[a * 3 + 0] * na;
+				wn[1] += basis[a * 3 + 1] * na;
+				wn[2] += basis[a * 3 + 2] * na;
+			}
+			float alen = std::sqrt(wn[0]*wn[0] + wn[1]*wn[1] + wn[2]*wn[2]);
+			if (alen < 1e-6f) continue; // degenerate blend: nothing to compare against
+			float an[3] = {wn[0]/alen, wn[1]/alen, wn[2]/alen};
+			const float e[2] = {half_to_float(s[i * 4 + 0]), half_to_float(s[i * 4 + 1])};
+			float rn[3];
+			ve::oct_decode(e, rn);
+			float rlen = std::sqrt(rn[0]*rn[0] + rn[1]*rn[1] + rn[2]*rn[2]);
+			if (rlen > 1e-8f) { rn[0]/=rlen; rn[1]/=rlen; rn[2]/=rlen; }
+			float ndl_render = rn[0]*kSun[0] + rn[1]*kSun[1] + rn[2]*kSun[2];
+			float ndl_analytic = an[0]*kSun[0] + an[1]*kSun[1] + an[2]*kSun[2];
+			const double diff = double(ndl_render) - double(ndl_analytic);
+			sum_sq += diff * diff;
+			considered++;
+			bool far_from_edges = true;
+			for (int eidx = 0; eidx < 3; eidx++) if (std::fabs(ndl_analytic - kEdges[eidx]) < 0.01f) far_from_edges = false;
+			if (!far_from_edges) continue;
+			if (band(ndl_render) != band(ndl_analytic)) {
+				mismatch[static_cast<size_t>(i)] = 1;
+				mismatches++;
+			}
+		}
+	}
+	double rms = considered > 0 ? std::sqrt(sum_sq / double(considered)) : 0.0;
+	double frac = considered > 0 ? double(mismatches) / double(considered) : 0.0;
+	int largest = 0;
+	std::vector<uint8_t> visited(static_cast<size_t>(w) * h, 0);
+	std::vector<int> stack;
+	stack.reserve(1024);
+	for (int y = 0; y < h; y++) {
+		for (int x = 0; x < w; x++) {
+			const int idx = y * w + x;
+			if (!mismatch[static_cast<size_t>(idx)] || visited[static_cast<size_t>(idx)]) continue;
+			int comp = 0;
+			stack.clear();
+			stack.push_back(idx);
+			visited[static_cast<size_t>(idx)] = 1;
+			while (!stack.empty()) {
+				int cur = stack.back(); stack.pop_back();
+				comp++;
+				int cx = cur % w;
+				int cy = cur / w;
+				if (cx > 0) { int nb = cur - 1; if (mismatch[static_cast<size_t>(nb)] && !visited[static_cast<size_t>(nb)]) { visited[static_cast<size_t>(nb)] = 1; stack.push_back(nb); } }
+				if (cx + 1 < w) { int nb = cur + 1; if (mismatch[static_cast<size_t>(nb)] && !visited[static_cast<size_t>(nb)]) { visited[static_cast<size_t>(nb)] = 1; stack.push_back(nb); } }
+				if (cy > 0) { int nb = cur - w; if (mismatch[static_cast<size_t>(nb)] && !visited[static_cast<size_t>(nb)]) { visited[static_cast<size_t>(nb)] = 1; stack.push_back(nb); } }
+				if (cy + 1 < h) { int nb = cur + w; if (mismatch[static_cast<size_t>(nb)] && !visited[static_cast<size_t>(nb)]) { visited[static_cast<size_t>(nb)] = 1; stack.push_back(nb); } }
+			}
+			if (comp > largest) largest = comp;
+		}
+	}
+	d["ran"] = true;
+	d["hits"] = total_hits;
+	d["considered"] = considered; // hits whose CPU reference gradient was exact and compared
+	d["rms_ndl"] = rms;
+	d["cel_mismatch_fraction"] = frac;
+	d["largest_mismatch_component"] = largest;
 	return d;
 }
 
@@ -5663,9 +6349,26 @@ void VoxelWorld::debug_store_volume(int slot, const PackedByteArray &sdf,
 	d.dim = dim;
 	d.sdf.assign(sdf.ptr(), sdf.ptr() + n);
 	d.mat.assign(mat.ptr(), mat.ptr() + n);
-	for (int64_t i = 0; i < n; i++)
+	d.normal_oct.assign(static_cast<size_t>(n), 0);
+	float center = 0.5f * (dim - 1) * 0.05f;
+	for (int64_t i = 0; i < n; i++) {
 		if (ve::decode_sdf(d.sdf[static_cast<size_t>(i)]) <= 0.0f) d.solid_voxels++;
-	volumes_.store(slot, std::move(d));
+		float up[3] = {0, 1, 0};
+		int z = static_cast<int>(i / (dim * dim));
+		int y = static_cast<int>((i / dim) % dim);
+		int x = static_cast<int>(i % dim);
+		float px = x * 0.05f - center;
+		float py = y * 0.05f - center;
+		float pz = z * 0.05f - center;
+		float len = std::sqrt(px*px + py*py + pz*pz);
+		if (len > 1e-6f) { float n[3]={px/len, py/len, pz/len}; d.normal_oct[static_cast<size_t>(i)] = ve::oct_encode_snorm8(n); }
+		else d.normal_oct[static_cast<size_t>(i)] = ve::oct_encode_snorm8(up);
+	}
+	ve::VolumeData to_upload = d;
+	if (volumes_.store(slot, std::move(d)) && mesh_) {
+		mesh_->submit_volume(slot, to_upload);
+		mesh_->run_sync([](MeshPass &){});
+	}
 }
 
 Vector2 VoxelWorld::debug_eval_field(Vector3 p, const PackedByteArray &ops, int op_count) {
@@ -5682,6 +6385,25 @@ Vector2 VoxelWorld::debug_eval_field(Vector3 p, const PackedByteArray &ops, int 
 	return Vector2(s.sdf, static_cast<float>(s.material));
 }
 
+Dictionary VoxelWorld::debug_eval_field_gradient(Vector3 p, const PackedByteArray &ops, int op_count) {
+	ve::AnalyticGenerator gen;
+	const ve::EditOp *ptr = nullptr;
+	if (op_count > 0) {
+		if (ops.size() < op_count * static_cast<int64_t>(sizeof(ve::EditOp))) {
+			UtilityFunctions::printerr("debug_eval_field_gradient: op buffer too small");
+			return Dictionary();
+		}
+		ptr = reinterpret_cast<const ve::EditOp *>(ops.ptr());
+	}
+	const ve::FieldSample s = ve::eval_field_gradient(gen, ptr, op_count, p.x, p.y, p.z, &volumes_, overrides_);
+	Dictionary d;
+	d["sdf"] = s.sdf;
+	d["material"] = int(s.material);
+	d["gradient"] = Vector3(s.gradient[0], s.gradient[1], s.gradient[2]);
+	d["exact"] = s.exact_gradient;
+	return d;
+}
+
 Dictionary VoxelWorld::debug_material_atlas_stats() {
 	Dictionary d;
 	if (!materials_ || !materials_->is_valid()) return d;
@@ -5692,6 +6414,29 @@ Dictionary VoxelWorld::debug_material_atlas_stats() {
 	d["albedo_valid"] = materials_->albedo_array().is_valid();
 	d["surface_valid"] = materials_->surface_array().is_valid();
 	return d;
+}
+
+// Task 7: rewrite the top-mip normal-map texels (surface array RG) of one material layer
+// with a hard tilt, so a test can re-render and prove the G-buffer normal never depends
+// on the material normal map.
+bool VoxelWorld::debug_poke_material_normal(int layer) {
+	ensure_initialized();
+	RenderingDevice *device = rd();
+	if (!initialized_ || !device || !materials_) return false;
+	if (layer < 0 || layer >= materials_->layer_count()) return false;
+	PackedByteArray data = device->texture_get_data(materials_->surface_array(), layer);
+	if (data.size() < 4) return false;
+	// EVERY texel of every mip in the layer, not just the first one: a probe ray is
+	// vanishingly unlikely to land on one poked texel, so a single-texel poke made the
+	// invariance assertion pass whether or not the shader sampled these bytes. The surface
+	// array is R8G8B8A8 with normal XY in RG (roughness in B, AO in A), so only RG move.
+	uint8_t *bytes = data.ptrw();
+	for (int64_t i = 0; i + 1 < data.size(); i += 4) {
+		bytes[i] = 255; // normal XY = (1, 0): the strongest tilt the format can hold
+		bytes[i + 1] = 0;
+	}
+	device->texture_update(materials_->surface_array(), layer, data);
+	return true;
 }
 
 Color VoxelWorld::debug_material_probe(int mat, Vector3 p, Vector3 n) {
@@ -5745,6 +6490,12 @@ Dictionary VoxelWorld::debug_atlas_stats() {
 	d["region_map_entries"] = atlas_->region_map_entries();
 	d["job_count"] = atlas_->read_job_count(device);
 	d["overflow"] = static_cast<int>(atlas_->read_overflow(device));
+	// Memory bounds (Task 6): the R8 atlas byte count is pinned so a regression that
+	// resizes it fails loudly next to the normal-pool capacity assertion.
+	const ve::IVec3 ab = atlas_->config().atlas_bricks;
+	const int64_t sdf_bytes = static_cast<int64_t>(ab.x) * ve::kBrickSdfStride *
+			(ab.y * ve::kBrickSdfStride) * (ab.z * ve::kBrickSdfStride);
+	d["sdf_atlas_bytes"] = sdf_bytes;
 	return d;
 }
 

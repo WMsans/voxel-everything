@@ -9,6 +9,7 @@
 #define FIELD_OVERRIDE_TABLE_BINDING 8
 #define FIELD_OVERRIDE_REGION_BINDING 9
 #include "common.glslh"
+#include "shade.glslh"
 layout(push_constant, std430) uniform Push {
 	vec4 origin_voxel;
 	ivec4 params;
@@ -40,6 +41,39 @@ float masked_field(vec3 p, out uint mat) {
 	for (int i = 0; i < pc.params.z; i++)
 		bu = min(bu, op_box_sdf(boxes.v[i * 2 + 0].xyz, boxes.v[i * 2 + 1].xyz, p));
 	return max(sdf, bu);
+}
+
+void masked_field_gradient(vec3 p, out float sdf, out uint mat, out vec3 gradient, out bool exact_gradient) {
+	float field_sdf;
+	uint field_mat;
+	vec3 field_grad;
+	bool field_exact;
+	eval_field_gradient(p, 0u, uint(pc.params.y), field_sdf, field_mat, field_grad, field_exact);
+	float bu = 1e30;
+	vec3 bu_grad = vec3(0.0, 1.0, 0.0);
+	for (int i = 0; i < pc.params.z; i++) {
+		vec3 lo = boxes.v[i * 2 + 0].xyz;
+		vec3 hi = boxes.v[i * 2 + 1].xyz;
+		float d = op_box_sdf(lo, hi, p);
+		if (d < bu) {
+			bu = d;
+			op_box_sdf_gradient(lo, hi, p, bu_grad);
+		}
+	}
+	if (bu > field_sdf) {
+		sdf = bu;
+		mat = 0u;
+		if (sdf <= 0.0) mat = field_mat;
+		if (sdf > 0.0) mat = 0u;
+		gradient = bu_grad;
+		exact_gradient = true;
+	} else {
+		sdf = field_sdf;
+		mat = field_mat;
+		gradient = field_grad;
+		exact_gradient = field_exact;
+		if (sdf > 0.0) mat = 0u;
+	}
 }
 
 void main() {
@@ -85,6 +119,16 @@ void main() {
 		}
 	}
 
-	out_vol.v[l.x + l.y * dim + l.z * dim * dim] =
-			(min(mat, 255u) << 8) | encode_sdf_byte(sdf);
+	vec3 gradient;
+	bool exact_gradient;
+	float grad_sdf;
+	uint grad_mat;
+	masked_field_gradient(p, grad_sdf, grad_mat, gradient, exact_gradient);
+	float gradient_len = length(gradient);
+	uint packed_normal = exact_gradient && gradient_len > 1e-8
+			? oct_encode_snorm8(gradient / gradient_len)
+			: 0x8080u;
+	out_vol.v[l.x + l.y * dim + l.z * dim * dim] = encode_sdf_byte(sdf)
+			| (min(mat, 255u) << 8)
+			| (packed_normal << 16);
 }

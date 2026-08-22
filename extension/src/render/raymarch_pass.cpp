@@ -118,8 +118,8 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 	width_ = w;
 	height_ = h;
 
-	Ref<RDUniform> u[24];
-	for (int i = 0; i < 24; i++) u[i].instantiate();
+	Ref<RDUniform> u[31];
+	for (int i = 0; i < 31; i++) u[i].instantiate();
 	u[0]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
 	u[0]->set_binding(0); u[0]->add_id(albedo_);
 	u[1]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
@@ -138,8 +138,10 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 	}
 	u[12]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
 	u[12]->set_binding(12); u[12]->add_id(edits_ubo_);
-	// 13-17: island sdf, material, min-max chain, descriptors, tile mask.
-	const RID island_bufs[5] = {islands->sdf_buffer(), islands->mat_buffer(),
+	// 13-17: shared authoritative volume SDF/material (indexed by Island.volume_slot since
+	// Task 6), island min-max chain, descriptors, tile mask. Atlas slot still selects the
+	// descriptor/mip/tile-mask entries.
+	const RID island_bufs[5] = {atlas.volumes().sdf_buffer(), atlas.volumes().mat_buffer(),
 			islands->mip_buffer(), islands->desc_buffer(),
 			tile_mask.is_valid() ? tile_mask : islands->fallback_mask()};
 	for (int i = 13; i <= 17; i++) {
@@ -161,8 +163,25 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 	u[22]->set_binding(22); u[22]->add_id(atlas.region_slot_counts());
 	u[23]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
 	u[23]->set_binding(23); u[23]->add_id(cost_buf_);
+	// 24-26: the compact-normal pool -- packed payload plus BOTH offset tables (per volume
+	// slot, per override-brick slot). -1 in a table row means "no normals bound".
+	const RID normal_bufs[3] = {atlas.stored_normals().normal_buffer(),
+			atlas.stored_normals().volume_offsets_buffer(),
+			atlas.stored_normals().override_offsets_buffer()};
+	for (int i = 24; i <= 26; i++) {
+		u[i]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
+		u[i]->set_binding(i); u[i]->add_id(normal_bufs[i - 24]);
+	}
+	// 27-30: the shared authoritative override pool (SDF bytes, material bytes, brick
+	// tables, region-to-table map) the field evaluator consults for shading normals.
+	const RID override_bufs[4] = {atlas.overrides().sdf_buffer(), atlas.overrides().mat_buffer(),
+			atlas.overrides().tables(), atlas.overrides().region_table_map()};
+	for (int i = 27; i <= 30; i++) {
+		u[i]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
+		u[i]->set_binding(i); u[i]->add_id(override_bufs[i - 27]);
+	}
 	Array uset_args;
-	for (int i = 0; i < 24; i++) uset_args.push_back(u[i]);
+	for (int i = 0; i < 31; i++) uset_args.push_back(u[i]);
 	uset_ = rd->uniform_set_create(uset_args, shader_, 0);
 }
 

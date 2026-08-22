@@ -25,8 +25,12 @@ for leg in "${LEGS[@]}"; do
 	name="${name#-}"
 	[ -z "$name" ] && name="steady"
 	echo "=== $name ($DRIVER) ==="
+	# Extra args belong AFTER the "--" separator: demo/benchmark.gd reads
+	# OS.get_cmdline_user_args(), and Godot silently drops an unknown dashed argument
+	# placed before the scene — a "--effects-off=..." run there measured every effect
+	# still enabled.
 	/usr/bin/godot --path "$ROOT" --display-driver "$DRIVER" --resolution 2560x1440 \
-		--disable-vsync "$@" demo/main.tscn -- "$leg" 2>&1 | tee "$OUT/$name.txt"
+		--disable-vsync demo/main.tscn -- "$leg" "$@" 2>&1 | tee "$OUT/$name.txt"
 	echo "EXIT_STATUS=${PIPESTATUS[0]}" | tee -a "$OUT/$name.txt"
 done
 

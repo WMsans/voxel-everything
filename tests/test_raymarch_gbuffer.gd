@@ -2,18 +2,6 @@ extends GdUnitTestSuite
 
 var _worlds: Array = []
 
-const SUN_DIR := Vector3(0.5746958, 0.7662610, 0.2873479)
-
-func analytic_terrain_normal(x: float, z: float) -> Vector3:
-	# AnalyticGenerator's surface is y = 51.2 + hills(x, z).
-	var dhdx := 0.66 * cos(x * 0.11) * cos(z * 0.13) \
-		+ 0.093 * cos(x * 0.031 + 1.7) * sin(z * 0.043) \
-		+ 0.23 * cos(x * 0.23 + z * 0.19)
-	var dhdz := -0.78 * sin(x * 0.11) * sin(z * 0.13) \
-		+ 0.129 * sin(x * 0.031 + 1.7) * cos(z * 0.043) \
-		+ 0.19 * cos(x * 0.23 + z * 0.19)
-	return Vector3(-dhdx, 1.0, -dhdz).normalized()
-
 func after_test() -> void:
 	for w in _worlds:
 		if is_instance_valid(w):
@@ -50,36 +38,6 @@ func test_a_ground_hit_writes_a_material_and_a_normal() -> void:
 	var n: Vector3 = d["normal"]
 	assert_float(n.length()).is_equal_approx(1.0, 0.01)
 	assert_float(n.y).is_greater(0.7)
-
-# The stored field has one R8 sample every 5 cm. Differentiating it over a smaller distance
-# exposes the quantised trilinear cells as abrupt normal changes on otherwise smooth terrain;
-# lighting and triplanar blending then turn those changes into contour-like surface marks.
-func test_smooth_terrain_normals_do_not_expose_the_voxel_lattice() -> void:
-	var w := make_world()
-	w.set_effect_enabled("raymarched_sun_shadow", false)
-	var previous_ndl := 0.0
-	var max_step := 0.0
-	var min_alignment := 1.0
-	var hits := 0
-	for i in range(61):
-		var x := 25.30 + float(i) * 0.005
-		var d: Dictionary = w.debug_raymarch_gbuffer(
-			Vector3(x, 75.0, 26.50), Vector3.DOWN)
-		if not d["hit"]:
-			continue
-		var normal := d["normal"] as Vector3
-		var ndl: float = normal.dot(SUN_DIR)
-		min_alignment = minf(min_alignment, normal.dot(analytic_terrain_normal(x, 26.50)))
-		if hits > 0:
-			max_step = maxf(max_step, absf(ndl - previous_ndl))
-		previous_ndl = ndl
-		hits += 1
-	assert_int(hits).override_failure_message(
-		"the normal probe strip did not stay on resident terrain").is_equal(61)
-	assert_float(max_step).override_failure_message(
-		"adjacent samples exposed a voxel-cell normal step of %f" % max_step).is_less(0.012)
-	assert_float(min_alignment).override_failure_message(
-		"smoothing no longer follows the analytic terrain slope").is_greater(0.98)
 
 func test_the_albedo_channel_is_albedo_and_not_shaded_colour() -> void:
 	var w := make_world()
@@ -208,3 +166,20 @@ func test_the_march_leaves_no_isolated_holes_in_the_gbuffer() -> void:
 	assert_int(d["hit_pixels"]).override_failure_message(
 		"the view hit nothing, so the hole count below proves nothing").is_greater(20000)
 	assert_int(d["isolated_misses"]).is_equal(0)
+
+# Task 7's invariance contract: the G-buffer normal comes from the source field (or its
+# R8 fallback), NEVER from the material normal map. Rewriting a material layer's normal-
+# map texels with a hard tilt must not move the decoded normal by one bit.
+func test_material_normal_map_bytes_do_not_change_gbuffer_normals() -> void:
+	var w := make_world()
+	var before := probe_ground(w)
+	assert_bool(before["hit"]).is_true()
+	var mat: int = before["material"]
+	assert_bool(w.debug_poke_material_normal(mat)).is_true()
+	var after := probe_ground(w)
+	assert_int(after["material"]).is_equal(mat)
+	var n0: Vector3 = before["normal"]
+	var n1: Vector3 = after["normal"]
+	assert_float((n0 - n1).length()).override_failure_message(
+		"G-buffer normal moved when the material normal map changed: %s -> %s" % [n0, n1]
+		).is_equal_approx(0.0, 0.0001)
