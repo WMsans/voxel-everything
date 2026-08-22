@@ -3,6 +3,7 @@
 #include <godot_cpp/variant/rid.hpp>
 #include <cstdint>
 #include <map>
+#include <mutex>
 #include "generator/volume_set.h"
 #include "world/brick.h"
 #include "world/normal_range_allocator.h"
@@ -75,14 +76,31 @@ public:
 	// live span is published for that slot (upload publishes before inserting, release
 	// publishes -1 before erasing), so an empty live map is exactly "all entries -1".
 	// Used by debug_normal_pool_state() to prove teardown/reinit restored the tables.
-	bool volume_offsets_all_minus_one() const { return volume_live_.empty(); }
-	bool override_offsets_all_minus_one() const { return override_live_.empty(); }
+	bool volume_offsets_all_minus_one() const {
+		std::lock_guard<std::mutex> lock(mu_);
+		return volume_live_.empty();
+	}
+	bool override_offsets_all_minus_one() const {
+		std::lock_guard<std::mutex> lock(mu_);
+		return override_live_.empty();
+	}
 
 private:
 	static constexpr int64_t kNoOffset = -1;
 
-	int64_t upload(RenderingDevice *rd, int slot, const void *packed_bytes,
+	// Callers must hold mu_.
+	int64_t upload_locked(RenderingDevice *rd, int slot, const void *packed_bytes,
 			int64_t byte_count, int expected_count, bool is_volume);
+	void release_locked(RenderingDevice *rd, int slot, bool is_volume);
+
+	// Volume spans are published from the RENDER thread (VoxelWorld::drain_island_uploads,
+	// via RaymarchCompositor's render callback) while override spans are published from the
+	// MAIN thread (pump_consolidation, from _process), and the HUD reads stats() on the main
+	// thread every frame. All three touch the same allocator, the same live maps and the
+	// same counters, so every entry point takes this lock. The rd->buffer_update calls stay
+	// inside it: they are small host-visible writes, and holding the lock across them is
+	// what keeps a published offset and its payload bytes consistent.
+	mutable std::mutex mu_;
 
 	RenderingDevice *rd_ = nullptr;
 	RID normals_, volume_offsets_, override_offsets_;

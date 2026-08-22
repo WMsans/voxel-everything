@@ -87,12 +87,12 @@ func _assert_normal_invariants(stats: Dictionary) -> void:
 	assert_int(cap).is_greater(0)
 	assert_int(live).is_greater_equal(0)
 	assert_int(hw).is_greater_equal(0)
-	assert_int(live).is_less_equal(cap).override_failure_message(
-		"live %d exceeds capacity %d" % [live, cap])
-	assert_int(hw).is_less_equal(cap).override_failure_message(
-		"high-water %d exceeds capacity %d" % [hw, cap])
-	assert_int(live).is_less_equal(hw).override_failure_message(
-		"live %d above high-water %d" % [live, hw])
+	assert_int(live).override_failure_message(
+		"live %d exceeds capacity %d" % [live, cap]).is_less_equal(cap)
+	assert_int(hw).override_failure_message(
+		"high-water %d exceeds capacity %d" % [hw, cap]).is_less_equal(cap)
+	assert_int(live).override_failure_message(
+		"live %d above high-water %d" % [live, hw]).is_less_equal(hw)
 	assert_int(stats["normal_allocation_failures"]).is_greater_equal(0)
 	assert_int(stats["normal_fallback_hits"]).is_greater_equal(0)
 

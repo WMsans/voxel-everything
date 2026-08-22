@@ -67,6 +67,7 @@
 #include <chrono>
 #include <thread>
 #include <cmath>
+#include <set>
 #include <cstring>
 #include <algorithm>
 #include <array>
@@ -259,7 +260,7 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::debug_apply_volume_add);
 	ClassDB::bind_method(D_METHOD("debug_island_extract_diff", "lo_cell", "hi_cell"), &VoxelWorld::debug_island_extract_diff);
 	ClassDB::bind_method(D_METHOD("debug_place_test_island", "slot", "lo_cell", "hi_cell", "offset"), &VoxelWorld::debug_place_test_island);
-	ClassDB::bind_method(D_METHOD("debug_place_test_island_rotated", "slot", "lo_cell", "hi_cell", "offset", "yaw"), &VoxelWorld::debug_place_test_island_rotated);
+	ClassDB::bind_method(D_METHOD("debug_place_test_island_rotated", "slot", "lo_cell", "hi_cell", "offset", "yaw", "volume_slot"), &VoxelWorld::debug_place_test_island_rotated, DEFVAL(-1));
 	ClassDB::bind_method(D_METHOD("debug_clear_test_island", "slot"), &VoxelWorld::debug_clear_test_island);
 	ClassDB::bind_method(D_METHOD("debug_island_tile_mask", "origin", "dir", "tan_x", "tan_y",
 			"width", "height"), &VoxelWorld::debug_island_tile_mask);
@@ -1453,9 +1454,21 @@ void VoxelWorld::teardown_physics() {
 			const ve::IVec3 region = consolidation_job_.region;
 			bool render_restored = true;
 			if (atlas_) {
-				for (size_t i = 0; i < consolidation_old_slots_.size(); i++)
+				for (size_t i = 0; i < consolidation_old_slots_.size(); i++) {
 					if (!atlas_->upload_override(rd(), consolidation_old_slots_[i],
 							consolidation_old_bricks_[i])) render_restored = false;
+					// Restore the NORMAL handle alongside the bytes, exactly as
+					// rollback_render() does. Leaving the new bake's normals bound to a slot
+					// holding the old brick's SDF/material shades a surface that is not there.
+					const ve::OverrideBrick &old_brick = consolidation_old_bricks_[i];
+					if (old_brick.normal_oct.size() == ve::kBrickSdfCount)
+						atlas_->stored_normals().upload_override(rd(),
+								consolidation_old_slots_[i], old_brick.normal_oct.data(),
+								ve::kBrickSdfCount);
+					else
+						atlas_->stored_normals().release_override(rd(),
+								consolidation_old_slots_[i]);
+				}
 				if (consolidation_table_ >= 0)
 					atlas_->overrides().clear_table(rd(), consolidation_table_);
 				if (consolidation_job_.region_slot >= 0) {
@@ -1471,8 +1484,11 @@ void VoxelWorld::teardown_physics() {
 			if (!render_restored)
 				UtilityFunctions::printerr(
 						"VoxelWorld: render override rollback failed during physics teardown; invalidated table");
-			for (const ve::IVec3 brick : consolidation_newly_acquired_)
+			for (const ve::IVec3 brick : consolidation_newly_acquired_) {
+				const int slot = overrides_ ? overrides_->slot_of(brick) : -1;
+				if (slot >= 0 && atlas_) atlas_->stored_normals().release_override(rd(), slot);
 				overrides_->release(brick);
+			}
 			if (edit_log_ && edit_log_->op_count(region) > 0)
 				consolidation_queue_.insert(consolidation_queue_.begin(), region);
 			consolidation_in_flight_ = false;
@@ -3253,7 +3269,14 @@ void VoxelWorld::pump_consolidation() {
 	const auto refuse_transaction = [&](bool retry, bool rebuild_worker) {
 		const ve::IVec3 region = consolidation_job_.region;
 		const bool restored = rollback_render();
-		for (const ve::IVec3 brick : consolidation_newly_acquired_) overrides_->release(brick);
+		for (const ve::IVec3 brick : consolidation_newly_acquired_) {
+			// The speculative slot's normal span was staged before the table entry naming
+			// it. Releasing the slot without releasing the span leaks payload out of the
+			// fixed 32 MiB pool for the rest of the process.
+			const int slot = overrides_ ? overrides_->slot_of(brick) : -1;
+			if (slot >= 0 && atlas_) atlas_->stored_normals().release_override(rd(), slot);
+			overrides_->release(brick);
+		}
 		if (!restored)
 			UtilityFunctions::printerr(
 					"VoxelWorld: render override rollback failed; retaining old edit state");
@@ -4348,7 +4371,7 @@ Dictionary VoxelWorld::debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_c
 }
 
 Dictionary VoxelWorld::debug_place_test_island_rotated(int slot, Vector3i lo_cell,
-		Vector3i hi_cell, Vector3 offset, float yaw) {
+		Vector3i hi_cell, Vector3 offset, float yaw, int volume_slot) {
 	Dictionary d;
 	d["ok"] = false;
 	ensure_initialized();
@@ -4386,6 +4409,10 @@ Dictionary VoxelWorld::debug_place_test_island_rotated(int slot, Vector3i lo_cel
 			IslandSlotDesc &d = all[s];
 			d.live = true;
 			d.dim = i[16];
+			// Lane 17 is the authoritative volume slot the shader strides the shared
+			// SDF/material/normal buffers with. Dropping it here parked a preserved island
+			// on the "no volume" path and made it vanish from the next placement onward.
+			d.volume_slot = i[17];
 			d.voxel = f[15];
 			for (int a = 0; a < 3; a++) {
 				d.basis[a * 3 + 0] = f[a * 4 + 0];
@@ -4399,14 +4426,19 @@ Dictionary VoxelWorld::debug_place_test_island_rotated(int slot, Vector3i lo_cel
 		}
 	}
 
-	if (!atlas_->volumes().upload(device, slot, volume)) return d;
+	// The atlas slot selects descriptor/mip/tile-mask entries; the volume slot strides the
+	// SHARED SDF/material/normal buffers. Real bodies get them from two different pools and
+	// they diverge, so a test may pass its own volume slot to reproduce that.
+	const int vslot = volume_slot >= 0 ? volume_slot : slot;
+	if (vslot >= ve::kMaxVolumes) return d;
+	if (!atlas_->volumes().upload(device, vslot, volume)) return d;
 	// Task 7: keep the CPU-authoritative copy too (the same thing IslandManager does for
 	// real bodies), so debug_island_normal_probe reads the same normals the GPU holds.
-	volumes_.reserve(slot);
-	if (!volumes_.store(slot, volume)) return d;
+	volumes_.reserve(vslot);
+	if (!volumes_.store(vslot, volume)) return d;
 	// Task 6: compact normals share the pool; the test fixture's radial lattice is real
 	// render-reachable payload, not a fallback source.
-	atlas_->stored_normals().upload_volume(device, slot, volume);
+	atlas_->stored_normals().upload_volume(device, vslot, volume);
 	if (!islands_->upload_mip(device, slot, volume)) return d;
 
 	// The body's local frame is the birth world frame shifted so the body origin is the
@@ -4431,7 +4463,7 @@ Dictionary VoxelWorld::debug_place_test_island_rotated(int slot, Vector3i lo_cel
 	desc.origin[1] += offset.y;
 	desc.origin[2] += offset.z;
 	desc.recompute_world_aabb();
-	desc.volume_slot = slot;
+	desc.volume_slot = vslot;
 
 	all[slot] = desc;
 	islands_->upload_descriptors(device, all, kMaxIslands);
@@ -6394,8 +6426,15 @@ bool VoxelWorld::debug_poke_material_normal(int layer) {
 	if (layer < 0 || layer >= materials_->layer_count()) return false;
 	PackedByteArray data = device->texture_get_data(materials_->surface_array(), layer);
 	if (data.size() < 4) return false;
-	data[0] = 255; // normal XY = (1, 0): the strongest tilt the format can hold
-	data[1] = 0;
+	// EVERY texel of every mip in the layer, not just the first one: a probe ray is
+	// vanishingly unlikely to land on one poked texel, so a single-texel poke made the
+	// invariance assertion pass whether or not the shader sampled these bytes. The surface
+	// array is R8G8B8A8 with normal XY in RG (roughness in B, AO in A), so only RG move.
+	uint8_t *bytes = data.ptrw();
+	for (int64_t i = 0; i + 1 < data.size(); i += 4) {
+		bytes[i] = 255; // normal XY = (1, 0): the strongest tilt the format can hold
+		bytes[i + 1] = 0;
+	}
 	device->texture_update(materials_->surface_array(), layer, data);
 	return true;
 }

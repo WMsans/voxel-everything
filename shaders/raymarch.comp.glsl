@@ -212,6 +212,7 @@ const int ISLAND_VOXELS = 262144;   // 64^3
 const int ISLAND_MIP_STRIDE = 8;    // ve::kVolumeMipStride
 const int ISLAND_MIP_CELLS = 8;     // ISLAND_DIM / ISLAND_MIP_STRIDE
 const int ISLAND_MIP_PER_SLOT = 512;
+const int MAX_VOLUME_SLOTS = 64;    // ve::kMaxVolumes
 
 const float GLOSSY_SDF_MAX_DIST = 20.0;
 const int GLOSSY_SDF_STEPS = 64;
@@ -250,7 +251,15 @@ bool island_load(int i, out Island isl) {
 	isl.lo = lv.xyz;
 	isl.voxel = lv.w;
 	isl.dim = dim;
+	// Since Task 6 the SDF/material bytes live in the SHARED authoritative volume pool,
+	// stridden by the volume slot -- NOT by the atlas slot `i`, which only selects the
+	// descriptor, the min-max mip and the tile-mask bit. The two are allocated by different
+	// pools (32 atlas slots, 64 volume slots) and diverge permanently once a merged body
+	// pins its volume slot while its atlas slot is freed, so striding with the wrong one
+	// renders another body's geometry. A descriptor without a valid volume slot has no bytes
+	// in that pool at all: treat it as a dead slot rather than read out of range.
 	isl.volume_slot = floatBitsToInt(island_desc.v[i * 8 + 4].y);
+	if (isl.volume_slot < 0 || isl.volume_slot >= MAX_VOLUME_SLOTS) return false;
 	return true;
 }
 
@@ -264,34 +273,34 @@ uint island_byte_mip(int i) {
 	return (island_mip.w[i >> 2] >> ((uint(i) & 3u) * 8u)) & 0xFFu;
 }
 
-float island_lattice(int slot, int dim, ivec3 v) {
-	int i = slot * ISLAND_VOXELS + v.x + v.y * dim + v.z * dim * dim;
+float island_lattice(int volume_slot, int dim, ivec3 v) {
+	int i = volume_slot * ISLAND_VOXELS + v.x + v.y * dim + v.z * dim * dim;
 	return decode_sdf(float(island_byte_sdf(i)) / 255.0);
 }
 
 // Trilinear reconstruction in LOCAL space, mirroring ve::sample_volume_lattice's inside
 // branch. Callers clamp q to the lattice box first, so no outside branch is needed here.
-float island_sdf_at(int slot, Island isl, vec3 q) {
+float island_sdf_at(Island isl, vec3 q) {
 	vec3 l = clamp((q - isl.lo) / isl.voxel, vec3(0.0), vec3(float(isl.dim - 1)));
 	ivec3 i0 = ivec3(l);
 	ivec3 i1 = min(i0 + 1, ivec3(isl.dim - 1));
 	vec3 f = l - vec3(i0);
-	float c000 = island_lattice(slot, isl.dim, ivec3(i0.x, i0.y, i0.z));
-	float c100 = island_lattice(slot, isl.dim, ivec3(i1.x, i0.y, i0.z));
-	float c010 = island_lattice(slot, isl.dim, ivec3(i0.x, i1.y, i0.z));
-	float c110 = island_lattice(slot, isl.dim, ivec3(i1.x, i1.y, i0.z));
-	float c001 = island_lattice(slot, isl.dim, ivec3(i0.x, i0.y, i1.z));
-	float c101 = island_lattice(slot, isl.dim, ivec3(i1.x, i0.y, i1.z));
-	float c011 = island_lattice(slot, isl.dim, ivec3(i0.x, i1.y, i1.z));
-	float c111 = island_lattice(slot, isl.dim, ivec3(i1.x, i1.y, i1.z));
+	float c000 = island_lattice(isl.volume_slot, isl.dim, ivec3(i0.x, i0.y, i0.z));
+	float c100 = island_lattice(isl.volume_slot, isl.dim, ivec3(i1.x, i0.y, i0.z));
+	float c010 = island_lattice(isl.volume_slot, isl.dim, ivec3(i0.x, i1.y, i0.z));
+	float c110 = island_lattice(isl.volume_slot, isl.dim, ivec3(i1.x, i1.y, i0.z));
+	float c001 = island_lattice(isl.volume_slot, isl.dim, ivec3(i0.x, i0.y, i1.z));
+	float c101 = island_lattice(isl.volume_slot, isl.dim, ivec3(i1.x, i0.y, i1.z));
+	float c011 = island_lattice(isl.volume_slot, isl.dim, ivec3(i0.x, i1.y, i1.z));
+	float c111 = island_lattice(isl.volume_slot, isl.dim, ivec3(i1.x, i1.y, i1.z));
 	return mix(mix(mix(c000, c100, f.x), mix(c010, c110, f.x), f.y),
 	           mix(mix(c001, c101, f.x), mix(c011, c111, f.x), f.y), f.z);
 }
 
-uint island_material_at(int slot, Island isl, vec3 q) {
+uint island_material_at(Island isl, vec3 q) {
 	vec3 l = clamp((q - isl.lo) / isl.voxel, vec3(0.0), vec3(float(isl.dim - 1)));
 	ivec3 m = min(ivec3(l + 0.5), ivec3(isl.dim - 1));
-	int i = slot * ISLAND_VOXELS + m.x + m.y * isl.dim + m.z * isl.dim * isl.dim;
+	int i = isl.volume_slot * ISLAND_VOXELS + m.x + m.y * isl.dim + m.z * isl.dim * isl.dim;
 	return island_byte_mat(i);
 }
 
@@ -300,17 +309,17 @@ uint island_material_at(int slot, Island isl, vec3 q) {
 // compact-normal span for the body's volume slot is missing (-1) or degenerate -- a source
 // whose CPU publication already counted its fallback hit; no per-pixel atomic and no
 // synchronous readback here.
-vec3 island_r8_fallback_normal(int slot, Island isl, vec3 q, inout int steps_left) {
+vec3 island_r8_fallback_normal(Island isl, vec3 q, inout int steps_left) {
 	if (steps_left < 6) return vec3(0.0, 1.0, 0.0);
 	steps_left -= 6;
 	float e = isl.voxel;
 	return normalize(vec3(
-		island_sdf_at(slot, isl, q + vec3(e, 0, 0)) -
-			island_sdf_at(slot, isl, q - vec3(e, 0, 0)),
-		island_sdf_at(slot, isl, q + vec3(0, e, 0)) -
-			island_sdf_at(slot, isl, q - vec3(0, e, 0)),
-		island_sdf_at(slot, isl, q + vec3(0, 0, e)) -
-			island_sdf_at(slot, isl, q - vec3(0, 0, e))));
+		island_sdf_at(isl, q + vec3(e, 0, 0)) -
+			island_sdf_at(isl, q - vec3(e, 0, 0)),
+		island_sdf_at(isl, q + vec3(0, e, 0)) -
+			island_sdf_at(isl, q - vec3(0, e, 0)),
+		island_sdf_at(isl, q + vec3(0, 0, e)) -
+			island_sdf_at(isl, q - vec3(0, 0, e))));
 }
 
 // Island shading normal from the body's OWN stored normals: a trilinear blend of the eight
@@ -318,9 +327,9 @@ vec3 island_r8_fallback_normal(int slot, Island isl, vec3 q, inout int steps_lef
 // with, normalized here in the LOCAL frame -- the caller rotates through isl.basis. An
 // offset of -1 (no span published) or a degenerate blend falls back to differentiating the
 // island's R8 lattice.
-vec3 island_source_normal(int slot, Island isl, vec3 q, inout int steps_left) {
+vec3 island_source_normal(Island isl, vec3 q, inout int steps_left) {
 #if defined(FIELD_VOLUME_NORMAL_BINDING) && defined(FIELD_VOLUME_NORMAL_OFFSET_BINDING)
-	if (isl.volume_slot >= 0 && isl.volume_slot < 64) {
+	if (isl.volume_slot >= 0 && isl.volume_slot < MAX_VOLUME_SLOTS) {
 		int off = field_volume_normal_offsets.slot[isl.volume_slot];
 		if (off >= 0) {
 			int base = off >> 2;
@@ -349,7 +358,7 @@ vec3 island_source_normal(int slot, Island isl, vec3 q, inout int steps_left) {
 		}
 	}
 #endif
-	return island_r8_fallback_normal(slot, isl, q, steps_left);
+	return island_r8_fallback_normal(isl, q, steps_left);
 }
 
 // Spec §3's "own min-max mip": the same inclusive-corner soundness argument the brick chain
@@ -424,13 +433,13 @@ void march_island(int slot, vec3 ro, vec3 rd, inout Hit best, inout int steps_le
 		}
 		if (steps_left <= 0) return;
 		steps_left--;
-		float d = island_sdf_at(slot, isl, q);
+		float d = island_sdf_at(isl, q);
 		if (d < 0.002) {
 			for (int r = 0; r < 4; r++) { // secant refinement, as the terrain march does
 				if (steps_left <= 0) return;
 				steps_left--;
 				q = ro_l + rd_l * t;
-				t += island_sdf_at(slot, isl, q) * 0.5;
+				t += island_sdf_at(isl, q) * 0.5;
 			}
 			if (t > best.t) return; // refinement pushed it behind the current winner
 			q = ro_l + rd_l * t;
@@ -438,8 +447,8 @@ void march_island(int slot, vec3 ro, vec3 rd, inout Hit best, inout int steps_le
 			best.t = t;
 			best.p = ro + rd * t;
 			best.n = normalize(isl.basis *
-					island_source_normal(slot, isl, q, steps_left));
-			best.mat = island_material_at(slot, isl, q);
+					island_source_normal(isl, q, steps_left));
+			best.mat = island_material_at(isl, q);
 			return;
 		}
 		t += max(d * 0.9, 0.005);
@@ -657,7 +666,7 @@ float island_sun_visibility(vec3 ro, int island_count) {
 		float tmax = min(t1, RAY_SHADOW_DIST);
 		for (int k = 0; k < 48; k++) {
 			if (t > tmax) break;
-			float d = island_sdf_at(i, isl, ro_l + rd_l * t);
+			float d = island_sdf_at(isl, ro_l + rd_l * t);
 			if (d < 0.004) return 0.0;
 			// Same narrow band, same saturation, same cutoff as terrain_sun_visibility.
 			if (t <= RAY_SHADOW_PENUMBRA_DIST) res = min(res, RAY_SHADOW_K * d / t);

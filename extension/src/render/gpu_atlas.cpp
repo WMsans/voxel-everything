@@ -290,6 +290,16 @@ bool GpuAtlas::replay_overrides(RenderingDevice *rd, const ve::OverrideStore &st
 					if (slot < 0) continue;
 					const ve::OverrideBrick *data = store.data(slot);
 					if (!data || !overrides_.upload(slot, *data)) return false;
+					// The pool this replays into is freshly initialized, so every override
+					// offset is -1. Without re-uploading the compact normals here, an atlas
+					// teardown/reinit silently drops every consolidated brick back to R8
+					// taps -- the artifact this whole feature removes -- and the CPU
+					// fallback counter never sees it, because publication succeeded.
+					if (data->normal_oct.size() == ve::kBrickSdfCount)
+						stored_normals_.upload_override(rd, slot, data->normal_oct.data(),
+								ve::kBrickSdfCount);
+					else
+						stored_normals_.release_override(rd, slot);
 					overrides_.set_table_entry(rd, table,
 						ve::WorldBounds::brick_index_in_region(brick), slot);
 				}

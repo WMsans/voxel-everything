@@ -203,9 +203,11 @@ bool ConsolidatePass::run(const ConsolidateJob &job, ConsolidateResult *out) {
 					std::vector<uint16_t> normals;
 					normals.reserve(ve::kBrickSdfCount);
 					bool ok = true;
-					for (int z = 0; z < ve::kBrickSdfStride; z++)
-						for (int y = 0; y < ve::kBrickSdfStride; y++)
-							for (int x = 0; x < ve::kBrickSdfStride; x++) {
+					// `ok` gates all three loops: a bare `break` on the inner one kept
+					// evaluating the rest of the brick only to throw the result away.
+					for (int z = 0; z < ve::kBrickSdfStride && ok; z++)
+						for (int y = 0; y < ve::kBrickSdfStride && ok; y++)
+							for (int x = 0; x < ve::kBrickSdfStride && ok; x++) {
 								float px = bo[0] + x * ve::kVoxelSize;
 								float py = bo[1] + y * ve::kVoxelSize;
 								float pz = bo[2] + z * ve::kVoxelSize;

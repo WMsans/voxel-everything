@@ -287,7 +287,14 @@ FieldSample apply_op_gradient(FieldSample s, const EditOp &op, float x, float y,
 			FieldSample vs{};
 			if (volumes && volumes->sample_gradient(static_cast<int>(op.aux[0]), x, y, z, op, &vs)) {
 				if (vs.sdf < s.sdf) {
+					// Same material rule as apply_op and as field.glslh's mirror: the
+					// operand's material is taken only where the result is solid AND the
+					// operand names one. A wholesale copy also stamped material 0 through
+					// air, which is a CPU/GLSL divergence the differential gate exists for.
+					const uint16_t previous_material = s.material;
 					s = vs;
+					s.material = (s.sdf <= 0.0f && vs.material != 0) ? vs.material
+																	 : previous_material;
 				}
 				return s;
 			}

@@ -153,3 +153,31 @@ TEST_CASE("override normals: compact when present, inexact fallback when absent"
     CHECK(ok3);
     CHECK_FALSE(out3.exact_gradient);
 }
+
+TEST_CASE("resample_volume leaves the payload empty when the source has no normals") {
+    // A source whose compact normals were cleared (an unresolvable extraction sentinel, a
+    // failed snapshot materialize, or a legacy volume) must not be handed a fabricated
+    // all-up payload: that passes has_normals(), gets uploaded, and shades the merged body
+    // flat with no offset of -1 and no fallback hit to show for it.
+    const float origin[3] = {0, 0, 0};
+    ve::VolumeData src;
+    src.dim = 8;
+    const int src_n = 8 * 8 * 8;
+    src.sdf.assign(src_n, ve::encode_sdf(-0.1f));
+    src.mat.assign(src_n, 1);
+    src.solid_voxels = src_n;
+    REQUIRE(src.valid());
+    REQUIRE_FALSE(src.has_normals());
+
+    const ve::EditOp src_op = ve::make_volume_add(0, origin, 0.05f, 8);
+    const float basis[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    const float at[3] = {10, 0, 10};
+    ve::VolumeData out;
+    ve::EditOp out_op{};
+    REQUIRE(ve::resample_volume(src, src_op, basis, at, 1, ve::kIslandDim, &out, &out_op));
+
+    CHECK(out.normal_oct.empty());
+    CHECK_FALSE(out.has_normals());
+    CHECK(out.valid()); // an empty payload is a valid volume, just one without normals
+    CHECK(out.solid_voxels > 0); // the SDF/material half is unaffected
+}

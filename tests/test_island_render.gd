@@ -61,6 +61,42 @@ func test_an_island_placed_in_the_air_is_hit_by_a_ray(timeout := 60000) -> void:
 	assert_float(pos.y).is_greater(centre.y - 2.0)
 	assert_bool(is_sky(probe["color"])).is_false()
 
+# Regression: the shader strides the SHARED authoritative SDF/material buffers with the
+# island's VOLUME slot, never with its atlas slot. Real bodies get the two from different
+# pools (32 atlas slots, 64 volume slots) and they diverge for good once a merged body pins
+# its volume slot while its atlas slot is freed, so an island placed at atlas 0 / volume 3
+# used to render whatever lived at volume 0 -- another body's geometry, with its own normals
+# on top. Every other fixture here places an island with both slots equal, which is exactly
+# why this went unnoticed; this one forces them apart.
+func test_an_island_renders_its_own_volume_not_its_atlas_slots(timeout := 60000) -> void:
+	var w := make_world()
+	var lift := Vector3(0.0, 30.0, 0.0)
+	# Decoy at volume slot 0, 40 m away: the bytes the buggy stride would have read.
+	var decoy: Dictionary = w.debug_place_test_island_rotated(1, Vector3i(35, 58, 35),
+		Vector3i(36, 59, 36), lift, 0.0, 0)
+	assert_bool(decoy.get("ok", false)).override_failure_message(str(decoy)).is_true()
+	# Subject at atlas slot 0, volume slot 3.
+	var d: Dictionary = w.debug_place_test_island_rotated(0, Vector3i(25, 58, 25),
+		Vector3i(26, 59, 26), lift, 0.0, 3)
+	assert_bool(d.get("ok", false)).override_failure_message(str(d)).is_true()
+	var centre: Vector3 = d["world_center"]
+
+	var probe: Dictionary = w.debug_raymarch_probe(centre + Vector3(0, 6, 0), Vector3(0, -1, 0))
+	assert_bool(probe["hit"]).override_failure_message(
+		"the ray passed through the island at atlas 0 / volume 3").is_true()
+	assert_float(probe["pos"].y).override_failure_message(
+		"hit %s is not on the island at %s -- the shader read the wrong volume slot"
+			% [str(probe["pos"]), str(centre)]).is_greater(centre.y - 2.0)
+	assert_bool(is_sky(probe["color"])).is_false()
+
+	# The decoy is still where it belongs, so the subject did not simply overwrite it.
+	var decoy_centre: Vector3 = decoy["world_center"]
+	var decoy_probe: Dictionary = w.debug_raymarch_probe(
+		decoy_centre + Vector3(0, 6, 0), Vector3(0, -1, 0))
+	assert_bool(decoy_probe["hit"]).override_failure_message(
+		"the decoy island at atlas 1 / volume 0 stopped rendering").is_true()
+	assert_float(decoy_probe["pos"].y).is_greater(decoy_centre.y - 2.0)
+
 func test_a_ray_beside_the_island_still_sees_the_sky(timeout := 60000) -> void:
 	var w := make_world()
 	var d: Dictionary = w.debug_place_test_island(0, Vector3i(25, 58, 25), Vector3i(26, 59, 26),

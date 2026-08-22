@@ -204,6 +204,13 @@ func compare(pts: PackedVector3Array, ops: PackedByteArray, op_count: int, label
 		var gpu_grad := Vector3(gpu[i * 8 + 2], gpu[i * 8 + 3], gpu[i * 8 + 4])
 		var gpu_exact: bool = gpu[i * 8 + 5] > 0.5
 
+		# Material is part of the mirrored contract, not decoration: the CPU volume-add
+		# gradient branch used to overwrite it wholesale while GLSL kept apply_op's rule.
+		if cpu_sdf <= 0.0 and gpu_sdf <= 0.0:
+			assert_int(gpu_mat).override_failure_message(
+				"%s: material differs at %s (cpu %d, gpu %d)" % [label, pts[i], cpu_mat, gpu_mat]
+				).is_equal(cpu_mat)
+
 		var diff: float = absf(gpu_sdf - cpu_sdf) / SDF_STEP
 		worst = maxf(worst, diff)
 		if diff <= 1.0:
@@ -229,6 +236,9 @@ func compare(pts: PackedVector3Array, ops: PackedByteArray, op_count: int, label
 	assert_float(float(within_one) / float(pts.size())).override_failure_message(
 		"%s: only %d/%d samples within one encoded step" % [label, within_one, pts.size()]
 		).is_greater(TIGHT_FRACTION)
+	assert_int(grad_compared).override_failure_message(
+		"%s: no gradient pair was comparable, so the assertion below proves nothing" % label
+		).is_greater(0)
 	if grad_compared > 0:
 		assert_int(grad_mismatched).override_failure_message(
 			"%s: %d/%d gradient mismatches (worst dot %.5f)" % [label, grad_mismatched, grad_compared, worst_dot]).is_equal(0)

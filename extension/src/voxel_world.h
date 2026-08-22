@@ -671,7 +671,7 @@ public:
 	Dictionary debug_place_test_island(int slot, Vector3i lo_cell, Vector3i hi_cell,
 			Vector3 offset);
 	Dictionary debug_place_test_island_rotated(int slot, Vector3i lo_cell, Vector3i hi_cell,
-			Vector3 offset, float yaw);
+			Vector3 offset, float yaw, int volume_slot = -1);
 	void debug_clear_test_island(int slot);
 	PackedInt32Array debug_island_tile_mask(Vector3 origin, Vector3 dir, float tan_x,
 			float tan_y, int width, int height);

@@ -1244,16 +1244,21 @@ Implementation-time facts, in the style of M1–M7: where this plan's text met r
 
    | leg | raymarch p50 | raymarch p99 | frame p95 |
    |---|---|---|---|
-   | steady | 15.636 → 15.003 (**−4.0%**) | 18.689 → 18.396 (−1.6%) | 19.44 → 18.75 (−3.5%) |
-   | move | 14.349 → 14.063 (−2.0%) | 18.064 → 17.549 (−2.9%) | 19.10 → 18.06 (−5.4%) |
-   | ridge | 11.029 → 11.343 (**+2.8%**) | 16.852 → 16.726 (−0.7%) | 18.16 → 18.06 (−0.6%) |
-   | edit | 21.208 → 22.243 (**+4.9%**) | 38.257 → 33.045 (−13.6%) | 33.33 → 33.33 (+0.0%) |
-   | edit-bounded | 19.445 → 19.104 (−1.8%) | 41.053 → 27.341 (−33.4%) | 27.70 → 27.27 (−1.6%) |
-   | island | 12.297 → 12.340 (+0.3%) | 18.799 → 18.628 (−0.9%) | 20.37 → 19.48 (−4.4%) |
+   | steady | 15.636 → 15.223 (**−2.6%**) | 18.689 → 18.391 (−1.6%) | 19.44 → 19.44 (+0.0%) |
+   | move | 14.349 → 14.066 (−2.0%) | 18.064 → 17.824 (−1.3%) | 19.10 → 18.06 (−5.4%) |
+   | ridge | 11.029 → 11.318 (**+2.6%**) | 16.852 → 16.793 (−0.4%) | 18.16 → 18.18 (+0.1%) |
+   | edit | 21.208 → 22.457 (**+5.9%**) | 38.257 → 32.253 (−15.7%) | 33.33 → 33.33 (+0.0%) |
+   | edit-bounded | 19.445 → 19.099 (−1.8%) | 41.053 → 38.506 (−6.2%) | 27.70 → 27.78 (+0.3%) |
+   | island | 12.297 → 11.847 (**−3.7%**) | 18.799 → 18.617 (−1.0%) | 20.37 → 20.37 (+0.0%) |
 
-   **The edit leg's +4.9% raymarch p50 exceeds the plan's 3% gate**, and it is not noise: the
-   per-run ranges do not overlap (base 20.594 / 21.208 / 21.339, candidate 21.936 / 22.243 /
-   22.311). Ridge (+2.8%) sits just inside the gate on the same mechanism. The plan expected an
+   **The edit leg's +5.9% raymarch p50 exceeds the plan's 3% gate**, and it is not noise: the
+   per-run ranges do not overlap (base 20.594 / 21.208 / 21.339, candidate 22.260 / 22.457 /
+   22.597). Ridge (+2.6%) sits just inside the gate on the same mechanism. The human accepted
+   this cost explicitly rather than trade it for a Task 7 redesign.
+
+   These are the FINAL sweeps, taken after the code-review fixes in entry 10. An earlier
+   sweep of the same candidate before those fixes read steady −4.0%, edit +4.9%, island
+   +0.3%; the island leg's improvement to −3.7% is the volume-slot striding fix landing. The plan expected an
    improvement everywhere because 48 random atlas reads were removed, and that is what the steady
    and move legs show — but it costed only the reads, not the replacement. The source-field normal
    pays two new per-hit costs the R8 taps did not: the analytic base gradient's extra
@@ -1268,7 +1273,10 @@ Implementation-time facts, in the style of M1–M7: where this plan's text met r
 8. **Task 8, Step 6: the capture.** 726 frames at 1280×720 into a throwaway user-data root, all
    optional effects off. The near-terrain frames are clean: `frame_00700.png`, `frame_00672.png`,
    `frame_00545.png`, `frame_00530.png` and `frame_00252.png` show smooth shading with only the
-   intended broad cel and material staging — no nested curls, no lattice. The live-island half of
+   intended broad cel and material staging — no nested curls, no lattice. Those five frames are
+   kept in `reports/normal-capture-frames/`; the rest were deleted, because `/tmp` is tmpfs on
+   this machine and 860 MB of PNGs held in RAM pushed a later full-suite run into swap (see
+   entry 11). The live-island half of
    this step could not be judged from these frames: the canned blasts sit at the camera's look-at
    point tens of metres out, so their islands are a few pixels across. The island evidence is the
    numeric `debug_island_normal_probe` fixture in `test_island_render.gd` instead, which is the
@@ -1281,3 +1289,79 @@ Implementation-time facts, in the style of M1–M7: where this plan's text met r
    `test_stored_normal_pool.gd` and `test_gpu_timings.gd` against a shrunk 65,536-byte budget. The
    benchmark harness does not print pool telemetry, so these numbers come from a debug probe, not
    from the sweeps above.
+
+10. **Code review found a rendering bug the whole island fixture set was blind to.** Since Task 6
+    the island SDF/material bytes live in the SHARED authoritative volume pool (`raymarch_pass`
+    bindings 13/14 = `atlas.volumes()`), uploaded at the **volume** slot — but
+    `island_lattice`/`island_sdf_at`/`island_material_at` still strode that pool with the
+    **atlas** slot. Only `island_source_normal` had been converted. The two indices come from
+    different allocators (32 atlas slots scanned by `IslandManager::free_atlas_slot`, 64 volume
+    slots by `VolumeSet::allocate`, the latter also consumed by pinned pasted volumes and by
+    `start_merges()`'s out-slot); they agree at startup and diverge permanently after the first
+    merge, when the merged body's volume slot is pinned by the paste op while its atlas slot is
+    freed. The next island then renders *another body's* geometry under its own transform and
+    normals. Plan Task 6, Step 7 had specified exactly this ("the island shader will use
+    `Island.volume_slot` as the buffer stride index"); Task 7, Step 5 converted only the normals.
+
+    Every fixture in `test_island_render.gd` places an island with both slots equal
+    (`queue_island_upload(slot, slot, d)`, `desc.volume_slot = slot`), so none of them could
+    fail on it. The regression test added with the fix,
+    `test_an_island_renders_its_own_volume_not_its_atlas_slots`, places a decoy at volume slot 0
+    and the subject at atlas 0 / volume 3, and was confirmed to FAIL against the old striding
+    before it was made to pass.
+
+    Fixing it surfaced a second bug in the fixture itself: `debug_place_test_island_rotated`
+    rebuilds the descriptor array from a GPU readback to preserve other islands, and never read
+    back lane 17, so placing a second island silently reset the first island's volume slot.
+
+    The rest of the review's confirmed findings, all fixed here:
+
+    - `StoredNormalPool` was mutated from two threads with no lock — volume spans from the render
+      thread (`drain_island_uploads`), override spans from the main thread (`pump_consolidation`),
+      plus `stats()` read by the HUD every frame — all touching one allocator, two `std::map`s and
+      one counter block. Now serialized by a `std::mutex` (which promptly exposed a self-deadlock:
+      the internal fallback path called the newly-locking public `release_*`).
+    - `resample_volume` filled a fabricated all-up normal payload when the source had none. That
+      payload passes `has_normals()`, uploads, and shades a merged body flat with no `-1` offset
+      and no fallback hit to show for it — the one failure mode the fail-soft design cannot
+      detect. It now leaves the payload empty (new native test).
+    - `GpuAtlas::replay_overrides` re-uploaded SDF/material after an atlas teardown/reinit but not
+      compact normals, so every consolidated override in the world silently reverted to R8 taps —
+      this feature's own artifact — while telemetry still read `fallback_hits = 0`.
+    - Two rollback gaps: `refuse_transaction` released speculative override slots without
+      releasing their normal spans (a slow leak out of the fixed 32 MiB pool), and
+      `teardown_physics`'s in-flight rollback restored old override bytes while leaving the new
+      bake's normals bound to them.
+    - `apply_op_gradient`'s `kOpVolumeAdd` branch copied the operand wholesale, overwriting
+      material where `apply_op` and the GLSL mirror take it only when the result is solid and the
+      operand names one — a CPU/GLSL divergence against the global constraint. The differential
+      suite decoded material on both sides and never asserted on it; it does now, and also asserts
+      that the gradient comparison was not empty.
+    - `debug_poke_material_normal` tilted a single texel of a mipped array layer, so the
+      material-normal invariance assertion would have passed whether or not the shader sampled
+      those bytes. It now pokes every texel's RG channels.
+    - Minor: a wrap guard in `StoredNormalPool::initialize` when the budget rounds down past the
+      metadata size, `ok`-gating all three loops of the consolidation normal bake instead of
+      `break`ing only the innermost, and a missing `<set>` include.
+
+    Not addressed, and worth a follow-up: `snapshot_field_sources` copies every override in the
+    *bounding box* of a job's bricks rather than the bricks themselves (each `OverrideBrick` now
+    carries ~9.8 KB of normals on top of its ~9 KB of SDF), `FieldSourceSnapshot::materialize`
+    dedupes with O(n²) scans, and the consolidation worker's new cost — 4913 `eval_field_gradient`
+    calls per baked brick after readback, which is why `test_consolidation.gd`'s poll budgets were
+    raised 4–16× in Task 5 — was never isolated with a timer the way entry 4's resample cost was.
+
+11. **A full-suite run is memory-hungry, and tmpfs is RAM.** The gdUnit suite runs all 63 suites in
+    one Godot process and peaked at **6.76 GB RSS**. A run taken while 860 MB of Step 6 capture
+    frames sat in `/tmp` (tmpfs) drove the machine into swap — 910 MB out, 6–21% IO wait — and
+    every suite slowed without failing: `test_lod_pool.gd` went 10.1 s → **16 min 19 s**,
+    `test_lod_gbuffer.gd` 5.2 s → 1 min 29 s, `test_connectivity.gd` 1 min 24 s → 3 min 59 s. It
+    reads exactly like a hang and is not one. After deleting the frames the same suite alone ran
+    in 10.2 s and the full suite in 5 min 29 s. Do not leave capture output in `/tmp` on this
+    machine, and do not read a slow suite as a deadlock without checking `free`/`vmstat` first: a
+    real deadlock here parks a single test at ~5% of one core with the main thread in
+    `pthread_mutex_lock` (entry 3), while every suite still completing is pressure, not a lock.
+
+12. **Final verification after the review fixes.** Native `scons test`: **357 test cases,
+    4,070,420 assertions, 0 failed**. gdUnit: **63 suites, 322 test cases, 0 errors, 0 failures,
+    0 flaky, 0 skipped, 0 orphans**, 5 min 29 s. Artifact probe unchanged from entry 6.

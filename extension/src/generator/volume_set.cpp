@@ -294,9 +294,15 @@ bool resample_volume(const VolumeData &src, const EditOp &src_op, const float ba
 	out->dim = dim;
 	out->sdf.assign(static_cast<size_t>(dim) * dim * dim, encode_sdf(kSdfRange));
 	out->mat.assign(static_cast<size_t>(dim) * dim * dim, 0);
-	out->normal_oct.assign(static_cast<size_t>(dim) * dim * dim, 0);
 	out->solid_voxels = 0;
+	// A resampled volume carries compact normals only when the SOURCE had them and every
+	// sample resolved. Filling the payload with a fabricated (0,1,0) would pass has_normals()
+	// and shade the whole merged body flat-up with nothing -- no offset of -1, no fallback
+	// hit -- to say the normals are meaningless. Empty is the honest answer: the pool parks
+	// -1 and the shader differentiates the R8 lattice.
 	const bool src_has_normals = src.has_normals();
+	bool normals_ok = src_has_normals;
+	if (src_has_normals) out->normal_oct.assign(static_cast<size_t>(dim) * dim * dim, 0);
 	for (int z = 0; z < dim; z++)
 		for (int y = 0; y < dim; y++)
 			for (int x = 0; x < dim; x++) {
@@ -316,7 +322,7 @@ bool resample_volume(const VolumeData &src, const EditOp &src_op, const float ba
 				out->mat[i] = static_cast<uint8_t>(s.material);
 				if (s.sdf <= 0.0f) out->solid_voxels++;
 				// sample source compact normal, rotate by row-major basis into world, normalize, encode
-				if (src_has_normals) {
+				if (normals_ok) {
 					FieldSample gs{};
 					const uint16_t *norm_ptr = src.normal_oct.data();
 					if (sample_volume_gradient_lattice(src.sdf.data(), src.mat.data(), norm_ptr, src.dim, src_op.pos, src_op.radius, q[0], q[1], q[2], &gs)) {
@@ -328,17 +334,19 @@ bool resample_volume(const VolumeData &src, const EditOp &src_op, const float ba
 							basis[2*3+0]*n_in[0] + basis[2*3+1]*n_in[1] + basis[2*3+2]*n_in[2]
 						};
 						float len = std::sqrt(n_world[0]*n_world[0] + n_world[1]*n_world[1] + n_world[2]*n_world[2]);
-						if (len > 1e-6f) { n_world[0]/=len; n_world[1]/=len; n_world[2]/=len; } else { n_world[0]=0; n_world[1]=1; n_world[2]=0; }
-						out->normal_oct[static_cast<size_t>(i)] = oct_encode_snorm8(n_world);
+						if (len > 1e-6f) {
+							n_world[0]/=len; n_world[1]/=len; n_world[2]/=len;
+							out->normal_oct[static_cast<size_t>(i)] = oct_encode_snorm8(n_world);
+						} else {
+							normals_ok = false; // degenerate: the whole payload goes
+						}
 					} else {
-						float fallback[3]={0,1,0};
-						out->normal_oct[static_cast<size_t>(i)] = oct_encode_snorm8(fallback);
+						normals_ok = false;
 					}
-				} else {
-					float fallback[3]={0,1,0};
-					out->normal_oct[static_cast<size_t>(i)] = oct_encode_snorm8(fallback);
 				}
 			}
+
+	if (!normals_ok) out->normal_oct.clear();
 
 	*out_op = make_volume_add(slot, o, pitch, dim);
 	return true;

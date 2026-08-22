@@ -39,12 +39,16 @@ StoredNormalPool::~StoredNormalPool() {
 bool StoredNormalPool::initialize(RenderingDevice *rd, uint32_t budget_bytes,
 		int max_volumes, int override_capacity) {
 	teardown();
+	std::lock_guard<std::mutex> lock(mu_);
 	if (!rd || max_volumes <= 0 || override_capacity <= 0) return false;
 	const uint64_t metadata =
 			static_cast<uint64_t>(max_volumes) * 4 + static_cast<uint64_t>(override_capacity) * 4;
 	if (metadata > budget_bytes) return false; // metadata must fit: the pool never grows
 	capacity_ = budget_bytes - static_cast<uint32_t>(
 			static_cast<uint64_t>(budget_bytes) % 4);
+	// Re-check AFTER the rounding: a budget that clears `metadata` by less than it loses to
+	// the round-down would otherwise wrap raw_payload to nearly 4 GiB.
+	if (metadata > capacity_) return false;
 	const uint32_t raw_payload = capacity_ - static_cast<uint32_t>(metadata);
 	payload_bytes_ = raw_payload - raw_payload % 4;
 
@@ -69,6 +73,7 @@ bool StoredNormalPool::initialize(RenderingDevice *rd, uint32_t budget_bytes,
 }
 
 void StoredNormalPool::teardown() {
+	std::lock_guard<std::mutex> lock(mu_);
 	// The offset tables and payload reference the same device as every consumer's uniform
 	// set; freeing them here (before GpuAtlas tears down anything else that reads them)
 	// keeps one teardown order in one place.
@@ -86,44 +91,50 @@ void StoredNormalPool::teardown() {
 
 int64_t StoredNormalPool::upload_volume(RenderingDevice *rd, int slot,
 		const ve::VolumeData &data) {
+	std::lock_guard<std::mutex> lock(mu_);
 	if (!data.has_normals()) {
 		// Payload absent: this render-reachable source enters fallback.
 		if (rd && rd_ && slot >= 0 && slot < max_volumes_) {
-			release_volume(rd, slot); // publishes -1 first, then frees the old span
+			release_locked(rd, slot, true); // publishes -1 first, then frees the old span
 			stats_.fallback_hits++;
 		}
 		return kNoOffset;
 	}
 	const int expected = data.voxel_count();
-	return upload(rd, slot, data.normal_oct.data(),
+	return upload_locked(rd, slot, data.normal_oct.data(),
 			static_cast<int64_t>(data.normal_oct.size()) * 2, expected, true);
 }
 
 void StoredNormalPool::release_volume(RenderingDevice *rd, int slot) {
-	if (!rd || !is_valid() || slot < 0 || slot >= max_volumes_) return;
-	publish_offset(rd, volume_offsets_, slot, kNoOffset); // -1 BEFORE returning the range
-	const auto it = volume_live_.find(slot);
-	if (it == volume_live_.end()) return;
-	allocator_.release(it->second);
-	volume_live_.erase(it);
+	std::lock_guard<std::mutex> lock(mu_);
+	release_locked(rd, slot, true);
 }
 
 int64_t StoredNormalPool::upload_override(RenderingDevice *rd, int slot,
 		const uint16_t *packed_normals, int count) {
-	return upload(rd, slot, packed_normals, static_cast<int64_t>(count) * 2,
+	std::lock_guard<std::mutex> lock(mu_);
+	return upload_locked(rd, slot, packed_normals, static_cast<int64_t>(count) * 2,
 			ve::kBrickSdfCount, false);
 }
 
 void StoredNormalPool::release_override(RenderingDevice *rd, int slot) {
-	if (!rd || !is_valid() || slot < 0 || slot >= override_capacity_) return;
-	publish_offset(rd, override_offsets_, slot, kNoOffset);
-	const auto it = override_live_.find(slot);
-	if (it == override_live_.end()) return;
-	allocator_.release(it->second);
-	override_live_.erase(it);
+	std::lock_guard<std::mutex> lock(mu_);
+	release_locked(rd, slot, false);
 }
 
-int64_t StoredNormalPool::upload(RenderingDevice *rd, int slot, const void *packed_bytes,
+void StoredNormalPool::release_locked(RenderingDevice *rd, int slot, bool is_volume) {
+	const int capacity = is_volume ? max_volumes_ : override_capacity_;
+	if (!rd || !is_valid() || slot < 0 || slot >= capacity) return;
+	const RID table = is_volume ? volume_offsets_ : override_offsets_;
+	publish_offset(rd, table, slot, kNoOffset); // -1 BEFORE returning the range
+	auto &live = is_volume ? volume_live_ : override_live_;
+	const auto it = live.find(slot);
+	if (it == live.end()) return;
+	allocator_.release(it->second);
+	live.erase(it);
+}
+
+int64_t StoredNormalPool::upload_locked(RenderingDevice *rd, int slot, const void *packed_bytes,
 		int64_t byte_count, int expected_count, bool is_volume) {
 	if (!rd || !is_valid()) return kNoOffset;
 	const bool volume_ok = is_volume && slot >= 0 && slot < max_volumes_;
@@ -135,8 +146,7 @@ int64_t StoredNormalPool::upload(RenderingDevice *rd, int slot, const void *pack
 	// writing a torn lattice or a wrong-length span.
 	if (expected_count <= 0 || packed_bytes == nullptr ||
 			byte_count != static_cast<int64_t>(expected_count) * 2) {
-		if (is_volume) release_volume(rd, slot);
-		else release_override(rd, slot);
+		release_locked(rd, slot, is_volume); // already holding mu_
 		stats_.fallback_hits++;
 		return kNoOffset;
 	}
@@ -182,6 +192,7 @@ int64_t StoredNormalPool::upload(RenderingDevice *rd, int slot, const void *pack
 }
 
 StoredNormalStats StoredNormalPool::stats() const {
+	std::lock_guard<std::mutex> lock(mu_);
 	StoredNormalStats s = stats_;
 	s.live_bytes = allocator_.used_bytes();
 	s.high_water_bytes = allocator_.high_water_bytes();
