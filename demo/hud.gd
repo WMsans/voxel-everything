@@ -108,6 +108,16 @@ func _update_text() -> void:
 				pf.get("lod_ms", 0.0)]
 			lod = lod.replace(" %.2fms" % float(pf.get("lod_ms", 0.0)),
 					" %.2fms cpu" % float(pf.get("lod_ms", 0.0)))
+	var norm := ""
+	if _world and _world.is_initialized():
+		var stats: Dictionary = _world.debug_stored_normal_stats()
+		if not stats.is_empty():
+			norm = "  |  " + ("norm %.1f/%.1f MiB hi %.1f fail %d fallback %d" % [
+				stats.normal_live_bytes / 1048576.0,
+				stats.normal_capacity_bytes / 1048576.0,
+				stats.normal_high_water_bytes / 1048576.0,
+				stats.normal_allocation_failures,
+				stats.normal_fallback_hits])
 	var gpu_line := "GPU n/a"
 	var gt: Dictionary = _world.debug_gpu_timings() if _world else {}
 	if gt.get("valid", false):
@@ -120,7 +130,7 @@ func _update_text() -> void:
 	var tool_line := ""
 	if _tool:
 		tool_line = "\n%s  radius %.1f" % [str(_tool.tool_name()), float(_tool.radius)]
-	text = "%d fps  (%.1f ms)  |  %s%s%s%s\n%s%s" % [fps, ms, s, p, isl, lod, gpu_line, tool_line]
+	text = "%d fps  (%.1f ms)  |  %s%s%s%s%s\n%s%s" % [fps, ms, s, p, isl, lod, norm, gpu_line, tool_line]
 
 func _draw_reticle() -> void:
 	if _reticle == null or mode == Mode.HIDDEN:

@@ -1171,3 +1171,113 @@ git commit -m "test: verify source-field normal quality and cost"
 Use `superpowers:requesting-code-review` on the complete branch. Address only findings supported
 by code/tests, rerun the affected focused suites, then rerun the full suite before claiming the
 artifact fixed.
+
+---
+
+## Errata (recorded during implementation — corrections and measured verdicts)
+
+Implementation-time facts, in the style of M1–M7: where this plan's text met reality and lost.
+
+1. **Task 1, Step 0: the wider-tap baseline sweep never happened.** `tools/run_benchmarks.sh` ran
+   before the extension had been built, so every leg aborted with `VoxelWorld` unregistered (see
+   d1c1d03's commit body). Task 8, Step 5 therefore takes its baseline from the branch base
+   `00481c3`, built in a separate worktree, rather than from an unstaged wider-finite-difference
+   attempt that no longer exists. What that commit *did* record is the before half of the
+   acceptance evidence, and it is reused below.
+
+2. **`tools/run_benchmarks.sh` silently dropped every extra argument.** The script passed `"$@"`
+   *before* `demo/main.tscn`, but `demo/benchmark.gd` reads `OS.get_cmdline_user_args()` — only
+   what follows `--`. Godot ignores an unknown dashed argument in front of the scene without a
+   word, so `tools/run_benchmarks.sh <label> --effects-off=...` measured every effect still
+   enabled. Verified both ways on the steady leg: arguments before the scene gave
+   `BENCH gpu_ssgi samples=287 p50_ms=0.164`, after `--` they give `BENCH gpu_ssgi samples=0`.
+   The script now passes extras after `-- "$leg"`, and both sweeps below use the fixed script.
+   Every `--effects-off` benchmark number recorded before this fix, in this plan or M7's, was
+   taken with the effects still on.
+
+3. **Task 6 deadlocked every teardown of a world that owned an island.** `release_volume_slot()`
+   was changed to take `island_mutex_` so it could queue `StoredNormalPool::release_volume()`,
+   but `VoxelWorld::teardown_physics()` calls `IslandManager::teardown()` *while holding that
+   mutex*, and teardown releases the volume slot of every body, in-flight extraction and merge.
+   Re-entering a non-recursive `std::mutex` hangs, so the first gdUnit suite that spawns an
+   island (`test_connectivity.gd`) froze the whole run — 40 minutes parked in
+   `pthread_mutex_lock` inside the extension at ~5% of one core. `ptrace_scope=1` means gdb can
+   only attach to its own descendants, so the diagnosis needs the process started *under* gdb
+   (`timeout -s INT 150 gdb -batch -ex run -ex "thread apply all bt" --args godot ...`). Fixed by
+   detaching `island_manager_` under the lock and tearing it down outside it: the render thread
+   sees a null manager the instant the lock drops, and the tool thread cannot observe the
+   detached pointer because `edit_mutex_` is held throughout.
+
+4. **Task 3 made `ve::resample_volume` ~4.7x more expensive, and a frame-counted test read that
+   as a failure.** Resampling a merged body's volume now blends, rotates and re-encodes a compact
+   normal per output sample, so a 64³ lattice went from **10.5 ms to 50 ms** on the mesher worker
+   (temporary timer around the call: base `11.6 / 25.3 / 12.4 / 10.5 / 10.6 / 10.6 ms`, branch
+   `49.2 / 57.5 / 49.7 / 51.1 ms`).
+   `test_body_pool_holes_after_merges_do_not_count_against_the_cap` waited `step(w, 240)` for the
+   freed slot to be reused, but `step()` runs as fast as the CPU allows (~0.2 ms an iteration), so
+   those 240 frames are really a ~50 ms wall-clock budget on work that happens on the worker — and
+   the queued window only gets its turn once the merge resample in flight lands. The hole *is*
+   reused (measured at ~920 steps), so the wait is now condition-based, like the rest of that
+   suite. Left for later: `sample_volume_gradient_lattice()` re-samples the value lattice that
+   `resample_volume()` has already sampled, so part of that 4.7x is redundant work.
+
+5. **Task 8, Step 4: full suites.** Native `scons test`: **356 test cases, 4,070,413 assertions,
+   0 failed** (doctest 2.4.11). gdUnit: **63 suites, 321 test cases, 0 errors, 0 failures, 0
+   flaky, 0 skipped, 0 orphans**, 5 min 35 s. No Vulkan validation errors and no shutdown errors;
+   the only `ERROR:` lines in the log are the deliberately broken shader in
+   `test_shader_reload.gd`.
+
+6. **Task 8: the artifact gate, before and after.** Same probe, same 256×192 view from
+   `(20, 72, 29)` along `(0.1, -0.85, -0.5)`, same 44,998 hits:
+
+   | metric | before (00481c3, R8 taps) | after (source field) | target |
+   |---|---|---|---|
+   | `rms_ndl` | 0.012834 | **0.000185** | ≤ 0.001 |
+   | `cel_mismatch_fraction` | 0.002267 | **0.000000** | < 0.001 |
+   | `largest_mismatch_component` | 4 | **0** | ≤ 8 |
+
+7. **Task 8, Step 5: the effects-off sweeps, and a gate breach.** Three runs a side, X11,
+   `vsync_actual=disabled`, `verdict_qualified=false`, effects confirmed off
+   (`gpu_ssgi samples=0`); medians of the three runs. Note the harness emits only p50/p99 per
+   GPU pass — there is no per-pass p95 — so the plan's "median and p95" gate is read here as the
+   `gpu_raymarch` p50/p99 plus the frame p95.
+
+   | leg | raymarch p50 | raymarch p99 | frame p95 |
+   |---|---|---|---|
+   | steady | 15.636 → 15.003 (**−4.0%**) | 18.689 → 18.396 (−1.6%) | 19.44 → 18.75 (−3.5%) |
+   | move | 14.349 → 14.063 (−2.0%) | 18.064 → 17.549 (−2.9%) | 19.10 → 18.06 (−5.4%) |
+   | ridge | 11.029 → 11.343 (**+2.8%**) | 16.852 → 16.726 (−0.7%) | 18.16 → 18.06 (−0.6%) |
+   | edit | 21.208 → 22.243 (**+4.9%**) | 38.257 → 33.045 (−13.6%) | 33.33 → 33.33 (+0.0%) |
+   | edit-bounded | 19.445 → 19.104 (−1.8%) | 41.053 → 27.341 (−33.4%) | 27.70 → 27.27 (−1.6%) |
+   | island | 12.297 → 12.340 (+0.3%) | 18.799 → 18.628 (−0.9%) | 20.37 → 19.48 (−4.4%) |
+
+   **The edit leg's +4.9% raymarch p50 exceeds the plan's 3% gate**, and it is not noise: the
+   per-run ranges do not overlap (base 20.594 / 21.208 / 21.339, candidate 21.936 / 22.243 /
+   22.311). Ridge (+2.8%) sits just inside the gate on the same mechanism. The plan expected an
+   improvement everywhere because 48 random atlas reads were removed, and that is what the steady
+   and move legs show — but it costed only the reads, not the replacement. The source-field normal
+   pays two new per-hit costs the R8 taps did not: the analytic base gradient's extra
+   trigonometry (which is why the unedited **ridge** leg regresses at all), and a walk of the
+   region's op list (which is why the op-heavy **edit** leg regresses most, while
+   **edit-bounded**, whose ops stay bounded, improves). The p99 of both edit legs improves
+   sharply, so the tail is better even where the median is worse. Not fixed here — the shape of
+   the fix (per-op AABB rejection at the hit point, as `brick_gen`/`brick_mark` already do
+   cooperatively via `op_touches_aabb`, or a cheaper analytic gradient) is a Task 7 design
+   decision, not a Task 8 measurement.
+
+8. **Task 8, Step 6: the capture.** 726 frames at 1280×720 into a throwaway user-data root, all
+   optional effects off. The near-terrain frames are clean: `frame_00700.png`, `frame_00672.png`,
+   `frame_00545.png`, `frame_00530.png` and `frame_00252.png` show smooth shading with only the
+   intended broad cel and material staging — no nested curls, no lattice. The live-island half of
+   this step could not be judged from these frames: the canned blasts sit at the camera's look-at
+   point tens of metres out, so their islands are a few pixels across. The island evidence is the
+   numeric `debug_island_normal_probe` fixture in `test_island_render.gd` instead, which is the
+   stronger check anyway.
+
+9. **Task 8: normal-pool telemetry in a live session.** Capacity is exactly **33,554,432 bytes**
+   at default settings, as required. A streamed world with four placed islands reports
+   `live = high_water = 2,097,152 bytes` (2 MiB, i.e. 6% of budget), `allocation_failures = 0`,
+   `fallback_hits = 0`. Exhaustion, reuse and fail-soft behaviour are covered deterministically by
+   `test_stored_normal_pool.gd` and `test_gpu_timings.gd` against a shrunk 65,536-byte budget. The
+   benchmark harness does not print pool telemetry, so these numbers come from a debug probe, not
+   from the sweeps above.

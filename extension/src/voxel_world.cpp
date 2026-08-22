@@ -315,6 +315,7 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_set_atlas_slot_used", "slot", "used"), &VoxelWorld::debug_set_atlas_slot_used);
 	ClassDB::bind_method(D_METHOD("debug_set_normal_pool_budget", "bytes"), &VoxelWorld::debug_set_normal_pool_budget);
 	ClassDB::bind_method(D_METHOD("debug_stored_normal_stats"), &VoxelWorld::debug_stored_normal_stats);
+	ClassDB::bind_method(D_METHOD("debug_normal_pool_state"), &VoxelWorld::debug_normal_pool_state);
 	ClassDB::bind_method(D_METHOD("debug_normal_upload_override", "slot", "packed_normals"), &VoxelWorld::debug_normal_upload_override);
 	ClassDB::bind_method(D_METHOD("debug_normal_release_override", "slot"), &VoxelWorld::debug_normal_release_override);
 #endif
@@ -1409,13 +1410,22 @@ void VoxelWorld::teardown_physics() {
 	// append_edit_locked() reading island_manager_ to call note_edit(). Also take
 	// island_mutex_ so the render thread's island_slot_count() cannot dereference a manager
 	// that is being destroyed (lock order: edit_mutex_ -> island_mutex_).
+	//
+	// Detach under the lock, then tear down outside it: teardown() releases every body's,
+	// in-flight extraction's and merge's volume slot through release_volume_slot(), which
+	// takes island_mutex_ to queue the GPU-side normal release. Running it under the lock
+	// re-entered a non-recursive std::mutex and hung the process. The render thread is
+	// still safe -- it sees a null manager the instant the lock is dropped -- and the tool
+	// thread cannot observe the detached pointer because edit_mutex_ is held throughout.
+	IslandManager *manager = nullptr;
 	{
 		std::lock_guard<std::mutex> island_lock(island_mutex_);
-		if (island_manager_) {
-			island_manager_->teardown();
-			delete island_manager_;
-			island_manager_ = nullptr;
-		}
+		manager = island_manager_;
+		island_manager_ = nullptr;
+	}
+	if (manager) {
+		manager->teardown();
+		delete manager;
 	}
 	physics_bubble_centers_.clear();
 	// Drop any uploads/descriptors the previous manager queued before the GPU pools are torn
@@ -1805,6 +1815,27 @@ Dictionary VoxelWorld::debug_stored_normal_stats() {
 	d["high_water_bytes"] = static_cast<int64_t>(s.high_water_bytes);
 	d["allocation_failures"] = static_cast<int64_t>(s.allocation_failures);
 	d["fallback_hits"] = static_cast<int64_t>(s.fallback_hits);
+	// Task 8: the exact telemetry keys the HUD and the teardown/telemetry tests read.
+	d["normal_capacity_bytes"] = static_cast<int64_t>(s.capacity_bytes);
+	d["normal_live_bytes"] = static_cast<int64_t>(s.live_bytes);
+	d["normal_high_water_bytes"] = static_cast<int64_t>(s.high_water_bytes);
+	d["normal_allocation_failures"] = static_cast<int64_t>(s.allocation_failures);
+	d["normal_fallback_hits"] = static_cast<int64_t>(s.fallback_hits);
+	return d;
+}
+
+Dictionary VoxelWorld::debug_normal_pool_state() {
+	Dictionary d;
+	const bool have_pool = atlas_ && atlas_->is_valid();
+	const StoredNormalPool *p = have_pool ? &atlas_->stored_normals() : nullptr;
+	d["pool_valid"] = p && p->is_valid();
+	d["normal_rid_valid"] = p && p->normal_buffer().is_valid();
+	d["volume_offsets_rid_valid"] = p && p->volume_offsets_buffer().is_valid();
+	d["override_offsets_rid_valid"] = p && p->override_offsets_buffer().is_valid();
+	d["volume_offsets_all_minus_one"] =
+			p && p->is_valid() && p->volume_offsets_all_minus_one();
+	d["override_offsets_all_minus_one"] =
+			p && p->is_valid() && p->override_offsets_all_minus_one();
 	return d;
 }
 

@@ -373,8 +373,19 @@ func test_body_pool_holes_after_merges_do_not_count_against_the_cap(timeout := 1
 
 	# The hole must be usable. With the old bodies_.size() check the pool reads "full" for
 	# ever once three bodies have existed, and the work queued above never gets in.
-	step(w, 240)
+	#
+	# Poll for the reuse rather than counting frames. step() runs as fast as the CPU allows
+	# (~0.2 ms an iteration), so a fixed frame budget is really a wall-clock budget on work
+	# that happens on the mesher worker: the queued window only gets its turn once the merge
+	# resample in flight lands. Source-field normals made that resample ~5x more expensive
+	# (10 ms -> 50 ms for a 64^3 lattice, measured), which pushed the reuse past a 240-step
+	# budget without changing whether the hole is ever reused.
 	var st: Dictionary = w.debug_island_stats()
+	for i in range(2000):
+		if st["islands_spawned"] + st["debris_spawned"] > before_spawned:
+			break
+		step(w, 1)
+		st = w.debug_island_stats()
 	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
 		"a merged-away body left a hole the pool never reused: %s" % st).is_greater(
 		before_spawned)

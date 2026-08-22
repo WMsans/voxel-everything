@@ -471,6 +471,11 @@ public:
 		normal_pool_bytes_ = bytes > 0 ? static_cast<uint32_t>(bytes) : 0u;
 	}
 	Dictionary debug_stored_normal_stats();
+	// Task 8 teardown telemetry: RID validity plus the CPU mirror of the two offset
+	// tables (an entry is non-minus-one exactly while a live span is published for that
+	// slot, so "all_minus_one" is exactly "no spans published"). After render teardown
+	// all three RIDs must be invalid; after reinitialization both tables must be -1.
+	Dictionary debug_normal_pool_state();
 	// Upload one override brick's packed uint16 normals; returns its published byte offset
 	// into normal_buffer(), or -1 when the source entered the wide-R8 fallback.
 	int64_t debug_normal_upload_override(int slot, const PackedByteArray &packed_normals);

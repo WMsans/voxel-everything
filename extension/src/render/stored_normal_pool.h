@@ -71,6 +71,12 @@ public:
 	void release_override(RenderingDevice *rd, int slot);
 
 	StoredNormalStats stats() const;
+	// CPU mirror of the GPU offset tables: an entry is non-minus-one exactly while a
+	// live span is published for that slot (upload publishes before inserting, release
+	// publishes -1 before erasing), so an empty live map is exactly "all entries -1".
+	// Used by debug_normal_pool_state() to prove teardown/reinit restored the tables.
+	bool volume_offsets_all_minus_one() const { return volume_live_.empty(); }
+	bool override_offsets_all_minus_one() const { return override_live_.empty(); }
 
 private:
 	static constexpr int64_t kNoOffset = -1;
