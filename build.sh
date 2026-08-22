@@ -23,7 +23,14 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXT_DIR="$ROOT/extension"
-JOBS="$(nproc 2>/dev/null || echo 4)"
+# Platform-aware job count: nproc on Linux, sysctl on macOS.
+if command -v nproc >/dev/null 2>&1; then
+	JOBS="$(nproc)"
+elif command -v sysctl >/dev/null 2>&1; then
+	JOBS="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+else
+	JOBS=4
+fi
 RUN_TESTS=0
 RUN_VERIFY=0
 CLEAN=0
@@ -81,7 +88,11 @@ echo "==> Building libvoxel_everything with scons (-j$JOBS)..."
 scons -j"$JOBS" -Q
 
 # --- report ----------------------------------------------------------------
-SO_DEBUG="$EXT_DIR/bin/libvoxel_everything.linux.template_debug.x86_64.so"
+# The produced artifact name depends on the host platform.
+case "$(uname -s)" in
+	Darwin) SO_DEBUG="$EXT_DIR/bin/libvoxel_everything.macos.template_debug.universal.dylib" ;;
+	*)      SO_DEBUG="$EXT_DIR/bin/libvoxel_everything.linux.template_debug.x86_64.so" ;;
+esac
 if [ ! -f "$SO_DEBUG" ]; then
 	echo "build.sh: build finished but $SO_DEBUG was not produced" >&2
 	exit 1
@@ -116,9 +127,16 @@ if [ "$RUN_VERIFY" -eq 1 ]; then
 	# aborts with "no main scene defined". Headless editor mode scans every
 	# script — exactly where the 'Could not find type' errors surface.
 	set +e
-	out="$(XDG_DATA_HOME="$ROOT/.xdgdata" XDG_CACHE_HOME="$ROOT/.xdgcache" \
-		XDG_CONFIG_HOME="$ROOT/.xdgconfig" \
-		timeout 240 godot --headless --editor --quit --path "$ROOT" 2>&1)"
+	# GNU coreutils' timeout doesn't exist on stock macOS; degrade gracefully.
+	if command -v timeout >/dev/null 2>&1; then
+		out="$(XDG_DATA_HOME="$ROOT/.xdgdata" XDG_CACHE_HOME="$ROOT/.xdgcache" \
+			XDG_CONFIG_HOME="$ROOT/.xdgconfig" \
+			timeout 240 godot --headless --editor --quit --path "$ROOT" 2>&1)"
+	else
+		out="$(XDG_DATA_HOME="$ROOT/.xdgdata" XDG_CACHE_HOME="$ROOT/.xdgcache" \
+			XDG_CONFIG_HOME="$ROOT/.xdgconfig" \
+			godot --headless --editor --quit --path "$ROOT" 2>&1)"
+	fi
 	status=$?
 	set -e
 	if [ $status -ne 0 ]; then

@@ -6,3 +6,5 @@ reloadable = true
 [libraries]
 linux.debug.x86_64 = "res://extension/bin/libvoxel_everything.linux.template_debug.x86_64.so"
 linux.release.x86_64 = "res://extension/bin/libvoxel_everything.linux.template_release.x86_64.so"
+macos.debug = "res://extension/bin/libvoxel_everything.macos.template_debug.universal.dylib"
+macos.release = "res://extension/bin/libvoxel_everything.macos.template_release.universal.dylib"

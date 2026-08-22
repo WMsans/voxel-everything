@@ -114,6 +114,9 @@ fi
 # or WAYLAND_DISPLAY exported even though the desktop session is running.
 # Without one, Godot falls back to the headless DisplayServer regardless of
 # flags, and gdUnit4 aborts. Auto-detect the running session's sockets.
+# On macOS there are no X11/Wayland sockets; Godot always launches against
+# the native WindowServer, so no detection is needed.
+if [ "$(uname -s)" != "Darwin" ]; then
 if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ]; then
 	runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 	# Sorted, so a session with several sockets always picks the same one
@@ -132,6 +135,7 @@ if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ]; then
 		echo "  desktop session (headless mode is rejected by gdUnit4)." >&2
 		exit 1
 	fi
+fi
 fi
 
 # --- vsync ------------------------------------------------------------------
