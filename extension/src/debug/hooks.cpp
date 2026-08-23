@@ -34,6 +34,7 @@
 #include "lod/lod_grid.h"
 #include "lod/lod_reduce.h"
 #include "lod/lod_skirt.h"
+#include "lod/lod_system.h" // Task 15: the LoD state/mutex live here; friend access
 #include "lod/lod_tree.h"
 #include "physics/collider_streamer.h"
 #include "physics/island_manager.h"
@@ -1108,27 +1109,27 @@ void VoxelDebugHooks::debug_lod_tick(Vector3 pos, Vector3 fwd) {
 }
 
 Dictionary VoxelDebugHooks::debug_lod_stats() {
-	std::lock_guard<std::mutex> lock(world_->lod_mutex_);
-	world_->ensure_lod();
+	std::lock_guard<std::mutex> lock(world_->context().lod->lod_mutex_);
+	world_->context().lod->ensure_lod();
 	Dictionary d;
-	d["pages_total"] = world_->lod_pool_ ? world_->lod_pool_->page_count() : 0;
-	d["pages_free"] = world_->lod_pool_ ? world_->lod_pool_->free_pages() : 0;
-	d["pages_used"] = (world_->lod_pool_ ? world_->lod_pool_->page_count() : 0) -
-			(world_->lod_pool_ ? world_->lod_pool_->free_pages() : 0);
-	d["chunks_resident"] = static_cast<int>(world_->lod_pages_of_.size());
+	d["pages_total"] = world_->context().lod->lod_pool_ ? world_->context().lod->lod_pool_->page_count() : 0;
+	d["pages_free"] = world_->context().lod->lod_pool_ ? world_->context().lod->lod_pool_->free_pages() : 0;
+	d["pages_used"] = (world_->context().lod->lod_pool_ ? world_->context().lod->lod_pool_->page_count() : 0) -
+			(world_->context().lod->lod_pool_ ? world_->context().lod->lod_pool_->free_pages() : 0);
+	d["chunks_resident"] = static_cast<int>(world_->context().lod->lod_pages_of_.size());
 	int dirty_chunks = 0;
 	int dirty_levels = 0;
-	if (world_->lod_tree_) world_->lod_tree_->dirty_stats(&dirty_chunks, &dirty_levels);
+	if (world_->context().lod->lod_tree_) world_->context().lod->lod_tree_->dirty_stats(&dirty_chunks, &dirty_levels);
 	d["dirty_chunks"] = dirty_chunks;
 	d["dirty_levels"] = dirty_levels;
 	int draw_pages = 0;
-	for (const ve::LodDrawItem &item : world_->lod_walk_.draws)
+	for (const ve::LodDrawItem &item : world_->context().lod->lod_walk_.draws)
 		draw_pages += item.page_count;
 	d["draw_pages"] = draw_pages;
 	// Requests the last walk still wants built. Zero, with nothing in flight, is what
 	// "the far field has converged for this camera" means; tests wait on it instead of
 	// guessing a frame count.
-	d["requests_pending"] = static_cast<int>(world_->lod_walk_.requests.size());
+	d["requests_pending"] = static_cast<int>(world_->context().lod->lod_walk_.requests.size());
 	// LodArena::alloc is all-or-nothing, so this should always be zero -- but reporting a
 	// hardcoded 0 makes the test that asserts it vacuous. MEASURE the two shapes a
 	// partially funded build would actually take: a chunk holding a page the per-page quad
@@ -1136,17 +1137,17 @@ Dictionary VoxelDebugHooks::debug_lod_stats() {
 	// half-rolled-back allocation leaves behind).
 	int partial = 0;
 	size_t owned_pages = 0;
-	for (const auto &kv : world_->lod_pages_of_) {
+	for (const auto &kv : world_->context().lod->lod_pages_of_) {
 		owned_pages += kv.second.size();
 		for (int p : kv.second) {
-			if (world_->lod_page_quads_.find(p) == world_->lod_page_quads_.end()) {
+			if (world_->context().lod->lod_page_quads_.find(p) == world_->context().lod->lod_page_quads_.end()) {
 				partial++;
 				break;
 			}
 		}
 	}
-	const int used_pages = (world_->lod_pool_ ? world_->lod_pool_->page_count() : 0) -
-			(world_->lod_pool_ ? world_->lod_pool_->free_pages() : 0);
+	const int used_pages = (world_->context().lod->lod_pool_ ? world_->context().lod->lod_pool_->page_count() : 0) -
+			(world_->context().lod->lod_pool_ ? world_->context().lod->lod_pool_->free_pages() : 0);
 	const int unowned = used_pages - static_cast<int>(owned_pages);
 	d["partial_allocations"] = partial + (unowned > 0 ? unowned : 0);
 	d["builds_in_flight"] = world_->mesh_ && world_->mesh_->lod_busy() ? 1 : 0;
@@ -1182,7 +1183,7 @@ Dictionary VoxelDebugHooks::debug_lod_render_probe_culled(Vector3 pos, Vector3 f
 	debug_lod_tick(pos, fwd);
 
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->lod_pool_ || !world_->lod_raster_pass() || !world_->material_atlas()) return d;
+	if (!world_->initialized_ || !device || !world_->context().lod->lod_pool_ || !world_->lod_raster_pass() || !world_->material_atlas()) return d;
 
 	const float p[3] = {pos.x, pos.y, pos.z};
 	const float f[3] = {fwd.x, fwd.y, fwd.z};
@@ -1202,11 +1203,11 @@ Dictionary VoxelDebugHooks::debug_lod_render_probe_culled(Vector3 pos, Vector3 f
 	device->texture_clear(world_->gbuffer()->depth(), Color(0.0f, 0.0f, 0.0f, 0.0f), 0, 1, 0, 1);
 	world_->lod_raster_pass()->set_cull_enabled(cull);
 	const int draw_count = world_->lod_raster_pass()->draw_page_count();
-	world_->lod_pool_->upload_draw_args(world_->lod_raster_pass()->draw_pages());
+	world_->context().lod->lod_pool_->upload_draw_args(world_->lod_raster_pass()->draw_pages());
 	float probe_start = ve::kLodFadeStartM;
 	float probe_end = ve::kLodFadeEndM;
 	world_->lod_fade_band(&probe_start, &probe_end);
-	bool ok = world_->lod_raster_pass()->draw(device, *world_->lod_pool_, *world_->material_atlas(), *world_->gbuffer(),
+	bool ok = world_->lod_raster_pass()->draw(device, *world_->context().lod->lod_pool_, *world_->material_atlas(), *world_->gbuffer(),
 			vp, p, draw_count, probe_start, probe_end);
 	device->submit();
 	device->sync();
@@ -1268,7 +1269,7 @@ Dictionary VoxelDebugHooks::debug_lod_gbuffer_probe(Vector3 pos, Vector3 fwd, in
 
 	debug_lod_tick(pos, fwd);
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->lod_pool_ || !world_->lod_raster_pass() || !world_->material_atlas() || !world_->gbuffer())
+	if (!world_->initialized_ || !device || !world_->context().lod->lod_pool_ || !world_->lod_raster_pass() || !world_->material_atlas() || !world_->gbuffer())
 		return d;
 	world_->lod_raster_pass()->release_targets();
 	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(w, h))) return d;
@@ -1288,11 +1289,11 @@ Dictionary VoxelDebugHooks::debug_lod_gbuffer_probe(Vector3 pos, Vector3 fwd, in
 	device->texture_clear(world_->gbuffer()->surface(), Color(0, 0, 0, 0), 0, 1, 0, 1);
 	device->texture_clear(world_->gbuffer()->depth(), Color(0, 0, 0, 0), 0, 1, 0, 1);
 	world_->lod_raster_pass()->set_cull_enabled(true);
-	world_->lod_pool_->upload_draw_args(world_->lod_raster_pass()->draw_pages());
+	world_->context().lod->lod_pool_->upload_draw_args(world_->lod_raster_pass()->draw_pages());
 	float fade_start = ve::kLodFadeStartM;
 	float fade_end = ve::kLodFadeEndM;
 	world_->lod_fade_band(&fade_start, &fade_end);
-	const bool ok = world_->lod_raster_pass()->draw(device, *world_->lod_pool_, *world_->material_atlas(), *world_->gbuffer(), vp, p,
+	const bool ok = world_->lod_raster_pass()->draw(device, *world_->context().lod->lod_pool_, *world_->material_atlas(), *world_->gbuffer(), vp, p,
 			world_->lod_raster_pass()->draw_page_count(), fade_start, fade_end);
 	device->submit();
 	device->sync();
@@ -1350,7 +1351,7 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 	RenderingDevice *device = world_->rd();
 	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass() ||
 			!world_->composite_pass() || !world_->deferred_pass() || !world_->inject_pass() || !world_->gbuffer() ||
-			!world_->lod_pool_ || !world_->lod_raster_pass()) return d;
+			!world_->context().lod->lod_pool_ || !world_->lod_raster_pass()) return d;
 
 	// The near field needs the streamer to have populated the SDF atlas; the LoD settle in
 	// the test only converges the far-field walk. Drive the streamer until it is quiet (the
@@ -1481,9 +1482,9 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 	// unclaimed. Production rendering never passes it.
 	if (!skip_lod) {
 		world_->lod_raster_pass()->set_cull_enabled(true);
-		world_->lod_pool_->upload_draw_args(world_->lod_raster_pass()->draw_pages());
+		world_->context().lod->lod_pool_->upload_draw_args(world_->lod_raster_pass()->draw_pages());
 		const int draw_count = world_->lod_raster_pass()->draw_page_count();
-		world_->lod_raster_pass()->draw(device, *world_->lod_pool_, *world_->material_atlas(), *world_->gbuffer(), vp, p,
+		world_->lod_raster_pass()->draw(device, *world_->context().lod->lod_pool_, *world_->material_atlas(), *world_->gbuffer(), vp, p,
 				draw_count, probe_fade_start, probe_fade_end, marker);
 	}
 
@@ -1601,7 +1602,7 @@ Dictionary VoxelDebugHooks::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 	debug_lod_tick(pos, fwd);
 
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->lod_pool_ || !world_->lod_raster_pass() || !world_->lod_cull_pass() ||
+	if (!world_->initialized_ || !device || !world_->context().lod->lod_pool_ || !world_->lod_raster_pass() || !world_->lod_cull_pass() ||
 			!world_->hiz_pass()) {
 		return d;
 	}
@@ -1617,10 +1618,10 @@ Dictionary VoxelDebugHooks::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 
 	const int draw_count = world_->lod_raster_pass()->draw_page_count();
 	if (draw_count <= 0) return d;
-	world_->lod_pool_->upload_draw_args(world_->lod_raster_pass()->draw_pages());
+	world_->context().lod->lod_pool_->upload_draw_args(world_->lod_raster_pass()->draw_pages());
 	device->submit();
 	device->sync();
-	const PackedByteArray before = device->buffer_get_data(world_->lod_pool_->args_buffer(), 0,
+	const PackedByteArray before = device->buffer_get_data(world_->context().lod->lod_pool_->args_buffer(), 0,
 			static_cast<uint32_t>(draw_count) * 20);
 
 	// This probe deliberately exercises frustum culling plus whatever HiZ state is present.
@@ -1628,13 +1629,13 @@ Dictionary VoxelDebugHooks::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 	// stale pyramid (the production path builds from the real scene depth before culling).
 	debug_hiz_probe_synthetic(0.0f, 1.0f);
 
-	const bool ok = world_->lod_cull_pass()->run(device, *world_->lod_pool_, world_->hiz_pass(), vp, draw_count,
+	const bool ok = world_->lod_cull_pass()->run(device, *world_->context().lod->lod_pool_, world_->hiz_pass(), vp, draw_count,
 			draw_count, 0);
 	device->submit();
 	device->sync();
 	if (!ok) return d;
 
-	const PackedByteArray after = device->buffer_get_data(world_->lod_pool_->args_buffer(), 0,
+	const PackedByteArray after = device->buffer_get_data(world_->context().lod->lod_pool_->args_buffer(), 0,
 			static_cast<uint32_t>(draw_count) * 20);
 	if (before.size() < static_cast<int64_t>(draw_count) * 20 ||
 			after.size() < static_cast<int64_t>(draw_count) * 20) {
@@ -1650,13 +1651,13 @@ Dictionary VoxelDebugHooks::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 	PackedInt32Array culled;
 	PackedInt32Array page_frustum_culled;
 	PackedInt32Array slot_frustum_culled;
-	const std::vector<uint32_t> &page_chunk_cpu = world_->lod_pool_->page_chunk_cpu();
+	const std::vector<uint32_t> &page_chunk_cpu = world_->context().lod->lod_pool_->page_chunk_cpu();
 	float planes[6][4];
 	ve::lod_frustum_planes(cam.view_proj, planes);
-	const PackedByteArray chunk_bytes = device->buffer_get_data(world_->lod_pool_->chunk_buffer(), 0,
-			static_cast<uint32_t>(world_->lod_pool_->chunk_record_count() * 32));
+	const PackedByteArray chunk_bytes = device->buffer_get_data(world_->context().lod->lod_pool_->chunk_buffer(), 0,
+			static_cast<uint32_t>(world_->context().lod->lod_pool_->chunk_record_count() * 32));
 	const float *chunk_data = reinterpret_cast<const float *>(chunk_bytes.ptr());
-	const bool have_chunks = chunk_bytes.size() >= world_->lod_pool_->chunk_record_count() * 32;
+	const bool have_chunks = chunk_bytes.size() >= world_->context().lod->lod_pool_->chunk_record_count() * 32;
 	auto aabb_outside = [&](uint32_t ci) -> bool {
 		if (!have_chunks || ci == 0xffffffffu) return true;
 		const float *rec = chunk_data + static_cast<size_t>(ci) * 8;
@@ -4175,13 +4176,13 @@ Dictionary VoxelDebugHooks::debug_sun_shadow_stats() {
 void VoxelDebugHooks::debug_sun_shadow_build(bool force) {
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!device || !world_->sun_shadow_pass() || !world_->lod_pool_ || !world_->lod_raster_pass()) return;
+	if (!device || !world_->sun_shadow_pass() || !world_->context().lod->lod_pool_ || !world_->lod_raster_pass()) return;
 	world_->prepare_lod_shadow_raster();
 	const ve::WorldBounds wb = world_->world_bounds();
 	float lo[3];
 	float hi[3];
 	wb.aabb(lo, hi);
-	world_->sun_shadow_pass()->build(device, *world_->lod_pool_, *world_->lod_raster_pass(),
+	world_->sun_shadow_pass()->build(device, *world_->context().lod->lod_pool_, *world_->lod_raster_pass(),
 			ve::sun_ortho(ve::kSunDir, lo, hi, SunShadowPass::kSize), force);
 	world_->prepare_lod_raster();
 }
