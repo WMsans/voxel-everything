@@ -313,6 +313,14 @@ void VoxelWorld::_process(double delta) {
 			anchor->get_global_position());
 }
 
+VoxelWorld::VoxelWorld() {
+	// WorldStore is created FIRST so the property setters always have a config
+	// to write -- pre-init setter semantics are identical to the plain fields
+	// they replace, and context wiring publishes the store from birth.
+	store_ = std::make_unique<WorldStore>(ve::WorldConfig{});
+	context_.store = store_.get();
+}
+
 VoxelWorld::~VoxelWorld() {
 	if (debug_hooks_) {
 		memdelete(debug_hooks_);
@@ -443,7 +451,7 @@ void VoxelWorld::teardown_gpu() {
 		delete streamer_;
 		streamer_ = nullptr;
 	}
-	if (residency_) { residency_->clear(); } // slot assignments are meaningless pre-atlas
+	store_->clear_residency(); // slot assignments are meaningless pre-atlas
 	if (island_cull_) { delete island_cull_; island_cull_ = nullptr; }
 	if (islands_) { delete islands_; islands_ = nullptr; }
 	{
@@ -516,9 +524,9 @@ void VoxelWorld::_exit_tree() {
 	// explicit benchmark shutdown and normal SceneTree exit.
 	shutdown_render_resources();
 	teardown_physics();
-	if (residency_) { delete residency_; residency_ = nullptr; }
-	if (edit_log_) { delete edit_log_; edit_log_ = nullptr; }
-	if (overrides_) { delete overrides_; overrides_ = nullptr; }
+	// CPU cores survive GPU teardown; deleted here exactly where they were
+	// before the split, in the same residency -> edit log -> overrides order.
+	store_->release_cores();
 	pending_edits_.clear();
 	overflow_seen_ = 0;
 	if (lod_pool_) {
@@ -556,10 +564,10 @@ void VoxelWorld::ensure_initialized() {
 	}
 	atlas_ = new GpuAtlas();
 	GpuAtlasConfig cfg;
-	cfg.atlas_bricks = {atlas_bricks_.x, atlas_bricks_.y, atlas_bricks_.z};
-	cfg.max_region_slots = max_region_slots_;
-	cfg.max_brick_jobs = max_brick_jobs_;
-	cfg.max_override_bricks = max_override_bricks_;
+	cfg.atlas_bricks = {store_->config_.atlas_bricks.x, store_->config_.atlas_bricks.y, store_->config_.atlas_bricks.z};
+	cfg.max_region_slots = store_->config_.max_region_slots;
+	cfg.max_brick_jobs = store_->config_.max_brick_jobs;
+	cfg.max_override_bricks = store_->config_.max_override_bricks;
 	cfg.bounds = world_bounds();
 	if (normal_pool_bytes_ > 0) cfg.normal_pool_bytes = normal_pool_bytes_; // test initializer
 	if (!atlas_->initialize(device, cfg)) { delete atlas_; atlas_ = nullptr; return; }
@@ -573,24 +581,20 @@ void VoxelWorld::ensure_initialized() {
 	if (!gen_pass_->initialize(device, *atlas_)) { teardown_gpu(); return; }
 	materials_ = new MaterialAtlas();
 	if (!materials_->initialize(device)) { teardown_gpu(); return; }
-	if (!edit_log_) edit_log_ = new ve::EditLog(world_bounds());
-	if (!overrides_) overrides_ = new ve::OverrideStore(atlas_->overrides().capacity());
-	if (!atlas_->replay_overrides(device, *overrides_, override_tables_)) {
+	// The four blocks below are the verbatim construction sequence moved into
+	// WorldStore; their call positions relative to the GPU setup are load-bearing.
+	store_->ensure_edit_log(world_bounds());
+	store_->ensure_overrides(atlas_->overrides().capacity());
+	if (!atlas_->replay_overrides(device, *store_->overrides_, store_->override_tables_)) {
 		UtilityFunctions::printerr("VoxelWorld: override replay into render pool failed");
 		teardown_gpu();
 		return;
 	}
-	if (!residency_) {
-		ve::ResidencyConfig rcfg;
-		rcfg.bounds = world_bounds();
-		rcfg.radius_m = residency_radius_m_;
-		rcfg.max_region_slots = max_region_slots_;
-		residency_ = new ve::RegionResidency(rcfg);
-	}
+	store_->ensure_residency(world_bounds());
 	streamer_ = new WorldStreamer();
-	streamer_->initialize(residency_, edit_log_, &edit_mutex_, &pending_edits_, atlas_,
-			region_pass_, gen_pass_, &occupancy_mutex_, &occupancy_inbox_, &edit_seq_, overrides_,
-			&override_tables_);
+	streamer_->initialize(store_->residency_, store_->edit_log_, &edit_mutex_, &pending_edits_, atlas_,
+			region_pass_, gen_pass_, &occupancy_mutex_, &occupancy_inbox_, &edit_seq_, store_->overrides_,
+			&store_->override_tables_);
 	raymarch_pass_ = new RaymarchPass();
 	raymarch_pass_->initialize(device);
 	raymarch_pass_->set_materials(*materials_);
@@ -675,12 +679,12 @@ ve::EditLog::AppendResult VoxelWorld::append_edit(const ve::EditOp &op) {
 
 ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
 		bool notify_islands) {
-	if (!edit_log_) return {};
-	ve::EditLog::AppendResult r = edit_log_->append(op);
+	if (!store_->edit_log_) return {};
+	ve::EditLog::AppendResult r = store_->edit_log_->append(op);
 	// Queue before the list reaches its hard cap. The bake is asynchronous, so the spare 64
 	// entries absorb edits appended while the worker is in flight.
 	for (const ve::IVec3 &region : r.touched)
-		if (edit_log_->op_count(region) >= ve::kConsolidateAtOps)
+		if (store_->edit_log_->op_count(region) >= ve::kConsolidateAtOps)
 			queue_consolidation(region);
 	// Bump AFTER the append and under the same lock the streamer uses to capture op counts.
 	// If the seq moved before the append, a readback stamped between the bump and the append
@@ -729,8 +733,8 @@ RenderingDevice *VoxelWorld::rd() const {
 
 ve::WorldBounds VoxelWorld::world_bounds() const {
 	ve::WorldBounds b;
-	b.origin_bricks = {world_origin_bricks_.x, world_origin_bricks_.y, world_origin_bricks_.z};
-	b.size_regions = {world_size_regions_.x, world_size_regions_.y, world_size_regions_.z};
+	b.origin_bricks = {store_->config_.world_origin_bricks.x, store_->config_.world_origin_bricks.y, store_->config_.world_origin_bricks.z};
+	b.size_regions = {store_->config_.world_size_regions.x, store_->config_.world_size_regions.y, store_->config_.world_size_regions.z};
 	return b;
 }
 
@@ -747,19 +751,21 @@ int VoxelWorld::island_slot_count() const {
 
 void VoxelWorld::ensure_physics_initialized() {
 	if (physics_ready_) return;
-	// The CPU cores are shared with the streaming path and outlive both (voxel_world.h).
-	if (!edit_log_) edit_log_ = new ve::EditLog(world_bounds());
-	if (!overrides_) overrides_ = new ve::OverrideStore(max_override_bricks_);
+	// The CPU cores are shared with the streaming path and outlive both
+	// (voxel_world.h); created through the same WorldStore lazy paths as the
+	// streaming init, so physics-first worlds get identical objects.
+	store_->ensure_edit_log(world_bounds());
+	store_->ensure_overrides(store_->config_.max_override_bricks);
 	mesh_ = new MeshService();
 	MeshPassConfig mcfg;
 	mcfg.max_jobs = mesh_jobs_per_frame_;
-	mcfg.max_override_bricks = overrides_ ? overrides_->capacity() : max_override_bricks_;
+	mcfg.max_override_bricks = store_->overrides_ ? store_->overrides_->capacity() : store_->config_.max_override_bricks;
 	if (!mesh_->start(mcfg)) {
 		delete mesh_;
 		mesh_ = nullptr;
 		return;
 	}
-	if (!mesh_->replay_overrides(*overrides_, override_tables_)) {
+	if (!mesh_->replay_overrides(*store_->overrides_, store_->override_tables_)) {
 		mesh_->stop();
 		delete mesh_;
 		mesh_ = nullptr;
@@ -770,8 +776,8 @@ void VoxelWorld::ensure_physics_initialized() {
 	// VolumeSet survive physics teardown, so replay every pinned volume into the new worker;
 	// the preserved island_uploads_ only covers the render device's pool.
 	for (int slot = 0; slot < ve::kMaxVolumes; slot++) {
-		if (!volumes_.pinned(slot)) continue;
-		const ve::VolumeData *d = volumes_.get(slot);
+		if (!store_->volumes_.pinned(slot)) continue;
+		const ve::VolumeData *d = store_->volumes_.get(slot);
 		if (d) mesh_->submit_volume(slot, *d);
 	}
 	ve::ChunkResidencyConfig ccfg;
@@ -781,7 +787,7 @@ void VoxelWorld::ensure_physics_initialized() {
 	ccfg.max_builds_per_frame = mesh_jobs_per_frame_;
 	chunks_ = new ve::ChunkResidency(ccfg);
 	colliders_ = new ColliderStreamer();
-	colliders_->initialize(chunks_, edit_log_, &edit_mutex_, mesh_, max_collider_chunks_);
+	colliders_->initialize(chunks_, store_->edit_log_, &edit_mutex_, mesh_, max_collider_chunks_);
 	colliders_->set_shape_builds_per_frame(shape_builds_per_frame_);
 	colliders_->set_body_bubble_radius_m(physics_bubble_radius_m_);
 	// Publish the manager under edit_mutex_: append_edit_locked() can be called from a tool
@@ -838,7 +844,7 @@ void VoxelWorld::teardown_physics() {
 		std::vector<IslandUpload> keep;
 		keep.reserve(island_uploads_.size());
 		for (IslandUpload &u : island_uploads_)
-			if (!u.to_island_atlas && volumes_.pinned(u.volume_slot))
+			if (!u.to_island_atlas && store_->volumes_.pinned(u.volume_slot))
 				keep.push_back(std::move(u));
 		island_uploads_.swap(keep);
 		island_descs_.clear();
@@ -884,11 +890,11 @@ void VoxelWorld::teardown_physics() {
 				UtilityFunctions::printerr(
 						"VoxelWorld: render override rollback failed during physics teardown; invalidated table");
 			for (const ve::IVec3 brick : consolidation_newly_acquired_) {
-				const int slot = overrides_ ? overrides_->slot_of(brick) : -1;
+				const int slot = store_->overrides_ ? store_->overrides_->slot_of(brick) : -1;
 				if (slot >= 0 && atlas_) atlas_->stored_normals().release_override(rd(), slot);
-				overrides_->release(brick);
+				store_->overrides_->release(brick);
 			}
-			if (edit_log_ && edit_log_->op_count(region) > 0)
+			if (store_->edit_log_ && store_->edit_log_->op_count(region) > 0)
 				consolidation_queue_.insert(consolidation_queue_.begin(), region);
 			consolidation_in_flight_ = false;
 			consolidation_job_ = ConsolidateJob{};
@@ -995,18 +1001,18 @@ void VoxelWorld::set_physics_bubbles(const std::vector<IslandBody *> &bodies) {
 
 ve::RayHit VoxelWorld::analytic_raycast_down(const float xz[2]) {
 	ve::RayHit h;
-	if (!edit_log_) return h;
+	if (!store_->edit_log_) return h;
 	std::lock_guard<std::mutex> lock(edit_mutex_);
 	ve::AnalyticGenerator gen;
 	const float o[3] = {xz[0], 200.0f, xz[1]};
 	const float dir[3] = {0.0f, -1.0f, 0.0f};
-	return ve::raycast(gen, *edit_log_, o, dir, 400.0f, &volumes_, overrides_);
+	return ve::raycast(gen, *store_->edit_log_, o, dir, 400.0f, &store_->volumes_, store_->overrides_);
 }
 
 bool VoxelWorld::release_volume_slot(int slot) {
 	// The authoritative copy goes first; only a successful release (never a pinned slot --
 	// a pasted volume-add still names it) queues the GPU-side normal teardown.
-	const bool freed = volumes_.release(slot);
+	const bool freed = store_->volumes_.release(slot);
 	if (freed) {
 		std::lock_guard<std::mutex> lock(island_mutex_);
 		pending_normal_releases_.push_back(slot);
@@ -1099,7 +1105,7 @@ void VoxelWorld::gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::Edit
 	if (!out) return;
 	out->clear();
 	std::lock_guard<std::mutex> lock(edit_mutex_);
-	if (!edit_log_) return;
+	if (!store_->edit_log_) return;
 	float lo[3], hi[3];
 	ve::lod_chunk_aabb(level, coord, lo, hi);
 	const float pad = std::max(2.0f * ve::lod_cell_size(level), ve::kLatticeFilterPad);
@@ -1107,7 +1113,7 @@ void VoxelWorld::gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::Edit
 		lo[a] -= pad;
 		hi[a] += pad;
 	}
-	ve::collect_ops_for_aabb(*edit_log_, lo, hi, out);
+	ve::collect_ops_for_aabb(*store_->edit_log_, lo, hi, out);
 	// M4 errata 1: the flattened cross-region list can exceed the cap. A chronological
 	// prefix is a valid world state; a suffix could apply an add without the subtract that
 	// made room for it.
@@ -1115,7 +1121,7 @@ void VoxelWorld::gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::Edit
 }
 
 bool VoxelWorld::snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo, ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const {
-	if (!out || !overrides_) return false;
+	if (!out || !store_->overrides_) return false;
 	out->overrides.clear();
 	out->volumes.clear();
 	// Copy only prior overrides inside inclusive brick range
@@ -1123,9 +1129,9 @@ bool VoxelWorld::snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::
 		for (int y = brick_lo.y; y <= brick_hi.y; y++)
 			for (int x = brick_lo.x; x <= brick_hi.x; x++) {
 				ve::IVec3 b{x, y, z};
-				int slot = overrides_->slot_of(b);
+				int slot = store_->overrides_->slot_of(b);
 				if (slot >= 0) {
-					const ve::OverrideBrick *data = overrides_->data(slot);
+					const ve::OverrideBrick *data = store_->overrides_->data(slot);
 					if (!data) return false;
 					if (!data->normal_oct.empty() && data->normal_oct.size() != ve::kBrickSdfCount) return false;
 					out->overrides.push_back({b, *data});
@@ -1137,7 +1143,7 @@ bool VoxelWorld::snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::
 		int slot = static_cast<int>(op.aux[0]);
 		if (seen.count(slot)) continue;
 		seen.insert(slot);
-		const ve::VolumeData *vd = volumes_.get(slot);
+		const ve::VolumeData *vd = store_->volumes_.get(slot);
 		if (!vd || !vd->valid()) return false;
 		out->volumes.push_back({slot, *vd});
 	}
@@ -1173,8 +1179,8 @@ void VoxelWorld::lod_fade_band(float *fade_start, float *fade_end) const {
 	// Fall back to the CONFIGURED radius there: the seam then starts where the near field
 	// intends to reach and only tightens if the atlas cannot fund it, instead of jumping
 	// once streaming begins and stranding the chunks the walk built under the old band.
-	float reach = residency_ ? residency_->complete_radius_m() : 0.0f;
-	if (reach <= 0.0f) reach = residency_radius_m_;
+	float reach = store_->residency_ ? store_->residency_->complete_radius_m() : 0.0f;
+	if (reach <= 0.0f) reach = store_->config_.residency_radius_m;
 	ve::lod_fade_band(reach, fade_start, fade_end);
 }
 
@@ -1394,8 +1400,8 @@ void VoxelWorld::prepare_lod_raster_locked() {
 
 
 int VoxelWorld::override_table_for_region(ve::IVec3 region) const {
-	const auto it = override_tables_.find(std::tuple<int, int, int>{region.x, region.y, region.z});
-	return it == override_tables_.end() ? -1 : it->second;
+	const auto it = store_->override_tables_.find(std::tuple<int, int, int>{region.x, region.y, region.z});
+	return it == store_->override_tables_.end() ? -1 : it->second;
 }
 
 
@@ -1409,7 +1415,7 @@ void VoxelWorld::pump_consolidation() {
 	std::unique_lock<std::mutex> lifetime(render_lifetime_mutex_);
 	if (render_shutting_down_) return;
 	std::unique_lock<std::mutex> edit_lock(edit_mutex_);
-	if (!mesh_ || !mesh_->is_valid() || !edit_log_ || !overrides_ || !residency_) return;
+	if (!mesh_ || !mesh_->is_valid() || !store_->edit_log_ || !store_->overrides_ || !store_->residency_) return;
 
 	const auto reset_transaction = [this]() {
 		consolidation_in_flight_ = false;
@@ -1457,9 +1463,9 @@ void VoxelWorld::pump_consolidation() {
 			// The speculative slot's normal span was staged before the table entry naming
 			// it. Releasing the slot without releasing the span leaks payload out of the
 			// fixed 32 MiB pool for the rest of the process.
-			const int slot = overrides_ ? overrides_->slot_of(brick) : -1;
+			const int slot = store_->overrides_ ? store_->overrides_->slot_of(brick) : -1;
 			if (slot >= 0 && atlas_) atlas_->stored_normals().release_override(rd(), slot);
-			overrides_->release(brick);
+			store_->overrides_->release(brick);
 		}
 		if (!restored)
 			UtilityFunctions::printerr(
@@ -1468,7 +1474,7 @@ void VoxelWorld::pump_consolidation() {
 		// CPU store/table map after releasing the speculative slots and before any requeue.
 		bool worker_rebuilt = true;
 		if (rebuild_worker)
-			worker_rebuilt = mesh_->replay_overrides(*overrides_, override_tables_);
+			worker_rebuilt = mesh_->replay_overrides(*store_->overrides_, store_->override_tables_);
 		if (!worker_rebuilt)
 			UtilityFunctions::printerr(
 					"VoxelWorld: worker override rebuild failed; refusing requeue");
@@ -1495,7 +1501,7 @@ void VoxelWorld::pump_consolidation() {
 			// The baked bytes live in the transaction's slots through the worker command; copy
 			// them from the publication command's result is unnecessary because acquire slots
 			// were populated before submission below.
-			if (residency_->slot_of(r) != consolidation_job_.region_slot) {
+			if (store_->residency_->slot_of(r) != consolidation_job_.region_slot) {
 				refuse_transaction(true, false);
 				return;
 			}
@@ -1503,13 +1509,13 @@ void VoxelWorld::pump_consolidation() {
 				atlas_->set_override_table(rd(), consolidation_job_.region_slot,
 						consolidation_table_, consolidation_entries_);
 			for (size_t i = 0; i < consolidation_slots_.size(); i++)
-				if (ve::OverrideBrick *data = overrides_->data(consolidation_slots_[i]))
+				if (ve::OverrideBrick *data = store_->overrides_->data(consolidation_slots_[i]))
 					*data = consolidation_baked_[i];
-			edit_log_->clear_region_through(r, consolidation_job_.through_seq);
+			store_->edit_log_->clear_region_through(r, consolidation_job_.through_seq);
 			pending_dirty_.push_back({ve::chunk_of_brick(base),
 					ve::chunk_of_brick({base.x + ve::kRegionBricks - 1,
 							base.y + ve::kRegionBricks - 1, base.z + ve::kRegionBricks - 1})});
-			if (edit_log_->op_count(r) >= ve::kConsolidateAtOps) queue_consolidation(r);
+			if (store_->edit_log_->op_count(r) >= ve::kConsolidateAtOps) queue_consolidation(r);
 			float lo[3], first_hi[3], last_lo[3], hi[3];
 			ve::brick_world_aabb(base, lo, first_hi);
 			ve::brick_world_aabb({base.x + ve::kRegionBricks - 1,
@@ -1519,7 +1525,7 @@ void VoxelWorld::pump_consolidation() {
 				lod_tree_->mark_dirty(lo, hi);
 			}
 			if (streamer_) streamer_->queue_region_regeneration_locked(r);
-			override_tables_[std::tuple<int, int, int>{r.x, r.y, r.z}] = consolidation_table_;
+			store_->override_tables_[std::tuple<int, int, int>{r.x, r.y, r.z}] = consolidation_table_;
 			consolidation_count_++;
 			reset_transaction();
 			return;
@@ -1539,8 +1545,8 @@ void VoxelWorld::pump_consolidation() {
 		consolidation_baked_ = results.front().baked;
 		consolidation_newly_acquired_.clear();
 		for (const ve::IVec3 brick : result.bricks) {
-			const bool present = overrides_->slot_of(brick) >= 0;
-			const int slot = overrides_->acquire(brick);
+			const bool present = store_->overrides_->slot_of(brick) >= 0;
+			const int slot = store_->overrides_->acquire(brick);
 			if (slot < 0) {
 				refuse_transaction(true, false);
 				return;
@@ -1556,7 +1562,7 @@ void VoxelWorld::pump_consolidation() {
 					}), consolidation_entries_.end());
 			consolidation_entries_.emplace_back(bi, consolidation_slots_[i]);
 		}
-		if (residency_->slot_of(region) != consolidation_job_.region_slot) {
+		if (store_->residency_->slot_of(region) != consolidation_job_.region_slot) {
 			refuse_transaction(true, false);
 			return;
 		}
@@ -1602,24 +1608,24 @@ void VoxelWorld::pump_consolidation() {
 	if (consolidation_queue_.empty()) return;
 	const ve::IVec3 region = consolidation_queue_.front();
 	consolidation_queue_.erase(consolidation_queue_.begin());
-	const int region_slot = residency_->slot_of(region);
+	const int region_slot = store_->residency_->slot_of(region);
 	if (region_slot < 0) {
 		consolidation_refusals_++;
 		requeue(region);
 		return;
 	}
-	const std::vector<ve::EditOp> &ops = edit_log_->ops(region);
+	const std::vector<ve::EditOp> &ops = store_->edit_log_->ops(region);
 	if (ops.empty()) return;
 	ConsolidateJob job;
 	job.region = region;
 	job.region_slot = region_slot;
 	job.ops = ops;
-	const std::vector<uint64_t> &seqs = edit_log_->seqs(region);
+	const std::vector<uint64_t> &seqs = store_->edit_log_->seqs(region);
 	job.through_seq = seqs.empty() ? 0 : seqs.back();
 	ve::plan_consolidation(job.ops.data(), static_cast<int>(job.ops.size()), region, &job.bricks);
 	if (!job.bricks.empty()) {
 		// Spec requires collect + snapshot while edit_mutex_ is held: edit_lock above spans this
-		// whole function, so overrides_, edit_log_, and volumes_ are read in one consistent state.
+		// whole function, so the overrides, edit log, and volumes are read in one consistent state.
 		ve::IVec3 lo = job.bricks[0], hi = job.bricks[0];
 		for (const auto &b : job.bricks) { lo.x = std::min(lo.x, b.x); lo.y = std::min(lo.y, b.y); lo.z = std::min(lo.z, b.z); hi.x = std::max(hi.x, b.x); hi.y = std::max(hi.y, b.y); hi.z = std::max(hi.z, b.z); }
 		if (!snapshot_field_sources(job.ops, lo, hi, &job.source)) {
@@ -1629,19 +1635,19 @@ void VoxelWorld::pump_consolidation() {
 		}
 	}
 	int needed_slots = 0;
-	for (const ve::IVec3 brick : job.bricks) if (overrides_->slot_of(brick) < 0) needed_slots++;
-	if (job.bricks.empty() || needed_slots > overrides_->capacity() - overrides_->used()) {
+	for (const ve::IVec3 brick : job.bricks) if (store_->overrides_->slot_of(brick) < 0) needed_slots++;
+	if (job.bricks.empty() || needed_slots > store_->overrides_->capacity() - store_->overrides_->used()) {
 		consolidation_refusals_++;
 		requeue(region);
 		return;
 	}
 	const std::tuple<int, int, int> key{region.x, region.y, region.z};
-	const auto found = override_tables_.find(key);
-	const int old_table = found == override_tables_.end() ? -1 : found->second;
+	const auto found = store_->override_tables_.find(key);
+	const int old_table = found == store_->override_tables_.end() ? -1 : found->second;
 	int table = old_table;
 	if (table < 0) {
 		std::vector<bool> used(OverridePool::kMaxOverrideTables, false);
-		for (const auto &it : override_tables_)
+		for (const auto &it : store_->override_tables_)
 			if (it.second >= 0 && it.second < OverridePool::kMaxOverrideTables)
 				used[static_cast<size_t>(it.second)] = true;
 		for (int i = 0; i < OverridePool::kMaxOverrideTables; i++)
@@ -1661,12 +1667,12 @@ void VoxelWorld::pump_consolidation() {
 		for (int y = 0; y < ve::kRegionBricks; y++)
 			for (int x = 0; x < ve::kRegionBricks; x++) {
 				const ve::IVec3 brick{base.x + x, base.y + y, base.z + z};
-				const int slot = overrides_->slot_of(brick);
+				const int slot = store_->overrides_->slot_of(brick);
 				if (slot < 0) continue;
 				consolidation_old_entries_.emplace_back(
 						ve::WorldBounds::brick_index_in_region(brick), slot);
 				consolidation_old_slots_.push_back(slot);
-				consolidation_old_bricks_.push_back(*overrides_->data(slot));
+				consolidation_old_bricks_.push_back(*store_->overrides_->data(slot));
 			}
 	consolidation_job_ = std::move(job);
 	consolidation_table_ = table;
@@ -1712,8 +1718,8 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 			ve::WorldBounds::region_of_point(job->origin[0], job->origin[1], job->origin[2]));
 	{
 		std::lock_guard<std::mutex> lock(edit_mutex_);
-		if (!edit_log_) return false;
-		ve::collect_ops_for_aabb(*edit_log_, wlo, whi, &job->ops);
+		if (!store_->edit_log_) return false;
+		ve::collect_ops_for_aabb(*store_->edit_log_, wlo, whi, &job->ops);
 		float lattice_hi[3] = {job->origin[0] + (job->dim - 1) * job->voxel, job->origin[1] + (job->dim - 1) * job->voxel, job->origin[2] + (job->dim - 1) * job->voxel};
 		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job->origin[0], job->origin[1], job->origin[2]);
 		ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
@@ -1737,7 +1743,7 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 	ve::VolumeData cpu;
 	ve::AnalyticGenerator gen;
 	ve::extract_island_volume(gen, job->ops.data(), static_cast<int>(job->ops.size()),
-			&volumes_, job->origin, job->voxel, job->dim, aabbs.data(),
+			&store_->volumes_, job->origin, job->voxel, job->dim, aabbs.data(),
 			static_cast<int>(boxes->size()), &cpu);
 	*out = std::move(cpu);
 	return true;
@@ -1769,12 +1775,12 @@ bool VoxelWorld::render_probe_pixel(Vector3 origin, Vector3 dir) {
 			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
 	const ve::WorldBounds wb = world_bounds();
 	const ve::IVec3 ro = wb.origin_regions();
-	cam.dims[0] = world_size_regions_.x; cam.dims[1] = world_size_regions_.y;
-	cam.dims[2] = world_size_regions_.z;
+	cam.dims[0] = store_->config_.world_size_regions.x; cam.dims[1] = store_->config_.world_size_regions.y;
+	cam.dims[2] = store_->config_.world_size_regions.z;
 	cam.dims[3] = island_slot_count();
 	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
-	cam.atlas_bricks[0] = atlas_bricks_.x; cam.atlas_bricks[1] = atlas_bricks_.y;
-	cam.atlas_bricks[2] = atlas_bricks_.z;
+	cam.atlas_bricks[0] = store_->config_.atlas_bricks.x; cam.atlas_bricks[1] = store_->config_.atlas_bricks.y;
+	cam.atlas_bricks[2] = store_->config_.atlas_bricks.z;
 	const uint32_t flags = ve::pack_flags(beauty_);
 	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};

@@ -16,12 +16,15 @@
 #include <atomic>
 #include <condition_variable>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <utility>
 #include <vector>
 #include <tuple>
 #include "connectivity/occupancy.h"
+#include "core/context.h"
+#include "core/world_store.h"
 #include "debug/hooks.h"
 #include "generator/volume_set.h"
 #include "lod/lod_tree.h"
@@ -101,13 +104,12 @@ class VoxelWorld : public Node3D {
 
 	bool use_local_device_ = false;
 
-	Vector3i atlas_bricks_ = Vector3i(64, 32, 32);
-	int max_region_slots_ = 512;
-	int max_brick_jobs_ = 16384;
-	int max_override_bricks_ = 8192;
-	Vector3i world_origin_bricks_ = Vector3i(0, -64, 0);
-	Vector3i world_size_regions_ = Vector3i(64, 8, 64);
-	float residency_radius_m_ = 96.0f;
+	// Authoritative CPU data plane (Phase 2a): config + edit log / override /
+	// volume / residency state live in WorldStore. Created FIRST, in the
+	// constructor, so the property setters can write the config pre-init
+	// exactly as they wrote the plain fields before the split.
+	std::unique_ptr<WorldStore> store_;
+	VoxelContext context_; // subsystem wiring; store_ is published here at construction
 
 	bool physics_enabled_ = true;
 	NodePath physics_center_path_;
@@ -151,17 +153,8 @@ class VoxelWorld : public Node3D {
 	int normal_roughness_state_ = -1;
 	RID downsample_shader_, downsample_pipeline_, downsample_sampler_, downsample_uset_;
 	RID downsample_src_, downsample_dst_;
-	// CPU cores outlive the GPU objects: a re-init re-streams the same world, edits
-	// included. This is also what a future save/reload will do (saves ARE the edit log).
-	ve::EditLog *edit_log_ = nullptr;
-	ve::OverrideStore *overrides_ = nullptr;
-	std::map<std::tuple<int, int, int>, int> override_tables_;
-	// The authoritative copy of every stored volume. Owned here because it outlives the GPU
-	// objects exactly as the edit log does: a re-init re-uploads the same rubble.
-	ve::VolumeSet volumes_;
-	ve::RegionResidency *residency_ = nullptr;
 	WorldStreamer *streamer_ = nullptr;
-	std::mutex edit_mutex_;                   // guards edit_log_ + pending_edits_
+	std::mutex edit_mutex_;                   // guards the WorldStore data plane + pending_edits_
 	std::vector<PendingEdit> pending_edits_;  // appended by tools, drained by the streamer
 	int overflow_seen_ = 0;                   // sticky OR of frame overflow bits (tests)
 
@@ -310,28 +303,35 @@ public:
 	void _exit_tree() override;
 	~VoxelWorld() override;
 
+	VoxelWorld();
+
 	// Debug/test facade: all debug_* bindings live here (Phase 1 strangler split).
 	VoxelDebugHooks *hooks();
 
 	void set_use_local_device(bool v) { use_local_device_ = v; }
 	bool get_use_local_device() const { return use_local_device_; }
-	void set_atlas_bricks(Vector3i v) { atlas_bricks_ = v; }
-	Vector3i get_atlas_bricks() const { return atlas_bricks_; }
-	void set_max_region_slots(int v) { max_region_slots_ = v; }
-	int get_max_region_slots() const { return max_region_slots_; }
-	void set_max_brick_jobs(int v) { max_brick_jobs_ = v; }
-	int get_max_brick_jobs() const { return max_brick_jobs_; }
+	// Config setters/getters: write/read store_->config_. Pre-init writes take
+	// effect at the next ensure_initialized(); post-init they behave exactly as
+	// before (pools never resize after creation).
+	void set_atlas_bricks(Vector3i v) { store_->config_.atlas_bricks = v; }
+	Vector3i get_atlas_bricks() const { return store_->config_.atlas_bricks; }
+	void set_max_region_slots(int v) { store_->config_.max_region_slots = v; }
+	int get_max_region_slots() const { return store_->config_.max_region_slots; }
+	void set_max_brick_jobs(int v) { store_->config_.max_brick_jobs = v; }
+	int get_max_brick_jobs() const { return store_->config_.max_brick_jobs; }
 	void set_max_override_bricks(int v) {
 		const int requested = std::max(v, 0);
-		max_override_bricks_ = overrides_ ? std::min(requested, overrides_->capacity()) : requested;
+		store_->config_.max_override_bricks = store_->overrides()
+				? std::min(requested, store_->overrides()->capacity())
+				: requested;
 	}
-	int get_max_override_bricks() const { return max_override_bricks_; }
-	void set_world_origin_bricks(Vector3i v) { world_origin_bricks_ = v; }
-	Vector3i get_world_origin_bricks() const { return world_origin_bricks_; }
-	void set_world_size_regions(Vector3i v) { world_size_regions_ = v; }
-	Vector3i get_world_size_regions() const { return world_size_regions_; }
-	void set_residency_radius_m(float v) { residency_radius_m_ = v; }
-	float get_residency_radius_m() const { return residency_radius_m_; }
+	int get_max_override_bricks() const { return store_->config_.max_override_bricks; }
+	void set_world_origin_bricks(Vector3i v) { store_->config_.world_origin_bricks = v; }
+	Vector3i get_world_origin_bricks() const { return store_->config_.world_origin_bricks; }
+	void set_world_size_regions(Vector3i v) { store_->config_.world_size_regions = v; }
+	Vector3i get_world_size_regions() const { return store_->config_.world_size_regions; }
+	void set_residency_radius_m(float v) { store_->config_.residency_radius_m = v; }
+	float get_residency_radius_m() const { return store_->config_.residency_radius_m; }
 
 	void ensure_initialized();
 	bool is_initialized() const { return initialized_; }
@@ -395,8 +395,8 @@ public:
 	// take island_mutex_ before touching island_manager_ / island_slots_.
 	int island_slot_count() const;
 	WorldStreamer *streamer() { return streamer_; }
-	ve::EditLog *edit_log() { return edit_log_; }
-	ve::VolumeSet &volumes() { return volumes_; }
+	ve::EditLog *edit_log() { return store_->edit_log(); }
+	ve::VolumeSet &volumes() { return store_->volumes(); }
 	RaymarchPass *raymarch_pass() { return raymarch_pass_; }
 	IslandCullPass *island_cull() { return island_cull_; }
 	CompositePass *composite_pass() { return composite_pass_; }
