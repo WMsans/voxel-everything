@@ -39,6 +39,7 @@
 #include "mesh/mesh_chunk.h"
 #include "mesh/box_merge.h"
 #include "generator/generator.h"
+#include "generator/field_generator.h"
 #include "world/brick_eval.h"
 #include "world/brick_flags.h"
 #include "world/brick_mip.h"
@@ -194,6 +195,10 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_effect_enabled", "name"),
 			&VoxelWorld::get_effect_enabled);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
+	// Task 10 contract smoke test: the WorldStore spine's edit sequence, and an
+	// AppendResult-free way to push one encoded op through the spine from GDScript.
+	ClassDB::bind_method(D_METHOD("edit_seq"), &VoxelWorld::edit_seq);
+	ClassDB::bind_method(D_METHOD("append_edit", "op"), &VoxelWorld::append_edit_op);
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
 	ClassDB::bind_method(D_METHOD("request_shader_reload"), &VoxelWorld::request_shader_reload);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "use_local_device"), "set_use_local_device", "get_use_local_device");
@@ -317,7 +322,7 @@ VoxelWorld::VoxelWorld() {
 	// WorldStore is created FIRST so the property setters always have a config
 	// to write -- pre-init setter semantics are identical to the plain fields
 	// they replace, and context wiring publishes the store from birth.
-	store_ = std::make_unique<WorldStore>(ve::WorldConfig{});
+	store_ = std::make_unique<WorldStore>(ve::WorldConfig{}, new ve::ProceduralFieldGenerator());
 	context_.store = store_.get();
 	// Task 8: the edit-append spine lives in WorldStore now. Inject its notification ports
 	// (this adapter forwards to today's island/consolidation logic). Since Task 9 the store
@@ -683,6 +688,26 @@ ve::EditLog::AppendResult VoxelWorld::append_edit(const ve::EditOp &op) {
 	return append_edit_locked(op);
 }
 
+Dictionary VoxelWorld::append_edit_op(const PackedByteArray &op_bytes) {
+	// Same {touched, rejected} shape VoxelEditTool::apply reports, so suites inspect the
+	// result exactly as they inspect tool results (r["rejected"] and friends).
+	Dictionary out;
+	Array touched, rejected;
+	out["touched"] = touched;
+	out["rejected"] = rejected;
+	if (op_bytes.size() < static_cast<int>(sizeof(ve::EditOp))) {
+		UtilityFunctions::printerr("VoxelWorld: append_edit op must be ",
+				static_cast<int>(sizeof(ve::EditOp)), " bytes (the ve::EditOp encoding)");
+		return out;
+	}
+	ve::EditOp op{};
+	std::memcpy(&op, op_bytes.ptr(), sizeof(ve::EditOp));
+	const ve::EditLog::AppendResult r = append_edit(op);
+	for (const ve::IVec3 &v : r.touched) touched.push_back(Vector3i(v.x, v.y, v.z));
+	for (const ve::IVec3 &v : r.rejected) rejected.push_back(Vector3i(v.x, v.y, v.z));
+	return out;
+}
+
 ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
 		bool notify_islands) {
 	// The spine (log append, consolidation queueing, seq bump, island notification via the
@@ -995,7 +1020,8 @@ ve::RayHit VoxelWorld::analytic_raycast_down(const float xz[2]) {
 	ve::RayHit h;
 	if (!store_->edit_log_) return h;
 	std::lock_guard<std::mutex> lock(store_->edit_mutex());
-	ve::AnalyticGenerator gen;
+	// Task 10: through the FieldGenerator seam -- same analytic field, no behavior change.
+	const ve::Generator &gen = store_->generator()->sampler();
 	const float o[3] = {xz[0], 200.0f, xz[1]};
 	const float dir[3] = {0.0f, -1.0f, 0.0f};
 	return ve::raycast(gen, *store_->edit_log_, o, dir, 400.0f, &store_->volumes_, store_->overrides_);
@@ -1742,7 +1768,8 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 	for (size_t i = 0; i < boxes->size(); i++)
 		(*boxes)[i].world_aabb(&aabbs[i * 6], &aabbs[i * 6 + 3]);
 	ve::VolumeData cpu;
-	ve::AnalyticGenerator gen;
+	// Task 10: through the FieldGenerator seam -- same analytic field, no behavior change.
+	const ve::Generator &gen = store_->generator()->sampler();
 	ve::extract_island_volume(gen, job->ops.data(), static_cast<int>(job->ops.size()),
 			&store_->volumes_, job->origin, job->voxel, job->dim, aabbs.data(),
 			static_cast<int>(boxes->size()), &cpu);

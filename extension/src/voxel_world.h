@@ -298,8 +298,13 @@ public:
 	// Config setters/getters: write/read store_->config_. Pre-init writes take
 	// effect at the next ensure_initialized(); post-init they behave exactly as
 	// before (pools never resize after creation).
-	void set_atlas_bricks(Vector3i v) { store_->config_.atlas_bricks = v; }
-	Vector3i get_atlas_bricks() const { return store_->config_.atlas_bricks; }
+	void set_atlas_bricks(Vector3i v) {
+		store_->config_.atlas_bricks = {v.x, v.y, v.z};
+	}
+	Vector3i get_atlas_bricks() const {
+		return {store_->config_.atlas_bricks.x, store_->config_.atlas_bricks.y,
+				store_->config_.atlas_bricks.z};
+	}
 	void set_max_region_slots(int v) { store_->config_.max_region_slots = v; }
 	int get_max_region_slots() const { return store_->config_.max_region_slots; }
 	void set_max_brick_jobs(int v) { store_->config_.max_brick_jobs = v; }
@@ -311,10 +316,20 @@ public:
 				: requested;
 	}
 	int get_max_override_bricks() const { return store_->config_.max_override_bricks; }
-	void set_world_origin_bricks(Vector3i v) { store_->config_.world_origin_bricks = v; }
-	Vector3i get_world_origin_bricks() const { return store_->config_.world_origin_bricks; }
-	void set_world_size_regions(Vector3i v) { store_->config_.world_size_regions = v; }
-	Vector3i get_world_size_regions() const { return store_->config_.world_size_regions; }
+	void set_world_origin_bricks(Vector3i v) {
+		store_->config_.world_origin_bricks = {v.x, v.y, v.z};
+	}
+	Vector3i get_world_origin_bricks() const {
+		return {store_->config_.world_origin_bricks.x, store_->config_.world_origin_bricks.y,
+				store_->config_.world_origin_bricks.z};
+	}
+	void set_world_size_regions(Vector3i v) {
+		store_->config_.world_size_regions = {v.x, v.y, v.z};
+	}
+	Vector3i get_world_size_regions() const {
+		return {store_->config_.world_size_regions.x, store_->config_.world_size_regions.y,
+				store_->config_.world_size_regions.z};
+	}
 	void set_residency_radius_m(float v) { store_->config_.residency_radius_m = v; }
 	float get_residency_radius_m() const { return store_->config_.residency_radius_m; }
 
@@ -427,6 +442,11 @@ public:
 	// Tool entry point (VoxelEditTool, Task 14). Main thread; takes edit_mutex(). One-line
 	// delegation into WorldStore's spine so external callers compile unchanged.
 	ve::EditLog::AppendResult append_edit(const ve::EditOp &op);
+	// GDScript-bound as "append_edit" (Task 10 contract smoke test): parses ONE op from its
+	// 32-byte ve::EditOp encoding -- the byte layout the tests' make_op helpers write --
+	// and runs it through append_edit(). Returns the same {touched, rejected} Dictionary
+	// shape VoxelEditTool reports, because GDScript cannot name ve::EditLog::AppendResult.
+	Dictionary append_edit_op(const PackedByteArray &op_bytes);
 	// Low-level append used by IslandManager to hold edit_mutex across a carve/restore
 	// sequence. The caller MUST already hold edit_mutex(). Runs WorldStore's spine, then
 	// applies the VoxelWorld-owned fan-out remainder (rejection stats, LoD dirty marks,
@@ -439,6 +459,11 @@ public:
 	// One-line delegations into WorldStore so external callers compile unchanged.
 	ve::OccupancyGrid &occupancy() { return store_->occupancy(); }
 	int64_t edit_seq() const { return store_->edit_seq(); }
+
+	// Pre-init-only swap of the field-generation seam (spec §4, Task 10). One-line
+	// delegation into WorldStore, which owns the generator; see WorldStore::set_generator
+	// for the ownership/no-guard rationale. Used by future worldgen features.
+	void set_generator(ve::FieldGenerator *generator) { store_->set_generator(generator); }
 
 	bool snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo, ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const;
 

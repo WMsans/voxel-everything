@@ -17,12 +17,12 @@
 #include <tuple>
 #include <vector>
 
-#include <godot_cpp/variant/vector3i.hpp>
-
 #include "connectivity/occupancy.h"
 #include "generator/edit_ops.h"
+#include "generator/field_generator.h"
 #include "generator/volume_set.h"
 #include "world/edit_log.h"
+#include "world/region.h"
 #include "world/override_store.h"
 #include "world/residency.h"
 
@@ -31,13 +31,15 @@ namespace ve {
 // Config snapshot for the world's sizing knobs. Property setters on VoxelWorld
 // write it pre-init; pools don't resize after creation, so post-init writes are
 // reflected/rejected with the same behavior as before the split (spec §5).
+// Vector fields are ve::IVec3, not godot::Vector3i: this header must keep compiling in
+// the zero-godot-cpp native test build (src/core/*.cpp is one of its pure globs).
 struct WorldConfig {
-	godot::Vector3i atlas_bricks{64, 32, 32};
+	ve::IVec3 atlas_bricks{64, 32, 32};
 	int max_region_slots = 512;
 	int max_brick_jobs = 16384;
 	int max_override_bricks = 8192;
-	godot::Vector3i world_origin_bricks{0, -64, 0};
-	godot::Vector3i world_size_regions{64, 8, 64};
+	ve::IVec3 world_origin_bricks{0, -64, 0};
+	ve::IVec3 world_size_regions{64, 8, 64};
 	float residency_radius_m = 96.0f;
 };
 
@@ -95,8 +97,17 @@ class WorldStore {
 	friend class VoxelDebugHooks;
 
 public:
-	explicit WorldStore(const ve::WorldConfig &config);
+	// The field-generation seam (spec §4) is injected at construction and OWNED by the
+	// store: a null pointer falls back to the default procedural generator, and the
+	// destructor deletes whatever is installed. Pre-init swaps go through set_generator().
+	explicit WorldStore(const ve::WorldConfig &config, ve::FieldGenerator *generator);
 	~WorldStore();
+
+	ve::FieldGenerator *generator() const { return generator_; }
+	// Pre-init-only swap path for future worldgen features: nothing evaluates the field
+	// before ensure_initialized() streams the base world, so the raw replace needs no
+	// guard. Takes ownership of `generator` (a null pointer resets to the default).
+	void set_generator(ve::FieldGenerator *generator);
 
 	ve::EditLog *edit_log() { return edit_log_; }
 	ve::OverrideStore *overrides() { return overrides_; }
@@ -135,7 +146,8 @@ public:
 		std::lock_guard<std::mutex> lock(occupancy_mutex_);
 		occupancy_inbox_.push_back(std::move(b));
 	}
-	// Inbox -> grid; returns how many blocks landed. Was VoxelWorld::drain_occupancy.
+	// Inbox -> grid; returns how many blocks were drained (skipped ones included). Was
+	// VoxelWorld::drain_occupancy.
 	int drain_occupancy();
 
 	// THE edit mutex; guards the edit log, override tables' append path, pending_edits_,
@@ -221,6 +233,9 @@ private:
 
 	EditSink *edit_sink_ = nullptr;
 	ConsolidationSink *consolidation_sink_ = nullptr;
+
+	// The world-generation seam (spec §4); owned, see the constructor comment.
+	ve::FieldGenerator *generator_ = nullptr;
 };
 
 } // namespace godot
