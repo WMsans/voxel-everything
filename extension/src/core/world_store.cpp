@@ -1,13 +1,23 @@
 #include "core/world_store.h"
 
-#include <godot_cpp/variant/utility_functions.hpp>
-
 namespace godot {
 
-WorldStore::WorldStore(const ve::WorldConfig &config) : config_(config) {}
+WorldStore::WorldStore(const ve::WorldConfig &config, ve::FieldGenerator *generator)
+	: config_(config),
+	  // Task 10: the field-generation seam is injected at construction; a null pointer
+	  // means "today's terrain". Owned from here on (see the header comment).
+	  generator_(generator ? generator : new ve::ProceduralFieldGenerator()) {}
 
 WorldStore::~WorldStore() {
+	delete generator_;
+	generator_ = nullptr;
 	release_cores();
+}
+
+void WorldStore::set_generator(ve::FieldGenerator *generator) {
+	if (generator == generator_) return;
+	delete generator_; // pre-init only: nothing can hold the old seam mid-evaluation
+	generator_ = generator ? generator : new ve::ProceduralFieldGenerator();
 }
 
 ve::EditLog::AppendResult WorldStore::append_edit(const ve::EditOp &op) {
