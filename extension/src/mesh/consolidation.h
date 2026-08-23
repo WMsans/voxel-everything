@@ -49,7 +49,8 @@ public:
 		std::mutex *lod_mutex = nullptr;
 		// Collider remesh queue guarded by edit_mutex(); drained by physics_tick().
 		std::vector<std::pair<ve::IVec3, ve::IVec3>> *pending_dirty = nullptr;
-		// Device selection seam (use_local_device_/main_rd_/local_rd_ stay on the world).
+		// Device selection seam (use_local_device_ stays on the world; the device pointers
+		// moved to RenderOrchestrator in Task 12 and are wired here by address-of slot).
 		const bool *use_local_device = nullptr;
 		RenderingDevice **main_rd = nullptr;
 		RenderingDevice **local_rd = nullptr;

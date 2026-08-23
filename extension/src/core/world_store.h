@@ -119,6 +119,9 @@ public:
 	// than growing friendship; ConsolidationCoordinator (Task 11) reads and assigns tables
 	// through this while holding edit_mutex().
 	std::map<std::tuple<int, int, int>, int> &override_tables() { return override_tables_; }
+	// Streamer handoff queue; RenderOrchestrator (Task 12) wires it into
+	// WorldStreamer::initialize at exactly the point VoxelWorld used to.
+	std::vector<PendingEdit> *pending_edits() { return &pending_edits_; }
 	// Pure data-plane read over overrides + stored volumes; moved verbatim from
 	// VoxelWorld in Task 11 so the consolidation coordinator needs no VoxelWorld*.
 	bool snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo,
