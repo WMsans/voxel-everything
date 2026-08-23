@@ -439,7 +439,6 @@ public:
 	// Drained by RaymarchCompositor on the render thread; returns how many landed.
 	int drain_island_uploads(RenderingDevice *device);
 
-
 	// Tool entry point (VoxelEditTool, Task 14). Main thread; takes edit_mutex_.
 	ve::EditLog::AppendResult append_edit(const ve::EditOp &op);
 	// Low-level append used by IslandManager to hold edit_mutex_ across a carve/restore
@@ -453,25 +452,16 @@ public:
 	ve::EditLog::AppendResult append_edit_locked(const ve::EditOp &op,
 			bool notify_islands = true);
 
-
 	// --- Task 8 hooks ---
 	ve::OccupancyGrid &occupancy() { return occupancy_; }
 	int64_t edit_seq() const { return edit_seq_.load(std::memory_order_relaxed); }
 
-
-
-
-
 	bool snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo, ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const;
-
-
-
 
 	// The near/far seam for this frame, derived from how far the near field's brick data is
 	// actually complete. One source of truth: the composite, the LoD raster and the LoD
 	// build gate must all fade at the same two distances or the band belongs to no field.
 	void lod_fade_band(float *fade_start, float *fade_end) const;
-
 
 };
 
