@@ -49,6 +49,18 @@ void RaymarchPass::initialize(RenderingDevice *rd) {
 	ss->set_mag_filter(RenderingDevice::SAMPLER_FILTER_NEAREST);
 	sampler_ = rd->sampler_create(ss);
 
+	Ref<RDSamplerState> ls;
+	ls.instantiate();
+	ls->set_min_filter(RenderingDevice::SAMPLER_FILTER_LINEAR);
+	ls->set_mag_filter(RenderingDevice::SAMPLER_FILTER_LINEAR);
+	// Explicit clamp: brick_sdf() only ever asks for coordinates inside the brick's own
+	// 17-voxel block, but an edge brick must not wrap to the far side of the atlas if a
+	// coordinate lands exactly on the boundary.
+	ls->set_repeat_u(RenderingDevice::SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE);
+	ls->set_repeat_v(RenderingDevice::SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE);
+	ls->set_repeat_w(RenderingDevice::SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE);
+	sampler_linear_ = rd->sampler_create(ls);
+
 	{
 		PackedByteArray zero;
 		zero.resize(32);
@@ -77,7 +89,7 @@ void RaymarchPass::teardown() {
 	// uset_mask_ is only a cache key for an externally owned tile-mask RID (usually the
 	// IslandAtlas fallback mask); it must not be freed here.
 	for (RID *r : {&uset_, &pipeline_, &shader_, &albedo_, &surface_, &hitpos_, &cost_buf_,
-			 &sampler_, &edits_ubo_}) {
+			 &sampler_, &sampler_linear_, &edits_ubo_}) {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
@@ -128,7 +140,10 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 			atlas.mip_atlas(1), atlas.mip_atlas(2)};
 	for (int i = 2; i <= 6; i++) {
 		u[i]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-		u[i]->set_binding(i); u[i]->add_id(sampler_); u[i]->add_id(sampled[i - 2]);
+		u[i]->set_binding(i);
+		// Binding 2 is the R8_UNORM SDF atlas and is the only one filtered in hardware.
+		u[i]->add_id(i == 2 ? sampler_linear_ : sampler_);
+		u[i]->add_id(sampled[i - 2]);
 	}
 	const RID buffers[5] = {atlas.palette(), atlas.region_map(), atlas.region_tables(),
 			atlas.op_pool(), atlas.op_counts()};
