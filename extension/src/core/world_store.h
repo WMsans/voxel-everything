@@ -21,6 +21,7 @@
 #include "generator/edit_ops.h"
 #include "generator/field_generator.h"
 #include "generator/volume_set.h"
+#include "world/field_source_snapshot.h"
 #include "world/edit_log.h"
 #include "world/region.h"
 #include "world/override_store.h"
@@ -114,6 +115,14 @@ public:
 	ve::VolumeSet &volumes() { return volumes_; }
 	ve::RegionResidency *residency() { return residency_; }
 	const ve::WorldConfig &config() const { return config_; }
+	// Region -> override table map. Task 7's ledger ruling: consumers add accessors rather
+	// than growing friendship; ConsolidationCoordinator (Task 11) reads and assigns tables
+	// through this while holding edit_mutex().
+	std::map<std::tuple<int, int, int>, int> &override_tables() { return override_tables_; }
+	// Pure data-plane read over overrides + stored volumes; moved verbatim from
+	// VoxelWorld in Task 11 so the consolidation coordinator needs no VoxelWorld*.
+	bool snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo,
+			ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const;
 
 	// --- the spine (moved verbatim from VoxelWorld::append_edit/_locked) ---
 	// Tool entry point. Main thread; takes edit_mutex().

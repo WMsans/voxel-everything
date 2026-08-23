@@ -1,5 +1,7 @@
 #include "core/world_store.h"
 
+#include <set>
+
 namespace godot {
 
 WorldStore::WorldStore(const ve::WorldConfig &config, ve::FieldGenerator *generator)
@@ -74,6 +76,39 @@ int WorldStore::drain_occupancy() {
 int WorldStore::override_table_for_region(ve::IVec3 region) const {
 	const auto it = override_tables_.find(std::tuple<int, int, int>{region.x, region.y, region.z});
 	return it == override_tables_.end() ? -1 : it->second;
+}
+
+// Moved verbatim from VoxelWorld (Task 11) so ConsolidationCoordinator reads field sources
+// through the store's public API instead of a VoxelWorld*.
+bool WorldStore::snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo,
+		ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const {
+	if (!out || !overrides_) return false;
+	out->overrides.clear();
+	out->volumes.clear();
+	// Copy only prior overrides inside inclusive brick range
+	for (int z = brick_lo.z; z <= brick_hi.z; z++)
+		for (int y = brick_lo.y; y <= brick_hi.y; y++)
+			for (int x = brick_lo.x; x <= brick_hi.x; x++) {
+				ve::IVec3 b{x, y, z};
+				int slot = overrides_->slot_of(b);
+				if (slot >= 0) {
+					const ve::OverrideBrick *data = overrides_->data(slot);
+					if (!data) return false;
+					if (!data->normal_oct.empty() && data->normal_oct.size() != ve::kBrickSdfCount) return false;
+					out->overrides.push_back({b, *data});
+				}
+			}
+	std::set<int> seen;
+	for (const auto &op : ops) {
+		if (op.type != ve::kOpVolumeAdd) continue;
+		int slot = static_cast<int>(op.aux[0]);
+		if (seen.count(slot)) continue;
+		seen.insert(slot);
+		const ve::VolumeData *vd = volumes_.get(slot);
+		if (!vd || !vd->valid()) return false;
+		out->volumes.push_back({slot, *vd});
+	}
+	return true;
 }
 
 } // namespace godot

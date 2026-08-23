@@ -41,3 +41,46 @@ func test_append_bumps_edit_seq_monotonically() -> void:
 	assert_array(result["rejected"]).is_empty()
 	assert_array(result["touched"]).is_not_empty()
 	assert_int(_world.edit_seq()).is_greater(before)
+
+# Phase-3 contract smoke test (Task 11): refusal/success counters surface through the stats
+# with unchanged semantics now that ConsolidationCoordinator owns them. Same hooks-facade
+# shape test_deferred.gd uses; same counters test_consolidation.gd has always asserted.
+func test_consolidation_refusal_accounting() -> void:
+	_world = ClassDB.instantiate("VoxelWorld")
+	_world.use_local_device = true
+	_world.physics_enabled = false
+	_world.world_origin_bricks = Vector3i(0, -64, 0)
+	_world.world_size_regions = Vector3i(8, 5, 8)
+	add_child(_world)
+	_world.ensure_initialized()
+	_world.hooks().debug_stream_region(Vector3i(0, 2, 0))
+	var stats: Dictionary = _world.hooks().debug_stream_stats()
+	var refusals_before: int = int(stats.get("consolidation_refusals", 0))
+	var successes_before: int = int(stats.get("consolidations", 0))
+	# Refusal path: region (1,2,1) was never streamed, so it has no residency slot; the
+	# forced consolidation must refuse once and bump exactly the refusal counter.
+	assert_bool(_world.hooks().debug_consolidate_region(Vector3i(1, 2, 1))).is_false()
+	stats = _world.hooks().debug_stream_stats()
+	assert_int(int(stats["consolidation_refusals"])).is_equal(refusals_before + 1)
+	assert_int(int(stats["consolidations"])).is_equal(successes_before)
+	# Success path: the async frame-pump path owns the "consolidations" success counter
+	# (a FORCED region, as above, deliberately never bumps it -- pre-Task-11 semantics).
+	# The append spine auto-enqueues a region once its op list reaches kConsolidateAtOps
+	# (192), so load it exactly the way test_consolidation.gd's async test does, then pump
+	# to completion. First bake on a cold worker can outlive wait()'s 2 s deadline, so
+	# poll like every async test in that suite.
+	for i in range(192):
+		_world.hooks().debug_apply_sphere_subtract(
+				Vector3(24.0 + float(i % 4) * 0.25, 55.0, 24.0 + float(i / 4 % 4) * 0.25), 0.8)
+	_world.hooks().debug_pump_consolidation_async()
+	var completed := false
+	for i in range(2000):
+		_world.hooks().debug_pump_consolidation_async()
+		stats = _world.hooks().debug_stream_stats()
+		if int(stats["consolidations"]) > successes_before:
+			completed = true
+			break
+		OS.delay_msec(5)
+	assert_bool(completed).override_failure_message("async consolidation never completed").is_true()
+	assert_int(int(stats["consolidation_refusals"])).is_equal(refusals_before + 1)
+	assert_int(_world.hooks().debug_region_op_count(Vector3i(0, 2, 0))).is_equal(0)
