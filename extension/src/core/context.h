@@ -1,7 +1,7 @@
 #pragma once
-// VoxelContext — the only thing subsystems see of each other (spec §4).
-// Populated incrementally by Phases 2-5; subsystems receive the collaborators
-// they need via constructor injection and never hold a VoxelWorld*.
+// VoxelContext — VoxelWorld's wiring record: the pointers handed to each subsystem at
+// construction. Subsystems do NOT see each other through this struct; each one receives
+// its own Collaborators struct via constructor injection and never holds a VoxelWorld*.
 #include "world/region.h"
 
 namespace godot {

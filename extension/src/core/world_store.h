@@ -45,6 +45,16 @@ struct WorldConfig {
 	float residency_radius_m = 96.0f;
 };
 
+// Project a config snapshot into the world-space bounds every consumer agrees on
+// (origin in bricks, size in regions). Single source of truth for VoxelWorld,
+// LodSystem, and RenderOrchestrator.
+inline WorldBounds world_bounds(const WorldConfig &c) {
+	WorldBounds b;
+	b.origin_bricks = {c.world_origin_bricks.x, c.world_origin_bricks.y, c.world_origin_bricks.z};
+	b.size_regions = {c.world_size_regions.x, c.world_size_regions.y, c.world_size_regions.z};
+	return b;
+}
+
 } // namespace ve
 
 namespace godot {
@@ -82,8 +92,8 @@ struct EditSink {
 	virtual void on_edit_appended(const ve::EditOp &op, bool notify_islands) = 0;
 };
 
-// Consolidation queue port; initially satisfied by VoxelWorld (Task 12 retargets it to
-// ConsolidationCoordinator).
+// Consolidation queue port; satisfied by ConsolidationCoordinator, which queues windows
+// for the streamer directly (VoxelWorld held it only during the early strangler steps).
 struct ConsolidationSink {
 	virtual ~ConsolidationSink() = default;
 	// edit_mutex() held (the append path calls this while accepting an op).
@@ -146,8 +156,9 @@ public:
 
 	// --- the spine (moved verbatim from VoxelWorld::append_edit/_locked) ---
 	// Tool entry point. Main thread; takes edit_mutex().
-	// WARNING: does NOT run the VoxelWorld fan-out (rejection stats, LoD dirty marks,
-	// collider remesh queue); prefer VoxelWorld::append_edit until Phase 3.
+	// WARNING: does NOT run the VoxelWorld fan-out remainder (rejection stats, LoD dirty
+	// marks, collider remesh queue) -- that lives in VoxelWorld::append_edit, which is why
+	// tools must go through VoxelWorld::append_edit, not this.
 	ve::EditLog::AppendResult append_edit(const ve::EditOp &op);
 	// Low-level append used by callers that hold edit_mutex() across a whole
 	// carve/restore sequence (IslandManager). The caller MUST already hold edit_mutex().
@@ -184,7 +195,7 @@ public:
 	// Lock order restated at the new owner (spec §6): Lock order is edit_mutex() ->
 	// LodSystem::mutex(): lod_tick never holds LodSystem::mutex() while it calls
 	// gather_lod_ops (which takes edit_mutex()), so append_edit_locked can safely take
-	// LodSystem::mutex() while already holding edit_mutex(). (LodSystem arrives in Phase 5.)
+	// LodSystem::mutex() while already holding edit_mutex().
 	std::mutex &edit_mutex() { return edit_mutex_; }
 
 	// --- lazy core creation; call order near GPU setup is load-bearing ---
