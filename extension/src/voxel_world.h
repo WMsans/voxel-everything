@@ -79,13 +79,6 @@ class IslandAtlas;
 class IslandCullPass;
 struct IslandExtractJob;
 
-// One region's occupancy block on its way from the render thread to the main thread's grid.
-struct OccupancyBlock {
-	ve::IVec3 region{};
-	int64_t seq = 0; // the world's edit sequence as of the mark that produced it
-	std::vector<uint8_t> bytes; // ve::kOccupancyBlockBytes
-};
-
 class VoxelWorld : public Node3D, public EditSink, public ConsolidationSink {
 	GDCLASS(VoxelWorld, Node3D)
 	// Task 8 strangler adapter: VoxelWorld satisfies WorldStore's notification ports and
@@ -175,15 +168,7 @@ class VoxelWorld : public Node3D, public EditSink, public ConsolidationSink {
 	int edit_rejections_ = 0;
 	bool consolidation_queue_refusal_logged_ = false;
 
-	ve::OccupancyGrid occupancy_;              // main thread only
-	std::mutex occupancy_mutex_;               // guards occupancy_inbox_
-	std::vector<OccupancyBlock> occupancy_inbox_;
-	// Monotonic; bumped by every accepted edit. The streamer stamps each occupancy readback
-	// with it so IslandManager (Task 13) can tell whether a window's cells are new enough to
-	// act on, rather than running connectivity against a picture of the world from before
-	// the blast.
-	std::atomic<int64_t> edit_seq_{0};
-	void drain_occupancy();                    // inbox -> grid
+	void drain_occupancy() { store_->drain_occupancy(); } // one-line delegation (Task 9)
 	void pump_consolidation();
 	// edit_mutex must be held (ConsolidationSink port satisfied for WorldStore's spine).
 	bool queue_consolidation(ve::IVec3 region) override;
@@ -451,8 +436,9 @@ public:
 	int override_table_for_region(ve::IVec3 region) const;
 
 	// --- Task 8 hooks ---
-	ve::OccupancyGrid &occupancy() { return occupancy_; }
-	int64_t edit_seq() const { return edit_seq_.load(std::memory_order_relaxed); }
+	// One-line delegations into WorldStore so external callers compile unchanged.
+	ve::OccupancyGrid &occupancy() { return store_->occupancy(); }
+	int64_t edit_seq() const { return store_->edit_seq(); }
 
 	bool snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo, ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const;
 
