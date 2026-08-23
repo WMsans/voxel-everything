@@ -193,13 +193,6 @@ class VoxelWorld : public Node3D, public EditSink {
 	std::set<LodKey> lod_overflow_logged_; // once-per-chunk overflow diagnostics
 	int lod_pressure_ = 0;
 
-	// --- M6 beautification settings (Task 3) ---
-	// Setters run on the main thread; render callbacks take a value snapshot through
-	// beauty_settings() rather than retaining a reference to this mutable state.
-	mutable std::mutex beauty_mutex_;
-	int quality_tier_ = static_cast<int>(ve::QualityTier::kHigh);
-	ve::BeautySettings beauty_ = ve::settings_for_tier(ve::QualityTier::kHigh);
-
 	void ensure_lod(); // lazy: creates/initializes lod_tree_ + lod_pool_ on first use
 	// Assumes lod_mutex_ is held; emits the real page list for the current lod_walk_.
 	void prepare_lod_raster_locked();
@@ -210,15 +203,9 @@ class VoxelWorld : public Node3D, public EditSink {
 	bool last_hiz_readback_was_pending_ = false;
 	bool last_hiz_readback_was_drained_ = true;
 
-	// Shader hot reload (spec §8). request_shader_reload() only sets the latch; the render
-	// callback pumps it, pre-flights every shader (RenderOrchestrator::preflight_shaders,
-	// Task 13), and only then tears down and rebuilds the GPU objects so a bad shader never
-	// kills the last-known-good pipelines. Reload machinery itself moves in Phase 4c.
-	std::atomic<bool> reload_requested_{false};
-	std::mutex reload_mutex_;
-	int reload_count_ = 0;
-	bool reload_last_ok_ = true;
-	String reload_last_error_;
+	// Shader hot reload + beauty settings moved verbatim into RenderOrchestrator
+	// (Task 14); VoxelWorld keeps one-line delegations and the ClassDB surface.
+
 	// Gathers the ops that can affect a LoD chunk: its AABB padded by two cells, flattened
 	// across regions in global append order, truncated to a chronological prefix (M4 errata 1).
 	void gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out);
@@ -313,6 +300,9 @@ public:
 	void set_lod_builds_per_frame(int v) { lod_builds_per_frame_ = v; }
 	int get_lod_builds_per_frame() const { return lod_builds_per_frame_; }
 
+	// One-line delegations into RenderOrchestrator (Task 14 move); the ClassDB surface
+	// and call sites compile unchanged. The effect/quality setters run on the main
+	// thread, exactly as before the move.
 	void set_quality_tier(int v);
 	int get_quality_tier() const;
 	void set_effect_enabled(const String &name, bool on);
@@ -322,9 +312,18 @@ public:
 	// callback's reload work directly.
 	void request_shader_reload();
 	void pump_shader_reload();
-	// Returns an immutable value snapshot. Render callbacks must take this once per frame and
-	// pass the copy through their work; the mutex is never held during render work.
+	// Returns an immutable value snapshot (RenderOrchestrator-owned mutex since Task 14).
+	// Render callbacks must take this once per frame and pass the copy through their work;
+	// the mutex is never held during render work.
 	ve::BeautySettings beauty_settings() const;
+	// Task 14 temporary hook-facing surface (deleted with the debug facade's world_ back-
+	// reference): single-mutex-hold copies matching the pre-move debug_* body shapes.
+	void reload_snapshot(int *out_count, bool *out_last_ok, String *out_last_error) const {
+		context_.render->reload_snapshot(out_count, out_last_ok, out_last_error);
+	}
+	void beauty_snapshot(ve::BeautySettings *out_settings, int *out_tier) const {
+		context_.render->beauty_snapshot(out_settings, out_tier);
+	}
 	void set_normal_roughness_state(int state) { context_.render->set_normal_roughness_state(state); }
 	int get_normal_roughness_state() const { return context_.render->normal_roughness_state(); }
 	void set_beauty_compositor(BeautyCompositor *effect) { beauty_compositor_ = effect; }

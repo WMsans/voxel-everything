@@ -408,7 +408,7 @@ void RenderOrchestrator::shutdown_render_resources() {
 		gpu_teardown_done_ = false;
 	}
 	RenderingServer::get_singleton()->call_on_render_thread(
-			Callable(handles_.callback_owner, "_shutdown_render_resources_on_render_thread"));
+			Callable(handles_.callback_owner, kShutdownRenderResourcesOnRenderThread));
 	std::unique_lock<std::mutex> lock(render_lifetime_mutex_);
 	gpu_teardown_cv_.wait(lock, [this] { return gpu_teardown_done_; });
 }
@@ -459,6 +459,132 @@ bool RenderOrchestrator::preflight_shaders(RenderingDevice *rd, String *out_erro
 	}
 	dir->list_dir_end();
 	return ok;
+}
+
+namespace {
+
+// One table, so the setter, the getter and the debug dictionary cannot disagree about what
+// an effect is called. (Moved verbatim from voxel_world.cpp, Task 14.)
+bool *beauty_field(ve::BeautySettings &s, const String &name) {
+	if (name == "ssgi") return &s.ssgi;
+	if (name == "ssr") return &s.ssr;
+	if (name == "contact_shadows") return &s.contact_shadows;
+	if (name == "outlines") return &s.outlines;
+	if (name == "sun_shadow_map") return &s.sun_shadow_map;
+	if (name == "glossy_sdf_rays") return &s.glossy_sdf_rays;
+	if (name == "raymarched_sun_shadow") return &s.raymarched_sun_shadow;
+	if (name == "cost_view") return &s.cost_view;
+	return nullptr;
+}
+
+} // namespace
+
+// --- shader hot-reload machinery + beauty settings (moved VERBATIM from VoxelWorld,
+// Task 14) ---------------------------------------------------------------
+// Same latch/mutex semantics as the pre-move bodies: request_shader_reload() only sets
+// the atomic latch (safe from _input); pump_shader_reload() runs where the render
+// callback runs and takes each mutex exactly where VoxelWorld took it. Nothing here is a
+// locking change, only a change of which class's members are touched.
+
+void RenderOrchestrator::request_shader_reload() {
+	// A latch, not the work: shaders are compiled and pipelines created on the device that
+	// owns them, and for the shipping world that device belongs to the render thread.
+	reload_requested_.store(true, std::memory_order_release);
+}
+
+void RenderOrchestrator::pump_shader_reload() {
+	if (!reload_requested_.exchange(false, std::memory_order_acq_rel)) return;
+	if (shutdown_in_progress()) return; // same mutex-guarded latch check as before the Task 13 move
+	{
+		std::lock_guard<std::mutex> lock(reload_mutex_);
+		reload_count_++;
+	}
+	if (!*handles_.initialized) {
+		handles_.ensure_initialized_thunk(handles_.ensure_initialized_self);
+		std::lock_guard<std::mutex> lock(reload_mutex_);
+		reload_last_ok_ = *handles_.initialized;
+		reload_last_error_ = *handles_.initialized ? String()
+											   : String("shader reload re-init failed");
+		return;
+	}
+	String error;
+	if (!preflight_shaders(rd(), &error)) {
+		// Fail-soft (spec §8): a shader that will not compile must not take down the
+		// pipelines that are already running. Keep the old GPU objects untouched.
+		std::lock_guard<std::mutex> lock(reload_mutex_);
+		reload_last_ok_ = false;
+		reload_last_error_ = error;
+		UtilityFunctions::printerr("VoxelWorld: shader reload pre-flight failed; keeping old pipelines: ",
+				error);
+		return;
+	}
+	// teardown_gpu() frees every GPU object and leaves the CPU cores -- edit log, residency,
+	// override store, LoD tree -- untouched, so ensure_initialized() re-streams the same
+	// world. This is the whole hot reload.
+	teardown_gpu();
+	handles_.ensure_initialized_thunk(handles_.ensure_initialized_self);
+	{
+		std::lock_guard<std::mutex> lock(reload_mutex_);
+		reload_last_ok_ = *handles_.initialized;
+		reload_last_error_ = *handles_.initialized ? String()
+											   : String("shader reload re-init failed");
+	}
+}
+
+void RenderOrchestrator::reload_snapshot(int *out_count, bool *out_last_ok,
+		String *out_last_error) const {
+	std::lock_guard<std::mutex> lock(reload_mutex_);
+	*out_count = reload_count_;
+	*out_last_ok = reload_last_ok_;
+	*out_last_error = reload_last_error_;
+}
+
+void RenderOrchestrator::set_quality_tier(int v) {
+	std::lock_guard<std::mutex> lock(beauty_mutex_);
+	quality_tier_ = v < 0 ? 0 : (v > 3 ? 3 : v);
+	beauty_ = ve::settings_for_tier(static_cast<ve::QualityTier>(quality_tier_));
+}
+
+int RenderOrchestrator::quality_tier() const {
+	std::lock_guard<std::mutex> lock(beauty_mutex_);
+	return quality_tier_;
+}
+
+void RenderOrchestrator::set_effect_enabled(const String &name, bool on) {
+	if (name == "islands") {
+		handles_.islands_enabled->store(on, std::memory_order_relaxed);
+		return;
+	}
+	if (name == "near_field") {
+		handles_.near_field_enabled->store(on, std::memory_order_relaxed);
+		return;
+	}
+	std::lock_guard<std::mutex> lock(beauty_mutex_);
+	bool *f = beauty_field(beauty_, name);
+	if (!f) return; // fail-soft: an unknown name in a debug menu is not a crash
+	*f = on;
+	ve::clamp_settings(&beauty_);
+}
+
+bool RenderOrchestrator::get_effect_enabled(const String &name) const {
+	if (name == "islands") return handles_.islands_enabled->load(std::memory_order_relaxed);
+	if (name == "near_field") return handles_.near_field_enabled->load(std::memory_order_relaxed);
+	std::lock_guard<std::mutex> lock(beauty_mutex_);
+	ve::BeautySettings copy = beauty_;
+	const bool *f = beauty_field(copy, name);
+	return f ? *f : false;
+}
+
+ve::BeautySettings RenderOrchestrator::beauty_settings() const {
+	std::lock_guard<std::mutex> lock(beauty_mutex_);
+	return beauty_;
+}
+
+void RenderOrchestrator::beauty_snapshot(ve::BeautySettings *out_settings, int *out_tier) const {
+	// One hold, matching the pre-move debug_beauty_settings body's shape.
+	std::lock_guard<std::mutex> lock(beauty_mutex_);
+	*out_settings = beauty_;
+	*out_tier = quality_tier_;
 }
 
 } // namespace godot
