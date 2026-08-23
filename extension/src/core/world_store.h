@@ -11,6 +11,7 @@
 // from ensure_initialized() at exactly the points where the moved statements used
 // to sit, clear_residency() from teardown_gpu(), and release_cores() from
 // _exit_tree() — same allocation/deallocation sequence as before the split.
+#include <algorithm>
 #include <atomic>
 #include <map>
 #include <mutex>
@@ -93,7 +94,9 @@ class WorldStore {
 	// Task 13: the strangler friendships (VoxelWorld, VoxelDebugHooks) are gone -- every
 	// former direct field read goes through the public accessors below (config(),
 	// edit_log(), overrides(), residency(), volumes(), override_tables(),
-	// pending_edits()), and pre-init config writes go through mutable_config().
+	// pending_edits()), and config writes go through the named per-field setters
+	// (set_atlas_bricks / set_max_region_slots / ...). There is deliberately no
+	// whole-struct mutable escape hatch: every knob keeps its write semantics in one place.
 
 public:
 	// The field-generation seam (spec §4) is injected at construction and OWNED by the
@@ -113,10 +116,22 @@ public:
 	ve::VolumeSet &volumes() { return volumes_; }
 	ve::RegionResidency *residency() { return residency_; }
 	const ve::WorldConfig &config() const { return config_; }
-	// Mutable config for VoxelWorld's property setters ONLY (pre-init writes; post-init
-	// writes behave exactly as before the split -- pools never resize after creation).
-	// Everything else reads through config().
-	ve::WorldConfig &mutable_config() { return config_; }
+	// --- named per-field config setters (the only write path into config_) ---
+	// Used by VoxelWorld's property setters: pre-init writes take effect at the next
+	// ensure_initialized(); post-init writes behave exactly as before the split -- pools
+	// never resize after creation. set_max_override_bricks keeps the post-init clamp to
+	// the live OverrideStore's capacity (a no-op while overrides_ is still null).
+	void set_atlas_bricks(const ve::IVec3 &v) { config_.atlas_bricks = v; }
+	void set_max_region_slots(int v) { config_.max_region_slots = v; }
+	void set_max_brick_jobs(int v) { config_.max_brick_jobs = v; }
+	void set_max_override_bricks(int v) {
+		const int requested = std::max(v, 0);
+		config_.max_override_bricks =
+				overrides_ ? std::min(requested, overrides_->capacity()) : requested;
+	}
+	void set_world_origin_bricks(const ve::IVec3 &v) { config_.world_origin_bricks = v; }
+	void set_world_size_regions(const ve::IVec3 &v) { config_.world_size_regions = v; }
+	void set_residency_radius_m(float v) { config_.residency_radius_m = v; }
 	// Region -> override table map. Task 7's ledger ruling: consumers add accessors rather
 	// than growing friendship; ConsolidationCoordinator (Task 11) reads and assigns tables
 	// through this while holding edit_mutex().
