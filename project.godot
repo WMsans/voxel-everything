@@ -32,3 +32,4 @@ enabled=PackedStringArray("res://addons/gdUnit4/plugin.cfg")
 [rendering]
 
 rendering_device/driver.windows="d3d12"
+scaling_3d/scale=0.65

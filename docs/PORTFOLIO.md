@@ -51,13 +51,85 @@ adjacent regions): `overflow=0`,
 `consolidations=1`, and stable `gpu_stream` p50/p99 (0.208/3.554 ms in `m7-final`,
 0.204/3.683 ms in `m7-final-b`).
 
+## Frame budget on an Apple M1 (8-core GPU, 2560x1440)
+
+The numbers above are an RTX 4070 Laptop. The same build on an M1 opened at **7.5 fps
+standing still** (133 ms/frame). Frame time scaled cleanly with pixel count and turning the
+near field off alone restored 60 fps, so the whole deficit was per-pixel work in the
+raymarcher and the stack over it -- not streaming, meshing or physics.
+
+Cutting the marcher's per-step cost took 133 ms to **49.9 ms** with no change to the image
+(commit "cut the near-field marcher's per-step cost"; the largest single win was deleting the
+in-brick 0.1 m min-max gate, which had become a second texture fetch buying a shorter advance
+than the sphere-trace step it displaced). The rest is configuration: this GPU is roughly a
+seventh of the reference one, and the frame is almost entirely screen-space.
+
+Shipped defaults, chosen by sweeping the two dials against these legs:
+
+| Dial | Where | Value |
+|---|---|---|
+| 3D render scale | `project.godot` `rendering/scaling_3d/scale` | 0.65 (bilinear) |
+| Near-field scale | `demo/main.tscn` `VoxelWorld.near_field_scale` | 0.40 |
+| Quality tier | default | High -- it costs ~0.2 ms here, so there is no reason to drop it |
+
+`near_field_scale` is the fraction of the internal 3D resolution the marcher runs at; the
+composite upsamples its G-buffer. Raise both towards 1.0 on a larger GPU. The benchmark
+overrides them per run: `--render-scale=`, `--near-scale=`, `--quality=`, plus
+`--frames=`/`--warmup=`/`--screenshot=`.
+
+`tools/run_benchmarks.sh m1-tuned`, macOS/Metal, V-Sync genuinely disabled
+(`verdict_qualified=false`):
+
+| Leg | avg fps | p50 | p95 | p99 | min fps |
+|---|---:|---:|---:|---:|---:|
+| steady | **72.2** | 13.89 | 13.89 | 14.58 | 59.2 |
+| move | **61.4** | 16.67 | 18.06 | 19.97 | 37.1 |
+| ridge | **68.8** | 14.29 | 16.67 | 19.85 | 38.0 |
+| edit | **30.5** | 29.63 | 59.26 | 129.49 | 7.3 |
+| edit-bounded | **44.5** | 19.05 | 41.25 | 47.33 | 7.7 |
+| island | **61.6** | 16.67 | 16.67 | 18.06 | 36.8 |
+
+Two things the table does not say on its own:
+
+* **The steady leg now settles before it samples.** It claims "the player is frozen, nothing
+  streams after warmup", but at frame 60 there were still 370 collision chunks pending and
+  the mesher worker was submitting GPU batches through the whole sampled run -- a streaming
+  measurement wearing a steady-state label. It now warms up until the chunk queue is empty
+  and prints `BENCH settle frames_to_quiet=` (947 here, against a 1500-frame cap). Only that
+  leg: the edit and island legs deliberately keep the world dirty.
+
+* **The edit leg's p99 is a GPU burst in the regeneration path**, not the raster this work
+  touched. It is unchanged by render scale, by physics, and by turning islands off; only its
+  p50 follows resolution. It was the worst leg on the reference GPU too (p99 81.77 ms there).
+  Bounding it means giving edit-driven brick regeneration a per-frame budget, which is a
+  streamer change, not a shader one.
+
+### Known on macOS/Metal, pre-existing
+
+Both predate this work (same failures on the parent commit) and both affect what the numbers
+above mean:
+
+* **The far field does not write depth**, so the near field cannot occlude it and it ghosts
+  through the terrain. `test_lod_render::test_depth_is_written_so_the_near_field_can_occlude`
+  and `test_lod_gbuffer::test_far_field_pixels_carry_a_material_and_a_unit_normal` fail here
+  and pass on Linux/Vulkan. More far-field pixels are shaded than should be, so the frame
+  costs more than a correct build would.
+* **GPU timestamps are emulated and return 0.** `capture_timestamp` records names fine, but
+  `get_captured_timestamp_gpu_time()` is 0 for every marker, so every `BENCH gpu_*` line reads
+  `samples=0` and every per-pass budget verdict is `UNMEASURED`. Per-pass attribution on this
+  platform has to come from A/B runs instead; frame times are stable to ~0.1%, which makes
+  that workable.
+
 ## Build and run
 
 ```bash
-./build.sh -j$(nproc)
-/usr/bin/godot --path . demo/main.tscn
+./build.sh -j$(nproc)          # macOS: -j$(sysctl -n hw.ncpu)
+godot --path . demo/main.tscn
 tools/run_benchmarks.sh m7-final
 ```
+
+`run_benchmarks.sh` runs on macOS as well as Linux: it picks the display driver only where
+there is a choice to make (x11 vs Wayland), and takes `GODOT_BIN` or `godot` from `PATH`.
 
 The demo help overlay lists the four tools, the radius wheel, and the reload/self-check
 keys. `tools/encode_capture.sh` turns the deterministic `--capture` PNG sequence into video.

@@ -166,6 +166,7 @@ class VoxelWorld : public Node3D, public EditSink {
 	uint32_t normal_pool_bytes_ = 0;
 	std::atomic<bool> islands_enabled_{true};
 	std::atomic<bool> near_field_enabled_{true};
+	std::atomic<float> near_field_scale_{0.66f};
 	int island_slots_ = 0; // high-water mark, not a population; guarded by island_mutex_
 	BeautyCompositor *beauty_compositor_ = nullptr;
 	std::vector<IslandSlotDesc> island_descs_;
@@ -255,6 +256,16 @@ public:
 	}
 	void set_residency_radius_m(float v) { store_->set_residency_radius_m(v); }
 	float get_residency_radius_m() const { return store_->config().residency_radius_m; }
+	// Fraction of the engine's internal 3D resolution the near-field marcher runs at; the
+	// composite upsamples its G-buffer to full size. The marcher is by far the most
+	// per-pixel-expensive thing in the frame, so this is the frame budget's coarsest dial
+	// and the one worth reaching for first on a GPU the default does not fit.
+	// Read on the render thread, written from the main thread: atomic, like the effect
+	// toggles next to it.
+	void set_near_field_scale(float v) {
+		near_field_scale_.store(v < 0.1f ? 0.1f : (v > 1.0f ? 1.0f : v), std::memory_order_relaxed);
+	}
+	float get_near_field_scale() const { return near_field_scale_.load(std::memory_order_relaxed); }
 
 	void ensure_initialized();
 	bool is_initialized() const { return initialized_; }

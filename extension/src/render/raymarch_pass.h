@@ -5,6 +5,19 @@
 
 namespace godot {
 
+// Workgroup shape of raymarch.comp.glsl. MUST match its layout(local_size_*): the dispatch
+// divides the target size by these, and before they existed that divisor was hard-coded to 8
+// while the shader was free to declare any layout -- a mismatch renders a fraction of the
+// target and reads as a large speed-up.
+//
+// Measured on an Apple M1 at 2450x1319 with the near field at half scale, the square tile is
+// what this workload wants: 8x8 = 18.33 ms/frame, 8x4 = 18.62, 16x8 = 18.57, 16x4 = 18.90,
+// 32x2 = 20.21, 64x1 = 20.73. Wide rows were worth testing -- ray length varies far more down
+// the screen than across it, so a one-row group holds a SIMD's rays at nearly the same depth
+// instead of pairing a short ray with a long one -- and lost anyway.
+inline constexpr int kRaymarchGroupX = 8;
+inline constexpr int kRaymarchGroupY = 8;
+
 class GpuAtlas;
 class IslandAtlas;
 class MaterialAtlas;

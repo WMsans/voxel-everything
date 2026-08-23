@@ -466,7 +466,18 @@ int ColliderStreamer::run_frame(float cx, float cy, float cz, const float *extra
 	last_tris_ = 0;
 	last_build_ms_ = 0.0f;
 	builds_last_frame_ = 0;
+	// The loop below is bounded by builds_last_frame_, but several of its paths cost real
+	// time WITHOUT building anything and so without incrementing it: a result whose slot
+	// moved under it is split into octants by enqueue_result() and then discarded, and an
+	// empty octant is skipped. While the player is editing, chunks are invalidated faster
+	// than they are rebuilt, and a frame that meets a long run of those paid for all of
+	// them: the edit leg reached 42 ms inside a step whose build budget is 4 ms. Bound the
+	// whole loop by the same wall clock the build path uses, still letting one iteration
+	// through so the queue always advances. This caps a spike the budget already meant to
+	// cap; it does not move that leg's p99, which is GPU-side.
+	int step_iterations = 0;
 	while (builds_last_frame_ < max_builds_per_frame_) {
+		if (step_iterations++ > 0 && ms_since(t_apply) > build_budget_ms_) break;
 		if (pending_.empty()) {
 			if (inbox_.empty()) break;
 			enqueue_result(std::move(inbox_.front()));

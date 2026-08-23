@@ -178,8 +178,9 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 		abort_frame();
 		return;
 	}
-	const int rw = static_cast<int>(size.x * 0.66f);
-	const int rh = static_cast<int>(size.y * 0.66f);
+	const float near_scale = world->get_near_field_scale();
+	const int rw = static_cast<int>(size.x * near_scale);
+	const int rh = static_cast<int>(size.y * near_scale);
 	if (rw <= 0 || rh <= 0) {
 		abort_frame();
 		return;

@@ -240,7 +240,8 @@ bool RaymarchPass::render(RenderingDevice *rd, const GpuAtlas &atlas,
 	rd->compute_list_bind_compute_pipeline(list, pipeline_);
 	rd->compute_list_bind_uniform_set(list, uset_, 0);
 	rd->compute_list_set_push_constant(list, pc, pc.size());
-	rd->compute_list_dispatch(list, (width + 7) / 8, (height + 7) / 8, 1);
+	rd->compute_list_dispatch(list, (width + kRaymarchGroupX - 1) / kRaymarchGroupX,
+			(height + kRaymarchGroupY - 1) / kRaymarchGroupY, 1);
 	rd->compute_list_end();
 	return true;
 }
