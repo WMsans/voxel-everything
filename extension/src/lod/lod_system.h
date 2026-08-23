@@ -110,9 +110,12 @@ public:
 
 private:
 	// Temporary Task-15 surface: the debug facade pokes the moved members directly today,
-	// exactly as it poked VoxelWorld's before the move. EXPIRY: dies with the facade's
-	// world_ back-reference in the plan's final cleanup task (Task 16), alongside the
-	// friend declaration on VoxelWorld -- see task-13-report's friend table.
+	// exactly as it poked VoxelWorld's before the move. Task 16 audit: still load-bearing --
+	// debug/hooks.cpp reads lod_mutex_, ensure_lod(), lod_tree_, lod_walk_, lod_pages_of_
+	// and lod_page_quads_ for its diagnostics (only pool() has a public accessor). Removing
+	// the declaration would mean widening LodSystem's public diagnostic surface, which the
+	// no-behavior-change guard (spec §8) defers to a dedicated facade rework. See
+	// task-16-report's friend table.
 	friend class VoxelDebugHooks;
 
 	// lazy: creates/initializes lod_tree_ + lod_pool_ on first use
