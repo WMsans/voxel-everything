@@ -194,14 +194,14 @@ func _process(delta: float) -> void:
 	# the frame currently in progress. Pair each delta with the counters from the frame it
 	# actually measures, or a spike gets blamed on the frame after the one that caused it.
 	var perf: Dictionary = _prev_perf
-	_prev_perf = _world.debug_perf_stats()
+	_prev_perf = _world.hooks().debug_perf_stats()
 	for k: String in perf:
 		_perf_accum[k] = float(_perf_accum.get(k, 0.0)) + float(perf[k])
 		_perf_max[k] = maxf(float(_perf_max.get(k, 0.0)), float(perf[k]))
 	# Same pairing for the LoD counters: use the stats from the frame whose delta is being
 	# recorded, then refresh the next frame's snapshot.
 	var lod: Dictionary = _prev_lod
-	_prev_lod = _world.debug_lod_stats()
+	_prev_lod = _world.hooks().debug_lod_stats()
 	_lod_ms_samples.append(float(perf.get("lod_ms", 0.0)))
 	_draw_pages_samples.append(float(lod.get("draw_pages", 0)))
 	_culled_ratio_samples.append(float(lod.get("culled_ratio", 0.0)))
@@ -231,7 +231,7 @@ func _fire_edit() -> void:
 	# and it is the case that dirties the most regions and collision chunks.
 	_edit_phase += 0.13
 	var dir := Vector3(sin(_edit_phase) * 0.5, -1.0, cos(_edit_phase) * 0.5).normalized()
-	var hit: Dictionary = _world.debug_raycast(_cam.global_position, dir)
+	var hit: Dictionary = _world.hooks().debug_raycast(_cam.global_position, dir)
 	if not hit["hit"]:
 		return
 	_tool.apply_sphere_subtract(hit["pos"], 3.0)
@@ -243,7 +243,7 @@ func _fire_bounded_edit() -> void:
 	# union wander across the world. This is the acceptance-item leg that measures the
 	# 900-frame, overflow=0 consolidation path itself.
 	var dir := Vector3(sin(0.4) * 0.5, -1.0, cos(0.4) * 0.5).normalized()
-	var hit: Dictionary = _world.debug_raycast(_cam.global_position, dir)
+	var hit: Dictionary = _world.hooks().debug_raycast(_cam.global_position, dir)
 	if not hit["hit"]:
 		return
 	var jitter := Vector3(
@@ -269,7 +269,7 @@ func _island_cycle(delta: float) -> void:
 		# Do not start another pillar until the previous island has fallen asleep and
 		# re-merged; otherwise cycles overlap, live islands accumulate, and refusals appear.
 		if _island_timer >= 2.0:
-			var st: Dictionary = _world.debug_island_stats()
+			var st: Dictionary = _world.hooks().debug_island_stats()
 			var live_islands := int(st.get("live_islands", 0))
 			if live_islands == 0:
 				_island_built = false
@@ -296,7 +296,7 @@ func _append_gpu(key: String, value: float) -> void:
 func _capture_gpu_sample() -> void:
 	if not _world:
 		return
-	var d: Dictionary = _world.debug_gpu_timings()
+	var d: Dictionary = _world.hooks().debug_gpu_timings()
 	if d.has("timestamp_unit"):
 		_gpu_timestamp_unit = str(d["timestamp_unit"])
 		_gpu_timestamp_scale = float(d.get("timestamp_scale_to_microseconds", 0.0))
@@ -341,7 +341,7 @@ func _timing_condition_line() -> String:
 func _report() -> void:
 	var sorted := _samples.duplicate()
 	sorted.sort()
-	var fb := _world.debug_lod_fade_band()
+	var fb := _world.hooks().debug_lod_fade_band()
 	var vp_size := _cam.get_viewport().get_visible_rect().size
 	print("BENCH camera fov=%.2f viewport=%dx%d fade_band_start=%.2f fade_band_end=%.2f" % [
 		_cam.fov, int(vp_size.x), int(vp_size.y), fb.x, fb.y])
@@ -419,17 +419,17 @@ func _report() -> void:
 	print(_timing_condition_line())
 	if qualified:
 		push_warning("BENCH: V-Sync is %s; frame percentiles are display-capped, not engine numbers" % _vsync_actual)
-	var st: Dictionary = _world.debug_stream_stats()
+	var st: Dictionary = _world.hooks().debug_stream_stats()
 	print("BENCH regions=%d overflow=%d overrides=%d/%d consolidations=%d refusals=%d" % [
 		st.get("resident_regions", -1), st.get("overflow_ever", -1),
 		st.get("override_bricks", -1), st.get("override_capacity", -1),
 		st.get("consolidations", -1), st.get("consolidation_refusals", -1)])
-	var ph: Dictionary = _world.debug_physics_stats()
+	var ph: Dictionary = _world.hooks().debug_physics_stats()
 	print("BENCH chunks=%d pending=%d bodies=%d bodies_raw=%d failures=%d build_ms=%.2f collect_ms=%.2f" % [
 		ph.get("chunks_resident", -1), ph.get("chunks_pending", -1), ph.get("bodies", -1),
 		ph.get("bodies_raw", -1), ph.get("failures", -1), ph.get("build_ms", 0.0),
 		ph.get("collect_ms", 0.0)])
-	var isl: Dictionary = _world.debug_island_stats()
+	var isl: Dictionary = _world.hooks().debug_island_stats()
 	print("BENCH islands=%d debris=%d spawned=%d merged=%d refused=%d cx_runs=%d" % [
 		isl.get("live_islands", -1), isl.get("live_debris", -1),
 		isl.get("islands_spawned", -1), isl.get("islands_merged", -1),

@@ -30,8 +30,8 @@ func make_world(pages: int = 256) -> VoxelWorld:
 	w.max_lod_pages = pages
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_atlas()).is_true()
-	assert_bool(w.debug_init_physics()).is_true()
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
 # Ticks until the walk has nothing left to ask for and nothing is in flight. Returns the
@@ -40,9 +40,9 @@ func make_world(pages: int = 256) -> VoxelWorld:
 func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> int:
 	var quiet := 0
 	for i in range(SETTLE_BUDGET):
-		w.debug_lod_tick(pos, fwd)
+		w.hooks().debug_lod_tick(pos, fwd)
 		await get_tree().process_frame
-		var d := w.debug_lod_stats()
+		var d := w.hooks().debug_lod_stats()
 		quiet = quiet + 1 if d["requests_pending"] == 0 and d["builds_in_flight"] == 0 else 0
 		if quiet >= QUIET_TICKS:
 			return i + 1
@@ -50,7 +50,7 @@ func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> int:
 
 func test_the_pool_starts_empty_and_sized() -> void:
 	var w := make_world(256)
-	var d := w.debug_lod_stats()
+	var d := w.hooks().debug_lod_stats()
 	assert_int(d["pages_total"]).is_equal(256)
 	assert_int(d["pages_free"]).is_equal(256)
 	assert_int(d["chunks_resident"]).is_equal(0)
@@ -58,7 +58,7 @@ func test_the_pool_starts_empty_and_sized() -> void:
 func test_ticking_streams_chunks_in(timeout := 60000) -> void:
 	var w := make_world(2048)
 	var ticks: int = await settle(w, NEAR_POS, NEAR_FWD)
-	var d := w.debug_lod_stats()
+	var d := w.hooks().debug_lod_stats()
 	assert_int(ticks).override_failure_message(
 		"the far field never converged: %s" % d).is_greater(0)
 	assert_int(d["chunks_resident"]).override_failure_message(
@@ -76,9 +76,9 @@ func test_ticking_streams_chunks_in(timeout := 60000) -> void:
 func test_a_tiny_pool_degrades_to_coarse_instead_of_breaking(timeout := 60000) -> void:
 	var w := make_world(24)
 	for i in range(400):
-		w.debug_lod_tick(NEAR_POS, NEAR_FWD)
+		w.hooks().debug_lod_tick(NEAR_POS, NEAR_FWD)
 		await get_tree().process_frame
-	var d := w.debug_lod_stats()
+	var d := w.hooks().debug_lod_stats()
 	assert_int(d["pages_free"]).is_greater_equal(0)
 	assert_int(d["pages_used"] as int + d["pages_free"] as int).is_equal(24)
 	# debug_lod_stats measures this: a chunk holding a page with no quad count, or arena
@@ -92,17 +92,17 @@ func test_a_tiny_pool_degrades_to_coarse_instead_of_breaking(timeout := 60000) -
 func test_pages_come_back_when_chunks_are_evicted(timeout := 60000) -> void:
 	var w := make_world(2048)
 	assert_int(await settle(w, NEAR_POS, NEAR_FWD)).override_failure_message(
-		"the near view never converged: %s" % w.debug_lod_stats()).is_greater(0)
-	var used_near: int = w.debug_lod_stats()["pages_used"]
+		"the near view never converged: %s" % w.hooks().debug_lod_stats()).is_greater(0)
+	var used_near: int = w.hooks().debug_lod_stats()["pages_used"]
 	assert_int(used_near).is_greater(0)
 	# Jump far away and let the eviction age expire. Eviction is driven by the TICK counter
 	# (kLodEvictFrames = 300 walks since a node was last touched), not by wall clock, so the
 	# budget is in ticks and only needs to clear that age with room to spare.
 	var used_far := used_near
 	for i in range(900):
-		w.debug_lod_tick(Vector3(1500.0, 400.0, 1500.0), Vector3(0, -1, 0))
+		w.hooks().debug_lod_tick(Vector3(1500.0, 400.0, 1500.0), Vector3(0, -1, 0))
 		await get_tree().process_frame
-		used_far = w.debug_lod_stats()["pages_used"]
+		used_far = w.hooks().debug_lod_stats()["pages_used"]
 		if used_far < used_near:
 			break
 	assert_int(used_far).override_failure_message(

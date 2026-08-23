@@ -33,7 +33,7 @@ func make_world() -> VoxelWorld:
 	w.max_region_slots = 64
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_atlas()).is_true()
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
 	return w
 
 # The readback ring carries at most eight regions at a time and the request goes out one
@@ -43,8 +43,8 @@ func settle(w: VoxelWorld, center: Vector3, frames := 300) -> void:
 	var last := -1
 	var quiet := 0
 	for i in range(frames):
-		w.debug_stream_frame(center)
-		var n: int = w.debug_occupancy_stats(center)["regions"]
+		w.hooks().debug_stream_frame(center)
+		var n: int = w.hooks().debug_occupancy_stats(center)["regions"]
 		quiet = quiet + 1 if n == last else 0
 		last = n
 		if quiet >= 20 and n > 0:
@@ -52,9 +52,9 @@ func settle(w: VoxelWorld, center: Vector3, frames := 300) -> void:
 
 func test_the_grid_fills_in_around_the_camera(timeout := 60000) -> void:
 	var w := make_world()
-	assert_int(w.debug_occupancy_stats(CENTER)["regions"]).is_equal(0)
+	assert_int(w.hooks().debug_occupancy_stats(CENTER)["regions"]).is_equal(0)
 	settle(w, CENTER)
-	assert_int(w.debug_occupancy_stats(CENTER)["regions"]).is_greater(2)
+	assert_int(w.hooks().debug_occupancy_stats(CENTER)["regions"]).is_greater(2)
 
 func test_every_described_cell_agrees_with_the_field(timeout := 60000) -> void:
 	var w := make_world()
@@ -69,11 +69,11 @@ func test_every_described_cell_agrees_with_the_field(timeout := 60000) -> void:
 	for i in range(600):
 		var cell := Vector3i(rng.randi_range(10, 40), rng.randi_range(50, 80),
 			rng.randi_range(10, 40))
-		var gpu: int = w.debug_occupancy_state(cell)
+		var gpu: int = w.hooks().debug_occupancy_state(cell)
 		if gpu == UNKNOWN:
 			continue # outside the streamed ball: nobody has looked yet, by design
 		compared += 1
-		if gpu != w.debug_cell_state(cell):
+		if gpu != w.hooks().debug_cell_state(cell):
 			mismatched += 1
 		if gpu == AIR: saw_air += 1
 		elif gpu == FULL: saw_full += 1
@@ -92,7 +92,7 @@ func test_an_edit_empties_the_cells_it_carves(timeout := 90000) -> void:
 	settle(w, CENTER)
 	# A cell that is solidly underground before the edit.
 	var cell := Vector3i(25, 62, 25)
-	var before: int = w.debug_occupancy_state(cell)
+	var before: int = w.hooks().debug_occupancy_state(cell)
 	assert_int(before).is_not_equal(UNKNOWN)
 	assert_int(before).is_not_equal(AIR)
 
@@ -102,23 +102,23 @@ func test_an_edit_empties_the_cells_it_carves(timeout := 90000) -> void:
 	# entirely inside it, so the only correct answer afterwards is AIR.
 	tool.apply_sphere_subtract(Vector3(cell) * 0.8 + Vector3(0.4, 0.4, 0.4), 4.0)
 	for i in range(120):
-		w.debug_stream_frame(CENTER)
-	assert_int(w.debug_occupancy_state(cell)).override_failure_message(
+		w.hooks().debug_stream_frame(CENTER)
+	assert_int(w.hooks().debug_occupancy_state(cell)).override_failure_message(
 		"the carved cell is still reported as occupied").is_equal(AIR)
-	assert_int(w.debug_occupancy_state(cell)).is_equal(w.debug_cell_state(cell))
+	assert_int(w.hooks().debug_occupancy_state(cell)).is_equal(w.hooks().debug_cell_state(cell))
 	# ...and the block carries a sequence number at least as new as the edit.
-	assert_int(w.debug_occupancy_stats(CENTER)["seq_at_center"]).is_greater_equal(1)
+	assert_int(w.hooks().debug_occupancy_stats(CENTER)["seq_at_center"]).is_greater_equal(1)
 
 func test_occupancy_survives_a_region_being_evicted_and_reloaded(timeout := 90000) -> void:
 	var w := make_world()
 	settle(w, CENTER)
 	var cell := Vector3i(25, 62, 25)
-	var state: int = w.debug_occupancy_state(cell)
+	var state: int = w.hooks().debug_occupancy_state(cell)
 	assert_int(state).is_not_equal(UNKNOWN)
 	# Walk far enough that the region is evicted, then come back.
 	settle(w, CENTER + Vector3(200.0, 0.0, 0.0))
 	# The grid is persistent (spec section 5): an evicted region keeps its block.
-	assert_int(w.debug_occupancy_state(cell)).is_equal(state)
+	assert_int(w.hooks().debug_occupancy_state(cell)).is_equal(state)
 	settle(w, CENTER)
-	assert_int(w.debug_occupancy_state(cell)).is_equal(state)
+	assert_int(w.hooks().debug_occupancy_state(cell)).is_equal(state)
 

@@ -31,8 +31,8 @@ func make_world() -> VoxelWorld:
 	w.shape_builds_per_frame = 4
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_atlas()).is_true()
-	assert_bool(w.debug_init_physics()).is_true()
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
 func tool_of(w: VoxelWorld) -> VoxelEditTool:
@@ -42,9 +42,9 @@ func tool_of(w: VoxelWorld) -> VoxelEditTool:
 
 func step(w: VoxelWorld, frames: int, center: Vector3 = CENTER) -> void:
 	for i in range(frames):
-		w.debug_stream_frame(center)
-		w.debug_physics_frame(center)
-		w.debug_island_frame(1.0 / 60.0, center)
+		w.hooks().debug_stream_frame(center)
+		w.hooks().debug_physics_frame(center)
+		w.hooks().debug_island_frame(1.0 / 60.0, center)
 
 func dump(tag: String, st: Dictionary) -> void:
 	prints("  [%s]" % tag,
@@ -83,7 +83,7 @@ func floating_matter(w: VoxelWorld, lo: Vector3, hi: Vector3, pitch := 0.1) -> A
 			var z := lo.z + (iz + 0.5) * pitch
 			var base := (iy * nz + iz) * nx
 			for ix in range(nx):
-				if w.debug_field_sdf(Vector3(lo.x + (ix + 0.5) * pitch, y, z)) < 0.0:
+				if w.hooks().debug_field_sdf(Vector3(lo.x + (ix + 0.5) * pitch, y, z)) < 0.0:
 					solid[base + ix] = 1
 					total += 1
 	# Flood from the bottom layer (the terrain the box is anchored to).
@@ -126,7 +126,7 @@ func report(w: VoxelWorld, tag: String) -> int:
 	var r: Array = floating_matter(w, Vector3(PILLAR_X - 5.0, PILLAR_BASE - 1.0, PILLAR_Z - 5.0),
 		Vector3(PILLAR_X + 5.0, PILLAR_BASE + 14.0, PILLAR_Z + 5.0))
 	prints("  %s: solid samples %d, FLOATING %d" % [tag, r[0], r[1]])
-	dump(tag, w.debug_island_stats())
+	dump(tag, w.hooks().debug_island_stats())
 	if r[1] > 0:
 		# Bucket the floaters into 0.8 m cells so their size and shape are legible.
 		var cells := {}
@@ -138,8 +138,8 @@ func report(w: VoxelWorld, tag: String) -> int:
 		for k in cells:
 			if shown >= 16:
 				break
-			prints("      cell", k, "grid", w.debug_occupancy_state(k),
-				"field", w.debug_cell_state(k), "samples", cells[k])
+			prints("      cell", k, "grid", w.hooks().debug_occupancy_state(k),
+				"field", w.hooks().debug_cell_state(k), "samples", cells[k])
 			shown += 1
 	return r[1]
 
@@ -154,7 +154,7 @@ func stacked_pillar(w: VoxelWorld, t: VoxelEditTool, n: int, spacing: float,
 func test_diag_scenarios(timeout := 900000) -> void:
 	# 1. The clean baseline: a densely stacked pillar, one big sphere cut.
 	var w := make_world()
-	w.debug_set_merge_sleep_seconds(999.0)
+	w.hooks().debug_set_merge_sleep_seconds(999.0)
 	var t := tool_of(w)
 	stacked_pillar(w, t, 8, 1.4)
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 4.9, PILLAR_Z), 3.0)
@@ -164,7 +164,7 @@ func test_diag_scenarios(timeout := 900000) -> void:
 	# 2. A scalloped pillar: adds spaced so the column is a string of lobes, which is what
 	#    clicking RMB while walking actually builds.
 	var w2 := make_world()
-	w2.debug_set_merge_sleep_seconds(999.0)
+	w2.hooks().debug_set_merge_sleep_seconds(999.0)
 	var t2 := tool_of(w2)
 	stacked_pillar(w2, t2, 6, 3.2)
 	t2.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 8.0, PILLAR_Z), 3.0)
@@ -173,7 +173,7 @@ func test_diag_scenarios(timeout := 900000) -> void:
 
 	# 3. The line drill through a dense pillar (demo R key: 10 x r0.6 along the aim ray).
 	var w3 := make_world()
-	w3.debug_set_merge_sleep_seconds(999.0)
+	w3.hooks().debug_set_merge_sleep_seconds(999.0)
 	var t3 := tool_of(w3)
 	stacked_pillar(w3, t3, 8, 1.4)
 	var start := Vector3(PILLAR_X - 3.0, PILLAR_BASE + 4.9, PILLAR_Z)
@@ -184,7 +184,7 @@ func test_diag_scenarios(timeout := 900000) -> void:
 
 	# 4. A grazing cut: the sphere clips the side of the pillar instead of severing it.
 	var w4 := make_world()
-	w4.debug_set_merge_sleep_seconds(999.0)
+	w4.hooks().debug_set_merge_sleep_seconds(999.0)
 	var t4 := tool_of(w4)
 	stacked_pillar(w4, t4, 8, 1.4)
 	t4.apply_sphere_subtract(Vector3(PILLAR_X + 2.6, PILLAR_BASE + 4.9, PILLAR_Z), 3.0)
@@ -193,7 +193,7 @@ func test_diag_scenarios(timeout := 900000) -> void:
 
 	# 5. Two cuts in quick succession, the second while the first is still resolving.
 	var w5 := make_world()
-	w5.debug_set_merge_sleep_seconds(999.0)
+	w5.hooks().debug_set_merge_sleep_seconds(999.0)
 	var t5 := tool_of(w5)
 	stacked_pillar(w5, t5, 8, 1.4)
 	t5.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 4.9, PILLAR_Z), 3.0)

@@ -16,17 +16,17 @@ func make_world() -> VoxelWorld:
 	w.world_size_regions = Vector3i(8, 5, 8)
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_atlas()).is_true()
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
 	var quiet := 0
 	for i in range(400):
-		quiet = quiet + 1 if w.debug_stream_frame(Vector3(30.0, 56.2, 30.0)) == 0 else 0
+		quiet = quiet + 1 if w.hooks().debug_stream_frame(Vector3(30.0, 56.2, 30.0)) == 0 else 0
 		if quiet >= 6:
 			break
 	return w
 
 func test_the_mask_is_half_resolution() -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_contact_shadow_probe(Vector3(30.0, 70.0, 30.0),
+	var d: Dictionary = w.hooks().debug_contact_shadow_probe(Vector3(30.0, 70.0, 30.0),
 		Vector3(0.2, -1.0, 0.2).normalized(), 128, 128)
 	assert_int(d["mask_width"]).is_equal(64)
 	assert_int(d["mask_height"]).is_equal(64)
@@ -36,7 +36,7 @@ func test_the_mask_is_half_resolution() -> void:
 # contact shadows exist for.
 func test_a_crater_darkens_its_own_floor() -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_contact_shadow_probe(Vector3(30.0, 70.0, 30.0),
+	var d: Dictionary = w.hooks().debug_contact_shadow_probe(Vector3(30.0, 70.0, 30.0),
 		Vector3(0.2, -1.0, 0.2).normalized(), 128, 128)
 	assert_float(d["mask_min"]).override_failure_message(
 		"no pixel was occluded at all: the march never hit anything").is_less(0.9)
@@ -46,7 +46,7 @@ func test_a_crater_darkens_its_own_floor() -> void:
 
 func test_the_apply_only_ever_darkens() -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_contact_shadow_probe(Vector3(30.0, 70.0, 30.0),
+	var d: Dictionary = w.hooks().debug_contact_shadow_probe(Vector3(30.0, 70.0, 30.0),
 		Vector3(0.2, -1.0, 0.2).normalized(), 128, 128)
 	assert_float(d["max_brightening"]).override_failure_message(
 		"a contact shadow made a pixel brighter").is_less(0.002)
@@ -55,14 +55,14 @@ func test_the_apply_only_ever_darkens() -> void:
 func test_turning_contact_shadows_off_leaves_the_image_alone() -> void:
 	var w := make_world()
 	w.set_effect_enabled("contact_shadows", false)
-	var d: Dictionary = w.debug_contact_shadow_probe(Vector3(30.0, 70.0, 30.0),
+	var d: Dictionary = w.hooks().debug_contact_shadow_probe(Vector3(30.0, 70.0, 30.0),
 		Vector3(0.2, -1.0, 0.2).normalized(), 128, 128)
 	assert_float(d["mean_darkening"]).is_equal_approx(0.0, 0.001)
 
 func test_zero_steps_reads_as_off_rather_than_as_a_free_dispatch() -> void:
 	var w := make_world()
 	w.quality_tier = 0
-	var d: Dictionary = w.debug_beauty_settings()
+	var d: Dictionary = w.hooks().debug_beauty_settings()
 	assert_int(int(d["flags"]) & 4).is_equal(0)
 
 # The march jitters its ray start with bayer4, which makes a marginal hit's visibility vary
@@ -74,7 +74,7 @@ func test_zero_steps_reads_as_off_rather_than_as_a_free_dispatch() -> void:
 # by anything close to full strength between two neighbouring pixels.
 func test_the_shadow_is_a_gradient_not_a_dither_lattice() -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_contact_shadow_probe(Vector3(30.0, 70.0, 30.0),
+	var d: Dictionary = w.hooks().debug_contact_shadow_probe(Vector3(30.0, 70.0, 30.0),
 		Vector3(0.2, -1.0, 0.2).normalized(), 128, 128)
 	assert_float(d["mean_darkening"]).override_failure_message(
 		"nothing was shadowed, so the speckle bound below proves nothing").is_greater(0.0)
@@ -87,7 +87,7 @@ func test_the_shadow_is_a_gradient_not_a_dither_lattice() -> void:
 # a different UV, and consequently classified most of the visible hills as contact shadow.
 func test_an_open_horizon_does_not_self_shadow() -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_contact_shadow_probe(Vector3(24.0, 63.9, 24.0),
+	var d: Dictionary = w.hooks().debug_contact_shadow_probe(Vector3(24.0, 63.9, 24.0),
 		Vector3(1.0, -0.04, 1.0).normalized(), 384, 192)
 	assert_float(d["mask_mean"]).override_failure_message(
 		"open terrain was classified as an occluder against itself").is_greater(0.95)

@@ -24,21 +24,21 @@ func make_world() -> VoxelWorld:
 	w.shape_builds_per_frame = 4
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_physics()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
 func settle_colliders(w: VoxelWorld, center: Vector3, frames := 400) -> void:
 	# Run the full budget rather than stopping on a quiet streak: a quiet streak can occur
 	# while a mesh batch is in flight, before the first static body exists.
 	for i in range(frames):
-		w.debug_physics_frame(center)
+		w.hooks().debug_physics_frame(center)
 
 func test_a_spawned_body_has_mass_and_falls(timeout := 90000) -> void:
 	var w := make_world()
 	var centre := Vector3(20.0, 56.0, 20.0)
 	settle_colliders(w, centre)
 	# A lump of rock lifted 20 m into the air, with no kick: it should just drop.
-	var d: Dictionary = w.debug_spawn_test_body(Vector3i(25, 62, 25), Vector3i(26, 63, 26),
+	var d: Dictionary = w.hooks().debug_spawn_test_body(Vector3i(25, 62, 25), Vector3i(26, 63, 26),
 		Vector3(0.0, 20.0, 0.0), Vector3.ZERO, false)
 	assert_bool(d.get("ok", false)).override_failure_message(str(d)).is_true()
 	assert_float(d["mass"]).is_greater(0.0)
@@ -48,7 +48,7 @@ func test_a_spawned_body_has_mass_and_falls(timeout := 90000) -> void:
 
 	for i in range(30):
 		await get_tree().physics_frame
-	var s: Dictionary = w.debug_test_body_stats(d["index"])
+	var s: Dictionary = w.hooks().debug_test_body_stats(d["index"])
 	assert_bool(s["live"]).is_true()
 	assert_float((s["origin"] as Vector3).y).override_failure_message(
 		"the body did not fall").is_less(start.y - 0.5)
@@ -57,40 +57,40 @@ func test_a_body_lands_on_the_streamed_collider_and_sleeps(timeout := 120000) ->
 	var w := make_world()
 	var centre := Vector3(20.0, 56.0, 20.0)
 	settle_colliders(w, centre)
-	var d: Dictionary = w.debug_spawn_test_body(Vector3i(25, 62, 25), Vector3i(26, 63, 26),
+	var d: Dictionary = w.hooks().debug_spawn_test_body(Vector3i(25, 62, 25), Vector3i(26, 63, 26),
 		Vector3(0.0, 8.0, 0.0), Vector3.ZERO, false)
 	assert_bool(d.get("ok", false)).is_true()
 	for i in range(400):
 		await get_tree().physics_frame
-		w.debug_tick_test_bodies(1.0 / 60.0)
-		if w.debug_test_body_stats(d["index"])["asleep_s"] > 0.5:
+		w.hooks().debug_tick_test_bodies(1.0 / 60.0)
+		if w.hooks().debug_test_body_stats(d["index"])["asleep_s"] > 0.5:
 			break
-	var s: Dictionary = w.debug_test_body_stats(d["index"])
+	var s: Dictionary = w.hooks().debug_test_body_stats(d["index"])
 	assert_float(s["asleep_s"]).override_failure_message(
 		"the body never came to rest on the terrain").is_greater(0.5)
 	# It stopped ON the ground, not below it.
-	var oracle: Dictionary = w.debug_raycast(Vector3(centre.x, 90.0, centre.z), Vector3(0, -1, 0))
+	var oracle: Dictionary = w.hooks().debug_raycast(Vector3(centre.x, 90.0, centre.z), Vector3(0, -1, 0))
 	assert_float((s["origin"] as Vector3).y).is_greater((oracle["pos"] as Vector3).y - 2.0)
 
 func test_an_impulse_throws_the_body_sideways(timeout := 90000) -> void:
 	var w := make_world()
 	settle_colliders(w, Vector3(20.0, 56.0, 20.0))
-	var d: Dictionary = w.debug_spawn_test_body(Vector3i(25, 62, 25), Vector3i(26, 63, 26),
+	var d: Dictionary = w.hooks().debug_spawn_test_body(Vector3i(25, 62, 25), Vector3i(26, 63, 26),
 		Vector3(0.0, 20.0, 0.0), Vector3(400.0, 0.0, 0.0), false)
 	assert_bool(d.get("ok", false)).is_true()
 	var start: Vector3 = d["origin"]
 	for i in range(20):
 		await get_tree().physics_frame
-	var s: Dictionary = w.debug_test_body_stats(d["index"])
+	var s: Dictionary = w.hooks().debug_test_body_stats(d["index"])
 	assert_float((s["origin"] as Vector3).x).override_failure_message(
 		"the explosion impulse did not reach the body").is_greater(start.x + 0.5)
 
 func test_atlas_islands_stay_raymarched_and_only_debris_gets_a_cel_mesh(timeout := 90000) -> void:
 	var w := make_world()
 	settle_colliders(w, Vector3(20.0, 56.0, 20.0))
-	var rock: Dictionary = w.debug_spawn_test_body(Vector3i(25, 62, 25), Vector3i(26, 63, 26),
+	var rock: Dictionary = w.hooks().debug_spawn_test_body(Vector3i(25, 62, 25), Vector3i(26, 63, 26),
 		Vector3(0.0, 20.0, 0.0), Vector3.ZERO, false)
-	var crumb: Dictionary = w.debug_spawn_test_body(Vector3i(28, 61, 28), Vector3i(28, 61, 28),
+	var crumb: Dictionary = w.hooks().debug_spawn_test_body(Vector3i(28, 61, 28), Vector3i(28, 61, 28),
 		Vector3(0.0, 20.0, 0.0), Vector3.ZERO, true)
 	assert_bool(rock.get("ok", false)).is_true()
 	assert_bool(crumb.get("ok", false)).is_true()
@@ -109,8 +109,8 @@ func test_atlas_islands_stay_raymarched_and_only_debris_gets_a_cel_mesh(timeout 
 func test_despawn_removes_the_body(timeout := 90000) -> void:
 	var w := make_world()
 	settle_colliders(w, Vector3(20.0, 56.0, 20.0))
-	var d: Dictionary = w.debug_spawn_test_body(Vector3i(25, 62, 25), Vector3i(26, 63, 26),
+	var d: Dictionary = w.hooks().debug_spawn_test_body(Vector3i(25, 62, 25), Vector3i(26, 63, 26),
 		Vector3(0.0, 20.0, 0.0), Vector3.ZERO, false)
 	assert_bool(d.get("ok", false)).is_true()
-	w.debug_despawn_test_body(d["index"])
-	assert_bool(w.debug_test_body_stats(d["index"])["live"]).is_false()
+	w.hooks().debug_despawn_test_body(d["index"])
+	assert_bool(w.hooks().debug_test_body_stats(d["index"])["live"]).is_false()

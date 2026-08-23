@@ -36,29 +36,29 @@ func settled_world() -> VoxelWorld:
 	w.max_lod_pages = 4096
 	add_child(w)
 	_world = w
-	assert_bool(w.debug_init_atlas()).is_true()
-	assert_bool(w.debug_init_physics()).is_true()
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
 
 	var fwd := FWD.normalized()
 	var quiet := 0
 	var ticks := 0
 	for i in range(SETTLE_BUDGET):
-		w.debug_lod_tick(POS, fwd)
+		w.hooks().debug_lod_tick(POS, fwd)
 		await get_tree().process_frame
-		var d := w.debug_lod_stats()
+		var d := w.hooks().debug_lod_stats()
 		quiet = quiet + 1 if d["requests_pending"] == 0 and d["builds_in_flight"] == 0 else 0
 		ticks = i + 1
 		if quiet >= QUIET_TICKS:
 			break
 	assert_int(quiet).override_failure_message(
-		"the far field never converged in %d ticks: %s" % [ticks, w.debug_lod_stats()]
+		"the far field never converged in %d ticks: %s" % [ticks, w.hooks().debug_lod_stats()]
 		).is_greater_equal(QUIET_TICKS)
 	_settled = true
 	return w
 
 func test_the_far_field_covers_the_ground(timeout := 60000) -> void:
 	var w: VoxelWorld = await settled_world()
-	var r := w.debug_lod_render_probe(POS, FWD.normalized(), 256, 200)
+	var r := w.hooks().debug_lod_render_probe(POS, FWD.normalized(), 256, 200)
 	assert_int(r["draw_pages"]).override_failure_message(
 		"nothing was submitted to the draw: %s" % r).is_greater(0)
 	# Looking down at terrain from 90 m: the lower half of the frame must be covered.
@@ -67,7 +67,7 @@ func test_the_far_field_covers_the_ground(timeout := 60000) -> void:
 
 func test_depth_is_written_so_the_near_field_can_occlude(timeout := 60000) -> void:
 	var w: VoxelWorld = await settled_world()
-	var r := w.debug_lod_render_probe(POS, FWD.normalized(), 256, 200)
+	var r := w.hooks().debug_lod_render_probe(POS, FWD.normalized(), 256, 200)
 	# Reverse-Z: every covered pixel must hold a depth strictly between far (0) and near (1).
 	assert_float(r["depth_min"]).is_greater(0.0)
 	assert_float(r["depth_max"]).is_less(1.0)
@@ -75,14 +75,14 @@ func test_depth_is_written_so_the_near_field_can_occlude(timeout := 60000) -> vo
 
 func test_nothing_is_drawn_inside_the_near_field(timeout := 60000) -> void:
 	var w: VoxelWorld = await settled_world()
-	var r := w.debug_lod_render_probe(POS, FWD.normalized(), 256, 200)
+	var r := w.hooks().debug_lod_render_probe(POS, FWD.normalized(), 256, 200)
 	# Spec section 6.4: a chunk entirely inside the fade start is never even built. The fade
 	# start is not the spec's 120 m any more -- it follows how far the near field's bricks
 	# actually reach (ve::lod_fade_band), so ask for it rather than baking in a distance the
 	# atlas may not be able to fund. A chunk STRADDLING the start is built, and its near
 	# corner is legitimately inside it, so the bar is the same fraction of the start the
 	# original 100/120 allowed.
-	var band := w.debug_lod_fade_band()
+	var band := w.hooks().debug_lod_fade_band()
 	assert_float(r["nearest_hit_m"]).override_failure_message(
 		"the far field drew geometry at %.1f m, inside the %.1f m fade start"
 		% [r["nearest_hit_m"], band.x]).is_greater_equal(band.x * (100.0 / 120.0))
@@ -93,8 +93,8 @@ func test_backface_culling_does_not_remove_visible_ground(timeout := 60000) -> v
 	# Each probe ticks the world before it draws, so the two are only comparable once the
 	# far field has converged and a tick no longer changes what is resident -- which is
 	# exactly the state settled_world() hands back.
-	var off := w.debug_lod_render_probe_culled(POS, fwd, 256, 200, false)
-	var on := w.debug_lod_render_probe_culled(POS, fwd, 256, 200, true)
+	var off := w.hooks().debug_lod_render_probe_culled(POS, fwd, 256, 200, false)
+	var on := w.hooks().debug_lod_render_probe_culled(POS, fwd, 256, 200, true)
 	# M3 errata 1: this codebase's winding convention has already cost one bug, so the
 	# front-face setting is MEASURED, not assumed. Culling backfaces must not lose coverage.
 	assert_float(on["coverage"]).override_failure_message(

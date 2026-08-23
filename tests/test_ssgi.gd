@@ -16,17 +16,17 @@ func make_world() -> VoxelWorld:
 	w.world_size_regions = Vector3i(8, 5, 8)
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_atlas()).is_true()
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
 	var quiet := 0
 	for i in range(400):
-		quiet = quiet + 1 if w.debug_stream_frame(Vector3(30.0, 56.2, 30.0)) == 0 else 0
+		quiet = quiet + 1 if w.hooks().debug_stream_frame(Vector3(30.0, 56.2, 30.0)) == 0 else 0
 		if quiet >= 6:
 			break
 	return w
 
 func test_the_result_is_half_resolution() -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_ssgi_probe(Vector3(30.0, 70.0, 30.0), Vector3(0.2, -1.0, 0.2).normalized(),
+	var d: Dictionary = w.hooks().debug_ssgi_probe(Vector3(30.0, 70.0, 30.0), Vector3(0.2, -1.0, 0.2).normalized(),
 		128, 128, 1)
 	assert_int(d["width"]).is_equal(64)
 	assert_int(d["height"]).is_equal(64)
@@ -35,7 +35,7 @@ func test_the_result_is_half_resolution() -> void:
 # an uninitialised texture and painting the screen with whatever was in memory.
 func test_the_first_frame_bounces_nothing() -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_ssgi_probe(Vector3(30.0, 70.0, 30.0), Vector3(0.2, -1.0, 0.2).normalized(),
+	var d: Dictionary = w.hooks().debug_ssgi_probe(Vector3(30.0, 70.0, 30.0), Vector3(0.2, -1.0, 0.2).normalized(),
 		128, 128, 1)
 	assert_float(d["max_channel"]).is_equal_approx(0.0, 0.001)
 
@@ -43,7 +43,7 @@ func test_the_first_frame_bounces_nothing() -> void:
 # walls see each other, which is the case one-bounce GI exists to brighten.
 func test_light_bounces_once_the_history_exists() -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_ssgi_probe(Vector3(30.0, 70.0, 30.0), Vector3(0.2, -1.0, 0.2).normalized(),
+	var d: Dictionary = w.hooks().debug_ssgi_probe(Vector3(30.0, 70.0, 30.0), Vector3(0.2, -1.0, 0.2).normalized(),
 		128, 128, 8)
 	assert_float(d["max_channel"]).override_failure_message(
 		"eight frames of history produced no bounce at all").is_greater(0.005)
@@ -55,8 +55,8 @@ func test_the_accumulation_converges_rather_than_climbing() -> void:
 	var w := make_world()
 	var pos := Vector3(30.0, 70.0, 30.0)
 	var fwd := Vector3(0.2, -1.0, 0.2).normalized()
-	var a: Dictionary = w.debug_ssgi_probe(pos, fwd, 128, 128, 8)
-	var b: Dictionary = w.debug_ssgi_probe(pos, fwd, 128, 128, 24)
+	var a: Dictionary = w.hooks().debug_ssgi_probe(pos, fwd, 128, 128, 8)
+	var b: Dictionary = w.hooks().debug_ssgi_probe(pos, fwd, 128, 128, 24)
 	# A static camera over a static world: three times the frames must not mean three times
 	# the light. Allow a wide band; the point is that it is bounded, not that it is equal.
 	assert_float(float(b["mean_luma"])).is_less(float(a["mean_luma"]) * 2.0 + 0.01)
@@ -64,7 +64,7 @@ func test_the_accumulation_converges_rather_than_climbing() -> void:
 func test_turning_ssgi_off_produces_nothing_and_costs_no_dispatch() -> void:
 	var w := make_world()
 	w.set_effect_enabled("ssgi", false)
-	var d: Dictionary = w.debug_ssgi_probe(Vector3(30.0, 70.0, 30.0), Vector3(0.2, -1.0, 0.2).normalized(),
+	var d: Dictionary = w.hooks().debug_ssgi_probe(Vector3(30.0, 70.0, 30.0), Vector3(0.2, -1.0, 0.2).normalized(),
 		128, 128, 8)
 	assert_bool(d["ran"]).is_false()
 
@@ -73,7 +73,7 @@ func test_turning_ssgi_off_produces_nothing_and_costs_no_dispatch() -> void:
 # non-identity transform; sampling history at current-frame horizon UVs produces no change.
 func test_temporal_history_uses_previous_camera_mapping() -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_ssgi_reprojection_probe(
+	var d: Dictionary = w.hooks().debug_ssgi_reprojection_probe(
 		Vector3(30.0, 70.0, 30.0), Vector3(0.2, -1.0, 0.2).normalized(),
 		Vector3(34.0, 70.0, 30.0), Vector3(-0.2, -1.0, 0.2).normalized(), 128, 128)
 	assert_bool(d["non_identity"]).is_true()

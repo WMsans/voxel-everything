@@ -29,8 +29,8 @@ func make_world(max_jobs := 16384, stream_radius := 40.0) -> VoxelWorld:
 	w.shape_builds_per_frame = 4
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_atlas()).is_true()
-	assert_bool(w.debug_init_physics()).is_true()
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
 func make_tall_world(max_jobs := 16384, stream_radius := 40.0) -> VoxelWorld:
@@ -48,8 +48,8 @@ func make_tall_world(max_jobs := 16384, stream_radius := 40.0) -> VoxelWorld:
 	w.shape_builds_per_frame = 4
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_atlas()).is_true()
-	assert_bool(w.debug_init_physics()).is_true()
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
 func tool_of(w: VoxelWorld) -> VoxelEditTool:
@@ -59,7 +59,7 @@ func tool_of(w: VoxelWorld) -> VoxelEditTool:
 
 func step(w: VoxelWorld, frames: int, center: Vector3 = CENTER) -> void:
 	for i in range(frames):
-		w.debug_stream_frame(center)
+		w.hooks().debug_stream_frame(center)
 
 # A shell thinner than the probe spacing: add a ball, subtract a slightly smaller ball at the
 # same centre. What survives is a spherical skin `radius - inner` thick.
@@ -76,8 +76,8 @@ func test_edit_overflow_repair_preserves_thin_sheet_occupancy(timeout := 300000)
 	t.apply_sphere_subtract(sheet, 0.09)
 	step(w, 12)
 	var cell := Vector3i(25, 77, 25)
-	assert_int(w.debug_cell_state(cell)).is_equal(2)
-	assert_int(w.debug_occupancy_state(cell)).is_equal(2)
+	assert_int(w.hooks().debug_cell_state(cell)).is_equal(2)
+	assert_int(w.hooks().debug_occupancy_state(cell)).is_equal(2)
 	# A separate paint edit in the same region expands the exact edit job list beyond 4096.
 	# It changes no SDF, so the sheet remains a probe-missed thin surface while overflow
 	# triggers the region recovery/repair paths.
@@ -87,13 +87,13 @@ func test_edit_overflow_repair_preserves_thin_sheet_occupancy(timeout := 300000)
 	# eviction/reload, so this exercises the overflow/repair re-mark path itself.
 	var overflow_seen := 0
 	for i in range(5):
-		w.debug_stream_frame(sheet)
-		overflow_seen |= int(w.debug_stream_stats()["overflow_ever"])
+		w.hooks().debug_stream_frame(sheet)
+		overflow_seen |= int(w.hooks().debug_stream_stats()["overflow_ever"])
 	assert_int(overflow_seen & 2).override_failure_message(
 		"the expanded exact-edit list did not overflow").is_not_equal(0)
 	for i in range(90):
-		w.debug_stream_frame(sheet)
-	assert_int(w.debug_occupancy_state(cell)).override_failure_message(
+		w.hooks().debug_stream_frame(sheet)
+	assert_int(w.hooks().debug_occupancy_state(cell)).override_failure_message(
 		"overflow/repair recovery reverted the thin sheet to probe-only occupancy").is_equal(2)
 
 func test_bounded_exact_edit_recovery_does_not_requeue_whole_region(timeout := 300000) -> void:
@@ -113,17 +113,17 @@ func test_bounded_exact_edit_recovery_does_not_requeue_whole_region(timeout := 3
 	# bounded AABB re-mark fits.
 	for i in range(80):
 		t.apply_sphere_add(c + Vector3(0.0, i * 0.05, 0.0), 1.5, 4)
-	w.debug_stream_frame(c)
+	w.hooks().debug_stream_frame(c)
 	var overflow_seen := 0
 	for i in range(5):
-		w.debug_stream_frame(c)
-		overflow_seen |= int(w.debug_stream_stats()["overflow_ever"])
+		w.hooks().debug_stream_frame(c)
+		overflow_seen |= int(w.hooks().debug_stream_stats()["overflow_ever"])
 	assert_int(overflow_seen & 2).override_failure_message(
 		"the tiny exact-edit job list did not overflow").is_not_equal(0)
 	var cleared := false
 	for i in range(90):
-		w.debug_stream_frame(c)
-		if (int(w.debug_atlas_stats()["overflow"]) & 2) == 0:
+		w.hooks().debug_stream_frame(c)
+		if (int(w.hooks().debug_atlas_stats()["overflow"]) & 2) == 0:
 			cleared = true
 			break
 	assert_bool(cleared).override_failure_message(
@@ -145,7 +145,7 @@ func test_a_sheet_thinner_than_the_probe_spacing_is_generated(timeout := 300000)
 	for i in range(64):
 		var a := TAU * float(i) / 64.0
 		var p := c + Vector3(cos(a), 0.0, sin(a)) * 1.95
-		if w.debug_field_sdf(p) < 0.0:
+		if w.hooks().debug_field_sdf(p) < 0.0:
 			on_shell += 1
 	prints("field samples inside the 10 cm skin:", on_shell, "/ 64")
 	assert_int(on_shell).override_failure_message("the skin was never built").is_greater(0)
@@ -169,7 +169,7 @@ func test_a_sheet_thinner_than_the_probe_spacing_is_generated(timeout := 300000)
 						for iz in range(16):
 							var p := Vector3((cx * 16 + ix + 0.5) * 0.05,
 								(cy * 16 + iy + 0.5) * 0.05, (cz * 16 + iz + 0.5) * 0.05)
-							if w.debug_field_sdf(p) < 0.0:
+							if w.hooks().debug_field_sdf(p) < 0.0:
 								holds = true
 								break
 						if holds:
@@ -179,7 +179,7 @@ func test_a_sheet_thinner_than_the_probe_spacing_is_generated(timeout := 300000)
 				if not holds:
 					continue
 				cells += 1
-				if w.debug_cell_state(cell) == 1:
+				if w.hooks().debug_cell_state(cell) == 1:
 					air += 1
 				else:
 					solid += 1
