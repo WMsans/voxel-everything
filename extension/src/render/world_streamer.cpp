@@ -1,6 +1,7 @@
 #include "render/world_streamer.h"
 #include "render/edit_aabb.h"
-#include "voxel_world.h" // godot::PendingEdit
+#include "core/world_store.h" // godot::PendingEdit
+#include "voxel_world.h" // godot::OccupancyBlock
 #include "render/mesh_service.h"
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <algorithm>
