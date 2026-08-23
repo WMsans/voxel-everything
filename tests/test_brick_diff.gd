@@ -29,7 +29,7 @@ func make_world() -> VoxelWorld:
 	w.world_origin_bricks = Vector3i(0, -64, 0)
 	w.world_size_regions = REGIONS
 	add_child(w)
-	assert_bool(w.debug_init_atlas()).is_true()
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
 	return w
 
 func make_op(type: int, material: int, pos: Vector3, radius: float) -> PackedByteArray:
@@ -43,12 +43,12 @@ func make_op(type: int, material: int, pos: Vector3, radius: float) -> PackedByt
 
 func generate_region(w: VoxelWorld, region: Vector3i, slot: int, op_count: int) -> void:
 	var lo := region * 32
-	w.debug_mark_region(region, slot, lo, lo + Vector3i(31, 31, 31), op_count, false)
-	w.debug_generate_pending()
+	w.hooks().debug_mark_region(region, slot, lo, lo + Vector3i(31, 31, 31), op_count, false)
+	w.hooks().debug_generate_pending()
 
 func active_bricks(w: VoxelWorld, slot: int, limit: int) -> Array:
 	var out := []
-	var jobs: PackedInt32Array = w.debug_jobs()
+	var jobs: PackedInt32Array = w.hooks().debug_jobs()
 	var count := jobs.size() / 8
 	# Spread the sample across the job list rather than taking the first N, which would all
 	# come from one corner of the region.
@@ -64,7 +64,7 @@ func check_bricks(w: VoxelWorld, bricks: Array, slot: int, ops: PackedByteArray,
 	assert_int(bricks.size()).override_failure_message(
 		"%s: no bricks to compare" % label).is_greater(4)
 	for brick in bricks:
-		var d: Dictionary = w.debug_brick_diff(brick, slot, ops, op_count)
+		var d: Dictionary = w.hooks().debug_brick_diff(brick, slot, ops, op_count)
 		assert_int(d["slot"]).override_failure_message(
 			"%s: brick %s is not resident" % [label, brick]).is_greater_equal(0)
 		assert_int(d["sdf_max_diff"]).override_failure_message(
@@ -97,7 +97,7 @@ func test_near_surface_cells_carry_a_real_material() -> void:
 	# is a deliberate, documented deviation from the brief's per-brick assertion.)
 	var exercised := 0
 	for brick in active_bricks(w, SLOT, 12):
-		var d: Dictionary = w.debug_brick_diff(brick, SLOT, PackedByteArray(), 0)
+		var d: Dictionary = w.hooks().debug_brick_diff(brick, SLOT, PackedByteArray(), 0)
 		if int(d["mat_near_compared"]) > 0:
 			exercised += 1
 	assert_int(exercised).is_greater(0)
@@ -107,7 +107,7 @@ func test_carved_bricks_match_the_cpu_reference() -> void:
 	# Sphere subtract straddling the surface (51.2 + hills(12.8, 12.8) ~= 51.26 m) inside
 	# region (0, 2, 0): it must cut the surface and activate new bricks there.
 	var ops := make_op(0, 0, Vector3(12.8, 55.2, 12.8), 5.0) # sphere subtract
-	w.debug_upload_region_ops(SLOT, ops, 1)
+	w.hooks().debug_upload_region_ops(SLOT, ops, 1)
 	generate_region(w, REGION, SLOT, 1)
 	check_bricks(w, active_bricks(w, SLOT, 12), SLOT, ops, 1, "carved")
 
@@ -115,14 +115,14 @@ func test_filled_bricks_match_and_introduce_the_new_material() -> void:
 	var w := make_world()
 	# Sphere add in the air above the surface: fills bricks with material 4.
 	var ops := make_op(1, 4, Vector3(12.8, 63.2, 12.8), 4.0) # sphere add, material 4
-	w.debug_upload_region_ops(SLOT, ops, 1)
+	w.hooks().debug_upload_region_ops(SLOT, ops, 1)
 	generate_region(w, REGION, SLOT, 1)
 	var bricks := active_bricks(w, SLOT, 16)
 	check_bricks(w, bricks, SLOT, ops, 1, "filled")
 	# At least one brick must actually hold the added material, or the op did nothing.
 	var found := false
 	for brick in bricks:
-		var d: Dictionary = w.debug_brick_diff(brick, SLOT, ops, 1)
+		var d: Dictionary = w.hooks().debug_brick_diff(brick, SLOT, ops, 1)
 		if d["has_material_4"]:
 			found = true
 			break
@@ -134,7 +134,7 @@ func test_an_ordered_op_chain_matches() -> void:
 	var ops := make_op(0, 0, Vector3(12.8, 55.2, 12.8), 6.0)
 	ops.append_array(make_op(1, 4, Vector3(12.8, 55.2, 12.8), 3.0))
 	ops.append_array(make_op(2, 2, Vector3(6.0, 55.2, 6.0), 5.0))
-	w.debug_upload_region_ops(SLOT, ops, 3)
+	w.hooks().debug_upload_region_ops(SLOT, ops, 3)
 	generate_region(w, REGION, SLOT, 3)
 	check_bricks(w, active_bricks(w, SLOT, 12), SLOT, ops, 3, "chain")
 
@@ -142,8 +142,8 @@ func test_regeneration_is_idempotent() -> void:
 	var w := make_world()
 	generate_region(w, REGION, SLOT, 0)
 	var bricks := active_bricks(w, SLOT, 8)
-	w.debug_reset_frame_counters()
+	w.hooks().debug_reset_frame_counters()
 	var lo := REGION * 32
-	w.debug_mark_region(REGION, SLOT, lo, lo + Vector3i(31, 31, 31), 0, true)
-	w.debug_generate_pending()
+	w.hooks().debug_mark_region(REGION, SLOT, lo, lo + Vector3i(31, 31, 31), 0, true)
+	w.hooks().debug_generate_pending()
 	check_bricks(w, bricks, SLOT, PackedByteArray(), 0, "regenerated")

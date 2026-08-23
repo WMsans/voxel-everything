@@ -48,7 +48,7 @@ func make_world() -> VoxelWorld:
 	w.world_size_regions = Vector3i(8, 5, 8)
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_physics()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
 func check_diff(d: Dictionary, label: String) -> void:
@@ -69,7 +69,7 @@ func check_diff(d: Dictionary, label: String) -> void:
 
 func test_a_surface_chunk_meshes_identically_on_both_sides() -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_mesh_diff(SURFACE_CHUNK)
+	var d: Dictionary = w.hooks().debug_mesh_diff(SURFACE_CHUNK)
 	check_diff(d, "plain terrain")
 	assert_int(d["cells_both"]).is_greater(1000)
 	assert_int(d["tri_gpu"]).is_greater(1000)
@@ -77,7 +77,7 @@ func test_a_surface_chunk_meshes_identically_on_both_sides() -> void:
 
 func test_every_vertex_sits_on_the_surface_and_faces_the_air() -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_mesh_diff(SURFACE_CHUNK)
+	var d: Dictionary = w.hooks().debug_mesh_diff(SURFACE_CHUNK)
 	# The generator reports a distance that exceeds the true one by at most lipschitz() = 2,
 	# so "within 0.1 m reported" is "within half a 0.1 m cell of the real surface". The one
 	# percent that may miss it are the cells straddling the crease where the cave sphere
@@ -97,13 +97,13 @@ func test_a_carved_chunk_still_matches() -> void:
 	var w := make_world()
 	var tool: VoxelEditTool = ClassDB.instantiate("VoxelEditTool")
 	w.add_child(tool)
-	var before: Dictionary = w.debug_mesh_diff(SURFACE_CHUNK)
-	var hit: Dictionary = w.debug_raycast(Vector3(30.0, 80.0, 30.0), Vector3(0, -1, 0))
+	var before: Dictionary = w.hooks().debug_mesh_diff(SURFACE_CHUNK)
+	var hit: Dictionary = w.hooks().debug_raycast(Vector3(30.0, 80.0, 30.0), Vector3(0, -1, 0))
 	assert_bool(hit["hit"]).is_true()
 	var r: Dictionary = tool.apply_sphere_subtract(hit["pos"], 3.0)
 	assert_array(r["rejected"]).is_empty()
 
-	var after: Dictionary = w.debug_mesh_diff(chunk_of(Vector3(30.0, hit["pos"].y, 30.0)))
+	var after: Dictionary = w.hooks().debug_mesh_diff(chunk_of(Vector3(30.0, hit["pos"].y, 30.0)))
 	check_diff(after, "carved terrain")
 	assert_int(after["op_count"]).is_greater(0)
 	assert_int(after["tri_gpu"]).is_greater(0)
@@ -112,7 +112,7 @@ func test_a_carved_chunk_still_matches() -> void:
 func test_open_sky_meshes_to_nothing() -> void:
 	var w := make_world()
 	# Chunk (4, 10, 4) spans world y [64.0, 70.4); the surface tops out at 51.2 + 10.
-	var d: Dictionary = w.debug_mesh_diff(SKY_CHUNK)
+	var d: Dictionary = w.hooks().debug_mesh_diff(SKY_CHUNK)
 	assert_int(d["tri_gpu"]).is_equal(0)
 	assert_int(d["tri_cpu"]).is_equal(0)
 	assert_int(d["cells_both"]).is_equal(0)

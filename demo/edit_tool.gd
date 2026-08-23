@@ -74,7 +74,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 		adjust_radius(-1)
 		return
-	var hit: Dictionary = _world.debug_raycast(
+	var hit: Dictionary = _world.hooks().debug_raycast(
 		_cam.global_position, -_cam.global_transform.basis.z)
 	if not hit["hit"]:
 		return
@@ -100,7 +100,7 @@ func _drill() -> void:
 	# Spec section 5's line drill: a row of small subtracts along the aim ray, starting at
 	# the surface and boring inward. It is the tool that actually severs an overhang, because
 	# a narrow bore cuts a support without swallowing the piece it was holding up.
-	var hit: Dictionary = _world.debug_raycast(
+	var hit: Dictionary = _world.hooks().debug_raycast(
 		_cam.global_position, -_cam.global_transform.basis.z)
 	if not hit["hit"]:
 		return

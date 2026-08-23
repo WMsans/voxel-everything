@@ -17,8 +17,8 @@ func make_world() -> VoxelWorld:
 	w.max_lod_pages = 4096
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_atlas()).is_true()
-	assert_bool(w.debug_init_physics()).is_true()
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
 # The walk descends only into a node whose eight children are all resident, so the far field
@@ -35,9 +35,9 @@ const QUIET_TICKS := 8
 func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> bool:
 	var quiet := 0
 	for i in range(SETTLE_BUDGET):
-		w.debug_lod_tick(pos, fwd)
+		w.hooks().debug_lod_tick(pos, fwd)
 		await get_tree().process_frame
-		var d := w.debug_lod_stats()
+		var d := w.hooks().debug_lod_stats()
 		quiet = quiet + 1 if d["requests_pending"] == 0 and d["builds_in_flight"] == 0 else 0
 		if quiet >= QUIET_TICKS:
 			return true
@@ -51,7 +51,7 @@ func test_the_cull_only_removes(timeout := 40000) -> void:
 	var pos := Vector3(400.0, 90.0, 400.0)
 	var fwd := Vector3(0.0, -0.35, -1.0).normalized()
 	await settle(w, pos, fwd)
-	var d := w.debug_lod_cull_probe(pos, fwd)
+	var d := w.hooks().debug_lod_cull_probe(pos, fwd)
 	assert_int(d["args_before"]).is_greater(0)
 	assert_int(d["args_after"]).is_equal(d["args_before"])
 	assert_int(d["offsets_changed"]).override_failure_message(
@@ -64,9 +64,9 @@ func test_facing_away_culls_almost_everything(timeout := 40000) -> void:
 	var pos := Vector3(400.0, 90.0, 400.0)
 	var fwd := Vector3(0.0, -0.35, -1.0).normalized()
 	await settle(w, pos, fwd)
-	var facing := w.debug_lod_cull_probe(pos, fwd)
+	var facing := w.hooks().debug_lod_cull_probe(pos, fwd)
 	# Same resident set, camera spun to face straight up into empty sky.
-	var away := w.debug_lod_cull_probe(pos, Vector3(0.0, 1.0, 0.0))
+	var away := w.hooks().debug_lod_cull_probe(pos, Vector3(0.0, 1.0, 0.0))
 	assert_int(away["drawn_after"]).override_failure_message(
 		"looking at the sky still drew %d pages" % away["drawn_after"]
 		).is_less(facing["drawn_after"] / 2)
@@ -76,7 +76,7 @@ func test_the_reported_ratio_is_sane(timeout := 40000) -> void:
 	var pos := Vector3(400.0, 90.0, 400.0)
 	var fwd := Vector3(0.0, -0.35, -1.0).normalized()
 	await settle(w, pos, fwd)
-	var d := w.debug_lod_cull_probe(pos, fwd)
+	var d := w.hooks().debug_lod_cull_probe(pos, fwd)
 	assert_float(d["culled_ratio"]).is_between(0.0, 1.0)
 
 # The args list is compact (walk order) while the arena page ids are arbitrary. The cull
@@ -89,7 +89,7 @@ func test_cull_uses_real_arena_page_id(timeout := 40000) -> void:
 	var pos := Vector3(400.0, 90.0, 400.0)
 	var fwd := Vector3(0.0, -0.35, -1.0).normalized()
 	await settle(w, pos, fwd)
-	var d := w.debug_lod_cull_probe(pos, fwd)
+	var d := w.hooks().debug_lod_cull_probe(pos, fwd)
 	var page_frustum: PackedInt32Array = d["page_frustum_culled"]
 	var slot_frustum: PackedInt32Array = d["slot_frustum_culled"]
 	var culled: PackedInt32Array = d["culled"]

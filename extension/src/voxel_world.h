@@ -14,21 +14,25 @@
 #include <godot_cpp/variant/vector2.hpp>
 #include <algorithm>
 #include <atomic>
-#include <condition_variable>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <utility>
 #include <vector>
 #include <tuple>
 #include "connectivity/occupancy.h"
+#include "core/context.h"
+#include "core/world_store.h"
+#include "debug/hooks.h"
 #include "generator/volume_set.h"
-#include "lod/lod_tree.h"
+#include "lod/lod_system.h"
 #include "mesh/chunk_residency.h"
 #include "physics/island_body.h"
 #include "physics/island_manager.h"
 #include "render/island_atlas.h"
 #include "render/gpu_timings.h"
+#include "render/orchestrator.h" // inline pass-graph delegations need the complete type
 #include "render/consolidate_pass.h"
 #include "shade/beauty_settings.h"
 #include "world/edit_log.h"
@@ -42,13 +46,14 @@ namespace godot {
 
 // Compositor callbacks can outlive the SceneTree during SceneTree::quit(). Admission
 // serializes the enabled check, SceneTree/world lookup, and per-world callback guard.
+// The free admission functions are declared in render/orchestrator.h (Task 13): the
+// per-world half of the admission state lives on RenderOrchestrator now.
 class VoxelWorld;
 bool voxel_compositor_callbacks_enabled();
 bool voxel_try_begin_compositor_callback(const NodePath &world_path, VoxelWorld **world);
-void voxel_compositor_callbacks_ready(VoxelWorld *world);
-void voxel_compositor_callbacks_shutdown_started(VoxelWorld *world);
 
 class GpuAtlas;
+class ConsolidationCoordinator;
 class MaterialAtlas;
 class RegionPass;
 class BrickGenPass;
@@ -75,35 +80,44 @@ class IslandAtlas;
 class IslandCullPass;
 struct IslandExtractJob;
 
-// One edit drained by the streamer: the op plus the regions its append touched/rejected.
-struct PendingEdit {
-	ve::EditOp op;
-	ve::EditLog::AppendResult result;
-};
-
-// One region's occupancy block on its way from the render thread to the main thread's grid.
-struct OccupancyBlock {
-	ve::IVec3 region{};
-	int64_t seq = 0; // the world's edit sequence as of the mark that produced it
-	std::vector<uint8_t> bytes; // ve::kOccupancyBlockBytes
-};
-
-class VoxelWorld : public Node3D {
+class VoxelWorld : public Node3D, public EditSink {
 	GDCLASS(VoxelWorld, Node3D)
-	friend class BeautyCompositor;
-	friend bool voxel_try_begin_compositor_callback(const NodePath &, VoxelWorld **);
-	friend void voxel_compositor_callbacks_ready(VoxelWorld *);
-	friend void voxel_compositor_callbacks_shutdown_started(VoxelWorld *);
+	// Strangler adapter: VoxelWorld satisfies WorldStore's notification ports and forwards
+	// to the fan-out logic. The EditSink half is permanent by ruling -- IslandManager keeps
+	// its own notification path, so VoxelWorld remains the EditSink; the ConsolidationSink
+	// half died in Task 11, when ConsolidationCoordinator took over (it satisfies the port
+	// directly).
+	//
+	// Last remaining friend (Task 13 removed the compositor/admission ones): the debug
+	// facade pokes ~20 private members directly (store_, mesh_, colliders_, chunks_,
+	// island_manager_, initialized_, physics_ready_, test_bodies_, island uploads/desc
+	// state, ...) plus 4 private helpers (drain_occupancy, render_probe_pixel,
+	// gather_lod_ops, extract_component) -- audited at Task 16. JUSTIFICATION: every one
+	// of those accesses is live in debug/hooks.cpp; replacing the friendship would need
+	// either an unbounded public accessor dump on this class or a wholesale rework of the
+	// facade's world_ back-reference. Both are behavior-surface changes outside this
+	// refactor's no-behavior-change guard (spec §8), so the friendship stays until that
+	// dedicated rework. See task-16-report's friend table.
+	friend class VoxelDebugHooks;
+
+	VoxelDebugHooks *debug_hooks_ = nullptr;
 
 	bool use_local_device_ = false;
 
-	Vector3i atlas_bricks_ = Vector3i(64, 32, 32);
-	int max_region_slots_ = 512;
-	int max_brick_jobs_ = 16384;
-	int max_override_bricks_ = 8192;
-	Vector3i world_origin_bricks_ = Vector3i(0, -64, 0);
-	Vector3i world_size_regions_ = Vector3i(64, 8, 64);
-	float residency_radius_m_ = 96.0f;
+	// Authoritative CPU data plane (Phase 2a): config + edit log / override /
+	// volume / residency state live in WorldStore. Created FIRST, in the
+	// constructor, so the property setters can write the config pre-init
+	// exactly as they wrote the plain fields before the split.
+	std::unique_ptr<WorldStore> store_;
+	VoxelContext context_; // subsystem wiring; store_ is published here at construction
+	// Owns the consolidation state machine (Task 11): queue/pump/publish/rollback plus all
+	// consolidation_* members live there now; it satisfies WorldStore's ConsolidationSink
+	// port directly. Handles-only collaborators (addresses of the fields below).
+	std::unique_ptr<ConsolidationCoordinator> consolidation_;
+	// GPU pass graph + device ownership (Task 12): every pass pointer, the downsample
+	// pipeline and main_rd_/local_rd_ live in RenderOrchestrator now; VoxelWorld keeps
+	// one-line delegations so external callers compile unchanged.
+	std::unique_ptr<RenderOrchestrator> render_;
 
 	bool physics_enabled_ = true;
 	NodePath physics_center_path_;
@@ -115,85 +129,14 @@ class VoxelWorld : public Node3D {
 	int max_collider_chunks_ = 1280;
 	int mesh_jobs_per_frame_ = 2;
 	int shape_builds_per_frame_ = 2;
-
-	GpuAtlas *atlas_ = nullptr;
-	MaterialAtlas *materials_ = nullptr;
-	IslandAtlas *islands_ = nullptr;
-	std::atomic<bool> islands_enabled_{true};
-	std::atomic<bool> near_field_enabled_{true};
-	int island_slots_ = 0; // high-water mark, not a population; guarded by island_mutex_
-	IslandCullPass *island_cull_ = nullptr;
-	RegionPass *region_pass_ = nullptr;
-	BrickGenPass *gen_pass_ = nullptr;
-	RaymarchPass *raymarch_pass_ = nullptr;
-	CompositePass *composite_pass_ = nullptr;
-	DeferredPass *deferred_pass_ = nullptr;
-	SunShadowPass *sun_shadow_pass_ = nullptr;
-	InjectPass *inject_pass_ = nullptr;
-	LodRasterPass *lod_raster_pass_ = nullptr;
-	LodCullPass *lod_cull_pass_ = nullptr;
-	HizPass *hiz_pass_ = nullptr;
-	GBuffer *gbuffer_ = nullptr;
-	CameraUbo *beauty_camera_ = nullptr;
-	ContactShadowPass *contact_shadow_pass_ = nullptr;
-	SsgiPass *ssgi_pass_ = nullptr;
-	SsrPass *ssr_pass_ = nullptr;
-	OutlinePass *outline_pass_ = nullptr;
-	BeautyCompositor *beauty_compositor_ = nullptr;
-	GpuTimings gpu_timings_;
-	float prev_view_proj_[16] = {};
-	bool has_history_ = false;
-	uint32_t beauty_frame_ = 0;
-	int normal_roughness_state_ = -1;
-	RID downsample_shader_, downsample_pipeline_, downsample_sampler_, downsample_uset_;
-	RID downsample_src_, downsample_dst_;
-	// CPU cores outlive the GPU objects: a re-init re-streams the same world, edits
-	// included. This is also what a future save/reload will do (saves ARE the edit log).
-	ve::EditLog *edit_log_ = nullptr;
-	ve::OverrideStore *overrides_ = nullptr;
-	std::map<std::tuple<int, int, int>, int> override_tables_;
-	// The authoritative copy of every stored volume. Owned here because it outlives the GPU
-	// objects exactly as the edit log does: a re-init re-uploads the same rubble.
-	ve::VolumeSet volumes_;
-	ve::RegionResidency *residency_ = nullptr;
 	WorldStreamer *streamer_ = nullptr;
-	std::mutex edit_mutex_;                   // guards edit_log_ + pending_edits_
-	std::vector<PendingEdit> pending_edits_;  // appended by tools, drained by the streamer
 	int overflow_seen_ = 0;                   // sticky OR of frame overflow bits (tests)
+	int edit_rejections_ = 0; // append fan-out rejection stat; read by debug_stream_stats
 
-	// Consolidation is deliberately one-region-at-a-time. The worker owns the bake; the main
-	// thread owns this queue and publishes the completed transaction between frames.
-	std::vector<ve::IVec3> consolidation_queue_;
-	bool consolidation_in_flight_ = false;
-	ConsolidateJob consolidation_job_;
-	int consolidation_table_ = -1;
-	int consolidation_old_table_ = -1;
-	std::vector<std::pair<int, int>> consolidation_old_entries_;
-	std::vector<std::pair<int, int>> consolidation_entries_;
-	std::vector<int> consolidation_old_slots_;
-	std::vector<ve::OverrideBrick> consolidation_old_bricks_;
-	std::vector<ve::IVec3> consolidation_newly_acquired_;
-	std::vector<int> consolidation_slots_;
-	std::vector<ve::OverrideBrick> consolidation_baked_;
-	bool consolidation_publish_in_flight_ = false;
-	int consolidation_count_ = 0;
-	int consolidation_refusals_ = 0;
-	int consolidation_queue_refusals_ = 0;
-	int edit_rejections_ = 0;
-	bool consolidation_queue_refusal_logged_ = false;
-
-	ve::OccupancyGrid occupancy_;              // main thread only
-	std::mutex occupancy_mutex_;               // guards occupancy_inbox_
-	std::vector<OccupancyBlock> occupancy_inbox_;
-	// Monotonic; bumped by every accepted edit. The streamer stamps each occupancy readback
-	// with it so IslandManager (Task 13) can tell whether a window's cells are new enough to
-	// act on, rather than running connectivity against a picture of the world from before
-	// the blast.
-	std::atomic<int64_t> edit_seq_{0};
-	void drain_occupancy();                    // inbox -> grid
-	void pump_consolidation();
-	bool queue_consolidation(ve::IVec3 region); // edit_mutex_ must be held
-	void requeue_consolidation_locked(ve::IVec3 region);
+	void drain_occupancy() { store_->drain_occupancy(); } // one-line delegation (Task 9)
+	// EditSink port satisfied for WorldStore's spine; adapter body forwards to today's
+	// island-manager notification.
+	void on_edit_appended(const ve::EditOp &op, bool notify_islands) override;
 	bool render_probe_pixel(Vector3 origin, Vector3 dir);
 
 	// The mesher runs on its own thread and owns its local RenderingDevice there; see
@@ -221,6 +164,10 @@ class VoxelWorld : public Node3D {
 	// Debug-settable compact-normal budget; 0 = GpuAtlasConfig's default 32 MiB. Must be
 	// set BEFORE the atlas is created; the pool never resizes after that.
 	uint32_t normal_pool_bytes_ = 0;
+	std::atomic<bool> islands_enabled_{true};
+	std::atomic<bool> near_field_enabled_{true};
+	int island_slots_ = 0; // high-water mark, not a population; guarded by island_mutex_
+	BeautyCompositor *beauty_compositor_ = nullptr;
 	std::vector<IslandSlotDesc> island_descs_;
 	bool island_descs_dirty_ = false;
 	std::vector<float> physics_bubble_centers_;
@@ -232,67 +179,26 @@ class VoxelWorld : public Node3D {
 	std::vector<IslandBody *> test_bodies_;
 	float last_physics_tick_ms_ = 0.0f; // diagnostic; see debug_perf_stats
 
-	// --- M5 LoD state (Task 12) ---
-	int max_lod_pages_ = 32768;
-	int lod_builds_per_frame_ = 8;
-	// Guards lod_tree_, lod_walk_, lod_pages_of_, lod_page_quads_, and lod_pool_ state
-	// between the render thread (lod_tick) and main/tool threads (mark_dirty, debug stats).
-	// Lock order is edit_mutex_ -> lod_mutex_: lod_tick never holds lod_mutex_ while it calls
-	// gather_lod_ops (which takes edit_mutex_), so append_edit_locked can safely take
-	// lod_mutex_ while already holding edit_mutex_.
-	std::mutex lod_mutex_;
-	using LodKey = ve::LodKey;
-	ve::LodTree *lod_tree_ = nullptr;
-	LodPool *lod_pool_ = nullptr;
-	uint32_t lod_frame_ = 0;
-	ve::LodWalkResult lod_walk_;
-	std::map<LodKey, std::vector<int>> lod_pages_of_;
-	std::map<int, int> lod_page_quads_; // page -> number of quads stored in that page
-	std::set<LodKey> lod_overflow_logged_; // once-per-chunk overflow diagnostics
-	int lod_pressure_ = 0;
+	// Owns the LoD runtime (Task 15): THE lod mutex, tree/walk/page-map/pool state plus
+	// tick/fade-band/op-gathering live in LodSystem now; VoxelWorld keeps one-line
+	// delegations so the compositor and debug facade compile unchanged. Created BEFORE
+	// RenderOrchestrator, whose teardown interleaves with its pool/tree/page maps via
+	// address-of slots (handles-only collaborators).
+	std::unique_ptr<LodSystem> lod_;
 
-	// --- M6 beautification settings (Task 3) ---
-	// Setters run on the main thread; render callbacks take a value snapshot through
-	// beauty_settings() rather than retaining a reference to this mutable state.
-	mutable std::mutex beauty_mutex_;
-	int quality_tier_ = static_cast<int>(ve::QualityTier::kHigh);
-	ve::BeautySettings beauty_ = ve::settings_for_tier(ve::QualityTier::kHigh);
-
-	void ensure_lod(); // lazy: creates/initializes lod_tree_ + lod_pool_ on first use
-	// Assumes lod_mutex_ is held; emits the real page list for the current lod_walk_.
-	void prepare_lod_raster_locked();
-
-	RenderingDevice *main_rd_ = nullptr;
-	RenderingDevice *local_rd_ = nullptr; // owned when use_local_device_
 	bool initialized_ = false;
-	mutable std::mutex render_lifetime_mutex_;
-	std::condition_variable render_lifetime_cv_;
-	bool render_shutting_down_ = false;
-	bool render_teardown_deferred_ = false;
-	int render_callbacks_ = 0;
-	std::condition_variable gpu_teardown_cv_;
-	bool gpu_teardown_done_ = false;
+	// HiZ async-readback end state captured by RenderOrchestrator's teardown (handle-
+	// injected); read by the debug facade after a shutdown.
 	bool last_hiz_readback_was_pending_ = false;
 	bool last_hiz_readback_was_drained_ = true;
 
-	// Shader hot reload (spec §8). request_shader_reload() only sets the latch; the render
-	// callback pumps it, pre-flights every shader, and only then tears down and rebuilds the
-	// GPU objects so a bad shader never kills the last-known-good pipelines.
-	std::atomic<bool> reload_requested_{false};
-	std::mutex reload_mutex_;
-	int reload_count_ = 0;
-	bool reload_last_ok_ = true;
-	String reload_last_error_;
-	bool preflight_shaders(RenderingDevice *rd, String *out_error);
+	// Shader hot reload + beauty settings moved verbatim into RenderOrchestrator
+	// (Task 14); VoxelWorld keeps one-line delegations and the ClassDB surface.
 
-	void teardown_gpu(); // every GPU object; CPU cores survive
-	void shutdown_render_resources_on_render_thread();
-	bool initialize_downsample(RenderingDevice *rd);
-	void teardown_downsample();
-	bool ensure_downsample_set(RenderingDevice *rd, RID src, RID dst);
-	bool downsample_history(RenderingDevice *rd, RID src, GBuffer &gb);
 	// Gathers the ops that can affect a LoD chunk: its AABB padded by two cells, flattened
 	// across regions in global append order, truncated to a chronological prefix (M4 errata 1).
+	// One-line delegation into LodSystem's gather_ops (Task 15 move); called by the debug
+	// facade (friend) exactly as it called the world's own body before.
 	void gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out);
 	bool extract_component(const std::vector<ve::IVec3> &cells, IslandExtractJob *job,
 			std::vector<ve::CellBox> *boxes, ve::VolumeData *out);
@@ -306,29 +212,58 @@ public:
 	void _exit_tree() override;
 	~VoxelWorld() override;
 
+	VoxelWorld();
+
+	// Debug/test facade: all debug_* bindings live here (Phase 1 strangler split).
+	VoxelDebugHooks *hooks();
+	// Subsystem wiring (spec §4). Phase-3 consumers (the debug facade) reach the
+	// consolidation coordinator through it instead of through VoxelWorld members.
+	VoxelContext &context() { return context_; }
+
 	void set_use_local_device(bool v) { use_local_device_ = v; }
 	bool get_use_local_device() const { return use_local_device_; }
-	void set_atlas_bricks(Vector3i v) { atlas_bricks_ = v; }
-	Vector3i get_atlas_bricks() const { return atlas_bricks_; }
-	void set_max_region_slots(int v) { max_region_slots_ = v; }
-	int get_max_region_slots() const { return max_region_slots_; }
-	void set_max_brick_jobs(int v) { max_brick_jobs_ = v; }
-	int get_max_brick_jobs() const { return max_brick_jobs_; }
-	void set_max_override_bricks(int v) {
-		const int requested = std::max(v, 0);
-		max_override_bricks_ = overrides_ ? std::min(requested, overrides_->capacity()) : requested;
+	// Config setters/getters: write/read the store's config (setters through its named
+	// per-field setters -- WorldStore has no whole-struct mutable escape hatch). Pre-init
+	// writes take effect at the next ensure_initialized(); post-init they behave exactly
+	// as before (pools never resize after creation).
+	void set_atlas_bricks(Vector3i v) {
+		store_->set_atlas_bricks({v.x, v.y, v.z});
 	}
-	int get_max_override_bricks() const { return max_override_bricks_; }
-	void set_world_origin_bricks(Vector3i v) { world_origin_bricks_ = v; }
-	Vector3i get_world_origin_bricks() const { return world_origin_bricks_; }
-	void set_world_size_regions(Vector3i v) { world_size_regions_ = v; }
-	Vector3i get_world_size_regions() const { return world_size_regions_; }
-	void set_residency_radius_m(float v) { residency_radius_m_ = v; }
-	float get_residency_radius_m() const { return residency_radius_m_; }
+	Vector3i get_atlas_bricks() const {
+		return {store_->config().atlas_bricks.x, store_->config().atlas_bricks.y,
+				store_->config().atlas_bricks.z};
+	}
+	void set_max_region_slots(int v) { store_->set_max_region_slots(v); }
+	int get_max_region_slots() const { return store_->config().max_region_slots; }
+	void set_max_brick_jobs(int v) { store_->set_max_brick_jobs(v); }
+	int get_max_brick_jobs() const { return store_->config().max_brick_jobs; }
+	void set_max_override_bricks(int v) { store_->set_max_override_bricks(v); }
+	int get_max_override_bricks() const { return store_->config().max_override_bricks; }
+	void set_world_origin_bricks(Vector3i v) {
+		store_->set_world_origin_bricks({v.x, v.y, v.z});
+	}
+	Vector3i get_world_origin_bricks() const {
+		return {store_->config().world_origin_bricks.x, store_->config().world_origin_bricks.y,
+				store_->config().world_origin_bricks.z};
+	}
+	void set_world_size_regions(Vector3i v) {
+		store_->set_world_size_regions({v.x, v.y, v.z});
+	}
+	Vector3i get_world_size_regions() const {
+		return {store_->config().world_size_regions.x, store_->config().world_size_regions.y,
+				store_->config().world_size_regions.z};
+	}
+	void set_residency_radius_m(float v) { store_->set_residency_radius_m(v); }
+	float get_residency_radius_m() const { return store_->config().residency_radius_m; }
 
 	void ensure_initialized();
 	bool is_initialized() const { return initialized_; }
+	// One-line delegations into RenderOrchestrator (Task 13), where the lifetime state
+	// lives now; kept so compositors, the debug facade and ClassDB compile unchanged.
 	void shutdown_render_resources();
+	// ClassDB-bound as "_shutdown_render_resources_on_render_thread": the render-thread
+	// teardown Callable targets THIS node (an Object), so the binding must stay here.
+	void shutdown_render_resources_on_render_thread();
 	// Render effects acquire this guard before dereferencing VoxelWorld. _exit_tree() blocks
 	// teardown until all callbacks that already acquired it have released their resources.
 	bool try_begin_render_callback();
@@ -336,7 +271,6 @@ public:
 	void ensure_physics_initialized();
 	void teardown_physics();
 	int physics_tick(Vector3 center); // returns actions taken; Task 7 gives it a body
-	bool is_physics_ready() const { return physics_ready_; }
 	void set_physics_enabled(bool v) { physics_enabled_ = v; }
 	bool get_physics_enabled() const { return physics_enabled_; }
 	void set_physics_center_path(const NodePath &p) { physics_center_path_ = p; }
@@ -351,11 +285,14 @@ public:
 	int get_mesh_jobs_per_frame() const { return mesh_jobs_per_frame_; }
 	void set_shape_builds_per_frame(int v) { shape_builds_per_frame_ = v; }
 	int get_shape_builds_per_frame() const { return shape_builds_per_frame_; }
-	void set_max_lod_pages(int v) { max_lod_pages_ = v; }
-	int get_max_lod_pages() const { return max_lod_pages_; }
-	void set_lod_builds_per_frame(int v) { lod_builds_per_frame_ = v; }
-	int get_lod_builds_per_frame() const { return lod_builds_per_frame_; }
+	void set_max_lod_pages(int v) { lod_->set_max_lod_pages(v); }
+	int get_max_lod_pages() const { return lod_->max_lod_pages(); }
+	void set_lod_builds_per_frame(int v) { lod_->set_lod_builds_per_frame(v); }
+	int get_lod_builds_per_frame() const { return lod_->lod_builds_per_frame(); }
 
+	// One-line delegations into RenderOrchestrator (Task 14 move); the ClassDB surface
+	// and call sites compile unchanged. The effect/quality setters run on the main
+	// thread, exactly as before the move.
 	void set_quality_tier(int v);
 	int get_quality_tier() const;
 	void set_effect_enabled(const String &name, bool on);
@@ -365,69 +302,70 @@ public:
 	// callback's reload work directly.
 	void request_shader_reload();
 	void pump_shader_reload();
-	Dictionary debug_shader_reload_stats();
-	void debug_pump_shader_reload() { pump_shader_reload(); }
-	void debug_set_shader_override(const String &name, const String &source);
-	// Differential self-check: runs the CPU-vs-GPU diff machinery the gdUnit suites use and
-	// returns a single dictionary a running demo can print.
-	Dictionary debug_self_check();
-	// Returns an immutable value snapshot. Render callbacks must take this once per frame and
-	// pass the copy through their work; the mutex is never held during render work.
+	// Returns an immutable value snapshot (RenderOrchestrator-owned mutex since Task 14).
+	// Render callbacks must take this once per frame and pass the copy through their work;
+	// the mutex is never held during render work.
 	ve::BeautySettings beauty_settings() const;
-	Dictionary debug_beauty_settings();
-	Dictionary debug_beauty_compositor_stats();
-	Dictionary debug_gpu_timings();
-	Dictionary debug_ingest_gpu_timings(const PackedStringArray &, const PackedInt64Array &, int64_t);
-	Dictionary debug_contact_shadow_probe(Vector3 pos, Vector3 fwd, int w, int h);
-	Dictionary debug_ssr_probe(int fixture, int w, int h);
-	Dictionary debug_outline_probe(int fixture, bool have_dynamic_normals);
-	Dictionary debug_glossy_sdf_probe(Vector3 origin, Vector3 dir);
-	Dictionary debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, int h, int frames);
-	Dictionary debug_ssgi_reprojection_probe(Vector3 previous_pos, Vector3 previous_fwd,
-			Vector3 current_pos, Vector3 current_fwd, int w, int h);
-	void set_normal_roughness_state(int state) { normal_roughness_state_ = state; }
+	// Task 14 temporary hook-facing surface (deleted with the debug facade's world_ back-
+	// reference): single-mutex-hold copies matching the pre-move debug_* body shapes.
+	void reload_snapshot(int *out_count, bool *out_last_ok, String *out_last_error) const {
+		context_.render->reload_snapshot(out_count, out_last_ok, out_last_error);
+	}
+	void beauty_snapshot(ve::BeautySettings *out_settings, int *out_tier) const {
+		context_.render->beauty_snapshot(out_settings, out_tier);
+	}
+	void set_normal_roughness_state(int state) { context_.render->set_normal_roughness_state(state); }
+	int get_normal_roughness_state() const { return context_.render->normal_roughness_state(); }
 	void set_beauty_compositor(BeautyCompositor *effect) { beauty_compositor_ = effect; }
 
+	// One-line delegations into LodSystem (Task 15 move); the compositor, the debug facade
+	// and ClassDB compile unchanged.
 	void lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ);
-	// Push the current lod_walk_ page list (with per-page quad counts) into the raster pass.
+	// Push the current walk's page list (with per-page quad counts) into the raster pass.
 	void prepare_lod_raster();
 	void prepare_lod_shadow_raster();
-	RenderingDevice *rd() const;
-	GpuTimings *gpu_timings() { return &gpu_timings_; }
+	RenderingDevice *rd() const; // one-line delegation into RenderOrchestrator
+	GpuTimings *gpu_timings() { return context_.render->gpu_timings(); }
 	ve::WorldBounds world_bounds() const;
 
-	GpuAtlas *atlas() { return atlas_; }
-	MaterialAtlas *material_atlas() { return materials_; }
-	IslandAtlas *islands() { return islands_; }
+	GpuAtlas *atlas() { return context_.render->atlas(); }
+	MaterialAtlas *material_atlas() { return context_.render->materials(); }
+	IslandAtlas *islands() { return context_.render->islands(); }
 	// High-water mark, not a population: the shader masks off bits at or above it and then
 	// tests each remaining slot's descriptor for dim >= 2, so a dead slot below the mark
 	// costs one branch and nothing else. Non-inline: the render thread calls this and must
 	// take island_mutex_ before touching island_manager_ / island_slots_.
 	int island_slot_count() const;
 	WorldStreamer *streamer() { return streamer_; }
-	ve::EditLog *edit_log() { return edit_log_; }
-	ve::VolumeSet &volumes() { return volumes_; }
-	RaymarchPass *raymarch_pass() { return raymarch_pass_; }
-	IslandCullPass *island_cull() { return island_cull_; }
-	CompositePass *composite_pass() { return composite_pass_; }
-	DeferredPass *deferred_pass() { return deferred_pass_; }
-	SunShadowPass *sun_shadow_pass() { return sun_shadow_pass_; }
-	InjectPass *inject_pass() { return inject_pass_; }
-	LodPool *lod_pool() { return lod_pool_; }
-	LodRasterPass *lod_raster_pass() { return lod_raster_pass_; }
-	LodCullPass *lod_cull_pass() { return lod_cull_pass_; }
-	HizPass *hiz_pass() { return hiz_pass_; }
-	GBuffer *gbuffer() { return gbuffer_; }
-	CameraUbo *beauty_camera() { return beauty_camera_; }
-	ContactShadowPass *contact_shadow_pass() { return contact_shadow_pass_; }
-	SsgiPass *ssgi_pass() { return ssgi_pass_; }
-	SsrPass *ssr_pass() { return ssr_pass_; }
-	OutlinePass *outline_pass() { return outline_pass_; }
-	const float *prev_view_proj() const { return prev_view_proj_; }
-	bool has_history() const { return has_history_; }
-	uint32_t beauty_frame() const { return beauty_frame_; }
+	ve::EditLog *edit_log() { return store_->edit_log(); }
+	ve::VolumeSet &volumes() { return store_->volumes(); }
+	RaymarchPass *raymarch_pass() { return context_.render->raymarch_pass(); }
+	IslandCullPass *island_cull() { return context_.render->island_cull(); }
+	CompositePass *composite_pass() { return context_.render->composite_pass(); }
+	DeferredPass *deferred_pass() { return context_.render->deferred_pass(); }
+	SunShadowPass *sun_shadow_pass() { return context_.render->sun_shadow_pass(); }
+	InjectPass *inject_pass() { return context_.render->inject_pass(); }
+	LodPool *lod_pool() { return context_.lod->pool(); }
+	LodRasterPass *lod_raster_pass() { return context_.render->lod_raster_pass(); }
+	LodCullPass *lod_cull_pass() { return context_.render->lod_cull_pass(); }
+	HizPass *hiz_pass() { return context_.render->hiz_pass(); }
+	GBuffer *gbuffer() { return context_.render->gbuffer(); }
+	CameraUbo *beauty_camera() { return context_.render->beauty_camera(); }
+	ContactShadowPass *contact_shadow_pass() { return context_.render->contact_shadow_pass(); }
+	SsgiPass *ssgi_pass() { return context_.render->ssgi_pass(); }
+	SsrPass *ssr_pass() { return context_.render->ssr_pass(); }
+	OutlinePass *outline_pass() { return context_.render->outline_pass(); }
+	// Region/gen passes have no pre-split accessor; added for the debug facade, which
+	// pokes them directly today (Task 12 moves their pointers into RenderOrchestrator).
+	RegionPass *region_pass() { return context_.render->region_pass(); }
+	BrickGenPass *gen_pass() { return context_.render->gen_pass(); }
+	// The debug facade's local-device probe (debug_local_rd).
+	RenderingDevice *local_rd() const { return context_.render->local_rd(); }
+	const float *prev_view_proj() const { return context_.render->prev_view_proj(); }
+	bool has_history() const { return context_.render->has_history(); }
+	uint32_t beauty_frame() const { return context_.render->beauty_frame(); }
 	void finish_beauty_frame(const float view_proj[16]);
-	std::mutex &edit_mutex() { return edit_mutex_; }
+	std::mutex &edit_mutex() { return store_->edit_mutex(); }
 	MeshService *mesh_service() { return mesh_; }
 	// Releases an authoritative volume slot AND queues the render-thread teardown of its
 	// compact-normal allocation. Pinned slots are refused by VolumeSet::release() and keep
@@ -449,278 +387,45 @@ public:
 	// Drained by RaymarchCompositor on the render thread; returns how many landed.
 	int drain_island_uploads(RenderingDevice *device);
 
-	int debug_island_frame(float dt, Vector3 center);
-	Dictionary debug_island_stats();
-	// Test hooks for teardown/reinit: let a test queue stale island GPU handoffs and observe
-	// that teardown_physics() clears them before the next physics lifetime starts.
-	int debug_island_pending_uploads();
-	// Test hook: how many field-volume uploads have actually been handed to the GPU since
-	// this VoxelWorld was created. A fully rejected re-merge paste must not increment this
-	// even though queue_field_volume_upload ran before append_edit.
-	int debug_field_volume_upload_count() const;
-	int debug_island_descriptors_pending();
-	// Test hook: slots the current MeshService has accepted through submit_volume since it
-	// started. Verifies pinned volumes are replayed into a new worker after physics re-init.
-	PackedInt32Array debug_mesh_volume_slots();
-	void debug_queue_test_island_upload(int slot, const PackedByteArray &sdf,
-			const PackedByteArray &mat, int dim);
-	// --- Task 6 hooks: fixed-capacity stored-normal pool ---
-	// Debug initializer: shrink the normal-pool budget BEFORE debug_init_atlas(). The
-	// pool's size is otherwise fixed at exactly 32 MiB and never resizes.
-	void debug_set_normal_pool_budget(int bytes) {
-		normal_pool_bytes_ = bytes > 0 ? static_cast<uint32_t>(bytes) : 0u;
-	}
-	Dictionary debug_stored_normal_stats();
-	// Task 8 teardown telemetry: RID validity plus the CPU mirror of the two offset
-	// tables (an entry is non-minus-one exactly while a live span is published for that
-	// slot, so "all_minus_one" is exactly "no spans published"). After render teardown
-	// all three RIDs must be invalid; after reinitialization both tables must be -1.
-	Dictionary debug_normal_pool_state();
-	// Upload one override brick's packed uint16 normals; returns its published byte offset
-	// into normal_buffer(), or -1 when the source entered the wide-R8 fallback.
-	int64_t debug_normal_upload_override(int slot, const PackedByteArray &packed_normals);
-	void debug_normal_release_override(int slot);
-	void debug_queue_test_island_descriptors();
-	// Test hook: store, pin, and queue a field-volume upload the way a committed re-merge or
-	// restore does. Teardown must preserve this upload across physics re-init because an edit
-	// log op may already reference the pinned slot.
-	void debug_queue_committed_field_volume_upload(int slot, const PackedByteArray &sdf,
-			const PackedByteArray &mat, int dim);
-	// Test hook: force the mesher's extraction availability flag so the engine suite can
-	// simulate a permanently unavailable island extraction pass.
-	void debug_set_extraction_available(bool v);
-	// Test hook: force field extractions to fail even when the worker pass exists.
-	void debug_set_fail_extractions(bool v);
-	// Test hook: make the mesher reject extraction submits even when it is idle, so the
-	// island manager's submit rollback path can be exercised deterministically.
-	void debug_set_fail_extract_submit(bool v);
-	void debug_set_fail_consolidations(bool v);
-	void debug_set_fail_consolidate_uploads(bool v);
-	void debug_set_fail_restore_overrides(bool v);
-	void debug_set_fail_restore_overrides_always(bool v);
-	void debug_set_pause_override_publication(bool v);
-	bool debug_override_publication_paused() const;
-	void debug_set_merge_sleep_seconds(float v);
-	// Test hook: lower the dynamic-body guardrail so a small test can prove slot-pool holes
-	// after merges do not count against the cap.
-	void debug_set_max_dynamic_bodies(int v);
-	// Test hook: mark/unmark an island-atlas slot as used so a small test can fill the
-	// 32-slot ceiling without spawning 32 real islands.
-	void debug_set_atlas_slot_used(int slot, bool used);
-	// Test hook: make the next island spawn fail before any carve so the no-carve fail-soft
-	// path can be exercised without depending on a Jolt failure mode.
-	void debug_set_fail_next_spawn(bool fail);
-	// Test hook: make the next carve-rejection restore appear not to cover every carved
-	// region, exercising the keep-the-body-alive path without depending on an op-cap race.
-	void debug_set_fail_next_restore(bool fail);
-	// Test hook: treat the next carve as rejected after at least one box has been accepted,
-	// exercising the post-spawn carve-rejection path without depending on an op-cap race.
-	void debug_set_fail_next_carve(bool fail);
-	// Test hook: make the next re-merge resample fail so the resample backoff path can be
-	// exercised without depending on a worker-side failure mode.
-	void debug_set_fail_next_resample(bool fail);
-	void debug_set_empty_next_extraction(bool v);
-	// Test hook: wake an island body after a re-merge resample has been submitted, so the
-	// stale-rest-pose guard can be exercised deterministically.
-	void debug_wake_island_body(int index);
-	// Test hook: offset and wake a live island body, for the stale-rest-pose regression.
-	void debug_offset_island_body(int index, Vector3 offset);
-	// Diagnostic: full physics-server state of a live island body plus a downward motion
-	// query, for diagnosing islands that do not fall.
-	Dictionary debug_island_body_info(int index);
-	// Diagnostic: residency/build state of a collision chunk, for diagnosing stale colliders.
-	Dictionary debug_chunk_collider_info(Vector3i chunk);
+	// One-line delegation into RenderOrchestrator's downsample pipeline (Task 12 move;
+	// public since Task 13 so BeautyCompositor no longer needs to be a friend).
+	bool downsample_history(RenderingDevice *rd, RID src, GBuffer &gb);
+	// One-line delegation into RenderOrchestrator (Task 13); also called by the debug
+	// facade's forced-teardown probes. Every GPU object; CPU cores survive.
+	void teardown_gpu();
 
-	// Tool entry point (VoxelEditTool, Task 14). Main thread; takes edit_mutex_.
+	// Tool entry point (VoxelEditTool, Task 14). Main thread; takes edit_mutex(). One-line
+	// delegation into WorldStore's spine so external callers compile unchanged.
 	ve::EditLog::AppendResult append_edit(const ve::EditOp &op);
-	// Low-level append used by IslandManager to hold edit_mutex_ across a carve/restore
-	// sequence. The caller MUST already hold edit_mutex_().
-	// `notify_islands` is false only for the island manager's own crumble carve: the matter
-	// it removes was already labelled UNANCHORED, so nothing that was holding on can be
-	// loosened by its going, and enqueueing a window would relabel the same neighbourhood
-	// every time a speck of sub-voxel dust is swept up.
-	int override_table_for_region(ve::IVec3 region) const;
-
+	// GDScript-bound as "append_edit" (Task 10 contract smoke test): parses ONE op from its
+	// 32-byte ve::EditOp encoding -- the byte layout the tests' make_op helpers write --
+	// and runs it through append_edit(). Returns the same {touched, rejected} Dictionary
+	// shape VoxelEditTool reports, because GDScript cannot name ve::EditLog::AppendResult.
+	Dictionary append_edit_op(const PackedByteArray &op_bytes);
+	// Low-level append used by IslandManager to hold edit_mutex across a carve/restore
+	// sequence. The caller MUST already hold edit_mutex(). Runs WorldStore's spine, then
+	// applies the VoxelWorld-owned fan-out remainder (rejection stats, LoD dirty marks,
+	// collider remesh queue) under the same single lock hold as before the split.
 	ve::EditLog::AppendResult append_edit_locked(const ve::EditOp &op,
 			bool notify_islands = true);
-
-	// --- debug/test hooks (Tasks 7-10 kept; debug_sdf_atlas now returns the ATLAS) ---
-	String debug_load_shader(const String &res_path) const;
-	void debug_store_volume(int slot, const PackedByteArray &sdf, const PackedByteArray &mat,
-			int dim);
-	Vector2 debug_eval_field(Vector3 p, const PackedByteArray &ops, int op_count);
-	Dictionary debug_eval_field_gradient(Vector3 p, const PackedByteArray &ops, int op_count);
-	bool debug_init_atlas();
-	void debug_teardown_atlas();
-	Dictionary debug_atlas_stats();
-	void debug_reset_frame_counters();
-	void debug_set_region_map_entry(int region_index, int region_slot);
-	void debug_upload_region_ops(int region_slot, const PackedByteArray &ops, int count);
-	bool debug_brick_has_surface(Vector3i brick, const PackedByteArray &ops, int op_count) const;
-	void debug_mark_region(Vector3i region, int region_slot, Vector3i lo, Vector3i hi,
-			int op_count, bool force);
-	void debug_release_region(int region_slot);
-	PackedInt32Array debug_jobs();
-	int debug_region_table_slot(int region_slot, Vector3i brick);
-	void debug_generate_pending();
-	Dictionary debug_brick_diff(Vector3i brick, int region_slot, const PackedByteArray &ops,
-			int op_count);
-	void debug_stream_region(Vector3i region);
-	Dictionary debug_brick_flags(Vector3i region);
-	Dictionary debug_brick_flags_after_mark(Vector3i region);
-	RID debug_sdf_atlas() const;
-	RID debug_mat_atlas() const;
-	RID debug_mip_atlas(int level) const;
-	RID debug_region_map() const;
-	RID debug_region_tables() const;
-	RID debug_free_list() const;
-	RID debug_frame_counters() const;
-	RID debug_op_pool() const;
-	RID debug_op_counts() const;
+	int override_table_for_region(ve::IVec3 region) const;
 
 	// --- Task 8 hooks ---
-	ve::OccupancyGrid &occupancy() { return occupancy_; }
-	int64_t edit_seq() const { return edit_seq_.load(std::memory_order_relaxed); }
-	int debug_occupancy_state(Vector3i cell);
-	// Harvest already-issued occupancy readbacks; does not advance streaming or issue a mark.
-	void debug_pump_occupancy();
-	Dictionary debug_occupancy_diff(Vector3i region);
-	Dictionary debug_occupancy_fallback_diff(Vector3i region);
-	// The world field's signed distance at a point: generator + that point's region ops +
-	// the volume store, the same evaluation ve::raycast marches. Diagnostic.
-	float debug_field_sdf(Vector3 p);
-	int debug_cell_state(Vector3i cell);
-	Dictionary debug_occupancy_stats(Vector3 center);
+	// One-line delegations into WorldStore so external callers compile unchanged.
+	ve::OccupancyGrid &occupancy() { return store_->occupancy(); }
+	int64_t edit_seq() const { return store_->edit_seq(); }
 
-	// --- Task 12 hooks ---
-	Color debug_raymarch_pixel(Vector3 origin, Vector3 dir);
-	Dictionary debug_raymarch_probe(Vector3 origin, Vector3 dir);
-	Dictionary debug_raymarch_cost_probe(Vector3 origin, Vector3 dir);
-	Dictionary debug_raymarch_gbuffer(Vector3 origin, Vector3 dir);
-	Dictionary debug_raymarch_hole_probe(Vector3 origin, Vector3 dir, int w, int h);
-	Dictionary debug_raymarch_normal_probe(Vector3 origin, Vector3 dir, int w, int h);
-	// Task 7: same five metrics as the terrain probe, but the reference normal for every
-	// hit inside the island's local lattice comes from that body's own VolumeData::normal_oct
-	// (trilinearly blended in the body frame, then rotated by the body basis).
-	Dictionary debug_island_normal_probe(int island_slot, Vector3 origin, Vector3 dir,
-			int w, int h);
-	// --- M5 Task 11 hooks ---
-	Dictionary debug_material_atlas_stats();
-	Color debug_material_probe(int mat, Vector3 p, Vector3 n);
-	// Task 7: rewrites one material layer's normal-map texels (surface array RG) so tests
-	// can prove the G-buffer normal never depends on the material normal map.
-	bool debug_poke_material_normal(int layer);
-	int debug_stream_frame(Vector3 cam);
-	Dictionary debug_stream_stats();
-	int debug_slot_of_region(Vector3i region) const;
-	int debug_region_map_entry(Vector3i region);
-	bool debug_region_map_consistent();
-	Dictionary debug_raycast(Vector3 origin, Vector3 dir);
-	RenderingDevice *debug_local_rd() const { return local_rd_; }
+	// Pre-init-only swap of the field-generation seam (spec §4, Task 10). One-line
+	// delegation into WorldStore, which owns the generator; see WorldStore::set_generator
+	// for the ownership/no-guard rationale. Used by future worldgen features.
+	void set_generator(ve::FieldGenerator *generator) { store_->set_generator(generator); }
 
-	// --- Task 12 body hooks ---
-	Dictionary debug_spawn_test_body(Vector3i lo_cell, Vector3i hi_cell, Vector3 offset,
-			Vector3 impulse, bool debris);
-	Dictionary debug_test_body_stats(int index);
-	void debug_tick_test_bodies(float dt);
-	void debug_despawn_test_body(int index);
-
-	// --- Task 4 hooks ---
-	bool debug_init_physics();
-	void debug_teardown_physics();
-	Dictionary debug_mesh_lattice_diff(Vector3i chunk);
-	int debug_physics_frame(Vector3 center);
-	// Test hook: stand in for the island manager's live bodies, so the bubble policy can be
-	// exercised without spawning (and waiting on) real islands.
-	void debug_set_physics_bubbles(const PackedVector3Array &centers);
-	Dictionary debug_physics_stats();
-	// Per-phase frame timings for the two streaming paths. Diagnostic only: the HUD and the
-	// benchmark read it to say WHERE a frame went, rather than that it was slow.
-	Dictionary debug_perf_stats();
-	RID debug_body_of_chunk(Vector3i chunk);
-	Dictionary debug_chunk_collider_octants(Vector3i chunk);
-
-	// --- Task 5 hook ---
-	Dictionary debug_mesh_diff(Vector3i chunk);
-	Dictionary debug_consolidate_diff(Vector3i region);
-	bool debug_consolidate_region(Vector3i region);
-	void debug_pump_consolidation();
-	void debug_pump_consolidation_async();
-	void debug_wait_consolidation();
-	int debug_region_op_count(Vector3i region);
-	int debug_override_used() const;
-	// Test-only fixture: publish one valid table containing every override slot, exhausting
-	// the real 8192-slot store so refusal tests do not rely on an oversized plan shortcut.
-	bool debug_fill_override_pool();
-	Dictionary debug_override_render_state(Vector3i brick);
-	int debug_override_region_table(int region_slot) const;
-
-	// --- M5 Task 9 hooks ---
-	Dictionary debug_lod_diff(int level, Vector3i coord);
-	void debug_apply_sphere_subtract(Vector3 centre, float radius);
-	// Task 7 fixture hook: a sphere-ADD op so the artifact tests can exercise the
-	// procedural CSG-add branch of the source-field normal path.
-	void debug_apply_sphere_add(Vector3 centre, float radius, int material);
 	bool snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo, ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const;
-	void debug_apply_volume_add(int slot, Vector3 origin, float voxel, int dim);
 
-	// --- Task 9 hook ---
-	Dictionary debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_cell);
-
-	// --- Task 10 hooks ---
-	Dictionary debug_place_test_island(int slot, Vector3i lo_cell, Vector3i hi_cell,
-			Vector3 offset);
-	Dictionary debug_place_test_island_rotated(int slot, Vector3i lo_cell, Vector3i hi_cell,
-			Vector3 offset, float yaw, int volume_slot = -1);
-	void debug_clear_test_island(int slot);
-	PackedInt32Array debug_island_tile_mask(Vector3 origin, Vector3 dir, float tan_x,
-			float tan_y, int width, int height);
-
-	// --- Task 6 hooks ---
-	Dictionary debug_cel_diff(Color albedo, Color ambient, float ndl, float ndv, float ndh,
-			float shadow, float ao, float gloss);
-	Color debug_cel_reference(Color albedo, Color ambient, float ndl, float ndv, float ndh,
-			float shadow, float ao, float gloss) const;
-	Dictionary debug_deferred_probe(Vector3 pos, Vector3 fwd, int w, int h, int probe_mode);
-	bool debug_mesh_submit(Array chunks);
-	Array debug_mesh_collect();
-	bool debug_extract_submit(int id, Vector3i lo_cell, Vector3i hi_cell);
-	Array debug_extract_collect();
-
-	// --- M5 Task 10 LoD queue hooks ---
-	bool debug_lod_submit(Array jobs);
-	Array debug_lod_collect();
-	// --- M5 Task 12 LoD tick hooks ---
-	void debug_lod_tick(Vector3 pos, Vector3 fwd);
-	// The near/far seam for this frame, derived from how far the near field's brick data is
-	// actually complete. One source of truth: the composite, the LoD raster and the LoD
-	// build gate must all fade at the same two distances or the band belongs to no field.
+	// The near/far seam for this frame -- one-line delegation into LodSystem (Task 15),
+	// which owns the fade band now.
 	void lod_fade_band(float *fade_start, float *fade_end) const;
 
-	Dictionary debug_lod_stats();
-	// x = fade start, y = fade end: the seam this frame, for tests that must not bake in a
-	// distance the near field may not be able to pay for.
-	Vector2 debug_lod_fade_band();
-	// --- M5 Task 13 LoD render hooks ---
-	Dictionary debug_lod_render_probe(Vector3 pos, Vector3 fwd, int w, int h);
-	Dictionary debug_lod_render_probe_culled(Vector3 pos, Vector3 fwd, int w, int h,
-			bool cull);
-	Dictionary debug_lod_gbuffer_probe(Vector3 pos, Vector3 fwd, int w, int h);
-	// --- M5 Task 16 seam hooks ---
-	Dictionary debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, bool skip_lod = false);
-	// --- M5 Task 14 HiZ hooks ---
-	Dictionary debug_hiz_stats();
-	Dictionary debug_hiz_shutdown_probe();
-	Dictionary debug_gbuffer_stats(int w, int h);
-	Dictionary debug_hiz_probe_synthetic(float far_value, float near_value);
-	bool debug_hiz_occluded(Vector2 lo, Vector2 hi, float depth);
-	// --- M5 Task 15 LoD cull hooks ---
-	Dictionary debug_lod_cull_probe(Vector3 pos, Vector3 fwd);
-
-	// --- Task 8 hooks ---
-	Dictionary debug_sun_shadow_stats();
-	void debug_sun_shadow_build(bool force);
-	float debug_sun_shadow_visibility(Vector3 p);
 };
 
 } // namespace godot

@@ -16,10 +16,10 @@ func make_world() -> VoxelWorld:
 	w.world_size_regions = Vector3i(8, 5, 8)
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_atlas()).is_true()
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
 	var quiet := 0
 	for i in range(400):
-		quiet = quiet + 1 if w.debug_stream_frame(Vector3(20.0, 56.2, 20.0)) == 0 else 0
+		quiet = quiet + 1 if w.hooks().debug_stream_frame(Vector3(20.0, 56.2, 20.0)) == 0 else 0
 		if quiet >= 6:
 			break
 	return w
@@ -39,7 +39,7 @@ func test_the_gpu_cel_ramp_matches_the_cpu_one() -> void:
 		[Color(0.02, 0.02, 0.9), Color(0.0, 0.0, 0.0), 0.66, 1.0, 0.0, 1.0, 1.0, 0.0],
 	]
 	for c in cases:
-		var d: Dictionary = w.debug_cel_diff(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7])
+		var d: Dictionary = w.hooks().debug_cel_diff(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7])
 		assert_float(d["max_delta"]).override_failure_message(
 			"gpu %s vs cpu %s for %s" % [d["gpu"], d["cpu"], c]).is_less(0.004)
 
@@ -49,7 +49,7 @@ func test_the_band_edges_land_in_the_same_place_on_both_sides() -> void:
 	var w := make_world()
 	for edge in [0.08, 0.32, 0.66]:
 		for delta in [-0.01, 0.01]:
-			var d: Dictionary = w.debug_cel_diff(Color(0.6, 0.6, 0.6), Color(0, 0, 0),
+			var d: Dictionary = w.hooks().debug_cel_diff(Color(0.6, 0.6, 0.6), Color(0, 0, 0),
 				edge + delta, 1.0, 0.0, 1.0, 1.0, 0.0)
 			assert_float(d["max_delta"]).override_failure_message(
 				"band edge %f%+f: gpu %s cpu %s" % [edge, delta, d["gpu"], d["cpu"]]
@@ -62,11 +62,11 @@ func test_the_deferred_pass_reconstructs_the_world_position_it_was_given() -> vo
 	var w := make_world()
 	var pos := Vector3(20.0, 75.0, 20.0)
 	var fwd := Vector3(0, -1, 0)
-	var truth := w.debug_raymarch_gbuffer(pos, fwd)
+	var truth := w.hooks().debug_raymarch_gbuffer(pos, fwd)
 	assert_bool(truth["hit"]).is_true()
 	# probe_mode 2 writes the reconstructed world position into the lit target instead of a
 	# colour; the probe reports the centre pixel.
-	var d: Dictionary = w.debug_deferred_probe(pos, fwd, 64, 64, 2)
+	var d: Dictionary = w.hooks().debug_deferred_probe(pos, fwd, 64, 64, 2)
 	var got: Vector3 = d["center"]
 	var want: Vector3 = truth["position"]
 	assert_float(got.distance_to(want)).override_failure_message(
@@ -75,7 +75,7 @@ func test_the_deferred_pass_reconstructs_the_world_position_it_was_given() -> vo
 func test_sky_pixels_pass_through_the_deferred_pass_unlit() -> void:
 	var w := make_world()
 	# Straight up: every pixel is sky, material 0.
-	var d: Dictionary = w.debug_deferred_probe(Vector3(20.0, 75.0, 20.0), Vector3(0, 1, 0), 64, 64, 0)
+	var d: Dictionary = w.hooks().debug_deferred_probe(Vector3(20.0, 75.0, 20.0), Vector3(0, 1, 0), 64, 64, 0)
 	var c: Color = d["center"]
 	# sky_color() is blue-dominant looking up. Cel-shading it would band it into flat plates.
 	assert_float(c.b).is_greater(c.r)
@@ -84,8 +84,8 @@ func test_sky_pixels_pass_through_the_deferred_pass_unlit() -> void:
 
 func test_the_lit_image_is_darker_where_the_sun_ray_says_it_is() -> void:
 	var w := make_world()
-	var d_lit: Dictionary = w.debug_deferred_probe(Vector3(20.0, 75.0, 20.0), Vector3(0, -1, 0), 64, 64, 0)
+	var d_lit: Dictionary = w.hooks().debug_deferred_probe(Vector3(20.0, 75.0, 20.0), Vector3(0, -1, 0), 64, 64, 0)
 	w.set_effect_enabled("raymarched_sun_shadow", false)
-	var d_flat: Dictionary = w.debug_deferred_probe(Vector3(20.0, 75.0, 20.0), Vector3(0, -1, 0), 64, 64, 0)
+	var d_flat: Dictionary = w.hooks().debug_deferred_probe(Vector3(20.0, 75.0, 20.0), Vector3(0, -1, 0), 64, 64, 0)
 	# Removing the shadow term can only brighten the image, never darken it.
 	assert_float(d_flat["mean_luma"]).is_greater_equal(float(d_lit["mean_luma"]) - 0.001)

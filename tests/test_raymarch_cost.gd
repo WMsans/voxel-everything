@@ -26,7 +26,7 @@ func make_world() -> VoxelWorld:
 func settle(w: VoxelWorld, cam: Vector3, frames := 120) -> void:
 	var quiet := 0
 	for i in range(frames):
-		quiet = quiet + 1 if w.debug_stream_frame(cam) == 0 else 0
+		quiet = quiet + 1 if w.hooks().debug_stream_frame(cam) == 0 else 0
 		if quiet >= 6:
 			return
 
@@ -36,8 +36,8 @@ func settle(w: VoxelWorld, cam: Vector3, frames := 120) -> void:
 func test_ground_ray_costs_more_than_sky_ray() -> void:
 	var w := make_world()
 	var eye := Vector3(24.0, 62.0, 24.0)
-	var down: Dictionary = w.debug_raymarch_cost_probe(eye, Vector3(0.2, -1.0, 0.2).normalized())
-	var up: Dictionary = w.debug_raymarch_cost_probe(eye, Vector3(0.0, 1.0, 0.0))
+	var down: Dictionary = w.hooks().debug_raymarch_cost_probe(eye, Vector3(0.2, -1.0, 0.2).normalized())
+	var up: Dictionary = w.hooks().debug_raymarch_cost_probe(eye, Vector3(0.0, 1.0, 0.0))
 	assert_bool(down["hit"]).is_true()
 	assert_bool(up["hit"]).is_false()
 	assert_int(down["steps"]).is_greater(0)
@@ -47,6 +47,6 @@ func test_probe_reports_brick_cells_visited() -> void:
 	var w := make_world()
 	# A near-horizontal ray crosses many brick cells before it finds anything; that count is
 	# what the region DDA in Task 4 is supposed to collapse.
-	var d: Dictionary = w.debug_raymarch_cost_probe(
+	var d: Dictionary = w.hooks().debug_raymarch_cost_probe(
 		Vector3(24.0, 70.0, 24.0), Vector3(1.0, -0.02, 0.0).normalized())
 	assert_int(d["bricks"]).is_greater(20)

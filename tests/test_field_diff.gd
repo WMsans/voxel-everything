@@ -58,7 +58,7 @@ func sample_points() -> PackedVector3Array:
 	return pts
 
 func run_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: int) -> PackedFloat32Array:
-	var code: String = _world.debug_load_shader("res://shaders/field_probe.comp.glsl")
+	var code: String = _world.hooks().debug_load_shader("res://shaders/field_probe.comp.glsl")
 	assert_str(code).is_not_empty()
 	# ve::load_shader_source keeps the Godot-only #[compute] annotation; glslang rejects it.
 	code = code.replace("#[compute]\n", "")
@@ -127,7 +127,7 @@ func compare(pts: PackedVector3Array, ops: PackedByteArray, op_count: int, label
 	var mat_mismatch := 0
 	var mat_compared := 0
 	for i in range(pts.size()):
-		var cpu: Vector2 = _world.debug_eval_field(pts[i], ops, op_count)
+		var cpu: Vector2 = _world.hooks().debug_eval_field(pts[i], ops, op_count)
 		var diff: float = absf(gpu[i * 4] - cpu.x) / SDF_STEP
 		worst = maxf(worst, diff)
 		if diff <= 1.0:

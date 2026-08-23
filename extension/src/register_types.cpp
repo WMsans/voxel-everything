@@ -3,6 +3,7 @@
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/defs.hpp>
 #include "voxel_world.h"
+#include "debug/hooks.h"
 #include "voxel_edit_tool.h"
 #include "raymarch_compositor.h"
 #include "beauty_compositor.h"
@@ -16,6 +17,7 @@ void voxel_everything_initialize(ModuleInitializationLevel p_level) {
 	GDREGISTER_INTERNAL_CLASS(AsyncBufferRead);
 	GDREGISTER_INTERNAL_CLASS(AsyncTextureRead);
 	GDREGISTER_CLASS(VoxelWorld);
+	GDREGISTER_CLASS(VoxelDebugHooks);
 	GDREGISTER_CLASS(RaymarchCompositor);
 	GDREGISTER_CLASS(BeautyCompositor);
 	GDREGISTER_CLASS(VoxelEditTool);

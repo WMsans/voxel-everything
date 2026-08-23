@@ -26,11 +26,11 @@ func make_world() -> VoxelWorld:
 	w.world_size_regions = Vector3i(8, 5, 8)
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_physics()).is_true() # starts the mesher's worker + its device
+	assert_bool(w.hooks().debug_init_physics()).is_true() # starts the mesher's worker + its device
 	return w
 
 func check_extract(w: VoxelWorld, lo: Vector3i, hi: Vector3i, label: String) -> Dictionary:
-	var d: Dictionary = w.debug_island_extract_diff(lo, hi)
+	var d: Dictionary = w.hooks().debug_island_extract_diff(lo, hi)
 	assert_bool(d.get("ok", false)).override_failure_message(
 		"%s: extraction failed: %s" % [label, d]).is_true()
 	assert_int(d["worst_steps"]).override_failure_message(

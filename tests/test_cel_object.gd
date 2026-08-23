@@ -45,7 +45,7 @@ func test_shaderlanguage_matches_ve_cel_shade() -> void:
 		[Color(.02,.02,.9),Color(0,0,0),-2.0,1.0,0.0,0.0,1.0,0.0]]
 	for c in cases:
 		var got: Color = await render_probe(probe, c)
-		var ref: Color = w.debug_cel_reference(c[0],c[1],c[2],c[3],c[4],c[5],c[6],c[7])
+		var ref: Color = w.hooks().debug_cel_reference(c[0],c[1],c[2],c[3],c[4],c[5],c[6],c[7])
 		assert_float(absf(got.r-ref.r)).is_less(0.006)
 		assert_float(absf(got.g-ref.g)).is_less(0.006)
 		assert_float(absf(got.b-ref.b)).is_less(0.006)

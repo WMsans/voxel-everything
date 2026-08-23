@@ -28,7 +28,7 @@ func make_world() -> VoxelWorld:
 	w.world_size_regions = Vector3i(8, 5, 8)
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_physics()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
 func check_diff(d: Dictionary, label: String) -> void:
@@ -54,7 +54,7 @@ func test_level_zero_over_the_surface() -> void:
 	var w := make_world()
 	# The terrain surface sits at y ~ 51.2 + hills (M2 errata 9), so an L0 chunk (12.8 m)
 	# whose y index is 4 straddles it.
-	check_diff(w.debug_lod_diff(0, Vector3i(2, 4, 2)), "L0 surface")
+	check_diff(w.hooks().debug_lod_diff(0, Vector3i(2, 4, 2)), "L0 surface")
 
 func test_every_level_agrees() -> void:
 	var w := make_world()
@@ -62,18 +62,18 @@ func test_every_level_agrees() -> void:
 		# The chunk containing (25.6, 51.2, 25.6) at each level.
 		var s := 12.8 * pow(2.0, float(level))
 		var c := Vector3i(int(floor(25.6 / s)), int(floor(51.2 / s)), int(floor(25.6 / s)))
-		check_diff(w.debug_lod_diff(level, c), "level %d" % level)
+		check_diff(w.hooks().debug_lod_diff(level, c), "level %d" % level)
 
 func test_an_edit_reaches_the_coarse_levels() -> void:
 	var w := make_world()
 	# A 5 m crater. At L4 the cell is 6.4 m, so the crater is under one cell -- and the whole
 	# point of the half-cell supersample is that it still moves samples there. Point sampling
 	# at 6.4 m would leave the coarse lattice bit-identical, which this asserts against.
-	var before := w.debug_lod_diff(4, Vector3i(0, 0, 0))
+	var before := w.hooks().debug_lod_diff(4, Vector3i(0, 0, 0))
 	assert_bool(before.has("reduced_hash")).is_true()
 	var hash_before: int = before["reduced_hash"]
-	w.debug_apply_sphere_subtract(Vector3(25.6, 51.2, 25.6), 5.0)
-	var after := w.debug_lod_diff(4, Vector3i(0, 0, 0))
+	w.hooks().debug_apply_sphere_subtract(Vector3(25.6, 51.2, 25.6), 5.0)
+	var after := w.hooks().debug_lod_diff(4, Vector3i(0, 0, 0))
 	check_diff(after, "L4 after a 5 m crater")
 	assert_int(after["reduced_hash"]).override_failure_message(
 		"a 5 m crater left the 6.4 m lattice bit-identical: the reduction is point sampling"

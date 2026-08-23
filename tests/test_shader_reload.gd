@@ -26,7 +26,7 @@ func make_world() -> VoxelWorld:
 func settle(w: VoxelWorld, cam: Vector3, frames := 120) -> void:
 	var quiet := 0
 	for i in range(frames):
-		quiet = quiet + 1 if w.debug_stream_frame(cam) == 0 else 0
+		quiet = quiet + 1 if w.hooks().debug_stream_frame(cam) == 0 else 0
 		if quiet >= 6:
 			return
 
@@ -34,24 +34,24 @@ func settle(w: VoxelWorld, cam: Vector3, frames := 120) -> void:
 # same way before and after, because the CPU cores that describe the world never went away.
 func test_reload_keeps_the_world(timeout := 60000) -> void:
 	var w := make_world()
-	w.debug_apply_sphere_subtract(Vector3(24.4, 51.4, 24.4), 1.5)
-	var before: Dictionary = w.debug_raycast(Vector3(24.4, 70.0, 24.4), Vector3(0, -1, 0))
+	w.hooks().debug_apply_sphere_subtract(Vector3(24.4, 51.4, 24.4), 1.5)
+	var before: Dictionary = w.hooks().debug_raycast(Vector3(24.4, 70.0, 24.4), Vector3(0, -1, 0))
 	w.request_shader_reload()
-	w.debug_pump_shader_reload() # what the render callback does
+	w.hooks().debug_pump_shader_reload() # what the render callback does
 	assert_bool(w.is_initialized()).is_true()
-	assert_int(int(w.debug_shader_reload_stats()["reloads"])).is_equal(1)
-	assert_bool(w.debug_shader_reload_stats()["last_ok"]).is_true()
-	var after: Dictionary = w.debug_raycast(Vector3(24.4, 70.0, 24.4), Vector3(0, -1, 0))
+	assert_int(int(w.hooks().debug_shader_reload_stats()["reloads"])).is_equal(1)
+	assert_bool(w.hooks().debug_shader_reload_stats()["last_ok"]).is_true()
+	var after: Dictionary = w.hooks().debug_raycast(Vector3(24.4, 70.0, 24.4), Vector3(0, -1, 0))
 	assert_bool(after["hit"]).is_equal(before["hit"])
 
 # A shader that will not compile must leave the previous pipelines running (spec §8's
 # fail-soft rule), not a black screen.
 func test_a_broken_reload_keeps_the_old_pipelines(timeout := 60000) -> void:
 	var w := make_world()
-	w.debug_set_shader_override("raymarch.comp.glsl", "#version 460\nthis is not glsl\n")
+	w.hooks().debug_set_shader_override("raymarch.comp.glsl", "#version 460\nthis is not glsl\n")
 	w.request_shader_reload()
-	w.debug_pump_shader_reload()
-	assert_bool(w.debug_shader_reload_stats()["last_ok"]).is_false()
+	w.hooks().debug_pump_shader_reload()
+	assert_bool(w.hooks().debug_shader_reload_stats()["last_ok"]).is_false()
 	assert_bool(w.is_initialized()).is_true()
-	var d: Dictionary = w.debug_raymarch_cost_probe(Vector3(24.0, 70.0, 24.0), Vector3(0, -1, 0))
+	var d: Dictionary = w.hooks().debug_raymarch_cost_probe(Vector3(24.0, 70.0, 24.0), Vector3(0, -1, 0))
 	assert_bool(d["hit"]).is_true()

@@ -18,8 +18,8 @@ func make_world(residency_radius := 96.0) -> VoxelWorld:
 	w.residency_radius_m = residency_radius
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_atlas()).is_true()
-	assert_bool(w.debug_init_physics()).is_true()
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
 # The walk descends only into a node whose eight children are all resident, so the far field
@@ -36,9 +36,9 @@ const QUIET_TICKS := 8
 func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> bool:
 	var quiet := 0
 	for i in range(SETTLE_BUDGET):
-		w.debug_lod_tick(pos, fwd)
+		w.hooks().debug_lod_tick(pos, fwd)
 		await get_tree().process_frame
-		var d := w.debug_lod_stats()
+		var d := w.hooks().debug_lod_stats()
 		quiet = quiet + 1 if d["requests_pending"] == 0 and d["builds_in_flight"] == 0 else 0
 		if quiet >= QUIET_TICKS:
 			return true
@@ -50,7 +50,7 @@ func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> bool:
 func settle_stream(w: VoxelWorld, pos: Vector3) -> bool:
 	var quiet := 0
 	for i in range(2000):
-		var actions := w.debug_stream_frame(pos)
+		var actions := w.hooks().debug_stream_frame(pos)
 		await get_tree().process_frame
 		quiet = quiet + 1 if actions == 0 else 0
 		if quiet >= QUIET_TICKS:
@@ -69,8 +69,8 @@ func test_the_band_is_covered_exactly_once(timeout := 40000) -> void:
 	var pos := Vector3(100.0, 68.0, 202.0)
 	var fwd := Vector3(0.0, -0.12, -1.0).normalized()
 	await settle(w, pos, fwd)
-	var d := w.debug_seam_probe(pos, fwd, 256, 144)
-	var band := w.debug_lod_fade_band()
+	var d := w.hooks().debug_seam_probe(pos, fwd, 256, 144)
+	var band := w.hooks().debug_lod_fade_band()
 	# NON-VACUITY FIRST. The probe cannot classify a pixel where the raymarch missed and no
 	# field wrote depth -- it has no terrain sample there, so it counts it as sky. That is
 	# the hole this metric used to be blind to: with the seam nailed to 120-150 m and the
@@ -100,7 +100,7 @@ func test_the_near_field_owns_everything_before_the_band(timeout := 40000) -> vo
 	var pos := Vector3(100.0, 68.0, 202.0)
 	var fwd := Vector3(0.0, -0.12, -1.0).normalized()
 	await settle(w, pos, fwd)
-	var d := w.debug_seam_probe(pos, fwd, 256, 144)
+	var d := w.hooks().debug_seam_probe(pos, fwd, 256, 144)
 	assert_int(d["near_pixels_lost_to_lod"]).is_equal(0)
 	assert_int(d["far_pixels_lost_to_raymarch"]).is_equal(0)
 
@@ -118,7 +118,7 @@ func test_skipping_lod_counts_unclaimed_band_pixels(timeout := 60000) -> void:
 	var fwd := Vector3(0.0, -0.40, -1.0).normalized()
 	await settle(w, pos, fwd)
 	await settle_stream(w, pos)
-	var d := w.debug_seam_probe(pos, fwd, 256, 144, true)
+	var d := w.hooks().debug_seam_probe(pos, fwd, 256, 144, true)
 	assert_int(d["band_pixels"]).override_failure_message(
 		"mutation camera saw no band pixels with LoD skipped").is_greater(0)
 	assert_int(d["band_pixels_unclaimed"]).override_failure_message(

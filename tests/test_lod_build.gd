@@ -23,16 +23,16 @@ func make_world() -> VoxelWorld:
 	w.world_size_regions = Vector3i(8, 5, 8)
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_physics()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
 func test_a_submitted_chunk_comes_back_with_quads(timeout := 20000) -> void:
 	var w := make_world()
 	# L0 chunk (2, 4, 2) straddles the surface at y ~ 51.2.
-	assert_bool(w.debug_lod_submit([[0, Vector3i(2, 4, 2)]])).is_true()
+	assert_bool(w.hooks().debug_lod_submit([[0, Vector3i(2, 4, 2)]])).is_true()
 	var got: Array = []
 	for i in range(POLL_FRAMES):
-		got = w.debug_lod_collect()
+		got = w.hooks().debug_lod_collect()
 		if got.size() > 0:
 			break
 		await get_tree().process_frame
@@ -47,10 +47,10 @@ func test_a_submitted_chunk_comes_back_with_quads(timeout := 20000) -> void:
 func test_an_air_chunk_comes_back_empty(timeout := 20000) -> void:
 	var w := make_world()
 	# High above the terrain: no surface, so no quads and no wasted pages.
-	assert_bool(w.debug_lod_submit([[0, Vector3i(2, 12, 2)]])).is_true()
+	assert_bool(w.hooks().debug_lod_submit([[0, Vector3i(2, 12, 2)]])).is_true()
 	var got: Array = []
 	for i in range(POLL_FRAMES):
-		got = w.debug_lod_collect()
+		got = w.hooks().debug_lod_collect()
 		if got.size() > 0:
 			break
 		await get_tree().process_frame
@@ -61,10 +61,10 @@ func test_an_air_chunk_comes_back_empty(timeout := 20000) -> void:
 func test_multi_job_batch_returns_all_results(timeout := 20000) -> void:
 	var w := make_world()
 	# Both chunks straddle the surface, and they are submitted together in one plural batch.
-	assert_bool(w.debug_lod_submit([[0, Vector3i(2, 4, 2)], [0, Vector3i(3, 4, 2)]])).is_true()
+	assert_bool(w.hooks().debug_lod_submit([[0, Vector3i(2, 4, 2)], [0, Vector3i(3, 4, 2)]])).is_true()
 	var got: Array = []
 	for i in range(POLL_FRAMES):
-		got = w.debug_lod_collect()
+		got = w.hooks().debug_lod_collect()
 		if got.size() >= 2:
 			break
 		await get_tree().process_frame
@@ -79,20 +79,20 @@ func test_multi_job_batch_returns_all_results(timeout := 20000) -> void:
 
 func test_a_batch_is_refused_while_one_is_in_flight() -> void:
 	var w := make_world()
-	assert_bool(w.debug_lod_submit([[0, Vector3i(2, 4, 2)]])).is_true()
+	assert_bool(w.hooks().debug_lod_submit([[0, Vector3i(2, 4, 2)]])).is_true()
 	# MeshPass's one-batch-at-a-time contract: the residency bookkeeping relies on it.
-	assert_bool(w.debug_lod_submit([[0, Vector3i(3, 4, 2)]])).is_false()
+	assert_bool(w.hooks().debug_lod_submit([[0, Vector3i(3, 4, 2)]])).is_false()
 
 func test_collider_meshing_still_works_alongside(timeout := 20000) -> void:
 	var w := make_world()
-	assert_bool(w.debug_lod_submit([[0, Vector3i(2, 4, 2)]])).is_true()
-	assert_bool(w.debug_mesh_submit([Vector3i(4, 8, 4)])).is_true()
+	assert_bool(w.hooks().debug_lod_submit([[0, Vector3i(2, 4, 2)]])).is_true()
+	assert_bool(w.hooks().debug_mesh_submit([Vector3i(4, 8, 4)])).is_true()
 	var lod_done := false
 	var mesh_done := false
 	for i in range(POLL_FRAMES):
-		if w.debug_lod_collect().size() > 0:
+		if w.hooks().debug_lod_collect().size() > 0:
 			lod_done = true
-		if w.debug_mesh_collect().size() > 0:
+		if w.hooks().debug_mesh_collect().size() > 0:
 			mesh_done = true
 		if lod_done and mesh_done:
 			break

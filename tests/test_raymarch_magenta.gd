@@ -46,7 +46,7 @@ func make_world() -> VoxelWorld:
 	# regions non-resident.
 	var _quiet := 0
 	for i in range(120):
-		_quiet = _quiet + 1 if w.debug_stream_frame(DEMO_ORIGIN) == 0 else 0
+		_quiet = _quiet + 1 if w.hooks().debug_stream_frame(DEMO_ORIGIN) == 0 else 0
 		if _quiet >= 6:
 			break
 	return w
@@ -64,7 +64,7 @@ func test_brick_face_hits_resolve_to_real_materials() -> void:
 	var w := make_world()
 	var hits := 0
 	for dir in MAGENTA_RAYS:
-		var d: Dictionary = w.debug_raymarch_probe(DEMO_ORIGIN, dir)
+		var d: Dictionary = w.hooks().debug_raymarch_probe(DEMO_ORIGIN, dir)
 		if not d["hit"]:
 			continue
 		hits += 1

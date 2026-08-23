@@ -110,7 +110,7 @@ func sample_points() -> PackedVector3Array:
 
 func run_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: int,
 		vol: Array) -> PackedFloat32Array:
-	var code: String = _world.debug_load_shader("res://shaders/field_probe.comp.glsl")
+	var code: String = _world.hooks().debug_load_shader("res://shaders/field_probe.comp.glsl")
 	assert_str(code).is_not_empty()
 	code = code.replace("#[compute]\n", "")
 
@@ -163,7 +163,7 @@ func run_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: int,
 func compare(ops: PackedByteArray, op_count: int, label: String) -> void:
 	var vol := ball_volume()
 	# The CPU side reads the same bytes through VoxelWorld's own ve::VolumeSet.
-	_world.debug_store_volume(0, vol[0], vol[1], VDIM)
+	_world.hooks().debug_store_volume(0, vol[0], vol[1], VDIM)
 	var pts := sample_points()
 	var gpu := run_gpu(pts, ops, op_count, vol)
 	assert_int(gpu.size()).is_equal(pts.size() * 4)
@@ -173,7 +173,7 @@ func compare(ops: PackedByteArray, op_count: int, label: String) -> void:
 	var mat_mismatch := 0
 	var mat_compared := 0
 	for i in range(pts.size()):
-		var cpu: Vector2 = _world.debug_eval_field(pts[i], ops, op_count)
+		var cpu: Vector2 = _world.hooks().debug_eval_field(pts[i], ops, op_count)
 		var diff: float = absf(gpu[i * 4] - cpu.x) / SDF_STEP
 		worst = maxf(worst, diff)
 		if diff <= 1.0:
@@ -228,9 +228,9 @@ func test_a_volume_op_naming_an_all_air_slot_agrees() -> void:
 	mat.resize(VDIM * VDIM * VDIM)
 	sdf.fill(255) # encode_sdf(+0.64): solidly outside anything
 	mat.fill(0)
-	_world.debug_store_volume(0, sdf, mat, VDIM)
+	_world.hooks().debug_store_volume(0, sdf, mat, VDIM)
 	var pts := sample_points()
 	var gpu := run_gpu(pts, volume_op(0), 1, [sdf, mat])
 	for i in range(pts.size()):
-		var cpu: Vector2 = _world.debug_eval_field(pts[i], volume_op(0), 1)
+		var cpu: Vector2 = _world.hooks().debug_eval_field(pts[i], volume_op(0), 1)
 		assert_float(absf(gpu[i * 4] - cpu.x) / SDF_STEP).is_less(MAX_STEPS)

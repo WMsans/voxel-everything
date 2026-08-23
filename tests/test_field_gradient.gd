@@ -127,7 +127,7 @@ func sample_points() -> PackedVector3Array:
 	return pts
 
 func run_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: int) -> PackedFloat32Array:
-	var code: String = _world.debug_load_shader("res://shaders/field_gradient_probe.comp.glsl")
+	var code: String = _world.hooks().debug_load_shader("res://shaders/field_gradient_probe.comp.glsl")
 	assert_str(code).is_not_empty()
 	code = code.replace("#[compute]\n", "")
 
@@ -193,7 +193,7 @@ func compare(pts: PackedVector3Array, ops: PackedByteArray, op_count: int, label
 	var grad_mismatched := 0
 	var worst_dot := 1.0
 	for i in range(pts.size()):
-		var cpu: Dictionary = _world.debug_eval_field_gradient(pts[i], ops, op_count)
+		var cpu: Dictionary = _world.hooks().debug_eval_field_gradient(pts[i], ops, op_count)
 		var cpu_sdf: float = cpu["sdf"]
 		var cpu_mat: int = int(cpu["material"])
 		var cpu_grad: Vector3 = cpu["gradient"]

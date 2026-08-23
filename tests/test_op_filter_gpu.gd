@@ -19,7 +19,7 @@ func make_world() -> VoxelWorld:
 	w.world_size_regions = Vector3i(8, 5, 8)
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_atlas()).is_true()
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
 	return w
 
 # ve::EditOp is 32 raw bytes and debug_brick_diff takes them as a PackedByteArray, exactly
@@ -47,13 +47,13 @@ func pack_extent3(nx: int, ny: int, nz: int) -> int:
 
 func generate_region(w: VoxelWorld, ops: PackedByteArray, op_count: int) -> void:
 	var region := Vector3i(0, 2, 0)
-	w.debug_upload_region_ops(0, ops, op_count)
-	w.debug_mark_region(region, 0, region * 32, region * 32 + Vector3i(31, 31, 31), op_count, true)
-	w.debug_generate_pending()
+	w.hooks().debug_upload_region_ops(0, ops, op_count)
+	w.hooks().debug_mark_region(region, 0, region * 32, region * 32 + Vector3i(31, 31, 31), op_count, true)
+	w.hooks().debug_generate_pending()
 
 func run_filtered_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: int,
 		volume: Array) -> PackedFloat32Array:
-	var code: String = _worlds[0].debug_load_shader("res://shaders/field_filter_probe.comp.glsl")
+	var code: String = _worlds[0].hooks().debug_load_shader("res://shaders/field_filter_probe.comp.glsl")
 	assert_str(code).is_not_empty()
 	code = code.replace("#[compute]\n", "")
 	var rd := RenderingServer.create_local_rendering_device()
@@ -104,11 +104,11 @@ func compare_filtered_to_unfiltered(pts: PackedVector3Array, ops: PackedByteArra
 		op_count: int, volume: Array, label: String) -> void:
 	if _worlds.is_empty():
 		make_world()
-	_worlds[0].debug_store_volume(0, volume[0], volume[1], 2)
+	_worlds[0].hooks().debug_store_volume(0, volume[0], volume[1], 2)
 	var gpu := run_filtered_gpu(pts, ops, op_count, volume)
 	assert_int(gpu.size()).is_equal(pts.size() * 4)
 	for i in range(pts.size()):
-		var oracle: Vector2 = _worlds[0].debug_eval_field(pts[i], ops, op_count)
+		var oracle: Vector2 = _worlds[0].hooks().debug_eval_field(pts[i], ops, op_count)
 		# Consumers store an R8 lattice, so the independent oracle compares the representable
 		# field rather than an out-of-band CSG value that both sides clamp identically.
 		var expected_sdf := clampf(oracle.x, -0.64, 0.64)
@@ -150,7 +150,7 @@ func test_generated_brick_matches_the_cpu_with_a_long_op_list(timeout := 30000) 
 			sin(float(i) * 1.3) * (5.0 + float(i) * 0.1))
 		ops.append_array(op_bytes(1, 4, c, 0.5))
 	generate_region(w, ops, 200)
-	var d: Dictionary = w.debug_brick_diff(Vector3i(10, 68, 10), 0, ops, 200)
+	var d: Dictionary = w.hooks().debug_brick_diff(Vector3i(10, 68, 10), 0, ops, 200)
 	assert_int(int(d["sdf_diff_over_one"])).is_equal(0)
 	assert_int(int(d["mat_near_mismatch"])).is_equal(0)
 
@@ -165,5 +165,5 @@ func test_filter_preserves_op_order(timeout := 30000) -> void:
 	for i in range(50):                             # far-away filler
 		ops.append_array(op_bytes(0, 0, Vector3(c.x + 40.0 + float(i), c.y, c.z), 1.0))
 	generate_region(w, ops, 52)
-	var d: Dictionary = w.debug_brick_diff(Vector3i(10, 68, 10), 0, ops, 52)
+	var d: Dictionary = w.hooks().debug_brick_diff(Vector3i(10, 68, 10), 0, ops, 52)
 	assert_int(int(d["sdf_diff_over_one"])).is_equal(0)

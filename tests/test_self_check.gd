@@ -14,7 +14,7 @@ func after_test() -> void:
 func settle(w: VoxelWorld, cam: Vector3, frames := 120) -> void:
 	var quiet := 0
 	for i in range(frames):
-		quiet = quiet + 1 if w.debug_stream_frame(cam) == 0 else 0
+		quiet = quiet + 1 if w.hooks().debug_stream_frame(cam) == 0 else 0
 		if quiet >= 6:
 			return
 
@@ -28,8 +28,8 @@ func test_self_check_reports_zero_mismatches_on_a_clean_world(timeout := 120000)
 	_worlds.append(w)
 	w.ensure_initialized()
 	settle(w, Vector3(24.0, 56.0, 24.0))
-	w.debug_apply_sphere_subtract(Vector3(24.4, 51.4, 24.4), 1.5)
-	var d: Dictionary = w.debug_self_check()
+	w.hooks().debug_apply_sphere_subtract(Vector3(24.4, 51.4, 24.4), 1.5)
+	var d: Dictionary = w.hooks().debug_self_check()
 	assert_bool(d["ok"]).is_true()
 	for key in ["field_mismatches", "brick_mismatches", "mesh_mismatches",
 			"lod_mismatches", "occupancy_mismatches"]:

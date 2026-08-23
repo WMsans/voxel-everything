@@ -65,7 +65,7 @@ func _sync() -> void:
 	if not _world:
 		return
 	_syncing = true
-	var settings: Dictionary = _world.debug_beauty_settings()
+	var settings: Dictionary = _world.hooks().debug_beauty_settings()
 	_quality.select(int(settings["tier"]))
 	for entry in EFFECTS:
 		(_checks[entry[1]] as CheckBox).set_pressed_no_signal(bool(settings[entry[1]]))

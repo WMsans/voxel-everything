@@ -37,13 +37,13 @@ func make_world() -> VoxelWorld:
 	w.world_size_regions = Vector3i(8, 5, 8)
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_physics()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
 func test_lattice_matches_the_cpu_field() -> void:
 	var w := make_world()
 	# Chunk (4, 8, 4) spans world y [51.2, 57.6) — the surface (51.2 + hills) crosses it.
-	var d: Dictionary = w.debug_mesh_lattice_diff(SURFACE_CHUNK)
+	var d: Dictionary = w.hooks().debug_mesh_lattice_diff(SURFACE_CHUNK)
 	assert_int(d["samples"]).is_equal(LATTICE * LATTICE * LATTICE)
 	assert_int(d["max_diff"]).override_failure_message(
 		"lattice differs by %d encoded steps" % d["max_diff"]).is_less_equal(1)
@@ -60,7 +60,7 @@ func test_lattice_includes_the_overlap_plane_and_the_edits() -> void:
 	var origin := Vector3(SURFACE_CHUNK) * CHUNK_M
 	var r: Dictionary = tool.apply_sphere_subtract(origin + Vector3(0.05, 0.05, 0.05), 3.0)
 	assert_array(r["rejected"]).is_empty()
-	var d: Dictionary = w.debug_mesh_lattice_diff(SURFACE_CHUNK)
+	var d: Dictionary = w.hooks().debug_mesh_lattice_diff(SURFACE_CHUNK)
 	assert_int(d["max_diff"]).is_less_equal(1)
 	assert_int(d["diff_over_one"]).is_equal(0)
 	assert_int(d["op_count"]).is_greater(0)
@@ -68,6 +68,6 @@ func test_lattice_includes_the_overlap_plane_and_the_edits() -> void:
 func test_a_chunk_far_outside_the_residency_ball_still_meshes() -> void:
 	var w := make_world()
 	# Nothing is streamed, no atlas is initialised: the mesher is independent of both.
-	var d: Dictionary = w.debug_mesh_lattice_diff(Vector3i(14, 8, 14))
+	var d: Dictionary = w.hooks().debug_mesh_lattice_diff(Vector3i(14, 8, 14))
 	assert_int(d["samples"]).is_equal(LATTICE * LATTICE * LATTICE)
 	assert_int(d["max_diff"]).is_less_equal(1)

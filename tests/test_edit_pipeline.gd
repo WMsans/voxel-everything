@@ -25,7 +25,7 @@ func make_world() -> VoxelWorld:
 func settle(w: VoxelWorld, cam: Vector3, frames := 120) -> void:
 	var quiet := 0
 	for i in range(frames):
-		quiet = quiet + 1 if w.debug_stream_frame(cam) == 0 else 0
+		quiet = quiet + 1 if w.hooks().debug_stream_frame(cam) == 0 else 0
 		if quiet >= 6:
 			return
 
@@ -47,23 +47,23 @@ func make_op(type: int, material: int, pos: Vector3, radius: float) -> PackedByt
 func test_sphere_subtract_carves_a_visible_hole() -> void:
 	var w := make_world()
 	var tool := make_tool(w)
-	var hit: Dictionary = w.debug_raycast(Vector3(40, 80, 40), Vector3(0, -1, 0))
+	var hit: Dictionary = w.hooks().debug_raycast(Vector3(40, 80, 40), Vector3(0, -1, 0))
 	assert_bool(hit["hit"]).is_true()
 	var hp: Vector3 = hit["pos"]
 
-	var before: Color = w.debug_raymarch_pixel(Vector3(hp.x, hp.y + 2.0, hp.z), Vector3(0, -1, 0))
+	var before: Color = w.hooks().debug_raymarch_pixel(Vector3(hp.x, hp.y + 2.0, hp.z), Vector3(0, -1, 0))
 	assert_bool(before.r < 0.52 and before.g > 0.05).is_true() # solid terrain
 
 	var r: Dictionary = tool.apply_sphere_subtract(Vector3(hp.x, hp.y + 0.5, hp.z), 2.5)
 	assert_array(r["rejected"]).is_empty()
 	for i in range(10):
-		w.debug_stream_frame(CAM)
+		w.hooks().debug_stream_frame(CAM)
 
 	# The old surface point is now air: the ray lands in the crater, over a metre deeper,
 	# and what it hits is still real terrain (not sky, not magenta).
-	var after: Dictionary = w.debug_raycast(Vector3(hp.x, hp.y + 2.0, hp.z), Vector3(0, -1, 0))
+	var after: Dictionary = w.hooks().debug_raycast(Vector3(hp.x, hp.y + 2.0, hp.z), Vector3(0, -1, 0))
 	assert_float(after["pos"].y).is_less(hp.y - 1.0)
-	var c: Color = w.debug_raymarch_pixel(Vector3(hp.x, hp.y + 2.0, hp.z), Vector3(0, -1, 0))
+	var c: Color = w.hooks().debug_raymarch_pixel(Vector3(hp.x, hp.y + 2.0, hp.z), Vector3(0, -1, 0))
 	assert_bool(c.r < 0.52 and c.g > 0.05).is_true()
 
 func test_sphere_add_places_material_4_in_open_sky() -> void:
@@ -73,7 +73,7 @@ func test_sphere_add_places_material_4_in_open_sky() -> void:
 	# above the blob: its top is sunlit (a ray from below would see the ambient-lit
 	# underside at 0.25x albedo — too dim for a useful colour assertion).
 	var eye := Vector3(40, 75.0, 40)
-	var before: Dictionary = w.debug_raymarch_probe(eye, Vector3(0, -1, 0))
+	var before: Dictionary = w.hooks().debug_raymarch_probe(eye, Vector3(0, -1, 0))
 	assert_bool(before["hit"]).is_true() # distant terrain below
 	var before_color: Color = before["color"]
 	assert_bool(before_color.r < 0.52 and before_color.g > 0.05).is_true()
@@ -81,12 +81,12 @@ func test_sphere_add_places_material_4_in_open_sky() -> void:
 	var r: Dictionary = tool.apply_sphere_add(Vector3(40, 68.2, 40), 1.5, 4)
 	assert_array(r["rejected"]).is_empty()
 	for i in range(10):
-		w.debug_stream_frame(CAM)
+		w.hooks().debug_stream_frame(CAM)
 
 	# Material 4 is now the textured breakstone, not the old flat fill (0.62, 0.60, 0.66).
 	# Re-baselined for M5: assert the add is visible (the ray stops on the blob high above
 	# the terrain), is not error magenta, and changes the shaded pixel from the terrain below.
-	var after: Dictionary = w.debug_raymarch_probe(eye, Vector3(0, -1, 0))
+	var after: Dictionary = w.hooks().debug_raymarch_probe(eye, Vector3(0, -1, 0))
 	assert_bool(after["hit"]).override_failure_message(
 		"the ray no longer hit after adding material 4").is_true()
 	assert_float(after["pos"].y).override_failure_message(
@@ -106,7 +106,7 @@ func test_paint_recolours_grass_to_rock_without_moving_the_surface() -> void:
 	var found := false
 	for x in range(30, 50):
 		for z in range(30, 50):
-			var h: Dictionary = w.debug_raycast(Vector3(x, 80, z), Vector3(0, -1, 0))
+			var h: Dictionary = w.hooks().debug_raycast(Vector3(x, 80, z), Vector3(0, -1, 0))
 			if h["hit"] and h["pos"].y - 51.2 > 1.0 and h["pos"].y - 51.2 < 4.0:
 				hp = h["pos"]
 				found = true
@@ -118,7 +118,7 @@ func test_paint_recolours_grass_to_rock_without_moving_the_surface() -> void:
 	# Re-baselined for M5: textured grass/rock no longer have stable flat-albedo colour
 	# dominance, so assert the paint changes the shaded pixel and keeps the surface in place.
 	var eye := Vector3(hp.x, hp.y + 1.0, hp.z)
-	var before: Dictionary = w.debug_raymarch_probe(eye, Vector3(0, -1, 0))
+	var before: Dictionary = w.hooks().debug_raymarch_probe(eye, Vector3(0, -1, 0))
 	assert_bool(before["hit"]).override_failure_message(
 		"the pre-paint ray missed the grass").is_true()
 	var before_color: Color = before["color"]
@@ -127,9 +127,9 @@ func test_paint_recolours_grass_to_rock_without_moving_the_surface() -> void:
 	var r: Dictionary = tool.apply_sphere_paint(hp, 1.5, 2) # rock
 	assert_array(r["rejected"]).is_empty()
 	for i in range(10):
-		w.debug_stream_frame(CAM)
+		w.hooks().debug_stream_frame(CAM)
 
-	var after: Dictionary = w.debug_raymarch_probe(eye, Vector3(0, -1, 0))
+	var after: Dictionary = w.hooks().debug_raymarch_probe(eye, Vector3(0, -1, 0))
 	assert_bool(after["hit"]).override_failure_message(
 		"the post-paint ray missed the surface").is_true()
 	var after_color: Color = after["color"]
@@ -139,7 +139,7 @@ func test_paint_recolours_grass_to_rock_without_moving_the_surface() -> void:
 	assert_float(diff).override_failure_message(
 		"painting material 2 did not visibly change the pixel colour").is_greater(0.02)
 	# The surface must not have moved: same ray, same hit depth to a centimetre.
-	var depth: Dictionary = w.debug_raycast(Vector3(hp.x, hp.y + 1.0, hp.z), Vector3(0, -1, 0))
+	var depth: Dictionary = w.hooks().debug_raycast(Vector3(hp.x, hp.y + 1.0, hp.z), Vector3(0, -1, 0))
 	assert_float(depth["pos"].y).is_equal_approx(hp.y, 0.01)
 
 func test_an_edit_leaves_no_brick_the_cpu_calls_active_without_a_slot() -> void:
@@ -151,13 +151,13 @@ func test_an_edit_leaves_no_brick_the_cpu_calls_active_without_a_slot() -> void:
 	# require the GPU's tables to agree with the CPU probe brick for brick.
 	var w := make_world()
 	var tool := make_tool(w)
-	var hit: Dictionary = w.debug_raycast(Vector3(40, 80, 40), Vector3(0, -1, 0))
+	var hit: Dictionary = w.hooks().debug_raycast(Vector3(40, 80, 40), Vector3(0, -1, 0))
 	assert_bool(hit["hit"]).is_true()
 	var hp: Vector3 = hit["pos"]
 	var r: Dictionary = tool.apply_sphere_subtract(hp, 2.5)
 	assert_array(r["rejected"]).is_empty()
 	for i in range(10):
-		w.debug_stream_frame(CAM)
+		w.hooks().debug_stream_frame(CAM)
 
 	var ops := make_op(0, 0, hp, 2.5)
 	var touched := {}
@@ -172,15 +172,15 @@ func test_an_edit_leaves_no_brick_the_cpu_calls_active_without_a_slot() -> void:
 			for bz in range(centre.z - 12, centre.z + 13):
 				var brick := Vector3i(bx, by, bz)
 				var region := Vector3i(floori(bx / 32.0), floori(by / 32.0), floori(bz / 32.0))
-				var rslot: int = w.debug_region_map_entry(region)
+				var rslot: int = w.hooks().debug_region_map_entry(region)
 				if rslot < 0:
 					continue # not resident: its bricks arrive on stream-in
 				# A brick is evaluated against ITS OWN region's op list, on both sides.
 				var n := 1 if touched.has(region) else 0
-				if not w.debug_brick_has_surface(brick, ops, n):
+				if not w.hooks().debug_brick_has_surface(brick, ops, n):
 					continue
 				active += 1
-				if w.debug_region_table_slot(rslot, brick) < 0:
+				if w.hooks().debug_region_table_slot(rslot, brick) < 0:
 					missing += 1
 	assert_int(active).override_failure_message(
 		"the scan found no active bricks; check the aim").is_greater(0)
@@ -194,14 +194,14 @@ func test_an_op_on_a_region_border_updates_both_sides() -> void:
 	# x = 25.6 m is the boundary between regions 0 and 1 on x. Settle next to the border:
 	# the default CAM is >20 m from region 0's side of it, so it would not be resident.
 	settle(w, Vector3(20, 53, 13))
-	var hit: Dictionary = w.debug_raycast(Vector3(25.6, 80, 12.8), Vector3(0, -1, 0))
+	var hit: Dictionary = w.hooks().debug_raycast(Vector3(25.6, 80, 12.8), Vector3(0, -1, 0))
 	assert_bool(hit["hit"]).is_true()
 	var hp: Vector3 = hit["pos"]
 	var r: Dictionary = tool.apply_sphere_subtract(hp, 3.0)
 	assert_array(r["rejected"]).is_empty()
 	assert_int(r["touched"].size()).is_greater_equal(2) # both regions got the op
 	for i in range(10):
-		w.debug_stream_frame(Vector3(20, 53, 13))
+		w.hooks().debug_stream_frame(Vector3(20, 53, 13))
 
 	# Rebuild the op bytes the tool emitted and diff GPU bricks against the CPU reference
 	# on BOTH sides of the border: each region's own op list drove its regeneration.
@@ -211,10 +211,10 @@ func test_an_op_on_a_region_border_updates_both_sides() -> void:
 		for by in range(56, 72):
 			var brick := Vector3i(bx, by, 16)
 			var region := Vector3i(floori(bx / 32.0), floori(by / 32.0), 0)
-			var rslot := w.debug_region_map_entry(region)
+			var rslot := w.hooks().debug_region_map_entry(region)
 			if rslot < 0:
 				continue
-			var d: Dictionary = w.debug_brick_diff(brick, rslot, ops, 1)
+			var d: Dictionary = w.hooks().debug_brick_diff(brick, rslot, ops, 1)
 			if int(d["slot"]) < 0:
 				continue
 			checked += 1
@@ -231,7 +231,7 @@ func test_a_full_region_rejects_the_257th_op_without_crashing() -> void:
 	var r: Dictionary = tool.apply_sphere_subtract(Vector3(5.0, 0.0, 5.0), 0.1)
 	assert_array(r["rejected"]).is_not_empty()
 	# Fail-soft: the world keeps streaming happily afterwards.
-	assert_int(w.debug_stream_frame(CAM)).is_greater_equal(0)
+	assert_int(w.hooks().debug_stream_frame(CAM)).is_greater_equal(0)
 
 func test_hostile_edit_inputs_are_rejected_before_touching_the_log() -> void:
 	# Final-review Finding 2a: NaN/Inf positions or radius, a non-positive radius, or an
@@ -257,7 +257,7 @@ func test_hostile_edit_inputs_are_rejected_before_touching_the_log() -> void:
 	var add: Dictionary = tool.apply_sphere_add(Vector3(40, 68.2, 40), 1.5, 70000)
 	assert_array(add["rejected"]).is_empty()
 	# The world still streams normally after the rejected inputs.
-	assert_int(w.debug_stream_frame(CAM)).is_greater_equal(0)
+	assert_int(w.hooks().debug_stream_frame(CAM)).is_greater_equal(0)
 
 func test_an_edit_still_allocates_when_the_resident_set_fills_the_atlas() -> void:
 	# Errata 11's eviction arm (spec §8 "evicts or drops") guarded the case where an SDF
@@ -286,7 +286,7 @@ func test_an_edit_still_allocates_when_the_resident_set_fills_the_atlas() -> voi
 
 	# Precondition: the resident set really does fill this atlas — most of it is spoken for,
 	# and what is left is the reserve the streamer keeps for edits.
-	var stats: Dictionary = w.debug_atlas_stats()
+	var stats: Dictionary = w.hooks().debug_atlas_stats()
 	var used: int = int(stats["slot_count"]) - int(stats["free_slots"])
 	assert_int(used).override_failure_message(
 		"precondition unmet: the resident set does not fill the atlas (used %d of %d)"
@@ -296,10 +296,10 @@ func test_an_edit_still_allocates_when_the_resident_set_fills_the_atlas() -> voi
 		).is_greater(0)
 
 	var tool := make_tool(w)
-	var hit: Dictionary = w.debug_raycast(Vector3(40, 80, 40), Vector3(0, -1, 0))
+	var hit: Dictionary = w.hooks().debug_raycast(Vector3(40, 80, 40), Vector3(0, -1, 0))
 	assert_bool(hit["hit"]).is_true()
 	var hp: Vector3 = hit["pos"]
-	var before: Color = w.debug_raymarch_pixel(Vector3(hp.x, hp.y + 2.0, hp.z), Vector3(0, -1, 0))
+	var before: Color = w.hooks().debug_raymarch_pixel(Vector3(hp.x, hp.y + 2.0, hp.z), Vector3(0, -1, 0))
 	assert_bool(before.r < 0.52 and before.g > 0.05).is_true() # solid terrain
 
 	var r: Dictionary = tool.apply_sphere_subtract(Vector3(hp.x, hp.y + 0.5, hp.z), 2.5)
@@ -307,9 +307,9 @@ func test_an_edit_still_allocates_when_the_resident_set_fills_the_atlas() -> voi
 
 	# The crater is real (deeper hit, still terrain below) and no brick was ever dropped.
 	for i in range(10):
-		w.debug_stream_frame(CAM)
-	var after: Dictionary = w.debug_raycast(Vector3(hp.x, hp.y + 2.0, hp.z), Vector3(0, -1, 0))
+		w.hooks().debug_stream_frame(CAM)
+	var after: Dictionary = w.hooks().debug_raycast(Vector3(hp.x, hp.y + 2.0, hp.z), Vector3(0, -1, 0))
 	assert_float(after["pos"].y).is_less(hp.y - 1.0)
-	var c: Color = w.debug_raymarch_pixel(Vector3(hp.x, hp.y + 2.0, hp.z), Vector3(0, -1, 0))
+	var c: Color = w.hooks().debug_raymarch_pixel(Vector3(hp.x, hp.y + 2.0, hp.z), Vector3(0, -1, 0))
 	assert_bool(c.r < 0.52 and c.g > 0.05).is_true()
-	assert_int(w.debug_stream_stats()["overflow_ever"]).is_equal(0)
+	assert_int(w.hooks().debug_stream_stats()["overflow_ever"]).is_equal(0)

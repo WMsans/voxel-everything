@@ -43,8 +43,8 @@ func make_world() -> VoxelWorld:
 	w.shape_builds_per_frame = 4
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_atlas()).is_true()
-	assert_bool(w.debug_init_physics()).is_true()
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
 func tool_of(w: VoxelWorld) -> VoxelEditTool:
@@ -73,9 +73,9 @@ func dummy_volume_bytes(dim: int) -> PackedByteArray:
 # and the island manager, in the order VoxelWorld::_process runs them.
 func step(w: VoxelWorld, frames: int, center: Vector3 = CENTER) -> void:
 	for i in range(frames):
-		w.debug_stream_frame(center)
-		w.debug_physics_frame(center)
-		w.debug_island_frame(1.0 / 60.0, center)
+		w.hooks().debug_stream_frame(center)
+		w.hooks().debug_physics_frame(center)
+		w.hooks().debug_island_frame(1.0 / 60.0, center)
 
 # Steps until no extraction is in flight. An extraction that has not landed yet has not been
 # refused yet either, so the window it came from is momentarily neither pending nor finished,
@@ -83,17 +83,17 @@ func step(w: VoxelWorld, frames: int, center: Vector3 = CENTER) -> void:
 # idle machine the extractions land well inside the fixed step() the atlas-full tests used to
 # rely on; under a full-suite run they do not, which is exactly when those tests flaked.
 func step_until_at_rest(w: VoxelWorld, frames := 600) -> Dictionary:
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	for i in range(frames):
 		if st["in_flight"] == 0:
 			return st
 		step(w, 1)
-		st = w.debug_island_stats()
+		st = w.hooks().debug_island_stats()
 	return st
 
 func solid_at(w: VoxelWorld, p: Vector3) -> bool:
 	# A downward ray from just above the point: it hits at p if there is matter there.
-	var hit: Dictionary = w.debug_raycast(p + Vector3(0, 0.6, 0), Vector3(0, -1, 0))
+	var hit: Dictionary = w.hooks().debug_raycast(p + Vector3(0, 0.6, 0), Vector3(0, -1, 0))
 	# 0.7 m: the helper is also used for points inside a sphere, where the downward ray can
 	# start already inside solid and return the origin (p.y + 0.6) as the hit.
 	return hit["hit"] and absf((hit["pos"] as Vector3).y - p.y) < 0.7
@@ -116,7 +116,7 @@ func test_the_grid_and_the_flood_find_a_severed_pillar_top(timeout := 120000) ->
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 240)
 
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["islands_spawned"]).override_failure_message(
 		"nothing came loose: %s" % st).is_greater(0)
 	# Production atlas-backed islands remain raymarched; creating a second mesh would
@@ -135,13 +135,13 @@ func test_the_island_body_falls_and_the_bodies_are_capped(timeout := 120000) -> 
 	build_pillar(w, t)
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 120)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["live_bodies"]).is_greater(0)
 	var y0: float = st["lowest_body_y"]
 	for i in range(60):
 		await get_tree().physics_frame
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-	assert_float(w.debug_island_stats()["lowest_body_y"]).override_failure_message(
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+	assert_float(w.hooks().debug_island_stats()["lowest_body_y"]).override_failure_message(
 		"the island did not fall").is_less(y0 - 0.2)
 	# Spec section 5's guardrails hold whatever happens.
 	assert_int(st["live_bodies"]).is_less_equal(64)
@@ -158,12 +158,12 @@ func test_the_carve_leaves_no_zero_planes_in_the_static_field(timeout := 180000)
 	# must therefore eat a small clearance past its cells: the field AT a carve face, and a
 	# centimetre beyond it, has to be air.
 	var w := make_world()
-	w.debug_set_merge_sleep_seconds(999.0)
+	w.hooks().debug_set_merge_sleep_seconds(999.0)
 	var t := tool_of(w)
 	build_pillar(w, t)
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 240)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["islands_spawned"]).override_failure_message("no island: %s" % st).is_greater(0)
 	var carved: PackedInt32Array = st["carved_boxes"]
 	assert_int(carved.size() / 6).is_greater(0)
@@ -191,9 +191,9 @@ func test_the_carve_leaves_no_zero_planes_in_the_static_field(timeout := 180000)
 					else:
 						p = Vector3(lerpf(lo.x, hi.x, fu), lerpf(lo.y, hi.y, fv), lo.z if d == 4 else hi.z)
 					checked += 1
-					if w.debug_field_sdf(p + n * 0.01) < 0.0:
+					if w.hooks().debug_field_sdf(p + n * 0.01) < 0.0:
 						bad += 1
-					if w.debug_field_sdf(p - n * 0.01) < 0.0:
+					if w.hooks().debug_field_sdf(p - n * 0.01) < 0.0:
 						bad += 1
 	prints("carve-face clearance probe: %d/%d samples solid" % [bad, checked * 2])
 	assert_int(bad).override_failure_message(
@@ -204,44 +204,44 @@ func test_a_dense_sphere_cut_pillar_top_falls_clear_of_the_cut(timeout := 180000
 	# top must fall clear of the cut instead of clamping onto the carve-boundary slivers a
 	# few centimetres below its birth pose.
 	var w := make_world()
-	w.debug_set_merge_sleep_seconds(999.0)
+	w.hooks().debug_set_merge_sleep_seconds(999.0)
 	var t := tool_of(w)
 	for i in range(8):
 		t.apply_sphere_add(Vector3(PILLAR_X, PILLAR_BASE + 1.4 * i, PILLAR_Z), 2.1, 4)
 	step(w, 120)
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 4.9, PILLAR_Z), 3.0)
 	step(w, 120)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["live_islands"]).override_failure_message(
 		"the severed dense pillar top never became a body: %s" % st).is_equal(1)
 	var y0: float = st["lowest_body_y"]
 	for i in range(240):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_physics_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-	assert_float(w.debug_island_stats()["lowest_body_y"]).override_failure_message(
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_physics_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+	assert_float(w.hooks().debug_island_stats()["lowest_body_y"]).override_failure_message(
 		"the severed pillar top is stuck on the carve-boundary slivers").is_less(y0 - 1.0)
 
 func test_a_rested_island_merges_back_into_the_terrain(timeout := 180000) -> void:
 	var w := make_world()
 	# Hold the body out of start_merges() until we have observed it sleeping for several
 	# consecutive frames; only then lower the sleep threshold and let it merge.
-	w.debug_set_merge_sleep_seconds(999.0)
+	w.hooks().debug_set_merge_sleep_seconds(999.0)
 	var t := tool_of(w)
 	build_pillar(w, t)
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 120)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["islands_spawned"]).override_failure_message(
 		"the severed top never became a body: %s" % st).is_greater(0)
 
 	# Wait for the body to fall and be reported asleep by the physics server.
 	for i in range(600):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		if int(st["sleeping_bodies"]) > 0:
 			break
 	assert_int(st["sleeping_bodies"]).override_failure_message(
@@ -251,21 +251,21 @@ func test_a_rested_island_merges_back_into_the_terrain(timeout := 180000) -> voi
 	var consecutive := 0
 	for i in range(30):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		consecutive = consecutive + 1 if int(st["sleeping_bodies"]) > 0 else 0
 		if consecutive >= 5:
 			break
 	assert_int(consecutive).override_failure_message(
 		"the body did not stay asleep for five consecutive frames: %s" % st).is_greater_equal(5)
 
-	w.debug_set_merge_sleep_seconds(0.2)
+	w.hooks().debug_set_merge_sleep_seconds(0.2)
 	for i in range(600):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		if st["islands_merged"] > 0:
 			break
 	assert_int(st["islands_merged"]).override_failure_message(
@@ -277,7 +277,7 @@ func test_a_rested_island_merges_back_into_the_terrain(timeout := 180000) -> voi
 	# the body tumbles before settling.
 	var merge_x: float = st.get("last_merge_x", PILLAR_X)
 	var merge_z: float = st.get("last_merge_z", PILLAR_Z)
-	var down: Dictionary = w.debug_raycast(Vector3(merge_x, 90.0, merge_z), Vector3(0, -1, 0))
+	var down: Dictionary = w.hooks().debug_raycast(Vector3(merge_x, 90.0, merge_z), Vector3(0, -1, 0))
 	assert_bool(down["hit"]).is_true()
 	assert_float((down["pos"] as Vector3).y).override_failure_message(
 		"the merged rubble is not standing on the ground at %s: %s" % [Vector3(merge_x, 0, merge_z), st]
@@ -290,7 +290,7 @@ func test_an_anchored_overhang_is_left_alone(timeout := 120000) -> void:
 	# Undercut the pillar without severing it: a 0.5 m bite out of one side.
 	t.apply_sphere_subtract(Vector3(PILLAR_X + 1.0, PILLAR_BASE + 2.0, PILLAR_Z), 0.7)
 	step(w, 180)
-	assert_int(w.debug_island_stats()["islands_spawned"]).override_failure_message(
+	assert_int(w.hooks().debug_island_stats()["islands_spawned"]).override_failure_message(
 		"a still-attached pillar was declared an island").is_equal(0)
 	assert_bool(solid_at(w, Vector3(PILLAR_X, PILLAR_BASE + 4.0, PILLAR_Z))).is_true()
 
@@ -303,14 +303,14 @@ func test_connectivity_runs_once_per_frame_however_many_edits_land(timeout := 12
 	t.apply_sphere_subtract(Vector3(PILLAR_X + 0.4, PILLAR_BASE + 2.2, PILLAR_Z), 1.2)
 	t.apply_sphere_subtract(Vector3(PILLAR_X - 0.4, PILLAR_BASE + 2.2, PILLAR_Z), 1.2)
 	step(w, 240)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["connectivity_runs"]).is_greater(0)
 	# One window covered all three, so the pillar top came off exactly once.
 	assert_int(st["islands_spawned"]).is_between(1, 3)
 
 func test_more_than_two_loose_components_eventually_all_spawn(timeout := 180000) -> void:
 	var w := make_world()
-	w.debug_set_merge_sleep_seconds(999.0) # keep the spawned bodies from merging mid-test
+	w.hooks().debug_set_merge_sleep_seconds(999.0) # keep the spawned bodies from merging mid-test
 	var t := tool_of(w)
 	var xs := [PILLAR_X - 4.0, PILLAR_X, PILLAR_X + 4.0]
 	for x in xs:
@@ -319,7 +319,7 @@ func test_more_than_two_loose_components_eventually_all_spawn(timeout := 180000)
 	for x in xs:
 		t.apply_sphere_subtract(Vector3(x, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 360)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["live_bodies"]).override_failure_message(
 		"a multi-component blast did not eventually spawn every piece: %s" % st
 		).is_greater_equal(3)
@@ -328,12 +328,12 @@ func test_more_than_two_loose_components_eventually_all_spawn(timeout := 180000)
 
 func test_body_pool_holes_after_merges_do_not_count_against_the_cap(timeout := 180000) -> void:
 	var w := make_world()
-	w.debug_set_merge_sleep_seconds(999.0) # keep the spawn phase from merging mid-test
+	w.hooks().debug_set_merge_sleep_seconds(999.0) # keep the spawn phase from merging mid-test
 	# Shrink the guardrail so four loose tops are enough to prove the slot-pool bug: with the
 	# old bodies_.size() check, merged-away bodies leave holes and the pool still reads "full"
 	# for ever. M7's lattice occupancy no longer manufactures the 1-cell cut crumbs main used
 	# to count as a fourth component, so use four real pillars instead.
-	w.debug_set_max_dynamic_bodies(3)
+	w.hooks().debug_set_max_dynamic_bodies(3)
 	var t := tool_of(w)
 	var xs := [PILLAR_X - 4.0, PILLAR_X, PILLAR_X + 4.0, PILLAR_X + 8.0]
 	for x in xs:
@@ -341,7 +341,7 @@ func test_body_pool_holes_after_merges_do_not_count_against_the_cap(timeout := 1
 	for x in xs:
 		t.apply_sphere_subtract(Vector3(x, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 240)
-	assert_int(w.debug_island_stats()["live_bodies"]).is_greater_equal(3)
+	assert_int(w.hooks().debug_island_stats()["live_bodies"]).is_greater_equal(3)
 
 	# Take the baseline HERE, while the pool is full and visibly turning work away. The
 	# carves left remainder windows queued behind the cap, so there is already demand waiting
@@ -350,22 +350,22 @@ func test_body_pool_holes_after_merges_do_not_count_against_the_cap(timeout := 1
 	# frames, so a pillar built afterwards would find the pool full again through no fault of
 	# the slot pool. (That is exactly what this test used to do, and it measured the refusal
 	# of its own late pillar rather than the hole it meant to test.)
-	var before: Dictionary = w.debug_island_stats()
+	var before: Dictionary = w.hooks().debug_island_stats()
 	var before_spawned: int = before["islands_spawned"] + before["debris_spawned"]
 	assert_int(before["refused_body_cap"]).override_failure_message(
 		"nothing was being refused, so a freed slot proves nothing: %s" % before).is_greater(0)
-	w.debug_set_merge_sleep_seconds(0.2)
+	w.hooks().debug_set_merge_sleep_seconds(0.2)
 
 	# Let at least one body sleep and merge back, leaving a hole in the slot pool. We do not
 	# require all three to merge: a single hole is enough to show the old bodies_.size() check
 	# would still read "full" (size 3) while the live count is below the cap.
 	for i in range(1200):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		if w.debug_island_stats()["live_bodies"] < 3:
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		if w.hooks().debug_island_stats()["live_bodies"] < 3:
 			break
-	var merged_stats: Dictionary = w.debug_island_stats()
+	var merged_stats: Dictionary = w.hooks().debug_island_stats()
 	assert_int(merged_stats["islands_merged"]).override_failure_message(
 		"no body merged back to free a slot: %s" % merged_stats).is_greater_equal(1)
 	assert_int(merged_stats["live_bodies"]).override_failure_message(
@@ -380,12 +380,12 @@ func test_body_pool_holes_after_merges_do_not_count_against_the_cap(timeout := 1
 	# resample in flight lands. Source-field normals made that resample ~5x more expensive
 	# (10 ms -> 50 ms for a 64^3 lattice, measured), which pushed the reuse past a 240-step
 	# budget without changing whether the hole is ever reused.
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	for i in range(2000):
 		if st["islands_spawned"] + st["debris_spawned"] > before_spawned:
 			break
 		step(w, 1)
-		st = w.debug_island_stats()
+		st = w.hooks().debug_island_stats()
 	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
 		"a merged-away body left a hole the pool never reused: %s" % st).is_greater(
 		before_spawned)
@@ -393,8 +393,8 @@ func test_body_pool_holes_after_merges_do_not_count_against_the_cap(timeout := 1
 
 func test_full_body_cap_keeps_window_queued_until_capacity_frees(timeout := 180000) -> void:
 	var w := make_world()
-	w.debug_set_merge_sleep_seconds(0.2)
-	w.debug_set_max_dynamic_bodies(1)
+	w.hooks().debug_set_merge_sleep_seconds(0.2)
+	w.hooks().debug_set_max_dynamic_bodies(1)
 	var t := tool_of(w)
 	var xs := [PILLAR_X - 4.0, PILLAR_X]
 	for x in xs:
@@ -402,7 +402,7 @@ func test_full_body_cap_keeps_window_queued_until_capacity_frees(timeout := 1800
 	for x in xs:
 		t.apply_sphere_subtract(Vector3(x, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 120)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["live_bodies"]).override_failure_message(
 		"the cap was not hit by the first component: %s" % st).is_equal(1)
 	assert_int(st["pending_windows"]).override_failure_message(
@@ -412,9 +412,9 @@ func test_full_body_cap_keeps_window_queued_until_capacity_frees(timeout := 1800
 	# spawn the second component; dropping it would leave the second piece attached forever.
 	for i in range(1800):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		if st["islands_spawned"] + st["debris_spawned"] >= 2:
 			break
 	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
@@ -422,23 +422,23 @@ func test_full_body_cap_keeps_window_queued_until_capacity_frees(timeout := 1800
 
 func test_rejected_remerge_paste_keeps_the_body_alive(timeout := 180000) -> void:
 	var w := make_world()
-	w.debug_set_merge_sleep_seconds(999.0) # keep the body from merging before the region is full
+	w.hooks().debug_set_merge_sleep_seconds(999.0) # keep the body from merging before the region is full
 	var t := tool_of(w)
 	build_pillar(w, t)
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 180)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["live_bodies"]).override_failure_message(
 		"the severed top never became a body: %s" % st).is_greater(0)
 	# Fill the region where the body will rest, then allow re-merge. The paste volume-add is
 	# rejected; the body must stay a body and the merge counter must not advance.
 	fill_region_ops(w, t, Vector3(PILLAR_X, PILLAR_BASE, PILLAR_Z))
-	w.debug_set_merge_sleep_seconds(0.2)
+	w.hooks().debug_set_merge_sleep_seconds(0.2)
 	for i in range(600):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		if st["islands_merged"] > 0:
 			break
 	assert_int(st["islands_merged"]).override_failure_message(
@@ -456,12 +456,12 @@ func test_rejected_carve_keeps_component_attached(timeout := 120000) -> void:
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	# Run one island frame so connectivity labels the top and submits the extraction, but do
 	# NOT let the extraction result land yet; then fill the region so the carve is rejected.
-	w.debug_stream_frame(CENTER)
-	w.debug_physics_frame(CENTER)
-	w.debug_island_frame(1.0 / 60.0, CENTER)
+	w.hooks().debug_stream_frame(CENTER)
+	w.hooks().debug_physics_frame(CENTER)
+	w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
 	fill_region_ops(w, t, top)
 	step(w, 240)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["islands_spawned"]).override_failure_message(
 		"a rejected carve still spawned a body: %s" % st).is_equal(0)
 	assert_int(st["live_bodies"]).override_failure_message(
@@ -472,23 +472,23 @@ func test_rejected_carve_keeps_component_attached(timeout := 120000) -> void:
 func test_atlas_slot_full_refusal_retries_after_a_slot_frees(timeout := 180000) -> void:
 	var w := make_world()
 	for i in range(32):
-		w.debug_set_atlas_slot_used(i, true)
+		w.hooks().debug_set_atlas_slot_used(i, true)
 	var t := tool_of(w)
 	build_pillar(w, t)
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 240)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["islands_spawned"]).override_failure_message(
 		"an island spawned despite every atlas slot being full: %s" % st).is_equal(0)
 	assert_int(st["pending_windows"]).override_failure_message(
 		"the atlas-full refusal dropped the originating window: %s" % st).is_greater(0)
 	# Free one slot; the re-queued window must retry and eventually spawn the island.
-	w.debug_set_atlas_slot_used(0, false)
+	w.hooks().debug_set_atlas_slot_used(0, false)
 	for i in range(600):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		# The carve itself enqueues a follow-up connectivity window; wait for that too so the
 		# re-queued atlas window has provably been consumed. Also wait for in_flight == 0: a
 		# landing extraction can enqueue another window after pending_windows briefly reads 0.
@@ -504,7 +504,7 @@ func test_atlas_slot_full_refusal_retries_after_a_slot_frees(timeout := 180000) 
 func test_atlas_full_remainder_window_gets_retry_backoff(timeout := 180000) -> void:
 	var w := make_world()
 	for i in range(32):
-		w.debug_set_atlas_slot_used(i, true)
+		w.hooks().debug_set_atlas_slot_used(i, true)
 	var t := tool_of(w)
 	# 3 m spacing keeps the pillars separate while their cut windows still overlap, so one
 	# connectivity window labels all three and the first pass re-queues a remainder.
@@ -533,7 +533,7 @@ func test_atlas_full_remainder_window_gets_retry_backoff(timeout := 180000) -> v
 func test_overlapping_edit_keeps_remainder_identity_for_retry_backoff(timeout := 180000) -> void:
 	var w := make_world()
 	for i in range(32):
-		w.debug_set_atlas_slot_used(i, true)
+		w.hooks().debug_set_atlas_slot_used(i, true)
 	var t := tool_of(w)
 	# 3 m spacing keeps the pillars separate while their cut windows still overlap, so one
 	# connectivity window labels all of them and the first pass re-queues a remainder.
@@ -547,10 +547,10 @@ func test_overlapping_edit_keeps_remainder_identity_for_retry_backoff(timeout :=
 	# land on a later frame.
 	var st: Dictionary = {}
 	for i in range(120):
-		w.debug_stream_frame(CENTER)
-		w.debug_physics_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_physics_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		if st["in_flight"] > 0:
 			break
 	assert_int(st["in_flight"]).override_failure_message(
@@ -576,30 +576,30 @@ func test_overlapping_edit_keeps_remainder_identity_for_retry_backoff(timeout :=
 
 func test_sleeping_body_can_remerge_when_volume_pool_is_full(timeout := 180000) -> void:
 	var w := make_world()
-	w.debug_set_merge_sleep_seconds(999.0) # keep the body from merging before the pool is full
+	w.hooks().debug_set_merge_sleep_seconds(999.0) # keep the body from merging before the pool is full
 	var t := tool_of(w)
 	build_pillar(w, t)
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 180)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["live_bodies"]).override_failure_message(
 		"the severed top never became a body: %s" % st).is_greater(0)
 	# Fill every remaining volume slot with pinned dummy volumes. The body owns one slot, so
 	# allocate() can no longer find a second slot; start_merges must fall back to reusing the
 	# body's own birth slot or the 64-body cap becomes a permanent merge deadlock.
 	for slot in range(1, 64):
-		w.debug_queue_committed_field_volume_upload(
+		w.hooks().debug_queue_committed_field_volume_upload(
 				slot, dummy_volume_bytes(2), dummy_volume_bytes(2), 2)
-	st = w.debug_island_stats()
+	st = w.hooks().debug_island_stats()
 	assert_int(st["volume_live"]).override_failure_message(
 		"the volume pool was not filled: %s" % st).is_equal(64)
 	var merged_before: int = st["islands_merged"]
-	w.debug_set_merge_sleep_seconds(0.2)
+	w.hooks().debug_set_merge_sleep_seconds(0.2)
 	for i in range(1200):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		if st["islands_merged"] > merged_before:
 			break
 	assert_int(st["islands_merged"]).override_failure_message(
@@ -608,7 +608,7 @@ func test_sleeping_body_can_remerge_when_volume_pool_is_full(timeout := 180000) 
 
 func test_permanently_unavailable_extraction_does_not_relabel_remainder(timeout := 120000) -> void:
 	var w := make_world()
-	w.debug_set_extraction_available(false)
+	w.hooks().debug_set_extraction_available(false)
 	var t := tool_of(w)
 	# 3 m spacing keeps the pillars separate while their cut windows still overlap, so one
 	# connectivity window labels three components and the first pass would ordinarily submit
@@ -617,11 +617,11 @@ func test_permanently_unavailable_extraction_does_not_relabel_remainder(timeout 
 	var xs := [PILLAR_X - 3.0, PILLAR_X, PILLAR_X + 3.0]
 	for x in xs:
 		build_pillar(w, t, x)
-	var runs_before: int = w.debug_island_stats()["connectivity_runs"]
+	var runs_before: int = w.hooks().debug_island_stats()["connectivity_runs"]
 	for x in xs:
 		t.apply_sphere_subtract(Vector3(x, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 240)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["connectivity_runs"] - runs_before).override_failure_message(
 		"permanently unavailable extraction relabelled a remainder every frame: %s" % st
 		).is_less(10)
@@ -634,16 +634,16 @@ func test_persistent_extraction_failures_backoff_and_drop_remainder(timeout := 1
 	var w := make_world()
 	# The worker has a live IslandExtractPass, but every field extraction reports failure.
 	# This exercises the per-window failure backoff/drop path rather than the no-pass path.
-	w.debug_set_fail_extractions(true)
+	w.hooks().debug_set_fail_extractions(true)
 	var t := tool_of(w)
 	var xs := [PILLAR_X - 3.0, PILLAR_X, PILLAR_X + 3.0]
 	for x in xs:
 		build_pillar(w, t, x)
-	var runs_before: int = w.debug_island_stats()["connectivity_runs"]
+	var runs_before: int = w.hooks().debug_island_stats()["connectivity_runs"]
 	for x in xs:
 		t.apply_sphere_subtract(Vector3(x, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 240)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["connectivity_runs"] - runs_before).override_failure_message(
 		"persistent extraction failures relabelled a remainder every frame: %s" % st
 		).is_less(10)
@@ -658,15 +658,15 @@ func test_fully_submitted_extraction_failure_is_retried_and_dropped(timeout := 1
 	# A single component fits in one connectivity batch, so a failed field extraction has no
 	# queued remainder to keep the edit alive. It must be re-queued with the same backoff/drop
 	# policy, not silently dropped.
-	w.debug_set_fail_extractions(true)
+	w.hooks().debug_set_fail_extractions(true)
 	var t := tool_of(w)
 	build_pillar(w, t)
-	var runs_before: int = w.debug_island_stats()["connectivity_runs"]
+	var runs_before: int = w.hooks().debug_island_stats()["connectivity_runs"]
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	for i in range(120):
 		step(w, 1)
-		st = w.debug_island_stats()
+		st = w.hooks().debug_island_stats()
 		if st["pending_windows"] > 0:
 			break
 	assert_int(st["pending_windows"]).override_failure_message(
@@ -675,7 +675,7 @@ func test_fully_submitted_extraction_failure_is_retried_and_dropped(timeout := 1
 		"an extraction spawned despite persistent extraction failures: %s" % st).is_equal(0)
 	# Repeated failures reach the same drop threshold as a remainder window.
 	step(w, 300)
-	st = w.debug_island_stats()
+	st = w.hooks().debug_island_stats()
 	assert_int(st["connectivity_runs"] - runs_before).override_failure_message(
 		"fully-submitted extraction failures relabelled without backoff: %s" % st).is_less(10)
 	assert_int(st["pending_windows"]).override_failure_message(
@@ -685,14 +685,14 @@ func test_fully_submitted_extraction_failure_is_retried_and_dropped(timeout := 1
 
 func test_resample_submit_colliding_with_in_flight_extractions_does_not_strand_merging(timeout := 180000) -> void:
 	var w := make_world()
-	w.debug_set_merge_sleep_seconds(999.0) # keep the first body from merging before the collision
+	w.hooks().debug_set_merge_sleep_seconds(999.0) # keep the first body from merging before the collision
 	var t := tool_of(w)
 	build_pillar(w, t)
 	build_pillar(w, t, PILLAR_X + 6.0, PILLAR_Z)
 	# Sever the first pillar and let it spawn, fall and rest while merging is disabled.
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 240)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["live_bodies"]).override_failure_message(
 		"the first severed top never became a body: %s" % st).is_greater(0)
 	var merged_before: int = st["islands_merged"]
@@ -700,22 +700,22 @@ func test_resample_submit_colliding_with_in_flight_extractions_does_not_strand_m
 	t.apply_sphere_subtract(Vector3(PILLAR_X + 6.0, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	for i in range(120):
 		step(w, 1)
-		st = w.debug_island_stats()
+		st = w.hooks().debug_island_stats()
 		if st["in_flight"] > 0:
 			break
 	assert_int(st["in_flight"]).override_failure_message(
 		"the second extraction never entered flight: %s" % st).is_greater(0)
 	# Now allow the first body to merge. run_frame will call start_merges while the second
 	# extraction is still in flight; a rejected resample submit must not strand merging_.
-	w.debug_set_merge_sleep_seconds(0.2)
-	w.debug_stream_frame(CENTER)
-	w.debug_physics_frame(CENTER)
-	w.debug_island_frame(1.0 / 60.0, CENTER)
+	w.hooks().debug_set_merge_sleep_seconds(0.2)
+	w.hooks().debug_stream_frame(CENTER)
+	w.hooks().debug_physics_frame(CENTER)
+	w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
 	for i in range(1200):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		if st["islands_merged"] > merged_before:
 			break
 	assert_int(st["islands_merged"]).override_failure_message(
@@ -733,13 +733,13 @@ func test_near_cap_carve_is_refused_before_any_carve(timeout := 120000) -> void:
 	# Submit the extraction but do not let the result land yet; then bring the region to 255
 	# ops. Accepting the carve would make it 256 and reject the restore volume-add, which used
 	# to reach std::abort(). Preflight must refuse before any carve is appended.
-	w.debug_stream_frame(CENTER)
-	w.debug_physics_frame(CENTER)
-	w.debug_island_frame(1.0 / 60.0, CENTER)
+	w.hooks().debug_stream_frame(CENTER)
+	w.hooks().debug_physics_frame(CENTER)
+	w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
 	fill_region_ops(w, t, top, 255)
-	var refused_before: int = w.debug_island_stats()["refused"]
+	var refused_before: int = w.hooks().debug_island_stats()["refused"]
 	step(w, 240)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["refused"]).override_failure_message(
 		"the near-cap extraction was not refused: %s" % st).is_greater(refused_before)
 	assert_int(st["islands_spawned"]).override_failure_message(
@@ -767,7 +767,7 @@ func test_cross_region_combined_op_count_is_refused_before_any_carve(timeout := 
 	fill_region_ops(w, t, Vector3(x + 1.2, PILLAR_BASE + 3.0, PILLAR_Z), 200)
 	t.apply_sphere_subtract(Vector3(x, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 240)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["refused"]).override_failure_message(
 		"the cross-region over-cap extraction was not refused: %s" % st).is_greater(0)
 	assert_int(st["islands_spawned"]).override_failure_message(
@@ -789,13 +789,13 @@ func test_stale_extraction_is_refused_before_any_carve(timeout := 120000) -> voi
 	# the component's AABB. The captured ops no longer match the current field, so landing the
 	# extraction must be refused under the same edit lock that guards the carve -- never
 	# carving a stale volume into a field that has moved on.
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	for i in range(120):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_physics_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_physics_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		if st["in_flight"] > 0:
 			break
 	assert_int(st["in_flight"]).override_failure_message(
@@ -807,10 +807,10 @@ func test_stale_extraction_is_refused_before_any_carve(timeout := 120000) -> voi
 	# assertions below still catch the no-carve outcome before any replacement spawn lands.
 	for i in range(120):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_physics_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_physics_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		if st["refused"] > refused_before:
 			break
 	assert_int(st["refused"]).override_failure_message(
@@ -823,22 +823,22 @@ func test_stale_extraction_is_refused_before_any_carve(timeout := 120000) -> voi
 
 func test_failed_resample_backs_off_instead_of_retrying_every_frame(timeout := 180000) -> void:
 	var w := make_world()
-	w.debug_set_merge_sleep_seconds(999.0) # keep the body from merging before the test is ready
+	w.hooks().debug_set_merge_sleep_seconds(999.0) # keep the body from merging before the test is ready
 	var t := tool_of(w)
 	build_pillar(w, t)
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 180)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["live_bodies"]).override_failure_message(
 		"the severed top never became a body: %s" % st).is_greater(0)
 	var refused_before: int = st["refused"]
-	w.debug_set_merge_sleep_seconds(0.2)
-	w.debug_set_fail_next_resample(true)
+	w.hooks().debug_set_merge_sleep_seconds(0.2)
+	w.hooks().debug_set_fail_next_resample(true)
 	for i in range(600):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		if st["refused"] > refused_before:
 			break
 	assert_int(st["refused"]).override_failure_message(
@@ -848,17 +848,17 @@ func test_failed_resample_backs_off_instead_of_retrying_every_frame(timeout := 1
 	# merge immediately.
 	for i in range(25):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 	assert_int(st["islands_merged"]).override_failure_message(
 		"a failed resample merged before the retry cooldown elapsed: %s" % st).is_equal(0)
 	# Once the cooldown expires, the body is allowed to try again and should merge normally.
 	for i in range(600):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		if st["islands_merged"] > 0:
 			break
 	assert_int(st["islands_merged"]).override_failure_message(
@@ -866,12 +866,12 @@ func test_failed_resample_backs_off_instead_of_retrying_every_frame(timeout := 1
 
 func test_stale_rest_pose_resample_is_refused_before_paste(timeout := 180000) -> void:
 	var w := make_world()
-	w.debug_set_merge_sleep_seconds(999.0) # keep the body from merging until the test is ready
+	w.hooks().debug_set_merge_sleep_seconds(999.0) # keep the body from merging until the test is ready
 	var t := tool_of(w)
 	build_pillar(w, t)
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 180)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["live_bodies"]).override_failure_message(
 		"the severed top never became a body: %s" % st).is_greater(0)
 	var refused_before: int = st["refused"]
@@ -879,12 +879,12 @@ func test_stale_rest_pose_resample_is_refused_before_paste(timeout := 180000) ->
 
 	# Let the body sleep, then lower the threshold and run until a re-merge resample is
 	# actually in flight. `merging` is the number of submitted resamples waiting to land.
-	w.debug_set_merge_sleep_seconds(0.2)
+	w.hooks().debug_set_merge_sleep_seconds(0.2)
 	for i in range(1200):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		if st["merging"] > 0:
 			break
 	assert_int(st["merging"]).override_failure_message(
@@ -893,12 +893,12 @@ func test_stale_rest_pose_resample_is_refused_before_paste(timeout := 180000) ->
 	# The resample was captured at the body's rest pose. Offset and wake the body before the
 	# worker result lands; the stale-rest-pose guard must refuse to paste the old pose and
 	# must not despawn the body from its new pose.
-	w.debug_offset_island_body(0, Vector3(0.25, 0.0, 0.0))
+	w.hooks().debug_offset_island_body(0, Vector3(0.25, 0.0, 0.0))
 	for i in range(120):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		if st["islands_merged"] > merged_before or st["refused"] > refused_before:
 			break
 	assert_int(st["islands_merged"]).override_failure_message(
@@ -920,12 +920,12 @@ func test_fully_rejected_op_does_not_enqueue_connectivity_window(timeout := 1200
 	# Submit the extraction but do not let the result land yet; then fill the region so the
 	# carve is rejected in every touched region. The rejected carve must NOT enqueue another
 	# connectivity window for the same unchanged component.
-	w.debug_stream_frame(CENTER)
-	w.debug_physics_frame(CENTER)
-	w.debug_island_frame(1.0 / 60.0, CENTER)
+	w.hooks().debug_stream_frame(CENTER)
+	w.hooks().debug_physics_frame(CENTER)
+	w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
 	fill_region_ops(w, t, top)
 	step(w, 120)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["islands_spawned"]).override_failure_message(
 		"a rejected carve still spawned a body: %s" % st).is_equal(0)
 	assert_int(st["live_bodies"]).override_failure_message(
@@ -937,12 +937,12 @@ func test_fully_rejected_op_does_not_enqueue_connectivity_window(timeout := 1200
 
 func test_rejected_remerge_paste_does_not_leak_pinned_slots_or_retry_every_frame(timeout := 180000) -> void:
 	var w := make_world()
-	w.debug_set_merge_sleep_seconds(999.0) # keep the body from merging before the region is full
+	w.hooks().debug_set_merge_sleep_seconds(999.0) # keep the body from merging before the region is full
 	var t := tool_of(w)
 	build_pillar(w, t)
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 180)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["live_bodies"]).override_failure_message(
 		"the severed top never became a body: %s" % st).is_greater(0)
 	# Fill every region the rest-volume AABB can touch, then allow re-merge. The paste must be
@@ -950,15 +950,15 @@ func test_rejected_remerge_paste_does_not_leak_pinned_slots_or_retry_every_frame
 	# the body must not be retried every frame while the regions stay full.
 	for y in [PILLAR_BASE - 4.0, PILLAR_BASE - 2.0, PILLAR_BASE, PILLAR_BASE + 2.0]:
 		fill_region_ops(w, t, Vector3(PILLAR_X, y, PILLAR_Z))
-	var volume_before: int = w.debug_island_stats()["volume_live"]
-	var refused_before: int = w.debug_island_stats()["refused"]
-	var field_uploads_before: int = w.debug_field_volume_upload_count()
-	w.debug_set_merge_sleep_seconds(0.2)
+	var volume_before: int = w.hooks().debug_island_stats()["volume_live"]
+	var refused_before: int = w.hooks().debug_island_stats()["refused"]
+	var field_uploads_before: int = w.hooks().debug_field_volume_upload_count()
+	w.hooks().debug_set_merge_sleep_seconds(0.2)
 	for i in range(600):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		if st["refused"] > refused_before or st["islands_merged"] > 0:
 			break
 	assert_int(st["refused"]).override_failure_message(
@@ -972,7 +972,7 @@ func test_rejected_remerge_paste_does_not_leak_pinned_slots_or_retry_every_frame
 	# The rejected paste queued a field-volume upload before append_edit rejected it. That
 	# stale upload must be discarded before the debug frame drains the queue; otherwise it is
 	# handed to the GPU and can later overwrite a reused slot.
-	assert_int(w.debug_field_volume_upload_count()).override_failure_message(
+	assert_int(w.hooks().debug_field_volume_upload_count()).override_failure_message(
 		"a fully rejected re-merge paste still uploaded stale bytes for the released slot: %s"
 		% st).is_equal(field_uploads_before)
 	assert_int(st["refused"]).override_failure_message(
@@ -980,21 +980,21 @@ func test_rejected_remerge_paste_does_not_leak_pinned_slots_or_retry_every_frame
 
 func test_partially_rejected_remerge_preflight_never_corrupts_reused_birth_slot(timeout := 180000) -> void:
 	var w := make_world()
-	w.debug_set_merge_sleep_seconds(999.0) # keep the body from merging before the pool is full
+	w.hooks().debug_set_merge_sleep_seconds(999.0) # keep the body from merging before the pool is full
 	var t := tool_of(w)
 	build_pillar(w, t)
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 180)
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["live_bodies"]).override_failure_message(
 		"the severed top never became a body: %s" % st).is_greater(0)
 
 	# Fill every remaining volume slot so start_merges() is forced to reuse the body's own
 	# birth slot as the resample out-slot.
 	for slot in range(1, 64):
-		w.debug_queue_committed_field_volume_upload(
+		w.hooks().debug_queue_committed_field_volume_upload(
 				slot, dummy_volume_bytes(2), dummy_volume_bytes(2), 2)
-	st = w.debug_island_stats()
+	st = w.hooks().debug_island_stats()
 	assert_int(st["volume_live"]).override_failure_message(
 		"the volume pool was not filled: %s" % st).is_equal(64)
 	var volume_before: int = st["volume_live"]
@@ -1004,13 +1004,13 @@ func test_partially_rejected_remerge_preflight_never_corrupts_reused_birth_slot(
 	# naive append would be partially accepted and partially rejected; the fixed land_resample
 	# must preflight-refuse before storing/pinning into the reused birth slot.
 	fill_region_ops(w, t, Vector3(PILLAR_X, st["lowest_body_y"], PILLAR_Z))
-	var refused_before: int = w.debug_island_stats()["refused"]
-	w.debug_set_merge_sleep_seconds(0.2)
+	var refused_before: int = w.hooks().debug_island_stats()["refused"]
+	w.hooks().debug_set_merge_sleep_seconds(0.2)
 	for i in range(600):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		if st["refused"] > refused_before or st["islands_merged"] > 0:
 			break
 	assert_int(st["refused"]).override_failure_message(
@@ -1037,17 +1037,17 @@ func test_failed_spawn_before_carve_leaves_component_attached(timeout := 120000)
 	# structural fix spawns BEFORE carving, so a spawn failure must leave the terrain intact
 	# (no carve, no hole) and the component still attached. Stop as soon as the refusal is
 	# recorded, before any follow-up connectivity window can spawn the component again.
-	w.debug_stream_frame(CENTER)
-	w.debug_physics_frame(CENTER)
-	w.debug_island_frame(1.0 / 60.0, CENTER)
-	var refused_before: int = w.debug_island_stats()["refused"]
-	w.debug_set_fail_next_spawn(true)
-	var st: Dictionary = w.debug_island_stats()
+	w.hooks().debug_stream_frame(CENTER)
+	w.hooks().debug_physics_frame(CENTER)
+	w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+	var refused_before: int = w.hooks().debug_island_stats()["refused"]
+	w.hooks().debug_set_fail_next_spawn(true)
+	var st: Dictionary = w.hooks().debug_island_stats()
 	for i in range(120):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		if st["refused"] > refused_before:
 			break
 	assert_int(st["refused"]).override_failure_message(
@@ -1066,18 +1066,18 @@ func test_rejected_extract_submit_rolls_back_in_flight_and_recovers(timeout := 1
 	var t := tool_of(w)
 	build_pillar(w, t)
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
-	var runs_before: int = w.debug_island_stats()["connectivity_runs"]
+	var runs_before: int = w.hooks().debug_island_stats()["connectivity_runs"]
 	# Force submit_extracts() to reject the batch even though the worker is idle. The manager
 	# must roll back the InFlight entries it pushed and release their volume slots, then keep
 	# the window alive so connectivity can succeed once the hook is cleared.
-	w.debug_set_fail_extract_submit(true)
-	var st: Dictionary = w.debug_island_stats()
+	w.hooks().debug_set_fail_extract_submit(true)
+	var st: Dictionary = w.hooks().debug_island_stats()
 	for i in range(120):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_physics_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_physics_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		if st["connectivity_runs"] > runs_before:
 			break
 	assert_int(st["connectivity_runs"]).override_failure_message(
@@ -1089,13 +1089,13 @@ func test_rejected_extract_submit_rolls_back_in_flight_and_recovers(timeout := 1
 	assert_int(st["pending_windows"]).override_failure_message(
 		"rejected extract submit did not keep the window alive: %s" % st).is_greater(0)
 	# Once submits are accepted again, the same edit must still produce an island.
-	w.debug_set_fail_extract_submit(false)
+	w.hooks().debug_set_fail_extract_submit(false)
 	for i in range(240):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_physics_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_physics_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		if st["islands_spawned"] > 0:
 			break
 	assert_int(st["islands_spawned"]).override_failure_message(
@@ -1113,17 +1113,17 @@ func test_post_spawn_carve_rejection_keeps_body_in_hole(timeout := 180000) -> vo
 	# body BEFORE carving, so this must leave the already-live body in the hole instead of
 	# despawned; because the restore volume-add was accepted (touched non-empty), the birth
 	# slot is referenced by the edit log and must remain pinned.
-	w.debug_stream_frame(CENTER)
-	w.debug_physics_frame(CENTER)
-	w.debug_island_frame(1.0 / 60.0, CENTER)
-	w.debug_set_fail_next_carve(true)
-	w.debug_set_fail_next_restore(true)
-	var st: Dictionary = w.debug_island_stats()
+	w.hooks().debug_stream_frame(CENTER)
+	w.hooks().debug_physics_frame(CENTER)
+	w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+	w.hooks().debug_set_fail_next_carve(true)
+	w.hooks().debug_set_fail_next_restore(true)
+	var st: Dictionary = w.hooks().debug_island_stats()
 	for i in range(120):
 		await get_tree().physics_frame
-		w.debug_stream_frame(CENTER)
-		w.debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.debug_island_stats()
+		w.hooks().debug_stream_frame(CENTER)
+		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
+		st = w.hooks().debug_island_stats()
 		if st["live_bodies"] > 0:
 			break
 	assert_int(st["live_bodies"]).override_failure_message(
@@ -1163,17 +1163,17 @@ func test_a_component_too_thin_to_extract_is_carved_away_not_left_standing(timeo
 	step(w, 90)
 	assert_bool(solid_at(w, speck)).override_failure_message(
 		"the floating speck was never built").is_true()
-	var ground_before: Dictionary = w.debug_raycast(
+	var ground_before: Dictionary = w.hooks().debug_raycast(
 		Vector3(elsewhere.x, 90.0, elsewhere.z), Vector3(0, -1, 0))
 	assert_bool(ground_before["hit"]).is_true()
 
 	# The next extraction to land reports no solid sample, as a sub-pitch sheet does.
-	w.debug_set_empty_next_extraction(true)
+	w.hooks().debug_set_empty_next_extraction(true)
 	# An edit near it, so connectivity has a window to act on; it misses the speck itself.
 	t.apply_sphere_subtract(speck + Vector3(0.0, -1.6, 0.0), 0.4)
 	step(w, 240)
 
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["crumbled"]).override_failure_message(
 		"the unrepresentable component was not crumbled: %s" % st).is_greater(0)
 	assert_int(st["refused_empty"]).override_failure_message(
@@ -1183,11 +1183,11 @@ func test_a_component_too_thin_to_extract_is_carved_away_not_left_standing(timeo
 	assert_bool(solid_at(w, speck)).override_failure_message(
 		"the component the extractor could not represent is still in the terrain: %s" % st
 		).is_false()
-	assert_int(w.debug_cell_state(Vector3i(25, 77, 25))).override_failure_message(
+	assert_int(w.hooks().debug_cell_state(Vector3i(25, 77, 25))).override_failure_message(
 		"the crumbled cell is still marked solid, so connectivity will label it again"
 		).is_equal(1) # ve::kCellAir
 	# ...and nothing outside the component went with it.
-	var ground_after: Dictionary = w.debug_raycast(
+	var ground_after: Dictionary = w.hooks().debug_raycast(
 		Vector3(elsewhere.x, 90.0, elsewhere.z), Vector3(0, -1, 0))
 	assert_bool(ground_after["hit"]).override_failure_message(
 		"crumbling removed the terrain beside the component").is_true()
@@ -1206,11 +1206,11 @@ func test_a_solid_component_is_never_crumbled(timeout := 120000) -> void:
 	assert_bool(solid_at(w, top)).is_true()
 
 	# The severed top is solid through and through: its inner cells hold no air sample at all.
-	w.debug_set_empty_next_extraction(true)
+	w.hooks().debug_set_empty_next_extraction(true)
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
 	step(w, 240)
 
-	var st: Dictionary = w.debug_island_stats()
+	var st: Dictionary = w.hooks().debug_island_stats()
 	assert_int(st["refused_empty"]).override_failure_message(
 		"a fully solid component was not protected from the crumble: %s" % st).is_greater(0)
 	# It is still there: better a piece that has to wait for the next connectivity run than

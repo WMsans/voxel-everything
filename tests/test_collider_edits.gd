@@ -29,7 +29,7 @@ func make_world() -> VoxelWorld:
 	w.shape_builds_per_frame = 4
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_physics()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
 # Settled means the streamer owes nothing: no resident chunk still waiting for a collider and
@@ -44,8 +44,8 @@ func make_world() -> VoxelWorld:
 func settle(w: VoxelWorld, center: Vector3, frames := 6000) -> bool:
 	var quiet := 0
 	for i in range(frames):
-		w.debug_physics_frame(center)
-		var st := w.debug_physics_stats()
+		w.hooks().debug_physics_frame(center)
+		var st := w.hooks().debug_physics_stats()
 		quiet = quiet + 1 if st["chunks_pending"] == 0 and st["queued"] == 0 else 0
 		if quiet >= 4:
 			return true
@@ -75,7 +75,7 @@ func test_carving_makes_the_ground_fall_away(timeout := 90000) -> void:
 	# streamer "frame" is microseconds and no longer stands in for the spec's "1-2 frames" of
 	# wall clock, so this waits for the rebuild to actually land rather than counting frames.
 	assert_bool(settle(w, CENTER)).override_failure_message(
-		"the streamer never finished rebuilding the crater: %s" % w.debug_physics_stats()
+		"the streamer never finished rebuilding the crater: %s" % w.hooks().debug_physics_stats()
 		).is_true()
 	await get_tree().physics_frame
 
@@ -86,7 +86,7 @@ func test_carving_makes_the_ground_fall_away(timeout := 90000) -> void:
 		"collision did not follow the crater: %f vs %f" % [after["position"].y, surface]
 		).is_less(surface - 1.0)
 	# ...and it still agrees with the field the renderer draws.
-	var oracle: Dictionary = w.debug_raycast(from, Vector3(0, -1, 0))
+	var oracle: Dictionary = w.hooks().debug_raycast(from, Vector3(0, -1, 0))
 	assert_float(after["position"].y).is_equal_approx(oracle["pos"].y, 0.15)
 
 func test_filling_makes_new_ground_collidable(timeout := 90000) -> void:
@@ -117,7 +117,7 @@ func test_a_paint_edit_rebuilds_nothing_it_does_not_have_to(timeout := 90000) ->
 	var tool: VoxelEditTool = ClassDB.instantiate("VoxelEditTool")
 	w.add_child(tool)
 	settle(w, CENTER)
-	var hit: Dictionary = w.debug_raycast(Vector3(CENTER.x, 80.0, CENTER.z), Vector3(0, -1, 0))
+	var hit: Dictionary = w.hooks().debug_raycast(Vector3(CENTER.x, 80.0, CENTER.z), Vector3(0, -1, 0))
 	assert_bool(hit["hit"]).is_true()
 
 	# Paint changes no SDF, but it is still an op in the region's list, so the chunks it
@@ -126,4 +126,4 @@ func test_a_paint_edit_rebuilds_nothing_it_does_not_have_to(timeout := 90000) ->
 	tool.apply_sphere_paint(hit["pos"], 3.0, 1)
 	settle(w, CENTER)
 	for i in range(20):
-		assert_int(w.debug_physics_frame(CENTER)).is_equal(0)
+		assert_int(w.hooks().debug_physics_frame(CENTER)).is_equal(0)
