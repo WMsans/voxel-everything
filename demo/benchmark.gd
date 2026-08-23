@@ -18,6 +18,13 @@ extends Node
 # So the report is percentiles plus the count of frames that missed 60 fps.
 
 const WARMUP := 60
+# The steady leg claims to measure a settled world, but 60 frames is not enough for
+# the collider streamer to drain: measured with `--benchmark`, 370 chunks were still pending
+# at frame 60, and the mesher worker was submitting GPU batches for the whole sampled run.
+# That is a streaming measurement wearing a steady-state label. It now warms up until the
+# chunk queue is actually empty (or this cap is hit, which is reported either way).
+const SETTLE_CAP := 1500
+const SETTLE_QUIET_FRAMES := 10
 const FRAMES := 300
 const ISLAND_FRAMES := 900
 const EDIT_BOUNDED_FRAMES := 900
@@ -73,6 +80,11 @@ var _target_frames := FRAMES
 # publishable verdict — MIN_GPU_SAMPLES still gates that — but it turns a 40 s
 # attribution run into a 6 s one while hunting for where the frame went.
 var _warmup := WARMUP
+# Steady leg only: keep warming while collision chunks are still landing.
+var _settle := false
+var _settle_quiet := 0
+var _settled_at := -1
+var _screenshot_path := ""
 
 func _effects_off_from_args(args: PackedStringArray) -> PackedStringArray:
 	var effects := PackedStringArray()
@@ -108,10 +120,41 @@ func _ready() -> void:
 	# "regression" that no code change can move.
 	_record_vsync()
 
+	# Only the steady leg. It is the one that claims a settled world, and the only one whose
+	# world can reach that state: the edit and island legs deliberately keep dirtying it, so
+	# waiting for quiet there would just run their edit loop for the length of the cap before
+	# sampling ever began -- which is a different measurement, and on the edit leg ran the
+	# region op lists to overflow.
+	_settle = _mode == "--benchmark"
+
 	_player = get_parent().get_node("Player")
 	_world = get_parent().get_node("VoxelWorld")
 	for effect in _effects_off_from_args(args):
 		_world.set_effect_enabled(effect, false)
+	# The two dials that decide how much of the frame the near field is allowed to cost.
+	# Sweeping them from the command line is how the shipped defaults were chosen.
+	for arg in args:
+		if arg.begins_with("--near-scale="):
+			_world.near_field_scale = float(arg.trim_prefix("--near-scale="))
+		elif arg.begins_with("--quality="):
+			_world.set_quality_tier(int(arg.trim_prefix("--quality=")))
+		elif arg == "--no-physics":
+			_world.physics_enabled = false
+		elif arg.begins_with("--render-scale="):
+			get_viewport().scaling_3d_scale = float(arg.trim_prefix("--render-scale="))
+		elif arg.begins_with("--screenshot="):
+			# One frame of the sampled leg, written just before the run reports. Comparing
+			# two of these is how a render-scale change gets judged on more than its cost.
+			_screenshot_path = arg.trim_prefix("--screenshot=")
+		elif arg.begins_with("--upscaler="):
+			var m := arg.trim_prefix("--upscaler=")
+			get_viewport().scaling_3d_mode = {
+				"bilinear": Viewport.SCALING_3D_MODE_BILINEAR,
+				"fsr": Viewport.SCALING_3D_MODE_FSR,
+				"fsr2": Viewport.SCALING_3D_MODE_FSR2,
+				"metalfx_spatial": Viewport.SCALING_3D_MODE_METALFX_SPATIAL,
+				"metalfx_temporal": Viewport.SCALING_3D_MODE_METALFX_TEMPORAL,
+			}.get(m, Viewport.SCALING_3D_MODE_BILINEAR)
 	_cam = _player.get_node("Camera3D")
 	# Drive the player from here rather than from input, so a run is reproducible.
 	_player.set_physics_process(false)
@@ -169,6 +212,12 @@ func _process(delta: float) -> void:
 		_capture_gpu_sample()
 		_drain_frames += 1
 		if _drain_frames >= GPU_DRAIN_FRAMES:
+			if not _screenshot_path.is_empty():
+				var img := get_viewport().get_texture().get_image()
+				var err := img.save_png(_screenshot_path)
+				print("BENCH screenshot path=%s size=%dx%d err=%d" % [
+					_screenshot_path, img.get_width(), img.get_height(), err])
+				_screenshot_path = ""
 			_report()
 			_world.shutdown_render_resources()
 			set_process(false)
@@ -196,6 +245,15 @@ func _process(delta: float) -> void:
 
 	if _frames <= _warmup:
 		return # let the first regions land before sampling
+	if _settle:
+		# Quiet means no collision chunk waiting to be built and none in flight, held for a
+		# few frames so a momentary pause in the queue is not mistaken for the end of it.
+		var ph: Dictionary = _world.hooks().debug_physics_stats()
+		_settle_quiet = _settle_quiet + 1 if int(ph.get("chunks_pending", 0)) == 0 else 0
+		if _settle_quiet < SETTLE_QUIET_FRAMES and _frames < SETTLE_CAP:
+			return
+		_settle = false
+		_settled_at = _frames
 	_capture_gpu_sample()
 	var ms := delta * 1000.0
 	_samples.append(ms)
@@ -351,9 +409,15 @@ func _report() -> void:
 	var sorted := _samples.duplicate()
 	sorted.sort()
 	var fb := _world.hooks().debug_lod_fade_band()
-	var vp_size := _cam.get_viewport().get_visible_rect().size
-	print("BENCH camera fov=%.2f viewport=%dx%d fade_band_start=%.2f fade_band_end=%.2f" % [
-		_cam.fov, int(vp_size.x), int(vp_size.y), fb.x, fb.y])
+	var vp := _cam.get_viewport()
+	var vp_size := vp.get_visible_rect().size
+	# The rendered 3D resolution, not the 2D stretch rect: the near field runs at
+	# near_field_scale OF THIS, and every screen-space pass runs at it.
+	var internal := Vector2(vp.get_texture().get_size()) * vp.scaling_3d_scale
+	print("BENCH camera fov=%.2f viewport=%dx%d internal_3d=%dx%d render_scale=%.2f near_field_scale=%.2f quality_tier=%d fade_band_start=%.2f fade_band_end=%.2f" % [
+		_cam.fov, int(vp_size.x), int(vp_size.y), int(internal.x), int(internal.y),
+		vp.scaling_3d_scale, _world.near_field_scale, _world.get_quality_tier(),
+		fb.x, fb.y])
 	var total := 0.0
 	var over := 0
 	for s in _samples:
@@ -362,6 +426,9 @@ func _report() -> void:
 			over += 1
 	var avg := total / _samples.size()
 	print("BENCH mode=%s frames=%d" % [_mode, _samples.size()])
+	if _settled_at >= 0:
+		print("BENCH settle frames_to_quiet=%d capped=%s" % [
+			_settled_at, str(_settled_at >= SETTLE_CAP).to_lower()])
 	print("BENCH frame_avg_ms=%.2f fps=%.1f" % [avg, 1000.0 / avg])
 	print("BENCH p50=%.2f p95=%.2f p99=%.2f max=%.2f min_fps=%.1f over_16.6ms=%d (%.1f%%)" % [
 		_percentile(sorted, 0.50), _percentile(sorted, 0.95), _percentile(sorted, 0.99),
