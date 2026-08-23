@@ -22,7 +22,7 @@ func make_world() -> VoxelWorld:
 	# 45 m of it, so settling anywhere else could leave their hit regions non-resident.
 	var _quiet := 0
 	for i in range(120):
-		_quiet = _quiet + 1 if w.debug_stream_frame(CAM) == 0 else 0
+		_quiet = _quiet + 1 if w.hooks().debug_stream_frame(CAM) == 0 else 0
 		if _quiet >= 6:
 			break
 	return w
@@ -38,21 +38,21 @@ func is_magenta(c: Color) -> bool:
 func test_ray_down_from_sky_hits_terrain() -> void:
 	var w := make_world()
 	# From (8, 63.2, 8) looking straight down: hills here are ~3m, must hit.
-	var d: Dictionary = w.debug_raymarch_probe(Vector3(8, 63.2, 8), Vector3(0, -1, 0))
+	var d: Dictionary = w.hooks().debug_raymarch_probe(Vector3(8, 63.2, 8), Vector3(0, -1, 0))
 	assert_bool(d["hit"]).override_failure_message("ray down from sky missed").is_true()
 	assert_bool(not is_magenta(d["color"])).override_failure_message(
 		"hit shaded error magenta").is_true()
 
 func test_ray_up_from_air_misses_to_sky() -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_raymarch_probe(Vector3(8, 59.2, 8), Vector3(0, 1, 0))
+	var d: Dictionary = w.hooks().debug_raymarch_probe(Vector3(8, 59.2, 8), Vector3(0, 1, 0))
 	assert_bool(not d["hit"]).override_failure_message("ray up from air hit terrain").is_true()
 
 func test_ray_down_from_non_boundary_origin_hits_terrain() -> void:
 	var w := make_world()
 	# Origin NOT on a brick boundary (8.25, 63.5, 7.9 are not multiples of 0.8):
 	# the negative-direction DDA must still reach terrain (~3.1m here).
-	var d: Dictionary = w.debug_raymarch_probe(
+	var d: Dictionary = w.hooks().debug_raymarch_probe(
 		Vector3(8.25, 63.5, 7.9), Vector3(0, -1, 0))
 	assert_bool(d["hit"]).override_failure_message(
 		"non-boundary ray down from sky missed").is_true()
@@ -62,7 +62,7 @@ func test_ray_down_from_non_boundary_origin_hits_terrain() -> void:
 func test_ray_diagonal_down_from_non_boundary_origin_hits_terrain() -> void:
 	var w := make_world()
 	# Diagonal negative-direction DDA from a non-boundary origin.
-	var d: Dictionary = w.debug_raymarch_probe(
+	var d: Dictionary = w.hooks().debug_raymarch_probe(
 		Vector3(7.3, 62.4, 9.1), Vector3(0, -0.9, -0.2))
 	assert_bool(d["hit"]).override_failure_message(
 		"diagonal ray down from sky missed").is_true()
@@ -97,7 +97,7 @@ func test_brick_face_slab_is_not_darker_than_the_rest() -> void:
 			var h := hills(x, z)
 			if h < 1.0 or h > 7.0:
 				continue
-			var c: Color = w.debug_raymarch_pixel(Vector3(x, 60.2, z), Vector3(0, -1, 0))
+			var c: Color = w.hooks().debug_raymarch_pixel(Vector3(x, 60.2, z), Vector3(0, -1, 0))
 			if c.b > c.g:
 				continue # sky miss
 			var slab := int(floor(fposmod(h, BRICK_SIZE) / VOXEL_SIZE))

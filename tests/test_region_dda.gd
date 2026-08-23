@@ -16,10 +16,10 @@ func make_world() -> VoxelWorld:
 	w.world_size_regions = Vector3i(8, 5, 8)
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_atlas()).is_true()
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
 	var quiet := 0
 	for i in range(400):
-		quiet = quiet + 1 if w.debug_stream_frame(Vector3(24.0, 56.2, 24.0)) == 0 else 0
+		quiet = quiet + 1 if w.hooks().debug_stream_frame(Vector3(24.0, 56.2, 24.0)) == 0 else 0
 		if quiet >= 6:
 			break
 	return w
@@ -29,7 +29,7 @@ func make_world() -> VoxelWorld:
 # point -- the ORDER is, so the assertion is written against the brick count it replaces.
 func test_sky_ray_walks_regions_not_bricks() -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_raymarch_cost_probe(Vector3(24.0, 70.0, 24.0), Vector3(0, 1, 0))
+	var d: Dictionary = w.hooks().debug_raymarch_cost_probe(Vector3(24.0, 70.0, 24.0), Vector3(0, 1, 0))
 	assert_bool(d["hit"]).is_false()
 	assert_int(int(d["bricks"])).is_less(32)
 	assert_int(int(d["regions"])).is_greater(0)
@@ -42,17 +42,17 @@ func test_ground_hits_still_match_the_analytic_raycast() -> void:
 		var a := float(i) * 0.5
 		var dir := Vector3(sin(a) * 0.6, -1.0, cos(a) * 0.6).normalized()
 		var eye := Vector3(24.0, 70.0, 24.0)
-		var probe: Dictionary = w.debug_raymarch_cost_probe(eye, dir)
-		var truth: Dictionary = w.debug_raycast(eye, dir)
+		var probe: Dictionary = w.hooks().debug_raymarch_cost_probe(eye, dir)
+		var truth: Dictionary = w.hooks().debug_raycast(eye, dir)
 		assert_bool(probe["hit"]).is_equal(truth["hit"])
 
 # A ray that starts inside a resident region and leaves the residency radius must not report
 # a hit from a region it never had data for.
 func test_ray_leaving_residency_finds_nothing_rather_than_something() -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_raymarch_cost_probe(
+	var d: Dictionary = w.hooks().debug_raymarch_cost_probe(
 		Vector3(24.0, 62.0, 24.0), Vector3(1.0, 0.02, 0.0).normalized())
-	var truth: Dictionary = w.debug_raycast(
+	var truth: Dictionary = w.hooks().debug_raycast(
 		Vector3(24.0, 62.0, 24.0), Vector3(1.0, 0.02, 0.0).normalized())
 	if truth["hit"]:
 		assert_bool(d["hit"]).is_true()

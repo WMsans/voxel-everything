@@ -34,9 +34,9 @@ func make_world() -> VoxelWorld:
 	w.max_region_slots = 64
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_physics()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
 	for i in range(60):
-		w.debug_stream_frame(Vector3(20.0, 56.0, 20.0))
+		w.hooks().debug_stream_frame(Vector3(20.0, 56.0, 20.0))
 	return w
 
 func is_sky(c: Color) -> bool:
@@ -47,13 +47,13 @@ func test_an_island_placed_in_the_air_is_hit_by_a_ray(timeout := 60000) -> void:
 	var w := make_world()
 	# Lift a 2x2x2-cell lump of rock 30 m above where it came from.
 	var lift := Vector3(0.0, 30.0, 0.0)
-	var d: Dictionary = w.debug_place_test_island(0, Vector3i(25, 58, 25), Vector3i(26, 59, 26),
+	var d: Dictionary = w.hooks().debug_place_test_island(0, Vector3i(25, 58, 25), Vector3i(26, 59, 26),
 		lift)
 	assert_bool(d.get("ok", false)).override_failure_message(str(d)).is_true()
 	var centre: Vector3 = d["world_center"]
 
 	# Straight down through the island's centre from above it.
-	var probe: Dictionary = w.debug_raymarch_probe(centre + Vector3(0, 6, 0), Vector3(0, -1, 0))
+	var probe: Dictionary = w.hooks().debug_raymarch_probe(centre + Vector3(0, 6, 0), Vector3(0, -1, 0))
 	assert_bool(probe["hit"]).override_failure_message(
 		"the ray passed through the island").is_true()
 	var pos: Vector3 = probe["pos"]
@@ -72,16 +72,16 @@ func test_an_island_renders_its_own_volume_not_its_atlas_slots(timeout := 60000)
 	var w := make_world()
 	var lift := Vector3(0.0, 30.0, 0.0)
 	# Decoy at volume slot 0, 40 m away: the bytes the buggy stride would have read.
-	var decoy: Dictionary = w.debug_place_test_island_rotated(1, Vector3i(35, 58, 35),
+	var decoy: Dictionary = w.hooks().debug_place_test_island_rotated(1, Vector3i(35, 58, 35),
 		Vector3i(36, 59, 36), lift, 0.0, 0)
 	assert_bool(decoy.get("ok", false)).override_failure_message(str(decoy)).is_true()
 	# Subject at atlas slot 0, volume slot 3.
-	var d: Dictionary = w.debug_place_test_island_rotated(0, Vector3i(25, 58, 25),
+	var d: Dictionary = w.hooks().debug_place_test_island_rotated(0, Vector3i(25, 58, 25),
 		Vector3i(26, 59, 26), lift, 0.0, 3)
 	assert_bool(d.get("ok", false)).override_failure_message(str(d)).is_true()
 	var centre: Vector3 = d["world_center"]
 
-	var probe: Dictionary = w.debug_raymarch_probe(centre + Vector3(0, 6, 0), Vector3(0, -1, 0))
+	var probe: Dictionary = w.hooks().debug_raymarch_probe(centre + Vector3(0, 6, 0), Vector3(0, -1, 0))
 	assert_bool(probe["hit"]).override_failure_message(
 		"the ray passed through the island at atlas 0 / volume 3").is_true()
 	assert_float(probe["pos"].y).override_failure_message(
@@ -91,7 +91,7 @@ func test_an_island_renders_its_own_volume_not_its_atlas_slots(timeout := 60000)
 
 	# The decoy is still where it belongs, so the subject did not simply overwrite it.
 	var decoy_centre: Vector3 = decoy["world_center"]
-	var decoy_probe: Dictionary = w.debug_raymarch_probe(
+	var decoy_probe: Dictionary = w.hooks().debug_raymarch_probe(
 		decoy_centre + Vector3(0, 6, 0), Vector3(0, -1, 0))
 	assert_bool(decoy_probe["hit"]).override_failure_message(
 		"the decoy island at atlas 1 / volume 0 stopped rendering").is_true()
@@ -99,35 +99,35 @@ func test_an_island_renders_its_own_volume_not_its_atlas_slots(timeout := 60000)
 
 func test_a_ray_beside_the_island_still_sees_the_sky(timeout := 60000) -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_place_test_island(0, Vector3i(25, 58, 25), Vector3i(26, 59, 26),
+	var d: Dictionary = w.hooks().debug_place_test_island(0, Vector3i(25, 58, 25), Vector3i(26, 59, 26),
 		Vector3(0.0, 30.0, 0.0))
 	assert_bool(d.get("ok", false)).is_true()
 	var centre: Vector3 = d["world_center"]
 	# Ten metres to the side of a 1.6 m lump, pointing up: nothing but sky.
-	var c: Color = w.debug_raymarch_pixel(centre + Vector3(10, 0, 0), Vector3(0, 1, 0))
+	var c: Color = w.hooks().debug_raymarch_pixel(centre + Vector3(10, 0, 0), Vector3(0, 1, 0))
 	assert_bool(is_sky(c)).override_failure_message(
 		"a ray well clear of the island did not see the sky: %s" % c).is_true()
 
 func test_the_island_occludes_the_terrain_behind_it(timeout := 60000) -> void:
 	var w := make_world()
 	var origin := Vector3(20.4, 90.0, 20.4)
-	var before: Dictionary = w.debug_raymarch_probe(origin, Vector3(0, -1, 0))
+	var before: Dictionary = w.hooks().debug_raymarch_probe(origin, Vector3(0, -1, 0))
 	assert_bool(before["hit"]).is_true()
 	var terrain_y: float = before["pos"].y
 
 	# Place it once to learn where the lattice lands, then again to put it exactly between
 	# the camera and the ground it just hit. (The hook's offset is a delta, because the
 	# lattice origin is chosen by ve::plan_island_lattice and the caller cannot predict it.)
-	var probe_place: Dictionary = w.debug_place_test_island(0, Vector3i(25, 58, 25),
+	var probe_place: Dictionary = w.hooks().debug_place_test_island(0, Vector3i(25, 58, 25),
 		Vector3i(26, 59, 26), Vector3.ZERO)
 	assert_bool(probe_place.get("ok", false)).is_true()
 	var want := Vector3(20.4, 80.0, 20.4)
-	var d: Dictionary = w.debug_place_test_island(0, Vector3i(25, 58, 25), Vector3i(26, 59, 26),
+	var d: Dictionary = w.hooks().debug_place_test_island(0, Vector3i(25, 58, 25), Vector3i(26, 59, 26),
 		want - (probe_place["world_center"] as Vector3))
 	assert_bool(d.get("ok", false)).is_true()
 	assert_float((d["world_center"] as Vector3).distance_to(want)).is_less(0.01)
 
-	var after: Dictionary = w.debug_raymarch_probe(origin, Vector3(0, -1, 0))
+	var after: Dictionary = w.hooks().debug_raymarch_probe(origin, Vector3(0, -1, 0))
 	assert_bool(after["hit"]).is_true()
 	assert_float(after["pos"].y).override_failure_message(
 		"the island did not occlude the terrain").is_greater(terrain_y + 5.0)
@@ -137,28 +137,28 @@ func test_a_rotated_island_is_hit_where_the_transform_puts_it(timeout := 60000) 
 	# The same lump, rotated 90 degrees about y and moved. A rotation about the body origin
 	# moves the lattice, so a ray that hit before must miss and one aimed at the new place
 	# must hit -- which is what proves the inverse transform is applied and not skipped.
-	var d: Dictionary = w.debug_place_test_island_rotated(0, Vector3i(25, 58, 25),
+	var d: Dictionary = w.hooks().debug_place_test_island_rotated(0, Vector3i(25, 58, 25),
 		Vector3i(28, 59, 26), Vector3(0.0, 30.0, 0.0), PI * 0.5)
 	assert_bool(d.get("ok", false)).override_failure_message(str(d)).is_true()
 	var centre: Vector3 = d["world_center"]
-	var probe: Dictionary = w.debug_raymarch_probe(centre + Vector3(0, 6, 0), Vector3(0, -1, 0))
+	var probe: Dictionary = w.hooks().debug_raymarch_probe(centre + Vector3(0, 6, 0), Vector3(0, -1, 0))
 	assert_bool(probe["hit"]).is_true()
 	assert_float(probe["pos"].y).is_greater(centre.y - 3.0)
 	# The lump is 3 cells long on x and 2 on z; after the rotation its long axis is z, so a
 	# ray 1.6 m out along x -- inside the UNROTATED extent, outside the rotated one -- misses.
-	var side: Dictionary = w.debug_raymarch_probe(centre + Vector3(1.6, 6, 0), Vector3(0, -1, 0))
+	var side: Dictionary = w.hooks().debug_raymarch_probe(centre + Vector3(1.6, 6, 0), Vector3(0, -1, 0))
 	assert_float(side["pos"].y if side["hit"] else -1000.0).is_less(centre.y - 5.0)
 
 func test_a_cleared_slot_stops_being_marched(timeout := 60000) -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_place_test_island(0, Vector3i(25, 58, 25), Vector3i(26, 59, 26),
+	var d: Dictionary = w.hooks().debug_place_test_island(0, Vector3i(25, 58, 25), Vector3i(26, 59, 26),
 		Vector3(0.0, 30.0, 0.0))
 	assert_bool(d.get("ok", false)).is_true()
 	var centre: Vector3 = d["world_center"]
-	assert_bool(w.debug_raymarch_probe(centre + Vector3(0, 6, 0), Vector3(0, -1, 0))["hit"]
+	assert_bool(w.hooks().debug_raymarch_probe(centre + Vector3(0, 6, 0), Vector3(0, -1, 0))["hit"]
 		).is_true()
-	w.debug_clear_test_island(0)
-	var probe: Dictionary = w.debug_raymarch_probe(centre + Vector3(0, 6, 0), Vector3(0, -1, 0))
+	w.hooks().debug_clear_test_island(0)
+	var probe: Dictionary = w.hooks().debug_raymarch_probe(centre + Vector3(0, 6, 0), Vector3(0, -1, 0))
 	# The terrain 30 m below is still there, so this hits -- just not up here.
 	assert_float(probe["pos"].y if probe["hit"] else -1000.0).is_less(centre.y - 20.0)
 
@@ -171,14 +171,14 @@ const TAN_Y := 0.4
 
 func test_the_tile_mask_marks_the_tiles_the_island_covers(timeout := 60000) -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_place_test_island(0, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
+	var d: Dictionary = w.hooks().debug_place_test_island(0, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
 		Vector3(0.0, 30.0, 0.0))
 	assert_bool(d.get("ok", false)).is_true()
 	var centre: Vector3 = d["world_center"]
 
 	# Look straight at it from 20 m away, at 128x128 -> an 8x8 tile grid.
 	var eye := centre + Vector3(0.0, 0.0, 20.0)
-	var mask: PackedInt32Array = w.debug_island_tile_mask(eye, Vector3(0, 0, -1),
+	var mask: PackedInt32Array = w.hooks().debug_island_tile_mask(eye, Vector3(0, 0, -1),
 		TAN_X, TAN_Y, 128, 128)
 	assert_int(mask.size()).is_equal(64)
 	var set_tiles := 0
@@ -195,40 +195,40 @@ func test_the_tile_mask_marks_the_tiles_the_island_covers(timeout := 60000) -> v
 
 func test_an_island_behind_the_camera_marks_nothing(timeout := 60000) -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_place_test_island(0, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
+	var d: Dictionary = w.hooks().debug_place_test_island(0, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
 		Vector3(0.0, 30.0, 0.0))
 	assert_bool(d.get("ok", false)).is_true()
 	var centre: Vector3 = d["world_center"]
-	var mask: PackedInt32Array = w.debug_island_tile_mask(centre + Vector3(0, 0, 20),
+	var mask: PackedInt32Array = w.hooks().debug_island_tile_mask(centre + Vector3(0, 0, 20),
 		Vector3(0, 0, 1), TAN_X, TAN_Y, 128, 128)
 	for m in mask:
 		assert_int(m & 1).is_equal(0)
 
 func test_an_island_the_camera_is_inside_marks_every_tile(timeout := 60000) -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_place_test_island(0, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
+	var d: Dictionary = w.hooks().debug_place_test_island(0, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
 		Vector3(0.0, 30.0, 0.0))
 	assert_bool(d.get("ok", false)).is_true()
 	# Inside the lattice box, where the projection of its corners says nothing useful: the
 	# pass must fail SAFE and mark everything rather than culling the island away.
-	var mask: PackedInt32Array = w.debug_island_tile_mask(d["world_center"], Vector3(0, 0, -1),
+	var mask: PackedInt32Array = w.hooks().debug_island_tile_mask(d["world_center"], Vector3(0, 0, -1),
 		TAN_X, TAN_Y, 128, 128)
 	for m in mask:
 		assert_int(m & 1).is_not_equal(0)
 
 func test_a_cleared_slot_is_never_marked(timeout := 60000) -> void:
 	var w := make_world()
-	var a: Dictionary = w.debug_place_test_island(0, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
+	var a: Dictionary = w.hooks().debug_place_test_island(0, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
 		Vector3(0.0, 30.0, 0.0))
 	assert_bool(a.get("ok", false)).is_true()
 	# A second island in slot 3, in the same place, then killed. Its BYTES stay in the atlas
 	# by design (clear_slot only zeroes the descriptor), so this is the test that the
 	# descriptor -- not the bytes -- is what decides whether a slot is marched.
-	var b: Dictionary = w.debug_place_test_island(3, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
+	var b: Dictionary = w.hooks().debug_place_test_island(3, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
 		Vector3(0.0, 30.0, 0.0))
 	assert_bool(b.get("ok", false)).is_true()
 	var eye: Vector3 = (a["world_center"] as Vector3) + Vector3(0, 0, 20)
-	var both: PackedInt32Array = w.debug_island_tile_mask(eye, Vector3(0, 0, -1), TAN_X,
+	var both: PackedInt32Array = w.hooks().debug_island_tile_mask(eye, Vector3(0, 0, -1), TAN_X,
 		TAN_Y, 128, 128)
 	var saw_three := false
 	for m in both:
@@ -236,8 +236,8 @@ func test_a_cleared_slot_is_never_marked(timeout := 60000) -> void:
 			saw_three = true
 	assert_bool(saw_three).is_true()
 
-	w.debug_clear_test_island(3)
-	var after: PackedInt32Array = w.debug_island_tile_mask(eye, Vector3(0, 0, -1), TAN_X,
+	w.hooks().debug_clear_test_island(3)
+	var after: PackedInt32Array = w.hooks().debug_island_tile_mask(eye, Vector3(0, 0, -1), TAN_X,
 		TAN_Y, 128, 128)
 	var live_zero := false
 	for m in after:
@@ -248,7 +248,7 @@ func test_a_cleared_slot_is_never_marked(timeout := 60000) -> void:
 
 func test_non_multiple_of_16_viewport_marks_the_tile_that_contains_the_island(timeout := 60000) -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_place_test_island(0, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
+	var d: Dictionary = w.hooks().debug_place_test_island(0, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
 		Vector3(0.0, 30.0, 0.0))
 	assert_bool(d.get("ok", false)).is_true()
 	var centre: Vector3 = d["world_center"]
@@ -275,7 +275,7 @@ func test_non_multiple_of_16_viewport_marks_the_tile_that_contains_the_island(ti
 	const DIST := 20.0
 	const HALF_SPAN := 1.575 # (kIslandDim - 1) * kIslandVoxelFine / 2
 	var eye := centre + Vector3(-OFFSET_X, 0.0, DIST)
-	var mask: PackedInt32Array = w.debug_island_tile_mask(eye, Vector3(0, 0, -1), TAN_X,
+	var mask: PackedInt32Array = w.hooks().debug_island_tile_mask(eye, Vector3(0, 0, -1), TAN_X,
 		TAN_Y, VIEW_W, VIEW_H)
 	assert_int(mask.size()).is_equal(tiles_x * tiles_y)
 
@@ -294,7 +294,7 @@ func test_non_multiple_of_16_viewport_marks_the_tile_that_contains_the_island(ti
 
 func test_a_camera_just_outside_the_near_epsilon_still_marks_every_tile(timeout := 60000) -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_place_test_island(0, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
+	var d: Dictionary = w.hooks().debug_place_test_island(0, Vector3i(25, 62, 25), Vector3i(26, 63, 26),
 		Vector3(0.0, 30.0, 0.0))
 	assert_bool(d.get("ok", false)).is_true()
 	var centre: Vector3 = d["world_center"]
@@ -308,7 +308,7 @@ func test_a_camera_just_outside_the_near_epsilon_still_marks_every_tile(timeout 
 	const OUTSIDE := 0.005
 	var eye := centre + Vector3(0.0, 0.0, HALF_SPAN + OUTSIDE)
 	var dir := Vector3(0.004, 0.0, 1.0).normalized()
-	var mask: PackedInt32Array = w.debug_island_tile_mask(eye, dir, TAN_X, TAN_Y, 128, 128)
+	var mask: PackedInt32Array = w.hooks().debug_island_tile_mask(eye, dir, TAN_X, TAN_Y, 128, 128)
 	for m in mask:
 		assert_int(m & 1).is_not_equal(0)
 
@@ -324,23 +324,23 @@ func test_teardown_physics_clears_stale_island_handoffs(timeout := 60000) -> voi
 	var mat := PackedByteArray()
 	mat.resize(n)
 	mat.fill(0)
-	w.debug_queue_test_island_upload(0, sdf, mat, dim)
-	w.debug_queue_test_island_descriptors()
-	assert_int(w.debug_island_pending_uploads()).override_failure_message(
+	w.hooks().debug_queue_test_island_upload(0, sdf, mat, dim)
+	w.hooks().debug_queue_test_island_descriptors()
+	assert_int(w.hooks().debug_island_pending_uploads()).override_failure_message(
 		"test island upload was not queued").is_equal(1)
-	assert_int(w.debug_island_descriptors_pending()).override_failure_message(
+	assert_int(w.hooks().debug_island_descriptors_pending()).override_failure_message(
 		"test island descriptors were not marked dirty").is_equal(1)
 
-	w.debug_teardown_physics()
-	assert_int(w.debug_island_pending_uploads()).override_failure_message(
+	w.hooks().debug_teardown_physics()
+	assert_int(w.hooks().debug_island_pending_uploads()).override_failure_message(
 		"teardown left stale island uploads queued").is_equal(0)
-	assert_int(w.debug_island_descriptors_pending()).override_failure_message(
+	assert_int(w.hooks().debug_island_descriptors_pending()).override_failure_message(
 		"teardown left stale island descriptors dirty").is_equal(0)
 
 	# Reinitializing physics must not drain those cleared entries into a fresh GPU pool.
-	assert_bool(w.debug_init_physics()).is_true()
-	assert_int(w.debug_island_pending_uploads()).is_equal(0)
-	assert_int(w.debug_island_descriptors_pending()).is_equal(0)
+	assert_bool(w.hooks().debug_init_physics()).is_true()
+	assert_int(w.hooks().debug_island_pending_uploads()).is_equal(0)
+	assert_int(w.hooks().debug_island_descriptors_pending()).is_equal(0)
 
 func test_teardown_physics_preserves_committed_field_volume_uploads(timeout := 60000) -> void:
 	var w := make_world()
@@ -354,23 +354,23 @@ func test_teardown_physics_preserves_committed_field_volume_uploads(timeout := 6
 	var mat := PackedByteArray()
 	mat.resize(n)
 	mat.fill(0)
-	w.debug_queue_committed_field_volume_upload(0, sdf, mat, dim)
-	assert_int(w.debug_island_pending_uploads()).override_failure_message(
+	w.hooks().debug_queue_committed_field_volume_upload(0, sdf, mat, dim)
+	assert_int(w.hooks().debug_island_pending_uploads()).override_failure_message(
 		"committed field-volume upload was not queued").is_equal(1)
 
-	w.debug_teardown_physics()
-	assert_int(w.debug_island_pending_uploads()).override_failure_message(
+	w.hooks().debug_teardown_physics()
+	assert_int(w.hooks().debug_island_pending_uploads()).override_failure_message(
 		"teardown dropped a field-volume upload whose slot is pinned by a committed edit").is_equal(1)
 
 	# Reinitializing physics must leave the committed upload queued so the new GPU pool can
 	# receive the bytes before any op that names the pinned slot is evaluated.
-	assert_bool(w.debug_init_physics()).is_true()
-	assert_int(w.debug_island_pending_uploads()).override_failure_message(
+	assert_bool(w.hooks().debug_init_physics()).is_true()
+	assert_int(w.hooks().debug_island_pending_uploads()).override_failure_message(
 		"committed field-volume upload was not preserved across physics re-init").is_equal(1)
 
 	# The fresh MeshService must also have received the pinned volume itself, not just a
 	# render-device queue entry; otherwise the worker's field evaluation reads a missing slot.
-	var worker_slots: PackedInt32Array = w.debug_mesh_volume_slots()
+	var worker_slots: PackedInt32Array = w.hooks().debug_mesh_volume_slots()
 	assert_bool(worker_slots.has(0)).override_failure_message(
 		"new MeshService did not receive the pinned-volume replay: %s" % worker_slots
 		).is_true()
@@ -396,7 +396,7 @@ func is_magenta(c: Color) -> bool:
 
 func test_no_ray_across_a_freed_island_resolves_to_error_magenta(timeout := 90000) -> void:
 	var w := make_world()
-	var ground: Dictionary = w.debug_raycast(Vector3(20.4, 90.0, 20.4), Vector3(0, -1, 0))
+	var ground: Dictionary = w.hooks().debug_raycast(Vector3(20.4, 90.0, 20.4), Vector3(0, -1, 0))
 	assert_bool(ground["hit"]).override_failure_message(
 		"could not find the terrain surface to cut the island out of").is_true()
 	var top := int(floor((ground["pos"] as Vector3).y / 0.8))
@@ -404,7 +404,7 @@ func test_no_ray_across_a_freed_island_resolves_to_error_magenta(timeout := 9000
 	var lo := Vector3i(25, top - 1, 25)
 	var hi := Vector3i(26, top, 26)
 
-	var d: Dictionary = w.debug_place_test_island(0, lo, hi, Vector3(0.0, 30.0, 0.0))
+	var d: Dictionary = w.hooks().debug_place_test_island(0, lo, hi, Vector3(0.0, 30.0, 0.0))
 	assert_bool(d.get("ok", false)).override_failure_message(str(d)).is_true()
 	assert_int(d["solid"]).override_failure_message(
 		"the component came out empty, so there is no surface to shade").is_greater(0)
@@ -415,7 +415,7 @@ func test_no_ray_across_a_freed_island_resolves_to_error_magenta(timeout := 9000
 	for iz in range(10):
 		for ix in range(10):
 			var off := Vector3((ix - 4.5) * 0.16, 6.0, (iz - 4.5) * 0.16)
-			var probe: Dictionary = w.debug_raymarch_probe(centre + off, Vector3(0, -1, 0))
+			var probe: Dictionary = w.hooks().debug_raymarch_probe(centre + off, Vector3(0, -1, 0))
 			if not probe["hit"]:
 				continue
 			if (probe["pos"] as Vector3).y < centre.y - 3.0:
@@ -436,9 +436,9 @@ func test_shared_storage_bounds_hold_for_an_island_render_world() -> void:
 	# byte count here is 544 x 272 x 544; the DEFAULT 1088 x 544 x 544 count is asserted
 	# by tests/test_stored_normal_pool.gd.
 	var w := make_world()
-	var stats: Dictionary = w.debug_stored_normal_stats()
+	var stats: Dictionary = w.hooks().debug_stored_normal_stats()
 	assert_int(stats["capacity_bytes"]).is_equal(33554432)
 	assert_int(stats["live_bytes"]).is_less_equal(33554432)
 	assert_int(stats["high_water_bytes"]).is_less_equal(33554432)
-	var atlas: Dictionary = w.debug_atlas_stats()
+	var atlas: Dictionary = w.hooks().debug_atlas_stats()
 	assert_int(atlas["sdf_atlas_bytes"]).is_equal(544 * 272 * 544)

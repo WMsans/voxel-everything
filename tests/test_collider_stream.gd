@@ -32,7 +32,7 @@ func make_world() -> VoxelWorld:
 	w.shape_builds_per_frame = 4
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_physics()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
 # Settled means the streamer owes nothing: no resident chunk still waiting for a collider and
@@ -47,8 +47,8 @@ func make_world() -> VoxelWorld:
 func settle(w: VoxelWorld, center: Vector3, frames := 6000) -> bool:
 	var quiet := 0
 	for i in range(frames):
-		w.debug_physics_frame(center)
-		var st := w.debug_physics_stats()
+		w.hooks().debug_physics_frame(center)
+		var st := w.hooks().debug_physics_stats()
 		quiet = quiet + 1 if st["chunks_pending"] == 0 and st["queued"] == 0 else 0
 		if quiet >= 4:
 			return true
@@ -84,7 +84,7 @@ func test_a_server_built_concave_shape_is_hit_by_a_ray(timeout := 20000) -> void
 func test_colliders_appear_around_the_player(timeout := 60000) -> void:
 	var w := make_world()
 	settle(w, CENTER)
-	var st: Dictionary = w.debug_physics_stats()
+	var st: Dictionary = w.hooks().debug_physics_stats()
 	assert_int(st["chunks_resident"]).is_greater(3)
 	assert_int(st["chunks_pending"]).is_equal(0)
 	assert_int(st["bodies"]).is_greater(3)
@@ -102,7 +102,7 @@ func test_a_physics_ray_lands_on_the_analytic_surface(timeout := 60000) -> void:
 	settle(w, CENTER)
 	await get_tree().physics_frame
 
-	var oracle: Dictionary = w.debug_raycast(Vector3(CENTER.x, 80.0, CENTER.z), Vector3(0, -1, 0))
+	var oracle: Dictionary = w.hooks().debug_raycast(Vector3(CENTER.x, 80.0, CENTER.z), Vector3(0, -1, 0))
 	assert_bool(oracle["hit"]).is_true()
 	var hit := ray(Vector3(CENTER.x, 80.0, CENTER.z), Vector3(CENTER.x, 20.0, CENTER.z))
 	assert_bool(hit.is_empty()).override_failure_message(
@@ -116,14 +116,14 @@ func test_a_physics_ray_lands_on_the_analytic_surface(timeout := 60000) -> void:
 func test_walking_away_releases_the_far_colliders(timeout := 90000) -> void:
 	var w := make_world()
 	settle(w, CENTER)
-	var before: Dictionary = w.debug_physics_stats()
+	var before: Dictionary = w.hooks().debug_physics_stats()
 	assert_int(before["bodies"]).is_greater(3)
 	assert_int(before["bodies_raw"]).is_greater_equal(before["bodies"])
 
 	var far := CENTER + Vector3(80.0, 0.0, 0.0)
 	settle(w, far)
 	await get_tree().physics_frame
-	var after: Dictionary = w.debug_physics_stats()
+	var after: Dictionary = w.hooks().debug_physics_stats()
 	# The set is bounded by the radius, not by how far the player has walked.
 	assert_int(after["bodies"]).is_less_equal(before["bodies"] + 4)
 	assert_int(after["bodies_raw"]).is_greater_equal(after["bodies"])
@@ -137,12 +137,12 @@ func test_walking_away_releases_the_far_colliders(timeout := 90000) -> void:
 func test_an_empty_chunk_costs_no_body_and_is_not_retried(timeout := 60000) -> void:
 	var w := make_world()
 	settle(w, CENTER)
-	var st: Dictionary = w.debug_physics_stats()
+	var st: Dictionary = w.hooks().debug_physics_stats()
 	# The probe is conservative, so some resident candidates mesh to nothing; those release
 	# their slot instead of holding a body, and the cached verdict stops them coming back.
 	assert_int(st["bodies"]).is_less_equal(st["chunks_resident"])
 	for i in range(20):
-		assert_int(w.debug_physics_frame(CENTER)).is_equal(0)
+		assert_int(w.hooks().debug_physics_frame(CENTER)).is_equal(0)
 	w.free()
 
 # Spec section 6 asks for "a ~64 m radius around the player + SMALL bubbles around active
@@ -168,18 +168,18 @@ func test_a_body_bubble_streams_its_own_small_ball_not_the_players(timeout := 90
 	w.shape_builds_per_frame = 4
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_physics()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
 
 	settle(w, CENTER)
-	var alone: int = w.debug_physics_stats()["chunks_resident"]
+	var alone: int = w.hooks().debug_physics_stats()["chunks_resident"]
 	assert_int(alone).override_failure_message(
 		"the player's own ball streamed nothing").is_greater(8)
 
 	# A body far outside the player's own 25 m ball, so everything it adds is its bubble.
 	var body := CENTER + Vector3(80.0, 0.0, 0.0)
-	w.debug_set_physics_bubbles(PackedVector3Array([body]))
+	w.hooks().debug_set_physics_bubbles(PackedVector3Array([body]))
 	settle(w, CENTER)
-	var withb: int = w.debug_physics_stats()["chunks_resident"]
+	var withb: int = w.hooks().debug_physics_stats()["chunks_resident"]
 
 	# It plans SOMETHING: a body with no colliders under it would fall through the world.
 	assert_int(withb).override_failure_message(
@@ -191,7 +191,7 @@ func test_a_body_bubble_streams_its_own_small_ball_not_the_players(timeout := 90
 		% [w.physics_bubble_radius_m, withb - alone, alone]).is_less(alone / 2)
 
 	# Dropping the body gives its chunks back.
-	w.debug_set_physics_bubbles(PackedVector3Array())
+	w.hooks().debug_set_physics_bubbles(PackedVector3Array())
 	settle(w, CENTER)
-	assert_int(w.debug_physics_stats()["chunks_resident"]).is_less_equal(alone)
+	assert_int(w.hooks().debug_physics_stats()["chunks_resident"]).is_less_equal(alone)
 	w.free()

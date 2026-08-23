@@ -72,7 +72,7 @@ func _update_text() -> void:
 
 	var s := "world: booting"
 	if _world and _world.is_initialized():
-		var st: Dictionary = _world.debug_stream_stats()
+		var st: Dictionary = _world.hooks().debug_stream_stats()
 		s = "regions %d  edits %d  ovf %d  ovr %d/%d  cons %d" % [
 			st.get("resident_regions", 0), st.get("frame_edits", 0),
 			st.get("overflow_ever", 0), st.get("override_bricks", 0),
@@ -81,14 +81,14 @@ func _update_text() -> void:
 	var isl := ""
 	var lod := ""
 	if _world:
-		var ph: Dictionary = _world.debug_physics_stats()
+		var ph: Dictionary = _world.hooks().debug_physics_stats()
 		# build_ms is the Jolt BVH build for the last chunk; it is the one physics number
 		# that can show up in the frame time (spec section 6 budgets nothing for it, and the
 		# streamer throttles it to shape_builds_per_frame).
 		p = "  |  chunks %d (+%d)  bodies %d  build %.1fms" % [
 			ph.get("chunks_resident", 0), ph.get("chunks_pending", 0),
 			ph.get("bodies", 0), ph.get("build_ms", 0.0)]
-		var st: Dictionary = _world.debug_island_stats()
+		var st: Dictionary = _world.hooks().debug_island_stats()
 		# islands/debris are what is in the air right now; spawned/merged are the running
 		# totals, so a demo recording can be checked afterwards for whether the loop closed.
 		isl = "  |  isl %d dbr %d (+%d/-%d)  cx %d  %.1fms" % [
@@ -96,8 +96,8 @@ func _update_text() -> void:
 			st.get("islands_spawned", 0), st.get("islands_merged", 0),
 			st.get("connectivity_runs", 0), st.get("manager_ms", 0.0)]
 		if _world.is_initialized():
-			var ld: Dictionary = _world.debug_lod_stats()
-			var pf: Dictionary = _world.debug_perf_stats()
+			var ld: Dictionary = _world.hooks().debug_lod_stats()
+			var pf: Dictionary = _world.hooks().debug_perf_stats()
 			var pages_used: int = int(ld.get("pages_used", 0))
 			var pages_total: int = int(ld.get("pages_total", 0))
 			var culled: float = float(ld.get("culled_ratio", 0.0))
@@ -110,7 +110,7 @@ func _update_text() -> void:
 					" %.2fms cpu" % float(pf.get("lod_ms", 0.0)))
 	var norm := ""
 	if _world and _world.is_initialized():
-		var stats: Dictionary = _world.debug_stored_normal_stats()
+		var stats: Dictionary = _world.hooks().debug_stored_normal_stats()
 		if not stats.is_empty():
 			norm = "  |  " + ("norm %.1f/%.1f MiB hi %.1f fail %d fallback %d" % [
 				stats.normal_live_bytes / 1048576.0,
@@ -119,7 +119,7 @@ func _update_text() -> void:
 				stats.normal_allocation_failures,
 				stats.normal_fallback_hits])
 	var gpu_line := "GPU n/a"
-	var gt: Dictionary = _world.debug_gpu_timings() if _world else {}
+	var gt: Dictionary = _world.hooks().debug_gpu_timings() if _world else {}
 	if gt.get("valid", false):
 		var shadows := maxf(float(gt.get("sun_shadow_gpu_ms", -1.0)), 0.0) + \
 				maxf(float(gt.get("contact_gpu_ms", -1.0)), 0.0)
@@ -151,7 +151,7 @@ func _reticle_circle_radius() -> float:
 	var cam: Camera3D = viewport.get_camera_3d() if viewport else null
 	if cam == null:
 		return 0.0
-	var hit: Dictionary = _world.debug_raycast(
+	var hit: Dictionary = _world.hooks().debug_raycast(
 		cam.global_position, -cam.global_transform.basis.z)
 	if not hit["hit"]:
 		return 0.0

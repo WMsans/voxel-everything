@@ -37,7 +37,7 @@ const SETTLE_QUIET_FRAMES := 6
 func settle(w: VoxelWorld, cam: Vector3) -> void:
 	var quiet := 0
 	for i in range(120):
-		quiet = quiet + 1 if w.debug_stream_frame(cam) == 0 else 0
+		quiet = quiet + 1 if w.hooks().debug_stream_frame(cam) == 0 else 0
 		if quiet >= SETTLE_QUIET_FRAMES:
 			return
 	fail("streamer did not settle within 120 frames")
@@ -45,14 +45,14 @@ func settle(w: VoxelWorld, cam: Vector3) -> void:
 func test_streaming_loads_the_camera_neighbourhood() -> void:
 	var w := make_world()
 	settle(w, Vector3(20, 56.2, 20)) # 56.2 m: above the local surface (51.2 +- 10)
-	var s: Dictionary = w.debug_stream_stats()
+	var s: Dictionary = w.hooks().debug_stream_stats()
 	assert_int(s["resident_regions"]).is_greater(4)
 	assert_int(s["overflow_ever"]).is_equal(0)
 	# The camera at (20, 56.2, 20) sits inside region (0, 2, 0) (world y [51.2, 76.8));
 	# region (0, 1, 0) (world y [25.6, 51.2)) is 5 m below it and also resident.
-	var rslot: int = w.debug_region_map_entry(Vector3i(0, 2, 0))
+	var rslot: int = w.hooks().debug_region_map_entry(Vector3i(0, 2, 0))
 	assert_int(rslot).is_greater_equal(0)
-	assert_int(w.debug_region_map_entry(Vector3i(0, 1, 0))).is_greater_equal(0)
+	assert_int(w.hooks().debug_region_map_entry(Vector3i(0, 1, 0))).is_greater_equal(0)
 	# The column at world (12.8, *, 12.8) crosses the surface near brick 64 (world y
 	# 51.2): sweep bricks y in [56, 72) (world [44.8, 57.6) m) and require the GPU to hold
 	# exactly the bricks the CPU probe calls active. Each swept brick is read from the
@@ -61,10 +61,10 @@ func test_streaming_loads_the_camera_neighbourhood() -> void:
 	var gpu_match := 0
 	for by in range(56, 72):
 		var brick := Vector3i(16, by, 16)
-		if w.debug_brick_has_surface(brick, PackedByteArray(), 0):
+		if w.hooks().debug_brick_has_surface(brick, PackedByteArray(), 0):
 			cpu_active += 1
-			var owner_slot: int = w.debug_region_map_entry(Vector3i(0, floori(by / 32.0), 0))
-			if owner_slot >= 0 and w.debug_region_table_slot(owner_slot, brick) >= 0:
+			var owner_slot: int = w.hooks().debug_region_map_entry(Vector3i(0, floori(by / 32.0), 0))
+			if owner_slot >= 0 and w.hooks().debug_region_table_slot(owner_slot, brick) >= 0:
 				gpu_match += 1
 	assert_int(cpu_active).override_failure_message(
 		"column holds no surface; check the world-origin maths").is_greater(0)
@@ -73,24 +73,24 @@ func test_streaming_loads_the_camera_neighbourhood() -> void:
 func test_moving_the_camera_streams_the_new_neighbourhood_and_recycles_slots() -> void:
 	var w := make_world()
 	settle(w, Vector3(20, 56.2, 20))
-	var used_before := ATLAS.x * ATLAS.y * ATLAS.z - int(w.debug_atlas_stats()["free_slots"])
+	var used_before := ATLAS.x * ATLAS.y * ATLAS.z - int(w.hooks().debug_atlas_stats()["free_slots"])
 	assert_int(used_before).is_greater(0)
-	assert_bool(w.debug_region_map_consistent()).is_true()
+	assert_bool(w.hooks().debug_region_map_consistent()).is_true()
 
 	settle(w, Vector3(90, 56.2, 90))
 	# Region (0, -1, 0) (world x,z [0, 25.6), y [-25.6, 0)) is ~107 m from the new camera,
 	# far past the 23 m evict boundary.
-	assert_int(w.debug_slot_of_region(Vector3i(0, -1, 0))).is_equal(-1)
-	assert_int(w.debug_region_map_entry(Vector3i(0, -1, 0))).is_equal(-1)
+	assert_int(w.hooks().debug_slot_of_region(Vector3i(0, -1, 0))).is_equal(-1)
+	assert_int(w.hooks().debug_region_map_entry(Vector3i(0, -1, 0))).is_equal(-1)
 	# The new neighbourhood is resident and the residency core agrees with the GPU map:
 	# the camera at (90, 56.2, 90) sits inside region (3, 2, 3) (x,z [76.8, 102.4),
 	# y [51.2, 76.8)) — distance 0, so it must be resident.
-	assert_int(w.debug_region_map_entry(Vector3i(3, 2, 3))).is_greater_equal(0)
-	assert_bool(w.debug_region_map_consistent()).is_true()
+	assert_int(w.hooks().debug_region_map_entry(Vector3i(3, 2, 3))).is_greater_equal(0)
+	assert_bool(w.hooks().debug_region_map_consistent()).is_true()
 	# Evicted regions returned their atlas slots: no leak, no overflow, no unbounded drop.
-	var s: Dictionary = w.debug_stream_stats()
+	var s: Dictionary = w.hooks().debug_stream_stats()
 	assert_int(s["overflow_ever"]).is_equal(0)
-	var free_now: int = w.debug_atlas_stats()["free_slots"]
+	var free_now: int = w.hooks().debug_atlas_stats()["free_slots"]
 	# used_now < used_before + slack: slack tolerates terrain-density variation between the
 	# two spots; a leak of the whole old neighbourhood (~6k bricks) would blow past it.
 	assert_int(free_now).is_greater(ATLAS.x * ATLAS.y * ATLAS.z - used_before - 2048)
@@ -126,16 +126,16 @@ func test_an_oversubscribed_atlas_keeps_slots_for_edits() -> void:
 	w.ensure_initialized()
 	var cam := Vector3(40, 56.2, 40)
 	for i in range(120):
-		if w.debug_stream_frame(cam) == 0:
+		if w.hooks().debug_stream_frame(cam) == 0:
 			break
 
 	# The atlas is over-subscribed, so some regions must stay unloaded — but the free list
 	# must never bottom out, and no brick may be dropped.
-	var stats: Dictionary = w.debug_atlas_stats()
+	var stats: Dictionary = w.hooks().debug_atlas_stats()
 	assert_int(int(stats["free_slots"])).override_failure_message(
 		"streaming drained the atlas free list to %d: an edit can no longer allocate"
 		% int(stats["free_slots"])).is_greater(0)
-	assert_int(int(w.debug_stream_stats()["overflow_ever"])).override_failure_message(
+	assert_int(int(w.hooks().debug_stream_stats()["overflow_ever"])).override_failure_message(
 		"streaming tripped the fail-soft drop arm; bricks were lost").is_equal(0)
 
 	# The user-visible half: an edit under a full atlas must still allocate every brick it
@@ -143,13 +143,13 @@ func test_an_oversubscribed_atlas_keeps_slots_for_edits() -> void:
 	# the GPU region tables over the op's whole brick range.
 	var tool: VoxelEditTool = ClassDB.instantiate("VoxelEditTool")
 	w.add_child(tool)
-	var hit: Dictionary = w.debug_raycast(Vector3(40, 80, 40), Vector3(0, -1, 0))
+	var hit: Dictionary = w.hooks().debug_raycast(Vector3(40, 80, 40), Vector3(0, -1, 0))
 	assert_bool(hit["hit"]).is_true()
 	var hp: Vector3 = hit["pos"]
 	var r: Dictionary = tool.apply_sphere_subtract(hp, 2.5)
 	assert_array(r["rejected"]).is_empty()
 	for i in range(10):
-		w.debug_stream_frame(cam)
+		w.hooks().debug_stream_frame(cam)
 
 	var ops := make_op(0, 0, hp, 2.5)
 	var corner := (hp - Vector3.ONE * 2.6) / 0.8 # ve::op_brick_range, kBrickSize = 0.8 m
@@ -160,19 +160,19 @@ func test_an_oversubscribed_atlas_keeps_slots_for_edits() -> void:
 		for by in range(lo.y, lo.y + 9):
 			for bz in range(lo.z, lo.z + 9):
 				var brick := Vector3i(bx, by, bz)
-				if not w.debug_brick_has_surface(brick, ops, 1):
+				if not w.hooks().debug_brick_has_surface(brick, ops, 1):
 					continue
 				active += 1
 				var region := Vector3i(floori(bx / 32.0), floori(by / 32.0), floori(bz / 32.0))
-				var rslot: int = w.debug_region_map_entry(region)
-				if rslot < 0 or w.debug_region_table_slot(rslot, brick) < 0:
+				var rslot: int = w.hooks().debug_region_map_entry(region)
+				if rslot < 0 or w.hooks().debug_region_table_slot(rslot, brick) < 0:
 					missing += 1
 	assert_int(active).override_failure_message(
 		"the edit activated no bricks; check the aim").is_greater(0)
 	assert_int(missing).override_failure_message(
 		"%d of %d bricks the edit activated hold no atlas slot — the shattered-terrain bug"
 		% [missing, active]).is_equal(0)
-	assert_int(int(w.debug_stream_stats()["overflow_ever"])).override_failure_message(
+	assert_int(int(w.hooks().debug_stream_stats()["overflow_ever"])).override_failure_message(
 		"the edit tripped the fail-soft drop arm").is_equal(0)
 
 func test_flight_never_drops_the_bricks_it_is_streaming_in() -> void:
@@ -200,8 +200,8 @@ func test_flight_never_drops_the_bricks_it_is_streaming_in() -> void:
 	var dropped := 0
 	for i in range(150):
 		cam += Vector3(0.42, 0.0, 0.42)
-		w.debug_stream_frame(cam)
-		var a: Dictionary = w.debug_atlas_stats()
+		w.hooks().debug_stream_frame(cam)
+		var a: Dictionary = w.hooks().debug_atlas_stats()
 		if int(a["free_slots"]) <= 0:
 			starved += 1
 		if int(a["overflow"]) & 1:
@@ -215,7 +215,7 @@ func test_flight_never_drops_the_bricks_it_is_streaming_in() -> void:
 	# The user-visible half: the ground under the camera is whole DURING the flight, not
 	# merely after a repair sweep has caught up.
 	var region := Vector3i(floori(cam.x / 25.6), floori(cam.y / 25.6), floori(cam.z / 25.6))
-	var rslot: int = w.debug_region_map_entry(region)
+	var rslot: int = w.hooks().debug_region_map_entry(region)
 	assert_int(rslot).override_failure_message(
 		"the camera's own region is not resident").is_greater_equal(0)
 	var active := 0
@@ -224,10 +224,10 @@ func test_flight_never_drops_the_bricks_it_is_streaming_in() -> void:
 		for bz in range(region.z * 32, region.z * 32 + 32, 3):
 			for by in range(region.y * 32, region.y * 32 + 32):
 				var brick := Vector3i(bx, by, bz)
-				if not w.debug_brick_has_surface(brick, PackedByteArray(), 0):
+				if not w.hooks().debug_brick_has_surface(brick, PackedByteArray(), 0):
 					continue
 				active += 1
-				if w.debug_region_table_slot(rslot, brick) < 0:
+				if w.hooks().debug_region_table_slot(rslot, brick) < 0:
 					missing += 1
 	assert_int(active).is_greater(0)
 	assert_int(missing).override_failure_message(
@@ -260,10 +260,10 @@ func test_a_starved_atlas_heals_instead_of_keeping_the_holes() -> void:
 
 	var cam := Vector3(40, 56.2, 40)
 	for i in range(60):
-		if w.debug_stream_frame(cam) == 0 and i > 5:
+		if w.hooks().debug_stream_frame(cam) == 0 and i > 5:
 			break
 
-	var hit: Dictionary = w.debug_raycast(Vector3(40, 80, 40), Vector3(0, -1, 0))
+	var hit: Dictionary = w.hooks().debug_raycast(Vector3(40, 80, 40), Vector3(0, -1, 0))
 	assert_bool(hit["hit"]).is_true()
 	var hp: Vector3 = hit["pos"]
 	# Clear of the ground, so the whole shell of each ball is new surface, and inside the one
@@ -275,20 +275,20 @@ func test_a_starved_atlas_heals_instead_of_keeping_the_holes() -> void:
 		tool.apply_sphere_add(c, 5.0, 4)
 		ops.append_array(make_op(1, 4, c, 5.0)) # 1 = ve::kOpSphereAdd
 		for i in range(4):
-			w.debug_stream_frame(cam)
-	assert_int(int(w.debug_stream_stats()["overflow_ever"]) & 1).override_failure_message(
+			w.hooks().debug_stream_frame(cam)
+	assert_int(int(w.hooks().debug_stream_stats()["overflow_ever"]) & 1).override_failure_message(
 		"the edits did not starve the atlas; this test is not exercising the repair path"
 		).is_not_equal(0)
 
 	for i in range(240):
-		w.debug_stream_frame(cam)
-	assert_int(int(w.debug_atlas_stats()["free_slots"])).override_failure_message(
+		w.hooks().debug_stream_frame(cam)
+	assert_int(int(w.hooks().debug_atlas_stats()["free_slots"])).override_failure_message(
 		"the give-back never returned a slot; the atlas is still on the floor").is_greater(0)
 
 	# Every brick the CPU calls active in the region under the camera must hold a slot: the
 	# sweep re-marked it and the give-back made room for what it re-marked.
 	var region := Vector3i(floori(cam.x / 25.6), floori(cam.y / 25.6), floori(cam.z / 25.6))
-	var rslot: int = w.debug_region_map_entry(region)
+	var rslot: int = w.hooks().debug_region_map_entry(region)
 	assert_int(rslot).override_failure_message(
 		"the camera's own region is not resident").is_greater_equal(0)
 	var active := 0
@@ -297,10 +297,10 @@ func test_a_starved_atlas_heals_instead_of_keeping_the_holes() -> void:
 		for bz in range(region.z * 32, region.z * 32 + 32, 3):
 			for by in range(region.y * 32, region.y * 32 + 32):
 				var brick := Vector3i(bx, by, bz)
-				if not w.debug_brick_has_surface(brick, ops, centres.size()):
+				if not w.hooks().debug_brick_has_surface(brick, ops, centres.size()):
 					continue
 				active += 1
-				if w.debug_region_table_slot(rslot, brick) < 0:
+				if w.hooks().debug_region_table_slot(rslot, brick) < 0:
 					missing += 1
 	assert_int(active).is_greater(0)
 	assert_int(missing).override_failure_message(
@@ -327,20 +327,20 @@ func test_job_overflow_recovers_via_force_regen() -> void:
 
 	# Frame 1: the first stream frame marks the camera neighbourhood (~6k surface
 	# bricks) against an 8-job list — the job counter overflows.
-	w.debug_stream_frame(Vector3(20, 56.2, 20))
-	var a: Dictionary = w.debug_atlas_stats()
+	w.hooks().debug_stream_frame(Vector3(20, 56.2, 20))
+	var a: Dictionary = w.hooks().debug_atlas_stats()
 	assert_int(int(a["overflow"]) & 2).override_failure_message(
 		"job-list overflow bit (2) was not set after the first stream frame"
 		).is_not_equal(0)
 
 	# Slots were still assigned during the overflowed mark: the slot assignment precedes
 	# the job-count check in brick_mark.comp.glsl, so surface bricks hold valid slots.
-	var rslot: int = w.debug_region_map_entry(Vector3i(0, 2, 0))
+	var rslot: int = w.hooks().debug_region_map_entry(Vector3i(0, 2, 0))
 	assert_int(rslot).is_greater_equal(0)
 	var slotted := 0
 	for by in range(64, 76):
 		var brick := Vector3i(16, by, 16)
-		if w.debug_region_table_slot(rslot, brick) >= 0:
+		if w.hooks().debug_region_table_slot(rslot, brick) >= 0:
 			slotted += 1
 	assert_int(slotted).override_failure_message(
 		"no surface bricks hold slots after the overflowed mark").is_greater(0)
@@ -356,18 +356,18 @@ func test_job_overflow_recovers_via_force_regen() -> void:
 	# the loop waits for it rather than hardcoding either number.
 	var jobs := PackedInt32Array()
 	for i in range(30):
-		w.debug_stream_frame(Vector3(20, 56.2, 20))
-		jobs = w.debug_jobs()
+		w.hooks().debug_stream_frame(Vector3(20, 56.2, 20))
+		jobs = w.hooks().debug_jobs()
 		if jobs.size() >= 8:
 			break
 	assert_int(jobs.size()).override_failure_message(
 		"no recovery frame ever enqueued jobs after the overflow").is_greater_equal(8)
 	var n := jobs.size() / 8
 	assert_int(n).is_greater(0)
-	var d: Dictionary = w.debug_brick_diff(
+	var d: Dictionary = w.hooks().debug_brick_diff(
 		Vector3i(jobs[0], jobs[1], jobs[2]), jobs[4], PackedByteArray(), 0)
 	assert_int(int(d["sdf_max_diff"])).override_failure_message(
 		"recovery frame did not regenerate the job's brick").is_less_equal(1)
 	assert_bool(d["palette_match"]).is_true()
 	# Fail-soft: the world keeps streaming afterwards, overflow stays contained.
-	assert_int(w.debug_stream_frame(Vector3(20, 56.2, 20))).is_greater_equal(0)
+	assert_int(w.hooks().debug_stream_frame(Vector3(20, 56.2, 20))).is_greater_equal(0)

@@ -16,8 +16,9 @@
 
 namespace godot {
 
-struct PendingEdit;      // defined in voxel_world.h; here only the pointer type is needed
-struct OccupancyBlock;   // defined in voxel_world.h; here only the pointer type is needed
+struct PendingEdit;      // defined in core/world_store.h; here only the pointer type is needed
+struct OccupancyBlock;   // defined in core/world_store.h; here only the pointer type is needed
+class WorldStore;
 class MeshService;
 
 // Drives one frame of world maintenance on the render thread: residency loads/evictions,
@@ -27,8 +28,7 @@ class WorldStreamer {
 public:
 	void initialize(ve::RegionResidency *residency, ve::EditLog *edit_log,
 			std::mutex *edit_mutex, std::vector<PendingEdit> *pending, GpuAtlas *atlas,
-			RegionPass *region_pass, BrickGenPass *brick_gen, std::mutex *occ_mutex,
-			std::vector<OccupancyBlock> *occ_inbox, std::atomic<int64_t> *edit_seq,
+			RegionPass *region_pass, BrickGenPass *brick_gen, WorldStore *store,
 			const ve::OverrideStore *overrides,
 			const std::map<std::tuple<int, int, int>, int> *override_tables);
 	void set_mesh_service(MeshService *mesh) { mesh_ = mesh; }
@@ -109,9 +109,9 @@ private:
 	// exactly what these entries describe.
 	std::vector<OccupancyBlock> occ_pending_;  // region + seq only; bytes filled on arrival
 	OccupancyRead occ_reads_[kOccupancyReads];
-	std::mutex *occ_mutex_ = nullptr;
-	std::vector<OccupancyBlock> *occ_inbox_ = nullptr;
-	std::atomic<int64_t> *edit_seq_ = nullptr;
+	// Owns occupancy handoff (enqueue_occupancy_block) and the edit_seq atomic the marks are
+	// stamped with. Borrowed from VoxelWorld.
+	WorldStore *store_ = nullptr;
 
 	void note_marked(ve::IVec3 region, int64_t seq);
 	void pump_occupancy(RenderingDevice *rd);

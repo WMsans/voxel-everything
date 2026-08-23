@@ -33,8 +33,8 @@ func test_quality_selection_replaces_the_world_settings() -> void:
 	var quality: OptionButton = menu.get_node("Controls/Quality")
 	quality.emit_signal("item_selected", 0)
 	assert_int(world.quality_tier).is_equal(0)
-	assert_bool(world.debug_beauty_settings()["ssr"]).is_false()
-	assert_bool(world.debug_beauty_settings()["outlines"]).is_false()
+	assert_bool(world.hooks().debug_beauty_settings()["ssr"]).is_false()
+	assert_bool(world.hooks().debug_beauty_settings()["outlines"]).is_false()
 
 func test_checkbox_writes_only_its_named_field() -> void:
 	var pair: Array = make_pair()
@@ -55,4 +55,4 @@ func test_islands_toggle_is_a_real_render_effect() -> void:
 	var islands: CheckBox = menu.get_node("Controls/islands")
 	islands.emit_signal("toggled", false)
 	assert_bool(world.get_effect_enabled("islands")).is_false()
-	assert_bool(world.debug_beauty_settings()["islands"]).is_false()
+	assert_bool(world.hooks().debug_beauty_settings()["islands"]).is_false()

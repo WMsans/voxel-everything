@@ -88,7 +88,7 @@ func _process(_delta: float) -> void:
 		# The benchmark harness calls debug_lod_stats() every frame, which is what triggers
 		# ensure_lod() and starts far-field builds. The capture rig has no benchmark loop, so
 		# kick the LoD once here; otherwise the portfolio capture would record near field only.
-		_world.debug_lod_stats()
+		_world.hooks().debug_lod_stats()
 	_frame += 1
 	if _frame < 0:
 		return                    # warmup: stream, do not record

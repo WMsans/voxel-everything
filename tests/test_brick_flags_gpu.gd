@@ -25,8 +25,8 @@ func make_world() -> VoxelWorld:
 # from the CPU reference brick. They must match everywhere.
 func test_gpu_flags_match_the_cpu_reference(timeout := 30000) -> void:
 	var w := make_world()
-	w.debug_stream_region(Vector3i(1, 2, 1))
-	var d: Dictionary = w.debug_brick_flags(Vector3i(1, 2, 1))
+	w.hooks().debug_stream_region(Vector3i(1, 2, 1))
+	var d: Dictionary = w.hooks().debug_brick_flags(Vector3i(1, 2, 1))
 	assert_int(int(d["compared"])).is_greater(50)
 	assert_int(int(d["mismatches"])).is_equal(0)
 
@@ -34,6 +34,6 @@ func test_gpu_flags_match_the_cpu_reference(timeout := 30000) -> void:
 # what stops a dropped generation job from becoming a hole.
 func test_allocated_but_ungenerated_bricks_are_conservative() -> void:
 	var w := make_world()
-	var d: Dictionary = w.debug_brick_flags_after_mark(Vector3i(1, 2, 1))
+	var d: Dictionary = w.hooks().debug_brick_flags_after_mark(Vector3i(1, 2, 1))
 	assert_int(int(d["allocated"])).is_greater(0)
 	assert_int(int(d["non_conservative"])).is_equal(0)

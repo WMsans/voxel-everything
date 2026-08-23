@@ -18,7 +18,7 @@ func make_world() -> VoxelWorld:
 	w.ensure_initialized()
 	var _quiet := 0
 	for i in range(120):
-		_quiet = _quiet + 1 if w.debug_stream_frame(CAM) == 0 else 0
+		_quiet = _quiet + 1 if w.hooks().debug_stream_frame(CAM) == 0 else 0
 		if _quiet >= 6:
 			break
 	return w
@@ -27,7 +27,7 @@ func test_down_rays_hit_and_the_mips_at_the_hit_agree() -> void:
 	var w := make_world()
 	for ox in range(-4, 5):
 		for oz in range(-4, 5):
-			var d: Dictionary = w.debug_raymarch_probe(
+			var d: Dictionary = w.hooks().debug_raymarch_probe(
 				Vector3(20 + ox, 56.2, 20 + oz), Vector3(0, -1, 0))
 			assert_bool(d["hit"]).override_failure_message(
 				"tunnel at offset %d,%d" % [ox, oz]).is_true()
@@ -37,7 +37,7 @@ func test_down_rays_hit_and_the_mips_at_the_hit_agree() -> void:
 func test_diagonal_ray_hits_through_many_empty_cells() -> void:
 	var w := make_world()
 	# Grazing descent: crosses dozens of empty 8^3 cells before reaching the surface.
-	var d: Dictionary = w.debug_raymarch_probe(Vector3(12, 56.2, 20), Vector3(0.5, -0.6, 0))
+	var d: Dictionary = w.hooks().debug_raymarch_probe(Vector3(12, 56.2, 20), Vector3(0.5, -0.6, 0))
 	assert_bool(d["hit"]).is_true()
 	assert_bool(d["brick_surface"]).is_true()
 	assert_bool(d["cell8_surface"]).is_true()

@@ -17,8 +17,8 @@ func make_world() -> VoxelWorld:
 	w.max_lod_pages = 4096
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_atlas()).is_true()
-	assert_bool(w.debug_init_physics()).is_true()
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
 const SETTLE_BUDGET := 2500
@@ -27,9 +27,9 @@ const QUIET_TICKS := 8
 func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> bool:
 	var quiet := 0
 	for i in range(SETTLE_BUDGET):
-		w.debug_lod_tick(pos, fwd)
+		w.hooks().debug_lod_tick(pos, fwd)
 		await get_tree().process_frame
-		var d: Dictionary = w.debug_lod_stats()
+		var d: Dictionary = w.hooks().debug_lod_stats()
 		quiet = quiet + 1 if d["requests_pending"] == 0 and d["builds_in_flight"] == 0 else 0
 		if quiet >= QUIET_TICKS:
 			return true
@@ -42,7 +42,7 @@ func test_far_field_pixels_carry_a_material_and_a_unit_normal(timeout := 60000) 
 	var pos := Vector3(100.0, 100.0, 100.0)
 	var fwd := Vector3(0.3, -0.5, 0.3).normalized()
 	assert_bool(await settle(w, pos, fwd)).is_true()
-	var d: Dictionary = w.debug_lod_gbuffer_probe(pos, fwd, 128, 128)
+	var d: Dictionary = w.hooks().debug_lod_gbuffer_probe(pos, fwd, 128, 128)
 	assert_float(d["material_coverage"]).override_failure_message(
 		"no far-field pixel wrote a material id").is_greater(0.2)
 	assert_float(d["worst_normal_length_error"]).override_failure_message(
@@ -58,7 +58,7 @@ func test_the_two_fields_light_identically_across_the_band(timeout := 60000) -> 
 	var pos := Vector3(100.0, 68.0, 202.0)
 	var fwd := Vector3(0.0, -0.12, -1.0).normalized()
 	assert_bool(await settle(w, pos, fwd)).is_true()
-	var d: Dictionary = w.debug_seam_probe(pos, fwd, 256, 144)
+	var d: Dictionary = w.hooks().debug_seam_probe(pos, fwd, 256, 144)
 	# Preserve the established test_lod_seam.gd seam contract: allow up to band_pixels / 200
 	# pinhole-scale unclaimed pixels (the same camera is documented there with 2 residual pixels).
 	# Double claims remain an exact invariant, and the band must be non-vacuously measured.
@@ -73,7 +73,7 @@ func test_the_lod_raster_no_longer_shades(timeout := 60000) -> void:
 	var pos := Vector3(100.0, 100.0, 100.0)
 	var fwd := Vector3(0.3, -0.5, 0.3).normalized()
 	assert_bool(await settle(w, pos, fwd)).is_true()
-	var d: Dictionary = w.debug_lod_gbuffer_probe(pos, fwd, 128, 128)
+	var d: Dictionary = w.hooks().debug_lod_gbuffer_probe(pos, fwd, 128, 128)
 	# The far field writes fully-lit sun visibility: shadowing it is the sun map's job, in
 	# the deferred pass, not the raster's.
 	assert_float(d["sun_min"]).is_equal_approx(1.0, 0.01)

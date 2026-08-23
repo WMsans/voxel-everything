@@ -24,7 +24,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			print("shader reload requested")
 			get_viewport().set_input_as_handled()
 		KEY_F6:
-			var d: Dictionary = _world.debug_self_check()
+			var d: Dictionary = _world.hooks().debug_self_check()
 			print("SELF-CHECK ok=%s field=%d brick=%d mesh=%d lod=%d occ=%d (%.1f ms)" % [
 				str(d["ok"]), d["field_mismatches"], d["brick_mismatches"],
 				d["mesh_mismatches"], d["lod_mismatches"], d["occupancy_mismatches"],

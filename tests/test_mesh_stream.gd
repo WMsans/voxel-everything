@@ -31,16 +31,16 @@ func make_world() -> VoxelWorld:
 	w.mesh_jobs_per_frame = 2
 	add_child(w)
 	_worlds.append(w)
-	assert_bool(w.debug_init_physics()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
 func test_a_batch_is_submitted_once_and_collected_once() -> void:
 	var w := make_world()
-	assert_bool(w.debug_mesh_submit([SURFACE_CHUNK, SURFACE_CHUNK_2])).is_true()
+	assert_bool(w.hooks().debug_mesh_submit([SURFACE_CHUNK, SURFACE_CHUNK_2])).is_true()
 	# A second batch cannot start while one is in flight.
-	assert_bool(w.debug_mesh_submit([SURFACE_CHUNK_3])).is_false()
+	assert_bool(w.hooks().debug_mesh_submit([SURFACE_CHUNK_3])).is_false()
 
-	var got: Array = w.debug_mesh_collect()
+	var got: Array = w.hooks().debug_mesh_collect()
 	assert_int(got.size()).is_equal(2)
 	assert_object(got[0]["chunk"]).is_equal(SURFACE_CHUNK)
 	assert_object(got[1]["chunk"]).is_equal(SURFACE_CHUNK_2)
@@ -50,14 +50,14 @@ func test_a_batch_is_submitted_once_and_collected_once() -> void:
 		assert_bool(r["overflow"]).is_false()
 
 	# Nothing is left to collect, and the pass is free again.
-	assert_int(w.debug_mesh_collect().size()).is_equal(0)
-	assert_bool(w.debug_mesh_submit([SURFACE_CHUNK_3])).is_true()
+	assert_int(w.hooks().debug_mesh_collect().size()).is_equal(0)
+	assert_bool(w.hooks().debug_mesh_submit([SURFACE_CHUNK_3])).is_true()
 
 func test_a_batch_agrees_with_the_synchronous_path() -> void:
 	var w := make_world()
-	var one: Dictionary = w.debug_mesh_diff(SURFACE_CHUNK)
-	assert_bool(w.debug_mesh_submit([SURFACE_CHUNK])).is_true()
-	var got: Array = w.debug_mesh_collect()
+	var one: Dictionary = w.hooks().debug_mesh_diff(SURFACE_CHUNK)
+	assert_bool(w.hooks().debug_mesh_submit([SURFACE_CHUNK])).is_true()
+	var got: Array = w.hooks().debug_mesh_collect()
 	assert_int(got.size()).is_equal(1)
 	# The batch path shares every buffer and every dispatch with the inline path; the counts
 	# must be identical, or a job's state is leaking between the two.
@@ -68,8 +68,8 @@ func test_jobs_in_one_batch_do_not_leak_into_each_other() -> void:
 	var w := make_world()
 	# SKY_CHUNK is open sky and meshes to nothing; batching it with a surface chunk must not
 	# give it the other job's triangles (they share one lattice and one cell map).
-	assert_bool(w.debug_mesh_submit([SURFACE_CHUNK, SKY_CHUNK])).is_true()
-	var got: Array = w.debug_mesh_collect()
+	assert_bool(w.hooks().debug_mesh_submit([SURFACE_CHUNK, SKY_CHUNK])).is_true()
+	var got: Array = w.hooks().debug_mesh_collect()
 	assert_int(got.size()).is_equal(2)
 	assert_int(got[0]["triangles"]).is_greater(1000)
 	assert_int(got[1]["triangles"]).is_equal(0)
@@ -83,18 +83,18 @@ func test_jobs_in_one_batch_do_not_leak_into_each_other() -> void:
 # corrupt the batch it interleaved with.
 func test_inline_sync_waits_for_a_batch_in_flight() -> void:
 	var w := make_world()
-	var reference: Dictionary = w.debug_mesh_diff(SURFACE_CHUNK)
+	var reference: Dictionary = w.hooks().debug_mesh_diff(SURFACE_CHUNK)
 	assert_int(reference["tri_gpu"]).is_greater(1000)
 
-	assert_bool(w.debug_mesh_submit([SURFACE_CHUNK])).is_true()
+	assert_bool(w.hooks().debug_mesh_submit([SURFACE_CHUNK])).is_true()
 	# Runs on the worker thread, behind the batch, and returns real data rather than nothing.
-	var d: Dictionary = w.debug_mesh_lattice_diff(SURFACE_CHUNK_2)
+	var d: Dictionary = w.hooks().debug_mesh_lattice_diff(SURFACE_CHUNK_2)
 	assert_bool(d.has("samples")).override_failure_message(
 		"the diagnostic returned nothing: %s" % d).is_true()
 
 	# The batch is intact: had the diagnostic run concurrently it would have overwritten the
 	# lattice the batch was meshing from, and these counts would not match a clean run.
-	var got: Array = w.debug_mesh_collect()
+	var got: Array = w.hooks().debug_mesh_collect()
 	assert_int(got.size()).is_equal(1)
 	assert_bool(got[0]["failed"]).is_false()
 	assert_int(got[0]["triangles"]).override_failure_message(
@@ -108,8 +108,8 @@ func test_inline_sync_waits_for_a_batch_in_flight() -> void:
 func test_an_oversized_batch_fails_every_chunk_instead_of_dropping_it() -> void:
 	var w := make_world()
 	var over := [SURFACE_CHUNK, SURFACE_CHUNK_2, SURFACE_CHUNK_3]
-	assert_bool(w.debug_mesh_submit(over)).is_true()
-	var got: Array = w.debug_mesh_collect()
+	assert_bool(w.hooks().debug_mesh_submit(over)).is_true()
+	var got: Array = w.hooks().debug_mesh_collect()
 	assert_int(got.size()).override_failure_message(
 		"an oversized batch stranded %d of its %d chunks" % [over.size() - got.size(), over.size()]
 		).is_equal(over.size())
@@ -120,8 +120,8 @@ func test_an_oversized_batch_fails_every_chunk_instead_of_dropping_it() -> void:
 		# A failed chunk carries no geometry, so nothing partial reaches Jolt.
 		assert_int(got[i]["triangles"]).is_equal(0)
 	# ...and the refusal does not wedge the queue: a legal batch still runs afterwards.
-	assert_bool(w.debug_mesh_submit([SURFACE_CHUNK])).is_true()
-	var after: Array = w.debug_mesh_collect()
+	assert_bool(w.hooks().debug_mesh_submit([SURFACE_CHUNK])).is_true()
+	var after: Array = w.hooks().debug_mesh_collect()
 	assert_int(after.size()).is_equal(1)
 	assert_bool(after[0]["failed"]).is_false()
 	assert_int(after[0]["triangles"]).is_greater(1000)
