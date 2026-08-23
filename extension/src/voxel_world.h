@@ -90,9 +90,9 @@ class VoxelWorld : public Node3D, public EditSink {
 	// Last remaining friend (Task 13 removed the compositor/admission ones): the debug
 	// facade still pokes ~15 private members directly (store_, beauty snapshot, physics
 	// diagnostics, initialized_, test_bodies_, ...). EXPIRY: this friendship dies with
-	// Phase 1's accessor-promotion exit / final cleanup, once hooks' remaining private
-	// surface is promoted or moved with its state (spec §5 Phase 1). Not de-friendable
-	// today without an unbounded accessor dump -- see task-13-report friend table.
+	// the plan's final cleanup task (Task 16), which deletes the temporary
+	// promoted-accessor surface and verifies 0 friends remain. Until then it is not
+	// de-friendable without an unbounded accessor dump -- see task-13-report friend table.
 	friend class VoxelDebugHooks;
 
 	VoxelDebugHooks *debug_hooks_ = nullptr;
@@ -244,43 +244,38 @@ public:
 
 	void set_use_local_device(bool v) { use_local_device_ = v; }
 	bool get_use_local_device() const { return use_local_device_; }
-	// Config setters/getters: write/read the store's config (setters via mutable_config()).
-	// Pre-init writes take
-	// effect at the next ensure_initialized(); post-init they behave exactly as
-	// before (pools never resize after creation).
+	// Config setters/getters: write/read the store's config (setters through its named
+	// per-field setters -- WorldStore has no whole-struct mutable escape hatch). Pre-init
+	// writes take effect at the next ensure_initialized(); post-init they behave exactly
+	// as before (pools never resize after creation).
 	void set_atlas_bricks(Vector3i v) {
-		store_->mutable_config().atlas_bricks = {v.x, v.y, v.z};
+		store_->set_atlas_bricks({v.x, v.y, v.z});
 	}
 	Vector3i get_atlas_bricks() const {
 		return {store_->config().atlas_bricks.x, store_->config().atlas_bricks.y,
 				store_->config().atlas_bricks.z};
 	}
-	void set_max_region_slots(int v) { store_->mutable_config().max_region_slots = v; }
+	void set_max_region_slots(int v) { store_->set_max_region_slots(v); }
 	int get_max_region_slots() const { return store_->config().max_region_slots; }
-	void set_max_brick_jobs(int v) { store_->mutable_config().max_brick_jobs = v; }
+	void set_max_brick_jobs(int v) { store_->set_max_brick_jobs(v); }
 	int get_max_brick_jobs() const { return store_->config().max_brick_jobs; }
-	void set_max_override_bricks(int v) {
-		const int requested = std::max(v, 0);
-		store_->mutable_config().max_override_bricks = store_->overrides()
-				? std::min(requested, store_->overrides()->capacity())
-				: requested;
-	}
+	void set_max_override_bricks(int v) { store_->set_max_override_bricks(v); }
 	int get_max_override_bricks() const { return store_->config().max_override_bricks; }
 	void set_world_origin_bricks(Vector3i v) {
-		store_->mutable_config().world_origin_bricks = {v.x, v.y, v.z};
+		store_->set_world_origin_bricks({v.x, v.y, v.z});
 	}
 	Vector3i get_world_origin_bricks() const {
 		return {store_->config().world_origin_bricks.x, store_->config().world_origin_bricks.y,
 				store_->config().world_origin_bricks.z};
 	}
 	void set_world_size_regions(Vector3i v) {
-		store_->mutable_config().world_size_regions = {v.x, v.y, v.z};
+		store_->set_world_size_regions({v.x, v.y, v.z});
 	}
 	Vector3i get_world_size_regions() const {
 		return {store_->config().world_size_regions.x, store_->config().world_size_regions.y,
 				store_->config().world_size_regions.z};
 	}
-	void set_residency_radius_m(float v) { store_->mutable_config().residency_radius_m = v; }
+	void set_residency_radius_m(float v) { store_->set_residency_radius_m(v); }
 	float get_residency_radius_m() const { return store_->config().residency_radius_m; }
 
 	void ensure_initialized();
