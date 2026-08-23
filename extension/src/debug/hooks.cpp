@@ -354,11 +354,11 @@ Dictionary VoxelDebugHooks::debug_contact_shadow_probe(Vector3 pos, Vector3 fwd,
 	cp.params[0] = tan_x; cp.params[1] = tan_y; cp.params[2] = 200.0f;
 	const ve::WorldBounds wb = world_->world_bounds();
 	const ve::IVec3 ro = wb.origin_regions();
-	cp.dims[0] = world_->world_size_regions_.x; cp.dims[1] = world_->world_size_regions_.y;
-	cp.dims[2] = world_->world_size_regions_.z; cp.dims[3] = world_->island_slot_count();
+	cp.dims[0] = world_->store_->config_.world_size_regions.x; cp.dims[1] = world_->store_->config_.world_size_regions.y;
+	cp.dims[2] = world_->store_->config_.world_size_regions.z; cp.dims[3] = world_->island_slot_count();
 	cp.region_origin[0] = ro.x; cp.region_origin[1] = ro.y; cp.region_origin[2] = ro.z;
-	cp.atlas_bricks[0] = world_->atlas_bricks_.x; cp.atlas_bricks[1] = world_->atlas_bricks_.y;
-	cp.atlas_bricks[2] = world_->atlas_bricks_.z;
+	cp.atlas_bricks[0] = world_->store_->config_.atlas_bricks.x; cp.atlas_bricks[1] = world_->store_->config_.atlas_bricks.y;
+	cp.atlas_bricks[2] = world_->store_->config_.atlas_bricks.z;
 	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->raymarch_pass_->render(device, *world_->atlas_, world_->islands_, RID(), cp, w, h, no_edit)) return d;
 	float fade_start = ve::kLodFadeStartM, fade_end = ve::kLodFadeEndM;
@@ -480,11 +480,11 @@ Dictionary VoxelDebugHooks::debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, in
 	cp.params[0] = tan_x; cp.params[1] = tan_y; cp.params[2] = 200.0f;
 	const ve::WorldBounds wb = world_->world_bounds();
 	const ve::IVec3 ro = wb.origin_regions();
-	cp.dims[0] = world_->world_size_regions_.x; cp.dims[1] = world_->world_size_regions_.y;
-	cp.dims[2] = world_->world_size_regions_.z; cp.dims[3] = world_->island_slot_count();
+	cp.dims[0] = world_->store_->config_.world_size_regions.x; cp.dims[1] = world_->store_->config_.world_size_regions.y;
+	cp.dims[2] = world_->store_->config_.world_size_regions.z; cp.dims[3] = world_->island_slot_count();
 	cp.region_origin[0] = ro.x; cp.region_origin[1] = ro.y; cp.region_origin[2] = ro.z;
-	cp.atlas_bricks[0] = world_->atlas_bricks_.x; cp.atlas_bricks[1] = world_->atlas_bricks_.y;
-	cp.atlas_bricks[2] = world_->atlas_bricks_.z;
+	cp.atlas_bricks[0] = world_->store_->config_.atlas_bricks.x; cp.atlas_bricks[1] = world_->store_->config_.atlas_bricks.y;
+	cp.atlas_bricks[2] = world_->store_->config_.atlas_bricks.z;
 	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
 	static const float no_sun[16] = {};
 	const ve::BeautySettings settings = world_->beauty_settings();
@@ -594,16 +594,16 @@ Dictionary VoxelDebugHooks::debug_ssgi_reprojection_probe(Vector3 previous_pos, 
 			result.params[2] = 200.0f;
 			const ve::WorldBounds wb = world_->world_bounds();
 			const ve::IVec3 ro = wb.origin_regions();
-			result.dims[0] = world_->world_size_regions_.x;
-			result.dims[1] = world_->world_size_regions_.y;
-			result.dims[2] = world_->world_size_regions_.z;
+			result.dims[0] = world_->store_->config_.world_size_regions.x;
+			result.dims[1] = world_->store_->config_.world_size_regions.y;
+			result.dims[2] = world_->store_->config_.world_size_regions.z;
 			result.dims[3] = world_->island_slot_count();
 			result.region_origin[0] = ro.x;
 			result.region_origin[1] = ro.y;
 			result.region_origin[2] = ro.z;
-			result.atlas_bricks[0] = world_->atlas_bricks_.x;
-			result.atlas_bricks[1] = world_->atlas_bricks_.y;
-			result.atlas_bricks[2] = world_->atlas_bricks_.z;
+			result.atlas_bricks[0] = world_->store_->config_.atlas_bricks.x;
+			result.atlas_bricks[1] = world_->store_->config_.atlas_bricks.y;
+			result.atlas_bricks[2] = world_->store_->config_.atlas_bricks.z;
 			return result;
 		};
 	const ve::CameraParams previous_params = make_camera_params(previous_pos, previous_fwd,
@@ -834,7 +834,7 @@ void VoxelDebugHooks::debug_queue_committed_field_volume_upload(int slot,
 				"debug_queue_committed_field_volume_upload: short buffers for dim ", dim);
 		return;
 	}
-	if (!world_->volumes_.reserve(slot)) {
+	if (!world_->store_->volumes_.reserve(slot)) {
 		UtilityFunctions::printerr(
 				"debug_queue_committed_field_volume_upload: slot ", slot, " is already in use");
 		return;
@@ -855,7 +855,7 @@ void VoxelDebugHooks::debug_queue_committed_field_volume_upload(int slot,
 		float len=std::sqrt(px*px+py*py+pz*pz);
 		if (len>1e-6f) { float n2[3]={px/len, py/len, pz/len}; d.normal_oct[static_cast<size_t>(i)]=ve::oct_encode_snorm8(n2);} else d.normal_oct[static_cast<size_t>(i)]=ve::oct_encode_snorm8(up);
 	}
-	if (!world_->volumes_.store(slot, d) || !world_->volumes_.pin(slot)) {
+	if (!world_->store_->volumes_.store(slot, d) || !world_->store_->volumes_.pin(slot)) {
 		world_->release_volume_slot(slot);
 		UtilityFunctions::printerr(
 				"debug_queue_committed_field_volume_upload: store/pin failed for slot ", slot);
@@ -1390,16 +1390,16 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 	cp.params[2] = 200.0f;
 	const ve::WorldBounds wb = world_->world_bounds();
 	const ve::IVec3 ro = wb.origin_regions();
-	cp.dims[0] = world_->world_size_regions_.x;
-	cp.dims[1] = world_->world_size_regions_.y;
-	cp.dims[2] = world_->world_size_regions_.z;
+	cp.dims[0] = world_->store_->config_.world_size_regions.x;
+	cp.dims[1] = world_->store_->config_.world_size_regions.y;
+	cp.dims[2] = world_->store_->config_.world_size_regions.z;
 	cp.dims[3] = world_->island_slot_count();
 	cp.region_origin[0] = ro.x;
 	cp.region_origin[1] = ro.y;
 	cp.region_origin[2] = ro.z;
-	cp.atlas_bricks[0] = world_->atlas_bricks_.x;
-	cp.atlas_bricks[1] = world_->atlas_bricks_.y;
-	cp.atlas_bricks[2] = world_->atlas_bricks_.z;
+	cp.atlas_bricks[0] = world_->store_->config_.atlas_bricks.x;
+	cp.atlas_bricks[1] = world_->store_->config_.atlas_bricks.y;
+	cp.atlas_bricks[2] = world_->store_->config_.atlas_bricks.z;
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->raymarch_pass_->render(device, *world_->atlas_, world_->islands_, RID(), cp, w, h, kNoEdit))
 		return d;
@@ -1827,7 +1827,7 @@ bool VoxelDebugHooks::debug_hiz_occluded(Vector2 lo, Vector2 hi, float depth) {
 }
 
 void VoxelDebugHooks::debug_apply_sphere_subtract(Vector3 centre, float radius) {
-	if (!world_->edit_log_) world_->ensure_physics_initialized();
+	if (!world_->store_->edit_log_) world_->ensure_physics_initialized();
 	ve::EditOp op;
 	op.type = ve::kOpSphereSubtract;
 	op.material = 0;
@@ -1839,7 +1839,7 @@ void VoxelDebugHooks::debug_apply_sphere_subtract(Vector3 centre, float radius) 
 }
 
 void VoxelDebugHooks::debug_apply_sphere_add(Vector3 centre, float radius, int material) {
-	if (!world_->edit_log_) world_->ensure_physics_initialized();
+	if (!world_->store_->edit_log_) world_->ensure_physics_initialized();
 	ve::EditOp op;
 	op.type = ve::kOpSphereAdd;
 	op.material = static_cast<uint16_t>(material);
@@ -1851,16 +1851,16 @@ void VoxelDebugHooks::debug_apply_sphere_add(Vector3 centre, float radius, int m
 }
 
 void VoxelDebugHooks::debug_apply_volume_add(int slot, Vector3 origin, float voxel, int dim) {
-	if (!world_->edit_log_) world_->ensure_physics_initialized();
+	if (!world_->store_->edit_log_) world_->ensure_physics_initialized();
 	float o[3] = {origin.x, origin.y, origin.z};
 	ve::EditOp op = ve::make_volume_add(slot, o, voxel, dim);
 	world_->append_edit(op);
 }
 
 int VoxelDebugHooks::debug_region_op_count(Vector3i region) {
-	if (!world_->edit_log_) return 0;
+	if (!world_->store_->edit_log_) return 0;
 	std::lock_guard<std::mutex> lock(world_->edit_mutex_);
-	return world_->edit_log_->op_count({region.x, region.y, region.z});
+	return world_->store_->edit_log_->op_count({region.x, region.y, region.z});
 }
 
 int VoxelDebugHooks::debug_override_region_table(int region_slot) const {
@@ -1868,15 +1868,15 @@ int VoxelDebugHooks::debug_override_region_table(int region_slot) const {
 }
 
 int VoxelDebugHooks::debug_override_used() const {
-	return world_->overrides_ ? world_->overrides_->used() : 0;
+	return world_->store_->overrides_ ? world_->store_->overrides_->used() : 0;
 }
 
 bool VoxelDebugHooks::debug_fill_override_pool() {
 	world_->ensure_physics_initialized();
 	std::unique_lock<std::mutex> edit_lock(world_->edit_mutex_);
-	if (!world_->atlas_ || !world_->mesh_ || !world_->overrides_ || world_->overrides_->used() != 0) return false;
+	if (!world_->atlas_ || !world_->mesh_ || !world_->store_->overrides_ || world_->store_->overrides_->used() != 0) return false;
 	const ve::IVec3 region = world_->world_bounds().origin_regions();
-	const int region_slot = world_->residency_ ? world_->residency_->slot_of(region) : -1;
+	const int region_slot = world_->store_->residency_ ? world_->store_->residency_->slot_of(region) : -1;
 	// This hook is allowed to fill only the target region's actual tenant. Slot 0 is a
 	// valid visible tenant for some other region; using it as an off-screen fallback can
 	// overwrite unrelated rendered state while the test is trying to exhaust the pool.
@@ -1887,21 +1887,21 @@ bool VoxelDebugHooks::debug_fill_override_pool() {
 	std::vector<ve::IVec3> acquired_bricks;
 	std::vector<ve::OverrideBrick> bricks;
 	std::vector<std::pair<int, int>> entries;
-	slots.reserve(world_->overrides_->capacity());
-	bricks.reserve(world_->overrides_->capacity());
-	entries.reserve(world_->overrides_->capacity());
-	for (int i = 0; i < world_->overrides_->capacity(); i++) {
+	slots.reserve(world_->store_->overrides_->capacity());
+	bricks.reserve(world_->store_->overrides_->capacity());
+	entries.reserve(world_->store_->overrides_->capacity());
+	for (int i = 0; i < world_->store_->overrides_->capacity(); i++) {
 		const ve::IVec3 brick{base.x + (i & 31), base.y + ((i >> 5) & 31),
 				base.z + ((i >> 10) & 31)};
-		const int slot = world_->overrides_->acquire(brick);
+		const int slot = world_->store_->overrides_->acquire(brick);
 		if (slot < 0) {
-			for (const ve::IVec3 acquired : acquired_bricks) world_->overrides_->release(acquired);
+			for (const ve::IVec3 acquired : acquired_bricks) world_->store_->overrides_->release(acquired);
 			return false;
 		}
-		const ve::OverrideBrick *data = world_->overrides_->data(slot);
+		const ve::OverrideBrick *data = world_->store_->overrides_->data(slot);
 		if (!data) {
-			for (const ve::IVec3 acquired : acquired_bricks) world_->overrides_->release(acquired);
-			world_->overrides_->release(brick);
+			for (const ve::IVec3 acquired : acquired_bricks) world_->store_->overrides_->release(acquired);
+			world_->store_->overrides_->release(brick);
 			return false;
 		}
 		slots.push_back(slot);
@@ -1914,7 +1914,7 @@ bool VoxelDebugHooks::debug_fill_override_pool() {
 			world_->atlas_->overrides().clear_table(world_->rd(), 0);
 			world_->atlas_->set_override_table(world_->rd(), region_slot, -1, {});
 		}
-		for (const ve::IVec3 brick : acquired_bricks) world_->overrides_->release(brick);
+		for (const ve::IVec3 brick : acquired_bricks) world_->store_->overrides_->release(brick);
 	};
 	if (world_->atlas_) {
 		for (size_t i = 0; i < slots.size(); i++) {
@@ -1944,7 +1944,7 @@ bool VoxelDebugHooks::debug_fill_override_pool() {
 		discard();
 		return false;
 	}
-	world_->override_tables_[std::tuple<int, int, int>{region.x, region.y, region.z}] = 0;
+	world_->store_->override_tables_[std::tuple<int, int, int>{region.x, region.y, region.z}] = 0;
 	return true;
 }
 
@@ -1957,10 +1957,10 @@ Dictionary VoxelDebugHooks::debug_override_render_state(Vector3i brick) {
 	d["sdf_match"] = false;
 	d["mat_match"] = false;
 	RenderingDevice *device = world_->rd();
-	if (!device || !world_->atlas_ || !world_->overrides_) return d;
+	if (!device || !world_->atlas_ || !world_->store_->overrides_) return d;
 	const ve::IVec3 b{brick.x, brick.y, brick.z};
 	const ve::IVec3 r = ve::WorldBounds::region_of_brick(b);
-	const int region_slot = world_->residency_ ? world_->residency_->slot_of(r) : -1;
+	const int region_slot = world_->store_->residency_ ? world_->store_->residency_->slot_of(r) : -1;
 	if (region_slot < 0) return d;
 	const int table = world_->atlas_->overrides().region_table(region_slot);
 	int table_slot = -1;
@@ -1970,7 +1970,7 @@ Dictionary VoxelDebugHooks::debug_override_render_state(Vector3i brick) {
 				static_cast<uint32_t>((table * ve::kRegionBrickCount + bi) * 4), 4);
 		if (entry.size() >= 4) table_slot = *reinterpret_cast<const int32_t *>(entry.ptr());
 	}
-	const int cpu_slot = world_->overrides_->slot_of(b);
+	const int cpu_slot = world_->store_->overrides_->slot_of(b);
 	d["cpu_slot"] = cpu_slot;
 	d["table"] = table;
 	d["table_slot"] = table_slot;
@@ -1981,7 +1981,7 @@ Dictionary VoxelDebugHooks::debug_override_render_state(Vector3i brick) {
 			static_cast<uint32_t>(cpu_slot * sdf_stride), sdf_stride);
 	const PackedByteArray mat = device->buffer_get_data(world_->atlas_->overrides().mat_buffer(),
 			static_cast<uint32_t>(cpu_slot * mat_stride), mat_stride);
-	const ve::OverrideBrick *cpu = world_->overrides_->data(cpu_slot);
+	const ve::OverrideBrick *cpu = world_->store_->overrides_->data(cpu_slot);
 	if (!cpu || sdf.size() < sdf_stride || mat.size() < mat_stride) return d;
 	d["sdf_match"] = std::memcmp(sdf.ptr(), cpu->sdf, ve::kBrickSdfCount) == 0;
 	d["mat_match"] = std::memcmp(mat.ptr(), cpu->mat, ve::kBrickVoxelCount) == 0;
@@ -2017,9 +2017,9 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 	Dictionary d;
 	world_->ensure_physics_initialized();
 	std::unique_lock<std::mutex> edit_lock(world_->edit_mutex_);
-	if (!world_->mesh_ || !world_->edit_log_ || !world_->overrides_ || !world_->residency_) return d;
+	if (!world_->mesh_ || !world_->store_->edit_log_ || !world_->store_->overrides_ || !world_->store_->residency_) return d;
 	const ve::IVec3 r{region.x, region.y, region.z};
-	std::vector<ve::EditOp> ops = world_->edit_log_->ops(r);
+	std::vector<ve::EditOp> ops = world_->store_->edit_log_->ops(r);
 	std::vector<ve::IVec3> bricks;
 	ve::plan_consolidation(ops.data(), static_cast<int>(ops.size()), r, &bricks);
 	d["bricks"] = static_cast<int>(bricks.size());
@@ -2028,7 +2028,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 	if (bricks.empty()) return d;
 	ConsolidateJob job;
 	job.region = r;
-	job.region_slot = world_->residency_->slot_of(r);
+	job.region_slot = world_->store_->residency_->slot_of(r);
 	if (job.region_slot < 0) return d;
 	job.bricks = bricks;
 	job.ops = ops;
@@ -2046,7 +2046,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 			for (int y = 0; y < ve::kRegionBricks; y++)
 				for (int x = 0; x < ve::kRegionBricks; x++) {
 					const ve::IVec3 b{base.x + x, base.y + y, base.z + z};
-					const int slot = world_->overrides_->slot_of(b);
+					const int slot = world_->store_->overrides_->slot_of(b);
 					if (slot >= 0) existing_entries.emplace_back(
 							ve::WorldBounds::brick_index_in_region(b), slot);
 				}
@@ -2069,7 +2069,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 				for (int x = 0; x <= ve::kBrickVoxels; x++) {
 					const ve::Sample s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
 							bo[0] + x * ve::kVoxelSize, bo[1] + y * ve::kVoxelSize,
-							bo[2] + z * ve::kVoxelSize, &world_->volumes_, world_->overrides_);
+							bo[2] + z * ve::kVoxelSize, &world_->store_->volumes_, world_->store_->overrides_);
 					const uint8_t expected = ve::encode_sdf(s.sdf);
 					const uint8_t actual = b.sdf[ve::sdf_index(x, y, z)];
 					if (expected != actual) {
@@ -2082,7 +2082,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 					for (int x = 0; x < ve::kBrickVoxels; x++) {
 						const ve::Sample s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
 								bo[0] + x * ve::kVoxelSize, bo[1] + y * ve::kVoxelSize,
-								bo[2] + z * ve::kVoxelSize, &world_->volumes_, world_->overrides_);
+								bo[2] + z * ve::kVoxelSize, &world_->store_->volumes_, world_->store_->overrides_);
 						if (s.material != b.mat[ve::voxel_index(x, y, z)]) mat_mismatches++;
 					}
 	}
@@ -2109,7 +2109,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 			float px = bo[0] + lx * ve::kVoxelSize;
 			float py = bo[1] + ly * ve::kVoxelSize;
 			float pz = bo[2] + lz * ve::kVoxelSize;
-			ve::FieldSample fs = ve::eval_field_gradient(gen, ops.data(), static_cast<int>(ops.size()), px, py, pz, &world_->volumes_, world_->overrides_);
+			ve::FieldSample fs = ve::eval_field_gradient(gen, ops.data(), static_cast<int>(ops.size()), px, py, pz, &world_->store_->volumes_, world_->store_->overrides_);
 			if (!fs.exact_gradient) { norm_min_dot = -1.0f; continue; }
 			float elen = std::sqrt(fs.gradient[0]*fs.gradient[0]+fs.gradient[1]*fs.gradient[1]+fs.gradient[2]*fs.gradient[2]);
 			if (!(elen>1e-6f)) continue;
@@ -2133,24 +2133,24 @@ bool VoxelDebugHooks::debug_consolidate_region(Vector3i region) {
 	world_->ensure_physics_initialized();
 	std::unique_lock<std::mutex> edit_lock(world_->edit_mutex_);
 	const auto refuse = [this]() { world_->consolidation_refusals_++; return false; };
-	if (!world_->mesh_ || !world_->edit_log_ || !world_->overrides_) return refuse();
+	if (!world_->mesh_ || !world_->store_->edit_log_ || !world_->store_->overrides_) return refuse();
 	const ve::IVec3 r{region.x, region.y, region.z};
-	std::vector<ve::EditOp> ops = world_->edit_log_->ops(r);
+	std::vector<ve::EditOp> ops = world_->store_->edit_log_->ops(r);
 	std::vector<ve::IVec3> bricks;
 	ve::plan_consolidation(ops.data(), static_cast<int>(ops.size()), r, &bricks);
 	int needed_slots = 0;
-	for (const ve::IVec3 b : bricks) if (world_->overrides_->slot_of(b) < 0) needed_slots++;
-	if (bricks.empty() || needed_slots > world_->overrides_->capacity() - world_->overrides_->used()) return refuse();
-	const int resident_slot = world_->residency_ ? world_->residency_->slot_of(r) : -1;
+	for (const ve::IVec3 b : bricks) if (world_->store_->overrides_->slot_of(b) < 0) needed_slots++;
+	if (bricks.empty() || needed_slots > world_->store_->overrides_->capacity() - world_->store_->overrides_->used()) return refuse();
+	const int resident_slot = world_->store_->residency_ ? world_->store_->residency_->slot_of(r) : -1;
 	if (resident_slot < 0) return refuse();
 
 	const std::tuple<int, int, int> key{r.x, r.y, r.z};
-	const auto found = world_->override_tables_.find(key);
-	const int old_table = found == world_->override_tables_.end() ? -1 : found->second;
+	const auto found = world_->store_->override_tables_.find(key);
+	const int old_table = found == world_->store_->override_tables_.end() ? -1 : found->second;
 	int table = old_table;
 	if (table < 0) {
 		std::vector<bool> used(OverridePool::kMaxOverrideTables, false);
-		for (const auto &it : world_->override_tables_)
+		for (const auto &it : world_->store_->override_tables_)
 			if (it.second >= 0 && it.second < OverridePool::kMaxOverrideTables)
 				used[static_cast<size_t>(it.second)] = true;
 		for (int i = 0; i < OverridePool::kMaxOverrideTables; i++)
@@ -2166,11 +2166,11 @@ bool VoxelDebugHooks::debug_consolidate_region(Vector3i region) {
 		for (int y = 0; y < ve::kRegionBricks; y++)
 			for (int x = 0; x < ve::kRegionBricks; x++) {
 				const ve::IVec3 b{base.x + x, base.y + y, base.z + z};
-				const int slot = world_->overrides_->slot_of(b);
+				const int slot = world_->store_->overrides_->slot_of(b);
 				if (slot < 0) continue;
 				old_entries.emplace_back(ve::WorldBounds::brick_index_in_region(b), slot);
 				old_slots.push_back(slot);
-				old_bricks.push_back(*world_->overrides_->data(slot));
+				old_bricks.push_back(*world_->store_->overrides_->data(slot));
 			}
 
 	ConsolidateJob job;
@@ -2194,10 +2194,10 @@ bool VoxelDebugHooks::debug_consolidate_region(Vector3i region) {
 	std::vector<int> slots;
 	std::vector<ve::IVec3> newly_acquired;
 	for (const ve::IVec3 b : bricks) {
-		const bool was_present = world_->overrides_->slot_of(b) >= 0;
-		const int slot = world_->overrides_->acquire(b);
+		const bool was_present = world_->store_->overrides_->slot_of(b) >= 0;
+		const int slot = world_->store_->overrides_->acquire(b);
 		if (slot < 0) {
-			for (const ve::IVec3 acquired : newly_acquired) world_->overrides_->release(acquired);
+			for (const ve::IVec3 acquired : newly_acquired) world_->store_->overrides_->release(acquired);
 			return refuse();
 		}
 		if (!was_present) newly_acquired.push_back(b);
@@ -2255,7 +2255,7 @@ bool VoxelDebugHooks::debug_consolidate_region(Vector3i region) {
 		// Newly acquired slots are never part of the old table. Release them even when a
 		// rollback reports failure; the old table/op list remains authoritative and the
 		// transaction is refused/retried rather than leaking capacity.
-		for (const ve::IVec3 acquired : newly_acquired) world_->overrides_->release(acquired);
+		for (const ve::IVec3 acquired : newly_acquired) world_->store_->overrides_->release(acquired);
 		return render_restored && worker_restored;
 	};
 	if (!render_ok) {
@@ -2266,8 +2266,8 @@ bool VoxelDebugHooks::debug_consolidate_region(Vector3i region) {
 		if (!rollback_publication()) return refuse();
 		return refuse();
 	}
-	for (size_t i = 0; i < slots.size(); i++) *world_->overrides_->data(slots[i]) = results[0].baked[i];
-	world_->edit_log_->clear_region(r);
+	for (size_t i = 0; i < slots.size(); i++) *world_->store_->overrides_->data(slots[i]) = results[0].baked[i];
+	world_->store_->edit_log_->clear_region(r);
 	const ve::IVec3 hi_brick{base.x + ve::kRegionBricks - 1,
 			base.y + ve::kRegionBricks - 1, base.z + ve::kRegionBricks - 1};
 	world_->pending_dirty_.push_back({ve::chunk_of_brick(base), ve::chunk_of_brick(hi_brick)});
@@ -2280,7 +2280,7 @@ bool VoxelDebugHooks::debug_consolidate_region(Vector3i region) {
 		world_->lod_tree_->mark_dirty(lo, hi);
 	}
 	if (world_->streamer_) world_->streamer_->queue_region_regeneration_locked(r);
-	world_->override_tables_[key] = table;
+	world_->store_->override_tables_[key] = table;
 	return true;
 }
 
@@ -2319,20 +2319,20 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 			return;
 		}
 		for (int slot = 0; slot < ve::kMaxVolumes; slot++) {
-			const ve::VolumeData *v = world_->volumes_.get(slot);
+			const ve::VolumeData *v = world_->store_->volumes_.get(slot);
 			if (v) lod.volumes().upload(rd, slot, *v);
 		}
 		std::vector<std::pair<int, int>> override_entries;
-		if (override_table >= 0 && world_->overrides_) {
+		if (override_table >= 0 && world_->store_->overrides_) {
 			const ve::IVec3 base{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
 					region.z * ve::kRegionBricks};
 			for (int z = 0; z < ve::kRegionBricks; z++)
 				for (int y = 0; y < ve::kRegionBricks; y++)
 					for (int x = 0; x < ve::kRegionBricks; x++) {
 						const ve::IVec3 b{base.x + x, base.y + y, base.z + z};
-						const int slot = world_->overrides_->slot_of(b);
+						const int slot = world_->store_->overrides_->slot_of(b);
 						if (slot < 0) continue;
-						const ve::OverrideBrick *data = world_->overrides_->data(slot);
+						const ve::OverrideBrick *data = world_->store_->overrides_->data(slot);
 						if (!data || !lod.upload_override(slot, *data)) {
 							lod.teardown();
 							memdelete(rd);
@@ -2379,7 +2379,7 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 						origin[1] + (static_cast<float>(y) - 3.0f) * cell * 0.5f,
 						origin[2] + (static_cast<float>(z) - 3.0f) * cell * 0.5f};
 				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-						p[0], p[1], p[2], &world_->volumes_, world_->overrides_).sdf;
+						p[0], p[1], p[2], &world_->store_->volumes_, world_->store_->overrides_).sdf;
 				const int idx = ve::lod_fine_index(x, y, z);
 				const int diff = std::abs(static_cast<int>(fine_sdf[idx]) -
 						static_cast<int>(ve::encode_sdf(s)));
@@ -2491,7 +2491,7 @@ Dictionary VoxelDebugHooks::debug_mesh_lattice_diff(Vector3i chunk) {
 	std::vector<ve::EditOp> ops;
 	{
 		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
-		ops = world_->edit_log_->ops(ve::region_of_chunk(c));
+		ops = world_->store_->edit_log_->ops(ve::region_of_chunk(c));
 	}
 	MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
 	ve::chunk_world_origin(c, job.origin);
@@ -2513,7 +2513,7 @@ Dictionary VoxelDebugHooks::debug_mesh_lattice_diff(Vector3i chunk) {
 						g.origin[1] + (y - 1) * g.cell_size,
 						g.origin[2] + (z - 1) * g.cell_size};
 				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-						p[0], p[1], p[2], &world_->volumes_).sdf;
+						p[0], p[1], p[2], &world_->store_->volumes_).sdf;
 				if (s <= 0.0f) neg = true; else pos = true;
 				const int want = ve::encode_sdf(s);
 				const int got = gpu[ve::dc_lattice_index(g, x, y, z)];
@@ -2537,7 +2537,7 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	std::vector<ve::EditOp> ops;
 	{
 		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
-		ops = world_->edit_log_->ops(ve::region_of_chunk(c));
+		ops = world_->store_->edit_log_->ops(ve::region_of_chunk(c));
 	}
 	MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
 	job.override_table = world_->override_table_for_region(ve::region_of_chunk(c));
@@ -2564,7 +2564,7 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 			for (int x = 0; x < g.lattice; x++) {
 				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
 						g.origin[0] + (x - 1) * g.cell_size, g.origin[1] + (y - 1) * g.cell_size,
-						g.origin[2] + (z - 1) * g.cell_size, &world_->volumes_, world_->overrides_).sdf;
+						g.origin[2] + (z - 1) * g.cell_size, &world_->store_->volumes_, world_->store_->overrides_).sdf;
 				const int diff = std::abs(static_cast<int>(lattice[ve::dc_lattice_index(g, x, y, z)]) -
 						static_cast<int>(ve::encode_sdf(s)));
 				lat_max = std::max(lat_max, diff);
@@ -2654,7 +2654,7 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	for (int v = 0; v < gpu_verts; v++) {
 		const float s = std::fabs(ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
 				gpu.positions[v * 3], gpu.positions[v * 3 + 1], gpu.positions[v * 3 + 2],
-				&world_->volumes_, world_->overrides_).sdf);
+				&world_->store_->volumes_, world_->store_->overrides_).sdf);
 		max_sdf = std::max(max_sdf, s);
 		if (s > 0.1f) off_10cm++;
 	}
@@ -2674,9 +2674,9 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 		// step clean through a thin feature and read solid on both sides.
 		const Vector3 step = n.normalized() * 0.02f;
 		const float out_side = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-				mid.x + step.x, mid.y + step.y, mid.z + step.z, &world_->volumes_, world_->overrides_).sdf;
+				mid.x + step.x, mid.y + step.y, mid.z + step.z, &world_->store_->volumes_, world_->store_->overrides_).sdf;
 		const float in_side = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-				mid.x - step.x, mid.y - step.y, mid.z - step.z, &world_->volumes_, world_->overrides_).sdf;
+				mid.x - step.x, mid.y - step.y, mid.z - step.z, &world_->store_->volumes_, world_->store_->overrides_).sdf;
 		tri_sampled++;
 		if (out_side <= in_side) winding_bad++;
 	}
@@ -2720,7 +2720,7 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 			ve::WorldBounds::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
 	{
 		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
-		ve::collect_ops_for_aabb(*world_->edit_log_, wlo, whi, &job.ops);
+		ve::collect_ops_for_aabb(*world_->store_->edit_log_, wlo, whi, &job.ops);
 		float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
 		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
 		ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
@@ -2744,7 +2744,7 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 	ve::VolumeData cpu;
 	ve::AnalyticGenerator gen;
 	ve::extract_island_volume(gen, job.ops.data(), static_cast<int>(job.ops.size()),
-			&world_->volumes_, job.origin, job.voxel, job.dim, aabbs.data(),
+			&world_->store_->volumes_, job.origin, job.voxel, job.dim, aabbs.data(),
 			static_cast<int>(boxes.size()), &cpu);
 
 	int worst = 0, mat_mismatch = 0, mat_compared = 0;
@@ -2785,7 +2785,7 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 			float px = job.origin[0] + x * job.voxel;
 			float py = job.origin[1] + y * job.voxel;
 			float pz = job.origin[2] + z * job.voxel;
-			ve::FieldSample fs = ve::eval_field_gradient(agen, job.ops.data(), static_cast<int>(job.ops.size()), px, py, pz, &world_->volumes_, world_->overrides_);
+			ve::FieldSample fs = ve::eval_field_gradient(agen, job.ops.data(), static_cast<int>(job.ops.size()), px, py, pz, &world_->store_->volumes_, world_->store_->overrides_);
 			float bu = 1e30f; float bu_grad[3]={0,1,0}; bool has_bu=false;
 			for (auto &b : boxes) { float lo[3], hi[3]; b.world_aabb(lo,hi); float d = ve::box_sdf(lo,hi,px,py,pz); if (!has_bu || d < bu) { bu=d; ve::box_sdf_gradient(lo,hi,px,py,pz,bu_grad); has_bu=true; } }
 			float exp_g[3]={fs.gradient[0],fs.gradient[1],fs.gradient[2]}; bool exp_exact=fs.exact_gradient;
@@ -2871,8 +2871,8 @@ Dictionary VoxelDebugHooks::debug_place_test_island_rotated(int slot, Vector3i l
 	if (!world_->atlas_->volumes().upload(device, vslot, volume)) return d;
 	// Task 7: keep the CPU-authoritative copy too (the same thing IslandManager does for
 	// real bodies), so debug_island_normal_probe reads the same normals the GPU holds.
-	world_->volumes_.reserve(vslot);
-	if (!world_->volumes_.store(vslot, volume)) return d;
+	world_->store_->volumes_.reserve(vslot);
+	if (!world_->store_->volumes_.store(vslot, volume)) return d;
 	// Task 6: compact normals share the pool; the test fixture's radial lattice is real
 	// render-reachable payload, not a fallback source.
 	world_->atlas_->stored_normals().upload_volume(device, vslot, volume);
@@ -2938,9 +2938,9 @@ Dictionary VoxelDebugHooks::debug_spawn_test_body(Vector3i lo_cell, Vector3i hi_
 	ve::VolumeData volume;
 	if (!world_->extract_component(cells, &job, &boxes, &volume)) return d;
 
-	const int slot = world_->volumes_.allocate();
+	const int slot = world_->store_->volumes_.allocate();
 	if (slot < 0) return d;
-	if (!world_->volumes_.store(slot, volume)) {
+	if (!world_->store_->volumes_.store(slot, volume)) {
 		world_->release_volume_slot(slot);
 		return d;
 	}
@@ -3064,7 +3064,7 @@ bool VoxelDebugHooks::debug_mesh_submit(Array chunks) {
 	{
 		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
 		for (const ve::IVec3 &c : coords)
-			requests.push_back({c, world_->edit_log_->ops(ve::region_of_chunk(c))});
+			requests.push_back({c, world_->store_->edit_log_->ops(ve::region_of_chunk(c))});
 	}
 	return world_->mesh_->submit(std::move(requests));
 }
@@ -3119,7 +3119,7 @@ bool VoxelDebugHooks::debug_lod_submit(Array jobs) {
 
 bool VoxelDebugHooks::debug_extract_submit(int id, Vector3i lo_cell, Vector3i hi_cell) {
 	world_->ensure_physics_initialized();
-	if (!world_->physics_ready_ || !world_->mesh_ || !world_->edit_log_) return false;
+	if (!world_->physics_ready_ || !world_->mesh_ || !world_->store_->edit_log_) return false;
 	if (lo_cell.x > hi_cell.x || lo_cell.y > hi_cell.y || lo_cell.z > hi_cell.z ||
 			hi_cell.x - lo_cell.x > 7 || hi_cell.y - lo_cell.y > 7 ||
 			hi_cell.z - lo_cell.z > 7)
@@ -3150,7 +3150,7 @@ bool VoxelDebugHooks::debug_extract_submit(int id, Vector3i lo_cell, Vector3i hi
 			ve::WorldBounds::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
 	{
 		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
-		ve::collect_ops_for_aabb(*world_->edit_log_, wlo, whi, &job.ops);
+		ve::collect_ops_for_aabb(*world_->store_->edit_log_, wlo, whi, &job.ops);
 		float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
 		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
 		ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
@@ -3296,12 +3296,12 @@ Dictionary VoxelDebugHooks::debug_raymarch_gbuffer(Vector3 origin, Vector3 dir) 
 			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
 	const ve::WorldBounds wb = world_->world_bounds();
 	const ve::IVec3 ro = wb.origin_regions();
-	cam.dims[0] = world_->world_size_regions_.x; cam.dims[1] = world_->world_size_regions_.y;
-	cam.dims[2] = world_->world_size_regions_.z;
+	cam.dims[0] = world_->store_->config_.world_size_regions.x; cam.dims[1] = world_->store_->config_.world_size_regions.y;
+	cam.dims[2] = world_->store_->config_.world_size_regions.z;
 	cam.dims[3] = world_->island_slot_count();
 	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
-	cam.atlas_bricks[0] = world_->atlas_bricks_.x; cam.atlas_bricks[1] = world_->atlas_bricks_.y;
-	cam.atlas_bricks[2] = world_->atlas_bricks_.z;
+	cam.atlas_bricks[0] = world_->store_->config_.atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config_.atlas_bricks.y;
+	cam.atlas_bricks[2] = world_->store_->config_.atlas_bricks.z;
 	const uint32_t flags = ve::pack_flags(world_->beauty_);
 	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
@@ -3350,11 +3350,11 @@ Dictionary VoxelDebugHooks::debug_raymarch_hole_probe(Vector3 origin, Vector3 di
 	cam.params[2] = 200.0f;
 	const ve::WorldBounds wb = world_->world_bounds();
 	const ve::IVec3 ro = wb.origin_regions();
-	cam.dims[0] = world_->world_size_regions_.x; cam.dims[1] = world_->world_size_regions_.y;
-	cam.dims[2] = world_->world_size_regions_.z; cam.dims[3] = world_->island_slot_count();
+	cam.dims[0] = world_->store_->config_.world_size_regions.x; cam.dims[1] = world_->store_->config_.world_size_regions.y;
+	cam.dims[2] = world_->store_->config_.world_size_regions.z; cam.dims[3] = world_->island_slot_count();
 	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
-	cam.atlas_bricks[0] = world_->atlas_bricks_.x; cam.atlas_bricks[1] = world_->atlas_bricks_.y;
-	cam.atlas_bricks[2] = world_->atlas_bricks_.z;
+	cam.atlas_bricks[0] = world_->store_->config_.atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config_.atlas_bricks.y;
+	cam.atlas_bricks[2] = world_->store_->config_.atlas_bricks.z;
 	const uint32_t flags = ve::pack_flags(world_->beauty_);
 	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
@@ -3403,11 +3403,11 @@ Dictionary VoxelDebugHooks::debug_raymarch_normal_probe(Vector3 origin, Vector3 
 	cam.params[2] = 200.0f;
 	const ve::WorldBounds wb = world_->world_bounds();
 	const ve::IVec3 ro = wb.origin_regions();
-	cam.dims[0] = world_->world_size_regions_.x; cam.dims[1] = world_->world_size_regions_.y;
-	cam.dims[2] = world_->world_size_regions_.z; cam.dims[3] = world_->island_slot_count();
+	cam.dims[0] = world_->store_->config_.world_size_regions.x; cam.dims[1] = world_->store_->config_.world_size_regions.y;
+	cam.dims[2] = world_->store_->config_.world_size_regions.z; cam.dims[3] = world_->island_slot_count();
 	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
-	cam.atlas_bricks[0] = world_->atlas_bricks_.x; cam.atlas_bricks[1] = world_->atlas_bricks_.y;
-	cam.atlas_bricks[2] = world_->atlas_bricks_.z;
+	cam.atlas_bricks[0] = world_->store_->config_.atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config_.atlas_bricks.y;
+	cam.atlas_bricks[2] = world_->store_->config_.atlas_bricks.z;
 	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
 	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
@@ -3451,9 +3451,9 @@ Dictionary VoxelDebugHooks::debug_raymarch_normal_probe(Vector3 origin, Vector3 
 			const float hitz = hp[i * 4 + 2];
 			// CPU reference gradient over this region's op span.
 			const std::vector<ve::EditOp> &ops =
-					world_->edit_log_->ops(ve::WorldBounds::region_of_point(hitx, hity, hitz));
+					world_->store_->edit_log_->ops(ve::WorldBounds::region_of_point(hitx, hity, hitz));
 			const ve::FieldSample fs = ve::eval_field_gradient(gen, ops.data(),
-					static_cast<int>(ops.size()), hitx, hity, hitz, &world_->volumes_, world_->overrides_);
+					static_cast<int>(ops.size()), hitx, hity, hitz, &world_->store_->volumes_, world_->store_->overrides_);
 			if (!fs.exact_gradient) continue;
 			const float gx = fs.gradient[0], gy = fs.gradient[1], gz = fs.gradient[2];
 			float alen = std::sqrt(gx*gx + gy*gy + gz*gz);
@@ -3549,7 +3549,7 @@ Dictionary VoxelDebugHooks::debug_island_normal_probe(int island_slot, Vector3 o
 	}
 	const float voxel = f[15];
 	if (!(voxel > 0.0f)) return d;
-	const ve::VolumeData *vol = world_->volumes_.get(volume_slot);
+	const ve::VolumeData *vol = world_->store_->volumes_.get(volume_slot);
 	if (!vol || !vol->has_normals() || vol->dim != dim) return d;
 
 	const float aspect = static_cast<float>(w) / static_cast<float>(h);
@@ -3561,11 +3561,11 @@ Dictionary VoxelDebugHooks::debug_island_normal_probe(int island_slot, Vector3 o
 	cam.params[2] = 200.0f;
 	const ve::WorldBounds wb = world_->world_bounds();
 	const ve::IVec3 ro = wb.origin_regions();
-	cam.dims[0] = world_->world_size_regions_.x; cam.dims[1] = world_->world_size_regions_.y;
-	cam.dims[2] = world_->world_size_regions_.z; cam.dims[3] = world_->island_slot_count();
+	cam.dims[0] = world_->store_->config_.world_size_regions.x; cam.dims[1] = world_->store_->config_.world_size_regions.y;
+	cam.dims[2] = world_->store_->config_.world_size_regions.z; cam.dims[3] = world_->island_slot_count();
 	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
-	cam.atlas_bricks[0] = world_->atlas_bricks_.x; cam.atlas_bricks[1] = world_->atlas_bricks_.y;
-	cam.atlas_bricks[2] = world_->atlas_bricks_.z;
+	cam.atlas_bricks[0] = world_->store_->config_.atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config_.atlas_bricks.y;
+	cam.atlas_bricks[2] = world_->store_->config_.atlas_bricks.z;
 	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
 	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
@@ -3747,16 +3747,16 @@ Dictionary VoxelDebugHooks::debug_ssr_probe(int fixture, int w, int h) {
 	camera_params.params[2] = 200.0f;
 	const ve::WorldBounds probe_bounds = world_->world_bounds();
 	const ve::IVec3 probe_origin = probe_bounds.origin_regions();
-	camera_params.dims[0] = world_->world_size_regions_.x;
-	camera_params.dims[1] = world_->world_size_regions_.y;
-	camera_params.dims[2] = world_->world_size_regions_.z;
+	camera_params.dims[0] = world_->store_->config_.world_size_regions.x;
+	camera_params.dims[1] = world_->store_->config_.world_size_regions.y;
+	camera_params.dims[2] = world_->store_->config_.world_size_regions.z;
 	camera_params.dims[3] = world_->island_slot_count();
 	camera_params.region_origin[0] = probe_origin.x;
 	camera_params.region_origin[1] = probe_origin.y;
 	camera_params.region_origin[2] = probe_origin.z;
-	camera_params.atlas_bricks[0] = world_->atlas_bricks_.x;
-	camera_params.atlas_bricks[1] = world_->atlas_bricks_.y;
-	camera_params.atlas_bricks[2] = world_->atlas_bricks_.z;
+	camera_params.atlas_bricks[0] = world_->store_->config_.atlas_bricks.x;
+	camera_params.atlas_bricks[1] = world_->store_->config_.atlas_bricks.y;
+	camera_params.atlas_bricks[2] = world_->store_->config_.atlas_bricks.z;
 	const uint32_t probe_flags = ve::pack_flags(settings);
 	std::memcpy(&camera_params.cam_pos[3], &probe_flags, sizeof(float));
 	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
@@ -4208,11 +4208,11 @@ Dictionary VoxelDebugHooks::debug_glossy_sdf_probe(Vector3 origin, Vector3 dir) 
 	cam.params[3] = -1.0f;
 	const ve::WorldBounds wb = world_->world_bounds();
 	const ve::IVec3 ro = wb.origin_regions();
-	cam.dims[0] = world_->world_size_regions_.x; cam.dims[1] = world_->world_size_regions_.y;
-	cam.dims[2] = world_->world_size_regions_.z; cam.dims[3] = world_->island_slot_count();
+	cam.dims[0] = world_->store_->config_.world_size_regions.x; cam.dims[1] = world_->store_->config_.world_size_regions.y;
+	cam.dims[2] = world_->store_->config_.world_size_regions.z; cam.dims[3] = world_->island_slot_count();
 	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
-	cam.atlas_bricks[0] = world_->atlas_bricks_.x; cam.atlas_bricks[1] = world_->atlas_bricks_.y;
-	cam.atlas_bricks[2] = world_->atlas_bricks_.z;
+	cam.atlas_bricks[0] = world_->store_->config_.atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config_.atlas_bricks.y;
+	cam.atlas_bricks[2] = world_->store_->config_.atlas_bricks.z;
 	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
 	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
@@ -4413,16 +4413,16 @@ Dictionary VoxelDebugHooks::debug_deferred_probe(Vector3 pos, Vector3 fwd, int w
 	cp.params[2] = 200.0f;
 	const ve::WorldBounds wb = world_->world_bounds();
 	const ve::IVec3 ro = wb.origin_regions();
-	cp.dims[0] = world_->world_size_regions_.x;
-	cp.dims[1] = world_->world_size_regions_.y;
-	cp.dims[2] = world_->world_size_regions_.z;
+	cp.dims[0] = world_->store_->config_.world_size_regions.x;
+	cp.dims[1] = world_->store_->config_.world_size_regions.y;
+	cp.dims[2] = world_->store_->config_.world_size_regions.z;
 	cp.dims[3] = world_->island_slot_count();
 	cp.region_origin[0] = ro.x;
 	cp.region_origin[1] = ro.y;
 	cp.region_origin[2] = ro.z;
-	cp.atlas_bricks[0] = world_->atlas_bricks_.x;
-	cp.atlas_bricks[1] = world_->atlas_bricks_.y;
-	cp.atlas_bricks[2] = world_->atlas_bricks_.z;
+	cp.atlas_bricks[0] = world_->store_->config_.atlas_bricks.x;
+	cp.atlas_bricks[1] = world_->store_->config_.atlas_bricks.y;
+	cp.atlas_bricks[2] = world_->store_->config_.atlas_bricks.z;
 	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
 	std::memcpy(&cp.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
@@ -4563,7 +4563,7 @@ Dictionary VoxelDebugHooks::debug_self_check() {
 		std::vector<ve::EditOp> ops_vec;
 		{
 			std::lock_guard<std::mutex> lock(world_->edit_mutex_);
-			if (world_->edit_log_) ops_vec = world_->edit_log_->ops(region);
+			if (world_->store_->edit_log_) ops_vec = world_->store_->edit_log_->ops(region);
 		}
 		PackedByteArray ops;
 		const int op_count = static_cast<int>(ops_vec.size());
@@ -4648,7 +4648,7 @@ void VoxelDebugHooks::debug_store_volume(int slot, const PackedByteArray &sdf,
 		UtilityFunctions::printerr("debug_store_volume: short buffers for dim ", dim);
 		return;
 	}
-	world_->volumes_.reserve(slot); // no-op when the suite already claimed it
+	world_->store_->volumes_.reserve(slot); // no-op when the suite already claimed it
 	ve::VolumeData d;
 	d.dim = dim;
 	d.sdf.assign(sdf.ptr(), sdf.ptr() + n);
@@ -4669,7 +4669,7 @@ void VoxelDebugHooks::debug_store_volume(int slot, const PackedByteArray &sdf,
 		else d.normal_oct[static_cast<size_t>(i)] = ve::oct_encode_snorm8(up);
 	}
 	ve::VolumeData to_upload = d;
-	if (world_->volumes_.store(slot, std::move(d)) && world_->mesh_) {
+	if (world_->store_->volumes_.store(slot, std::move(d)) && world_->mesh_) {
 		world_->mesh_->submit_volume(slot, to_upload);
 		world_->mesh_->run_sync([](MeshPass &){});
 	}
@@ -4685,7 +4685,7 @@ Vector2 VoxelDebugHooks::debug_eval_field(Vector3 p, const PackedByteArray &ops,
 		}
 		ptr = reinterpret_cast<const ve::EditOp *>(ops.ptr());
 	}
-	const ve::Sample s = ve::eval_field(gen, ptr, op_count, p.x, p.y, p.z, &world_->volumes_, world_->overrides_);
+	const ve::Sample s = ve::eval_field(gen, ptr, op_count, p.x, p.y, p.z, &world_->store_->volumes_, world_->store_->overrides_);
 	return Vector2(s.sdf, static_cast<float>(s.material));
 }
 
@@ -4699,7 +4699,7 @@ Dictionary VoxelDebugHooks::debug_eval_field_gradient(Vector3 p, const PackedByt
 		}
 		ptr = reinterpret_cast<const ve::EditOp *>(ops.ptr());
 	}
-	const ve::FieldSample s = ve::eval_field_gradient(gen, ptr, op_count, p.x, p.y, p.z, &world_->volumes_, world_->overrides_);
+	const ve::FieldSample s = ve::eval_field_gradient(gen, ptr, op_count, p.x, p.y, p.z, &world_->store_->volumes_, world_->store_->overrides_);
 	Dictionary d;
 	d["sdf"] = s.sdf;
 	d["material"] = int(s.material);
@@ -4758,12 +4758,12 @@ Color VoxelDebugHooks::debug_material_probe(int mat, Vector3 p, Vector3 n) {
 	cam.params[3] = static_cast<float>(mat);
 	const ve::WorldBounds wb = world_->world_bounds();
 	const ve::IVec3 ro = wb.origin_regions();
-	cam.dims[0] = world_->world_size_regions_.x; cam.dims[1] = world_->world_size_regions_.y;
-	cam.dims[2] = world_->world_size_regions_.z;
+	cam.dims[0] = world_->store_->config_.world_size_regions.x; cam.dims[1] = world_->store_->config_.world_size_regions.y;
+	cam.dims[2] = world_->store_->config_.world_size_regions.z;
 	cam.dims[3] = world_->island_slot_count();
 	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
-	cam.atlas_bricks[0] = world_->atlas_bricks_.x; cam.atlas_bricks[1] = world_->atlas_bricks_.y;
-	cam.atlas_bricks[2] = world_->atlas_bricks_.z;
+	cam.atlas_bricks[0] = world_->store_->config_.atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config_.atlas_bricks.y;
+	cam.atlas_bricks[2] = world_->store_->config_.atlas_bricks.z;
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->raymarch_pass_->render(device, *world_->atlas_, world_->islands_, RID(), cam, 1, 1,
 			kNoEdit))
@@ -4835,18 +4835,18 @@ bool VoxelDebugHooks::debug_brick_has_surface(Vector3i brick, const PackedByteAr
 		}
 		ptr = reinterpret_cast<const ve::EditOp *>(ops.ptr());
 	}
-	return ve::brick_has_surface(gen, ptr, op_count, {brick.x, brick.y, brick.z}, &world_->volumes_);
+	return ve::brick_has_surface(gen, ptr, op_count, {brick.x, brick.y, brick.z}, &world_->store_->volumes_);
 }
 
 void VoxelDebugHooks::debug_mark_region(Vector3i region, int region_slot, Vector3i lo, Vector3i hi,
 		int op_count, bool force) {
 	RenderingDevice *device = world_->rd();
 	if (!device || !world_->atlas_ || !world_->region_pass_) return;
-	if (region_slot < 0 || region_slot >= world_->max_region_slots_) {
+	if (region_slot < 0 || region_slot >= world_->store_->config_.max_region_slots) {
 		// The mark shader indexes region_tables with rslot * kRegionBrickCount + bi, so a
 		// hostile slot is a GPU-side out-of-bounds write. Refuse before recording.
 		UtilityFunctions::printerr("debug_mark_region: region_slot ", region_slot,
-				" out of range [0, ", world_->max_region_slots_, ")");
+				" out of range [0, ", world_->store_->config_.max_region_slots, ")");
 		return;
 	}
 	const int64_t list = device->compute_list_begin();
@@ -4889,7 +4889,7 @@ Dictionary VoxelDebugHooks::debug_brick_diff(Vector3i brick, int region_slot,
 
 	ve::AnalyticGenerator gen;
 	ve::BrickEval ref{};
-	ve::eval_brick(gen, ptr, op_count, b, &ref, &world_->volumes_, world_->overrides_);
+	ve::eval_brick(gen, ptr, op_count, b, &ref, &world_->store_->volumes_, world_->store_->overrides_);
 
 	const ve::IVec3 ab = world_->atlas_->config().atlas_bricks;
 	const ve::IVec3 cell{slot % ab.x, (slot / ab.x) % ab.y, slot / (ab.x * ab.y)};
@@ -5003,7 +5003,7 @@ Dictionary VoxelDebugHooks::debug_brick_flags(Vector3i region) {
 	Dictionary d;
 	debug_stream_region(region);
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas_ || !world_->edit_log_) return d;
+	if (!world_->initialized_ || !device || !world_->atlas_ || !world_->store_->edit_log_) return d;
 	const int rslot = debug_region_map_entry(region);
 	if (rslot < 0) return d;
 
@@ -5017,7 +5017,7 @@ Dictionary VoxelDebugHooks::debug_brick_flags(Vector3i region) {
 	std::vector<ve::EditOp> ops;
 	{
 		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
-		ops = world_->edit_log_->ops({region.x, region.y, region.z});
+		ops = world_->store_->edit_log_->ops({region.x, region.y, region.z});
 	}
 	ve::AnalyticGenerator gen;
 	const int32_t *slots = reinterpret_cast<const int32_t *>(table.ptr());
@@ -5034,7 +5034,7 @@ Dictionary VoxelDebugHooks::debug_brick_flags(Vector3i region) {
 		const ve::IVec3 brick{region.x * ve::kRegionBricks + x,
 				region.y * ve::kRegionBricks + y, region.z * ve::kRegionBricks + z};
 		ve::BrickEval ref{};
-		ve::eval_brick(gen, ops.data(), static_cast<int>(ops.size()), brick, &ref, &world_->volumes_, world_->overrides_);
+		ve::eval_brick(gen, ops.data(), static_cast<int>(ops.size()), brick, &ref, &world_->store_->volumes_, world_->store_->overrides_);
 		const uint32_t want = ve::brick_flags_from_mips(ref.mips, ref.brick.palette[0]);
 		const uint32_t got = gpu_flags[slot];
 		compared++;
@@ -5053,13 +5053,13 @@ Dictionary VoxelDebugHooks::debug_brick_flags_after_mark(Vector3i region) {
 	Dictionary d;
 	debug_stream_region(region);
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas_ || !world_->edit_log_ || !world_->region_pass_) return d;
+	if (!world_->initialized_ || !device || !world_->atlas_ || !world_->store_->edit_log_ || !world_->region_pass_) return d;
 	const int rslot = debug_region_map_entry(region);
 	if (rslot < 0) return d;
 	int op_count = 0;
 	{
 		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
-		op_count = static_cast<int>(world_->edit_log_->ops({region.x, region.y, region.z}).size());
+		op_count = static_cast<int>(world_->store_->edit_log_->ops({region.x, region.y, region.z}).size());
 	}
 	const ve::IVec3 lo{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
 			region.z * ve::kRegionBricks};
@@ -5091,11 +5091,11 @@ Dictionary VoxelDebugHooks::debug_brick_flags_after_mark(Vector3i region) {
 void VoxelDebugHooks::debug_release_region(int region_slot) {
 	RenderingDevice *device = world_->rd();
 	if (!device || !world_->region_pass_) return;
-	if (region_slot < 0 || region_slot >= world_->max_region_slots_) {
+	if (region_slot < 0 || region_slot >= world_->store_->config_.max_region_slots) {
 		// Same hostile-slot hazard as debug_mark_region: the free shader indexes
 		// region_tables with rslot * kRegionBrickCount + bi.
 		UtilityFunctions::printerr("debug_release_region: region_slot ", region_slot,
-				" out of range [0, ", world_->max_region_slots_, ")");
+				" out of range [0, ", world_->store_->config_.max_region_slots, ")");
 		return;
 	}
 	const int64_t list = device->compute_list_begin();
@@ -5169,7 +5169,7 @@ Dictionary VoxelDebugHooks::debug_occupancy_fallback_diff(Vector3i region) {
 	d["mismatches"] = 0;
 	d["first_mismatch_brick"] = Vector3i(-1, -1, -1);
 	world_->ensure_initialized();
-	if (!world_->rd() || !world_->atlas_ || !world_->edit_log_ || !world_->region_pass_) return d;
+	if (!world_->rd() || !world_->atlas_ || !world_->store_->edit_log_ || !world_->region_pass_) return d;
 	debug_stream_region(region);
 	const int rslot = debug_region_map_entry(region);
 	if (rslot < 0) return d;
@@ -5177,7 +5177,7 @@ Dictionary VoxelDebugHooks::debug_occupancy_fallback_diff(Vector3i region) {
 	std::vector<ve::EditOp> ops;
 	{
 		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
-		ops = world_->edit_log_->ops({region.x, region.y, region.z});
+		ops = world_->store_->edit_log_->ops({region.x, region.y, region.z});
 	}
 	const ve::IVec3 lo{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
 			region.z * ve::kRegionBricks};
@@ -5201,12 +5201,12 @@ Dictionary VoxelDebugHooks::debug_occupancy_fallback_diff(Vector3i region) {
 				region.y * ve::kRegionBricks + ((bi >> 5) & (ve::kRegionBricks - 1)),
 				region.z * ve::kRegionBricks + (bi >> 10)};
 		if (ve::brick_has_surface(gen, ops.data(), static_cast<int>(ops.size()), brick,
-				&world_->volumes_, world_->overrides_)) continue;
+				&world_->store_->volumes_, world_->store_->overrides_)) continue;
 		fallback++;
 		const int got = ve::OccupancyGrid::read_packed(
 				reinterpret_cast<const uint8_t *>(gpu.ptr()), bi);
 		const int want = static_cast<int>(ve::cell_state_probe(gen, ops.data(),
-				static_cast<int>(ops.size()), brick, &world_->volumes_, world_->overrides_));
+				static_cast<int>(ops.size()), brick, &world_->store_->volumes_, world_->store_->overrides_));
 		compared++;
 		if (got != want) {
 			mismatches++;
@@ -5226,7 +5226,7 @@ Dictionary VoxelDebugHooks::debug_occupancy_diff(Vector3i region) {
 	d["mismatches"] = 0;
 	d["first_mismatch_brick"] = Vector3i(-1, -1, -1);
 	world_->ensure_initialized();
-	if (!world_->rd() || !world_->atlas_ || !world_->edit_log_) return d;
+	if (!world_->rd() || !world_->atlas_ || !world_->store_->edit_log_) return d;
 	debug_stream_region(region);
 	const int rslot = debug_region_map_entry(region);
 	if (rslot < 0) return d;
@@ -5241,7 +5241,7 @@ Dictionary VoxelDebugHooks::debug_occupancy_diff(Vector3i region) {
 	std::vector<ve::EditOp> ops;
 	{
 		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
-		ops = world_->edit_log_->ops({region.x, region.y, region.z});
+		ops = world_->store_->edit_log_->ops({region.x, region.y, region.z});
 	}
 	const int32_t *slots = reinterpret_cast<const int32_t *>(table.ptr());
 	ve::AnalyticGenerator gen;
@@ -5256,7 +5256,7 @@ Dictionary VoxelDebugHooks::debug_occupancy_diff(Vector3i region) {
 		const int got = ve::OccupancyGrid::read_packed(
 				reinterpret_cast<const uint8_t *>(gpu.ptr()), bi);
 		const int want = static_cast<int>(ve::cell_state_field(gen, ops.data(),
-				static_cast<int>(ops.size()), brick, &world_->volumes_, world_->overrides_));
+				static_cast<int>(ops.size()), brick, &world_->store_->volumes_, world_->store_->overrides_));
 		compared++;
 		if (got != want) {
 			mismatches++;
@@ -5270,23 +5270,23 @@ Dictionary VoxelDebugHooks::debug_occupancy_diff(Vector3i region) {
 }
 
 float VoxelDebugHooks::debug_field_sdf(Vector3 p) {
-	if (!world_->edit_log_) return 1e30f;
+	if (!world_->store_->edit_log_) return 1e30f;
 	ve::AnalyticGenerator gen;
 	std::lock_guard<std::mutex> lock(world_->edit_mutex_);
 	const std::vector<ve::EditOp> &ops =
-			world_->edit_log_->ops(ve::WorldBounds::region_of_point(p.x, p.y, p.z));
+			world_->store_->edit_log_->ops(ve::WorldBounds::region_of_point(p.x, p.y, p.z));
 	return ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()), p.x, p.y, p.z,
-			&world_->volumes_, world_->overrides_).sdf;
+			&world_->store_->volumes_, world_->store_->overrides_).sdf;
 }
 
 int VoxelDebugHooks::debug_cell_state(Vector3i cell) {
-	if (!world_->edit_log_) return static_cast<int>(ve::kCellUnknown);
+	if (!world_->store_->edit_log_) return static_cast<int>(ve::kCellUnknown);
 	const ve::IVec3 c{cell.x, cell.y, cell.z};
 	ve::AnalyticGenerator gen;
 	std::lock_guard<std::mutex> lock(world_->edit_mutex_);
-	const std::vector<ve::EditOp> &ops = world_->edit_log_->ops(ve::WorldBounds::region_of_brick(c));
+	const std::vector<ve::EditOp> &ops = world_->store_->edit_log_->ops(ve::WorldBounds::region_of_brick(c));
 	return static_cast<int>(ve::cell_state_field(gen, ops.data(),
-			static_cast<int>(ops.size()), c, &world_->volumes_, world_->overrides_));
+			static_cast<int>(ops.size()), c, &world_->store_->volumes_, world_->store_->overrides_));
 }
 
 Dictionary VoxelDebugHooks::debug_occupancy_stats(Vector3 center) {
@@ -5316,8 +5316,8 @@ int VoxelDebugHooks::debug_stream_frame(Vector3 cam) {
 Dictionary VoxelDebugHooks::debug_stream_stats() {
 	Dictionary d;
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas_ || !world_->residency_ || !world_->streamer_) return d;
-	d["resident_regions"] = world_->residency_->resident_count();
+	if (!world_->initialized_ || !device || !world_->atlas_ || !world_->store_->residency_ || !world_->streamer_) return d;
+	d["resident_regions"] = world_->store_->residency_->resident_count();
 	d["frame_edits"] = world_->streamer_->last_frame_edits();
 	d["overflow"] = static_cast<int>(world_->atlas_->read_overflow(device));
 	// Either path may be the one running: debug_stream_frame drives the world in tests, the
@@ -5327,8 +5327,8 @@ Dictionary VoxelDebugHooks::debug_stream_stats() {
 			world_->overflow_seen_ | static_cast<int>(world_->streamer_->overflow_seen());
 	{
 		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
-		d["override_bricks"] = world_->overrides_ ? world_->overrides_->used() : 0;
-		d["override_capacity"] = world_->overrides_ ? world_->overrides_->capacity() : world_->max_override_bricks_;
+		d["override_bricks"] = world_->store_->overrides_ ? world_->store_->overrides_->used() : 0;
+		d["override_capacity"] = world_->store_->overrides_ ? world_->store_->overrides_->capacity() : world_->store_->config_.max_override_bricks;
 		d["consolidations"] = world_->consolidation_count_;
 		d["consolidation_refusals"] = world_->consolidation_refusals_;
 		d["consolidation_queue_refusals"] = world_->consolidation_queue_refusals_;
@@ -5338,8 +5338,8 @@ Dictionary VoxelDebugHooks::debug_stream_stats() {
 }
 
 int VoxelDebugHooks::debug_slot_of_region(Vector3i region) const {
-	if (!world_->residency_) return -1;
-	return world_->residency_->slot_of({region.x, region.y, region.z});
+	if (!world_->store_->residency_) return -1;
+	return world_->store_->residency_->slot_of({region.x, region.y, region.z});
 }
 
 int VoxelDebugHooks::debug_region_map_entry(Vector3i region) {
@@ -5353,7 +5353,7 @@ int VoxelDebugHooks::debug_region_map_entry(Vector3i region) {
 
 bool VoxelDebugHooks::debug_region_map_consistent() {
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas_ || !world_->residency_) return false;
+	if (!world_->initialized_ || !device || !world_->atlas_ || !world_->store_->residency_) return false;
 	const ve::WorldBounds wb = world_->world_bounds();
 	const PackedByteArray b = device->buffer_get_data(world_->atlas_->region_map());
 	const int32_t *map = reinterpret_cast<const int32_t *>(b.ptr());
@@ -5364,9 +5364,9 @@ bool VoxelDebugHooks::debug_region_map_consistent() {
 			for (int x = 0; x < sz.x; x++) {
 				const ve::IVec3 r{o.x + x, o.y + y, o.z + z};
 				const int gpu_slot = map[x + y * sz.x + z * sz.x * sz.y];
-				const int cpu_slot = world_->residency_->slot_of(r);
+				const int cpu_slot = world_->store_->residency_->slot_of(r);
 				if (gpu_slot != cpu_slot) return false;
-				if (gpu_slot >= 0 && !(world_->residency_->region_of_slot(gpu_slot) == r)) return false;
+				if (gpu_slot >= 0 && !(world_->store_->residency_->region_of_slot(gpu_slot) == r)) return false;
 			}
 	return true;
 }
@@ -5374,12 +5374,12 @@ bool VoxelDebugHooks::debug_region_map_consistent() {
 Dictionary VoxelDebugHooks::debug_raycast(Vector3 origin, Vector3 dir) {
 	Dictionary d;
 	d["hit"] = false;
-	if (!world_->edit_log_) return d;
+	if (!world_->store_->edit_log_) return d;
 	std::lock_guard<std::mutex> lock(world_->edit_mutex_);
 	ve::AnalyticGenerator gen;
 	const float o[3] = {origin.x, origin.y, origin.z};
 	const float f[3] = {dir.x, dir.y, dir.z};
-	const ve::RayHit h = ve::raycast(gen, *world_->edit_log_, o, f, 200.0f, &world_->volumes_, world_->overrides_);
+	const ve::RayHit h = ve::raycast(gen, *world_->store_->edit_log_, o, f, 200.0f, &world_->store_->volumes_, world_->store_->overrides_);
 	if (!h.hit) return d;
 	d["hit"] = true;
 	d["pos"] = Vector3(h.pos[0], h.pos[1], h.pos[2]);
