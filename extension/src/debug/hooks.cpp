@@ -686,11 +686,9 @@ Dictionary VoxelDebugHooks::debug_ssgi_reprojection_probe(Vector3 previous_pos, 
 Dictionary VoxelDebugHooks::debug_beauty_settings() {
 	ve::BeautySettings beauty;
 	int quality_tier;
-	{
-		std::lock_guard<std::mutex> lock(world_->beauty_mutex_);
-		beauty = world_->beauty_;
-		quality_tier = world_->quality_tier_;
-	}
+	// Task 14: beauty_mutex_/beauty_/quality_tier_ moved into RenderOrchestrator; this
+	// snapshot keeps the single-mutex-hold shape of the pre-move body.
+	world_->beauty_snapshot(&beauty, &quality_tier);
 
 	Dictionary d;
 	d["ssgi"] = beauty.ssgi;
@@ -2001,8 +1999,10 @@ void VoxelDebugHooks::debug_wait_consolidation() {
 }
 
 void VoxelDebugHooks::debug_pump_consolidation() {
-	debug_pump_consolidation_async();
-	debug_wait_consolidation();
+	world_->ensure_physics_initialized();
+	// Task 14 minor: the pump_async()+wait() composition lives on
+	// ConsolidationCoordinator::pump() now instead of being re-assembled here.
+	world_->context().consolidation->pump();
 }
 
 Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
@@ -3146,7 +3146,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_gbuffer(Vector3 origin, Vector3 dir) 
 	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
 	cam.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
 	cam.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
-	const uint32_t flags = ve::pack_flags(world_->beauty_);
+	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
 	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, 1, 1, kNoEdit)) return d;
@@ -3199,7 +3199,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_hole_probe(Vector3 origin, Vector3 di
 	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
 	cam.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
 	cam.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
-	const uint32_t flags = ve::pack_flags(world_->beauty_);
+	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
 	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, w, h, kNoEdit)) return d;
@@ -4342,10 +4342,15 @@ String VoxelDebugHooks::debug_load_shader(const String &res_path) const {
 
 Dictionary VoxelDebugHooks::debug_shader_reload_stats() {
 	Dictionary d;
-	std::lock_guard<std::mutex> lock(world_->reload_mutex_);
-	d["reloads"] = world_->reload_count_;
-	d["last_ok"] = world_->reload_last_ok_;
-	d["last_error"] = world_->reload_last_error_;
+	// Task 14: the reload bookkeeping moved into RenderOrchestrator; one-line delegation
+	// keeps the single-mutex-hold snapshot shape of the pre-move body.
+	int count = 0;
+	bool last_ok = true;
+	String last_error;
+	world_->reload_snapshot(&count, &last_ok, &last_error);
+	d["reloads"] = count;
+	d["last_ok"] = last_ok;
+	d["last_error"] = last_error;
 	return d;
 }
 

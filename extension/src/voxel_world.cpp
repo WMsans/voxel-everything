@@ -138,10 +138,17 @@ void VoxelWorld::end_render_callback() {
 
 void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("hooks"), &VoxelWorld::hooks);
-	ClassDB::bind_method(D_METHOD("_shutdown_render_resources_on_render_thread"),
+	// Name shared with orchestrator.cpp's render-thread Callable dispatch
+	// (kShutdownRenderResourcesOnRenderThread) so the two sites cannot drift.
+	ClassDB::bind_method(D_METHOD(kShutdownRenderResourcesOnRenderThread),
 			&VoxelWorld::shutdown_render_resources_on_render_thread);
 	ClassDB::bind_method(D_METHOD("shutdown_render_resources"),
 			&VoxelWorld::shutdown_render_resources);
+	// Task 14 contract smoke test: the admission guard itself, so GDScript can pin the
+	// refuse-after-shutdown / re-admit-after-reopen behavior at the orchestrator boundary.
+	ClassDB::bind_method(D_METHOD("try_begin_render_callback"),
+			&VoxelWorld::try_begin_render_callback);
+	ClassDB::bind_method(D_METHOD("end_render_callback"), &VoxelWorld::end_render_callback);
 	ClassDB::bind_method(D_METHOD("set_use_local_device", "v"), &VoxelWorld::set_use_local_device);
 	ClassDB::bind_method(D_METHOD("get_use_local_device"), &VoxelWorld::get_use_local_device);
 	ClassDB::bind_method(D_METHOD("set_atlas_bricks", "v"), &VoxelWorld::set_atlas_bricks);
@@ -210,61 +217,29 @@ void VoxelWorld::_bind_methods() {
 			"Off,Low,Medium,High"), "set_quality_tier", "get_quality_tier");
 }
 
+// Task 14: bodies moved verbatim into RenderOrchestrator (beauty_mutex_, quality_tier_,
+// beauty_ and the effect-name table went with them); these one-line delegations keep the
+// ClassDB surface and every call site compiling unchanged. Same threads as before the
+// move: setters on the main thread, value snapshots wherever beauty_settings() is taken.
+
 void VoxelWorld::set_quality_tier(int v) {
-	std::lock_guard<std::mutex> lock(beauty_mutex_);
-	quality_tier_ = v < 0 ? 0 : (v > 3 ? 3 : v);
-	beauty_ = ve::settings_for_tier(static_cast<ve::QualityTier>(quality_tier_));
+	context_.render->set_quality_tier(v);
 }
 
 int VoxelWorld::get_quality_tier() const {
-	std::lock_guard<std::mutex> lock(beauty_mutex_);
-	return quality_tier_;
+	return context_.render->quality_tier();
 }
-
-namespace {
-// One table, so the setter, the getter and the debug dictionary cannot disagree about what
-// an effect is called.
-bool *beauty_field(ve::BeautySettings &s, const String &name) {
-	if (name == "ssgi") return &s.ssgi;
-	if (name == "ssr") return &s.ssr;
-	if (name == "contact_shadows") return &s.contact_shadows;
-	if (name == "outlines") return &s.outlines;
-	if (name == "sun_shadow_map") return &s.sun_shadow_map;
-	if (name == "glossy_sdf_rays") return &s.glossy_sdf_rays;
-	if (name == "raymarched_sun_shadow") return &s.raymarched_sun_shadow;
-	if (name == "cost_view") return &s.cost_view;
-	return nullptr;
-}
-} // namespace
 
 void VoxelWorld::set_effect_enabled(const String &name, bool on) {
-	if (name == "islands") {
-		islands_enabled_.store(on, std::memory_order_relaxed);
-		return;
-	}
-	if (name == "near_field") {
-		near_field_enabled_.store(on, std::memory_order_relaxed);
-		return;
-	}
-	std::lock_guard<std::mutex> lock(beauty_mutex_);
-	bool *f = beauty_field(beauty_, name);
-	if (!f) return; // fail-soft: an unknown name in a debug menu is not a crash
-	*f = on;
-	ve::clamp_settings(&beauty_);
+	context_.render->set_effect_enabled(name, on);
 }
 
 bool VoxelWorld::get_effect_enabled(const String &name) const {
-	if (name == "islands") return islands_enabled_.load(std::memory_order_relaxed);
-	if (name == "near_field") return near_field_enabled_.load(std::memory_order_relaxed);
-	std::lock_guard<std::mutex> lock(beauty_mutex_);
-	ve::BeautySettings copy = beauty_;
-	const bool *f = beauty_field(copy, name);
-	return f ? *f : false;
+	return context_.render->get_effect_enabled(name);
 }
 
 ve::BeautySettings VoxelWorld::beauty_settings() const {
-	std::lock_guard<std::mutex> lock(beauty_mutex_);
-	return beauty_;
+	return context_.render->beauty_settings();
 }
 
 
@@ -334,6 +309,15 @@ VoxelWorld::VoxelWorld() {
 			.lod_page_quads = &lod_page_quads_,
 			.lod_overflow_logged = &lod_overflow_logged_,
 			.callback_owner = this,
+			// Task 14: effect toggles stay world properties (they gate non-beauty behavior
+			// too); reload's re-init arm stays VoxelWorld::ensure_initialized() via a
+			// captureless thunk -- no VoxelWorld* is handed to the orchestrator.
+			.islands_enabled = &islands_enabled_,
+			.near_field_enabled = &near_field_enabled_,
+			.ensure_initialized_thunk = [](void *self) {
+				static_cast<VoxelWorld *>(self)->ensure_initialized();
+			},
+			.ensure_initialized_self = this,
 	});
 	context_.render = render_.get();
 	// Task 11: the consolidation state machine moves off this class into the coordinator.
@@ -1230,7 +1214,7 @@ bool VoxelWorld::render_probe_pixel(Vector3 origin, Vector3 dir) {
 	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
 	cam.atlas_bricks[0] = store_->config().atlas_bricks.x; cam.atlas_bricks[1] = store_->config().atlas_bricks.y;
 	cam.atlas_bricks[2] = store_->config().atlas_bricks.z;
-	const uint32_t flags = ve::pack_flags(beauty_);
+	const uint32_t flags = ve::pack_flags(beauty_settings());
 	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!raymarch_pass()->render(device, *atlas(), islands(), RID(), cam, 1, 1,
@@ -1258,49 +1242,15 @@ bool VoxelWorld::render_probe_pixel(Vector3 origin, Vector3 dir) {
 
 
 
-// Preflight_shaders moved verbatim into RenderOrchestrator (Task 13).
+// Preflight_shaders moved verbatim into RenderOrchestrator (Task 13); the reload latch,
+// pump machinery and bookkeeping moved verbatim into RenderOrchestrator (Task 14).
 
 void VoxelWorld::request_shader_reload() {
-	// A latch, not the work: shaders are compiled and pipelines created on the device that
-	// owns them, and for the shipping world that device belongs to the render thread.
-	reload_requested_.store(true, std::memory_order_release);
+	context_.render->request_shader_reload();
 }
 
 void VoxelWorld::pump_shader_reload() {
-	if (!reload_requested_.exchange(false, std::memory_order_acq_rel)) return;
-	if (context_.render->shutdown_in_progress()) return; // same mutex-guarded latch check as before the Task 13 move
-	{
-		std::lock_guard<std::mutex> lock(reload_mutex_);
-		reload_count_++;
-	}
-	if (!initialized_) {
-		ensure_initialized();
-		std::lock_guard<std::mutex> lock(reload_mutex_);
-		reload_last_ok_ = initialized_;
-		reload_last_error_ = initialized_ ? String() : String("shader reload re-init failed");
-		return;
-	}
-	String error;
-	if (!context_.render->preflight_shaders(rd(), &error)) {
-		// Fail-soft (spec §8): a shader that will not compile must not take down the
-		// pipelines that are already running. Keep the old GPU objects untouched.
-		std::lock_guard<std::mutex> lock(reload_mutex_);
-		reload_last_ok_ = false;
-		reload_last_error_ = error;
-		UtilityFunctions::printerr("VoxelWorld: shader reload pre-flight failed; keeping old pipelines: ",
-				error);
-		return;
-	}
-	// teardown_gpu() frees every GPU object and leaves the CPU cores -- edit log, residency,
-	// override store, LoD tree -- untouched, so ensure_initialized() re-streams the same
-	// world. This is the whole hot reload.
-	teardown_gpu();
-	ensure_initialized();
-	{
-		std::lock_guard<std::mutex> lock(reload_mutex_);
-		reload_last_ok_ = initialized_;
-		reload_last_error_ = initialized_ ? String() : String("shader reload re-init failed");
-	}
+	context_.render->pump_shader_reload();
 }
 
 

@@ -8,7 +8,8 @@
 // CPU-outlives-GPU invariant): ensure_gpu_graph(), teardown_gpu() and the
 // teardown_*() halves preserve the exact allocation/deallocation sequence
 // VoxelWorld used before the split. Compositor admission/lifetime moved here
-// verbatim in Phase 4b (Task 13); reload/beauty snapshot follows in Phase 4c.
+// verbatim in Phase 4b (Task 13); shader reload + beauty snapshot + timings
+// followed verbatim in Phase 4c (Task 14).
 //
 // No VoxelWorld* lives here: collaborators arrive as injected handles/addresses
 // (same rule as ConsolidationCoordinator's Collaborators -- the store/spine
@@ -22,6 +23,7 @@
 #include <godot_cpp/variant/node_path.hpp>
 #include <godot_cpp/variant/string.hpp>
 
+#include <atomic>
 #include <condition_variable>
 #include <map>
 #include <mutex>
@@ -30,9 +32,16 @@
 
 #include "lod/lod_tree.h" // ve::LodKey: teardown clears the world's LoD page maps
 #include "render/gpu_timings.h"
+#include "shade/beauty_settings.h"
 #include "world/region.h"
 
 namespace godot {
+
+// Shared name of the ClassDB method binding (voxel_world.cpp -- the Callable must
+// target the bound node) and of the render-thread teardown Callable dispatched here.
+// Task 13 minor: one constant so the two sites cannot drift apart.
+inline constexpr char kShutdownRenderResourcesOnRenderThread[] =
+		"_shutdown_render_resources_on_render_thread";
 
 class RenderingDevice;
 class WorldStore;
@@ -87,6 +96,18 @@ public:
 		std::set<ve::LodKey> *lod_overflow_logged = nullptr;
 		// Callable target for the queued render-thread teardown (see class comment).
 		Object *callback_owner = nullptr;
+		// --- Task 14 ---
+		// set_effect_enabled()/get_effect_enabled() route the two atomic toggles that
+		// stayed world properties (they gate non-beauty behavior too). Addresses only.
+		std::atomic<bool> *islands_enabled = nullptr;
+		std::atomic<bool> *near_field_enabled = nullptr;
+		// pump_shader_reload()'s re-init arm: VoxelWorld::ensure_initialized() (it owns
+		// the CPU-side init ordering around the GPU half this class moved in Task 12).
+		// Generic thunk + user-data, not a stored VoxelWorld*: the world registers a
+		// captureless static trampoline at construction, exactly like callback_owner
+		// above is registered for its single Callable purpose.
+		void (*ensure_initialized_thunk)(void *) = nullptr;
+		void *ensure_initialized_self = nullptr;
 	};
 
 	explicit RenderOrchestrator(Collaborators handles);
@@ -110,6 +131,31 @@ public:
 	// shutting-down flag under this exact mutex from its worker thread).
 	std::mutex *render_lifetime_mutex_slot() { return &render_lifetime_mutex_; }
 	const bool *render_shutting_down_slot() const { return &render_shutting_down_; }
+
+	// --- shader hot reload (spec §8), moved VERBATIM from VoxelWorld (Task 14) ---
+	// request_shader_reload() only sets the latch; the render callback pumps it,
+	// pre-flights every shader (preflight_shaders below), and only then tears down and
+	// rebuilds the GPU objects so a bad shader never kills the last-known-good pipelines.
+	void request_shader_reload();
+	void pump_shader_reload();
+	// Debug-facade snapshot: one reload_mutex_ hold copying all three bookkeeping fields,
+	// the exact hold shape of the pre-move debug_shader_reload_stats body.
+	void reload_snapshot(int *out_count, bool *out_last_ok, String *out_last_error) const;
+
+	// --- beauty settings snapshot (moved VERBATIM from VoxelWorld, Task 14) ---
+	// Setters run on the main thread; render callbacks take value snapshots through
+	// beauty_settings() rather than retaining a reference to this mutable state; the
+	// mutex is never held during render work.
+	void set_quality_tier(int v);
+	int quality_tier() const;
+	void set_effect_enabled(const String &name, bool on);
+	bool get_effect_enabled(const String &name) const;
+	// Returns an immutable value snapshot. Render callbacks must take this once per frame
+	// and pass the copy through their work; the mutex is never held during render work.
+	ve::BeautySettings beauty_settings() const;
+	// One beauty_mutex_ hold copying settings + tier together -- the exact hold shape of
+	// the pre-move debug_beauty_settings body.
+	void beauty_snapshot(ve::BeautySettings *out_settings, int *out_tier) const;
 
 	// Outcome of the GPU-half of ensure_initialized():
 	//   kOk          -- graph complete; caller sets its initialized_ flag.
@@ -253,6 +299,18 @@ private:
 	bool gpu_teardown_done_ = false;
 	RenderingDevice *main_rd_ = nullptr;
 	RenderingDevice *local_rd_ = nullptr; // owned when use_local_device_
+	// --- shader hot reload (spec §8), member-for-member from VoxelWorld (Task 14);
+	// the latch/mutex acquisition sites live in request/pump_shader_reload above ---
+	std::atomic<bool> reload_requested_{false};
+	mutable std::mutex reload_mutex_; // mutable: const debug-facade snapshots take it
+	int reload_count_ = 0;
+	bool reload_last_ok_ = true;
+	String reload_last_error_;
+	// --- M6 beautification settings (member-for-member from VoxelWorld, Task 14);
+	// guarded by beauty_mutex_ per the class contract documented above ---
+	mutable std::mutex beauty_mutex_;
+	int quality_tier_ = static_cast<int>(ve::QualityTier::kHigh);
+	ve::BeautySettings beauty_ = ve::settings_for_tier(ve::QualityTier::kHigh);
 };
 
 // Compositor callbacks can outlive the SceneTree during SceneTree::quit(). Admission

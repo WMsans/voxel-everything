@@ -84,3 +84,31 @@ func test_consolidation_refusal_accounting() -> void:
 	assert_bool(completed).override_failure_message("async consolidation never completed").is_true()
 	assert_int(int(stats["consolidation_refusals"])).is_equal(refusals_before + 1)
 	assert_int(_world.hooks().debug_region_op_count(Vector3i(0, 2, 0))).is_equal(0)
+
+# Phase-4 contract smoke test (Task 14): compositor-callback admission refuses once
+# shutdown_render_resources() has run, and re-admits after a lifecycle reopen + re-init --
+# pinned at the orchestrator boundary (mirrors what test_render_shutdown.gd proves
+# end-to-end). try_begin_render_callback/end_render_callback are ClassDB-bound as of this
+# task so GDScript can exercise the guard directly.
+func test_render_callback_admission_shuts_down_cleanly() -> void:
+	_world = ClassDB.instantiate("VoxelWorld")
+	_world.use_local_device = true
+	_world.physics_enabled = false
+	add_child(_world)
+	_world.ensure_initialized()
+	assert_bool(_world.is_initialized()).is_true()
+	assert_bool(_world.try_begin_render_callback()).is_true()
+	_world.end_render_callback()
+	_world.shutdown_render_resources()
+	# Admission stays latched shut after shutdown...
+	assert_bool(_world.try_begin_render_callback()).is_false()
+	# ...until a fresh lifecycle entry runs VoxelWorld._ready()'s
+	# voxel_compositor_callbacks_ready -> reopen_admission, exactly as a scene
+	# re-instantiation would. Then re-init rebuilds the graph and admits again.
+	remove_child(_world)
+	_world.request_ready()
+	add_child(_world)
+	_world.ensure_initialized()
+	assert_bool(_world.is_initialized()).is_true()
+	assert_bool(_world.try_begin_render_callback()).is_true()
+	_world.end_render_callback()
