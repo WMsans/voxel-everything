@@ -1,6 +1,7 @@
 #include "debug/hooks.h"
 
 #include "../voxel_world.h"
+#include "mesh/consolidation.h"
 #include "render/gpu_atlas.h"
 #include "render/material_atlas.h"
 #include "render/camera_params.h"
@@ -1990,22 +1991,13 @@ Dictionary VoxelDebugHooks::debug_override_render_state(Vector3i brick) {
 
 void VoxelDebugHooks::debug_pump_consolidation_async() {
 	world_->ensure_physics_initialized();
-	world_->pump_consolidation();
+	// Task 11: the state machine moved off VoxelWorld into the coordinator.
+	world_->context().consolidation->pump_async();
 }
 
 void VoxelDebugHooks::debug_wait_consolidation() {
 	world_->ensure_physics_initialized();
-	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-	for (;;) {
-		bool in_flight = false;
-		{
-			std::lock_guard<std::mutex> lock(world_->edit_mutex());
-			in_flight = world_->consolidation_in_flight_;
-		}
-		if (!in_flight || std::chrono::steady_clock::now() >= deadline) return;
-		std::this_thread::sleep_for(std::chrono::milliseconds(1));
-		world_->pump_consolidation();
-	}
+	world_->context().consolidation->wait();
 }
 
 void VoxelDebugHooks::debug_pump_consolidation() {
@@ -2131,157 +2123,9 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 
 bool VoxelDebugHooks::debug_consolidate_region(Vector3i region) {
 	world_->ensure_physics_initialized();
-	std::unique_lock<std::mutex> edit_lock(world_->edit_mutex());
-	const auto refuse = [this]() { world_->consolidation_refusals_++; return false; };
-	if (!world_->mesh_ || !world_->store_->edit_log_ || !world_->store_->overrides_) return refuse();
-	const ve::IVec3 r{region.x, region.y, region.z};
-	std::vector<ve::EditOp> ops = world_->store_->edit_log_->ops(r);
-	std::vector<ve::IVec3> bricks;
-	ve::plan_consolidation(ops.data(), static_cast<int>(ops.size()), r, &bricks);
-	int needed_slots = 0;
-	for (const ve::IVec3 b : bricks) if (world_->store_->overrides_->slot_of(b) < 0) needed_slots++;
-	if (bricks.empty() || needed_slots > world_->store_->overrides_->capacity() - world_->store_->overrides_->used()) return refuse();
-	const int resident_slot = world_->store_->residency_ ? world_->store_->residency_->slot_of(r) : -1;
-	if (resident_slot < 0) return refuse();
-
-	const std::tuple<int, int, int> key{r.x, r.y, r.z};
-	const auto found = world_->store_->override_tables_.find(key);
-	const int old_table = found == world_->store_->override_tables_.end() ? -1 : found->second;
-	int table = old_table;
-	if (table < 0) {
-		std::vector<bool> used(OverridePool::kMaxOverrideTables, false);
-		for (const auto &it : world_->store_->override_tables_)
-			if (it.second >= 0 && it.second < OverridePool::kMaxOverrideTables)
-				used[static_cast<size_t>(it.second)] = true;
-		for (int i = 0; i < OverridePool::kMaxOverrideTables; i++)
-			if (!used[static_cast<size_t>(i)]) { table = i; break; }
-		if (table < 0) return refuse();
-	}
-	const ve::IVec3 base{r.x * ve::kRegionBricks, r.y * ve::kRegionBricks,
-			r.z * ve::kRegionBricks};
-	std::vector<std::pair<int, int>> old_entries;
-	std::vector<int> old_slots;
-	std::vector<ve::OverrideBrick> old_bricks;
-	for (int z = 0; z < ve::kRegionBricks; z++)
-		for (int y = 0; y < ve::kRegionBricks; y++)
-			for (int x = 0; x < ve::kRegionBricks; x++) {
-				const ve::IVec3 b{base.x + x, base.y + y, base.z + z};
-				const int slot = world_->store_->overrides_->slot_of(b);
-				if (slot < 0) continue;
-				old_entries.emplace_back(ve::WorldBounds::brick_index_in_region(b), slot);
-				old_slots.push_back(slot);
-				old_bricks.push_back(*world_->store_->overrides_->data(slot));
-			}
-
-	ConsolidateJob job;
-	job.region = r;
-	job.region_slot = resident_slot;
-	job.bricks = bricks;
-	job.ops = ops;
-	if (!bricks.empty()) {
-		ve::IVec3 lo = bricks[0], hi = bricks[0];
-		for (auto &b : bricks) { lo.x = std::min(lo.x, b.x); lo.y = std::min(lo.y, b.y); lo.z = std::min(lo.z, b.z); hi.x = std::max(hi.x, b.x); hi.y = std::max(hi.y, b.y); hi.z = std::max(hi.z, b.z); }
-		if (!world_->snapshot_field_sources(ops, lo, hi, &job.source)) return refuse();
-	}
-	// A reused worker region slot must see the old table while the bake reads its base.
-	if (!world_->mesh_->set_override_region(r, job.region_slot, old_table, old_entries)) return refuse();
-	if (!world_->mesh_->submit_consolidations({job})) return refuse();
-	world_->mesh_->run_sync([](MeshPass &) {});
-	std::vector<ConsolidateResult> results;
-	if (world_->mesh_->collect_consolidations(&results) != 1 || results[0].failed ||
-			results[0].baked.size() != bricks.size()) return refuse();
-
-	std::vector<int> slots;
-	std::vector<ve::IVec3> newly_acquired;
-	for (const ve::IVec3 b : bricks) {
-		const bool was_present = world_->store_->overrides_->slot_of(b) >= 0;
-		const int slot = world_->store_->overrides_->acquire(b);
-		if (slot < 0) {
-			for (const ve::IVec3 acquired : newly_acquired) world_->store_->overrides_->release(acquired);
-			return refuse();
-		}
-		if (!was_present) newly_acquired.push_back(b);
-		slots.push_back(slot);
-	}
-	std::vector<std::pair<int, int>> entries;
-	entries.reserve(bricks.size());
-	for (size_t i = 0; i < bricks.size(); i++)
-		entries.emplace_back(ve::WorldBounds::brick_index_in_region(bricks[i]), slots[i]);
-
-	// Stage render bytes first and check every upload. The old CPU bytes/table remain the
-	// rollback source until both devices have published the complete replacement.
-	bool render_ok = true;
-	if (world_->atlas_) {
-		for (size_t i = 0; i < slots.size(); i++)
-			if (!world_->atlas_->upload_override(world_->rd(), slots[i], results[0].baked[i])) render_ok = false;
-		// Task 7: normals share the transaction -- payload before table publication.
-		if (render_ok)
-			for (size_t i = 0; i < slots.size(); i++) {
-				const ve::OverrideBrick &brick = results[0].baked[i];
-				if (brick.normal_oct.size() == ve::kBrickSdfCount)
-					world_->atlas_->stored_normals().upload_override(world_->rd(), slots[i],
-							brick.normal_oct.data(), ve::kBrickSdfCount);
-				else
-					world_->atlas_->stored_normals().release_override(world_->rd(), slots[i]);
-			}
-		if (render_ok) world_->atlas_->set_override_table(world_->rd(), job.region_slot, table, entries);
-	}
-	const auto rollback_publication = [&]() {
-		bool render_restored = true;
-		if (world_->atlas_) {
-			for (size_t i = 0; i < old_slots.size(); i++)
-				if (!world_->atlas_->upload_override(world_->rd(), old_slots[i], old_bricks[i])) render_restored = false;
-			// Restore the previous NORMAL handles alongside the previous override bytes.
-			for (size_t i = 0; i < old_slots.size(); i++) {
-				const ve::OverrideBrick &old = old_bricks[i];
-				if (old.normal_oct.size() == ve::kBrickSdfCount)
-					world_->atlas_->stored_normals().upload_override(world_->rd(), old_slots[i],
-							old.normal_oct.data(), ve::kBrickSdfCount);
-				else
-					world_->atlas_->stored_normals().release_override(world_->rd(), old_slots[i]);
-			}
-			world_->atlas_->overrides().clear_table(world_->rd(), table);
-			world_->atlas_->set_override_table(world_->rd(), job.region_slot, old_table, old_entries);
-		}
-		bool worker_restored = world_->mesh_->restore_overrides(old_slots, old_bricks, r,
-				job.region_slot, table, old_table, old_entries);
-		if (!worker_restored) {
-			UtilityFunctions::printerr("VoxelWorld: worker override rollback failed; retrying");
-			worker_restored = world_->mesh_->restore_overrides(old_slots, old_bricks, r,
-					job.region_slot, table, old_table, old_entries);
-		}
-		if (!worker_restored)
-			UtilityFunctions::printerr("VoxelWorld: worker override rollback could not be completed");
-		// Newly acquired slots are never part of the old table. Release them even when a
-		// rollback reports failure; the old table/op list remains authoritative and the
-		// transaction is refused/retried rather than leaking capacity.
-		for (const ve::IVec3 acquired : newly_acquired) world_->store_->overrides_->release(acquired);
-		return render_restored && worker_restored;
-	};
-	if (!render_ok) {
-		rollback_publication();
-		return refuse();
-	}
-	if (!world_->mesh_->publish_overrides(slots, results[0].baked, r, job.region_slot, table, entries)) {
-		if (!rollback_publication()) return refuse();
-		return refuse();
-	}
-	for (size_t i = 0; i < slots.size(); i++) *world_->store_->overrides_->data(slots[i]) = results[0].baked[i];
-	world_->store_->edit_log_->clear_region(r);
-	const ve::IVec3 hi_brick{base.x + ve::kRegionBricks - 1,
-			base.y + ve::kRegionBricks - 1, base.z + ve::kRegionBricks - 1};
-	world_->pending_dirty_.push_back({ve::chunk_of_brick(base), ve::chunk_of_brick(hi_brick)});
-	float lo[3], first_hi[3], last_lo[3], hi[3];
-	ve::brick_world_aabb(base, lo, first_hi);
-	ve::brick_world_aabb({base.x + ve::kRegionBricks - 1, base.y + ve::kRegionBricks - 1,
-			base.z + ve::kRegionBricks - 1}, last_lo, hi);
-	if (world_->lod_tree_) {
-		std::lock_guard<std::mutex> lock(world_->lod_mutex_);
-		world_->lod_tree_->mark_dirty(lo, hi);
-	}
-	if (world_->streamer_) world_->streamer_->queue_region_regeneration_locked(r);
-	world_->store_->override_tables_[key] = table;
-	return true;
+	// Task 11: the body moved verbatim into ConsolidationCoordinator::force_region; it
+	// takes edit_mutex itself and owns the refusal counter, exactly as before.
+	return world_->context().consolidation->force_region({region.x, region.y, region.z});
 }
 
 Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
@@ -5329,9 +5173,9 @@ Dictionary VoxelDebugHooks::debug_stream_stats() {
 		std::lock_guard<std::mutex> lock(world_->edit_mutex());
 		d["override_bricks"] = world_->store_->overrides_ ? world_->store_->overrides_->used() : 0;
 		d["override_capacity"] = world_->store_->overrides_ ? world_->store_->overrides_->capacity() : world_->store_->config_.max_override_bricks;
-		d["consolidations"] = world_->consolidation_count_;
-		d["consolidation_refusals"] = world_->consolidation_refusals_;
-		d["consolidation_queue_refusals"] = world_->consolidation_queue_refusals_;
+		d["consolidations"] = world_->context().consolidation->consolidated_count();
+		d["consolidation_refusals"] = world_->context().consolidation->refusals();
+		d["consolidation_queue_refusals"] = world_->context().consolidation->queue_refusals();
 		d["edit_rejections"] = world_->edit_rejections_;
 	}
 	return d;

@@ -20,6 +20,9 @@ pure_sources = (Glob("src/world/*.cpp") + Glob("src/generator/*.cpp") +
 for f in ["src/render/shader_loader.cpp", "src/render/camera_params.cpp"]:
     if os.path.exists(f):
         pure_sources.append(f)
+# ConsolidationCoordinator publishes GPU transactions by design (godot-cpp headers, worker
+# submission); it is not a pure core and cannot compile in the zero-godot-cpp test build.
+pure_sources = [s for s in pure_sources if str(s) != "src/mesh/consolidation.cpp"]
 tests = test_env.Program("build/tests/ve_tests", Glob("tests/*.cpp") + pure_sources)
 test_alias = Alias("test", [tests], tests[0].abspath)
 AlwaysBuild(test_alias)

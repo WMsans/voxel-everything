@@ -53,6 +53,7 @@ void voxel_compositor_callbacks_ready(VoxelWorld *world);
 void voxel_compositor_callbacks_shutdown_started(VoxelWorld *world);
 
 class GpuAtlas;
+class ConsolidationCoordinator;
 class MaterialAtlas;
 class RegionPass;
 class BrickGenPass;
@@ -79,12 +80,12 @@ class IslandAtlas;
 class IslandCullPass;
 struct IslandExtractJob;
 
-class VoxelWorld : public Node3D, public EditSink, public ConsolidationSink {
+class VoxelWorld : public Node3D, public EditSink {
 	GDCLASS(VoxelWorld, Node3D)
 	// Task 8 strangler adapter: VoxelWorld satisfies WorldStore's notification ports and
 	// forwards to today's logic. The EditSink half dies when IslandManager implements the
-	// port directly (Phase 3), the ConsolidationSink half when ConsolidationCoordinator
-	// takes over (Task 12).
+	// port directly (Phase 3); the ConsolidationSink half died in Task 11, when
+	// ConsolidationCoordinator took over (it satisfies the port directly).
 	friend class VoxelDebugHooks;
 	friend class BeautyCompositor;
 	friend bool voxel_try_begin_compositor_callback(const NodePath &, VoxelWorld **);
@@ -101,6 +102,10 @@ class VoxelWorld : public Node3D, public EditSink, public ConsolidationSink {
 	// exactly as they wrote the plain fields before the split.
 	std::unique_ptr<WorldStore> store_;
 	VoxelContext context_; // subsystem wiring; store_ is published here at construction
+	// Owns the consolidation state machine (Task 11): queue/pump/publish/rollback plus all
+	// consolidation_* members live there now; it satisfies WorldStore's ConsolidationSink
+	// port directly. Handles-only collaborators (addresses of the fields below).
+	std::unique_ptr<ConsolidationCoordinator> consolidation_;
 
 	bool physics_enabled_ = true;
 	NodePath physics_center_path_;
@@ -146,33 +151,9 @@ class VoxelWorld : public Node3D, public EditSink, public ConsolidationSink {
 	RID downsample_src_, downsample_dst_;
 	WorldStreamer *streamer_ = nullptr;
 	int overflow_seen_ = 0;                   // sticky OR of frame overflow bits (tests)
-
-	// Consolidation is deliberately one-region-at-a-time. The worker owns the bake; the main
-	// thread owns this queue and publishes the completed transaction between frames.
-	std::vector<ve::IVec3> consolidation_queue_;
-	bool consolidation_in_flight_ = false;
-	ConsolidateJob consolidation_job_;
-	int consolidation_table_ = -1;
-	int consolidation_old_table_ = -1;
-	std::vector<std::pair<int, int>> consolidation_old_entries_;
-	std::vector<std::pair<int, int>> consolidation_entries_;
-	std::vector<int> consolidation_old_slots_;
-	std::vector<ve::OverrideBrick> consolidation_old_bricks_;
-	std::vector<ve::IVec3> consolidation_newly_acquired_;
-	std::vector<int> consolidation_slots_;
-	std::vector<ve::OverrideBrick> consolidation_baked_;
-	bool consolidation_publish_in_flight_ = false;
-	int consolidation_count_ = 0;
-	int consolidation_refusals_ = 0;
-	int consolidation_queue_refusals_ = 0;
-	int edit_rejections_ = 0;
-	bool consolidation_queue_refusal_logged_ = false;
+	int edit_rejections_ = 0; // append fan-out rejection stat; read by debug_stream_stats
 
 	void drain_occupancy() { store_->drain_occupancy(); } // one-line delegation (Task 9)
-	void pump_consolidation();
-	// edit_mutex must be held (ConsolidationSink port satisfied for WorldStore's spine).
-	bool queue_consolidation(ve::IVec3 region) override;
-	void requeue_consolidation_locked(ve::IVec3 region);
 	// EditSink port satisfied for WorldStore's spine; adapter body forwards to today's
 	// island-manager notification.
 	void on_edit_appended(const ve::EditOp &op, bool notify_islands) override;
@@ -292,6 +273,9 @@ public:
 
 	// Debug/test facade: all debug_* bindings live here (Phase 1 strangler split).
 	VoxelDebugHooks *hooks();
+	// Subsystem wiring (spec §4). Phase-3 consumers (the debug facade) reach the
+	// consolidation coordinator through it instead of through VoxelWorld members.
+	VoxelContext &context() { return context_; }
 
 	void set_use_local_device(bool v) { use_local_device_ = v; }
 	bool get_use_local_device() const { return use_local_device_; }
