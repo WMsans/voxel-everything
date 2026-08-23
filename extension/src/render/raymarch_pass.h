@@ -38,6 +38,11 @@ private:
 	RenderingDevice *rd_ = nullptr;
 	RID shader_, pipeline_;
 	RID sampler_;     // shared NEAREST sampler, created once
+	// The SDF atlas is the one target sampled with hardware trilinear (binding 2): its
+	// 17-voxel apron keeps a filtered fetch inside the brick's own block, so one fetch
+	// replaces the eight brick_sdf() used to issue. The material and min-max atlases stay
+	// on sampler_ -- they are integer textures and cannot be filtered at all.
+	RID sampler_linear_;
 	RID edits_ubo_;   // 32-byte uniform buffer, updated every render
 	RID material_albedo_, material_surface_, material_sampler_;
 	RID albedo_, surface_, hitpos_, cost_buf_, uset_, uset_mask_;

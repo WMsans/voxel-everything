@@ -82,33 +82,41 @@ int region_slot_of(ivec3 brick) {
 	return region_map.slot[l.x + l.y * pc.dims.x + l.z * pc.dims.x * pc.dims.y];
 }
 
-// Atlas slot of a global brick; -1 when absent. `& 31` is the floor-mod for negatives.
-int slot_at(ivec3 brick) {
-	int rs = region_slot_of(brick);
-	if (rs < 0) return -1;
+// Atlas slot of a brick within a KNOWN region table; -1 when absent. `& 31` is the
+// floor-mod for negatives. The brick DDA runs inside one region for a whole segment, so it
+// resolves the region once and calls this, rather than walking region_map -> region_tables
+// as two dependent loads on every 0.8 m of ray.
+int slot_in_region(int rs, ivec3 brick) {
 	int bi = (brick.x & 31) + (brick.y & 31) * REGION_BRICKS +
 			(brick.z & 31) * REGION_BRICKS * REGION_BRICKS;
 	return region_tables.slot[rs * REGION_BRICK_COUNT + bi];
 }
 
-// Manual trilinear inside one brick (unchanged from M1 except the runtime atlas base).
+// Atlas slot of a global brick; -1 when absent. For callers that do not already know which
+// region they are in (the shadow march, the gradient taps).
+int slot_at(ivec3 brick) {
+	int rs = region_slot_of(brick);
+	if (rs < 0) return -1;
+	return slot_in_region(rs, brick);
+}
+
+// Trilinear inside one brick. The lattice is 17 voxels on a side -- 16 cells plus the apron
+// that repeats the neighbour's shared face -- so a filtered fetch anywhere in [0, 16] reads
+// only this brick's own block and the texture unit can do the interpolation. That is one
+// fetch where the manual mix issued eight, on the marcher's hottest read.
+//
+// The two forms agree exactly, not approximately: decode_sdf() is affine, so decoding the
+// filtered unorm equals filtering the decoded values, which is what the mix chain computed.
+// The only difference is the filter's weight precision (>= 8 fractional bits, i.e. under
+// 0.02 mm on this 5 mm-per-code encoding, against a 2 mm hit threshold).
+//
+// This is why binding 2 alone carries the LINEAR sampler (RaymarchPass::initialize); the
+// material and min-max atlases are integer textures and must stay on the NEAREST one.
 float brick_sdf(int slot, vec3 local) { // local in voxel units [0, 16]
 	vec3 p = clamp(local, vec3(0.0), vec3(BRICK_SDF_MAX));
-	ivec3 i0 = ivec3(floor(p));
-	vec3 f = p - vec3(i0);
-	ivec3 i1 = min(i0 + 1, ivec3(BRICK_VOXELS));
-	ivec3 base = atlas_base(slot, pc.atlas_bricks.xyz, BRICK_SDF_STRIDE);
-	float c000 = texelFetch(sdf_atlas, base + ivec3(i0.x, i0.y, i0.z), 0).r;
-	float c100 = texelFetch(sdf_atlas, base + ivec3(i1.x, i0.y, i0.z), 0).r;
-	float c010 = texelFetch(sdf_atlas, base + ivec3(i0.x, i1.y, i0.z), 0).r;
-	float c110 = texelFetch(sdf_atlas, base + ivec3(i1.x, i1.y, i0.z), 0).r;
-	float c001 = texelFetch(sdf_atlas, base + ivec3(i0.x, i0.y, i1.z), 0).r;
-	float c101 = texelFetch(sdf_atlas, base + ivec3(i1.x, i0.y, i1.z), 0).r;
-	float c011 = texelFetch(sdf_atlas, base + ivec3(i0.x, i1.y, i1.z), 0).r;
-	float c111 = texelFetch(sdf_atlas, base + ivec3(i1.x, i1.y, i1.z), 0).r;
-	float v = mix(mix(mix(c000, c100, f.x), mix(c010, c110, f.x), f.y),
-	              mix(mix(c001, c101, f.x), mix(c011, c111, f.x), f.y), f.z);
-	return decode_sdf(v);
+	vec3 base = vec3(atlas_base(slot, pc.atlas_bricks.xyz, BRICK_SDF_STRIDE));
+	vec3 dim = vec3(pc.atlas_bricks.xyz * BRICK_SDF_STRIDE);
+	return decode_sdf(textureLod(sdf_atlas, (base + p + 0.5) / dim, 0.0).r);
 }
 
 float world_sdf(vec3 p) {
@@ -171,36 +179,16 @@ uint material_at(vec3 p, ivec3 brick, int slot) {
 	return palette_buf.ids[slot * 4 + idx];
 }
 
-// The chain stores inclusive min/max over each cell's trilinear corner samples (Task 4),
-// so "no surface" is a SOUND skip: the reconstructed field inside the cell cannot cross 0.
-// Whole-brick rejection: the 2^3 level holds one min/max per 8^3-voxel octant, so the
-// brick summary is the reduce over all eight cells — inclusive-exact, never hides a hit.
-bool brick_may_have_surface(int slot) {
-	ivec3 base = atlas_base(slot, pc.atlas_bricks.xyz, 2);
-	uint mn = 255u, mx = 0u;
-	for (int z = 0; z < 2; z++)
-		for (int y = 0; y < 2; y++)
-			for (int x = 0; x < 2; x++) {
-				uvec2 mm = texelFetch(mip2_atlas, base + ivec3(x, y, z), 0).xy;
-				mn = min(mn, mm.x);
-				mx = max(mx, mm.y);
-			}
-	return mn <= ENCODED_ZERO && mx >= ENCODED_ZERO;
+// Whole-brick rejection reads the per-brick flag word instead of re-reducing the 2^3 level
+// on every DDA step. brick_gen writes that word from the same inclusive straddle test over
+// the same mip data (and brick_mark writes CONSERVATIVE for an allocated-but-ungenerated
+// slot), so the answer is identical -- at one buffer load instead of eight texture fetches
+// plus the palette read, on the hottest path in the marcher. This is the use
+// ve::brick_flags_from_mips was introduced for; test_brick_flags_gpu pins GPU == CPU.
+uint brick_flag_word(int slot) {
+	return brick_flags.v[slot];
 }
 
-bool cell8_may_have_surface(int slot, ivec3 cell) { // cell in [0,8)^3, 2 voxels per cell
-	uvec2 mm = texelFetch(mip8_atlas, atlas_base(slot, pc.atlas_bricks.xyz, 8) + cell, 0).xy;
-	// Only the MIN half belongs here. The march's hit test is one-sided -- it accepts any
-	// d below a small positive threshold, negatives included -- so the question this gate
-	// has to answer is "can any point in the cell be close enough to hit", i.e. is the
-	// minimum low enough. Requiring a sign CHANGE as well (mm.y >= ENCODED_ZERO) additionally
-	// skipped every cell lying wholly INSIDE the surface, whose max is below the zero code.
-	// A ray that entered the solid through such a cell was advanced straight out the far
-	// side, leaving isolated one-pixel holes in the g-buffer that the outline pass then drew
-	// a black speck around. The trilinear field is bounded by its corner samples, so the
-	// minimum alone is still a sound skip.
-	return mm.x <= ENCODED_ZERO;
-}
 
 // ---------------------------------------------------------------------------------------
 // Islands (spec §3, "Multi-target raymarching"). Each is a dense 64^3 volume in a pool of
@@ -459,7 +447,8 @@ void march_island(int slot, vec3 ro, vec3 rd, inout Hit best, inout int steps_le
 // segment start rather than recomputing from `ro`: a ray that crosses several regions must
 // not revisit the bricks it already crossed. Local `t` is converted back to world distance
 // only when writing the hit record and evaluating the ray position.
-Hit march_bricks(vec3 ro, vec3 rd, float t_begin, float t_end, inout int steps_left) {
+Hit march_bricks(int region_slot, ivec3 region_coord, vec3 ro, vec3 rd,
+		float t_begin, float t_end, inout int steps_left) {
 	Hit h;
 	h.hit = false;
 	h.t = t_end;
@@ -486,36 +475,46 @@ Hit march_bricks(vec3 ro, vec3 rd, float t_begin, float t_end, inout int steps_l
 		// face; testing `t_exit > segment_length` can drop that final brick by a float ULP,
 		// leaving isolated holes at the far edge of a region.
 		if (t_prev > segment_length) break;
-
-		int slot = slot_at(map);
-		if (slot >= 0 && brick_may_have_surface(slot)) {
-			bool has_material = palette_buf.ids[slot * 4] != 0u;
+		// The segment bounds are float arithmetic against a DDA whose `side` values
+		// accumulate, so `map` can sit one brick outside this region at either end: a
+		// segment start rounded a ULP short of the entry face, or a step past the exit one.
+		// Indexing this region's table with such a brick's `& 31` coordinate would silently
+		// address a DIFFERENT brick's atlas slot -- the hoisted region slot is only valid
+		// for bricks actually inside the region. The region coordinate is exact integer
+		// data, so ask it. Not a `break`: the neighbouring region's own march_bricks call
+		// covers that brick, and breaking here would drop the rest of this segment.
+		int slot = all(equal(map >> 5, region_coord)) ? slot_in_region(region_slot, map) : -1;
+		uint bflags = slot >= 0 ? brick_flag_word(slot) : 0u;
+		if ((bflags & BRICK_FLAG_HAS_SURFACE) != 0u) {
+			bool has_material = (bflags & BRICK_FLAG_HAS_MATERIAL) != 0u;
 			float t = t_prev;
 			for (int j = 0; j < 64 && steps_left > 0; j++) {
 				if (t > t_exit) break;
 				vec3 p = segment_ro + rd * t;
 				vec3 vox = (p - vec3(map) * BRICK_SIZE) / VOXEL_SIZE;
-				ivec3 cell8 = clamp(ivec3(floor(vox * 0.5)), ivec3(0), ivec3(7));
-				if (!cell8_may_have_surface(slot, cell8)) {
-					steps_left--;
-					vec3 cell_lo = vec3(map) * BRICK_SIZE + vec3(cell8 * 2) * VOXEL_SIZE;
-					vec3 cell_hi = cell_lo + 2.0 * VOXEL_SIZE;
-					vec3 far = mix(cell_lo, cell_hi, step(0.0, rd));
-					vec3 tf = (far - p) / rd;
-					if (st.x == 0) tf.x = 1.0 / 0.0;
-					if (st.y == 0) tf.y = 1.0 / 0.0;
-					if (st.z == 0) tf.z = 1.0 / 0.0;
-					t = min(t + max(min(tf.x, min(tf.y, tf.z)), 0.002), t_exit);
-					continue;
-				}
+				// No 8^3 min-max gate here any more. It existed to skip a 0.1 m cell without
+				// paying for the SDF, back when the SDF cost eight texture fetches. Now that
+				// brick_sdf() is one filtered fetch the gate is a second fetch that buys a
+				// SHORTER advance than the sphere-trace step it replaced: the stored field is
+				// a narrow band clamped at SDF_RANGE, so a saturated sample already steps
+				// 0.576 m, against the 0.1 m one cell face gives. Removing it is also
+				// strictly sound -- sphere tracing skips nothing the gate would have caught.
 				if (steps_left <= 0) break;
 				steps_left--;
-				float d = world_sdf(p);
+				// This is the marcher's hottest read. world_sdf() would re-derive the brick
+				// from `p` and walk region_map -> region_tables to find the slot again --
+				// two DEPENDENT buffer loads ahead of the eight atlas fetches -- when the
+				// DDA already knows both the brick (`map`) and its slot, and `vox` is
+				// already that brick's local coordinate. brick_sdf() clamps into the
+				// 17-voxel apron, so a `p` that drifted a ULP past the exit face reads the
+				// shared face value rather than the neighbour's slot: the same number
+				// sdf_near() relies on for its gradient taps.
+				float d = brick_sdf(slot, vox);
 				if (d < 0.002 && has_material) {
 					for (int k = 0; k < 4; k++) {
 						if (steps_left <= 0) return h;
 						steps_left--;
-						float dk = world_sdf(p);
+						float dk = brick_sdf(slot, (p - vec3(map) * BRICK_SIZE) / VOXEL_SIZE);
 						t += dk * 0.5;
 						p = segment_ro + rd * t;
 					}
@@ -568,7 +567,7 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
 		int rs = region_slot_of(rmap * REGION_BRICKS);
 		bool region_worth_entering = rs >= 0 && region_slot_counts.n[rs] > 0;
 		if (region_worth_entering) {
-			Hit candidate = march_bricks(ro, rd, max(rt_prev, 0.0),
+			Hit candidate = march_bricks(rs, rmap, ro, rd, max(rt_prev, 0.0),
 					min(rt_exit, max_dist), steps_left);
 			if (candidate.hit) return candidate;
 			if (steps_left <= 0) return h;
@@ -614,11 +613,24 @@ const int RAY_SHADOW_MAX_ISLANDS = 4;
 // far away is a shadow edge this band cannot soften anyway.
 const float RAY_SHADOW_PENUMBRA_DIST = RAY_SHADOW_K * SDF_RANGE; // 7.68 m
 
-float terrain_sun_visibility(vec3 ro) {
+// How far this ray is worth marching, given what else shades the pixel. Past the penumbra
+// distance the march contributes ONLY a hard binary occlusion test (see above) -- and the
+// deferred pass already min()s in sun_map_visibility(), a hard binary occlusion test taken
+// from a shadow map that covers the whole world rather than the near field's 60 m. So the
+// 7.68-60 m stretch was re-deriving, at ~0.64 m per sample because the band saturates
+// there, an answer the frame already had. What the march uniquely provides -- the softening
+// as an occluder approaches -- lives entirely inside the penumbra band.
+//
+// With the sun map off the march is the only shadow term there is, so it keeps full reach.
+float ray_shadow_dist(uint flags) {
+	return (flags & BEAUTY_SUN_MAP) != 0u ? RAY_SHADOW_PENUMBRA_DIST : RAY_SHADOW_DIST;
+}
+
+float terrain_sun_visibility(vec3 ro, float max_shadow_dist) {
 	float res = 1.0;
 	float t = 0.05;
 	for (int i = 0; i < RAY_SHADOW_STEPS; i++) {
-		if (t > RAY_SHADOW_DIST) break;
+		if (t > max_shadow_dist) break;
 		vec3 q = ro + SUN_DIR * t;
 		ivec3 brick = ivec3(floor(q / BRICK_SIZE));
 		int shadow_region = region_slot_of(brick);
@@ -647,7 +659,7 @@ float terrain_sun_visibility(vec3 ro) {
 // reject costs a few ALU for each of the (at most 32) live slots; only islands the ray
 // actually crosses are marched, and at most RAY_SHADOW_MAX_ISLANDS of them. A fifth
 // overlapping island is a case the demo does not produce and the budget does not pay for.
-float island_sun_visibility(vec3 ro, int island_count) {
+float island_sun_visibility(vec3 ro, int island_count, float max_shadow_dist) {
 	float res = 1.0;
 	int marched = 0;
 	for (int i = 0; i < 32; i++) {
@@ -663,7 +675,7 @@ float island_sun_visibility(vec3 ro, int island_count) {
 		vec3 ro_l = inv * (ro - isl.pos);
 		vec3 rd_l = inv * SUN_DIR;
 		float t = max(t0, 0.05);
-		float tmax = min(t1, RAY_SHADOW_DIST);
+		float tmax = min(t1, max_shadow_dist);
 		for (int k = 0; k < 48; k++) {
 			if (t > tmax) break;
 			float d = island_sdf_at(isl, ro_l + rd_l * t);
@@ -740,7 +752,9 @@ void main() {
 			// One voxel of offset: less and the ray self-shadows on its own surface, more
 			// and thin ledges stop casting.
 			vec3 sro = best.p + best.n * 0.06;
-			sun = min(terrain_sun_visibility(sro), island_sun_visibility(sro, island_count));
+			const float sd = ray_shadow_dist(flags);
+			sun = min(terrain_sun_visibility(sro, sd),
+					island_sun_visibility(sro, island_count, sd));
 		}
 		if (pc.params.w < -0.5) gloss = 1.0;
 		if ((flags & BEAUTY_GLOSSY_RAYS) != 0u && gloss > GLOSSY_SDF_MIN_GLOSS) {

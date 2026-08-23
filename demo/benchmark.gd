@@ -69,6 +69,10 @@ var _island_timer := 0.0
 var _island_built := false
 var _island_waiting_for_merge := false
 var _target_frames := FRAMES
+# Bisection overrides (`--frames=N`, `--warmup=N`). A shorter leg cannot produce a
+# publishable verdict — MIN_GPU_SAMPLES still gates that — but it turns a 40 s
+# attribution run into a 6 s one while hunting for where the frame went.
+var _warmup := WARMUP
 
 func _effects_off_from_args(args: PackedStringArray) -> PackedStringArray:
 	var effects := PackedStringArray()
@@ -94,6 +98,11 @@ func _ready() -> void:
 		_target_frames = ISLAND_FRAMES
 	elif _mode == "--benchmark-edit-bounded":
 		_target_frames = EDIT_BOUNDED_FRAMES
+	for arg in args:
+		if arg.begins_with("--frames="):
+			_target_frames = maxi(1, int(arg.trim_prefix("--frames=")))
+		elif arg.begins_with("--warmup="):
+			_warmup = maxi(0, int(arg.trim_prefix("--warmup=")))
 	# Without this the harness measures the DISPLAY, not the engine: a compositor that hands
 	# an unfocused window one frame callback in eight reports a 133 ms frame and a 7 fps
 	# "regression" that no code change can move.
@@ -178,14 +187,14 @@ func _process(delta: float) -> void:
 		var p: Vector3 = _player.global_position + Vector3(2.0, 0.0, 1.0).normalized() * 25.0 * delta
 		p.y = _terrain_height(p.x, p.z) + 1.5
 		_player.global_position = p
-	elif _mode == "--benchmark-edit" and _frames > WARMUP:
+	elif _mode == "--benchmark-edit" and _frames > _warmup:
 		_fire_edit()
-	elif _mode == "--benchmark-edit-bounded" and _frames > WARMUP:
+	elif _mode == "--benchmark-edit-bounded" and _frames > _warmup:
 		_fire_bounded_edit()
-	elif _mode == "--benchmark-island" and _frames > WARMUP:
+	elif _mode == "--benchmark-island" and _frames > _warmup:
 		_island_cycle(delta)
 
-	if _frames <= WARMUP:
+	if _frames <= _warmup:
 		return # let the first regions land before sampling
 	_capture_gpu_sample()
 	var ms := delta * 1000.0

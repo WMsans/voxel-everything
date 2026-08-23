@@ -94,9 +94,21 @@ func test_sphere_add_places_material_4_in_open_sky() -> void:
 	var c: Color = after["color"]
 	assert_bool(c.g > 0.05).override_failure_message(
 		"the material 4 blob shaded error magenta").is_true()
+	# The claim this test exists to make -- "sphere_add places MATERIAL 4" -- read straight
+	# off the G-buffer instead of inferred from a colour delta. Breakstone and the rock the
+	# probe ray used to land on shade within ~0.02 of each other at this spot, so the delta
+	# below sat about 18% above its own threshold and turned on a single 8-bit LSB of the
+	# TERRAIN sample: any change that moves a hit by a fraction of a millimetre (the
+	# marcher's filtered SDF read does, by 0.16 mm) flipped it, while the blob's own shaded
+	# colour stayed bit-identical. Assert the identity exactly and keep the colour delta as
+	# the secondary "it is not shading as the terrain" signal, at a threshold that measures
+	# shading rather than rounding.
+	var gb: Dictionary = w.hooks().debug_raymarch_gbuffer(eye, Vector3(0, -1, 0))
+	assert_int(int(gb["material"])).override_failure_message(
+		"the blob did not report material 4 in the G-buffer").is_equal(4)
 	var diff := absf(c.r - before_color.r) + absf(c.g - before_color.g) + absf(c.b - before_color.b)
 	assert_float(diff).override_failure_message(
-		"the material 4 blob is not visibly different from the terrain below").is_greater(0.02)
+		"the material 4 blob is not visibly different from the terrain below").is_greater(0.015)
 
 func test_paint_recolours_grass_to_rock_without_moving_the_surface() -> void:
 	var w := make_world()
