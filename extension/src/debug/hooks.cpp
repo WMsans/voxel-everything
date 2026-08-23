@@ -5388,19 +5388,17 @@ Dictionary VoxelDebugHooks::debug_raycast(Vector3 origin, Vector3 dir) {
 	return d;
 }
 
-	void VoxelDebugHooks::debug_pump_shader_reload() {
- world_->pump_shader_reload(); 
+void VoxelDebugHooks::debug_pump_shader_reload() {
+	world_->pump_shader_reload();
 }
-	// --- Task 6 hooks: fixed-capacity stored-normal pool ---
-	// Debug initializer: shrink the normal-pool budget BEFORE debug_init_atlas(). The
-	// pool's size is otherwise fixed at exactly 32 MiB and never resizes.
-	void VoxelDebugHooks::debug_set_normal_pool_budget(int bytes) {
-
+// --- Task 6 hooks: fixed-capacity stored-normal pool ---
+// Debug initializer: shrink the normal-pool budget BEFORE debug_init_atlas(). The
+// pool's size is otherwise fixed at exactly 32 MiB and never resizes.
+void VoxelDebugHooks::debug_set_normal_pool_budget(int bytes) {
 	world_->normal_pool_bytes_ = bytes > 0 ? static_cast<uint32_t>(bytes) : 0u;
-
 }
-	RenderingDevice *VoxelDebugHooks::debug_local_rd() const {
- return world_->local_rd_; 
+RenderingDevice *VoxelDebugHooks::debug_local_rd() const {
+	return world_->local_rd_;
 }
 
 } // namespace godot
