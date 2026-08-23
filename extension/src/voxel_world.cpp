@@ -513,10 +513,7 @@ RenderingDevice *VoxelWorld::rd() const {
 }
 
 ve::WorldBounds VoxelWorld::world_bounds() const {
-	ve::WorldBounds b;
-	b.origin_bricks = {store_->config().world_origin_bricks.x, store_->config().world_origin_bricks.y, store_->config().world_origin_bricks.z};
-	b.size_regions = {store_->config().world_size_regions.x, store_->config().world_size_regions.y, store_->config().world_size_regions.z};
-	return b;
+	return ve::world_bounds(store_->config());
 }
 
 int VoxelWorld::island_slot_count() const {
@@ -869,8 +866,8 @@ void VoxelWorld::on_edit_appended(const ve::EditOp &op, bool notify_islands) {
 	// EditSink adapter (Task 8): called by WorldStore::append_edit_locked with edit_mutex()
 	// held, at exactly the point where this logic used to sit inside append_edit_locked.
 	// WorldStore has already gated on `notify_islands` and on the op changing region field
-	// state; only the manager-presence check remains here. Dies in Phase 3 when
-	// IslandManager implements EditSink directly.
+	// state; only the manager-presence check remains here. Permanent by ruling: IslandManager
+	// keeps its own notification path; VoxelWorld remains the EditSink.
 	if (notify_islands && island_manager_)
 		island_manager_->note_edit(op, store_->edit_seq());
 }

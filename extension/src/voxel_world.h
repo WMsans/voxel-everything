@@ -82,10 +82,11 @@ struct IslandExtractJob;
 
 class VoxelWorld : public Node3D, public EditSink {
 	GDCLASS(VoxelWorld, Node3D)
-	// Task 8 strangler adapter: VoxelWorld satisfies WorldStore's notification ports and
-	// forwards to today's logic. The EditSink half dies when IslandManager implements the
-	// port directly (Phase 3); the ConsolidationSink half died in Task 11, when
-	// ConsolidationCoordinator took over (it satisfies the port directly).
+	// Strangler adapter: VoxelWorld satisfies WorldStore's notification ports and forwards
+	// to the fan-out logic. The EditSink half is permanent by ruling -- IslandManager keeps
+	// its own notification path, so VoxelWorld remains the EditSink; the ConsolidationSink
+	// half died in Task 11, when ConsolidationCoordinator took over (it satisfies the port
+	// directly).
 	//
 	// Last remaining friend (Task 13 removed the compositor/admission ones): the debug
 	// facade pokes ~20 private members directly (store_, mesh_, colliders_, chunks_,

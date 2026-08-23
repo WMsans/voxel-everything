@@ -42,12 +42,7 @@ void LodSystem::gather_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *
 }
 
 ve::WorldBounds LodSystem::world_bounds() const {
-	ve::WorldBounds b;
-	b.origin_bricks = {store()->config().world_origin_bricks.x,
-			store()->config().world_origin_bricks.y, store()->config().world_origin_bricks.z};
-	b.size_regions = {store()->config().world_size_regions.x,
-			store()->config().world_size_regions.y, store()->config().world_size_regions.z};
-	return b;
+	return ve::world_bounds(store()->config());
 }
 
 void LodSystem::ensure_lod() {

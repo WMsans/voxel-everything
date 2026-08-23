@@ -71,11 +71,7 @@ void RenderOrchestrator::release_devices() {
 }
 
 ve::WorldBounds RenderOrchestrator::world_bounds() const {
-	const ve::WorldConfig &c = handles_.store->config();
-	ve::WorldBounds b;
-	b.origin_bricks = {c.world_origin_bricks.x, c.world_origin_bricks.y, c.world_origin_bricks.z};
-	b.size_regions = {c.world_size_regions.x, c.world_size_regions.y, c.world_size_regions.z};
-	return b;
+	return ve::world_bounds(handles_.store->config());
 }
 
 bool RenderOrchestrator::initialize_downsample(RenderingDevice *rd) {
