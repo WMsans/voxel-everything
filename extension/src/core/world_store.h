@@ -90,12 +90,10 @@ struct ConsolidationSink {
 };
 
 class WorldStore {
-	// Temporary strangler-phase friendships: VoxelWorld and the debug facade
-	// still read the data plane directly while Tasks 8-13 move their logic
-	// behind this boundary. Both disappear when the spec §5 goal ("all friend
-	// declarations on VoxelWorld disappear") lands.
-	friend class VoxelWorld;
-	friend class VoxelDebugHooks;
+	// Task 13: the strangler friendships (VoxelWorld, VoxelDebugHooks) are gone -- every
+	// former direct field read goes through the public accessors below (config(),
+	// edit_log(), overrides(), residency(), volumes(), override_tables(),
+	// pending_edits()), and pre-init config writes go through mutable_config().
 
 public:
 	// The field-generation seam (spec §4) is injected at construction and OWNED by the
@@ -115,6 +113,10 @@ public:
 	ve::VolumeSet &volumes() { return volumes_; }
 	ve::RegionResidency *residency() { return residency_; }
 	const ve::WorldConfig &config() const { return config_; }
+	// Mutable config for VoxelWorld's property setters ONLY (pre-init writes; post-init
+	// writes behave exactly as before the split -- pools never resize after creation).
+	// Everything else reads through config().
+	ve::WorldConfig &mutable_config() { return config_; }
 	// Region -> override table map. Task 7's ledger ruling: consumers add accessors rather
 	// than growing friendship; ConsolidationCoordinator (Task 11) reads and assigns tables
 	// through this while holding edit_mutex().

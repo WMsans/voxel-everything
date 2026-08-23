@@ -14,7 +14,6 @@
 #include <godot_cpp/variant/vector2.hpp>
 #include <algorithm>
 #include <atomic>
-#include <condition_variable>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -47,11 +46,11 @@ namespace godot {
 
 // Compositor callbacks can outlive the SceneTree during SceneTree::quit(). Admission
 // serializes the enabled check, SceneTree/world lookup, and per-world callback guard.
+// The free admission functions are declared in render/orchestrator.h (Task 13): the
+// per-world half of the admission state lives on RenderOrchestrator now.
 class VoxelWorld;
 bool voxel_compositor_callbacks_enabled();
 bool voxel_try_begin_compositor_callback(const NodePath &world_path, VoxelWorld **world);
-void voxel_compositor_callbacks_ready(VoxelWorld *world);
-void voxel_compositor_callbacks_shutdown_started(VoxelWorld *world);
 
 class GpuAtlas;
 class ConsolidationCoordinator;
@@ -87,11 +86,14 @@ class VoxelWorld : public Node3D, public EditSink {
 	// forwards to today's logic. The EditSink half dies when IslandManager implements the
 	// port directly (Phase 3); the ConsolidationSink half died in Task 11, when
 	// ConsolidationCoordinator took over (it satisfies the port directly).
+	//
+	// Last remaining friend (Task 13 removed the compositor/admission ones): the debug
+	// facade still pokes ~15 private members directly (store_, beauty snapshot, physics
+	// diagnostics, initialized_, test_bodies_, ...). EXPIRY: this friendship dies with
+	// Phase 1's accessor-promotion exit / final cleanup, once hooks' remaining private
+	// surface is promoted or moved with its state (spec §5 Phase 1). Not de-friendable
+	// today without an unbounded accessor dump -- see task-13-report friend table.
 	friend class VoxelDebugHooks;
-	friend class BeautyCompositor;
-	friend bool voxel_try_begin_compositor_callback(const NodePath &, VoxelWorld **);
-	friend void voxel_compositor_callbacks_ready(VoxelWorld *);
-	friend void voxel_compositor_callbacks_shutdown_started(VoxelWorld *);
 
 	VoxelDebugHooks *debug_hooks_ = nullptr;
 
@@ -203,31 +205,20 @@ class VoxelWorld : public Node3D, public EditSink {
 	void prepare_lod_raster_locked();
 
 	bool initialized_ = false;
-	mutable std::mutex render_lifetime_mutex_;
-	std::condition_variable render_lifetime_cv_;
-	bool render_shutting_down_ = false;
-	bool render_teardown_deferred_ = false;
-	int render_callbacks_ = 0;
-	std::condition_variable gpu_teardown_cv_;
-	bool gpu_teardown_done_ = false;
 	// HiZ async-readback end state captured by RenderOrchestrator's teardown (handle-
 	// injected); read by the debug facade after a shutdown.
 	bool last_hiz_readback_was_pending_ = false;
 	bool last_hiz_readback_was_drained_ = true;
 
 	// Shader hot reload (spec §8). request_shader_reload() only sets the latch; the render
-	// callback pumps it, pre-flights every shader, and only then tears down and rebuilds the
-	// GPU objects so a bad shader never kills the last-known-good pipelines.
+	// callback pumps it, pre-flights every shader (RenderOrchestrator::preflight_shaders,
+	// Task 13), and only then tears down and rebuilds the GPU objects so a bad shader never
+	// kills the last-known-good pipelines. Reload machinery itself moves in Phase 4c.
 	std::atomic<bool> reload_requested_{false};
 	std::mutex reload_mutex_;
 	int reload_count_ = 0;
 	bool reload_last_ok_ = true;
 	String reload_last_error_;
-	bool preflight_shaders(RenderingDevice *rd, String *out_error);
-
-	void teardown_gpu(); // every GPU object; CPU cores survive
-	void shutdown_render_resources_on_render_thread();
-	bool downsample_history(RenderingDevice *rd, RID src, GBuffer &gb); // one-line delegation
 	// Gathers the ops that can affect a LoD chunk: its AABB padded by two cells, flattened
 	// across regions in global append order, truncated to a chronological prefix (M4 errata 1).
 	void gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out);
@@ -253,47 +244,53 @@ public:
 
 	void set_use_local_device(bool v) { use_local_device_ = v; }
 	bool get_use_local_device() const { return use_local_device_; }
-	// Config setters/getters: write/read store_->config_. Pre-init writes take
+	// Config setters/getters: write/read the store's config (setters via mutable_config()).
+	// Pre-init writes take
 	// effect at the next ensure_initialized(); post-init they behave exactly as
 	// before (pools never resize after creation).
 	void set_atlas_bricks(Vector3i v) {
-		store_->config_.atlas_bricks = {v.x, v.y, v.z};
+		store_->mutable_config().atlas_bricks = {v.x, v.y, v.z};
 	}
 	Vector3i get_atlas_bricks() const {
-		return {store_->config_.atlas_bricks.x, store_->config_.atlas_bricks.y,
-				store_->config_.atlas_bricks.z};
+		return {store_->config().atlas_bricks.x, store_->config().atlas_bricks.y,
+				store_->config().atlas_bricks.z};
 	}
-	void set_max_region_slots(int v) { store_->config_.max_region_slots = v; }
-	int get_max_region_slots() const { return store_->config_.max_region_slots; }
-	void set_max_brick_jobs(int v) { store_->config_.max_brick_jobs = v; }
-	int get_max_brick_jobs() const { return store_->config_.max_brick_jobs; }
+	void set_max_region_slots(int v) { store_->mutable_config().max_region_slots = v; }
+	int get_max_region_slots() const { return store_->config().max_region_slots; }
+	void set_max_brick_jobs(int v) { store_->mutable_config().max_brick_jobs = v; }
+	int get_max_brick_jobs() const { return store_->config().max_brick_jobs; }
 	void set_max_override_bricks(int v) {
 		const int requested = std::max(v, 0);
-		store_->config_.max_override_bricks = store_->overrides()
+		store_->mutable_config().max_override_bricks = store_->overrides()
 				? std::min(requested, store_->overrides()->capacity())
 				: requested;
 	}
-	int get_max_override_bricks() const { return store_->config_.max_override_bricks; }
+	int get_max_override_bricks() const { return store_->config().max_override_bricks; }
 	void set_world_origin_bricks(Vector3i v) {
-		store_->config_.world_origin_bricks = {v.x, v.y, v.z};
+		store_->mutable_config().world_origin_bricks = {v.x, v.y, v.z};
 	}
 	Vector3i get_world_origin_bricks() const {
-		return {store_->config_.world_origin_bricks.x, store_->config_.world_origin_bricks.y,
-				store_->config_.world_origin_bricks.z};
+		return {store_->config().world_origin_bricks.x, store_->config().world_origin_bricks.y,
+				store_->config().world_origin_bricks.z};
 	}
 	void set_world_size_regions(Vector3i v) {
-		store_->config_.world_size_regions = {v.x, v.y, v.z};
+		store_->mutable_config().world_size_regions = {v.x, v.y, v.z};
 	}
 	Vector3i get_world_size_regions() const {
-		return {store_->config_.world_size_regions.x, store_->config_.world_size_regions.y,
-				store_->config_.world_size_regions.z};
+		return {store_->config().world_size_regions.x, store_->config().world_size_regions.y,
+				store_->config().world_size_regions.z};
 	}
-	void set_residency_radius_m(float v) { store_->config_.residency_radius_m = v; }
-	float get_residency_radius_m() const { return store_->config_.residency_radius_m; }
+	void set_residency_radius_m(float v) { store_->mutable_config().residency_radius_m = v; }
+	float get_residency_radius_m() const { return store_->config().residency_radius_m; }
 
 	void ensure_initialized();
 	bool is_initialized() const { return initialized_; }
+	// One-line delegations into RenderOrchestrator (Task 13), where the lifetime state
+	// lives now; kept so compositors, the debug facade and ClassDB compile unchanged.
 	void shutdown_render_resources();
+	// ClassDB-bound as "_shutdown_render_resources_on_render_thread": the render-thread
+	// teardown Callable targets THIS node (an Object), so the binding must stay here.
+	void shutdown_render_resources_on_render_thread();
 	// Render effects acquire this guard before dereferencing VoxelWorld. _exit_tree() blocks
 	// teardown until all callbacks that already acquired it have released their resources.
 	bool try_begin_render_callback();
@@ -403,6 +400,13 @@ public:
 	ve::RayHit analytic_raycast_down(const float xz[2]);
 	// Drained by RaymarchCompositor on the render thread; returns how many landed.
 	int drain_island_uploads(RenderingDevice *device);
+
+	// One-line delegation into RenderOrchestrator's downsample pipeline (Task 12 move;
+	// public since Task 13 so BeautyCompositor no longer needs to be a friend).
+	bool downsample_history(RenderingDevice *rd, RID src, GBuffer &gb);
+	// One-line delegation into RenderOrchestrator (Task 13); also called by the debug
+	// facade's forced-teardown probes. Every GPU object; CPU cores survive.
+	void teardown_gpu();
 
 	// Tool entry point (VoxelEditTool, Task 14). Main thread; takes edit_mutex(). One-line
 	// delegation into WorldStore's spine so external callers compile unchanged.
