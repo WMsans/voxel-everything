@@ -287,6 +287,22 @@ VoxelWorld::VoxelWorld() {
 	// they replace, and context wiring publishes the store from birth.
 	store_ = std::make_unique<WorldStore>(ve::WorldConfig{}, new ve::ProceduralFieldGenerator());
 	context_.store = store_.get();
+	// Task 15: the LoD runtime moves off this class into LodSystem (the lod mutex travels
+	// with it). Created BEFORE RenderOrchestrator: the orchestrator's teardown interleaves
+	// with the LoD pool/tree/page maps, so it takes this system's state slots below. The
+	// render collaborator is the ADDRESS of context_.render precisely because the
+	// orchestrator does not exist yet at this point; LodSystem re-reads it at every use.
+	lod_ = std::make_unique<LodSystem>(LodSystem::Collaborators{
+			.store = store_.get(),
+			.render = &context_.render,
+			.mesh = &mesh_,
+			.near_field_enabled = &near_field_enabled_,
+			.ensure_initialized_thunk = [](void *self) {
+				static_cast<VoxelWorld *>(self)->ensure_initialized();
+			},
+			.ensure_initialized_self = this,
+	});
+	context_.lod = lod_.get();
 	// Task 12: the GPU pass graph + device ownership move into RenderOrchestrator. Created
 	// BEFORE the consolidation coordinator, whose collaborators take addresses of the
 	// orchestrator's atlas/device slots (handles-only; re-read at every use).
@@ -303,11 +319,12 @@ VoxelWorld::VoxelWorld() {
 			.initialized = &initialized_,
 			.island_mutex = &island_mutex_,
 			.island_slots = &island_slots_,
-			.lod_pool = &lod_pool_,
-			.lod_tree = &lod_tree_,
-			.lod_pages_of = &lod_pages_of_,
-			.lod_page_quads = &lod_page_quads_,
-			.lod_overflow_logged = &lod_overflow_logged_,
+			// Task 15: the LoD state slots live on LodSystem now.
+			.lod_pool = context_.lod->pool_slot(),
+			.lod_tree = context_.lod->tree_slot(),
+			.lod_pages_of = context_.lod->pages_of_slot(),
+			.lod_page_quads = context_.lod->page_quads_slot(),
+			.lod_overflow_logged = context_.lod->overflow_logged_slot(),
 			.callback_owner = this,
 			// Task 14: effect toggles stay world properties (they gate non-beauty behavior
 			// too); reload's re-init arm stays VoxelWorld::ensure_initialized() via a
@@ -330,8 +347,9 @@ VoxelWorld::VoxelWorld() {
 					.atlas = context_.render->atlas_slot(),
 					.mesh = &mesh_,
 					.streamer = &streamer_,
-					.lod_tree = &lod_tree_,
-					.lod_mutex = &lod_mutex_,
+					// Task 15: tree/mutex handles now address LodSystem's state.
+					.lod_tree = context_.lod->tree_slot(),
+					.lod_mutex = context_.lod->mutex_slot(),
 					.pending_dirty = &pending_dirty_,
 					.use_local_device = &use_local_device_,
 					.main_rd = context_.render->main_rd_slot(),
@@ -403,16 +421,9 @@ void VoxelWorld::_exit_tree() {
 	store_->release_cores();
 	store_->pending_edits()->clear();
 	overflow_seen_ = 0;
-	if (lod_pool_) {
-		delete lod_pool_;
-		lod_pool_ = nullptr;
-	}
-	if (lod_tree_) {
-		delete lod_tree_;
-		lod_tree_ = nullptr;
-	}
-	lod_pages_of_.clear();
-	lod_page_quads_.clear();
+	// Task 15: pool -> tree -> page maps moved verbatim into LodSystem::teardown(); run at
+	// exactly the position where the statements used to sit here.
+	lod_->teardown();
 	// Device drop moved verbatim into RenderOrchestrator (Task 12): the owned local
 	// device is deleted, the borrowed main pointer merely forgotten.
 	context_.render->release_devices();
@@ -484,18 +495,9 @@ ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
 				r.rejected[0].x, ", ", r.rejected[0].y, ", ", r.rejected[0].z,
 				") — spec §8 fail-soft");
 	}
-	if (lod_tree_ && !r.touched.empty()) {
-		float lo[3], hi[3];
-		ve::op_world_aabb(op, lo, hi);
-		// Every level: ve::LodTree::mark_dirty walks them itself, and the relevance cut is
-		// at the HALF-CELL supersample resolution rather than the cell -- a 5 m crater still
-		// registers at L4's 6.4 m cells, which is the point of the reduction change. Only
-		// ops shorter than half a cell on every axis are genuinely unrepresentable.
-		// Lock order: caller holds edit_mutex_, lod_tick never holds lod_mutex_ while taking
-		// edit_mutex_, so edit_mutex_ -> lod_mutex_ is safe.
-		std::lock_guard<std::mutex> lock(lod_mutex_);
-		lod_tree_->mark_dirty(lo, hi);
-	}
+	// The LoD half of the fan-out moved verbatim into LodSystem::note_edit (Task 15): it
+	// checks its tree, takes lod_mutex under edit_mutex exactly as this block did.
+	if (!r.touched.empty()) context_.lod->note_edit(op);
 	// Collision's half of the fan-out (spec §5: "Fan-out: raymarch set, physics remesh queue,
 	// LoD chain, connectivity"). Queued rather than applied, because this may run on any
 	// thread that owns a tool while ChunkResidency belongs to the main one; physics_tick
@@ -828,23 +830,11 @@ int VoxelWorld::drain_island_uploads(RenderingDevice *device) {
 
 
 
+// Task 15: gather_lod_ops/ensure_lod/lod_fade_band/lod_tick/prepare_lod_raster[_locked]/
+// prepare_lod_shadow_raster moved verbatim into LodSystem; these one-line delegations keep
+// the compositor, the debug facade and ClassDB compiling unchanged.
 void VoxelWorld::gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out) {
-	if (!out) return;
-	out->clear();
-	std::lock_guard<std::mutex> lock(store_->edit_mutex());
-	if (!store_->edit_log()) return;
-	float lo[3], hi[3];
-	ve::lod_chunk_aabb(level, coord, lo, hi);
-	const float pad = std::max(2.0f * ve::lod_cell_size(level), ve::kLatticeFilterPad);
-	for (int a = 0; a < 3; a++) {
-		lo[a] -= pad;
-		hi[a] += pad;
-	}
-	ve::collect_ops_for_aabb(*store_->edit_log(), lo, hi, out);
-	// M4 errata 1: the flattened cross-region list can exceed the cap. A chronological
-	// prefix is a valid world state; a suffix could apply an add without the subtract that
-	// made room for it.
-	if (out->size() > ve::kMaxRegionOps) out->resize(ve::kMaxRegionOps);
+	context_.lod->gather_ops(level, coord, out);
 }
 
 // Moved verbatim into WorldStore (Task 11); one-line delegation so hooks and
@@ -853,254 +843,23 @@ bool VoxelWorld::snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::
 	return store_->snapshot_field_sources(ops, brick_lo, brick_hi, out);
 }
 
-void VoxelWorld::ensure_lod() {
-	if (lod_tree_ && lod_pool_ && lod_pool_->page_count() > 0) return;
-	ensure_initialized();
-	RenderingDevice *device = rd();
-	if (!device) return;
-	if (!lod_tree_) {
-		ve::LodTreeConfig cfg;
-		cfg.bounds = world_bounds();
-		lod_tree_ = new ve::LodTree(cfg);
-	}
-	if (!lod_pool_) lod_pool_ = new LodPool();
-	if (lod_pool_->page_count() == 0 && !lod_pool_->initialize(device, max_lod_pages_))
-		UtilityFunctions::printerr("VoxelWorld: LodPool initialize failed");
-}
-
-void VoxelWorld::lod_fade_band(float *fade_start, float *fade_end) const {
-	// With the near field forced off the far field owns every distance: move the seam to
-	// zero and make the fade span essentially infinite so the LoD build gate requests the
-	// near chunks and the fragment shader keeps every far-field fragment.
-	if (!near_field_enabled_.load(std::memory_order_relaxed)) {
-		if (fade_start) *fade_start = 0.0f;
-		if (fade_end) *fade_end = 1.0e9f;
-		return;
-	}
-	// Until the streamer has run a frame there is nothing measured, and before the first
-	// regions land the measurement is "complete out to 0 m" -- both would swing the seam.
-	// Fall back to the CONFIGURED radius there: the seam then starts where the near field
-	// intends to reach and only tightens if the atlas cannot fund it, instead of jumping
-	// once streaming begins and stranding the chunks the walk built under the old band.
-	float reach = store_->residency() ? store_->residency()->complete_radius_m() : 0.0f;
-	if (reach <= 0.0f) reach = store_->config().residency_radius_m;
-	ve::lod_fade_band(reach, fade_start, fade_end);
-}
-
+// Task 15 one-line delegations into LodSystem, where tick/fade-band/raster-prep moved
+// verbatim; the compositor, the debug facade and ClassDB compile unchanged.
 void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
-	std::unique_lock<std::mutex> lock(lod_mutex_);
-	ensure_lod();
-	if (!lod_tree_ || !lod_pool_) return;
-	// The gate that decides which chunks are worth building has to agree with the fragment
-	// shader about where the far field starts, or it refuses to build exactly the chunks the
-	// near field can no longer cover.
-	{
-		float fs = ve::kLodFadeStartM;
-		lod_fade_band(&fs, nullptr);
-		lod_tree_->set_fade_start_m(fs);
-	}
-	lod_tree_->walk(cam, occ, ++lod_frame_, &lod_walk_);
-
-	// Results first: a page that arrives this frame should be drawable this frame.
-	std::vector<LodBuildResult> done;
-	if (mesh_ && mesh_->collect_lod(&done) > 0) {
-		for (LodBuildResult &r : done) {
-			if (r.failed) {
-				const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
-				const auto old_it = lod_pages_of_.find(key);
-				if (old_it != lod_pages_of_.end()) {
-					// Stale beats missing: a failed rebuild keeps the old pages drawable and
-					// is re-affirmed Ready-with-dirty so the next walk retries it. Do not
-					// release the old pages and do not mark the node failed (that would
-					// un-draw it).
-					lod_tree_->note_ready_dirty(r.level, r.coord);
-					lod_pressure_ += ve::lod_pages_for_quads(int(r.quads.size()));
-				} else {
-					lod_tree_->note_failed(r.level, r.coord);
-				}
-				continue;
-			}
-			if (r.overflow) {
-				const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
-				if (lod_overflow_logged_.insert(key).second)
-					UtilityFunctions::printerr("VoxelWorld: LoD chunk (level ", r.level,
-							", ", r.coord.x, ", ", r.coord.y, ", ", r.coord.z,
-							") overflowed; keeping first ", ve::kLodMaxQuadsPerChunk,
-							" quads");
-			}
-			if (r.quads.empty()) {
-				// Empty result. If an edit landed while this build was in flight, the result
-				// is stale: keep any old pages drawing (stale beats missing) or leave a
-				// non-resident node requestable. Only a non-dirty empty result is terminal,
-				// and only then may the old GPU pages be released.
-				const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
-				const bool dirty = lod_tree_->is_dirty(r.level, r.coord);
-				const auto old_it = lod_pages_of_.find(key);
-				if (dirty) {
-					if (old_it != lod_pages_of_.end()) {
-						// Old pages stay drawable; note_ready_dirty re-requests the rebuild.
-						lod_tree_->note_ready_dirty(r.level, r.coord);
-					} else {
-						// Nothing to keep drawing; note_empty leaves the node requestable.
-						lod_tree_->note_empty(r.level, r.coord);
-					}
-					continue;
-				}
-				// Genuinely empty: release any old pages before telling the tree, otherwise
-				// the tree stops drawing/requesting it while the stale GPU pages stay
-				// allocated forever.
-				if (old_it != lod_pages_of_.end()) {
-					for (int p : old_it->second) lod_page_quads_.erase(p);
-					lod_pool_->release(old_it->second);
-					if (sun_shadow_pass()) sun_shadow_pass()->mark_dirty();
-					lod_pages_of_.erase(old_it);
-				}
-				lod_tree_->note_empty(r.level, r.coord);
-				continue;
-			}
-			std::vector<int> pages;
-			if (!lod_pool_->upload(r.level, r.coord, r.quads, &pages)) {
-				// Refused, not half-funded. If the chunk already has resident pages, keep
-				// drawing them: stale beats missing. Re-affirm Ready-with-dirty using the old
-				// page list so the node stays drawable AND is re-requested next frame; a node
-				// with no old pages still fails and is re-requested next frame.
-				const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
-				const auto old_it = lod_pages_of_.find(key);
-				if (old_it != lod_pages_of_.end()) {
-					lod_tree_->note_ready_dirty(r.level, r.coord);
-					// Keep the old page list in lod_pages_of_: it remains the node's drawable
-					// pages until a later upload succeeds and replaces them.
-				} else {
-					lod_tree_->note_failed(r.level, r.coord);
-				}
-				// Accumulate across refusals in this frame so evictions recover enough pages
-				// for every refused rebuild, not just the last one.
-				lod_pressure_ += ve::lod_pages_for_quads(int(r.quads.size()));
-				continue;
-			}
-			// A rebuild replaces the old page list. Release the stale pages only once the
-			// new pages are allocated and uploaded, so a refused rebuild keeps the old pages
-			// drawing; after this point the tree points at the new list.
-			if (sun_shadow_pass()) sun_shadow_pass()->mark_dirty();
-			const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
-			const auto old_it = lod_pages_of_.find(key);
-			if (old_it != lod_pages_of_.end()) {
-				for (int p : old_it->second) lod_page_quads_.erase(p);
-				lod_pool_->release(old_it->second);
-				lod_pages_of_.erase(old_it);
-			}
-			for (int i = 0; i < int(pages.size()); i++) {
-				const int first = i * ve::kLodQuadsPerPage;
-				const int count = std::min(ve::kLodQuadsPerPage,
-						static_cast<int>(r.quads.size()) - first);
-				lod_page_quads_[pages[static_cast<size_t>(i)]] = count;
-			}
-			lod_tree_->note_ready(r.level, r.coord, pages.front(), int(pages.size()));
-			lod_pages_of_[key] = std::move(pages);
-		}
-	}
-
-	// Then evictions, so the budget below sees the pages they returned.
-	std::vector<ve::LodDrawItem> evicted;
-	lod_tree_->collect_evictions(lod_frame_, lod_pressure_, &evicted);
-	lod_pressure_ = 0;
-	for (const ve::LodDrawItem &e : evicted) {
-		const LodKey key{e.level, e.coord.x, e.coord.y, e.coord.z};
-		const auto it = lod_pages_of_.find(key);
-		if (it == lod_pages_of_.end()) continue;
-		for (int p : it->second) lod_page_quads_.erase(p);
-		lod_pool_->release(it->second);
-		if (sun_shadow_pass()) sun_shadow_pass()->mark_dirty();
-		lod_pages_of_.erase(it);
-	}
-
-	// Then this frame's builds, priority order, one batch. Mark the nodes building while
-	// still holding lod_mutex_ so note_building's dirty-clear happens at submission time.
-	// gather_lod_ops takes edit_mutex_, so it must run AFTER releasing lod_mutex_ (lock
-	// order: edit_mutex_ -> lod_mutex_); the building flag prevents a concurrent walk from
-	// re-requesting these nodes during that window, and a refused submit rolls the flags back.
-	std::vector<ve::LodBuildRequest> batch_requests;
-	if (mesh_ && !mesh_->lod_busy()) {
-		// MeshService's LodBuildPass currently supports at most 8 LoD jobs per batch.
-		// lod_builds_per_frame_ is user-facing and may be higher; submit_lod would reject
-		// anything above the mesher's cap, so clamp the actual batch take here.
-		const int take = std::min<int>({lod_builds_per_frame_, int(lod_walk_.requests.size()), 8});
-		batch_requests.assign(lod_walk_.requests.begin(), lod_walk_.requests.begin() + take);
-		for (const ve::LodBuildRequest &q : batch_requests)
-			lod_tree_->note_building(q.level, q.coord);
-	}
-	lock.unlock();
-
-	if (!batch_requests.empty()) {
-		std::vector<LodBuildJob> batch;
-		batch.reserve(batch_requests.size());
-		for (const ve::LodBuildRequest &q : batch_requests) {
-			LodBuildJob j;
-			j.level = q.level;
-			j.coord = q.coord;
-			gather_lod_ops(q.level, q.coord, &j.ops);
-			batch.push_back(std::move(j));
-		}
-		if (!mesh_->submit_lod(std::move(batch))) {
-			lock.lock();
-			for (const ve::LodBuildRequest &q : batch_requests) {
-				const LodKey key{q.level, q.coord.x, q.coord.y, q.coord.z};
-				if (lod_pages_of_.find(key) != lod_pages_of_.end()) {
-					lod_tree_->note_ready_dirty(q.level, q.coord);
-				} else {
-					lod_tree_->note_failed(q.level, q.coord);
-				}
-			}
-			lock.unlock();
-		}
-	}
-
-	lock.lock();
-	prepare_lod_raster_locked();
+	context_.lod->tick(cam, occ);
 }
 
 void VoxelWorld::prepare_lod_raster() {
-	std::lock_guard<std::mutex> lock(lod_mutex_);
-	prepare_lod_raster_locked();
+	context_.lod->prepare_raster();
 }
 
 void VoxelWorld::prepare_lod_shadow_raster() {
-	std::lock_guard<std::mutex> lock(lod_mutex_);
-	if (!lod_raster_pass() || !lod_pool_) return;
-	std::vector<LodRasterPass::PageDraw> pages;
-	pages.reserve(lod_page_quads_.size());
-	for (const auto &kv : lod_page_quads_)
-		pages.push_back(LodRasterPass::PageDraw{kv.first, kv.second});
-	lod_raster_pass()->set_draw_pages(pages);
+	context_.lod->prepare_shadow_raster();
 }
 
-void VoxelWorld::prepare_lod_raster_locked() {
-	if (!lod_raster_pass() || !lod_pool_) return;
-	std::vector<ve::LodPageDraw> page_draws;
-	ve::lod_collect_page_draws(lod_walk_.draws, lod_pages_of_, lod_page_quads_, &page_draws);
-	std::vector<LodRasterPass::PageDraw> pages;
-	pages.reserve(page_draws.size());
-	for (const ve::LodPageDraw &pd : page_draws)
-		pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});
-	lod_raster_pass()->set_draw_pages(pages);
+void VoxelWorld::lod_fade_band(float *fade_start, float *fade_end) const {
+	context_.lod->fade_band(fade_start, fade_end);
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 int VoxelWorld::override_table_for_region(ve::IVec3 region) const {
 	return store_->override_table_for_region(region);

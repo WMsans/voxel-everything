@@ -112,3 +112,52 @@ func test_render_callback_admission_shuts_down_cleanly() -> void:
 	assert_bool(_world.is_initialized()).is_true()
 	assert_bool(_world.try_begin_render_callback()).is_true()
 	_world.end_render_callback()
+
+# Phase-5 contract smoke test (Task 15): after the LoD runtime settles, the debug facade's
+# fade band -- one-line delegation into LodSystem::fade_band(), the single source of truth
+# since the move out of VoxelWorld -- must equal a fresh read of the same band, and both
+# endpoints must satisfy start < end. The M5 seam tests (test_lod_seam.gd) pin compositing
+# behavior at exactly these two distances, so a band whose start >= end belongs to no
+# field. Settle pattern from test_lod_build.gd/test_lod_pool.gd: poll debug_lod_tick until
+# the walk requests nothing and nothing is in flight for a quiet streak.
+const LOD_SETTLE_BUDGET := 2500
+const LOD_QUIET_TICKS := 8
+const LOD_POS := Vector3(400.0, 70.0, 400.0)
+const LOD_FWD := Vector3(0, -0.2, -1)
+
+func test_lod_fade_band_is_single_source_of_truth(timeout := 60000) -> void:
+	_world = ClassDB.instantiate("VoxelWorld")
+	_world.use_local_device = true
+	_world.physics_enabled = false
+	_world.world_origin_bricks = Vector3i(0, -64, 0)
+	_world.world_size_regions = Vector3i(8, 5, 8)
+	add_child(_world)
+	assert_bool(_world.hooks().debug_init_atlas()).is_true()
+	assert_bool(_world.hooks().debug_init_physics()).is_true()
+	# Settle the far field exactly as the LoD suites do (requests_pending dips while a
+	# batch lands, so convergence has to hold for a streak, not one frame).
+	var settled := false
+	var quiet := 0
+	for i in range(LOD_SETTLE_BUDGET):
+		_world.hooks().debug_lod_tick(LOD_POS, LOD_FWD)
+		await get_tree().process_frame
+		var stats: Dictionary = _world.hooks().debug_lod_stats()
+		quiet = quiet + 1 if int(stats["requests_pending"]) == 0 \
+				and int(stats["builds_in_flight"]) == 0 else 0
+		if quiet >= LOD_QUIET_TICKS:
+			settled = true
+			break
+	assert_bool(settled).override_failure_message(
+		"the far field never converged; stats: %s"
+			% _world.hooks().debug_lod_stats()).is_true()
+	# One source of truth: two reads through the facade agree...
+	var band: Vector2 = _world.hooks().debug_lod_fade_band()
+	var again: Vector2 = _world.hooks().debug_lod_fade_band()
+	assert_vector(band).override_failure_message(
+		"the fade band moved between two reads after settle: %s vs %s" % [band, again]
+	).is_equal(again)
+	# ...and the invariant every seam assertion leans on holds.
+	assert_float(band.x).override_failure_message(
+		"fade start must be positive after settle: %s" % band).is_greater(0.0)
+	assert_float(band.y).override_failure_message(
+		"fade end must exceed fade start: %s" % band).is_greater(band.x)

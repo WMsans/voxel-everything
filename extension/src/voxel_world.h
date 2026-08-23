@@ -26,7 +26,7 @@
 #include "core/world_store.h"
 #include "debug/hooks.h"
 #include "generator/volume_set.h"
-#include "lod/lod_tree.h"
+#include "lod/lod_system.h"
 #include "mesh/chunk_residency.h"
 #include "physics/island_body.h"
 #include "physics/island_manager.h"
@@ -174,28 +174,12 @@ class VoxelWorld : public Node3D, public EditSink {
 	std::vector<IslandBody *> test_bodies_;
 	float last_physics_tick_ms_ = 0.0f; // diagnostic; see debug_perf_stats
 
-	// --- M5 LoD state (Task 12) ---
-	int max_lod_pages_ = 32768;
-	int lod_builds_per_frame_ = 8;
-	// Guards lod_tree_, lod_walk_, lod_pages_of_, lod_page_quads_, and lod_pool_ state
-	// between the render thread (lod_tick) and main/tool threads (mark_dirty, debug stats).
-	// Lock order versus the edit path is restated at its new owner, WorldStore::edit_mutex():
-	// edit_mutex -> LodSystem::mutex() (lod_tick never holds LodSystem::mutex() across
-	// gather_lod_ops, so append_edit_locked can take it while holding edit_mutex).
-	std::mutex lod_mutex_;
-	using LodKey = ve::LodKey;
-	ve::LodTree *lod_tree_ = nullptr;
-	LodPool *lod_pool_ = nullptr;
-	uint32_t lod_frame_ = 0;
-	ve::LodWalkResult lod_walk_;
-	std::map<LodKey, std::vector<int>> lod_pages_of_;
-	std::map<int, int> lod_page_quads_; // page -> number of quads stored in that page
-	std::set<LodKey> lod_overflow_logged_; // once-per-chunk overflow diagnostics
-	int lod_pressure_ = 0;
-
-	void ensure_lod(); // lazy: creates/initializes lod_tree_ + lod_pool_ on first use
-	// Assumes lod_mutex_ is held; emits the real page list for the current lod_walk_.
-	void prepare_lod_raster_locked();
+	// Owns the LoD runtime (Task 15): THE lod mutex, tree/walk/page-map/pool state plus
+	// tick/fade-band/op-gathering live in LodSystem now; VoxelWorld keeps one-line
+	// delegations so the compositor and debug facade compile unchanged. Created BEFORE
+	// RenderOrchestrator, whose teardown interleaves with its pool/tree/page maps via
+	// address-of slots (handles-only collaborators).
+	std::unique_ptr<LodSystem> lod_;
 
 	bool initialized_ = false;
 	// HiZ async-readback end state captured by RenderOrchestrator's teardown (handle-
@@ -208,6 +192,8 @@ class VoxelWorld : public Node3D, public EditSink {
 
 	// Gathers the ops that can affect a LoD chunk: its AABB padded by two cells, flattened
 	// across regions in global append order, truncated to a chronological prefix (M4 errata 1).
+	// One-line delegation into LodSystem's gather_ops (Task 15 move); called by the debug
+	// facade (friend) exactly as it called the world's own body before.
 	void gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out);
 	bool extract_component(const std::vector<ve::IVec3> &cells, IslandExtractJob *job,
 			std::vector<ve::CellBox> *boxes, ve::VolumeData *out);
@@ -295,10 +281,10 @@ public:
 	int get_mesh_jobs_per_frame() const { return mesh_jobs_per_frame_; }
 	void set_shape_builds_per_frame(int v) { shape_builds_per_frame_ = v; }
 	int get_shape_builds_per_frame() const { return shape_builds_per_frame_; }
-	void set_max_lod_pages(int v) { max_lod_pages_ = v; }
-	int get_max_lod_pages() const { return max_lod_pages_; }
-	void set_lod_builds_per_frame(int v) { lod_builds_per_frame_ = v; }
-	int get_lod_builds_per_frame() const { return lod_builds_per_frame_; }
+	void set_max_lod_pages(int v) { lod_->set_max_lod_pages(v); }
+	int get_max_lod_pages() const { return lod_->max_lod_pages(); }
+	void set_lod_builds_per_frame(int v) { lod_->set_lod_builds_per_frame(v); }
+	int get_lod_builds_per_frame() const { return lod_->lod_builds_per_frame(); }
 
 	// One-line delegations into RenderOrchestrator (Task 14 move); the ClassDB surface
 	// and call sites compile unchanged. The effect/quality setters run on the main
@@ -328,8 +314,10 @@ public:
 	int get_normal_roughness_state() const { return context_.render->normal_roughness_state(); }
 	void set_beauty_compositor(BeautyCompositor *effect) { beauty_compositor_ = effect; }
 
+	// One-line delegations into LodSystem (Task 15 move); the compositor, the debug facade
+	// and ClassDB compile unchanged.
 	void lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ);
-	// Push the current lod_walk_ page list (with per-page quad counts) into the raster pass.
+	// Push the current walk's page list (with per-page quad counts) into the raster pass.
 	void prepare_lod_raster();
 	void prepare_lod_shadow_raster();
 	RenderingDevice *rd() const; // one-line delegation into RenderOrchestrator
@@ -353,7 +341,7 @@ public:
 	DeferredPass *deferred_pass() { return context_.render->deferred_pass(); }
 	SunShadowPass *sun_shadow_pass() { return context_.render->sun_shadow_pass(); }
 	InjectPass *inject_pass() { return context_.render->inject_pass(); }
-	LodPool *lod_pool() { return lod_pool_; }
+	LodPool *lod_pool() { return context_.lod->pool(); }
 	LodRasterPass *lod_raster_pass() { return context_.render->lod_raster_pass(); }
 	LodCullPass *lod_cull_pass() { return context_.render->lod_cull_pass(); }
 	HizPass *hiz_pass() { return context_.render->hiz_pass(); }
@@ -430,9 +418,8 @@ public:
 
 	bool snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo, ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const;
 
-	// The near/far seam for this frame, derived from how far the near field's brick data is
-	// actually complete. One source of truth: the composite, the LoD raster and the LoD
-	// build gate must all fade at the same two distances or the band belongs to no field.
+	// The near/far seam for this frame -- one-line delegation into LodSystem (Task 15),
+	// which owns the fade band now.
 	void lod_fade_band(float *fade_start, float *fade_end) const;
 
 };

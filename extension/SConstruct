@@ -22,7 +22,9 @@ for f in ["src/render/shader_loader.cpp", "src/render/camera_params.cpp"]:
         pure_sources.append(f)
 # ConsolidationCoordinator publishes GPU transactions by design (godot-cpp headers, worker
 # submission); it is not a pure core and cannot compile in the zero-godot-cpp test build.
-pure_sources = [s for s in pure_sources if str(s) != "src/mesh/consolidation.cpp"]
+# Same for LodSystem (Task 15): ensure_lod()/tick() drive GPU pools and raster passes.
+pure_sources = [s for s in pure_sources
+                if str(s) not in ("src/mesh/consolidation.cpp", "src/lod/lod_system.cpp")]
 tests = test_env.Program("build/tests/ve_tests", Glob("tests/*.cpp") + pure_sources)
 test_alias = Alias("test", [tests], tests[0].abspath)
 AlwaysBuild(test_alias)
