@@ -5150,7 +5150,7 @@ RID VoxelDebugHooks::debug_op_counts() const { return world_->atlas_ ? world_->a
 
 int VoxelDebugHooks::debug_occupancy_state(Vector3i cell) {
 	world_->drain_occupancy(); // tests step the streamer by hand and never run _process
-	return static_cast<int>(world_->occupancy_.state({cell.x, cell.y, cell.z}));
+	return static_cast<int>(world_->occupancy().state({cell.x, cell.y, cell.z}));
 }
 
 void VoxelDebugHooks::debug_pump_occupancy() {
@@ -5292,12 +5292,12 @@ int VoxelDebugHooks::debug_cell_state(Vector3i cell) {
 Dictionary VoxelDebugHooks::debug_occupancy_stats(Vector3 center) {
 	world_->drain_occupancy();
 	Dictionary d;
-	d["regions"] = world_->occupancy_.region_count();
+	d["regions"] = world_->occupancy().region_count();
 	d["edit_seq"] = static_cast<int64_t>(world_->edit_seq());
 	// The block covering the streaming centre, so a test can tell "the grid has been told
 	// about this edit" from "some other region's block arrived".
 	const ve::IVec3 r = ve::WorldBounds::region_of_point(center.x, center.y, center.z);
-	d["seq_at_center"] = static_cast<int64_t>(world_->occupancy_.block_seq(r));
+	d["seq_at_center"] = static_cast<int64_t>(world_->occupancy().block_seq(r));
 	return d;
 }
 

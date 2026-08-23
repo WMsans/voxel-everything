@@ -320,11 +320,10 @@ VoxelWorld::VoxelWorld() {
 	store_ = std::make_unique<WorldStore>(ve::WorldConfig{});
 	context_.store = store_.get();
 	// Task 8: the edit-append spine lives in WorldStore now. Inject its notification ports
-	// (this adapter forwards to today's island/consolidation logic) and lend it the edit
-	// sequence atomic until Task 9 moves edit_seq into the store. Sinks are never null
+	// (this adapter forwards to today's island/consolidation logic). Since Task 9 the store
+	// also owns the occupancy grid/inbox and the edit_seq_ atomic. Sinks are never null
 	// from this point on, matching append_edit_locked's unguarded expectations.
 	store_->set_sinks(this, this);
-	store_->set_edit_seq(&edit_seq_);
 }
 
 VoxelWorld::~VoxelWorld() {
@@ -600,7 +599,7 @@ void VoxelWorld::ensure_initialized() {
 	streamer_ = new WorldStreamer();
 	streamer_->initialize(store_->residency_, store_->edit_log_, &store_->edit_mutex(),
 			&store_->pending_edits_, atlas_,
-			region_pass_, gen_pass_, &occupancy_mutex_, &occupancy_inbox_, &edit_seq_, store_->overrides_,
+			region_pass_, gen_pass_, store_.get(), store_->overrides_,
 			&store_->override_tables_);
 	raymarch_pass_ = new RaymarchPass();
 	raymarch_pass_->initialize(device);
@@ -1403,7 +1402,7 @@ void VoxelWorld::on_edit_appended(const ve::EditOp &op, bool notify_islands) {
 	// state; only the manager-presence check remains here. Dies in Phase 3 when
 	// IslandManager implements EditSink directly.
 	if (notify_islands && island_manager_)
-		island_manager_->note_edit(op, edit_seq_.load(std::memory_order_relaxed));
+		island_manager_->note_edit(op, store_->edit_seq());
 }
 
 
@@ -1931,19 +1930,6 @@ void VoxelWorld::pump_shader_reload() {
 
 
 
-void VoxelWorld::drain_occupancy() {
-	std::vector<OccupancyBlock> blocks;
-	{
-		std::lock_guard<std::mutex> lock(occupancy_mutex_);
-		blocks.swap(occupancy_inbox_);
-	}
-	for (const OccupancyBlock &b : blocks) {
-		// A region marked in consecutive frames can have two reads in flight, and the older
-		// one can land after the newer one. Never let it regress the grid or the block's seq.
-		if (b.seq < occupancy_.block_seq(b.region)) continue;
-		occupancy_.set_block(b.region, b.bytes.data(), b.seq);
-	}
-}
 
 
 

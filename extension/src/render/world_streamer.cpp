@@ -1,7 +1,6 @@
 #include "render/world_streamer.h"
 #include "render/edit_aabb.h"
-#include "core/world_store.h" // godot::PendingEdit
-#include "voxel_world.h" // godot::OccupancyBlock
+#include "core/world_store.h" // godot::PendingEdit + godot::OccupancyBlock
 #include "render/mesh_service.h"
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <algorithm>
@@ -61,8 +60,7 @@ using namespace godot;
 
 void WorldStreamer::initialize(ve::RegionResidency *residency, ve::EditLog *edit_log,
 		std::mutex *edit_mutex, std::vector<PendingEdit> *pending, GpuAtlas *atlas,
-		RegionPass *region_pass, BrickGenPass *brick_gen, std::mutex *occ_mutex,
-		std::vector<OccupancyBlock> *occ_inbox, std::atomic<int64_t> *edit_seq,
+		RegionPass *region_pass, BrickGenPass *brick_gen, WorldStore *store,
 		const ve::OverrideStore *overrides,
 		const std::map<std::tuple<int, int, int>, int> *override_tables) {
 	residency_ = residency;
@@ -75,9 +73,7 @@ void WorldStreamer::initialize(ve::RegionResidency *residency, ve::EditLog *edit
 	mesh_ = nullptr;
 	overrides_ = overrides;
 	override_tables_ = override_tables;
-	occ_mutex_ = occ_mutex;
-	occ_inbox_ = occ_inbox;
-	edit_seq_ = edit_seq;
+	store_ = store;
 	overflow_read_.instantiate();
 	free_read_.instantiate();
 	costs_read_.instantiate();
@@ -122,7 +118,7 @@ void WorldStreamer::note_marked(ve::IVec3 region, int64_t seq) {
 }
 
 void WorldStreamer::pump_occupancy(RenderingDevice *rd) {
-	if (!atlas_ || !occ_inbox_ || !occ_mutex_) return;
+	if (!atlas_ || !store_) return;
 	// 1. Harvest whatever landed. take_fresh() is true exactly once per arrival.
 	for (OccupancyRead &r : occ_reads_) {
 		if (!r.active || !r.read->take_fresh()) continue;
@@ -143,8 +139,7 @@ void WorldStreamer::pump_occupancy(RenderingDevice *rd) {
 		b.seq = r.seq;
 		b.bytes.assign(r.read->data().ptr(),
 				r.read->data().ptr() + ve::kOccupancyBlockBytes);
-		std::lock_guard<std::mutex> lock(*occ_mutex_);
-		occ_inbox_->push_back(std::move(b));
+		store_->enqueue_occupancy_block(std::move(b));
 	}
 	// 2. Issue what fits. A region that has since been evicted is skipped: its slot now
 	//    describes somewhere else, and region_free has already cleared it.
@@ -389,11 +384,11 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 			std::lock_guard<std::mutex> lock(*edit_mutex_);
 			const std::vector<ve::EditOp> &ops = edit_log_->ops(l.region);
 			op_count = static_cast<int>(ops.size());
-			// The seq must match the op set just captured, not whatever edit_seq_ says
+			// The seq must match the op set just captured, not whatever the store's edit_seq says
 			// after the mark is recorded: an edit appended between the upload and the
 			// mark would be stamped but not in the GPU state. Reading it under the same
 			// lock as ops() makes the two a consistent pair.
-			seq = edit_seq_ ? edit_seq_->load(std::memory_order_relaxed) : 0;
+			seq = store_ ? store_->edit_seq() : 0;
 			// Unconditional, even when empty: the slot may be a recycled eviction still
 			// holding the previous tenant's op count, and op_count is the only field the
 			// mark pass reads.
@@ -442,7 +437,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		{
 			std::lock_guard<std::mutex> lock(*edit_mutex_);
 			op_count = static_cast<int>(edit_log_->ops(region).size());
-			seq = edit_seq_ ? edit_seq_->load(std::memory_order_relaxed) : 0;
+			seq = store_ ? store_->edit_seq() : 0;
 			atlas_->upload_region_ops(rd, slot, edit_log_->ops(region).data(), op_count);
 		}
 		load_jobs.push_back({region, slot, op_count, seq});
@@ -467,7 +462,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 			std::lock_guard<std::mutex> lock(*edit_mutex_);
 			const std::vector<ve::EditOp> &ops = edit_log_->ops(region);
 			atlas_->upload_region_ops(rd, slot, ops.data(), static_cast<int>(ops.size()));
-			const int64_t seq = edit_seq_ ? edit_seq_->load(std::memory_order_relaxed) : 0;
+			const int64_t seq = store_ ? store_->edit_seq() : 0;
 			const ve::IVec3 r0{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
 					region.z * ve::kRegionBricks};
 			const EditJob job{region, slot,
@@ -533,7 +528,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 				std::lock_guard<std::mutex> lock(*edit_mutex_);
 				const std::vector<ve::EditOp> &ops = edit_log_->ops(region);
 				op_count = static_cast<int>(ops.size());
-				seq = edit_seq_ ? edit_seq_->load(std::memory_order_relaxed) : 0;
+				seq = store_ ? store_->edit_seq() : 0;
 				has_exact = ve::exact_edit_aabbs(region, ops, &exact_ranges);
 			}
 			const ve::IVec3 lo{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
@@ -582,7 +577,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 			std::lock_guard<std::mutex> lock(*edit_mutex_);
 			const std::vector<ve::EditOp> &ops = edit_log_->ops(region);
 			op_count = static_cast<int>(ops.size());
-			seq = edit_seq_ ? edit_seq_->load(std::memory_order_relaxed) : 0;
+			seq = store_ ? store_->edit_seq() : 0;
 			has_exact = ve::exact_edit_aabbs(region, ops, &exact_ranges);
 		}
 		const ve::IVec3 lo{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,

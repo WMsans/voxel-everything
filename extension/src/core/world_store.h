@@ -4,8 +4,9 @@
 // EditSink/ConsolidationSink ports; consumers talk only to its public API.
 //
 // Phase 2b scope (Task 8): the edit-append path moved in verbatim behind the
-// sink ports, together with edit_mutex_ + pending_edits_. Occupancy/edit_seq
-// move next (Task 9). Construction/teardown order is load-bearing near GPU
+// sink ports, together with edit_mutex_ + pending_edits_. Phase 2c scope
+// (Task 9): the occupancy grid + inbox and the edit_seq_ atomic moved in
+// verbatim too. Construction/teardown order is load-bearing near GPU
 // setup: VoxelWorld calls ensure_edit_log()/ensure_overrides()/ensure_residency()
 // from ensure_initialized() at exactly the points where the moved statements used
 // to sit, clear_residency() from teardown_gpu(), and release_cores() from
@@ -18,6 +19,7 @@
 
 #include <godot_cpp/variant/vector3i.hpp>
 
+#include "connectivity/occupancy.h"
 #include "generator/edit_ops.h"
 #include "generator/volume_set.h"
 #include "world/edit_log.h"
@@ -51,6 +53,14 @@ class VoxelDebugHooks;
 struct PendingEdit {
 	ve::EditOp op;
 	ve::EditLog::AppendResult result;
+};
+
+// One region's occupancy block on its way from the render thread to the main thread's grid.
+// (Moved verbatim from voxel_world.h alongside occupancy_inbox_, its only queue.)
+struct OccupancyBlock {
+	ve::IVec3 region{};
+	int64_t seq = 0; // the world's edit sequence as of the mark that produced it
+	std::vector<uint8_t> bytes; // ve::kOccupancyBlockBytes
 };
 
 // Notification port injected at construction (spec §5 Phase 2). Implemented today by a
@@ -96,6 +106,8 @@ public:
 
 	// --- the spine (moved verbatim from VoxelWorld::append_edit/_locked) ---
 	// Tool entry point. Main thread; takes edit_mutex().
+	// WARNING: does NOT run the VoxelWorld fan-out (rejection stats, LoD dirty marks,
+	// collider remesh queue); prefer VoxelWorld::append_edit until Phase 3.
 	ve::EditLog::AppendResult append_edit(const ve::EditOp &op);
 	// Low-level append used by callers that hold edit_mutex() across a whole
 	// carve/restore sequence (IslandManager). The caller MUST already hold edit_mutex().
@@ -111,9 +123,20 @@ public:
 		edit_sink_ = edits;
 		consolidation_sink_ = consolidation;
 	}
-	// Borrowed until Task 9 moves edit_seq into WorldStore; must outlive the store
-	// (VoxelWorld owns the atomic and constructs the store first).
-	void set_edit_seq(std::atomic<int64_t> *seq) { edit_seq_ = seq; }
+	// --- occupancy cluster + edit sequence (moved verbatim from VoxelWorld, Task 9) ---
+	// Main thread only (same contract as the pre-split field).
+	ve::OccupancyGrid &occupancy() { return occupancy_; }
+	int64_t edit_seq() const { return edit_seq_.load(std::memory_order_relaxed); }
+	// Called by append_edit_locked; returns the PREVIOUS seq (fetch_add semantics).
+	int64_t bump_edit_seq();
+	// Render-thread producers hand blocks over through occupancy_mutex_ exactly as they
+	// pushed into the pre-split inbox inline.
+	void enqueue_occupancy_block(OccupancyBlock b) {
+		std::lock_guard<std::mutex> lock(occupancy_mutex_);
+		occupancy_inbox_.push_back(std::move(b));
+	}
+	// Inbox -> grid; returns how many blocks landed. Was VoxelWorld::drain_occupancy.
+	int drain_occupancy();
 
 	// THE edit mutex; guards the edit log, override tables' append path, pending_edits_,
 	// and everything the fan-out touches while an op is accepted.
@@ -185,7 +208,17 @@ private:
 	// --- moved verbatim from VoxelWorld (Task 8) ---
 	std::mutex edit_mutex_;                  // guards the data plane + pending_edits_
 	std::vector<PendingEdit> pending_edits_; // appended by tools, drained by the streamer
-	std::atomic<int64_t> *edit_seq_ = nullptr; // borrowed from VoxelWorld until Task 9
+
+	// --- moved verbatim from VoxelWorld (Task 9) ---
+	ve::OccupancyGrid occupancy_;              // main thread only
+	std::mutex occupancy_mutex_;               // guards occupancy_inbox_
+	std::vector<OccupancyBlock> occupancy_inbox_;
+	// Monotonic; bumped by every accepted edit. The streamer stamps each occupancy readback
+	// with it so IslandManager (Task 13) can tell whether a window's cells are new enough to
+	// act on, rather than running connectivity against a picture of the world from before
+	// the blast.
+	std::atomic<int64_t> edit_seq_{0};
+
 	EditSink *edit_sink_ = nullptr;
 	ConsolidationSink *consolidation_sink_ = nullptr;
 };
