@@ -33,6 +33,7 @@
 #include "physics/island_manager.h"
 #include "render/island_atlas.h"
 #include "render/gpu_timings.h"
+#include "render/orchestrator.h" // inline pass-graph delegations need the complete type
 #include "render/consolidate_pass.h"
 #include "shade/beauty_settings.h"
 #include "world/edit_log.h"
@@ -106,6 +107,10 @@ class VoxelWorld : public Node3D, public EditSink {
 	// consolidation_* members live there now; it satisfies WorldStore's ConsolidationSink
 	// port directly. Handles-only collaborators (addresses of the fields below).
 	std::unique_ptr<ConsolidationCoordinator> consolidation_;
+	// GPU pass graph + device ownership (Task 12): every pass pointer, the downsample
+	// pipeline and main_rd_/local_rd_ live in RenderOrchestrator now; VoxelWorld keeps
+	// one-line delegations so external callers compile unchanged.
+	std::unique_ptr<RenderOrchestrator> render_;
 
 	bool physics_enabled_ = true;
 	NodePath physics_center_path_;
@@ -117,38 +122,6 @@ class VoxelWorld : public Node3D, public EditSink {
 	int max_collider_chunks_ = 1280;
 	int mesh_jobs_per_frame_ = 2;
 	int shape_builds_per_frame_ = 2;
-
-	GpuAtlas *atlas_ = nullptr;
-	MaterialAtlas *materials_ = nullptr;
-	IslandAtlas *islands_ = nullptr;
-	std::atomic<bool> islands_enabled_{true};
-	std::atomic<bool> near_field_enabled_{true};
-	int island_slots_ = 0; // high-water mark, not a population; guarded by island_mutex_
-	IslandCullPass *island_cull_ = nullptr;
-	RegionPass *region_pass_ = nullptr;
-	BrickGenPass *gen_pass_ = nullptr;
-	RaymarchPass *raymarch_pass_ = nullptr;
-	CompositePass *composite_pass_ = nullptr;
-	DeferredPass *deferred_pass_ = nullptr;
-	SunShadowPass *sun_shadow_pass_ = nullptr;
-	InjectPass *inject_pass_ = nullptr;
-	LodRasterPass *lod_raster_pass_ = nullptr;
-	LodCullPass *lod_cull_pass_ = nullptr;
-	HizPass *hiz_pass_ = nullptr;
-	GBuffer *gbuffer_ = nullptr;
-	CameraUbo *beauty_camera_ = nullptr;
-	ContactShadowPass *contact_shadow_pass_ = nullptr;
-	SsgiPass *ssgi_pass_ = nullptr;
-	SsrPass *ssr_pass_ = nullptr;
-	OutlinePass *outline_pass_ = nullptr;
-	BeautyCompositor *beauty_compositor_ = nullptr;
-	GpuTimings gpu_timings_;
-	float prev_view_proj_[16] = {};
-	bool has_history_ = false;
-	uint32_t beauty_frame_ = 0;
-	int normal_roughness_state_ = -1;
-	RID downsample_shader_, downsample_pipeline_, downsample_sampler_, downsample_uset_;
-	RID downsample_src_, downsample_dst_;
 	WorldStreamer *streamer_ = nullptr;
 	int overflow_seen_ = 0;                   // sticky OR of frame overflow bits (tests)
 	int edit_rejections_ = 0; // append fan-out rejection stat; read by debug_stream_stats
@@ -184,6 +157,10 @@ class VoxelWorld : public Node3D, public EditSink {
 	// Debug-settable compact-normal budget; 0 = GpuAtlasConfig's default 32 MiB. Must be
 	// set BEFORE the atlas is created; the pool never resizes after that.
 	uint32_t normal_pool_bytes_ = 0;
+	std::atomic<bool> islands_enabled_{true};
+	std::atomic<bool> near_field_enabled_{true};
+	int island_slots_ = 0; // high-water mark, not a population; guarded by island_mutex_
+	BeautyCompositor *beauty_compositor_ = nullptr;
 	std::vector<IslandSlotDesc> island_descs_;
 	bool island_descs_dirty_ = false;
 	std::vector<float> physics_bubble_centers_;
@@ -225,8 +202,6 @@ class VoxelWorld : public Node3D, public EditSink {
 	// Assumes lod_mutex_ is held; emits the real page list for the current lod_walk_.
 	void prepare_lod_raster_locked();
 
-	RenderingDevice *main_rd_ = nullptr;
-	RenderingDevice *local_rd_ = nullptr; // owned when use_local_device_
 	bool initialized_ = false;
 	mutable std::mutex render_lifetime_mutex_;
 	std::condition_variable render_lifetime_cv_;
@@ -235,6 +210,8 @@ class VoxelWorld : public Node3D, public EditSink {
 	int render_callbacks_ = 0;
 	std::condition_variable gpu_teardown_cv_;
 	bool gpu_teardown_done_ = false;
+	// HiZ async-readback end state captured by RenderOrchestrator's teardown (handle-
+	// injected); read by the debug facade after a shutdown.
 	bool last_hiz_readback_was_pending_ = false;
 	bool last_hiz_readback_was_drained_ = true;
 
@@ -250,10 +227,7 @@ class VoxelWorld : public Node3D, public EditSink {
 
 	void teardown_gpu(); // every GPU object; CPU cores survive
 	void shutdown_render_resources_on_render_thread();
-	bool initialize_downsample(RenderingDevice *rd);
-	void teardown_downsample();
-	bool ensure_downsample_set(RenderingDevice *rd, RID src, RID dst);
-	bool downsample_history(RenderingDevice *rd, RID src, GBuffer &gb);
+	bool downsample_history(RenderingDevice *rd, RID src, GBuffer &gb); // one-line delegation
 	// Gathers the ops that can affect a LoD chunk: its AABB padded by two cells, flattened
 	// across regions in global append order, truncated to a chronological prefix (M4 errata 1).
 	void gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out);
@@ -359,20 +333,21 @@ public:
 	// Returns an immutable value snapshot. Render callbacks must take this once per frame and
 	// pass the copy through their work; the mutex is never held during render work.
 	ve::BeautySettings beauty_settings() const;
-	void set_normal_roughness_state(int state) { normal_roughness_state_ = state; }
+	void set_normal_roughness_state(int state) { context_.render->set_normal_roughness_state(state); }
+	int get_normal_roughness_state() const { return context_.render->normal_roughness_state(); }
 	void set_beauty_compositor(BeautyCompositor *effect) { beauty_compositor_ = effect; }
 
 	void lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ);
 	// Push the current lod_walk_ page list (with per-page quad counts) into the raster pass.
 	void prepare_lod_raster();
 	void prepare_lod_shadow_raster();
-	RenderingDevice *rd() const;
-	GpuTimings *gpu_timings() { return &gpu_timings_; }
+	RenderingDevice *rd() const; // one-line delegation into RenderOrchestrator
+	GpuTimings *gpu_timings() { return context_.render->gpu_timings(); }
 	ve::WorldBounds world_bounds() const;
 
-	GpuAtlas *atlas() { return atlas_; }
-	MaterialAtlas *material_atlas() { return materials_; }
-	IslandAtlas *islands() { return islands_; }
+	GpuAtlas *atlas() { return context_.render->atlas(); }
+	MaterialAtlas *material_atlas() { return context_.render->materials(); }
+	IslandAtlas *islands() { return context_.render->islands(); }
 	// High-water mark, not a population: the shader masks off bits at or above it and then
 	// tests each remaining slot's descriptor for dim >= 2, so a dead slot below the mark
 	// costs one branch and nothing else. Non-inline: the render thread calls this and must
@@ -381,25 +356,31 @@ public:
 	WorldStreamer *streamer() { return streamer_; }
 	ve::EditLog *edit_log() { return store_->edit_log(); }
 	ve::VolumeSet &volumes() { return store_->volumes(); }
-	RaymarchPass *raymarch_pass() { return raymarch_pass_; }
-	IslandCullPass *island_cull() { return island_cull_; }
-	CompositePass *composite_pass() { return composite_pass_; }
-	DeferredPass *deferred_pass() { return deferred_pass_; }
-	SunShadowPass *sun_shadow_pass() { return sun_shadow_pass_; }
-	InjectPass *inject_pass() { return inject_pass_; }
+	RaymarchPass *raymarch_pass() { return context_.render->raymarch_pass(); }
+	IslandCullPass *island_cull() { return context_.render->island_cull(); }
+	CompositePass *composite_pass() { return context_.render->composite_pass(); }
+	DeferredPass *deferred_pass() { return context_.render->deferred_pass(); }
+	SunShadowPass *sun_shadow_pass() { return context_.render->sun_shadow_pass(); }
+	InjectPass *inject_pass() { return context_.render->inject_pass(); }
 	LodPool *lod_pool() { return lod_pool_; }
-	LodRasterPass *lod_raster_pass() { return lod_raster_pass_; }
-	LodCullPass *lod_cull_pass() { return lod_cull_pass_; }
-	HizPass *hiz_pass() { return hiz_pass_; }
-	GBuffer *gbuffer() { return gbuffer_; }
-	CameraUbo *beauty_camera() { return beauty_camera_; }
-	ContactShadowPass *contact_shadow_pass() { return contact_shadow_pass_; }
-	SsgiPass *ssgi_pass() { return ssgi_pass_; }
-	SsrPass *ssr_pass() { return ssr_pass_; }
-	OutlinePass *outline_pass() { return outline_pass_; }
-	const float *prev_view_proj() const { return prev_view_proj_; }
-	bool has_history() const { return has_history_; }
-	uint32_t beauty_frame() const { return beauty_frame_; }
+	LodRasterPass *lod_raster_pass() { return context_.render->lod_raster_pass(); }
+	LodCullPass *lod_cull_pass() { return context_.render->lod_cull_pass(); }
+	HizPass *hiz_pass() { return context_.render->hiz_pass(); }
+	GBuffer *gbuffer() { return context_.render->gbuffer(); }
+	CameraUbo *beauty_camera() { return context_.render->beauty_camera(); }
+	ContactShadowPass *contact_shadow_pass() { return context_.render->contact_shadow_pass(); }
+	SsgiPass *ssgi_pass() { return context_.render->ssgi_pass(); }
+	SsrPass *ssr_pass() { return context_.render->ssr_pass(); }
+	OutlinePass *outline_pass() { return context_.render->outline_pass(); }
+	// Region/gen passes have no pre-split accessor; added for the debug facade, which
+	// pokes them directly today (Task 12 moves their pointers into RenderOrchestrator).
+	RegionPass *region_pass() { return context_.render->region_pass(); }
+	BrickGenPass *gen_pass() { return context_.render->gen_pass(); }
+	// The debug facade's local-device probe (debug_local_rd).
+	RenderingDevice *local_rd() const { return context_.render->local_rd(); }
+	const float *prev_view_proj() const { return context_.render->prev_view_proj(); }
+	bool has_history() const { return context_.render->has_history(); }
+	uint32_t beauty_frame() const { return context_.render->beauty_frame(); }
 	void finish_beauty_frame(const float view_proj[16]);
 	std::mutex &edit_mutex() { return store_->edit_mutex(); }
 	MeshService *mesh_service() { return mesh_; }

@@ -1,5 +1,6 @@
 #include "voxel_world.h"
 #include "debug/hooks.h"
+#include "render/orchestrator.h"
 #include "render/gpu_atlas.h"
 #include "render/material_atlas.h"
 #include "render/camera_params.h"
@@ -325,6 +326,18 @@ VoxelWorld::VoxelWorld() {
 	// they replace, and context wiring publishes the store from birth.
 	store_ = std::make_unique<WorldStore>(ve::WorldConfig{}, new ve::ProceduralFieldGenerator());
 	context_.store = store_.get();
+	// Task 12: the GPU pass graph + device ownership move into RenderOrchestrator. Created
+	// BEFORE the consolidation coordinator, whose collaborators take addresses of the
+	// orchestrator's atlas/device slots (handles-only; re-read at every use).
+	render_ = std::make_unique<RenderOrchestrator>(RenderOrchestrator::Collaborators{
+			.use_local_device = &use_local_device_,
+			.store = store_.get(),
+			.streamer = &streamer_,
+			.normal_pool_bytes = &normal_pool_bytes_,
+			.last_hiz_readback_was_pending = &last_hiz_readback_was_pending_,
+			.last_hiz_readback_was_drained = &last_hiz_readback_was_drained_,
+	});
+	context_.render = render_.get();
 	// Task 11: the consolidation state machine moves off this class into the coordinator.
 	// It receives ADDRESSES of the fields below (they are created lazily and destroyed
 	// across teardown cycles, so it re-reads them at every use). The store's ConsolidationSink
@@ -332,15 +345,15 @@ VoxelWorld::VoxelWorld() {
 	// adapter half until IslandManager implements that port itself.
 	consolidation_ = std::make_unique<ConsolidationCoordinator>(store_.get(),
 			ConsolidationCoordinator::Collaborators{
-					.atlas = &atlas_,
+					.atlas = context_.render->atlas_slot(),
 					.mesh = &mesh_,
 					.streamer = &streamer_,
 					.lod_tree = &lod_tree_,
 					.lod_mutex = &lod_mutex_,
 					.pending_dirty = &pending_dirty_,
 					.use_local_device = &use_local_device_,
-					.main_rd = &main_rd_,
-					.local_rd = &local_rd_,
+					.main_rd = context_.render->main_rd_slot(),
+					.local_rd = context_.render->local_rd_slot(),
 					.render_lifetime_mutex = &render_lifetime_mutex_,
 					.render_shutting_down = &render_shutting_down_,
 			});
@@ -364,135 +377,39 @@ VoxelWorld::~VoxelWorld() {
 	ve::clear_shader_source_overrides();
 }
 
-bool VoxelWorld::initialize_downsample(RenderingDevice *rd) {
-	teardown_downsample();
-	if (!rd) return false;
-	const String path = ProjectSettings::get_singleton()->globalize_path(
-			"res://shaders/downsample.comp.glsl");
-	const String inc = ProjectSettings::get_singleton()->globalize_path("res://shaders");
-	std::string err;
-	const std::string code = ve::strip_shader_annotations(
-			ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err));
-	if (code.empty()) return false;
-	Ref<RDShaderSource> source;
-	source.instantiate();
-	source->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
-	source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, String(code.c_str()));
-	Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(source);
-	if (!spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE).is_empty())
-		return false;
-	downsample_shader_ = rd->shader_create_from_spirv(spirv);
-	downsample_pipeline_ = rd->compute_pipeline_create(downsample_shader_);
-	Ref<RDSamplerState> sampler;
-	sampler.instantiate();
-	sampler->set_min_filter(RenderingDevice::SAMPLER_FILTER_LINEAR);
-	sampler->set_mag_filter(RenderingDevice::SAMPLER_FILTER_LINEAR);
-	downsample_sampler_ = rd->sampler_create(sampler);
-	if (!downsample_shader_.is_valid() || !downsample_pipeline_.is_valid() ||
-			!downsample_sampler_.is_valid()) {
-		teardown_downsample();
-		return false;
-	}
-	return true;
-}
-
-void VoxelWorld::teardown_downsample() {
-	RenderingDevice *device = rd();
-	if (device) {
-		for (RID *r : {&downsample_uset_, &downsample_pipeline_, &downsample_shader_,
-				&downsample_sampler_}) {
-			if (r->is_valid()) device->free_rid(*r);
-			*r = RID();
-		}
-	}
-	downsample_src_ = downsample_dst_ = RID();
-}
-
-bool VoxelWorld::ensure_downsample_set(RenderingDevice *rd, RID src, RID dst) {
-	if (downsample_uset_.is_valid() && downsample_src_ == src && downsample_dst_ == dst)
-		return true;
-	if (downsample_uset_.is_valid()) rd->free_rid(downsample_uset_);
-	Ref<RDUniform> u0, u1;
-	u0.instantiate(); u1.instantiate();
-	u0->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-	u0->set_binding(0); u0->add_id(downsample_sampler_); u0->add_id(src);
-	u1->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
-	u1->set_binding(1); u1->add_id(dst);
-	downsample_uset_ = rd->uniform_set_create(Array::make(u0, u1), downsample_shader_, 0);
-	if (!downsample_uset_.is_valid()) return false;
-	downsample_src_ = src;
-	downsample_dst_ = dst;
-	return true;
+// Moved verbatim into RenderOrchestrator (Task 12); one-line delegations so the
+// compositor's world->downsample_history() and world->finish_beauty_frame() compile
+// unchanged.
+bool VoxelWorld::downsample_history(RenderingDevice *rd, RID src, GBuffer &gb) {
+	return context_.render->downsample_history(rd, src, gb);
 }
 
 void VoxelWorld::finish_beauty_frame(const float view_proj[16]) {
-	if (view_proj) std::memcpy(prev_view_proj_, view_proj, sizeof(prev_view_proj_));
-	beauty_frame_++;
-}
-
-bool VoxelWorld::downsample_history(RenderingDevice *rd, RID src, GBuffer &gb) {
-	if (!rd || !downsample_pipeline_.is_valid() || !gb.history().is_valid()) return false;
-	const Vector2i half = gb.half_size();
-	if (!ensure_downsample_set(rd, src, gb.history())) return false;
-	PackedByteArray pc;
-	pc.resize(16);
-	int32_t *dims = reinterpret_cast<int32_t *>(pc.ptrw());
-	dims[0] = half.x; dims[1] = half.y; dims[2] = dims[3] = 0;
-	const int64_t list = rd->compute_list_begin();
-	if (list < 0) return false;
-	rd->compute_list_bind_compute_pipeline(list, downsample_pipeline_);
-	rd->compute_list_bind_uniform_set(list, downsample_uset_, 0);
-	rd->compute_list_set_push_constant(list, pc, pc.size());
-	rd->compute_list_dispatch(list, (half.x + 7) / 8, (half.y + 7) / 8, 1);
-	rd->compute_list_end();
-	has_history_ = true;
-	return true;
+	context_.render->finish_beauty_frame(view_proj);
 }
 
 void VoxelWorld::teardown_gpu() {
 	// Passes before the atlas: their uniform sets reference atlas RIDs, and freeing a
 	// texture cascades to referencing sets (M1's documented order). Islands sit between
 	// passes and the atlas pool: RaymarchPass's uniform set references island buffers too.
-	if (composite_pass_) { delete composite_pass_; composite_pass_ = nullptr; }
-	if (inject_pass_) { delete inject_pass_; inject_pass_ = nullptr; }
-	if (deferred_pass_) { delete deferred_pass_; deferred_pass_ = nullptr; }
-	if (sun_shadow_pass_) { delete sun_shadow_pass_; sun_shadow_pass_ = nullptr; }
-	if (hiz_pass_ && gbuffer_) hiz_pass_->release_level0_set();
-	teardown_downsample();
-	if (contact_shadow_pass_) { delete contact_shadow_pass_; contact_shadow_pass_ = nullptr; }
-	if (ssr_pass_) { delete ssr_pass_; ssr_pass_ = nullptr; }
-	if (outline_pass_) { delete outline_pass_; outline_pass_ = nullptr; }
-	if (ssgi_pass_) { delete ssgi_pass_; ssgi_pass_ = nullptr; }
-	if (beauty_camera_) { beauty_camera_->teardown(); delete beauty_camera_; beauty_camera_ = nullptr; }
-	if (gbuffer_) { delete gbuffer_; gbuffer_ = nullptr; }
-	if (raymarch_pass_) { delete raymarch_pass_; raymarch_pass_ = nullptr; }
-	if (lod_raster_pass_) { delete lod_raster_pass_; lod_raster_pass_ = nullptr; }
-	if (lod_cull_pass_) { delete lod_cull_pass_; lod_cull_pass_ = nullptr; }
-	if (hiz_pass_) {
-		hiz_pass_->teardown();
-		last_hiz_readback_was_pending_ = hiz_pass_->readback_was_pending_at_teardown();
-		last_hiz_readback_was_drained_ = hiz_pass_->readback_was_drained_at_teardown();
-		delete hiz_pass_;
-		hiz_pass_ = nullptr;
-	}
-	if (materials_) { delete materials_; materials_ = nullptr; }
-	if (gen_pass_) { delete gen_pass_; gen_pass_ = nullptr; }
-	if (region_pass_) { delete region_pass_; region_pass_ = nullptr; }
+	// The deletion sequence lives in RenderOrchestrator (Task 12), split into the three
+	// halves below so the VoxelWorld-owned statements between them keep their exact
+	// positions in the deallocation order.
+	context_.render->teardown_render_passes();
 	if (streamer_) {
-		streamer_->drain_readbacks(rd());
+		streamer_->drain_readbacks(context_.render->rd());
 		delete streamer_;
 		streamer_ = nullptr;
 	}
 	store_->clear_residency(); // slot assignments are meaningless pre-atlas
-	if (island_cull_) { delete island_cull_; island_cull_ = nullptr; }
-	if (islands_) { delete islands_; islands_ = nullptr; }
+	context_.render->teardown_island_graph();
 	{
 		// island_slot_count() can still be on the render thread during teardown; keep the
 		// high-water mark's write under the same mutex.
 		std::lock_guard<std::mutex> lock(island_mutex_);
 		island_slots_ = 0;
 	}
-	if (atlas_) { delete atlas_; atlas_ = nullptr; }
+	context_.render->teardown_atlas_pool();
 	// The tree holds page indices the pool is about to free, and a stale index would be
 	// handed to the next chunk. Pool first, then tree, then the page map.
 	if (lod_pool_) lod_pool_->teardown();
@@ -500,9 +417,7 @@ void VoxelWorld::teardown_gpu() {
 	lod_pages_of_.clear();
 	lod_page_quads_.clear();
 	lod_overflow_logged_.clear();
-	has_history_ = false;
-	beauty_frame_ = 0;
-	std::memset(prev_view_proj_, 0, sizeof(prev_view_proj_));
+	context_.render->reset_history_state();
 	initialized_ = false;
 }
 
@@ -530,8 +445,9 @@ void VoxelWorld::shutdown_render_resources() {
 			render_lifetime_cv_.wait(lock, [this] { return render_callbacks_ == 0; });
 		}
 	}
-	if (!initialized_ || !rd()) return;
-	if (RenderingServer::get_singleton()->is_on_render_thread() || use_local_device_ || !main_rd_) {
+	if (!initialized_ || !context_.render->rd()) return;
+	if (RenderingServer::get_singleton()->is_on_render_thread() || use_local_device_ ||
+			!context_.render->has_main_device()) {
 		teardown_gpu();
 		return;
 	}
@@ -571,11 +487,9 @@ void VoxelWorld::_exit_tree() {
 	}
 	lod_pages_of_.clear();
 	lod_page_quads_.clear();
-	if (local_rd_) {
-		memdelete(local_rd_);
-		local_rd_ = nullptr;
-	}
-	main_rd_ = nullptr;
+	// Device drop moved verbatim into RenderOrchestrator (Task 12): the owned local
+	// device is deleted, the borrowed main pointer merely forgotten.
+	context_.render->release_devices();
 }
 
 void VoxelWorld::ensure_initialized() {
@@ -584,94 +498,27 @@ void VoxelWorld::ensure_initialized() {
 		if (render_shutting_down_) return;
 	}
 	if (initialized_) return;
-	if (use_local_device_ && !local_rd_) {
-		local_rd_ = RenderingServer::get_singleton()->create_local_rendering_device();
-	} else if (!use_local_device_ && !main_rd_) {
-		main_rd_ = RenderingServer::get_singleton()->get_rendering_device();
-	}
-	RenderingDevice *device = rd();
+	// Device acquisition + the whole GPU graph construction live in RenderOrchestrator
+	// (Task 12), in the exact allocation order this body used. Only the lifetime flag
+	// and the failure routing remain here.
+	RenderingDevice *device = context_.render->acquire_device();
 	if (!device) {
 		UtilityFunctions::printerr("VoxelWorld: no RenderingDevice");
 		return;
 	}
-	atlas_ = new GpuAtlas();
-	GpuAtlasConfig cfg;
-	cfg.atlas_bricks = {store_->config_.atlas_bricks.x, store_->config_.atlas_bricks.y, store_->config_.atlas_bricks.z};
-	cfg.max_region_slots = store_->config_.max_region_slots;
-	cfg.max_brick_jobs = store_->config_.max_brick_jobs;
-	cfg.max_override_bricks = store_->config_.max_override_bricks;
-	cfg.bounds = world_bounds();
-	if (normal_pool_bytes_ > 0) cfg.normal_pool_bytes = normal_pool_bytes_; // test initializer
-	if (!atlas_->initialize(device, cfg)) { delete atlas_; atlas_ = nullptr; return; }
-	islands_ = new IslandAtlas();
-	if (!islands_->initialize(device)) { teardown_gpu(); return; }
-	island_cull_ = new IslandCullPass();
-	if (!island_cull_->initialize(device)) { teardown_gpu(); return; }
-	region_pass_ = new RegionPass();
-	if (!region_pass_->initialize(device, *atlas_)) { teardown_gpu(); return; }
-	gen_pass_ = new BrickGenPass();
-	if (!gen_pass_->initialize(device, *atlas_)) { teardown_gpu(); return; }
-	materials_ = new MaterialAtlas();
-	if (!materials_->initialize(device)) { teardown_gpu(); return; }
-	// The four blocks below are the verbatim construction sequence moved into
-	// WorldStore; their call positions relative to the GPU setup are load-bearing.
-	store_->ensure_edit_log(world_bounds());
-	store_->ensure_overrides(atlas_->overrides().capacity());
-	if (!atlas_->replay_overrides(device, *store_->overrides_, store_->override_tables_)) {
-		UtilityFunctions::printerr("VoxelWorld: override replay into render pool failed");
+	switch (context_.render->ensure_gpu_graph(device)) {
+	case RenderOrchestrator::GpuInitResult::kOk:
+		initialized_ = true;
+		break;
+	case RenderOrchestrator::GpuInitResult::kAtlasFailed:
+		// Only the half-built atlas existed; it deleted itself, exactly as before.
+		break;
+	case RenderOrchestrator::GpuInitResult::kFailed:
+		// A later stage refused; a partial graph exists. Same recovery as the pre-split
+		// body's per-stage teardown_gpu() + return.
 		teardown_gpu();
-		return;
+		break;
 	}
-	store_->ensure_residency(world_bounds());
-	streamer_ = new WorldStreamer();
-	streamer_->initialize(store_->residency_, store_->edit_log_, &store_->edit_mutex(),
-			&store_->pending_edits_, atlas_,
-			region_pass_, gen_pass_, store_.get(), store_->overrides_,
-			&store_->override_tables_);
-	raymarch_pass_ = new RaymarchPass();
-	raymarch_pass_->initialize(device);
-	raymarch_pass_->set_materials(*materials_);
-	composite_pass_ = new CompositePass();
-	composite_pass_->initialize(device);
-	deferred_pass_ = new DeferredPass();
-	deferred_pass_->initialize(device);
-	inject_pass_ = new InjectPass();
-	inject_pass_->initialize(device);
-	gbuffer_ = new GBuffer();
-	beauty_camera_ = new CameraUbo();
-	contact_shadow_pass_ = new ContactShadowPass();
-	contact_shadow_pass_->initialize(device);
-	ssgi_pass_ = new SsgiPass();
-	ssgi_pass_->initialize(device);
-	ssr_pass_ = new SsrPass();
-	ssr_pass_->initialize(device);
-	outline_pass_ = new OutlinePass();
-	outline_pass_->initialize(device);
-	initialize_downsample(device);
-	lod_raster_pass_ = new LodRasterPass();
-	lod_raster_pass_->initialize(device);
-	sun_shadow_pass_ = new SunShadowPass();
-	if (!sun_shadow_pass_->initialize(device)) {
-		UtilityFunctions::printerr("VoxelWorld: sun shadow initialization failed; continuing without "
-				"the world shadow map");
-		delete sun_shadow_pass_;
-		sun_shadow_pass_ = nullptr;
-	}
-	lod_cull_pass_ = new LodCullPass();
-	if (!lod_cull_pass_->initialize(device)) {
-		UtilityFunctions::printerr("VoxelWorld: LoD cull initialization failed; continuing "
-				"without GPU culling (safe fail-soft: draw every candidate page)");
-		delete lod_cull_pass_;
-		lod_cull_pass_ = nullptr;
-	}
-	hiz_pass_ = new HizPass();
-	if (!hiz_pass_->initialize(device)) {
-		UtilityFunctions::printerr("VoxelWorld: HiZ initialization failed; continuing without "
-				"occlusion (safe fail-soft: always visible)");
-		delete hiz_pass_;
-		hiz_pass_ = nullptr;
-	}
-	initialized_ = true;
 }
 
 ve::EditLog::AppendResult VoxelWorld::append_edit(const ve::EditOp &op) {
@@ -736,7 +583,7 @@ ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
 }
 
 RenderingDevice *VoxelWorld::rd() const {
-	return use_local_device_ ? local_rd_ : main_rd_;
+	return context_.render->rd(); // one-line delegation (Task 12)
 }
 
 ve::WorldBounds VoxelWorld::world_bounds() const {
@@ -991,7 +838,7 @@ int VoxelWorld::drain_island_uploads(RenderingDevice *device) {
 		island_descs_dirty_ = false;
 	}
 	for (const int slot : normal_releases) {
-		if (atlas_) atlas_->stored_normals().release_volume(device, slot);
+		if (atlas()) atlas()->stored_normals().release_volume(device, slot);
 	}
 	for (const IslandUpload &u : uploads) {
 		// SDF/material and compact normals land ONCE, in the shared authoritative pools,
@@ -999,24 +846,24 @@ int VoxelWorld::drain_island_uploads(RenderingDevice *device) {
 		// the atlas slot; a field-volume upload follows the identical volume/normal path
 		// without one. A missing/malformed/failed normal payload is fail-soft: the pool
 		// publishes -1 and the shader falls back to differentiating the R8 atlas.
-		if (atlas_ && u.volume_slot >= 0) {
-			if (!atlas_->volumes().upload(device, u.volume_slot, u.data))
+		if (atlas() && u.volume_slot >= 0) {
+			if (!atlas()->volumes().upload(device, u.volume_slot, u.data))
 				UtilityFunctions::printerr("VoxelWorld: field volume upload failed for slot ",
 						u.volume_slot);
-			atlas_->stored_normals().upload_volume(device, u.volume_slot, u.data);
-		} else if (!atlas_ && u.to_island_atlas) {
+			atlas()->stored_normals().upload_volume(device, u.volume_slot, u.data);
+		} else if (!atlas() && u.to_island_atlas) {
 			UtilityFunctions::printerr("VoxelWorld: no GpuAtlas for island upload of slot ",
 					u.volume_slot);
 		}
-		if (u.to_island_atlas && islands_ && u.atlas_slot >= 0 &&
-				!islands_->upload_mip(device, u.atlas_slot, u.data))
+		if (u.to_island_atlas && islands() && u.atlas_slot >= 0 &&
+				!islands()->upload_mip(device, u.atlas_slot, u.data))
 			UtilityFunctions::printerr("VoxelWorld: island mip upload failed for slot ",
 					u.atlas_slot);
 		if (!u.to_island_atlas)
 			debug_field_volume_upload_count_.fetch_add(1, std::memory_order_relaxed);
 	}
-	if (dirty && islands_)
-		islands_->upload_descriptors(device, descs.data(), static_cast<int>(descs.size()));
+	if (dirty && islands())
+		islands()->upload_descriptors(device, descs.data(), static_cast<int>(descs.size()));
 	return static_cast<int>(uploads.size());
 }
 
@@ -1181,7 +1028,7 @@ void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ)
 				if (old_it != lod_pages_of_.end()) {
 					for (int p : old_it->second) lod_page_quads_.erase(p);
 					lod_pool_->release(old_it->second);
-					if (sun_shadow_pass_) sun_shadow_pass_->mark_dirty();
+					if (sun_shadow_pass()) sun_shadow_pass()->mark_dirty();
 					lod_pages_of_.erase(old_it);
 				}
 				lod_tree_->note_empty(r.level, r.coord);
@@ -1210,7 +1057,7 @@ void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ)
 			// A rebuild replaces the old page list. Release the stale pages only once the
 			// new pages are allocated and uploaded, so a refused rebuild keeps the old pages
 			// drawing; after this point the tree points at the new list.
-			if (sun_shadow_pass_) sun_shadow_pass_->mark_dirty();
+			if (sun_shadow_pass()) sun_shadow_pass()->mark_dirty();
 			const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
 			const auto old_it = lod_pages_of_.find(key);
 			if (old_it != lod_pages_of_.end()) {
@@ -1239,7 +1086,7 @@ void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ)
 		if (it == lod_pages_of_.end()) continue;
 		for (int p : it->second) lod_page_quads_.erase(p);
 		lod_pool_->release(it->second);
-		if (sun_shadow_pass_) sun_shadow_pass_->mark_dirty();
+		if (sun_shadow_pass()) sun_shadow_pass()->mark_dirty();
 		lod_pages_of_.erase(it);
 	}
 
@@ -1295,23 +1142,23 @@ void VoxelWorld::prepare_lod_raster() {
 
 void VoxelWorld::prepare_lod_shadow_raster() {
 	std::lock_guard<std::mutex> lock(lod_mutex_);
-	if (!lod_raster_pass_ || !lod_pool_) return;
+	if (!lod_raster_pass() || !lod_pool_) return;
 	std::vector<LodRasterPass::PageDraw> pages;
 	pages.reserve(lod_page_quads_.size());
 	for (const auto &kv : lod_page_quads_)
 		pages.push_back(LodRasterPass::PageDraw{kv.first, kv.second});
-	lod_raster_pass_->set_draw_pages(pages);
+	lod_raster_pass()->set_draw_pages(pages);
 }
 
 void VoxelWorld::prepare_lod_raster_locked() {
-	if (!lod_raster_pass_ || !lod_pool_) return;
+	if (!lod_raster_pass() || !lod_pool_) return;
 	std::vector<ve::LodPageDraw> page_draws;
 	ve::lod_collect_page_draws(lod_walk_.draws, lod_pages_of_, lod_page_quads_, &page_draws);
 	std::vector<LodRasterPass::PageDraw> pages;
 	pages.reserve(page_draws.size());
 	for (const ve::LodPageDraw &pd : page_draws)
 		pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});
-	lod_raster_pass_->set_draw_pages(pages);
+	lod_raster_pass()->set_draw_pages(pages);
 }
 
 
@@ -1430,7 +1277,7 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 bool VoxelWorld::render_probe_pixel(Vector3 origin, Vector3 dir) {
 	ensure_initialized();
 	RenderingDevice *device = rd();
-	if (!initialized_ || !device || !atlas_ || !materials_ || !raymarch_pass_)
+	if (!initialized_ || !device || !atlas() || !material_atlas() || !raymarch_pass())
 		return false;
 	// The probe is a read-only diagnostic: it must not mutate the streamed world.
 	ve::CameraParams cam = ve::CameraParams::looking_at(
@@ -1446,7 +1293,7 @@ bool VoxelWorld::render_probe_pixel(Vector3 origin, Vector3 dir) {
 	const uint32_t flags = ve::pack_flags(beauty_);
 	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!raymarch_pass_->render(device, *atlas_, islands_, RID(), cam, 1, 1,
+	if (!raymarch_pass()->render(device, *atlas(), islands(), RID(), cam, 1, 1,
 			kNoEdit))
 		return false;
 	device->submit();
