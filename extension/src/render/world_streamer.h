@@ -16,7 +16,7 @@
 
 namespace godot {
 
-struct PendingEdit;      // defined in voxel_world.h; here only the pointer type is needed
+struct PendingEdit;      // defined in core/world_store.h; here only the pointer type is needed
 struct OccupancyBlock;   // defined in voxel_world.h; here only the pointer type is needed
 class MeshService;
 

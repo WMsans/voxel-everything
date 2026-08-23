@@ -319,6 +319,12 @@ VoxelWorld::VoxelWorld() {
 	// they replace, and context wiring publishes the store from birth.
 	store_ = std::make_unique<WorldStore>(ve::WorldConfig{});
 	context_.store = store_.get();
+	// Task 8: the edit-append spine lives in WorldStore now. Inject its notification ports
+	// (this adapter forwards to today's island/consolidation logic) and lend it the edit
+	// sequence atomic until Task 9 moves edit_seq into the store. Sinks are never null
+	// from this point on, matching append_edit_locked's unguarded expectations.
+	store_->set_sinks(this, this);
+	store_->set_edit_seq(&edit_seq_);
 }
 
 VoxelWorld::~VoxelWorld() {
@@ -527,7 +533,7 @@ void VoxelWorld::_exit_tree() {
 	// CPU cores survive GPU teardown; deleted here exactly where they were
 	// before the split, in the same residency -> edit log -> overrides order.
 	store_->release_cores();
-	pending_edits_.clear();
+	store_->pending_edits_.clear();
 	overflow_seen_ = 0;
 	if (lod_pool_) {
 		delete lod_pool_;
@@ -592,7 +598,8 @@ void VoxelWorld::ensure_initialized() {
 	}
 	store_->ensure_residency(world_bounds());
 	streamer_ = new WorldStreamer();
-	streamer_->initialize(store_->residency_, store_->edit_log_, &edit_mutex_, &pending_edits_, atlas_,
+	streamer_->initialize(store_->residency_, store_->edit_log_, &store_->edit_mutex(),
+			&store_->pending_edits_, atlas_,
 			region_pass_, gen_pass_, &occupancy_mutex_, &occupancy_inbox_, &edit_seq_, store_->overrides_,
 			&store_->override_tables_);
 	raymarch_pass_ = new RaymarchPass();
@@ -673,30 +680,24 @@ void VoxelWorld::requeue_consolidation_locked(ve::IVec3 region) {
 }
 
 ve::EditLog::AppendResult VoxelWorld::append_edit(const ve::EditOp &op) {
-	std::lock_guard<std::mutex> lock(edit_mutex_);
+	std::lock_guard<std::mutex> lock(store_->edit_mutex());
 	return append_edit_locked(op);
 }
 
 ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
 		bool notify_islands) {
-	if (!store_->edit_log_) return {};
-	ve::EditLog::AppendResult r = store_->edit_log_->append(op);
-	// Queue before the list reaches its hard cap. The bake is asynchronous, so the spare 64
-	// entries absorb edits appended while the worker is in flight.
-	for (const ve::IVec3 &region : r.touched)
-		if (store_->edit_log_->op_count(region) >= ve::kConsolidateAtOps)
-			queue_consolidation(region);
-	// Bump AFTER the append and under the same lock the streamer uses to capture op counts.
-	// If the seq moved before the append, a readback stamped between the bump and the append
-	// would claim edits that are not in the GPU state the readback describes.
-	edit_seq_.fetch_add(1, std::memory_order_relaxed);
+	// The spine (log append, consolidation queueing, seq bump, island notification via the
+	// EditSink port, pending_edits_) runs in WorldStore; the VoxelWorld-owned fan-out below
+	// stays here under the SAME single lock hold, in the same relative order as before the
+	// split.
+	if (!store_->edit_log()) return {};
+	ve::EditLog::AppendResult r = store_->append_edit_locked(op, notify_islands);
 	if (!r.rejected.empty()) {
 		edit_rejections_ += static_cast<int>(r.rejected.size());
 		UtilityFunctions::printerr("VoxelWorld: region op list full, op rejected (",
 				r.rejected[0].x, ", ", r.rejected[0].y, ", ", r.rejected[0].z,
 				") — spec §8 fail-soft");
 	}
-	pending_edits_.push_back({op, r});
 	if (lod_tree_ && !r.touched.empty()) {
 		float lo[3], hi[3];
 		ve::op_world_aabb(op, lo, hi);
@@ -709,14 +710,6 @@ ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
 		std::lock_guard<std::mutex> lock(lod_mutex_);
 		lod_tree_->mark_dirty(lo, hi);
 	}
-	// Connectivity's half of the fan-out. Runs under the append lock; the manager's
-	// pending-window queue is guarded by its own windows_mutex_ (note_edit may be called
-	// from a tool thread), and the seq bump above lets the window know which readback is
-	// "new enough" to act on. A fully rejected op changed no field state, so it must not
-	// enqueue a window: doing so would re-label the same component and retry the rejected
-	// edit forever.
-	if (notify_islands && island_manager_ && !r.touched.empty())
-		island_manager_->note_edit(op, edit_seq_.load(std::memory_order_relaxed));
 	// Collision's half of the fan-out (spec §5: "Fan-out: raymarch set, physics remesh queue,
 	// LoD chain, connectivity"). Queued rather than applied, because this may run on any
 	// thread that owns a tool while ChunkResidency belongs to the main one; physics_tick
@@ -787,7 +780,7 @@ void VoxelWorld::ensure_physics_initialized() {
 	ccfg.max_builds_per_frame = mesh_jobs_per_frame_;
 	chunks_ = new ve::ChunkResidency(ccfg);
 	colliders_ = new ColliderStreamer();
-	colliders_->initialize(chunks_, store_->edit_log_, &edit_mutex_, mesh_, max_collider_chunks_);
+	colliders_->initialize(chunks_, store_->edit_log_, &store_->edit_mutex(), mesh_, max_collider_chunks_);
 	colliders_->set_shape_builds_per_frame(shape_builds_per_frame_);
 	colliders_->set_body_bubble_radius_m(physics_bubble_radius_m_);
 	// Publish the manager under edit_mutex_: append_edit_locked() can be called from a tool
@@ -796,7 +789,7 @@ void VoxelWorld::ensure_physics_initialized() {
 	// order, matching teardown) so the render thread's island_slot_count() sees a stable
 	// pointer.
 	{
-		std::lock_guard<std::mutex> lock(edit_mutex_);
+		std::lock_guard<std::mutex> lock(store_->edit_mutex());
 		std::lock_guard<std::mutex> island_lock(island_mutex_);
 		island_manager_ = new IslandManager();
 		island_manager_->initialize(this);
@@ -805,7 +798,7 @@ void VoxelWorld::ensure_physics_initialized() {
 }
 
 void VoxelWorld::teardown_physics() {
-	std::unique_lock<std::mutex> edit_lock(edit_mutex_);
+	std::unique_lock<std::mutex> edit_lock(store_->edit_mutex());
 	physics_ready_ = false;
 	if (streamer_) streamer_->set_mesh_service(nullptr);
 	for (IslandBody *b : test_bodies_) delete b;
@@ -927,7 +920,7 @@ int VoxelWorld::physics_tick(Vector3 center) {
 	// probe inside update(), which takes edit_mutex_, can never deadlock against an edit.
 	std::vector<std::pair<ve::IVec3, ve::IVec3>> dirty;
 	{
-		std::lock_guard<std::mutex> lock(edit_mutex_);
+		std::lock_guard<std::mutex> lock(store_->edit_mutex());
 		dirty.swap(pending_dirty_);
 	}
 	for (const auto &r : dirty) chunks_->mark_dirty(r.first, r.second);
@@ -1002,7 +995,7 @@ void VoxelWorld::set_physics_bubbles(const std::vector<IslandBody *> &bodies) {
 ve::RayHit VoxelWorld::analytic_raycast_down(const float xz[2]) {
 	ve::RayHit h;
 	if (!store_->edit_log_) return h;
-	std::lock_guard<std::mutex> lock(edit_mutex_);
+	std::lock_guard<std::mutex> lock(store_->edit_mutex());
 	ve::AnalyticGenerator gen;
 	const float o[3] = {xz[0], 200.0f, xz[1]};
 	const float dir[3] = {0.0f, -1.0f, 0.0f};
@@ -1104,7 +1097,7 @@ int VoxelWorld::drain_island_uploads(RenderingDevice *device) {
 void VoxelWorld::gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out) {
 	if (!out) return;
 	out->clear();
-	std::lock_guard<std::mutex> lock(edit_mutex_);
+	std::lock_guard<std::mutex> lock(store_->edit_mutex());
 	if (!store_->edit_log_) return;
 	float lo[3], hi[3];
 	ve::lod_chunk_aabb(level, coord, lo, hi);
@@ -1400,8 +1393,17 @@ void VoxelWorld::prepare_lod_raster_locked() {
 
 
 int VoxelWorld::override_table_for_region(ve::IVec3 region) const {
-	const auto it = store_->override_tables_.find(std::tuple<int, int, int>{region.x, region.y, region.z});
-	return it == store_->override_tables_.end() ? -1 : it->second;
+	return store_->override_table_for_region(region);
+}
+
+void VoxelWorld::on_edit_appended(const ve::EditOp &op, bool notify_islands) {
+	// EditSink adapter (Task 8): called by WorldStore::append_edit_locked with edit_mutex()
+	// held, at exactly the point where this logic used to sit inside append_edit_locked.
+	// WorldStore has already gated on `notify_islands` and on the op changing region field
+	// state; only the manager-presence check remains here. Dies in Phase 3 when
+	// IslandManager implements EditSink directly.
+	if (notify_islands && island_manager_)
+		island_manager_->note_edit(op, edit_seq_.load(std::memory_order_relaxed));
 }
 
 
@@ -1414,7 +1416,7 @@ void VoxelWorld::pump_consolidation() {
 	// consistent state. No worker call below waits for GPU work.
 	std::unique_lock<std::mutex> lifetime(render_lifetime_mutex_);
 	if (render_shutting_down_) return;
-	std::unique_lock<std::mutex> edit_lock(edit_mutex_);
+	std::unique_lock<std::mutex> edit_lock(store_->edit_mutex());
 	if (!mesh_ || !mesh_->is_valid() || !store_->edit_log_ || !store_->overrides_ || !store_->residency_) return;
 
 	const auto reset_transaction = [this]() {
@@ -1717,7 +1719,7 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 	job->override_table = override_table_for_region(
 			ve::WorldBounds::region_of_point(job->origin[0], job->origin[1], job->origin[2]));
 	{
-		std::lock_guard<std::mutex> lock(edit_mutex_);
+		std::lock_guard<std::mutex> lock(store_->edit_mutex());
 		if (!store_->edit_log_) return false;
 		ve::collect_ops_for_aabb(*store_->edit_log_, wlo, whi, &job->ops);
 		float lattice_hi[3] = {job->origin[0] + (job->dim - 1) * job->voxel, job->origin[1] + (job->dim - 1) * job->voxel, job->origin[2] + (job->dim - 1) * job->voxel};

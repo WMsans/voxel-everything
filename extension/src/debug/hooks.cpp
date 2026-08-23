@@ -1859,7 +1859,7 @@ void VoxelDebugHooks::debug_apply_volume_add(int slot, Vector3 origin, float vox
 
 int VoxelDebugHooks::debug_region_op_count(Vector3i region) {
 	if (!world_->store_->edit_log_) return 0;
-	std::lock_guard<std::mutex> lock(world_->edit_mutex_);
+	std::lock_guard<std::mutex> lock(world_->edit_mutex());
 	return world_->store_->edit_log_->op_count({region.x, region.y, region.z});
 }
 
@@ -1873,7 +1873,7 @@ int VoxelDebugHooks::debug_override_used() const {
 
 bool VoxelDebugHooks::debug_fill_override_pool() {
 	world_->ensure_physics_initialized();
-	std::unique_lock<std::mutex> edit_lock(world_->edit_mutex_);
+	std::unique_lock<std::mutex> edit_lock(world_->edit_mutex());
 	if (!world_->atlas_ || !world_->mesh_ || !world_->store_->overrides_ || world_->store_->overrides_->used() != 0) return false;
 	const ve::IVec3 region = world_->world_bounds().origin_regions();
 	const int region_slot = world_->store_->residency_ ? world_->store_->residency_->slot_of(region) : -1;
@@ -1949,7 +1949,7 @@ bool VoxelDebugHooks::debug_fill_override_pool() {
 }
 
 Dictionary VoxelDebugHooks::debug_override_render_state(Vector3i brick) {
-	std::unique_lock<std::mutex> edit_lock(world_->edit_mutex_);
+	std::unique_lock<std::mutex> edit_lock(world_->edit_mutex());
 	Dictionary d;
 	d["cpu_slot"] = -1;
 	d["table"] = -1;
@@ -1999,7 +1999,7 @@ void VoxelDebugHooks::debug_wait_consolidation() {
 	for (;;) {
 		bool in_flight = false;
 		{
-			std::lock_guard<std::mutex> lock(world_->edit_mutex_);
+			std::lock_guard<std::mutex> lock(world_->edit_mutex());
 			in_flight = world_->consolidation_in_flight_;
 		}
 		if (!in_flight || std::chrono::steady_clock::now() >= deadline) return;
@@ -2016,7 +2016,7 @@ void VoxelDebugHooks::debug_pump_consolidation() {
 Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 	Dictionary d;
 	world_->ensure_physics_initialized();
-	std::unique_lock<std::mutex> edit_lock(world_->edit_mutex_);
+	std::unique_lock<std::mutex> edit_lock(world_->edit_mutex());
 	if (!world_->mesh_ || !world_->store_->edit_log_ || !world_->store_->overrides_ || !world_->store_->residency_) return d;
 	const ve::IVec3 r{region.x, region.y, region.z};
 	std::vector<ve::EditOp> ops = world_->store_->edit_log_->ops(r);
@@ -2131,7 +2131,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 
 bool VoxelDebugHooks::debug_consolidate_region(Vector3i region) {
 	world_->ensure_physics_initialized();
-	std::unique_lock<std::mutex> edit_lock(world_->edit_mutex_);
+	std::unique_lock<std::mutex> edit_lock(world_->edit_mutex());
 	const auto refuse = [this]() { world_->consolidation_refusals_++; return false; };
 	if (!world_->mesh_ || !world_->store_->edit_log_ || !world_->store_->overrides_) return refuse();
 	const ve::IVec3 r{region.x, region.y, region.z};
@@ -2490,7 +2490,7 @@ Dictionary VoxelDebugHooks::debug_mesh_lattice_diff(Vector3i chunk) {
 	const ve::IVec3 c{chunk.x, chunk.y, chunk.z};
 	std::vector<ve::EditOp> ops;
 	{
-		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
+		std::lock_guard<std::mutex> lock(world_->edit_mutex());
 		ops = world_->store_->edit_log_->ops(ve::region_of_chunk(c));
 	}
 	MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
@@ -2536,7 +2536,7 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	const ve::IVec3 c{chunk.x, chunk.y, chunk.z};
 	std::vector<ve::EditOp> ops;
 	{
-		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
+		std::lock_guard<std::mutex> lock(world_->edit_mutex());
 		ops = world_->store_->edit_log_->ops(ve::region_of_chunk(c));
 	}
 	MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
@@ -2719,7 +2719,7 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 	job.override_table = world_->override_table_for_region(
 			ve::WorldBounds::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
 	{
-		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
+		std::lock_guard<std::mutex> lock(world_->edit_mutex());
 		ve::collect_ops_for_aabb(*world_->store_->edit_log_, wlo, whi, &job.ops);
 		float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
 		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
@@ -3062,7 +3062,7 @@ bool VoxelDebugHooks::debug_mesh_submit(Array chunks) {
 	std::vector<MeshRequest> requests;
 	requests.reserve(coords.size());
 	{
-		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
+		std::lock_guard<std::mutex> lock(world_->edit_mutex());
 		for (const ve::IVec3 &c : coords)
 			requests.push_back({c, world_->store_->edit_log_->ops(ve::region_of_chunk(c))});
 	}
@@ -3149,7 +3149,7 @@ bool VoxelDebugHooks::debug_extract_submit(int id, Vector3i lo_cell, Vector3i hi
 	job.override_table = world_->override_table_for_region(
 			ve::WorldBounds::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
 	{
-		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
+		std::lock_guard<std::mutex> lock(world_->edit_mutex());
 		ve::collect_ops_for_aabb(*world_->store_->edit_log_, wlo, whi, &job.ops);
 		float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
 		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
@@ -3435,7 +3435,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_normal_probe(Vector3 origin, Vector3 
 	// edits, stored volumes and consolidated overrides are all covered. For a pure
 	// procedural hit this reduces exactly to Task 1's analytic gradient.
 	ve::AnalyticGenerator gen;
-	std::lock_guard<std::mutex> edit_lock(world_->edit_mutex_);
+	std::lock_guard<std::mutex> edit_lock(world_->edit_mutex());
 	for (int y = 0; y < h; y++) {
 		for (int x = 0; x < w; x++) {
 			const int i = y * w + x;
@@ -4562,7 +4562,7 @@ Dictionary VoxelDebugHooks::debug_self_check() {
 	if (rslot >= 0) {
 		std::vector<ve::EditOp> ops_vec;
 		{
-			std::lock_guard<std::mutex> lock(world_->edit_mutex_);
+			std::lock_guard<std::mutex> lock(world_->edit_mutex());
 			if (world_->store_->edit_log_) ops_vec = world_->store_->edit_log_->ops(region);
 		}
 		PackedByteArray ops;
@@ -5016,7 +5016,7 @@ Dictionary VoxelDebugHooks::debug_brick_flags(Vector3i region) {
 
 	std::vector<ve::EditOp> ops;
 	{
-		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
+		std::lock_guard<std::mutex> lock(world_->edit_mutex());
 		ops = world_->store_->edit_log_->ops({region.x, region.y, region.z});
 	}
 	ve::AnalyticGenerator gen;
@@ -5058,7 +5058,7 @@ Dictionary VoxelDebugHooks::debug_brick_flags_after_mark(Vector3i region) {
 	if (rslot < 0) return d;
 	int op_count = 0;
 	{
-		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
+		std::lock_guard<std::mutex> lock(world_->edit_mutex());
 		op_count = static_cast<int>(world_->store_->edit_log_->ops({region.x, region.y, region.z}).size());
 	}
 	const ve::IVec3 lo{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
@@ -5176,7 +5176,7 @@ Dictionary VoxelDebugHooks::debug_occupancy_fallback_diff(Vector3i region) {
 
 	std::vector<ve::EditOp> ops;
 	{
-		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
+		std::lock_guard<std::mutex> lock(world_->edit_mutex());
 		ops = world_->store_->edit_log_->ops({region.x, region.y, region.z});
 	}
 	const ve::IVec3 lo{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
@@ -5240,7 +5240,7 @@ Dictionary VoxelDebugHooks::debug_occupancy_diff(Vector3i region) {
 			table.size() < ve::kRegionBrickCount * 4) return d;
 	std::vector<ve::EditOp> ops;
 	{
-		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
+		std::lock_guard<std::mutex> lock(world_->edit_mutex());
 		ops = world_->store_->edit_log_->ops({region.x, region.y, region.z});
 	}
 	const int32_t *slots = reinterpret_cast<const int32_t *>(table.ptr());
@@ -5272,7 +5272,7 @@ Dictionary VoxelDebugHooks::debug_occupancy_diff(Vector3i region) {
 float VoxelDebugHooks::debug_field_sdf(Vector3 p) {
 	if (!world_->store_->edit_log_) return 1e30f;
 	ve::AnalyticGenerator gen;
-	std::lock_guard<std::mutex> lock(world_->edit_mutex_);
+	std::lock_guard<std::mutex> lock(world_->edit_mutex());
 	const std::vector<ve::EditOp> &ops =
 			world_->store_->edit_log_->ops(ve::WorldBounds::region_of_point(p.x, p.y, p.z));
 	return ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()), p.x, p.y, p.z,
@@ -5283,7 +5283,7 @@ int VoxelDebugHooks::debug_cell_state(Vector3i cell) {
 	if (!world_->store_->edit_log_) return static_cast<int>(ve::kCellUnknown);
 	const ve::IVec3 c{cell.x, cell.y, cell.z};
 	ve::AnalyticGenerator gen;
-	std::lock_guard<std::mutex> lock(world_->edit_mutex_);
+	std::lock_guard<std::mutex> lock(world_->edit_mutex());
 	const std::vector<ve::EditOp> &ops = world_->store_->edit_log_->ops(ve::WorldBounds::region_of_brick(c));
 	return static_cast<int>(ve::cell_state_field(gen, ops.data(),
 			static_cast<int>(ops.size()), c, &world_->store_->volumes_, world_->store_->overrides_));
@@ -5326,7 +5326,7 @@ Dictionary VoxelDebugHooks::debug_stream_stats() {
 	d["overflow_ever"] =
 			world_->overflow_seen_ | static_cast<int>(world_->streamer_->overflow_seen());
 	{
-		std::lock_guard<std::mutex> lock(world_->edit_mutex_);
+		std::lock_guard<std::mutex> lock(world_->edit_mutex());
 		d["override_bricks"] = world_->store_->overrides_ ? world_->store_->overrides_->used() : 0;
 		d["override_capacity"] = world_->store_->overrides_ ? world_->store_->overrides_->capacity() : world_->store_->config_.max_override_bricks;
 		d["consolidations"] = world_->consolidation_count_;
@@ -5375,7 +5375,7 @@ Dictionary VoxelDebugHooks::debug_raycast(Vector3 origin, Vector3 dir) {
 	Dictionary d;
 	d["hit"] = false;
 	if (!world_->store_->edit_log_) return d;
-	std::lock_guard<std::mutex> lock(world_->edit_mutex_);
+	std::lock_guard<std::mutex> lock(world_->edit_mutex());
 	ve::AnalyticGenerator gen;
 	const float o[3] = {origin.x, origin.y, origin.z};
 	const float f[3] = {dir.x, dir.y, dir.z};

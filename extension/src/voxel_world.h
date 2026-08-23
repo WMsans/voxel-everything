@@ -79,12 +79,6 @@ class IslandAtlas;
 class IslandCullPass;
 struct IslandExtractJob;
 
-// One edit drained by the streamer: the op plus the regions its append touched/rejected.
-struct PendingEdit {
-	ve::EditOp op;
-	ve::EditLog::AppendResult result;
-};
-
 // One region's occupancy block on its way from the render thread to the main thread's grid.
 struct OccupancyBlock {
 	ve::IVec3 region{};
@@ -92,8 +86,12 @@ struct OccupancyBlock {
 	std::vector<uint8_t> bytes; // ve::kOccupancyBlockBytes
 };
 
-class VoxelWorld : public Node3D {
+class VoxelWorld : public Node3D, public EditSink, public ConsolidationSink {
 	GDCLASS(VoxelWorld, Node3D)
+	// Task 8 strangler adapter: VoxelWorld satisfies WorldStore's notification ports and
+	// forwards to today's logic. The EditSink half dies when IslandManager implements the
+	// port directly (Phase 3), the ConsolidationSink half when ConsolidationCoordinator
+	// takes over (Task 12).
 	friend class VoxelDebugHooks;
 	friend class BeautyCompositor;
 	friend bool voxel_try_begin_compositor_callback(const NodePath &, VoxelWorld **);
@@ -154,8 +152,6 @@ class VoxelWorld : public Node3D {
 	RID downsample_shader_, downsample_pipeline_, downsample_sampler_, downsample_uset_;
 	RID downsample_src_, downsample_dst_;
 	WorldStreamer *streamer_ = nullptr;
-	std::mutex edit_mutex_;                   // guards the WorldStore data plane + pending_edits_
-	std::vector<PendingEdit> pending_edits_;  // appended by tools, drained by the streamer
 	int overflow_seen_ = 0;                   // sticky OR of frame overflow bits (tests)
 
 	// Consolidation is deliberately one-region-at-a-time. The worker owns the bake; the main
@@ -189,8 +185,12 @@ class VoxelWorld : public Node3D {
 	std::atomic<int64_t> edit_seq_{0};
 	void drain_occupancy();                    // inbox -> grid
 	void pump_consolidation();
-	bool queue_consolidation(ve::IVec3 region); // edit_mutex_ must be held
+	// edit_mutex must be held (ConsolidationSink port satisfied for WorldStore's spine).
+	bool queue_consolidation(ve::IVec3 region) override;
 	void requeue_consolidation_locked(ve::IVec3 region);
+	// EditSink port satisfied for WorldStore's spine; adapter body forwards to today's
+	// island-manager notification.
+	void on_edit_appended(const ve::EditOp &op, bool notify_islands) override;
 	bool render_probe_pixel(Vector3 origin, Vector3 dir);
 
 	// The mesher runs on its own thread and owns its local RenderingDevice there; see
@@ -234,9 +234,9 @@ class VoxelWorld : public Node3D {
 	int lod_builds_per_frame_ = 8;
 	// Guards lod_tree_, lod_walk_, lod_pages_of_, lod_page_quads_, and lod_pool_ state
 	// between the render thread (lod_tick) and main/tool threads (mark_dirty, debug stats).
-	// Lock order is edit_mutex_ -> lod_mutex_: lod_tick never holds lod_mutex_ while it calls
-	// gather_lod_ops (which takes edit_mutex_), so append_edit_locked can safely take
-	// lod_mutex_ while already holding edit_mutex_.
+	// Lock order versus the edit path is restated at its new owner, WorldStore::edit_mutex():
+	// edit_mutex -> LodSystem::mutex() (lod_tick never holds LodSystem::mutex() across
+	// gather_lod_ops, so append_edit_locked can take it while holding edit_mutex).
 	std::mutex lod_mutex_;
 	using LodKey = ve::LodKey;
 	ve::LodTree *lod_tree_ = nullptr;
@@ -417,7 +417,7 @@ public:
 	bool has_history() const { return has_history_; }
 	uint32_t beauty_frame() const { return beauty_frame_; }
 	void finish_beauty_frame(const float view_proj[16]);
-	std::mutex &edit_mutex() { return edit_mutex_; }
+	std::mutex &edit_mutex() { return store_->edit_mutex(); }
 	MeshService *mesh_service() { return mesh_; }
 	// Releases an authoritative volume slot AND queues the render-thread teardown of its
 	// compact-normal allocation. Pinned slots are refused by VolumeSet::release() and keep
@@ -439,18 +439,16 @@ public:
 	// Drained by RaymarchCompositor on the render thread; returns how many landed.
 	int drain_island_uploads(RenderingDevice *device);
 
-	// Tool entry point (VoxelEditTool, Task 14). Main thread; takes edit_mutex_.
+	// Tool entry point (VoxelEditTool, Task 14). Main thread; takes edit_mutex(). One-line
+	// delegation into WorldStore's spine so external callers compile unchanged.
 	ve::EditLog::AppendResult append_edit(const ve::EditOp &op);
-	// Low-level append used by IslandManager to hold edit_mutex_ across a carve/restore
-	// sequence. The caller MUST already hold edit_mutex_().
-	// `notify_islands` is false only for the island manager's own crumble carve: the matter
-	// it removes was already labelled UNANCHORED, so nothing that was holding on can be
-	// loosened by its going, and enqueueing a window would relabel the same neighbourhood
-	// every time a speck of sub-voxel dust is swept up.
-	int override_table_for_region(ve::IVec3 region) const;
-
+	// Low-level append used by IslandManager to hold edit_mutex across a carve/restore
+	// sequence. The caller MUST already hold edit_mutex(). Runs WorldStore's spine, then
+	// applies the VoxelWorld-owned fan-out remainder (rejection stats, LoD dirty marks,
+	// collider remesh queue) under the same single lock hold as before the split.
 	ve::EditLog::AppendResult append_edit_locked(const ve::EditOp &op,
 			bool notify_islands = true);
+	int override_table_for_region(ve::IVec3 region) const;
 
 	// --- Task 8 hooks ---
 	ve::OccupancyGrid &occupancy() { return occupancy_; }
