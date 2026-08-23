@@ -22,7 +22,10 @@
 #include "render/hiz_pass.h"
 #include "render/world_streamer.h"
 #include "render/shader_loader.h"
+#include "render/lod_pool.h"
+#include "lod/lod_tree.h"
 #include "core/world_store.h"
+#include <godot_cpp/classes/dir_access.hpp>
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rd_sampler_state.hpp>
 #include <godot_cpp/classes/rd_shader_source.hpp>
@@ -30,6 +33,7 @@
 #include <godot_cpp/classes/rd_uniform.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/variant/array.hpp>
+#include <godot_cpp/variant/callable.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
@@ -42,6 +46,10 @@ namespace godot {
 RenderOrchestrator::RenderOrchestrator(Collaborators handles) : handles_(handles) {}
 
 RenderingDevice *RenderOrchestrator::acquire_device() {
+	// Guard: main/render-thread use OUTSIDE a frame only. Mid-frame acquisition (e.g.
+	// from a compositor callback) would create/fetch a RenderingDevice under the
+	// renderer's feet; every call site today runs during ensure_initialized()/reload
+	// re-init, before or after the frame's draw lists. Do not call from render work.
 	if (*handles_.use_local_device && !local_rd_) {
 		local_rd_ = RenderingServer::get_singleton()->create_local_rendering_device();
 	} else if (!*handles_.use_local_device && !main_rd_) {
@@ -283,6 +291,174 @@ void RenderOrchestrator::reset_history_state() {
 	has_history_ = false;
 	beauty_frame_ = 0;
 	std::memset(prev_view_proj_, 0, sizeof(prev_view_proj_));
+}
+
+// --- compositor admission/lifetime (moved VERBATIM from VoxelWorld, Task 13) ------
+// Same cv waits/signals and latch semantics as the pre-move bodies; nothing here is
+// a locking change, only a change of which class's members are touched.
+
+bool RenderOrchestrator::try_begin_render_callback() {
+	std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
+	if (render_shutting_down_) return false;
+	render_callbacks_++;
+	return true;
+}
+
+void RenderOrchestrator::end_render_callback() {
+	bool defer_teardown = false;
+	{
+		std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
+		if (render_callbacks_ <= 0) return;
+		if (--render_callbacks_ == 0) {
+			defer_teardown = render_teardown_deferred_;
+			render_teardown_deferred_ = false;
+			render_lifetime_cv_.notify_all();
+		}
+	}
+	// A render-thread caller cannot wait for its own callback guard. Defer destruction until
+	// that guard has released the last callback; no resource is touched after this destructor.
+	if (defer_teardown) shutdown_render_resources_on_render_thread();
+}
+
+void RenderOrchestrator::reopen_admission() {
+	std::lock_guard<std::mutex> lifetime(render_lifetime_mutex_);
+	render_shutting_down_ = false;
+	render_teardown_deferred_ = false;
+}
+
+void RenderOrchestrator::close_admission() {
+	std::lock_guard<std::mutex> lifetime(render_lifetime_mutex_);
+	render_shutting_down_ = true;
+}
+
+bool RenderOrchestrator::shutdown_in_progress() {
+	std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
+	return render_shutting_down_;
+}
+
+void RenderOrchestrator::teardown_gpu() {
+	// Passes before the atlas: their uniform sets reference atlas RIDs, and freeing a
+	// texture cascades to referencing sets (M1's documented order). Islands sit between
+	// passes and the atlas pool: RaymarchPass's uniform set references island buffers too.
+	// The deletion sequence lives in the three teardown_*() halves below; the interleaved
+	// world-owned statements keep their exact positions in the deallocation order via the
+	// Collaborator addresses (Task 13 move -- placement unchanged).
+	teardown_render_passes();
+	if (*handles_.streamer) {
+		(*handles_.streamer)->drain_readbacks(rd());
+		delete *handles_.streamer;
+		*handles_.streamer = nullptr;
+	}
+	handles_.store->clear_residency(); // slot assignments are meaningless pre-atlas
+	teardown_island_graph();
+	{
+		// island_slot_count() can still be on the render thread during teardown; keep the
+		// high-water mark's write under the same mutex.
+		std::lock_guard<std::mutex> lock(*handles_.island_mutex);
+		*handles_.island_slots = 0;
+	}
+	teardown_atlas_pool();
+	// The tree holds page indices the pool is about to free, and a stale index would be
+	// handed to the next chunk. Pool first, then tree, then the page map.
+	if (*handles_.lod_pool) (*handles_.lod_pool)->teardown();
+	if (*handles_.lod_tree) (*handles_.lod_tree)->clear();
+	handles_.lod_pages_of->clear();
+	handles_.lod_page_quads->clear();
+	handles_.lod_overflow_logged->clear();
+	reset_history_state();
+	*handles_.initialized = false;
+}
+
+void RenderOrchestrator::shutdown_render_resources_on_render_thread() {
+	teardown_gpu();
+	{
+		std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
+		gpu_teardown_done_ = true;
+	}
+	gpu_teardown_cv_.notify_all();
+}
+
+void RenderOrchestrator::shutdown_render_resources() {
+	// Close admission before synchronizing or queueing teardown. The admission lock makes
+	// the enabled check and world lookup indivisible from this transition.
+	voxel_compositor_callbacks_shutdown_started(this);
+	{
+		std::unique_lock<std::mutex> lock(render_lifetime_mutex_);
+		const bool on_render_thread = RenderingServer::get_singleton()->is_on_render_thread();
+		if (on_render_thread && render_callbacks_ > 0) {
+			render_teardown_deferred_ = true;
+			return;
+		}
+		if (!on_render_thread) {
+			render_lifetime_cv_.wait(lock, [this] { return render_callbacks_ == 0; });
+		}
+	}
+	if (!*handles_.initialized || !rd()) return;
+	if (RenderingServer::get_singleton()->is_on_render_thread() || *handles_.use_local_device ||
+			!has_main_device()) {
+		teardown_gpu();
+		return;
+	}
+	// Drain the RenderingServer queue first; unlike RenderingDevice::submit/sync this is the
+	// supported global-device synchronization boundary. The actual RD teardown is queued on
+	// the render thread, where HizPass can drain its pending async Callable safely.
+	RenderingServer::get_singleton()->force_sync();
+	{
+		std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
+		gpu_teardown_done_ = false;
+	}
+	RenderingServer::get_singleton()->call_on_render_thread(
+			Callable(handles_.callback_owner, "_shutdown_render_resources_on_render_thread"));
+	std::unique_lock<std::mutex> lock(render_lifetime_mutex_);
+	gpu_teardown_cv_.wait(lock, [this] { return gpu_teardown_done_; });
+}
+
+bool RenderOrchestrator::preflight_shaders(RenderingDevice *rd, String *out_error) {
+	if (!rd) {
+		if (out_error) *out_error = "shader reload pre-flight: no RenderingDevice";
+		return false;
+	}
+	ProjectSettings *ps = ProjectSettings::get_singleton();
+	const String inc = ps->globalize_path("res://shaders");
+	Ref<DirAccess> dir = DirAccess::open("res://shaders");
+	if (dir.is_null()) {
+		if (out_error) *out_error = "shader reload pre-flight: cannot open res://shaders";
+		return false;
+	}
+	dir->list_dir_begin();
+	String file = dir->get_next();
+	bool ok = true;
+	while (!file.is_empty()) {
+		if (!dir->current_is_dir() && file.ends_with(".glsl")) {
+			const String res = "res://shaders/" + file;
+			const String path = ps->globalize_path(res);
+			std::string err;
+			const std::string code = ve::strip_shader_annotations(
+					ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err));
+			if (code.empty()) {
+				if (out_error) *out_error = res + String(": ") + String(err.c_str());
+				ok = false;
+				break;
+			}
+			Ref<RDShaderSource> src;
+			src.instantiate();
+			src->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
+			RenderingDevice::ShaderStage stage = RenderingDevice::SHADER_STAGE_COMPUTE;
+			if (file.ends_with(".vert.glsl")) stage = RenderingDevice::SHADER_STAGE_VERTEX;
+			else if (file.ends_with(".frag.glsl")) stage = RenderingDevice::SHADER_STAGE_FRAGMENT;
+			src->set_stage_source(stage, String(code.c_str()));
+			Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(src);
+			const String compile_err = spirv->get_stage_compile_error(stage);
+			if (!compile_err.is_empty()) {
+				if (out_error) *out_error = res + String(": ") + compile_err;
+				ok = false;
+				break;
+			}
+		}
+		file = dir->get_next();
+	}
+	dir->list_dir_end();
+	return ok;
 }
 
 } // namespace godot

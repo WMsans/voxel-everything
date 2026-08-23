@@ -110,44 +110,30 @@ bool godot::voxel_try_begin_compositor_callback(const NodePath &world_path,
 	return true;
 }
 
-void godot::voxel_compositor_callbacks_ready(VoxelWorld *world) {
+void godot::voxel_compositor_callbacks_ready(RenderOrchestrator *render) {
 	std::lock_guard<std::mutex> admission(g_voxel_compositor_admission_mutex);
-	{
-		std::lock_guard<std::mutex> lifetime(world->render_lifetime_mutex_);
-		world->render_shutting_down_ = false;
-		world->render_teardown_deferred_ = false;
-	}
+	// Same lock order as before the Task 13 move: admission -> render_lifetime_mutex_
+	// (taken inside reopen_admission()).
+	render->reopen_admission();
 	g_voxel_compositor_callbacks_enabled = true;
 }
 
-void godot::voxel_compositor_callbacks_shutdown_started(VoxelWorld *world) {
+void godot::voxel_compositor_callbacks_shutdown_started(RenderOrchestrator *render) {
 	std::lock_guard<std::mutex> admission(g_voxel_compositor_admission_mutex);
 	g_voxel_compositor_callbacks_enabled = false;
-	std::lock_guard<std::mutex> lifetime(world->render_lifetime_mutex_);
-	world->render_shutting_down_ = true;
+	// Same lock order as before the Task 13 move: admission -> render_lifetime_mutex_
+	// (taken inside close_admission()).
+	render->close_admission();
 }
 
+// One-line delegations into RenderOrchestrator (Task 13), which owns the admission
+// counters and the shutdown latches now; bodies moved verbatim.
 bool VoxelWorld::try_begin_render_callback() {
-	std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
-	if (render_shutting_down_) return false;
-	render_callbacks_++;
-	return true;
+	return context_.render->try_begin_render_callback();
 }
 
 void VoxelWorld::end_render_callback() {
-	bool defer_teardown = false;
-	{
-		std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
-		if (render_callbacks_ <= 0) return;
-		if (--render_callbacks_ == 0) {
-			defer_teardown = render_teardown_deferred_;
-			render_teardown_deferred_ = false;
-			render_lifetime_cv_.notify_all();
-		}
-	}
-	// A render-thread caller cannot wait for its own callback guard. Defer destruction until
-	// that guard has released the last callback; no resource is touched after this destructor.
-	if (defer_teardown) shutdown_render_resources_on_render_thread();
+	context_.render->end_render_callback();
 }
 
 void VoxelWorld::_bind_methods() {
@@ -293,7 +279,7 @@ void VoxelWorld::_ready() {
 	hooks();
 	// A scene can be instantiated again after a benchmark/test quit request in the same
 	// process. Reset this world's lifetime state before reopening global callback admission.
-	voxel_compositor_callbacks_ready(this);
+	voxel_compositor_callbacks_ready(context_.render);
 	// Godot only calls _process on a GDExtension node that asks for it.
 	set_process(true);
 }
@@ -336,6 +322,18 @@ VoxelWorld::VoxelWorld() {
 			.normal_pool_bytes = &normal_pool_bytes_,
 			.last_hiz_readback_was_pending = &last_hiz_readback_was_pending_,
 			.last_hiz_readback_was_drained = &last_hiz_readback_was_drained_,
+			// Task 13: teardown interleaving + admission/lifetime handles. callback_owner
+			// is this node as an Object, solely the Callable target for the queued
+			// render-thread teardown; render_ dies with this node, so it cannot dangle.
+			.initialized = &initialized_,
+			.island_mutex = &island_mutex_,
+			.island_slots = &island_slots_,
+			.lod_pool = &lod_pool_,
+			.lod_tree = &lod_tree_,
+			.lod_pages_of = &lod_pages_of_,
+			.lod_page_quads = &lod_page_quads_,
+			.lod_overflow_logged = &lod_overflow_logged_,
+			.callback_owner = this,
 	});
 	context_.render = render_.get();
 	// Task 11: the consolidation state machine moves off this class into the coordinator.
@@ -354,8 +352,10 @@ VoxelWorld::VoxelWorld() {
 					.use_local_device = &use_local_device_,
 					.main_rd = context_.render->main_rd_slot(),
 					.local_rd = context_.render->local_rd_slot(),
-					.render_lifetime_mutex = &render_lifetime_mutex_,
-					.render_shutting_down = &render_shutting_down_,
+					// Task 13: the lifetime mutex/flag moved into RenderOrchestrator; the
+					// coordinator keeps its handles-only view of them.
+					.render_lifetime_mutex = context_.render->render_lifetime_mutex_slot(),
+					.render_shutting_down = context_.render->render_shutting_down_slot(),
 			});
 	context_.consolidation = consolidation_.get();
 	// Task 8: the edit-append spine lives in WorldStore now. Inject its notification ports
@@ -389,80 +389,22 @@ void VoxelWorld::finish_beauty_frame(const float view_proj[16]) {
 }
 
 void VoxelWorld::teardown_gpu() {
-	// Passes before the atlas: their uniform sets reference atlas RIDs, and freeing a
-	// texture cascades to referencing sets (M1's documented order). Islands sit between
-	// passes and the atlas pool: RaymarchPass's uniform set references island buffers too.
-	// The deletion sequence lives in RenderOrchestrator (Task 12), split into the three
-	// halves below so the VoxelWorld-owned statements between them keep their exact
-	// positions in the deallocation order.
-	context_.render->teardown_render_passes();
-	if (streamer_) {
-		streamer_->drain_readbacks(context_.render->rd());
-		delete streamer_;
-		streamer_ = nullptr;
-	}
-	store_->clear_residency(); // slot assignments are meaningless pre-atlas
-	context_.render->teardown_island_graph();
-	{
-		// island_slot_count() can still be on the render thread during teardown; keep the
-		// high-water mark's write under the same mutex.
-		std::lock_guard<std::mutex> lock(island_mutex_);
-		island_slots_ = 0;
-	}
-	context_.render->teardown_atlas_pool();
-	// The tree holds page indices the pool is about to free, and a stale index would be
-	// handed to the next chunk. Pool first, then tree, then the page map.
-	if (lod_pool_) lod_pool_->teardown();
-	if (lod_tree_) lod_tree_->clear();
-	lod_pages_of_.clear();
-	lod_page_quads_.clear();
-	lod_overflow_logged_.clear();
-	context_.render->reset_history_state();
-	initialized_ = false;
+	// Whole method lives in RenderOrchestrator now (Task 13): the three teardown halves
+	// and the interleaved world-owned statements (streamer drain/delete, residency clear,
+	// island high-water mark, LoD pool/tree/page maps) run there via Collaborator
+	// addresses, so the deallocation order is statement-for-statement identical.
+	context_.render->teardown_gpu();
 }
 
 void VoxelWorld::shutdown_render_resources_on_render_thread() {
-	teardown_gpu();
-	{
-		std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
-		gpu_teardown_done_ = true;
-	}
-	gpu_teardown_cv_.notify_all();
+	// ClassDB-bound (see _bind_methods): the render-thread Callable targets this node.
+	context_.render->shutdown_render_resources_on_render_thread();
 }
 
 void VoxelWorld::shutdown_render_resources() {
-	// Close admission before synchronizing or queueing teardown. The admission lock makes
-	// the enabled check and world lookup indivisible from this transition.
-	voxel_compositor_callbacks_shutdown_started(this);
-	{
-		std::unique_lock<std::mutex> lock(render_lifetime_mutex_);
-		const bool on_render_thread = RenderingServer::get_singleton()->is_on_render_thread();
-		if (on_render_thread && render_callbacks_ > 0) {
-			render_teardown_deferred_ = true;
-			return;
-		}
-		if (!on_render_thread) {
-			render_lifetime_cv_.wait(lock, [this] { return render_callbacks_ == 0; });
-		}
-	}
-	if (!initialized_ || !context_.render->rd()) return;
-	if (RenderingServer::get_singleton()->is_on_render_thread() || use_local_device_ ||
-			!context_.render->has_main_device()) {
-		teardown_gpu();
-		return;
-	}
-	// Drain the RenderingServer queue first; unlike RenderingDevice::submit/sync this is the
-	// supported global-device synchronization boundary. The actual RD teardown is queued on
-	// the render thread, where HizPass can drain its pending async Callable safely.
-	RenderingServer::get_singleton()->force_sync();
-	{
-		std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
-		gpu_teardown_done_ = false;
-	}
-	RenderingServer::get_singleton()->call_on_render_thread(
-			Callable(this, "_shutdown_render_resources_on_render_thread"));
-	std::unique_lock<std::mutex> lock(render_lifetime_mutex_);
-	gpu_teardown_cv_.wait(lock, [this] { return gpu_teardown_done_; });
+	// Body moved verbatim into RenderOrchestrator (Task 13); admission close, callback
+	// drain, and the render-thread Callable dispatch sequence are unchanged.
+	context_.render->shutdown_render_resources();
 }
 
 void VoxelWorld::_exit_tree() {
@@ -475,7 +417,7 @@ void VoxelWorld::_exit_tree() {
 	// CPU cores survive GPU teardown; deleted here exactly where they were
 	// before the split, in the same residency -> edit log -> overrides order.
 	store_->release_cores();
-	store_->pending_edits_.clear();
+	store_->pending_edits()->clear();
 	overflow_seen_ = 0;
 	if (lod_pool_) {
 		delete lod_pool_;
@@ -493,10 +435,8 @@ void VoxelWorld::_exit_tree() {
 }
 
 void VoxelWorld::ensure_initialized() {
-	{
-		std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
-		if (render_shutting_down_) return;
-	}
+	// Admission gate moved with the lifetime state (Task 13); same mutex-guarded check.
+	if (context_.render->shutdown_in_progress()) return;
 	if (initialized_) return;
 	// Device acquisition + the whole GPU graph construction live in RenderOrchestrator
 	// (Task 12), in the exact allocation order this body used. Only the lifetime flag
@@ -588,8 +528,8 @@ RenderingDevice *VoxelWorld::rd() const {
 
 ve::WorldBounds VoxelWorld::world_bounds() const {
 	ve::WorldBounds b;
-	b.origin_bricks = {store_->config_.world_origin_bricks.x, store_->config_.world_origin_bricks.y, store_->config_.world_origin_bricks.z};
-	b.size_regions = {store_->config_.world_size_regions.x, store_->config_.world_size_regions.y, store_->config_.world_size_regions.z};
+	b.origin_bricks = {store_->config().world_origin_bricks.x, store_->config().world_origin_bricks.y, store_->config().world_origin_bricks.z};
+	b.size_regions = {store_->config().world_size_regions.x, store_->config().world_size_regions.y, store_->config().world_size_regions.z};
 	return b;
 }
 
@@ -610,17 +550,17 @@ void VoxelWorld::ensure_physics_initialized() {
 	// (voxel_world.h); created through the same WorldStore lazy paths as the
 	// streaming init, so physics-first worlds get identical objects.
 	store_->ensure_edit_log(world_bounds());
-	store_->ensure_overrides(store_->config_.max_override_bricks);
+	store_->ensure_overrides(store_->config().max_override_bricks);
 	mesh_ = new MeshService();
 	MeshPassConfig mcfg;
 	mcfg.max_jobs = mesh_jobs_per_frame_;
-	mcfg.max_override_bricks = store_->overrides_ ? store_->overrides_->capacity() : store_->config_.max_override_bricks;
+	mcfg.max_override_bricks = store_->overrides() ? store_->overrides()->capacity() : store_->config().max_override_bricks;
 	if (!mesh_->start(mcfg)) {
 		delete mesh_;
 		mesh_ = nullptr;
 		return;
 	}
-	if (!mesh_->replay_overrides(*store_->overrides_, store_->override_tables_)) {
+	if (!mesh_->replay_overrides(*store_->overrides(), store_->override_tables())) {
 		mesh_->stop();
 		delete mesh_;
 		mesh_ = nullptr;
@@ -631,8 +571,8 @@ void VoxelWorld::ensure_physics_initialized() {
 	// VolumeSet survive physics teardown, so replay every pinned volume into the new worker;
 	// the preserved island_uploads_ only covers the render device's pool.
 	for (int slot = 0; slot < ve::kMaxVolumes; slot++) {
-		if (!store_->volumes_.pinned(slot)) continue;
-		const ve::VolumeData *d = store_->volumes_.get(slot);
+		if (!store_->volumes().pinned(slot)) continue;
+		const ve::VolumeData *d = store_->volumes().get(slot);
 		if (d) mesh_->submit_volume(slot, *d);
 	}
 	ve::ChunkResidencyConfig ccfg;
@@ -642,7 +582,7 @@ void VoxelWorld::ensure_physics_initialized() {
 	ccfg.max_builds_per_frame = mesh_jobs_per_frame_;
 	chunks_ = new ve::ChunkResidency(ccfg);
 	colliders_ = new ColliderStreamer();
-	colliders_->initialize(chunks_, store_->edit_log_, &store_->edit_mutex(), mesh_, max_collider_chunks_);
+	colliders_->initialize(chunks_, store_->edit_log(), &store_->edit_mutex(), mesh_, max_collider_chunks_);
 	colliders_->set_shape_builds_per_frame(shape_builds_per_frame_);
 	colliders_->set_body_bubble_radius_m(physics_bubble_radius_m_);
 	// Publish the manager under edit_mutex_: append_edit_locked() can be called from a tool
@@ -699,7 +639,7 @@ void VoxelWorld::teardown_physics() {
 		std::vector<IslandUpload> keep;
 		keep.reserve(island_uploads_.size());
 		for (IslandUpload &u : island_uploads_)
-			if (!u.to_island_atlas && store_->volumes_.pinned(u.volume_slot))
+			if (!u.to_island_atlas && store_->volumes().pinned(u.volume_slot))
 				keep.push_back(std::move(u));
 		island_uploads_.swap(keep);
 		island_descs_.clear();
@@ -803,19 +743,19 @@ void VoxelWorld::set_physics_bubbles(const std::vector<IslandBody *> &bodies) {
 
 ve::RayHit VoxelWorld::analytic_raycast_down(const float xz[2]) {
 	ve::RayHit h;
-	if (!store_->edit_log_) return h;
+	if (!store_->edit_log()) return h;
 	std::lock_guard<std::mutex> lock(store_->edit_mutex());
 	// Task 10: through the FieldGenerator seam -- same analytic field, no behavior change.
 	const ve::Generator &gen = store_->generator()->sampler();
 	const float o[3] = {xz[0], 200.0f, xz[1]};
 	const float dir[3] = {0.0f, -1.0f, 0.0f};
-	return ve::raycast(gen, *store_->edit_log_, o, dir, 400.0f, &store_->volumes_, store_->overrides_);
+	return ve::raycast(gen, *store_->edit_log(), o, dir, 400.0f, &store_->volumes(), store_->overrides());
 }
 
 bool VoxelWorld::release_volume_slot(int slot) {
 	// The authoritative copy goes first; only a successful release (never a pinned slot --
 	// a pasted volume-add still names it) queues the GPU-side normal teardown.
-	const bool freed = store_->volumes_.release(slot);
+	const bool freed = store_->volumes().release(slot);
 	if (freed) {
 		std::lock_guard<std::mutex> lock(island_mutex_);
 		pending_normal_releases_.push_back(slot);
@@ -908,7 +848,7 @@ void VoxelWorld::gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::Edit
 	if (!out) return;
 	out->clear();
 	std::lock_guard<std::mutex> lock(store_->edit_mutex());
-	if (!store_->edit_log_) return;
+	if (!store_->edit_log()) return;
 	float lo[3], hi[3];
 	ve::lod_chunk_aabb(level, coord, lo, hi);
 	const float pad = std::max(2.0f * ve::lod_cell_size(level), ve::kLatticeFilterPad);
@@ -916,7 +856,7 @@ void VoxelWorld::gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::Edit
 		lo[a] -= pad;
 		hi[a] += pad;
 	}
-	ve::collect_ops_for_aabb(*store_->edit_log_, lo, hi, out);
+	ve::collect_ops_for_aabb(*store_->edit_log(), lo, hi, out);
 	// M4 errata 1: the flattened cross-region list can exceed the cap. A chronological
 	// prefix is a valid world state; a suffix could apply an add without the subtract that
 	// made room for it.
@@ -958,8 +898,8 @@ void VoxelWorld::lod_fade_band(float *fade_start, float *fade_end) const {
 	// Fall back to the CONFIGURED radius there: the seam then starts where the near field
 	// intends to reach and only tightens if the atlas cannot fund it, instead of jumping
 	// once streaming begins and stranding the chunks the walk built under the old band.
-	float reach = store_->residency_ ? store_->residency_->complete_radius_m() : 0.0f;
-	if (reach <= 0.0f) reach = store_->config_.residency_radius_m;
+	float reach = store_->residency() ? store_->residency()->complete_radius_m() : 0.0f;
+	if (reach <= 0.0f) reach = store_->config().residency_radius_m;
 	ve::lod_fade_band(reach, fade_start, fade_end);
 }
 
@@ -1226,8 +1166,8 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 			ve::WorldBounds::region_of_point(job->origin[0], job->origin[1], job->origin[2]));
 	{
 		std::lock_guard<std::mutex> lock(store_->edit_mutex());
-		if (!store_->edit_log_) return false;
-		ve::collect_ops_for_aabb(*store_->edit_log_, wlo, whi, &job->ops);
+		if (!store_->edit_log()) return false;
+		ve::collect_ops_for_aabb(*store_->edit_log(), wlo, whi, &job->ops);
 		float lattice_hi[3] = {job->origin[0] + (job->dim - 1) * job->voxel, job->origin[1] + (job->dim - 1) * job->voxel, job->origin[2] + (job->dim - 1) * job->voxel};
 		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job->origin[0], job->origin[1], job->origin[2]);
 		ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
@@ -1252,7 +1192,7 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 	// Task 10: through the FieldGenerator seam -- same analytic field, no behavior change.
 	const ve::Generator &gen = store_->generator()->sampler();
 	ve::extract_island_volume(gen, job->ops.data(), static_cast<int>(job->ops.size()),
-			&store_->volumes_, job->origin, job->voxel, job->dim, aabbs.data(),
+			&store_->volumes(), job->origin, job->voxel, job->dim, aabbs.data(),
 			static_cast<int>(boxes->size()), &cpu);
 	*out = std::move(cpu);
 	return true;
@@ -1284,12 +1224,12 @@ bool VoxelWorld::render_probe_pixel(Vector3 origin, Vector3 dir) {
 			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
 	const ve::WorldBounds wb = world_bounds();
 	const ve::IVec3 ro = wb.origin_regions();
-	cam.dims[0] = store_->config_.world_size_regions.x; cam.dims[1] = store_->config_.world_size_regions.y;
-	cam.dims[2] = store_->config_.world_size_regions.z;
+	cam.dims[0] = store_->config().world_size_regions.x; cam.dims[1] = store_->config().world_size_regions.y;
+	cam.dims[2] = store_->config().world_size_regions.z;
 	cam.dims[3] = island_slot_count();
 	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
-	cam.atlas_bricks[0] = store_->config_.atlas_bricks.x; cam.atlas_bricks[1] = store_->config_.atlas_bricks.y;
-	cam.atlas_bricks[2] = store_->config_.atlas_bricks.z;
+	cam.atlas_bricks[0] = store_->config().atlas_bricks.x; cam.atlas_bricks[1] = store_->config().atlas_bricks.y;
+	cam.atlas_bricks[2] = store_->config().atlas_bricks.z;
 	const uint32_t flags = ve::pack_flags(beauty_);
 	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
@@ -1318,53 +1258,7 @@ bool VoxelWorld::render_probe_pixel(Vector3 origin, Vector3 dir) {
 
 
 
-bool VoxelWorld::preflight_shaders(RenderingDevice *rd, String *out_error) {
-	if (!rd) {
-		if (out_error) *out_error = "shader reload pre-flight: no RenderingDevice";
-		return false;
-	}
-	ProjectSettings *ps = ProjectSettings::get_singleton();
-	const String inc = ps->globalize_path("res://shaders");
-	Ref<DirAccess> dir = DirAccess::open("res://shaders");
-	if (dir.is_null()) {
-		if (out_error) *out_error = "shader reload pre-flight: cannot open res://shaders";
-		return false;
-	}
-	dir->list_dir_begin();
-	String file = dir->get_next();
-	bool ok = true;
-	while (!file.is_empty()) {
-		if (!dir->current_is_dir() && file.ends_with(".glsl")) {
-			const String res = "res://shaders/" + file;
-			const String path = ps->globalize_path(res);
-			std::string err;
-			const std::string code = ve::strip_shader_annotations(
-					ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err));
-			if (code.empty()) {
-				if (out_error) *out_error = res + String(": ") + String(err.c_str());
-				ok = false;
-				break;
-			}
-			Ref<RDShaderSource> src;
-			src.instantiate();
-			src->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
-			RenderingDevice::ShaderStage stage = RenderingDevice::SHADER_STAGE_COMPUTE;
-			if (file.ends_with(".vert.glsl")) stage = RenderingDevice::SHADER_STAGE_VERTEX;
-			else if (file.ends_with(".frag.glsl")) stage = RenderingDevice::SHADER_STAGE_FRAGMENT;
-			src->set_stage_source(stage, String(code.c_str()));
-			Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(src);
-			const String compile_err = spirv->get_stage_compile_error(stage);
-			if (!compile_err.is_empty()) {
-				if (out_error) *out_error = res + String(": ") + compile_err;
-				ok = false;
-				break;
-			}
-		}
-		file = dir->get_next();
-	}
-	dir->list_dir_end();
-	return ok;
-}
+// Preflight_shaders moved verbatim into RenderOrchestrator (Task 13).
 
 void VoxelWorld::request_shader_reload() {
 	// A latch, not the work: shaders are compiled and pipelines created on the device that
@@ -1374,10 +1268,7 @@ void VoxelWorld::request_shader_reload() {
 
 void VoxelWorld::pump_shader_reload() {
 	if (!reload_requested_.exchange(false, std::memory_order_acq_rel)) return;
-	{
-		std::lock_guard<std::mutex> lock(render_lifetime_mutex_);
-		if (render_shutting_down_) return;
-	}
+	if (context_.render->shutdown_in_progress()) return; // same mutex-guarded latch check as before the Task 13 move
 	{
 		std::lock_guard<std::mutex> lock(reload_mutex_);
 		reload_count_++;
@@ -1390,7 +1281,7 @@ void VoxelWorld::pump_shader_reload() {
 		return;
 	}
 	String error;
-	if (!preflight_shaders(rd(), &error)) {
+	if (!context_.render->preflight_shaders(rd(), &error)) {
 		// Fail-soft (spec §8): a shader that will not compile must not take down the
 		// pipelines that are already running. Keep the old GPU objects untouched.
 		std::lock_guard<std::mutex> lock(reload_mutex_);

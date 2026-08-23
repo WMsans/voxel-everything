@@ -5,17 +5,30 @@
 // is never globbed there -- see SConstruct).
 //
 // Construction/teardown ORDER of the GPU objects below is load-bearing (the
-// CPU-outlives-GPU invariant): ensure_gpu_graph() and the teardown_*() halves
-// preserve the exact allocation/deallocation sequence VoxelWorld used before
-// the split. Lifetime/admission moves in Phase 4b and reload/beauty in Phase
-// 4c; until then VoxelWorld drives those paths THROUGH this class.
+// CPU-outlives-GPU invariant): ensure_gpu_graph(), teardown_gpu() and the
+// teardown_*() halves preserve the exact allocation/deallocation sequence
+// VoxelWorld used before the split. Compositor admission/lifetime moved here
+// verbatim in Phase 4b (Task 13); reload/beauty snapshot follows in Phase 4c.
 //
 // No VoxelWorld* lives here: collaborators arrive as injected handles/addresses
 // (same rule as ConsolidationCoordinator's Collaborators -- the store/spine
 // objects are created lazily and destroyed across teardown cycles, so their
 // addresses are re-read at every use instead of caching stranded pointers).
+// The single exception is callback_owner (the owning VoxelWorld node as an
+// Object): it exists only as the Callable target for the render-thread teardown
+// dispatch, and cannot dangle because this orchestrator is a member of that
+// node and dies with it.
 #include <godot_cpp/variant/rid.hpp>
+#include <godot_cpp/variant/node_path.hpp>
+#include <godot_cpp/variant/string.hpp>
 
+#include <condition_variable>
+#include <map>
+#include <mutex>
+#include <set>
+#include <vector>
+
+#include "lod/lod_tree.h" // ve::LodKey: teardown clears the world's LoD page maps
 #include "render/gpu_timings.h"
 #include "world/region.h"
 
@@ -44,6 +57,8 @@ class ContactShadowPass;
 class SsgiPass;
 class SsrPass;
 class OutlinePass;
+class LodPool;
+class Object;
 
 class RenderOrchestrator {
 public:
@@ -59,9 +74,42 @@ public:
 		// Teardown captures HiZ's async-readback end state for the debug facade.
 		bool *last_hiz_readback_was_pending = nullptr;
 		bool *last_hiz_readback_was_drained = nullptr;
+		// --- Task 13 (lifetime/admission + teardown interleaving) ---
+		// World-owned flags/state teardown_gpu() touches BETWEEN its three halves
+		// and after them. Addresses only, re-read at every use.
+		bool *initialized = nullptr;        // cleared last by teardown_gpu(), as before
+		std::mutex *island_mutex = nullptr; // guards *island_slots during teardown
+		int *island_slots = nullptr;        // high-water mark reset under *island_mutex
+		LodPool **lod_pool = nullptr;       // pool -> tree -> page maps, post-atlas
+		ve::LodTree **lod_tree = nullptr;
+		std::map<ve::LodKey, std::vector<int>> *lod_pages_of = nullptr;
+		std::map<int, int> *lod_page_quads = nullptr;
+		std::set<ve::LodKey> *lod_overflow_logged = nullptr;
+		// Callable target for the queued render-thread teardown (see class comment).
+		Object *callback_owner = nullptr;
 	};
 
 	explicit RenderOrchestrator(Collaborators handles);
+
+	// --- compositor admission/lifetime (moved VERBATIM from VoxelWorld, Task 13) ---
+	// The lifetime mutex/cv pair below serializes compositor-callback admission against
+	// shutdown exactly as VoxelWorld did: same latch checks, same cv waits/signals, same
+	// deferred-teardown handoff to the render thread. Callers reach these through
+	// VoxelWorld's one-line delegations or the free admission functions.
+	bool try_begin_render_callback();
+	void end_render_callback();
+	// Admission transitions taken by the free admission functions while they hold the
+	// global admission lock (lock order: g_voxel_compositor_admission_mutex ->
+	// render_lifetime_mutex_, unchanged from the pre-move bodies).
+	void reopen_admission();  // voxel_compositor_callbacks_ready()
+	void close_admission();   // voxel_compositor_callbacks_shutdown_started()
+	// ensure_initialized()/pump_shader_reload()'s gate, verbatim: refuse new init/reload
+	// work once shutdown started. Takes render_lifetime_mutex_ for the check, as before.
+	bool shutdown_in_progress();
+	// Addresses consumed by ConsolidationCoordinator's Collaborators (it inspects the
+	// shutting-down flag under this exact mutex from its worker thread).
+	std::mutex *render_lifetime_mutex_slot() { return &render_lifetime_mutex_; }
+	const bool *render_shutting_down_slot() const { return &render_shutting_down_; }
 
 	// Outcome of the GPU-half of ensure_initialized():
 	//   kOk          -- graph complete; caller sets its initialized_ flag.
@@ -140,6 +188,25 @@ public:
 	// state moved here, so the caller invokes this at the same relative position.
 	void reset_history_state();
 
+	// --- shutdown / teardown drivers (moved VERBATIM from VoxelWorld, Task 13) ---
+	// Every GPU object; CPU cores survive. The interleaved world-owned steps (streamer
+	// drain/delete, residency clear, island high-water mark, LoD pool/tree/page maps)
+	// ride along via Collaborator addresses, so the deallocation ORDER is identical to
+	// the pre-split body statement for statement.
+	void teardown_gpu();
+	// Queued onto the render thread by shutdown_render_resources(); signals
+	// gpu_teardown_cv_ when the GPU half is gone. Also runs directly when the caller
+	// already is on the render thread or owns a local device.
+	void shutdown_render_resources_on_render_thread();
+	// Closes compositor admission, drains in-flight callbacks, then tears the GPU graph
+	// down -- on the render thread via Callable(callback_owner, ...) when the main
+	// device is in play, otherwise inline. Exact pre-move sequence preserved.
+	void shutdown_render_resources();
+	// Shader hot-reload pre-flight (spec §8): compiles every res://shaders/*.glsl on
+	// `rd` WITHOUT creating pipelines. A false return leaves out_error set and the
+	// caller keeps the old pipelines. Body moved verbatim from VoxelWorld.
+	bool preflight_shaders(RenderingDevice *rd, String *out_error);
+
 private:
 	ve::WorldBounds world_bounds() const; // store-config projection, as VoxelWorld's
 	bool ensure_downsample_set(RenderingDevice *device, RID src, RID dst);
@@ -174,8 +241,27 @@ private:
 	int normal_roughness_state_ = -1;
 	RID downsample_shader_, downsample_pipeline_, downsample_sampler_, downsample_uset_;
 	RID downsample_src_, downsample_dst_;
+	// --- compositor admission/lifetime state (Task 13, member-for-member from
+	// VoxelWorld; the cv wait/signal sites live in try/end_render_callback and
+	// shutdown_render_resources[_on_render_thread] above) ---
+	mutable std::mutex render_lifetime_mutex_;
+	std::condition_variable render_lifetime_cv_;
+	bool render_shutting_down_ = false;
+	bool render_teardown_deferred_ = false;
+	int render_callbacks_ = 0;
+	std::condition_variable gpu_teardown_cv_;
+	bool gpu_teardown_done_ = false;
 	RenderingDevice *main_rd_ = nullptr;
 	RenderingDevice *local_rd_ = nullptr; // owned when use_local_device_
 };
+
+// Compositor callbacks can outlive the SceneTree during SceneTree::quit(). Admission
+// serializes the enabled check, SceneTree/world lookup, and per-world callback guard.
+// (Declarations live beside the orchestrator because the per-world half of the state
+// moved there in Task 13.)
+class VoxelWorld;
+bool voxel_try_begin_compositor_callback(const NodePath &world_path, VoxelWorld **world);
+void voxel_compositor_callbacks_ready(RenderOrchestrator *render);
+void voxel_compositor_callbacks_shutdown_started(RenderOrchestrator *render);
 
 } // namespace godot
