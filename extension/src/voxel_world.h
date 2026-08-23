@@ -88,11 +88,15 @@ class VoxelWorld : public Node3D, public EditSink {
 	// ConsolidationCoordinator took over (it satisfies the port directly).
 	//
 	// Last remaining friend (Task 13 removed the compositor/admission ones): the debug
-	// facade still pokes ~15 private members directly (store_, beauty snapshot, physics
-	// diagnostics, initialized_, test_bodies_, ...). EXPIRY: this friendship dies with
-	// the plan's final cleanup task (Task 16), which deletes the temporary
-	// promoted-accessor surface and verifies 0 friends remain. Until then it is not
-	// de-friendable without an unbounded accessor dump -- see task-13-report friend table.
+	// facade pokes ~20 private members directly (store_, mesh_, colliders_, chunks_,
+	// island_manager_, initialized_, physics_ready_, test_bodies_, island uploads/desc
+	// state, ...) plus 4 private helpers (drain_occupancy, render_probe_pixel,
+	// gather_lod_ops, extract_component) -- audited at Task 16. JUSTIFICATION: every one
+	// of those accesses is live in debug/hooks.cpp; replacing the friendship would need
+	// either an unbounded public accessor dump on this class or a wholesale rework of the
+	// facade's world_ back-reference. Both are behavior-surface changes outside this
+	// refactor's no-behavior-change guard (spec §8), so the friendship stays until that
+	// dedicated rework. See task-16-report's friend table.
 	friend class VoxelDebugHooks;
 
 	VoxelDebugHooks *debug_hooks_ = nullptr;
@@ -266,7 +270,6 @@ public:
 	void ensure_physics_initialized();
 	void teardown_physics();
 	int physics_tick(Vector3 center); // returns actions taken; Task 7 gives it a body
-	bool is_physics_ready() const { return physics_ready_; }
 	void set_physics_enabled(bool v) { physics_enabled_ = v; }
 	bool get_physics_enabled() const { return physics_enabled_; }
 	void set_physics_center_path(const NodePath &p) { physics_center_path_ = p; }
