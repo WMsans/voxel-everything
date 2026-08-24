@@ -10,7 +10,7 @@ enum class QualityTier { kOff = 0, kLow = 1, kMedium = 2, kHigh = 3 };
 struct BeautySettings {
 	bool ssgi = true;
 	bool ssr = true;
-	bool contact_shadows = true;
+	bool contact_shadows = false;
 	bool outlines = true;
 	bool sun_shadow_map = true;
 	bool glossy_sdf_rays = true;

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://d0d8tf8cj7lwk"
+path="res://.godot/imported/ssao.comp.glsl-d50988d4f776202f89223f332ff80e32.res"
+
+[deps]
+
+source_file="res://shaders/ssao.comp.glsl"
+dest_files=["res://.godot/imported/ssao.comp.glsl-d50988d4f776202f89223f332ff80e32.res"]
+
+[params]
+
