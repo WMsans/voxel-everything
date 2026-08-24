@@ -143,6 +143,8 @@ void VoxelDebugHooks::_bind_methods() {
 			&VoxelDebugHooks::debug_apply_sphere_subtract);
 	ClassDB::bind_method(D_METHOD("debug_apply_sphere_add", "centre", "radius", "material"),
 			&VoxelDebugHooks::debug_apply_sphere_add);
+	ClassDB::bind_method(D_METHOD("debug_apply_sphere_paint", "centre", "radius", "material"),
+			&VoxelDebugHooks::debug_apply_sphere_paint);
 	ClassDB::bind_method(D_METHOD("debug_apply_volume_add", "slot", "origin", "voxel", "dim"),
 			&VoxelDebugHooks::debug_apply_volume_add);
 	ClassDB::bind_method(D_METHOD("debug_island_extract_diff", "lo_cell", "hi_cell"), &VoxelDebugHooks::debug_island_extract_diff);
@@ -1960,6 +1962,18 @@ void VoxelDebugHooks::debug_apply_sphere_add(Vector3 centre, float radius, int m
 	if (!world_->store_->edit_log()) world_->ensure_physics_initialized();
 	ve::EditOp op;
 	op.type = ve::kOpSphereAdd;
+	op.material = static_cast<uint16_t>(material);
+	op.pos[0] = centre.x;
+	op.pos[1] = centre.y;
+	op.pos[2] = centre.z;
+	op.radius = radius;
+	world_->append_edit(op);
+}
+
+void VoxelDebugHooks::debug_apply_sphere_paint(Vector3 centre, float radius, int material) {
+	if (!world_->store_->edit_log()) world_->ensure_physics_initialized();
+	ve::EditOp op;
+	op.type = ve::kOpSpherePaint;
 	op.material = static_cast<uint16_t>(material);
 	op.pos[0] = centre.x;
 	op.pos[1] = centre.y;

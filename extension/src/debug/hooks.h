@@ -360,6 +360,10 @@ public:
 	// procedural CSG-add branch of the source-field normal path.
 	void debug_apply_sphere_add(Vector3 centre, float radius, int material);
 
+	// Recolour existing solid without moving the surface, so a test can compare two
+	// materials over identical geometry. Mirror of VoxelEditTool::apply_sphere_paint.
+	void debug_apply_sphere_paint(Vector3 centre, float radius, int material);
+
 	void debug_apply_volume_add(int slot, Vector3 origin, float voxel, int dim);
 
 	// --- Task 9 hook ---
