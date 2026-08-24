@@ -24,6 +24,11 @@ compositor_effects = [SubResource(1), SubResource(6)]
 background_mode = 4
 ambient_light_source = 3
 ambient_light_energy = 0.4
+glow_enabled = true
+glow_intensity = 0.8
+glow_bloom = 0.1
+glow_hdr_threshold = 1.0
+glow_blend_mode = 1
 
 [sub_resource type="BoxMesh" id="4"]
 size = Vector3(2, 2, 2)

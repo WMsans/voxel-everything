@@ -51,6 +51,18 @@ func test_wheel_changes_radius_within_bounds() -> void:
 		t.adjust_radius(-1)
 	assert_float(float(t.get("radius"))).is_greater_equal(0.5)
 
+# Emission above 1.0 only becomes visible bloom if the Environment asks for it. The engine
+# writes HDR into the colour buffer before Godot's glow stage; this is the other half.
+func test_the_demo_environment_has_glow_enabled() -> void:
+	var scene: PackedScene = load("res://demo/main.tscn")
+	var root: Node = scene.instantiate()
+	var we: WorldEnvironment = root.get_node("WorldEnvironment")
+	assert_bool(we.environment.glow_enabled).override_failure_message(
+		"main.tscn's Environment has glow disabled: emissive materials will not bloom"
+		).is_true()
+	assert_float(we.environment.glow_hdr_threshold).is_greater(0.0)
+	root.free()
+
 func test_help_lists_every_binding_the_demo_uses() -> void:
 	var help := Control.new()
 	help.set_script(HELP_SCRIPT)
