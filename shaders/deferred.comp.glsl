@@ -94,6 +94,37 @@ void main() {
 	// visibility terms. The pass's sky pixels are exactly 1.0, so horizons are untouched.
 	float ao = 1.0;
 	if ((pc.flags.x & BEAUTY_SSAO) != 0u) ao = texture(ssao_tex, uv).r;
-	imageStore(out_lit, px,
-			vec4(cel_shade(g0.rgb, ambient, ndl, ndv, ndh, shadow, ao, g1.w), 1.0));
+	vec3 lit = cel_shade(g0.rgb, ambient, ndl, ndv, ndh, shadow, ao, g1.w);
+
+	// Emission is ADDED after shading, never lit: a glowing surface is its own light source.
+	// The whole block is skipped for any material whose table strength is zero, which is
+	// every material but the emissive ones -- so dull terrain pays one array read.
+	//
+	// The mask is the albedo array's alpha (see MaterialAtlas::pack_layer). It is sampled
+	// here rather than carried through the G-buffer because no G-buffer channel is free,
+	// and widening it would make every pixel pay for a feature one material uses.
+	float glow = mat_glow(mat);
+	if (glow > 0.0) {
+		// This is a compute shader: there is no dFdx. Reconstruct the neighbouring pixels'
+		// world positions from the depth buffer to get the triplanar gradients, the same
+		// way the raymarcher derives them from ray differentials.
+		vec3 wpos_x = wpos, wpos_y = wpos;
+		ivec2 mx = min(px + ivec2(1, 0), size - 1);
+		ivec2 my = min(px + ivec2(0, 1), size - 1);
+		float dx_depth = texelFetch(gb_depth, mx, 0).r;
+		float dy_depth = texelFetch(gb_depth, my, 0).r;
+		if (dx_depth > 0.0) {
+			vec2 nd = ((vec2(mx) + 0.5) / vec2(size)) * 2.0 - 1.0;
+			vec4 hx = pc.inv_view_proj * vec4(nd, dx_depth, 1.0);
+			wpos_x = hx.xyz / (abs(hx.w) < 1e-9 ? 1e-9 : hx.w);
+		}
+		if (dy_depth > 0.0) {
+			vec2 nd = ((vec2(my) + 0.5) / vec2(size)) * 2.0 - 1.0;
+			vec4 hy = pc.inv_view_proj * vec4(nd, dy_depth, 1.0);
+			wpos_y = hy.xyz / (abs(hy.w) < 1e-9 ? 1e-9 : hy.w);
+		}
+		float mask = material_surface(mat, wpos, n, wpos_x - wpos, wpos_y - wpos).a;
+		lit += mat_glow_rgb(mat) * glow * mask;
+	}
+	imageStore(out_lit, px, vec4(lit, 1.0));
 }
