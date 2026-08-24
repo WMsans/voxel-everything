@@ -58,5 +58,5 @@ func test_help_lists_every_binding_the_demo_uses() -> void:
 	_roots.append(help)
 	await get_tree().process_frame
 	var text: String = help.help_text()
-	for key in ["W", "F", "F1", "F2", "F3", "F4", "F5", "F6", "F12", "P", "1", "4", "Wheel"]:
+	for key in ["W", "F", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F12", "P", "1", "4", "Wheel"]:
 		assert_str(text).contains(key)
