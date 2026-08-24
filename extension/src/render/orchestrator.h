@@ -64,6 +64,7 @@ class GBuffer;
 class CameraUbo;
 class ContactShadowPass;
 class SsgiPass;
+class SsaoPass;
 class SsrPass;
 class OutlinePass;
 class LodPool;
@@ -202,6 +203,7 @@ public:
 	CameraUbo *beauty_camera() { return beauty_camera_; }
 	ContactShadowPass *contact_shadow_pass() { return contact_shadow_pass_; }
 	SsgiPass *ssgi_pass() { return ssgi_pass_; }
+	SsaoPass *ssao_pass() { return ssao_pass_; }
 	SsrPass *ssr_pass() { return ssr_pass_; }
 	OutlinePass *outline_pass() { return outline_pass_; }
 	GpuTimings *gpu_timings() { return &gpu_timings_; }
@@ -278,6 +280,7 @@ private:
 	CameraUbo *beauty_camera_ = nullptr;
 	ContactShadowPass *contact_shadow_pass_ = nullptr;
 	SsgiPass *ssgi_pass_ = nullptr;
+	SsaoPass *ssao_pass_ = nullptr;
 	SsrPass *ssr_pass_ = nullptr;
 	OutlinePass *outline_pass_ = nullptr;
 	GpuTimings gpu_timings_;
