@@ -55,4 +55,26 @@ struct Brick {
 uint8_t get_mat_index(const Brick &b, int idx);
 void set_mat_index(Brick &b, int idx, uint8_t v);
 
+// Per-point hardness makes a carve's radius vary with the material at the sample point.
+// That keeps the field's SIGN exactly right, so meshing, occupancy and collision are
+// unaffected -- but it destroys the MAGNITUDE as a distance bound at a material seam: the
+// field reports the distance to the soft material's crater wall while the barely-carved
+// hard lip stands much closer, and shaders/raymarch.comp.glsl steps t += max(d * 0.9, ...)
+// straight through it.
+//
+// clamp_brick_lattice restores the property the tracer needs: after it, no two adjacent
+// lattice samples differ by more than one voxel pitch. It only ever shrinks magnitudes and
+// never flips a sign, so occupancy classification (which compares against encoded zero) is
+// untouched. It works in the ENCODED uint8 space because shaders/brick_gen.comp.glsl
+// mirrors it against an r8 image, and the two must agree byte for byte.
+//
+// The relaxation is monotone min-plus, so its fixed point is unique and independent of the
+// order samples are visited. That is what lets a 256-thread workgroup reproduce this
+// single-threaded loop exactly.
+void clamp_brick_lattice(uint8_t *sdf);
+
+// Iterations to convergence. A magnitude can travel at most kSdfRange before it saturates,
+// in steps of kVoxelSize, so ceil(0.64 / 0.05) = 13 passes suffice from any input.
+inline constexpr int kClampIterations = 13;
+
 } // namespace ve
