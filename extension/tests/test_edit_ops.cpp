@@ -1,7 +1,23 @@
 #include <doctest/doctest.h>
 #include "generator/edit_ops.h"
 #include "world/brick_eval.h"
+#include "world/material_table.h"
 #include <cmath>
+
+namespace {
+
+// The field at a point, given only the material sitting there. This is the unit under
+// test: apply_op's carve must consult the sample's own material.
+float carve_depth(uint16_t material, float distance_from_centre, float radius) {
+	ve::EditOp op{};
+	op.type = ve::kOpSphereSubtract;
+	op.radius = radius;
+	op.pos[0] = op.pos[1] = op.pos[2] = 0.0f;
+	ve::Sample s{-1.0f, material}; // deep solid, so the carve is the winning term
+	return ve::apply_op(s, op, distance_from_centre, 0.0f, 0.0f).sdf;
+}
+
+} // namespace
 
 static ve::EditOp sphere(uint32_t type, float x, float y, float z, float r, uint32_t mat = 0) {
 	ve::EditOp op{};
@@ -17,14 +33,16 @@ TEST_CASE("EditOp is exactly 32 bytes so the GPU pool can mirror it") {
 }
 
 TEST_CASE("sphere subtract carves solid into air and clears its material") {
-	const ve::Sample solid{-1.0f, 2};
+	// grass_01 (hardness 1.0): the sample material must not shrink the carve, so this
+	// stays a pure CSG-arithmetic pin. Hardness itself is covered further below.
+	const ve::Sample solid{-1.0f, 1};
 	const ve::EditOp op = sphere(ve::kOpSphereSubtract, 0, 0, 0, 5.0f);
 	const ve::Sample in = ve::apply_op(solid, op, 0, 0, 0);   // 5 m inside the sphere
 	CHECK(in.sdf == doctest::Approx(5.0f));
 	CHECK(in.material == 0);
 	const ve::Sample out = ve::apply_op(solid, op, 20, 0, 0); // far outside: untouched
 	CHECK(out.sdf == doctest::Approx(-1.0f));
-	CHECK(out.material == 2);
+	CHECK(out.material == 1);
 }
 
 TEST_CASE("sphere add fills air and stamps its own material") {
@@ -51,14 +69,16 @@ TEST_CASE("sphere paint recolours solid only, never changes the surface") {
 }
 
 TEST_CASE("ops apply in order: a later add refills an earlier subtract") {
+	// The add stamps grass_01 (hardness 1.0) so that, in the reversed order, the trailing
+	// subtract still carves at its full radius: this test pins op ORDERING, not hardness.
 	const ve::EditOp ops[2] = {
 		sphere(ve::kOpSphereSubtract, 0, 0, 0, 5.0f),
-		sphere(ve::kOpSphereAdd, 0, 0, 0, 3.0f, 4),
+		sphere(ve::kOpSphereAdd, 0, 0, 0, 3.0f, 1),
 	};
-	const ve::Sample base{-1.0f, 2};
+	const ve::Sample base{-1.0f, 1};
 	const ve::Sample s = ve::apply_ops(base, ops, 2, 0, 0, 0);
 	CHECK(s.sdf == doctest::Approx(-3.0f)); // the add won at the centre
-	CHECK(s.material == 4);
+	CHECK(s.material == 1);
 	// Reversing the order leaves a hole: the subtract runs last.
 	const ve::EditOp rev[2] = {ops[1], ops[0]};
 	CHECK(ve::apply_ops(base, rev, 2, 0, 0, 0).sdf == doctest::Approx(5.0f));
@@ -125,6 +145,36 @@ static void check_range_covers_every_flip(const ve::EditOp &op, float scan_m) {
 			}
 	CHECK(flips > 0); // otherwise the case proves nothing
 	CHECK(escaped == 0);
+}
+
+TEST_CASE("a harder material carves less than a softer one") {
+	// grass_01 is hardness 1.0 and rock is 3.0, so at 0.5 m from a 1 m carve's centre the
+	// grass is air (0.5 < 1.0) and the rock is still solid (0.5 > 1.0/3.0).
+	CHECK(carve_depth(1, 0.5f, 1.0f) > 0.0f);
+	CHECK(carve_depth(2, 0.5f, 1.0f) < 0.0f);
+}
+
+TEST_CASE("hardness 1.0 reproduces the unhardened carve exactly") {
+	REQUIRE(ve::material_hardness(1) == doctest::Approx(1.0f));
+	// A point 0.25 m inside a 1 m carve reads +0.75: the full-radius result.
+	CHECK(carve_depth(1, 0.25f, 1.0f) == doctest::Approx(0.75f));
+}
+
+TEST_CASE("air carves at full radius") {
+	// Material 0 has no hardness entry. Carving air changes nothing visible, but the
+	// evaluator must not divide by a garbage value on the way there.
+	CHECK(carve_depth(0, 0.25f, 1.0f) == doctest::Approx(0.75f));
+}
+
+TEST_CASE("a carve never reaches past its own AABB") {
+	// This is the invariant the hardness >= 1.0 floor exists to protect. op_world_aabb
+	// reports pos +/- radius, and an op reaching outside it is dropped at region borders.
+	for (int i = 0; i < ve::kMaterialCount; i++) {
+		const uint16_t id = static_cast<uint16_t>(i + 1);
+		// Just outside the declared radius: must still be solid for EVERY material.
+		CHECK_MESSAGE(carve_depth(id, 1.001f, 1.0f) < 0.0f,
+				ve::kMaterials[i].name << " carves past op.radius");
+	}
 }
 
 TEST_CASE("the brick range covers every brick the op flips active or inactive") {
