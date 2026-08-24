@@ -1,4 +1,5 @@
 #include "render/material_atlas.h"
+#include "world/material_table.h"
 #include <godot_cpp/classes/file_access.hpp>
 #include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/classes/project_settings.hpp>
@@ -10,15 +11,10 @@
 #include <array>
 #include <cstdio>
 #include <cstring>
-#include <iterator>
 
 using namespace godot;
 
 namespace {
-
-// Index order IS the layer order used by tools/convert_materials.sh. Layer i serves ve
-// material id i + 1; material 0 is air and has no layer.
-const char *kMaterialNames[] = {"grass_01", "rock", "ground_01", "breakstone"};
 
 PackedByteArray load_png(const String &path) {
 	return FileAccess::get_file_as_bytes(path);
@@ -106,7 +102,10 @@ bool MaterialAtlas::initialize(RenderingDevice *rd) {
 
 	TypedArray<PackedByteArray> albedo_data;
 	TypedArray<PackedByteArray> surface_data;
-	const int source_count = static_cast<int>(std::size(kMaterialNames));
+	// The table is authoritative for how many layers have real art; the rest stay flat
+	// error magenta so an out-of-range id is visible rather than undefined.
+	const int source_count = ve::kMaterialCount < kMaterialLayers
+			? ve::kMaterialCount : kMaterialLayers;
 	for (int layer = 0; layer < kMaterialLayers; layer++) {
 		if (layer < source_count) {
 			std::array<Ref<Image>, 5> maps;
@@ -114,8 +113,8 @@ bool MaterialAtlas::initialize(RenderingDevice *rd) {
 					"ambientOcclusion", "height"};
 			for (int m = 0; m < 5; m++) {
 				char rel[256];
-				std::snprintf(rel, sizeof(rel), "res://assets/materials/%02d_%s.png", layer,
-						suffixes[m]);
+				std::snprintf(rel, sizeof(rel), "res://assets/materials/%s_%s.png",
+						ve::kMaterials[layer].asset, suffixes[m]);
 				const String path = ProjectSettings::get_singleton()->globalize_path(rel);
 				PackedByteArray bytes = load_png(path);
 				if (!decode_png(bytes, &maps[m])) {
