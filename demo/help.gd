@@ -11,6 +11,7 @@ const CONTROLS := [
 	["Select tool", "1 Carve   2 Fill   3 Paint   4 Drill"],
 	["Tool radius", "Mouse Wheel"],
 	["Drill (shortcut)", "R"],
+	["Choose material", "M"],
 	["Beauty menu", "F1"],
 	["This help", "F2"],
 	["Raymarch cost view", "F3"],
