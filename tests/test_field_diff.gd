@@ -165,6 +165,16 @@ func test_sphere_paint_matches() -> void:
 	var ops := make_op(OP_PAINT, 2, Vector3(10.0, 49.2, 10.0), 8.0)
 	compare(sample_points(), ops, 1, "paint")
 
+func test_hardness_scaled_subtract_matches() -> void:
+	# The hardness mirror. ve::hardened_radius divides a carve's radius by the material at
+	# the sample point and field.glslh's mat_hardness must agree exactly. The paint lays a
+	# slab of rock (hardness 3.0) across part of the sampled volume first, so the carve that
+	# follows spans two hardnesses -- a mirror that ignored hardness on either side, or that
+	# read a different table, shows up here as an sdf disagreement.
+	var ops := make_op(OP_PAINT, 2, Vector3(6.0, 51.2, 6.0), 8.0)
+	ops.append_array(make_op(OP_SUBTRACT, 0, Vector3(10.0, 51.2, 10.0), 6.0))
+	compare(sample_points(), ops, 2, "hardness")
+
 func test_ordered_op_chain_matches() -> void:
 	# Order matters: an add inside an earlier subtract must refill it on both sides.
 	var ops := make_op(OP_SUBTRACT, 0, Vector3(10.0, 51.2, 10.0), 8.0)

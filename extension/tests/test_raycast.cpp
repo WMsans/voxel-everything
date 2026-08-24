@@ -55,7 +55,10 @@ TEST_CASE("the trace sees edits: a crater moves the hit point down") {
 
 	const ve::RayHit after = ve::raycast(gen, log, o, d, 200.0f);
 	REQUIRE(after.hit);
-	CHECK(after.pos[1] < before.pos[1] - 3.0f); // fell through the crater
+	// Hardness scaling makes the crater shallower where it passes through hard bands
+	// (rock resists the same radius three times as much), so the guaranteed drop is
+	// smaller than the pre-hardness 3.0 m -- but it must still be a real crater.
+	CHECK(after.pos[1] < before.pos[1] - 2.0f); // fell through the crater
 }
 
 TEST_CASE("a ray that starts inside solid reports a hit at its origin") {
