@@ -62,3 +62,11 @@ TEST_CASE("the converter script's material list matches the table") {
 	for (int i = 0; i < ve::kMaterialCount; i++)
 		CHECK(names[i] == ve::kMaterials[i].name);
 }
+
+TEST_CASE("the table fits inside the atlas layer bound") {
+	// kMaterialLayers = 16 (extension/src/render/material_atlas.h). source_count clamps
+	// silently, so an overflowing table would render flat magenta while hardness and glow
+	// stayed live -- silent drift, caught here instead. A static_assert would drag
+	// godot-cpp into the pure native test binary.
+	CHECK(ve::kMaterialCount <= 16);
+}

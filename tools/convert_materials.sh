@@ -12,8 +12,6 @@ DST="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/assets/materials"
 # extension/src/world/material_table.h (the authoritative table). Layer i serves ve material
 # id i + 1; material 0 is air and has no layer. Agreement is enforced by the converter
 # test in extension/tests/test_material_table.cpp.
-# This list must match ve::kMaterials in extension/src/world/material_table.h, in order.
-# extension/tests/test_material_table.cpp asserts it.
 MATERIALS=(grass_01 rock ground_01 breakstone ground_crack_01)
 
 # Materials whose glow mask is derived from the inverted height map: the crevices glow and
