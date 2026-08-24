@@ -2,6 +2,7 @@
 #include "world/brick_clamp.h"
 #include "world/material_table.h"
 #include <cmath>
+#include <cstring>
 
 namespace ve {
 
@@ -26,24 +27,36 @@ uint8_t bound(uint8_t self, uint8_t neighbour) {
 	return d >= lo ? self : encode_sdf(lo);
 }
 
+// One snapshot-Jacobi sweep: every sample's new value is computed from the PREVIOUS
+// iteration's frozen state, so the visiting order cannot influence the result. This is what
+// lets shaders/brick_gen.comp.glsl agree byte for byte with 256 threads racing ahead of each
+// other -- a Gauss-Seidel sweep here would be one arbitrary interleaving the GPU cannot
+// reproduce (Task 7 review: cross-sign coupling is anti-monotone, forward vs reverse sweeps
+// reach genuinely different fixed points on realistic seam fields).
+void jacobi_sweep(uint8_t *sdf, const uint8_t *snap) {
+	const int s = kBrickSdfStride;
+	for (int z = 0; z < s; z++)
+		for (int y = 0; y < s; y++)
+			for (int x = 0; x < s; x++) {
+				const int i = sdf_index(x, y, z);
+				uint8_t v = snap[i];
+				if (x > 0)     v = bound(v, snap[sdf_index(x - 1, y, z)]);
+				if (x + 1 < s) v = bound(v, snap[sdf_index(x + 1, y, z)]);
+				if (y > 0)     v = bound(v, snap[sdf_index(x, y - 1, z)]);
+				if (y + 1 < s) v = bound(v, snap[sdf_index(x, y + 1, z)]);
+				if (z > 0)     v = bound(v, snap[sdf_index(x, y, z - 1)]);
+				if (z + 1 < s) v = bound(v, snap[sdf_index(x, y, z + 1)]);
+				sdf[i] = v;
+			}
+}
+
 } // namespace
 
 void clamp_brick_lattice(uint8_t *sdf) {
-	const int s = kBrickSdfStride;
+	uint8_t snap[kBrickSdfCount];
 	for (int iter = 0; iter < kClampIterations; iter++) {
-		for (int z = 0; z < s; z++)
-			for (int y = 0; y < s; y++)
-				for (int x = 0; x < s; x++) {
-					const int i = sdf_index(x, y, z);
-					uint8_t v = sdf[i];
-					if (x > 0)     v = bound(v, sdf[sdf_index(x - 1, y, z)]);
-					if (x + 1 < s) v = bound(v, sdf[sdf_index(x + 1, y, z)]);
-					if (y > 0)     v = bound(v, sdf[sdf_index(x, y - 1, z)]);
-					if (y + 1 < s) v = bound(v, sdf[sdf_index(x, y + 1, z)]);
-					if (z > 0)     v = bound(v, sdf[sdf_index(x, y, z - 1)]);
-					if (z + 1 < s) v = bound(v, sdf[sdf_index(x, y, z + 1)]);
-					sdf[i] = v;
-				}
+		std::memcpy(snap, sdf, kBrickSdfCount);
+		jacobi_sweep(sdf, snap);
 	}
 }
 

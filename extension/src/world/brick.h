@@ -68,16 +68,22 @@ void set_mat_index(Brick &b, int idx, uint8_t v);
 // untouched. It works in the ENCODED uint8 space because shaders/brick_gen.comp.glsl
 // mirrors it against an r8 image, and the two must agree byte for byte.
 //
-// The relaxation is a monotone pull-toward-zero, so it converges within kClampIterations
-// passes for any input -- but it is deterministic ONLY under a fixed visiting order:
-// cross-sign coupling makes the update anti-monotone in the neighbours, so genuine
-// alternative fixed points exist. A parallel mirror must therefore reproduce this same
-// sweep semantics (or both sides must adopt an order-independent formulation such as
-// snapshot-Jacobi) to agree byte for byte.
+// The relaxation runs as snapshot-Jacobi: every pass computes each sample's new value from
+// the previous pass's frozen state, so the result does not depend on the visiting order.
+// This matters because shaders/brick_gen.comp.glsl mirrors the clamp with 256 threads per
+// brick -- a Gauss-Seidel sweep here would be one arbitrary interleaving that no GPU
+// schedule can reproduce (cross-sign coupling makes the fixed point genuinely
+// order-dependent; see the Task 7 review). It still converges within kClampIterations
+// passes for any input: magnitudes only ever shrink, and Jacobi merely delays each
+// sample's pull by one pass compared to Gauss-Seidel.
 void clamp_brick_lattice(uint8_t *sdf);
 
 // Iterations to convergence. A magnitude can travel at most kSdfRange before it saturates,
-// in steps of kVoxelSize, so ceil(0.64 / 0.05) = 13 passes suffice from any input.
-inline constexpr int kClampIterations = 13;
+// in steps of kVoxelSize, so ceil(0.64 / 0.05) = 13 passes suffice from any input -- but
+// Jacobi reaches each sample one pass later than an in-place sweep would, and the Task 8
+// probe measured 13 passes to a fixed point on the worst inputs it could construct
+// (too-steep ramps, a quantised carve). The shipped count is that observed worst case
+// doubled. shaders/common.glslh mirrors this as CLAMP_ITERATIONS; the two must stay equal.
+inline constexpr int kClampIterations = 26;
 
 } // namespace ve
