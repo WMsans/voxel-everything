@@ -9,6 +9,7 @@ const float SDF_RANGE = 0.64;         // uint8 unorm <-> [-0.64, 0.64]
 const float ACTIVATION_PAD = 0.15;
 const float BRICK_FILTER_PAD = ACTIVATION_PAD + VOXEL_SIZE;
 const float LATTICE_FILTER_PAD = VOXEL_SIZE + SDF_RANGE;
+#include "material_table.glslh"
 const int REGION_BRICKS = 32;
 const float REGION_SIZE = 25.6;       // 32 * 0.8
 const int REGION_BRICK_COUNT = 32768; // 32^3
@@ -44,14 +45,12 @@ uint encode_sdf_byte(float d) {
 // ve::encode_sdf(d).
 float quantise_sdf(float d) { return float(encode_sdf_byte(d)) / 255.0; }
 
+// The far-field and unknown-layer fallback, read from the generated table so it cannot
+// drift from ve::kMaterials. An id with no entry stays error magenta.
 vec3 flat_material_albedo(uint mat_id) {
-	switch (mat_id) {
-		case 1: return vec3(0.36, 0.55, 0.22); // grass
-		case 2: return vec3(0.45, 0.42, 0.40); // rock
-		case 3: return vec3(0.50, 0.35, 0.20); // dirt
-		case 4: return vec3(0.62, 0.60, 0.66); // fill (sphere-add tool)
-		default: return vec3(1.0, 0.0, 1.0);   // error magenta
-	}
+	int i = int(mat_id) - 1;
+	if (i < 0 || i >= MATERIAL_COUNT) return vec3(1.0, 0.0, 1.0);
+	return MAT_FLAT_ALBEDO[i];
 }
 
 vec3 sky_color(vec3 dir) {
