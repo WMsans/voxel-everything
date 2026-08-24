@@ -218,6 +218,10 @@ public:
 
 	// Debug/test facade: all debug_* bindings live here (Phase 1 strangler split).
 	VoxelDebugHooks *hooks();
+
+	// The material registry, for the demo's picker. One dictionary per material, id
+	// ascending. Bound rather than exposed as a property: it is constant for the process.
+	Array material_table() const;
 	// Subsystem wiring (spec §4). Phase-3 consumers (the debug facade) reach the
 	// consolidation coordinator through it instead of through VoxelWorld members.
 	VoxelContext &context() { return context_; }

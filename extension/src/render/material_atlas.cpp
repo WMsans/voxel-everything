@@ -1,4 +1,5 @@
 #include "render/material_atlas.h"
+#include "world/material_table.h"
 #include <godot_cpp/classes/file_access.hpp>
 #include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/classes/project_settings.hpp>
@@ -10,15 +11,10 @@
 #include <array>
 #include <cstdio>
 #include <cstring>
-#include <iterator>
 
 using namespace godot;
 
 namespace {
-
-// Index order IS the layer order used by tools/convert_materials.sh. Layer i serves ve
-// material id i + 1; material 0 is air and has no layer.
-const char *kMaterialNames[] = {"grass_01", "rock", "ground_01", "breakstone"};
 
 PackedByteArray load_png(const String &path) {
 	return FileAccess::get_file_as_bytes(path);
@@ -36,6 +32,11 @@ bool decode_png(const PackedByteArray &bytes, Ref<Image> *out) {
 
 // Builds one 512^2 RGBA8 image with all mips. `albedo` selects which of the two array
 // formats is being packed; the five input images must be decoded RGBA8 512^2.
+//
+// `maps[4]` is the GLOW MASK, not the height map. Height was packed into the albedo
+// array's alpha until this change and read by exactly nothing; the channel now carries
+// per-texel emission. A material with no glow PNG gets a flat 1.0 mask from the caller,
+// so its table glow strength applies uniformly rather than not at all.
 PackedByteArray pack_layer(bool albedo, const std::array<Ref<Image>, 5> &maps) {
 	PackedByteArray data;
 	data.resize(kMaterialTextureSize * kMaterialTextureSize * 4);
@@ -44,22 +45,22 @@ PackedByteArray pack_layer(bool albedo, const std::array<Ref<Image>, 5> &maps) {
 	const PackedByteArray normal = maps[1]->get_data();
 	const PackedByteArray rough = maps[2]->get_data();
 	const PackedByteArray ao = maps[3]->get_data();
-	const PackedByteArray height = maps[4]->get_data();
+	const PackedByteArray glow = maps[4]->get_data();
 	const uint8_t *bp = base.ptr();
 	const uint8_t *np = normal.ptr();
 	const uint8_t *rp = rough.ptr();
 	const uint8_t *ap = ao.ptr();
-	const uint8_t *hp = height.ptr();
+	const uint8_t *gp = glow.ptr();
 	for (int y = 0; y < kMaterialTextureSize; y++) {
 		for (int x = 0; x < kMaterialTextureSize; x++) {
 			const int64_t o = (static_cast<int64_t>(y) * kMaterialTextureSize + x) * 4;
 			uint8_t *p = dst + o;
 			if (albedo) {
-				// albedo <- basecolor RGB, height in A.
+				// albedo <- basecolor RGB, glow mask in A.
 				p[0] = bp[o + 0];
 				p[1] = bp[o + 1];
 				p[2] = bp[o + 2];
-				p[3] = hp[o + 0];
+				p[3] = gp[o + 0];
 			} else {
 				// surface <- normal XY, roughness in B, AO in A.
 				p[0] = np[o + 0];
@@ -82,7 +83,7 @@ PackedByteArray flat_layer(bool albedo) {
 	for (int i = 0; i < kMaterialTextureSize * kMaterialTextureSize; i++) {
 		uint8_t *px = p + i * 4;
 		if (albedo) {
-			px[0] = 255; px[1] = 0; px[2] = 255; px[3] = 0; // error magenta, height 0
+			px[0] = 255; px[1] = 0; px[2] = 255; px[3] = 255; // error magenta, mask 1.0
 		} else {
 			px[0] = 128; px[1] = 128; px[2] = 255; px[3] = 255; // neutral normal/white AO
 		}
@@ -106,23 +107,35 @@ bool MaterialAtlas::initialize(RenderingDevice *rd) {
 
 	TypedArray<PackedByteArray> albedo_data;
 	TypedArray<PackedByteArray> surface_data;
-	const int source_count = static_cast<int>(std::size(kMaterialNames));
+	// The table is authoritative for how many layers have real art; the rest stay flat
+	// error magenta so an out-of-range id is visible rather than undefined.
+	const int source_count = ve::kMaterialCount < kMaterialLayers
+			? ve::kMaterialCount : kMaterialLayers;
 	for (int layer = 0; layer < kMaterialLayers; layer++) {
 		if (layer < source_count) {
 			std::array<Ref<Image>, 5> maps;
 			const char *suffixes[] = {"basecolor", "normal", "roughness",
-					"ambientOcclusion", "height"};
+					"ambientOcclusion", "glow"};
 			for (int m = 0; m < 5; m++) {
 				char rel[256];
-				std::snprintf(rel, sizeof(rel), "res://assets/materials/%02d_%s.png", layer,
-						suffixes[m]);
+				std::snprintf(rel, sizeof(rel), "res://assets/materials/%s_%s.png",
+						ve::kMaterials[layer].asset, suffixes[m]);
 				const String path = ProjectSettings::get_singleton()->globalize_path(rel);
 				PackedByteArray bytes = load_png(path);
-				if (!decode_png(bytes, &maps[m])) {
-					UtilityFunctions::printerr("MaterialAtlas: failed to load ", path);
-					teardown();
-					return false;
+				if (decode_png(bytes, &maps[m])) continue;
+				// The glow mask is the one optional map: a material with no NN_glow.png
+				// packs a flat 1.0 so its table strength applies uniformly. Every other
+				// missing map is a genuine asset error.
+				if (m == 4) {
+					Ref<Image> flat = Image::create_empty(kMaterialTextureSize,
+							kMaterialTextureSize, false, Image::FORMAT_RGBA8);
+					flat->fill(Color(1, 1, 1, 1));
+					maps[m] = flat;
+					continue;
 				}
+				UtilityFunctions::printerr("MaterialAtlas: failed to load ", path);
+				teardown();
+				return false;
 			}
 			albedo_data.push_back(pack_layer(true, maps));
 			surface_data.push_back(pack_layer(false, maps));

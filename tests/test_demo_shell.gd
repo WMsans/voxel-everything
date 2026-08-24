@@ -51,6 +51,34 @@ func test_wheel_changes_radius_within_bounds() -> void:
 		t.adjust_radius(-1)
 	assert_float(float(t.get("radius"))).is_greater_equal(0.5)
 
+# Emission above 1.0 only becomes visible bloom if the Environment asks for it. The engine
+# writes HDR into the colour buffer before Godot's glow stage; this is the other half.
+func test_the_demo_environment_has_glow_enabled() -> void:
+	var scene: PackedScene = load("res://demo/main.tscn")
+	var root: Node = scene.instantiate()
+	var we: WorldEnvironment = root.get_node("WorldEnvironment")
+	assert_bool(we.environment.glow_enabled).override_failure_message(
+		"main.tscn's Environment has glow disabled: emissive materials will not bloom"
+		).is_true()
+	assert_float(we.environment.glow_hdr_threshold).is_greater(0.0)
+	root.free()
+
+func test_the_demo_has_a_material_picker_wired_to_the_edit_tool() -> void:
+	var root: Node = load("res://demo/main.tscn").instantiate()
+	# The scene's exports use absolute paths (/root/Main/...), so the instance only
+	# resolves its world_path/tool_path if it sits at exactly that spot in the tree.
+	root.name = "Main"
+	get_tree().root.add_child(root)
+	_roots.append(root)
+	var picker: Control = root.get_node_or_null("HUD/MaterialPicker")
+	assert_object(picker).override_failure_message(
+		"main.tscn has no HUD/MaterialPicker").is_not_null()
+	assert_bool(picker.tool_path.is_empty()).override_failure_message(
+		"the picker has no tool_path: selecting a material would change nothing"
+		).is_false()
+	assert_object(picker.get_node_or_null(picker.tool_path)).override_failure_message(
+		"the picker's tool_path does not resolve").is_not_null()
+
 func test_help_lists_every_binding_the_demo_uses() -> void:
 	var help := Control.new()
 	help.set_script(HELP_SCRIPT)

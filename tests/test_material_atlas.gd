@@ -52,6 +52,25 @@ func test_the_near_field_gains_texture_detail() -> void:
 		"two points on the same material shaded identically: no texture is being sampled"
 		).is_greater(0.002)
 
+# The albedo array's alpha used to carry a height map that no shader ever read. It now
+# carries the glow mask. A material with no glow PNG packs flat 1.0 so the table's scalar
+# still drives it uniformly -- that fallback is why "glow" and "glow mask" are separable.
+func test_the_glow_mask_lands_in_the_albedo_alpha() -> void:
+	var w := make_world()
+	var d := w.hooks().debug_material_alpha_stats(4) # layer 4 == magma
+	assert_bool(d.has("min")).override_failure_message(
+		"debug_material_alpha_stats returned nothing for layer 4").is_true()
+	# Cracks glow, raised stone does not: the mask must actually vary.
+	assert_float(d["max"] - d["min"]).override_failure_message(
+		"magma's glow mask is flat: the converter did not emit 04_glow.png"
+		).is_greater(0.2)
+
+func test_a_material_without_a_glow_png_packs_a_flat_mask() -> void:
+	var w := make_world()
+	var d := w.hooks().debug_material_alpha_stats(0) # layer 0 == grass_01, no glow art
+	assert_float(d["min"]).is_equal_approx(1.0, 0.02)
+	assert_float(d["max"]).is_equal_approx(1.0, 0.02)
+
 # Sampling must fall back rather than read garbage when a material has no layer.
 func test_an_unknown_material_falls_back_to_flat_albedo() -> void:
 	var w := make_world()

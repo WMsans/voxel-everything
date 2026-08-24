@@ -432,8 +432,13 @@ void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat) {
 		return;
 	}
 
+	// Mirror of ve::apply_op. Only the SUBTRACT branch is hardness-scaled: hardness is a
+	// resistance to being carved, not a property of material being added or painted.
+	// ve::hardened_radius divides by mat_hardness, which is floored at 1.0 so the effective
+	// radius can never exceed op.radius and escape op_world_aabb.
 	float sp = length(p - c) - radius;
 	if (type == OP_SPHERE_SUBTRACT) {
+		sp = length(p - c) - radius / mat_hardness(mat);
 		if (-sp > sdf) { sdf = -sp; if (sdf > 0.0) mat = 0u; }
 	} else if (type == OP_SPHERE_ADD) {
 		if (sp < sdf) { sdf = sp; if (sdf <= 0.0) mat = material; }
@@ -501,6 +506,9 @@ void apply_field_op_gradient(uint index, vec3 p, inout float sdf, inout uint mat
 	}
 	float sp = length(p - c) - radius;
 	if (type == OP_SPHERE_SUBTRACT) {
+		// Hardness-scaled like apply_field_op above; the gradient itself is unchanged, it is
+		// the normalised direction from the centre and does not depend on the radius.
+		sp = length(p - c) - radius / mat_hardness(mat);
 		if (-sp > sdf) {
 			vec3 d = p - c; float len = length(d);
 			vec3 g; bool e;

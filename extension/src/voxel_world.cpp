@@ -45,6 +45,7 @@
 #include "world/brick_eval.h"
 #include "world/brick_flags.h"
 #include "world/brick_mip.h"
+#include "world/material_table.h"
 #include "world/raycast.h"
 #include "shade/oct.h"
 #include "shade/cel.h"
@@ -138,6 +139,7 @@ void VoxelWorld::end_render_callback() {
 
 void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("hooks"), &VoxelWorld::hooks);
+	ClassDB::bind_method(D_METHOD("material_table"), &VoxelWorld::material_table);
 	// Name shared with orchestrator.cpp's render-thread Callable dispatch
 	// (kShutdownRenderResourcesOnRenderThread) so the two sites cannot drift.
 	ClassDB::bind_method(D_METHOD(kShutdownRenderResourcesOnRenderThread),
@@ -269,6 +271,23 @@ VoxelDebugHooks *VoxelWorld::hooks() {
 		debug_hooks_->bind_world(this);
 	}
 	return debug_hooks_;
+}
+
+Array VoxelWorld::material_table() const {
+	Array out;
+	for (int i = 0; i < ve::kMaterialCount; i++) {
+		const ve::MaterialDef &m = ve::kMaterials[i];
+		Dictionary d;
+		d["id"] = i + 1; // material 0 is air; layer i serves id i + 1
+		d["name"] = String(m.name);
+		d["asset"] = String(m.asset);
+		d["hardness"] = m.hardness;
+		d["glow"] = m.glow;
+		d["glow_color"] = Color(m.glow_rgb[0], m.glow_rgb[1], m.glow_rgb[2]);
+		d["albedo"] = Color(m.flat_albedo[0], m.flat_albedo[1], m.flat_albedo[2]);
+		out.push_back(d);
+	}
+	return out;
 }
 
 void VoxelWorld::_process(double delta) {

@@ -1,4 +1,4 @@
-[gd_scene load_steps=18 format=3 uid="uid://dx2akrpw2s62k"]
+[gd_scene load_steps=19 format=3 uid="uid://dx2akrpw2s62k"]
 
 [ext_resource type="Script" path="res://demo/player.gd" id="1"]
 [ext_resource type="Script" path="res://demo/hud.gd" id="2"]
@@ -10,6 +10,7 @@
 [ext_resource type="Script" path="res://demo/dev_tools.gd" id="8"]
 [ext_resource type="Script" path="res://demo/capture.gd" id="9"]
 [ext_resource type="PackedScene" path="res://demo/settings_menu.tscn" id="10"]
+[ext_resource type="PackedScene" path="res://demo/material_picker.tscn" id="11"]
 
 [sub_resource type="RaymarchCompositor" id="1"]
 world_path = NodePath("/root/Main/VoxelWorld")
@@ -24,6 +25,11 @@ compositor_effects = [SubResource(1), SubResource(6)]
 background_mode = 4
 ambient_light_source = 3
 ambient_light_energy = 0.4
+glow_enabled = true
+glow_intensity = 0.8
+glow_bloom = 0.1
+glow_hdr_threshold = 1.0
+glow_blend_mode = 1
 
 [sub_resource type="BoxMesh" id="4"]
 size = Vector3(2, 2, 2)
@@ -109,6 +115,10 @@ world_path = NodePath("/root/Main/VoxelWorld")
 
 [node name="SettingsMenu" parent="HUD" instance=ExtResource("10")]
 world_path = NodePath("/root/Main/VoxelWorld")
+
+[node name="MaterialPicker" parent="HUD" instance=ExtResource("11")]
+world_path = NodePath("/root/Main/VoxelWorld")
+tool_path = NodePath("/root/Main/EditTool")
 
 [node name="Benchmark" type="Node" parent="."]
 script = ExtResource(3)

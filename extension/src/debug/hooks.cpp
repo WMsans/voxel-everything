@@ -143,6 +143,8 @@ void VoxelDebugHooks::_bind_methods() {
 			&VoxelDebugHooks::debug_apply_sphere_subtract);
 	ClassDB::bind_method(D_METHOD("debug_apply_sphere_add", "centre", "radius", "material"),
 			&VoxelDebugHooks::debug_apply_sphere_add);
+	ClassDB::bind_method(D_METHOD("debug_apply_sphere_paint", "centre", "radius", "material"),
+			&VoxelDebugHooks::debug_apply_sphere_paint);
 	ClassDB::bind_method(D_METHOD("debug_apply_volume_add", "slot", "origin", "voxel", "dim"),
 			&VoxelDebugHooks::debug_apply_volume_add);
 	ClassDB::bind_method(D_METHOD("debug_island_extract_diff", "lo_cell", "hi_cell"), &VoxelDebugHooks::debug_island_extract_diff);
@@ -237,6 +239,8 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_deferred_probe", "pos", "fwd", "w", "h", "probe_mode"),
 			&VoxelDebugHooks::debug_deferred_probe);
 	ClassDB::bind_method(D_METHOD("debug_material_atlas_stats"), &VoxelDebugHooks::debug_material_atlas_stats);
+	ClassDB::bind_method(D_METHOD("debug_material_alpha_stats", "layer"),
+			&VoxelDebugHooks::debug_material_alpha_stats);
 	ClassDB::bind_method(D_METHOD("debug_material_probe", "mat", "p", "n"), &VoxelDebugHooks::debug_material_probe);
 	ClassDB::bind_method(D_METHOD("debug_poke_material_normal", "layer"), &VoxelDebugHooks::debug_poke_material_normal);
 	ClassDB::bind_method(D_METHOD("debug_sdf_atlas"), &VoxelDebugHooks::debug_sdf_atlas);
@@ -1958,6 +1962,18 @@ void VoxelDebugHooks::debug_apply_sphere_add(Vector3 centre, float radius, int m
 	if (!world_->store_->edit_log()) world_->ensure_physics_initialized();
 	ve::EditOp op;
 	op.type = ve::kOpSphereAdd;
+	op.material = static_cast<uint16_t>(material);
+	op.pos[0] = centre.x;
+	op.pos[1] = centre.y;
+	op.pos[2] = centre.z;
+	op.radius = radius;
+	world_->append_edit(op);
+}
+
+void VoxelDebugHooks::debug_apply_sphere_paint(Vector3 centre, float radius, int material) {
+	if (!world_->store_->edit_log()) world_->ensure_physics_initialized();
+	ve::EditOp op;
+	op.type = ve::kOpSpherePaint;
 	op.material = static_cast<uint16_t>(material);
 	op.pos[0] = centre.x;
 	op.pos[1] = centre.y;
@@ -4683,6 +4699,28 @@ Dictionary VoxelDebugHooks::debug_material_atlas_stats() {
 	d["mipmaps"] = kMaterialMipmaps;
 	d["albedo_valid"] = world_->material_atlas()->albedo_array().is_valid();
 	d["surface_valid"] = world_->material_atlas()->surface_array().is_valid();
+	return d;
+}
+
+Dictionary VoxelDebugHooks::debug_material_alpha_stats(int layer) {
+	Dictionary d;
+	world_->ensure_initialized();
+	RenderingDevice *device = world_->rd();
+	if (!world_->initialized_ || !device || !world_->material_atlas() ||
+			!world_->material_atlas()->is_valid()) return d;
+	if (layer < 0 || layer >= world_->material_atlas()->layer_count()) return d;
+	const PackedByteArray data =
+			device->texture_get_data(world_->material_atlas()->albedo_array(), layer);
+	const int64_t top = static_cast<int64_t>(kMaterialTextureSize) * kMaterialTextureSize * 4;
+	if (data.size() < top) return d;
+	const uint8_t *p = data.ptr();
+	uint8_t lo = 255, hi = 0;
+	for (int64_t i = 3; i < top; i += 4) { // alpha is every 4th byte
+		if (p[i] < lo) lo = p[i];
+		if (p[i] > hi) hi = p[i];
+	}
+	d["min"] = lo / 255.0f;
+	d["max"] = hi / 255.0f;
 	return d;
 }
 
