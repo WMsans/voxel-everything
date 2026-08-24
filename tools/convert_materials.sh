@@ -8,9 +8,10 @@ set -euo pipefail
 SRC="${1:-/home/jeremy/Development/Unity/RayTraceVoxel/Assets/Textures/terrain_textures_vol2}"
 DST="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/assets/materials"
 
-# Index order IS the texture-array layer order and must match kMaterialNames in
-# extension/src/render/material_atlas.cpp. Layer i serves ve material id i + 1; material 0 is
-# air and has no layer.
+# Index order IS the texture-array layer order and must match ve::kMaterials in
+# extension/src/world/material_table.h (the authoritative table). Layer i serves ve material
+# id i + 1; material 0 is air and has no layer. Agreement is enforced by the converter
+# test in extension/tests/test_material_table.cpp.
 MATERIALS=(grass_01 rock ground_01 breakstone)
 MAPS=(basecolor normal roughness ambientOcclusion height)
 
