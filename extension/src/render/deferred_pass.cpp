@@ -65,7 +65,7 @@ void DeferredPass::teardown() {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
-	for (RID *r : {&dummy_black_, &dummy_far_, &sun_ubo_, &sampler_linear_, &sampler_nearest_}) {
+	for (RID *r : {&dummy_black_, &dummy_far_, &dummy_white_, &sun_ubo_, &sampler_linear_, &sampler_nearest_}) {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
@@ -74,6 +74,7 @@ void DeferredPass::teardown() {
 	key_depth_ = RID();
 	key_lit_ = RID();
 	key_ssgi_ = RID();
+	key_ssao_ = RID();
 	key_sun_ = RID();
 	key_material_albedo_ = RID();
 	key_material_surface_ = RID();
@@ -101,6 +102,11 @@ bool DeferredPass::ensure_dummies(RenderingDevice *rd) {
 	black.resize(8);
 	black.fill(0);
 	dummy_black_ = make_1x1(RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT, black);
+	PackedByteArray white;
+	white.resize(8);
+	// AO = 1 everywhere: a missing SSAO input must leave the ambient term untouched.
+	white.fill(0x3C00); // half float 1.0
+	dummy_white_ = make_1x1(RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT, white);
 	PackedByteArray far;
 	far.resize(4);
 	far.fill(0);
@@ -109,30 +115,35 @@ bool DeferredPass::ensure_dummies(RenderingDevice *rd) {
 	zeros.resize(80);
 	zeros.fill(0);
 	sun_ubo_ = rd->uniform_buffer_create(80, zeros);
-	return dummy_black_.is_valid() && dummy_far_.is_valid() && sun_ubo_.is_valid();
+	return dummy_black_.is_valid() && dummy_far_.is_valid() && dummy_white_.is_valid() && sun_ubo_.is_valid();
 }
 
 bool DeferredPass::ensure_uniform_set(RenderingDevice *rd, GBuffer &gb,
-		const MaterialAtlas &materials, RID ssgi, RID sun_map) {
+		const MaterialAtlas &materials, RID ssgi, RID ssao, RID sun_map) {
 	const RID material_albedo = materials.albedo_array();
 	const RID material_surface = materials.surface_array();
 	const RID material_sampler = materials.sampler();
 	if (uset_.is_valid() && key_albedo_ == gb.albedo() && key_surface_ == gb.surface() &&
 			key_depth_ == gb.depth() && key_lit_ == gb.lit() && key_ssgi_ == ssgi &&
-			key_sun_ == sun_map && key_material_albedo_ == material_albedo &&
+			key_ssao_ == ssao && key_sun_ == sun_map && key_material_albedo_ == material_albedo &&
 			key_material_surface_ == material_surface && key_material_sampler_ == material_sampler)
 		return true;
 	if (uset_.is_valid()) rd->free_rid(uset_);
 	uset_ = RID();
 	Ref<RDUniform> u[10];
 	for (int i = 0; i < 10; i++) u[i].instantiate();
-	const RID textures[5] = {gb.albedo(), gb.surface(), gb.depth(), ssgi, sun_map};
+	const RID textures[6] = {gb.albedo(), gb.surface(), gb.depth(), ssgi, sun_map, ssao};
 	for (int i = 0; i < 5; i++) {
 		u[i]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
 		u[i]->set_binding(i);
 		u[i]->add_id(i < 3 ? sampler_nearest_ : sampler_linear_);
 		u[i]->add_id(textures[i]);
 	}
+	// SSAO lives at binding 7, after the material arrays' reserved slots.
+	u[7]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
+	u[7]->set_binding(7);
+	u[7]->add_id(sampler_nearest_);
+	u[7]->add_id(ssao);
 	u[5]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
 	u[5]->set_binding(5);
 	u[5]->add_id(gb.lit());
@@ -147,7 +158,8 @@ bool DeferredPass::ensure_uniform_set(RenderingDevice *rd, GBuffer &gb,
 	u[9]->set_binding(9);
 	u[9]->add_id(materials.sampler());
 	u[9]->add_id(materials.surface_array());
-	uset_ = rd->uniform_set_create(Array::make(u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[8], u[9]),
+	uset_ = rd->uniform_set_create(
+			Array::make(u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], u[9]),
 			shader_, 0);
 	if (!uset_.is_valid()) return false;
 	key_albedo_ = gb.albedo();
@@ -155,6 +167,7 @@ bool DeferredPass::ensure_uniform_set(RenderingDevice *rd, GBuffer &gb,
 	key_depth_ = gb.depth();
 	key_lit_ = gb.lit();
 	key_ssgi_ = ssgi;
+	key_ssao_ = ssao;
 	key_sun_ = sun_map;
 	key_material_albedo_ = material_albedo;
 	key_material_surface_ = material_surface;
@@ -163,17 +176,19 @@ bool DeferredPass::ensure_uniform_set(RenderingDevice *rd, GBuffer &gb,
 }
 
 bool DeferredPass::render(RenderingDevice *rd, GBuffer &gb, const MaterialAtlas &materials,
-		RID ssgi, RID sun_map, const float sun_view_proj[16], float shadow_texel,
+		RID ssgi, RID ssao, RID sun_map, const float sun_view_proj[16], float shadow_texel,
 		const Params &p) {
 	if (!is_valid() || !gb.is_valid()) return false;
 	if (!ensure_dummies(rd)) return false;
 	const auto t0 = std::chrono::steady_clock::now();
 	uint32_t flags = p.flags;
 	if (!ssgi.is_valid()) flags &= ~ve::kFlagSsgi;
+	if (!ssao.is_valid()) flags &= ~ve::kFlagSsao;
 	if (!sun_map.is_valid()) flags &= ~ve::kFlagSunMap;
 	const RID ssgi_bound = ssgi.is_valid() ? ssgi : dummy_black_;
+	const RID ssao_bound = ssao.is_valid() ? ssao : dummy_white_;
 	const RID sun_bound = sun_map.is_valid() ? sun_map : dummy_far_;
-	if (!ensure_uniform_set(rd, gb, materials, ssgi_bound, sun_bound)) return false;
+	if (!ensure_uniform_set(rd, gb, materials, ssgi_bound, ssao_bound, sun_bound)) return false;
 
 	PackedByteArray ub;
 	ub.resize(80);

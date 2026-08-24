@@ -125,4 +125,5 @@ const uint BEAUTY_OUTLINES = 8u;
 const uint BEAUTY_SUN_MAP = 16u;
 const uint BEAUTY_GLOSSY_RAYS = 32u;
 const uint BEAUTY_RAY_SUN_SHADOW = 64u;
+const uint BEAUTY_SSAO = 256u;
 const uint BEAUTY_COST_VIEW = 128u;

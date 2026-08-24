@@ -49,6 +49,8 @@ public:
 
 	Dictionary debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, int h, int frames);
 
+	Dictionary debug_ssao_probe(Vector3 pos, Vector3 fwd, int w, int h);
+
 	Dictionary debug_ssgi_reprojection_probe(Vector3 previous_pos, Vector3 previous_fwd,
 			Vector3 current_pos, Vector3 current_fwd, int w, int h);
 

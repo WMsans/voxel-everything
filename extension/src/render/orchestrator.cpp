@@ -14,6 +14,7 @@
 #include "render/beauty_camera.h"
 #include "render/contact_shadow_pass.h"
 #include "render/ssgi_pass.h"
+#include "render/ssao_pass.h"
 #include "render/ssr_pass.h"
 #include "render/outline_pass.h"
 #include "render/lod_raster_pass.h"
@@ -212,6 +213,8 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 	contact_shadow_pass_->initialize(device);
 	ssgi_pass_ = new SsgiPass();
 	ssgi_pass_->initialize(device);
+	ssao_pass_ = new SsaoPass();
+	ssao_pass_->initialize(device);
 	ssr_pass_ = new SsrPass();
 	ssr_pass_->initialize(device);
 	outline_pass_ = new OutlinePass();
@@ -257,6 +260,7 @@ void RenderOrchestrator::teardown_render_passes() {
 	if (ssr_pass_) { delete ssr_pass_; ssr_pass_ = nullptr; }
 	if (outline_pass_) { delete outline_pass_; outline_pass_ = nullptr; }
 	if (ssgi_pass_) { delete ssgi_pass_; ssgi_pass_ = nullptr; }
+	if (ssao_pass_) { delete ssao_pass_; ssao_pass_ = nullptr; }
 	if (beauty_camera_) { beauty_camera_->teardown(); delete beauty_camera_; beauty_camera_ = nullptr; }
 	if (gbuffer_) { delete gbuffer_; gbuffer_ = nullptr; }
 	if (raymarch_pass_) { delete raymarch_pass_; raymarch_pass_ = nullptr; }
@@ -469,6 +473,7 @@ bool *beauty_field(ve::BeautySettings &s, const String &name) {
 	if (name == "sun_shadow_map") return &s.sun_shadow_map;
 	if (name == "glossy_sdf_rays") return &s.glossy_sdf_rays;
 	if (name == "raymarched_sun_shadow") return &s.raymarched_sun_shadow;
+	if (name == "ssao") return &s.ssao;
 	if (name == "cost_view") return &s.cost_view;
 	return nullptr;
 }

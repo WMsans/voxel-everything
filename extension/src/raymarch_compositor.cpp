@@ -6,6 +6,7 @@
 #include "render/gbuffer.h"
 #include "render/beauty_camera.h"
 #include "render/ssgi_pass.h"
+#include "render/ssao_pass.h"
 #include "render/gpu_atlas.h"
 #include "render/hiz_pass.h"
 #include "render/lod_pool.h"
@@ -362,7 +363,17 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	const bool use_sun = sun && sun->is_valid() && sun->rebuilds() > 0 &&
 			(beauty_flags & ve::kFlagSunMap) != 0u;
 	timings->begin(rd, "deferred");
+	SsaoPass *ssao = world->ssao_pass();
+	if (ssao) ssao->clear_result();
+	bool ssao_ok = false;
+	if (ssao && (beauty_flags & ve::kFlagSsao) != 0u) {
+		timings->begin(rd, "ssao");
+		ssao_ok = ssao->render(rd, *gb, ubo->buffer(), beauty);
+		if (ssao_ok) timings->end(rd, "ssao");
+		else timings->cancel("ssao");
+	}
 	const bool deferred_ok = deferred->render(rd, *gb, *materials, ssgi_ok ? ssgi->result() : RID(),
+			ssao_ok ? ssao->result() : RID(),
 			use_sun ? sun->map() : RID(), use_sun ? sun->view_proj() : kNoSun,
 			use_sun ? sun->texel_world() : 0.0f, dp);
 	if (!deferred_ok) {

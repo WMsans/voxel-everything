@@ -15,6 +15,7 @@
 #include "render/beauty_camera.h"
 #include "render/contact_shadow_pass.h"
 #include "render/ssgi_pass.h"
+#include "render/ssao_pass.h"
 #include "render/ssr_pass.h"
 #include "render/outline_pass.h"
 #include "beauty_compositor.h"
@@ -92,6 +93,8 @@ void VoxelDebugHooks::_bind_methods() {
 			&VoxelDebugHooks::debug_glossy_sdf_probe);
 	ClassDB::bind_method(D_METHOD("debug_ssgi_probe", "pos", "fwd", "w", "h", "frames"),
 			&VoxelDebugHooks::debug_ssgi_probe);
+	ClassDB::bind_method(D_METHOD("debug_ssao_probe", "pos", "fwd", "w", "h"),
+			&VoxelDebugHooks::debug_ssao_probe);
 	ClassDB::bind_method(D_METHOD("debug_ssgi_reprojection_probe", "previous_pos",
 			"previous_fwd", "current_pos", "current_fwd", "w", "h"),
 			&VoxelDebugHooks::debug_ssgi_reprojection_probe);
@@ -376,7 +379,7 @@ Dictionary VoxelDebugHooks::debug_contact_shadow_probe(Vector3 pos, Vector3 fwd,
 	dp.cam_pos[0] = pos.x; dp.cam_pos[1] = pos.y; dp.cam_pos[2] = pos.z;
 	dp.flags = ve::pack_flags(world_->beauty_settings());
 	static const float no_sun[16] = {};
-	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), no_sun, 0.0f, dp))
+	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), RID(), no_sun, 0.0f, dp))
 		return d;
 	auto make_scratch = [&]() -> RID {
 		Ref<RDTextureFormat> tf; tf.instantiate();
@@ -514,7 +517,8 @@ Dictionary VoxelDebugHooks::debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, in
 		dp.cam_pos[0] = pos.x; dp.cam_pos[1] = pos.y; dp.cam_pos[2] = pos.z;
 		dp.flags = ve::pack_flags(settings);
 		if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(),
-				ssgi_ok ? world_->ssgi_pass()->result() : RID(), RID(), no_sun, 0.0f, dp)) break;
+				(ssgi_ok ? world_->ssgi_pass()->result() : RID()),
+				RID(), RID(), no_sun, 0.0f, dp)) break;
 		world_->downsample_history(device, world_->gbuffer()->lit(), *world_->gbuffer());
 	}
 	device->submit();
@@ -540,6 +544,117 @@ Dictionary VoxelDebugHooks::debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, in
 	}
 	d["max_channel"] = max_channel;
 	d["mean_luma"] = mean_luma / static_cast<double>(pixels);
+	return d;
+}
+
+// One frame of raymarch -> composite -> HBAO over the G-buffer, then a readback of the
+// single-channel occlusion target. Reads the AO texture directly: whether the deferred pass
+// applies it is deferred's own contract, not this probe's.
+Dictionary VoxelDebugHooks::debug_ssao_probe(Vector3 pos, Vector3 fwd, int w, int h) {
+	Dictionary d;
+	d["width"] = w;
+	d["height"] = h;
+	d["min_ao"] = 1.0f;
+	d["max_ao"] = 0.0f;
+	d["ran"] = false;
+	if (w <= 0 || h <= 0) return d;
+	world_->ensure_initialized();
+	RenderingDevice *device = world_->rd();
+	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass() ||
+			!world_->composite_pass() || !world_->gbuffer() || !world_->beauty_camera() || !world_->ssao_pass())
+		return d;
+	int quiet = 0;
+	for (int i = 0; i < 400 && quiet < 6; i++)
+		quiet = debug_stream_frame(pos) == 0 ? quiet + 1 : 0;
+	world_->composite_pass()->release_targets();
+	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(w, h)) || !world_->beauty_camera()->ensure(device)) return d;
+
+	const float p[3] = {pos.x, pos.y, pos.z};
+	const float f[3] = {fwd.x, fwd.y, fwd.z};
+	const float up[3] = {0.0f, std::fabs(fwd.y) > 0.9f ? 0.0f : 1.0f,
+			std::fabs(fwd.y) > 0.9f ? 1.0f : 0.0f};
+	const float aspect = static_cast<float>(w) / static_cast<float>(h);
+	const float fov_y = 1.0471975512f;
+	const float tan_y = std::tan(fov_y * 0.5f);
+	const float tan_x = tan_y * aspect;
+	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, fov_y, aspect,
+			0.05f, 4000.0f, w, h);
+	Projection view_proj;
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++) view_proj.columns[c][r] = cam.view_proj[c * 4 + r];
+	ve::CameraParams cp = ve::CameraParams::looking_at(pos.x, pos.y, pos.z,
+			fwd.x, fwd.y, fwd.z, up[0], up[1], up[2]);
+	cp.params[0] = tan_x; cp.params[1] = tan_y; cp.params[2] = 200.0f;
+	const ve::WorldBounds wb = world_->world_bounds();
+	const ve::IVec3 ro = wb.origin_regions();
+	cp.dims[0] = world_->store_->config().world_size_regions.x; cp.dims[1] = world_->store_->config().world_size_regions.y;
+	cp.dims[2] = world_->store_->config().world_size_regions.z; cp.dims[3] = world_->island_slot_count();
+	cp.region_origin[0] = ro.x; cp.region_origin[1] = ro.y; cp.region_origin[2] = ro.z;
+	cp.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
+	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
+	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
+	const ve::BeautySettings settings = world_->beauty_settings();
+	world_->ssao_pass()->clear_result();
+	bool ran = false;
+	world_->beauty_camera()->update(device, view_proj, p, Vector2i(w, h), 0.05f, 4000.0f);
+	if (world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp, w, h, no_edit)) {
+		float fade_start = ve::kLodFadeStartM, fade_end = ve::kLodFadeEndM;
+		world_->lod_fade_band(&fade_start, &fade_end);
+		world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
+				world_->raymarch_pass()->surface_texture(), world_->raymarch_pass()->hitpos_texture(), view_proj,
+				*world_->material_atlas(), p, fade_start, fade_end);
+		if (world_->composite_pass()->last_draw_ok())
+			ran = world_->ssao_pass()->render(device, *world_->gbuffer(),
+					world_->beauty_camera()->buffer(), settings);
+		// The full deferred chain on top, so the probe can also report what the lit image
+		// looks like with this frame's AO applied.
+		DeferredPass::Params dp;
+		const Projection inv = view_proj.inverse();
+		for (int c = 0; c < 4; c++)
+			for (int r = 0; r < 4; r++) dp.inv_view_proj[c * 4 + r] = inv.columns[c][r];
+		dp.cam_pos[0] = pos.x; dp.cam_pos[1] = pos.y; dp.cam_pos[2] = pos.z;
+		dp.flags = ve::pack_flags(settings);
+		static const float kNoSun[16] = {};
+		world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(),
+				RID(), ran ? world_->ssao_pass()->result() : RID(), RID(), kNoSun, 0.0f, dp);
+	}
+	device->submit();
+	device->sync();
+	d["ran"] = ran;
+	{
+		const PackedByteArray lit = device->texture_get_data(world_->gbuffer()->lit(), 0);
+		const int pixels = w * h;
+		if (lit.size() >= static_cast<int64_t>(pixels) * 8) {
+			const uint16_t *lv = reinterpret_cast<const uint16_t *>(lit.ptr());
+			double luma = 0.0;
+			for (int i = 0; i < pixels; i++) {
+				const float r = Math::half_to_float(lv[i * 4]);
+				const float g = Math::half_to_float(lv[i * 4 + 1]);
+				const float b = Math::half_to_float(lv[i * 4 + 2]);
+				luma += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+			}
+			d["lit_luma"] = luma / static_cast<double>(pixels);
+		} else {
+			d["lit_luma"] = -1.0;
+		}
+	}
+	const RID output = world_->ssao_pass()->result();
+	if (!output.is_valid()) return d;
+	const PackedByteArray data = device->texture_get_data(output, 0);
+	const int pixels = w * h;
+	if (data.size() < pixels) return d;
+	const uint8_t *values = reinterpret_cast<const uint8_t *>(data.ptr());
+	float min_ao = 1.0f, max_ao = 0.0f;
+	double mean_ao = 0.0;
+	for (int i = 0; i < pixels; i++) {
+		const float ao = static_cast<float>(values[i]) / 255.0f;
+		min_ao = std::min(min_ao, ao);
+		max_ao = std::max(max_ao, ao);
+		mean_ao += ao;
+	}
+	d["min_ao"] = min_ao;
+	d["max_ao"] = max_ao;
+	d["mean_ao"] = mean_ao / static_cast<double>(pixels);
 	return d;
 }
 
@@ -647,7 +762,7 @@ Dictionary VoxelDebugHooks::debug_ssgi_reprojection_probe(Vector3 previous_pos, 
 			dp.cam_pos[1] = camera_pos.y;
 			dp.cam_pos[2] = camera_pos.z;
 			dp.flags = ve::pack_flags(settings);
-			return world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), world_->ssgi_pass()->result(), RID(),
+			return world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), world_->ssgi_pass()->result(), RID(), RID(),
 					no_sun, 0.0f, dp);
 	};
 	auto read_luma = [&]() {
@@ -699,6 +814,7 @@ Dictionary VoxelDebugHooks::debug_beauty_settings() {
 	d["sun_shadow_map"] = beauty.sun_shadow_map;
 	d["glossy_sdf_rays"] = beauty.glossy_sdf_rays;
 	d["raymarched_sun_shadow"] = beauty.raymarched_sun_shadow;
+	d["ssao"] = beauty.ssao;
 	d["cost_view"] = beauty.cost_view;
 	d["islands"] = world_->islands_enabled_.load(std::memory_order_relaxed);
 	d["ssgi_taps"] = beauty.ssgi_taps;
@@ -1499,7 +1615,7 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 	dp.cam_pos[2] = pos.z;
 	dp.flags = ve::pack_flags(world_->beauty_settings());
 	static const float kNoSun[16] = {};
-	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), kNoSun, 0.0f, dp) ||
+	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), RID(), kNoSun, 0.0f, dp) ||
 			!world_->inject_pass()->draw(device, color, depth, world_->gbuffer()->lit(), world_->gbuffer()->depth())) {
 		cleanup();
 		return d;
@@ -4120,7 +4236,7 @@ Dictionary VoxelDebugHooks::debug_cel_diff(Color albedo, Color ambient, float nd
 	p.inv_view_proj[12] = ao;
 	p.inv_view_proj[13] = gloss;
 	static const float kNoSun[16] = {};
-	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), kNoSun, 0.0f, p))
+	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), RID(), kNoSun, 0.0f, p))
 		return d;
 	device->submit();
 	device->sync();
@@ -4207,7 +4323,7 @@ float VoxelDebugHooks::debug_sun_shadow_visibility(Vector3 p) {
 	dp.flags = ve::pack_flags(beauty);
 	dp.probe_mode = 3;
 	static const float kNoSun[16] = {};
-	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(),
+	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(),
 			use_sun ? world_->sun_shadow_pass()->map() : RID(),
 			use_sun ? world_->sun_shadow_pass()->view_proj() : kNoSun,
 			use_sun ? world_->sun_shadow_pass()->texel_world() : 0.0f, dp))
@@ -4290,7 +4406,7 @@ Dictionary VoxelDebugHooks::debug_deferred_probe(Vector3 pos, Vector3 fwd, int w
 	dp.cam_pos[2] = pos.z;
 	dp.flags = flags;
 	dp.probe_mode = probe_mode;
-	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), kNoEdit, 0.0f, dp))
+	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), RID(), kNoEdit, 0.0f, dp))
 		return d;
 	device->submit();
 	device->sync();

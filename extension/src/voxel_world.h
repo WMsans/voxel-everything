@@ -73,6 +73,7 @@ class GBuffer;
 class CameraUbo;
 class ContactShadowPass;
 class SsgiPass;
+class SsaoPass;
 class SsrPass;
 class OutlinePass;
 class BeautyCompositor;
@@ -364,6 +365,7 @@ public:
 	CameraUbo *beauty_camera() { return context_.render->beauty_camera(); }
 	ContactShadowPass *contact_shadow_pass() { return context_.render->contact_shadow_pass(); }
 	SsgiPass *ssgi_pass() { return context_.render->ssgi_pass(); }
+	SsaoPass *ssao_pass() { return context_.render->ssao_pass(); }
 	SsrPass *ssr_pass() { return context_.render->ssr_pass(); }
 	OutlinePass *outline_pass() { return context_.render->outline_pass(); }
 	// Region/gen passes have no pre-split accessor; added for the debug facade, which

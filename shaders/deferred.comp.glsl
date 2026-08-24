@@ -14,6 +14,7 @@ layout(set = 0, binding = 1) uniform sampler2D gb_surface;
 layout(set = 0, binding = 2) uniform sampler2D gb_depth;
 layout(set = 0, binding = 3) uniform sampler2D ssgi_tex;
 layout(set = 0, binding = 4) uniform sampler2D sun_map;
+layout(set = 0, binding = 7) uniform sampler2D ssao_tex;
 layout(set = 0, binding = 5, rgba16f) writeonly uniform image2D out_lit;
 layout(set = 0, binding = 6, std140) uniform SunBlock {
 	mat4 view_proj;
@@ -89,6 +90,10 @@ void main() {
 		shadow = min(shadow, sun_map_visibility(wpos, ndl));
 	vec3 ambient = pc.sky.rgb;
 	if ((pc.flags.x & BEAUTY_SSGI) != 0u) ambient += texture(ssgi_tex, uv).rgb;
+	// HBAO multiplies the ambient term only: sun lighting, spec and rim keep their own
+	// visibility terms. The pass's sky pixels are exactly 1.0, so horizons are untouched.
+	float ao = 1.0;
+	if ((pc.flags.x & BEAUTY_SSAO) != 0u) ao = texture(ssao_tex, uv).r;
 	imageStore(out_lit, px,
-			vec4(cel_shade(g0.rgb, ambient, ndl, ndv, ndh, shadow, 1.0, g1.w), 1.0));
+			vec4(cel_shade(g0.rgb, ambient, ndl, ndv, ndh, shadow, ao, g1.w), 1.0));
 }

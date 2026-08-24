@@ -20,6 +20,7 @@ BeautySettings settings_for_tier(QualityTier t) {
 		case QualityTier::kOff:
 			s.ssgi = s.ssr = s.contact_shadows = s.outlines = false;
 			s.sun_shadow_map = s.glossy_sdf_rays = s.raymarched_sun_shadow = false;
+			s.ssao = false;
 			s.ssgi_taps = 0;
 			s.ssr_steps = 0;
 			s.contact_steps = 0;
@@ -29,6 +30,7 @@ BeautySettings settings_for_tier(QualityTier t) {
 			// read as this engine's image at all, and together they cost under 1 ms.
 			s.ssgi = s.ssr = s.contact_shadows = false;
 			s.glossy_sdf_rays = false;
+			s.ssao = false;
 			s.ssgi_taps = 0;
 			s.ssr_steps = 0;
 			s.contact_steps = 0;
@@ -69,6 +71,7 @@ uint32_t pack_beauty_flags(const BeautySettings &s) {
 	if (s.sun_shadow_map) f |= kFlagSunMap;
 	if (s.glossy_sdf_rays) f |= kFlagGlossyRays;
 	if (s.raymarched_sun_shadow) f |= kFlagRaySunShadow;
+	if (s.ssao) f |= kFlagSsao;
 	if (s.cost_view) f |= kFlagCostView;
 	return f;
 }

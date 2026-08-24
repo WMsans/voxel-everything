@@ -16,6 +16,7 @@ struct BeautySettings {
 	bool glossy_sdf_rays = true;
 	bool raymarched_sun_shadow = true;
 	bool cost_view = false;
+	bool ssao = true;
 
 	int ssgi_taps = 8;      // [0, 16]
 	int ssr_steps = 24;     // [0, 64]
@@ -34,6 +35,7 @@ inline constexpr uint32_t kFlagOutlines = 8u;
 inline constexpr uint32_t kFlagSunMap = 16u;
 inline constexpr uint32_t kFlagGlossyRays = 32u;
 inline constexpr uint32_t kFlagRaySunShadow = 64u;
+inline constexpr uint32_t kFlagSsao = 256u;
 // A debug view, not an effect: it replaces the albedo channel with marching cost so the
 // budget conversation can be about pixels instead of averages. It is never set by a tier.
 inline constexpr uint32_t kFlagCostView = 128u;
