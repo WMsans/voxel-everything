@@ -68,9 +68,12 @@ void set_mat_index(Brick &b, int idx, uint8_t v);
 // untouched. It works in the ENCODED uint8 space because shaders/brick_gen.comp.glsl
 // mirrors it against an r8 image, and the two must agree byte for byte.
 //
-// The relaxation is monotone min-plus, so its fixed point is unique and independent of the
-// order samples are visited. That is what lets a 256-thread workgroup reproduce this
-// single-threaded loop exactly.
+// The relaxation is a monotone pull-toward-zero, so it converges within kClampIterations
+// passes for any input -- but it is deterministic ONLY under a fixed visiting order:
+// cross-sign coupling makes the update anti-monotone in the neighbours, so genuine
+// alternative fixed points exist. A parallel mirror must therefore reproduce this same
+// sweep semantics (or both sides must adopt an order-independent formulation such as
+// snapshot-Jacobi) to agree byte for byte.
 void clamp_brick_lattice(uint8_t *sdf);
 
 // Iterations to convergence. A magnitude can travel at most kSdfRange before it saturates,
