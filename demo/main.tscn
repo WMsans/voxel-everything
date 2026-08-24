@@ -42,6 +42,7 @@ shader_parameter/gloss = 0.15
 process_mode = 3
 world_origin_bricks = Vector3i(0, -64, 0)
 world_size_regions = Vector3i(64, 8, 64)
+near_field_scale = 0.4
 physics_center_path = NodePath("/root/Main/Player")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]

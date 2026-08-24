@@ -5,6 +5,19 @@
 
 namespace godot {
 
+// Workgroup shape of raymarch.comp.glsl. MUST match its layout(local_size_*): the dispatch
+// divides the target size by these, and before they existed that divisor was hard-coded to 8
+// while the shader was free to declare any layout -- a mismatch renders a fraction of the
+// target and reads as a large speed-up.
+//
+// Measured on an Apple M1 at 2450x1319 with the near field at half scale, the square tile is
+// what this workload wants: 8x8 = 18.33 ms/frame, 8x4 = 18.62, 16x8 = 18.57, 16x4 = 18.90,
+// 32x2 = 20.21, 64x1 = 20.73. Wide rows were worth testing -- ray length varies far more down
+// the screen than across it, so a one-row group holds a SIMD's rays at nearly the same depth
+// instead of pairing a short ray with a long one -- and lost anyway.
+inline constexpr int kRaymarchGroupX = 8;
+inline constexpr int kRaymarchGroupY = 8;
+
 class GpuAtlas;
 class IslandAtlas;
 class MaterialAtlas;
@@ -38,6 +51,11 @@ private:
 	RenderingDevice *rd_ = nullptr;
 	RID shader_, pipeline_;
 	RID sampler_;     // shared NEAREST sampler, created once
+	// The SDF atlas is the one target sampled with hardware trilinear (binding 2): its
+	// 17-voxel apron keeps a filtered fetch inside the brick's own block, so one fetch
+	// replaces the eight brick_sdf() used to issue. The material and min-max atlases stay
+	// on sampler_ -- they are integer textures and cannot be filtered at all.
+	RID sampler_linear_;
 	RID edits_ubo_;   // 32-byte uniform buffer, updated every render
 	RID material_albedo_, material_surface_, material_sampler_;
 	RID albedo_, surface_, hitpos_, cost_buf_, uset_, uset_mask_;

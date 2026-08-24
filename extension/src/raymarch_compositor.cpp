@@ -96,7 +96,9 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	cp.cam_up[0] = up.x; cp.cam_up[1] = up.y; cp.cam_up[2] = up.z;
 	cp.cam_fwd[0] = fwd.x; cp.cam_fwd[1] = fwd.y; cp.cam_fwd[2] = fwd.z;
 	cp.params[0] = tan_x; cp.params[1] = tan_y;
-	cp.params[2] = near_field_enabled ? 200.0f : 0.0f; // 0 = no near-field hits
+	// Provisional reach; the real one is the fade band's end, read below once the streamer
+	// has run. 0 = no near-field hits.
+	cp.params[2] = near_field_enabled ? 200.0f : 0.0f;
 	const Vector3i sr = world->get_world_size_regions();
 	cp.dims[0] = sr.x; cp.dims[1] = sr.y; cp.dims[2] = sr.z;
 	cp.dims[3] = world->island_slot_count();
@@ -165,12 +167,20 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	float fade_start = ve::kLodFadeStartM;
 	float fade_end = ve::kLodFadeEndM;
 	world->lod_fade_band(&fade_start, &fade_end);
+	// The near field is never visible past the fade band's end: composite.frag.glsl's dither
+	// threshold reaches 1.0 there, so every fragment beyond it is dropped and the far field
+	// owns the pixel. Marching further was work whose result could not be used. Clamp the
+	// reach to the seam the composite actually honours -- this costs nothing when the camera
+	// looks down at close ground and saves the whole 80-200 m stretch when it looks at the
+	// horizon, which is the case the move and ridge legs walk into.
+	if (near_field_enabled) cp.params[2] = fade_end;
 	if (!gb->ensure(rd, rsb, size)) {
 		abort_frame();
 		return;
 	}
-	const int rw = static_cast<int>(size.x * 0.66f);
-	const int rh = static_cast<int>(size.y * 0.66f);
+	const float near_scale = world->get_near_field_scale();
+	const int rw = static_cast<int>(size.x * near_scale);
+	const int rh = static_cast<int>(size.y * near_scale);
 	if (rw <= 0 || rh <= 0) {
 		abort_frame();
 		return;
