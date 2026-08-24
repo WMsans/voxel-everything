@@ -6,34 +6,38 @@
 // NOTE: never put a literal include directive inside a comment in this file -- the
 // loader matches include tokens anywhere in a line and would self-include.
 
-const int MATERIAL_COUNT = 4;
+const int MATERIAL_COUNT = 5;
 
 const float MAT_HARDNESS[MATERIAL_COUNT] = float[MATERIAL_COUNT](
 	1.000000, // grass_01
 	3.000000, // rock
 	1.400000, // ground_01
-	2.200000 // breakstone
+	2.200000, // breakstone
+	1.100000 // ground_crack_01
 );
 
 const float MAT_GLOW[MATERIAL_COUNT] = float[MATERIAL_COUNT](
 	0.000000, // grass_01
 	0.000000, // rock
 	0.000000, // ground_01
-	0.000000 // breakstone
+	0.000000, // breakstone
+	6.000000 // ground_crack_01
 );
 
 const vec3 MAT_GLOW_RGB[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](
 	vec3(0.000000, 0.000000, 0.000000), // grass_01
 	vec3(0.000000, 0.000000, 0.000000), // rock
 	vec3(0.000000, 0.000000, 0.000000), // ground_01
-	vec3(0.000000, 0.000000, 0.000000) // breakstone
+	vec3(0.000000, 0.000000, 0.000000), // breakstone
+	vec3(1.000000, 0.350000, 0.080000) // ground_crack_01
 );
 
 const vec3 MAT_FLAT_ALBEDO[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](
 	vec3(0.360000, 0.550000, 0.220000), // grass_01
 	vec3(0.450000, 0.420000, 0.400000), // rock
 	vec3(0.500000, 0.350000, 0.200000), // ground_01
-	vec3(0.620000, 0.600000, 0.660000) // breakstone
+	vec3(0.620000, 0.600000, 0.660000), // breakstone
+	vec3(0.350000, 0.120000, 0.060000) // ground_crack_01
 );
 
 // Mirrors of ve::material_hardness / ve::material_glow, including their fail-soft

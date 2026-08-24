@@ -12,7 +12,14 @@ DST="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/assets/materials"
 # extension/src/world/material_table.h (the authoritative table). Layer i serves ve material
 # id i + 1; material 0 is air and has no layer. Agreement is enforced by the converter
 # test in extension/tests/test_material_table.cpp.
-MATERIALS=(grass_01 rock ground_01 breakstone)
+# This list must match ve::kMaterials in extension/src/world/material_table.h, in order.
+# extension/tests/test_material_table.cpp asserts it.
+MATERIALS=(grass_01 rock ground_01 breakstone ground_crack_01)
+
+# Materials whose glow mask is derived from the inverted height map: the crevices glow and
+# the raised surface stays dark. A material absent here ships no NN_glow.png, and
+# MaterialAtlas packs a flat 1.0 mask so its table glow strength applies uniformly.
+GLOW_FROM_INVERTED_HEIGHT=(ground_crack_01)
 MAPS=(basecolor normal roughness ambientOcclusion height)
 
 command -v convert >/dev/null || { echo "need ImageMagick 'convert'" >&2; exit 1; }
@@ -29,6 +36,13 @@ for i in "${!MATERIALS[@]}"; do
 			exit 1
 		fi
 		convert "$in" -resize 512x512! -strip "PNG24:$out"
+		echo "  $out"
+	done
+	for g in "${GLOW_FROM_INVERTED_HEIGHT[@]}"; do
+		[ "$g" = "$m" ] || continue
+		out="$DST/$(printf '%02d' "$i")_glow.png"
+		convert "$SRC/$m/T_${m}_height.tga" -resize 512x512! -negate \
+			-level 40%,100% -strip "PNG24:$out"
 		echo "  $out"
 	done
 done

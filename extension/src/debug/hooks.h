@@ -269,6 +269,10 @@ public:
 	// --- M5 Task 11 hooks ---
 	Dictionary debug_material_atlas_stats();
 
+	// Min/max of one albedo-array layer's ALPHA channel across the top mip. Alpha carries
+	// the glow mask; a flat 1.0 means the material ships no glow PNG.
+	Dictionary debug_material_alpha_stats(int layer);
+
 	Color debug_material_probe(int mat, Vector3 p, Vector3 n);
 
 	// Task 7: rewrites one material layer's normal-map texels (surface array RG) so tests
