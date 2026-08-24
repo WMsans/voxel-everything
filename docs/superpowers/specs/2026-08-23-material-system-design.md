@@ -69,16 +69,22 @@ Three consumers read the one table:
 
 - **C++** includes the header. `MaterialAtlas::initialize` replaces `kMaterialNames` with
   `kMaterials[i].asset`.
-- **GLSL** receives a *generated* `material_table.glslh` declaring `MAT_HARDNESS[]`,
-  `MAT_GLOW[]`, `MAT_GLOW_RGB[]` and `MAT_FLAT_ALBEDO[]`. It is produced from `kMaterials`
-  at init and registered through the shader override map that `load_shader_source` already
-  consults (`render/shader_loader.cpp:14`). No shader gains a binding and no descriptor set
-  changes. `flat_material_albedo()` in `common.glslh` becomes a lookup into it.
+- **GLSL** reads `shaders/material_table.glslh`, a committed generated file declaring
+  `MAT_HARDNESS[]`, `MAT_GLOW[]`, `MAT_GLOW_RGB[]` and `MAT_FLAT_ALBEDO[]`, pulled in by
+  `common.glslh`. No shader gains a binding and no descriptor set changes.
+  `flat_material_albedo()` becomes a lookup into it.
+
+  `ve::material_table_glsl()` emits that text from `kMaterials`, and a unit test asserts the
+  committed file matches it byte for byte, printing the correct contents on failure. This is
+  the same hand-mirror-plus-differential-test pattern `shade.glslh` and `field.glslh` already
+  use, and it is chosen over registering the source through `load_shader_source`'s override
+  map for two reasons: `gen_pass_->initialize` compiles `brick_gen.comp.glsl` at
+  `render/orchestrator.cpp:182`, before `materials_->initialize` at `:184`, so an override
+  would have to be installed ahead of the whole pass-init sequence; and
+  `clear_shader_source_overrides()` — which tests call — would then leave every shader unable
+  to resolve the include.
 - **GDScript** calls `VoxelWorld.material_table() -> Array[Dictionary]`, one dictionary per
   material with `id`, `name`, `asset`, `hardness`, `glow`, `glow_color`, `albedo`.
-
-The override map is documented today as test/dev only. It gains a second, production role;
-its header comment is updated to say so rather than leaving the new use undocumented.
 
 `tools/convert_materials.sh` keeps its own `MATERIALS` array — it is a separate process that
 cannot include a C++ header — but a unit test asserts the two lists agree, which is exactly
@@ -214,6 +220,9 @@ unmistakable to react to.
 - `test_material_table.cpp`: hardness >= 1.0 for every entry, unique names, layer count
   within `kMaterialLayers`, glow strengths non-negative, and agreement with the
   `MATERIALS` array in `tools/convert_materials.sh`.
+- `test_material_glslh.cpp`: the committed `shaders/material_table.glslh` matches
+  `ve::material_table_glsl()` byte for byte, and the failure message prints the correct
+  file contents.
 - `test_edit_ops.cpp` (extended): an identical carve removes strictly less volume from a
   hard material than from a soft one, and a hardness of 1.0 reproduces today's result
   exactly.
