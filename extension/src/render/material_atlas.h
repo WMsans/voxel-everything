@@ -13,8 +13,9 @@ constexpr int kMaterialLayers = 16;
 constexpr int kMaterialTextureSize = 512;
 constexpr int kMaterialMipmaps = 10; // floor(log2(512)) + 1
 
-// Owns the two 512^2 RGBA8 2D-array textures that give every material its basecolor/height
-// and normal/roughness/AO. This is Godot glue only: it reads PNGs through Godot's Image,
+// Owns the two 512^2 RGBA8 2D-array textures that give every material its basecolor (with
+// the glow mask packed into alpha) and normal/roughness/AO.
+// This is Godot glue only: it reads PNGs through Godot's Image,
 // packs channels, and hands the concatenated mip chains to RenderingDevice::texture_create.
 class MaterialAtlas {
 public:

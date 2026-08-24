@@ -269,6 +269,10 @@ public:
 	// --- M5 Task 11 hooks ---
 	Dictionary debug_material_atlas_stats();
 
+	// Min/max of one albedo-array layer's ALPHA channel across the top mip. Alpha carries
+	// the glow mask; a flat 1.0 means the material ships no glow PNG.
+	Dictionary debug_material_alpha_stats(int layer);
+
 	Color debug_material_probe(int mat, Vector3 p, Vector3 n);
 
 	// Task 7: rewrites one material layer's normal-map texels (surface array RG) so tests
@@ -355,6 +359,10 @@ public:
 	// Task 7 fixture hook: a sphere-ADD op so the artifact tests can exercise the
 	// procedural CSG-add branch of the source-field normal path.
 	void debug_apply_sphere_add(Vector3 centre, float radius, int material);
+
+	// Recolour existing solid without moving the surface, so a test can compare two
+	// materials over identical geometry. Mirror of VoxelEditTool::apply_sphere_paint.
+	void debug_apply_sphere_paint(Vector3 centre, float radius, int material);
 
 	void debug_apply_volume_add(int slot, Vector3 origin, float voxel, int dim);
 

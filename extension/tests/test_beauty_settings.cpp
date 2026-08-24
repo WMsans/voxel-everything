@@ -35,7 +35,9 @@ TEST_CASE("High is the demo default and matches the fixed numbers table") {
 	CHECK(hi.contact_steps == 12);
 	CHECK(hi.ssgi);
 	CHECK(hi.ssr);
-	CHECK(hi.contact_shadows);
+	// Contact shadows were removed outright (8ae4ee4): the knob stays but every tier,
+	// including High, reads as off.
+	CHECK_FALSE(hi.contact_shadows);
 	CHECK(hi.outlines);
 	CHECK(hi.sun_shadow_map);
 	CHECK(hi.glossy_sdf_rays);

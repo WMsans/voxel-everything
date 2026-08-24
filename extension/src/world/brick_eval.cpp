@@ -1,4 +1,5 @@
 #include "world/brick_eval.h"
+#include "world/brick_clamp.h"
 #include "world/override_store.h"
 #include "world/palette.h"
 #include <algorithm>
@@ -188,6 +189,12 @@ void eval_brick(const Generator &gen, const EditOp *ops, int op_count, IVec3 bri
 						std::min(vy, kBrickVoxels - 1), std::min(vz, kBrickVoxels - 1));
 				if (!apron || mat[ci] == 0) mat[ci] = s.material; // a cell's own sample wins
 			}
+
+	// Before spread_materials, which reads b.sdf to project air cells onto the surface, and
+	// before build_brick_mips, which reduces it. shaders/brick_gen.comp.glsl inserts the
+	// mirror of this between its Phase 1b and Phase 2 for exactly the same reason.
+	if (lattice_needs_clamp(mat, kBrickVoxelCount, filtered, filtered_count))
+		clamp_brick_lattice(b.sdf);
 
 	spread_materials(mat, b, gen, filtered, filtered_count, bo, volumes, overrides);
 
