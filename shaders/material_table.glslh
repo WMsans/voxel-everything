@@ -1,0 +1,54 @@
+// GENERATED from extension/src/world/material_table.h (ve::kMaterials) by
+// ve::material_table_glsl(). Do not edit by hand: extension/tests/test_material_glslh.cpp
+// asserts this file byte for byte and prints the correct contents on failure.
+//
+// Every array is indexed by MATERIAL ID MINUS ONE. Id 0 is air and has no entry.
+// NOTE: never put a literal include directive inside a comment in this file -- the
+// loader matches include tokens anywhere in a line and would self-include.
+
+const int MATERIAL_COUNT = 4;
+
+const float MAT_HARDNESS[MATERIAL_COUNT] = float[MATERIAL_COUNT](
+	1.000000, // grass_01
+	3.000000, // rock
+	1.400000, // ground_01
+	2.200000 // breakstone
+);
+
+const float MAT_GLOW[MATERIAL_COUNT] = float[MATERIAL_COUNT](
+	0.000000, // grass_01
+	0.000000, // rock
+	0.000000, // ground_01
+	0.000000 // breakstone
+);
+
+const vec3 MAT_GLOW_RGB[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](
+	vec3(0.000000, 0.000000, 0.000000), // grass_01
+	vec3(0.000000, 0.000000, 0.000000), // rock
+	vec3(0.000000, 0.000000, 0.000000), // ground_01
+	vec3(0.000000, 0.000000, 0.000000) // breakstone
+);
+
+const vec3 MAT_FLAT_ALBEDO[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](
+	vec3(0.360000, 0.550000, 0.220000), // grass_01
+	vec3(0.450000, 0.420000, 0.400000), // rock
+	vec3(0.500000, 0.350000, 0.200000), // ground_01
+	vec3(0.620000, 0.600000, 0.660000) // breakstone
+);
+
+// Mirrors of ve::material_hardness / ve::material_glow, including their fail-soft
+// rule: air and any id with no table entry carve at full radius and emit nothing.
+float mat_hardness(uint id) {
+	int i = int(id) - 1;
+	return (i < 0 || i >= MATERIAL_COUNT) ? 1.0 : MAT_HARDNESS[i];
+}
+
+float mat_glow(uint id) {
+	int i = int(id) - 1;
+	return (i < 0 || i >= MATERIAL_COUNT) ? 0.0 : MAT_GLOW[i];
+}
+
+vec3 mat_glow_rgb(uint id) {
+	int i = int(id) - 1;
+	return (i < 0 || i >= MATERIAL_COUNT) ? vec3(0.0) : MAT_GLOW_RGB[i];
+}

@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <string>
 
 namespace ve {
 
@@ -44,5 +45,13 @@ static_assert(material_hardness_floor_holds(), "material hardness must be >= 1.0
 // Fail soft for air (0) and any id with no table entry: full-radius carve, no emission.
 float material_hardness(uint16_t id);
 float material_glow(uint16_t id);
+
+// The exact intended contents of shaders/material_table.glslh. That file is committed and a
+// unit test asserts it equals this string byte for byte; the test prints this text on
+// failure, so regenerating is copy-and-paste. Emitting at runtime and registering through
+// load_shader_source's override map was rejected: BrickGenPass compiles brick_gen.comp.glsl
+// at render/orchestrator.cpp:182, before MaterialAtlas::initialize at :184, and
+// clear_shader_source_overrides() (called by tests) would leave the include unresolvable.
+std::string material_table_glsl();
 
 } // namespace ve
