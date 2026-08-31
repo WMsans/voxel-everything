@@ -15,7 +15,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	match event.keycode:
 		KEY_F3:
-			var enabled := _world.get_effect_enabled("cost_view")
+			var enabled : bool = _world.get_effect_enabled("cost_view")
 			_world.set_effect_enabled("cost_view", not enabled)
 			print("cost view %s" % ("on" if not enabled else "off"))
 			get_viewport().set_input_as_handled()

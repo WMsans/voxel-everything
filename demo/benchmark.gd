@@ -410,7 +410,7 @@ func _timing_condition_line() -> String:
 func _report() -> void:
 	var sorted := _samples.duplicate()
 	sorted.sort()
-	var fb := _world.hooks().debug_lod_fade_band()
+	var fb : Vector2 = _world.hooks().debug_lod_fade_band()
 	var vp := _cam.get_viewport()
 	var vp_size := vp.get_visible_rect().size
 	# The rendered 3D resolution, not the 2D stretch rect: the near field runs at
