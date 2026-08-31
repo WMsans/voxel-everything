@@ -58,9 +58,8 @@ RayHit raycast(const Generator &gen, const EditLog &log, const float origin[3],
 	for (int i = 0; i < 4096 && t <= max_dist; i++) {
 		const float p[3] = {origin[0] + d[0] * t, origin[1] + d[1] * t, origin[2] + d[2] * t};
 		const std::vector<EditOp> &ops = ops_at(log, p[0], p[1], p[2]);
-		const Sample sample = eval_field(gen, ops.data(), static_cast<int>(ops.size()), p[0],
-				p[1], p[2], volumes, overrides);
-		const float f = sample.sdf;
+		const float f = eval_field(gen, ops.data(), static_cast<int>(ops.size()), p[0], p[1],
+				p[2], volumes, overrides).sdf;
 		const bool sign_crossing = region_has_live_volume_add(ops, volumes);
 		const bool hit = sign_crossing ? (prev_f > 0.0f && f <= 0.0f) : (f < hit_eps);
 		if (hit) {
@@ -81,63 +80,6 @@ RayHit raycast(const Generator &gen, const EditLog &log, const float origin[3],
 			} else {
 				out.normal[1] = 1.0f;
 			}
-			out.material = sample.material;
-			// The hit tolerance can stop just outside the surface, where the field correctly
-			// reports air. Project to the zero crossing using the measured local gradient,
-			// then move only 0.1 mm inside. A fixed voxel-scale offset can jump across a thin
-			// shell and report the hollow air behind it.
-			const auto material_behind = [&](float offset) {
-				float q[3];
-				for (int a = 0; a < 3; a++) {
-					q[a] = p[a] - out.normal[a] * offset;
-					if (out.normal[a] != 0.0f && q[a] == p[a])
-						q[a] = std::nextafter(p[a], out.normal[a] > 0.0f
-								? -std::numeric_limits<float>::infinity()
-								: std::numeric_limits<float>::infinity());
-				}
-				const std::vector<EditOp> &qops = ops_at(log, q[0], q[1], q[2]);
-				return eval_field(gen, qops.data(), static_cast<int>(qops.size()), q[0], q[1],
-						q[2], volumes, overrides).material;
-			};
-			if (out.material == 0) {
-				// The normal's one-voxel stencil can span both sides of a thin shell and
-				// underestimate its slope. Measure the directional derivative on a much finer
-				// stencil so f / slope lands at the near zero crossing instead of beyond it.
-				constexpr float kProjectionEpsilon = 0.0001f;
-				float plus_p[3], minus_p[3];
-				for (int a = 0; a < 3; a++) {
-					plus_p[a] = p[a] + out.normal[a] * kProjectionEpsilon;
-					minus_p[a] = p[a] - out.normal[a] * kProjectionEpsilon;
-					if (out.normal[a] > 0.0f) {
-						if (plus_p[a] == p[a]) plus_p[a] = std::nextafter(p[a],
-								std::numeric_limits<float>::infinity());
-						if (minus_p[a] == p[a]) minus_p[a] = std::nextafter(p[a],
-								-std::numeric_limits<float>::infinity());
-					} else if (out.normal[a] < 0.0f) {
-						if (plus_p[a] == p[a]) plus_p[a] = std::nextafter(p[a],
-								-std::numeric_limits<float>::infinity());
-						if (minus_p[a] == p[a]) minus_p[a] = std::nextafter(p[a],
-								std::numeric_limits<float>::infinity());
-					}
-				}
-				const float plus = field_at(gen, log, plus_p[0], plus_p[1], plus_p[2],
-						volumes, overrides);
-				const float minus = field_at(gen, log, minus_p[0], minus_p[1], minus_p[2],
-						volumes, overrides);
-				const float represented_span = std::fabs(
-						(plus_p[0] - minus_p[0]) * out.normal[0] +
-						(plus_p[1] - minus_p[1]) * out.normal[1] +
-						(plus_p[2] - minus_p[2]) * out.normal[2]);
-				const float directional_slope = represented_span > 0.0f
-						? std::fabs(plus - minus) / represented_span : 0.0f;
-				const float to_surface = f > 0.0f && directional_slope > 1e-6f
-						? f / directional_slope : 0.0f;
-				const float inside = std::max(kProjectionEpsilon, 0.5f * represented_span);
-				out.material = material_behind(to_surface + inside);
-			}
-			// Fallback for non-ideal fields whose local linear projection does not enter solid.
-			for (float over = 0.5f; out.material == 0 && over <= 2.5f; over += 1.0f)
-				out.material = material_behind(over * kVoxelSize);
 			return out;
 		}
 		t += std::max(f * inv_l, min_step);

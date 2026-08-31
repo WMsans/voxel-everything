@@ -1,5 +1,6 @@
 #include "generator/edit_ops.h"
 #include "connectivity/occupancy.h"
+#include "world/material_table.h"
 #include <algorithm>
 #include <cmath>
 
@@ -10,6 +11,15 @@ namespace {
 float sphere_sdf(const EditOp &op, float x, float y, float z) {
 	const float dx = x - op.pos[0], dy = y - op.pos[1], dz = z - op.pos[2];
 	return std::sqrt(dx * dx + dy * dy + dz * dz) - op.radius;
+}
+
+// The carve's effective radius at a sample. Hardness only ever SHRINKS it: op.radius is the
+// op's declared maximum reach and op_world_aabb reports pos +/- op.radius, so an effective
+// radius above it would put field influence outside the AABB, where the region filter drops
+// it. ve::material_hardness is floored at 1.0 and static_asserted for exactly this reason.
+// Mirrored in shaders/field.glslh.
+float hardened_radius(const EditOp &op, uint16_t material) {
+	return op.radius / material_hardness(material);
 }
 
 // Inclusive [lo, hi] cell range of the op's padded AABB on a lattice of the given pitch.
@@ -157,9 +167,13 @@ Sample apply_op(Sample s, const EditOp &op, float x, float y, float z,
 		case kOpSphereSubtract: {
 			// CSG subtract: max(s, -sphere). A point that becomes air carries no material,
 			// matching the generator's own convention (Sample::material == 0 above ground).
-			// Hardness is resolved once when the op is created, so this evaluator sees one
-			// ordinary sphere and cannot distort it at a material seam.
-			const float sp = sphere_sdf(op, x, y, z);
+			// The sphere's radius is divided by the hardness of the material AT THIS POINT,
+			// so one blast eats deep into dirt and barely scratches an adjacent rock seam.
+			// That keeps the field's sign exact but destroys its magnitude as a distance
+			// bound at the seam -- see ve::clamp_brick_lattice, which repairs it at bake.
+			const float dx = x - op.pos[0], dy = y - op.pos[1], dz = z - op.pos[2];
+			const float sp = std::sqrt(dx * dx + dy * dy + dz * dz) -
+					hardened_radius(op, s.material);
 			if (-sp > s.sdf) {
 				s.sdf = -sp;
 				if (s.sdf > 0.0f) s.material = 0;
@@ -239,7 +253,11 @@ FieldSample apply_op_gradient(FieldSample s, const EditOp &op, float x, float y,
 		const VolumeStore *volumes) {
 	switch (op.type) {
 		case kOpSphereSubtract: {
-			const float sp = sphere_sdf(op, x, y, z);
+			// Hardness-scaled like apply_op's subtract above; the gradient itself is unchanged,
+			// it is the normalised direction from the centre and does not depend on the radius.
+			const float dx = x - op.pos[0], dy = y - op.pos[1], dz = z - op.pos[2];
+			const float sp = std::sqrt(dx * dx + dy * dy + dz * dz) -
+					hardened_radius(op, s.material);
 			if (-sp > s.sdf) {
 				float g[3]; bool exact;
 				sphere_gradient(op, x, y, z, g, exact);

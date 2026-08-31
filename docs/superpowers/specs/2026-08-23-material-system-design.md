@@ -1,7 +1,7 @@
 # Voxel Everything — Material System Design
 
 **Date:** 2026-08-23
-**Status:** Implemented; hardness architecture revised 2026-08-24
+**Status:** Approved design, pre-implementation
 **Scope:** Promote materials from three hardcoded lists into one authoritative table
 carrying hardness and glow; apply glow in rendering and hardness in editing; add a demo
 scene for choosing the material being placed.
@@ -40,8 +40,8 @@ subsystem split was meant to serve. This is that feature.
 | Decision | Choice |
 |---|---|
 | Source of truth | `constexpr` C++ table; rebuild to add a material |
-| Hardness semantics | Resolve once from the center ray's material when creating a removal op |
-| Field shape | One stored effective radius, uniform across every material the op reaches |
+| Hardness semantics | Per-point, inside the field evaluator (not tool-side) |
+| Field distortion | Fixed properly via a gated Eikonal clamp, not accepted or capped |
 | Glow authoring | Per-material scalar × optional per-texel mask |
 | Picker form | Modal grid panel, toggled by a key |
 | Existing edit tools | Unchanged — keys 1–4 and the wheel keep their current meanings |
@@ -70,7 +70,7 @@ Three consumers read the one table:
 - **C++** includes the header. `MaterialAtlas::initialize` replaces `kMaterialNames` with
   `kMaterials[i].asset`.
 - **GLSL** reads `shaders/material_table.glslh`, a committed generated file declaring
-  `MAT_GLOW[]`, `MAT_GLOW_RGB[]` and `MAT_FLAT_ALBEDO[]`, pulled in by
+  `MAT_HARDNESS[]`, `MAT_GLOW[]`, `MAT_GLOW_RGB[]` and `MAT_FLAT_ALBEDO[]`, pulled in by
   `common.glslh`. No shader gains a binding and no descriptor set changes.
   `flat_material_albedo()` becomes a lookup into it.
 
@@ -136,50 +136,54 @@ and ambient.
 
 ## 5. Hardness
 
-Hardness is resolved **once**, before a removal op enters the field evaluator. The analytic
-raycast reports the material of the surface it struck; ray-driven tools pass that material
-to `VoxelEditTool.apply_sphere_subtract(pos, nominal_radius, material)`, and the tool stores:
+`ve::apply_op` divides a sphere-subtract's radius by the hardness of the material at the
+sample point, and `shaders/field.glslh` mirrors it exactly:
 
 ```cpp
-op.radius = nominal_radius / material_hardness(material);
+const float r = op.radius / MAT_HARDNESS[s.material];
+if (-(dist - r) > s.sdf) { ... }
 ```
 
-`material` is optional. Omitting it supplies material `0`, whose fail-soft hardness is
-`1.0`, so programmatic callers can continue treating their radius as already effective.
-The selected material id is retained in the op for traceability, but CPU and GLSL field
-evaluators use only the stored effective radius.
-
-A ray hit may stop slightly outside a surface due to the tracer tolerance. Material recovery
-projects to the zero crossing using a fine directional derivative and samples just inside;
-coarser probes remain a fallback. This avoids both reporting air at ordinary surfaces and
-skipping through thin shells.
+Because `eval_field` is the one field every consumer walks, this reaches brick generation,
+raycasting, meshing, occupancy and island extraction consistently, on both CPU and GPU.
+`tests/test_field_diff.gd` already diffs the two evaluators and is the gate on the mirror.
 
 ### 5.1 The hardness >= 1.0 invariant
 
-**Hardness is constrained to `[1.0, ∞)` and static_asserted in the table.** Hardness models
-resistance: it may shrink a nominal removal dimension, never enlarge it. Softness is
-expressed by authoring a larger tool radius, not by a hardness below one.
+**Hardness is clamped to `[1.0, ∞)` and static_asserted in the table.** This is load-bearing.
 
-After scaling, `op.radius` is the operation's exact geometric reach. `op_world_aabb()`,
-region ranges, brick residency, connectivity re-marking and op filtering all consume that
-same value.
+`op_world_aabb()` reports `pos ± op.radius`, and every region range, brick residency test,
+connectivity re-mark and op-filter decision is built on it. A hardness below 1.0 would make
+the carve reach *past* its own AABB, and an op that reaches outside its declared bounds is
+silently dropped at region boundaries — a deleted edit, not a visual artifact. So
+`op.radius` is the op's maximum reach and hardness only ever shrinks it. Softness is
+expressed by authoring a larger tool radius, never by a hardness below one.
 
-### 5.2 Uniform field shape and performance
+### 5.2 The field distortion, and the fix
 
-Every point reached by one sphere-subtract now evaluates the same ordinary sphere SDF,
-regardless of the material at that point. A hard center ray therefore produces a smaller
-sphere, but that sphere remains uniform when it crosses a hard/soft seam. Drill resolves the
-first center ray once and reuses its material for every sphere in the stroke.
+Per-point hardness keeps the field's **sign** exactly correct — a point is air iff it lies
+inside the crater its own material would take — so meshing, occupancy, collision and
+residency classification are unaffected.
 
-This removes the original per-point discontinuity rather than repairing it after baking.
-The CPU/GPU Eikonal clamp, its 26 relaxation passes, GPU shared-memory snapshot, and GLSL
-hardness table are consequently unnecessary and have been removed. Future removal shapes
-can apply the same one-time material scale to their dimensions without adding material
-branches to every field sample.
+What it breaks is the **magnitude**. At a rock/dirt seam inside a crater, the field reports
+the distance to the dirt crater's wall while the barely-carved rock lip stands much closer.
+The near-field marcher sphere-traces with `t += max(d * 0.9, 0.005)` and steps through it.
+Concretely: a 3 m carve against rock at hardness 3 can report roughly 1 m of clearance with
+a lip 5 cm away — eighteen voxels of overshoot, seen as sparkling holes along seams.
 
-`tests/test_field_diff.gd` gates CPU/GLSL agreement across a painted material seam, while
-`tests/test_material_seam.gd` verifies one effective radius on both sides and checks that the
-near-field marcher agrees with the analytic raycast.
+The fix is a **Chebyshev/Eikonal clamp on the baked 17³ brick lattice**: clamp each sample's
+magnitude against its six neighbours plus one voxel pitch, sweeping until it converges. That
+restores the 1-Lipschitz property sphere tracing depends on, and it also tightens the
+ordinary CSG overestimates the engine already carries from `max(a, -b)`.
+
+It is **gated so the common case pays nothing**: it runs only for a brick whose palette
+holds more than one material *and* whose op list contains a sphere-subtract. Both facts are
+already computed during the bake, and neither holds for unedited terrain.
+
+The clamp must exist twice — in the CPU bake and as a shared-memory sweep in
+`shaders/brick_gen.comp.glsl` — because `test_field_diff.gd` and `test_brick_diff.gd` diff
+the two lattices. Keeping that mirror bit-exact is the largest single piece of work in the
+plan, and it is scheduled before hardness is switched on so the artifact never lands.
 
 ## 6. Demo picker
 
@@ -219,15 +223,17 @@ unmistakable to react to.
 - `test_material_glslh.cpp`: the committed `shaders/material_table.glslh` matches
   `ve::material_table_glsl()` byte for byte, and the failure message prints the correct
   file contents.
-- `test_edit_ops.cpp` (extended): one stored subtract op has one radius across soft and hard
-  sample materials, including the gradient path.
-- `test_material_table.cpp` (extended): one-time removal-radius scaling and the material-0
-  compatibility default.
-- `test_raycast.cpp` (extended): surface material reporting, including a thin solid shell.
+- `test_edit_ops.cpp` (extended): an identical carve removes strictly less volume from a
+  hard material than from a soft one, and a hardness of 1.0 reproduces today's result
+  exactly.
+- `test_brick_eval.cpp` (extended): after the clamp, every adjacent lattice pair satisfies
+  `|d[i+1] - d[i]| <= voxel + epsilon`; and the clamp does not run for a single-material
+  brick.
 
 **GDScript (`tests/`)**
-- `test_field_diff.gd` (extended): a stored-radius carve straddles two materials, catching
-  either evaluator reintroducing a per-sample hardness lookup.
+- `test_field_diff.gd` (extended): the scenario gains a carve straddling two materials of
+  different hardness, so the CPU/GLSL mirror of both the hardness term and the clamp is
+  gated.
 - `test_material_atlas.gd` (extended): the albedo array's alpha carries a non-flat mask for
   magma and flat 1.0 for a material with no glow PNG; and a magma pixel's lit value exceeds
   its albedo while a grass pixel's does not.
@@ -249,9 +255,8 @@ unmistakable to react to.
 - **Glow sampled in deferred, not carried in the G-buffer.** No G-buffer channel is free,
   and widening it or stealing precision from the material id would make every pixel pay for
   a feature that one material uses. Re-sampling costs nothing when the strength is zero.
-- **Hardness at op creation, not in the field.** A removal is governed by the center ray's
-  material. Resolving once preserves one geometric shape, avoids material-seam artifacts,
-  and keeps future shape evaluators material-agnostic.
-- **No hardness-seam clamp.** Uniform-radius CSG does not create the discontinuity the clamp
-  repaired, so retaining its CPU/GPU relaxation would add cost and complexity without a
-  valid hardness case.
+- **Hardness in the field, not in the tool.** Scaling the radius tool-side would have been
+  far cheaper and needed no mirror, but a single blast would then carve grass and granite
+  identically based on whatever sat under the reticle.
+- **The clamp is gated, not global.** Running an Eikonal sweep on every brick would make
+  streaming pay for a correction that only edited, multi-material bricks require.

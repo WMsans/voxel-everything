@@ -301,7 +301,7 @@ func _fire_edit() -> void:
 	var hit: Dictionary = _world.hooks().debug_raycast(_cam.global_position, dir)
 	if not hit["hit"]:
 		return
-	_tool.apply_sphere_subtract(hit["pos"], 3.0, hit["material"])
+	_tool.apply_sphere_subtract(hit["pos"], 3.0)
 
 func _fire_bounded_edit() -> void:
 	# Consolidation is only reachable when a bounded area accumulates enough edits. Hold a
@@ -317,7 +317,7 @@ func _fire_bounded_edit() -> void:
 			sin(_frames * 0.7) * 0.3,
 			cos(_frames * 0.9) * 0.3,
 			sin(_frames * 0.5) * 0.3)
-	_tool.apply_sphere_subtract(hit["pos"] + jitter, 3.0, hit["material"])
+	_tool.apply_sphere_subtract(hit["pos"] + jitter, 3.0)
 
 func _island_cycle(delta: float) -> void:
 	# Build a pillar, wait for it to stream in, subtract through its middle, then wait for

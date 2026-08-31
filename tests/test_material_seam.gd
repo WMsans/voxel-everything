@@ -1,8 +1,10 @@
 extends GdUnitTestSuite
 
-# A removal operation must remain one geometric shape across a material seam. Hardness is
-# selected once from the center ray's material and resolved into the stored radius before
-# the field evaluator sees the op; per-point material lookups would make this suite fail.
+# The artifact this file exists to prevent: per-point hardness makes the carve field
+# overestimate free space beside a hard-material seam, and the near-field marcher --
+# t += max(d * 0.9, 0.005) -- steps straight through the barely-carved lip. The Eikonal
+# clamp on the brick lattice (ve::clamp_brick_lattice) is what stops it. If someone removes
+# or mis-gates the clamp, this is the test that goes red.
 
 var _worlds: Array = []
 
@@ -35,8 +37,8 @@ func settle(w: VoxelWorld) -> void:
 		if quiet >= 6:
 			break
 
-# Two hardnesses meeting inside one crater is the regression geometry.
-func build_seam(w: VoxelWorld) -> Dictionary:
+# Two hardnesses meeting inside one crater is the exact geometry that distorts the field.
+func build_seam(w: VoxelWorld) -> Vector3:
 	var centre := Vector3(20.0, 47.5, 20.0)
 	# A slab of the hardest material, then a slab of the softest, sharing a plane.
 	var hard := 0
@@ -57,20 +59,16 @@ func build_seam(w: VoxelWorld) -> Dictionary:
 	w.hooks().debug_apply_sphere_paint(centre - Vector3(2.0, 0, 0), 2.0, hard)
 	w.hooks().debug_apply_sphere_paint(centre + Vector3(2.0, 0, 0), 2.0, soft)
 	settle(w)
-	# Resolve the selected center material once. Both painted sides must then consume this
-	# same effective radius, regardless of their own material IDs.
-	var tool: VoxelEditTool = ClassDB.instantiate("VoxelEditTool")
-	w.add_child(tool)
-	tool.apply_sphere_subtract(centre, 3.0, hard)
+	# One carve spanning both: it eats deep into the soft side and barely into the hard.
+	w.hooks().debug_apply_sphere_subtract(centre, 3.0)
 	settle(w)
-	return {"centre": centre, "effective_radius": 3.0 / hard_h}
+	return centre
 
 # The marcher and the analytic raycast walk the same world by different means. A ray that
 # leaks through the seam lip reports a hit far behind where the field says the surface is.
 func test_rays_do_not_leak_through_the_seam_lip() -> void:
 	var w := make_world()
-	var seam := build_seam(w)
-	var centre: Vector3 = seam["centre"]
+	var centre := build_seam(w)
 	var leaks := 0
 	var tested := 0
 	for i in range(24):
@@ -88,24 +86,50 @@ func test_rays_do_not_leak_through_the_seam_lip() -> void:
 	assert_int(tested).override_failure_message(
 		"no ray in the sweep hit the terrain; the fixture did not build").is_greater(8)
 	assert_int(leaks).override_failure_message(
-		"%d of %d rays across the material seam missed a surface the analytic field reports" % [leaks, tested]).is_equal(0)
+		"%d of %d rays across the hardness seam missed a surface the field reports: the Eikonal clamp is not repairing the carve field" % [leaks, tested]).is_equal(0)
 
-func test_the_seam_carve_uses_one_effective_radius() -> void:
+# The other half: hardness must actually be doing something, or the test above passes
+# trivially on a world where nothing distorted the field in the first place.
+func test_the_seam_carve_is_actually_asymmetric() -> void:
 	var w := make_world()
-	var seam := build_seam(w)
-	var centre: Vector3 = seam["centre"]
-	var effective_radius: float = seam["effective_radius"]
-	var inside_offset := effective_radius * 0.5
-	var outside_offset := effective_radius + 0.2
-	var hard_inside: float = w.hooks().debug_field_sdf(
-		centre - Vector3(inside_offset, 0, 0))
-	var soft_inside: float = w.hooks().debug_field_sdf(
-		centre + Vector3(inside_offset, 0, 0))
-	var hard_outside: float = w.hooks().debug_field_sdf(
-		centre - Vector3(outside_offset, 0, 0))
-	var soft_outside: float = w.hooks().debug_field_sdf(
-		centre + Vector3(outside_offset, 0, 0))
-	assert_float(hard_inside).is_equal_approx(soft_inside, 0.0001)
-	assert_float(hard_outside).is_equal_approx(soft_outside, 0.0001)
-	assert_float(hard_inside).is_greater(0.0)
-	assert_float(hard_outside).is_less(0.0)
+	var centre := build_seam(w)
+	# 1.2 m either side of the carve centre: inside the soft crater, outside the hard one.
+	var soft_state := w.hooks().debug_cell_state(Vector3i(
+		int((centre.x + 1.2) / 0.8), int(centre.y / 0.8), int(centre.z / 0.8)))
+	var hard_state := w.hooks().debug_cell_state(Vector3i(
+		int((centre.x - 1.2) / 0.8), int(centre.y / 0.8), int(centre.z / 0.8)))
+	assert_int(soft_state).override_failure_message(
+		"the soft side of the seam did not carve: hardness is not being applied"
+		).is_not_equal(hard_state)
+
+func terrain_height(x: float, z: float) -> float:
+	return 51.2 + 6.0 * sin(x * 0.11) * cos(z * 0.13) \
+		+ 3.0 * sin(x * 0.031 + 1.7) * sin(z * 0.043) \
+		+ sin(x * 0.23 + z * 0.19)
+
+# A hard surface already forms a hardness seam with air: air uses the baseline 1.0 while
+# the solid uses its material hardness. This is the ordinary "break a rock" case, without
+# a second solid material in the same brick to accidentally switch the repair on.
+func test_rays_do_not_leak_through_a_hard_surface_beside_air() -> void:
+	var w := make_world()
+	var centre := Vector3(20.0, 49.56, 20.0)
+	w.hooks().debug_apply_sphere_paint(centre, 5.0, 2) # rock, hardness 3.0
+	settle(w)
+	w.hooks().debug_apply_sphere_subtract(centre, 3.0)
+	settle(w)
+
+	var leaks := 0
+	# The hard material only carves to radius 1.0. Rays in this annulus should hit the
+	# untouched procedural surface; a lattice left discontinuous at air steps through it.
+	# Use that closed-form surface as the oracle: the CPU raycast is also a sphere tracer and
+	# reproduces this bug, so comparing one leaky marcher to another would hide the artifact.
+	for i in range(24):
+		var angle := TAU * float(i) / 24.0
+		var origin := centre + Vector3(cos(angle) * 1.8, 8.0, sin(angle) * 1.8)
+		var marched: Dictionary = w.hooks().debug_raymarch_gbuffer(origin, Vector3(0, -1, 0))
+		var expected_y := terrain_height(origin.x, origin.z)
+		if not marched["hit"] or absf(float(marched["position"].y) - expected_y) > 0.15:
+			leaks += 1
+	assert_int(leaks).override_failure_message(
+		"%d of 24 rays leaked through a hard-material surface beside air" % leaks
+		).is_equal(0)
