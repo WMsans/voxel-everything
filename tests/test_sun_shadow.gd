@@ -45,9 +45,6 @@ const POOL_STABLE_TICKS := 120
 
 func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> bool:
 	var quiet := 0
-	var pool_quiet := 0
-	var last_draw_pages := -1
-	var last_requests_pending := -1
 	for i in range(SETTLE_BUDGET):
 		w.hooks().debug_lod_tick(pos, fwd)
 		await get_tree().process_frame
@@ -55,18 +52,46 @@ func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> bool:
 		quiet = quiet + 1 if d["requests_pending"] == 0 and d["builds_in_flight"] == 0 else 0
 		if quiet >= QUIET_TICKS:
 			return true
-		# A bounded pool can leave a stable, drawable coarse view with requests that
-		# cannot be funded. Treat that as settled only after the visible state has
-		# stopped changing for a longer streak; this avoids accepting a transient stall.
-		var pool_starved: bool = d["pages_free"] < 32 and d["requests_pending"] > 0 \
+		# The 4096-page fixture can leave refinement requests unfunded. Drain the build
+		# already submitted by this tick, then observe the last prepared scene without
+		# issuing another walk (which would immediately submit the same unfunded work).
+		# Accept this fallback only when every current draw page is resident, no scene node
+		# is dirty/partial, and the exact draw, resident, and pending identities stay fixed.
+		var draw_page_ids: PackedInt32Array = d["draw_page_ids"]
+		var resident_page_ids: PackedInt32Array = d["resident_page_ids"]
+		var pending_request_ids: Array = d["pending_request_ids"]
+		var all_draw_pages_resident := true
+		for page in draw_page_ids:
+			if resident_page_ids.find(page) < 0:
+				all_draw_pages_resident = false
+				break
+		var bounded_pool: bool = d["pages_free"] < 32 and d["requests_pending"] > 0
+		var scene_complete: bool = draw_page_ids.size() == d["draw_pages"] and all_draw_pages_resident \
 			and d["dirty_chunks"] == 0 and d["partial_allocations"] == 0
-		var same_view: bool = d["draw_pages"] == last_draw_pages \
-			and d["requests_pending"] == last_requests_pending
-		pool_quiet = pool_quiet + 1 if pool_starved and same_view else 0
-		if pool_quiet >= POOL_STABLE_TICKS:
-			return true
-		last_draw_pages = d["draw_pages"]
-		last_requests_pending = d["requests_pending"]
+		if bounded_pool and scene_complete:
+			var stable := 0
+			var last_draw_page_ids := draw_page_ids
+			var last_resident_page_ids := resident_page_ids
+			var last_pending_request_ids := pending_request_ids
+			var last_pages_free: int = d["pages_free"]
+			for j in range(POOL_STABLE_TICKS):
+				await get_tree().process_frame
+				var stable_d: Dictionary = w.hooks().debug_lod_stats()
+				var stable_draw_page_ids: PackedInt32Array = stable_d["draw_page_ids"]
+				var stable_resident_page_ids: PackedInt32Array = stable_d["resident_page_ids"]
+				var stable_pending_request_ids: Array = stable_d["pending_request_ids"]
+				var same_scene: bool = stable_d["builds_in_flight"] == 0 and stable_d["dirty_chunks"] == 0 \
+					and stable_d["partial_allocations"] == 0 and stable_d["pages_free"] == last_pages_free \
+					and stable_draw_page_ids == last_draw_page_ids \
+					and stable_resident_page_ids == last_resident_page_ids \
+					and stable_pending_request_ids == last_pending_request_ids
+				stable = stable + 1 if same_scene else 0
+				if stable >= POOL_STABLE_TICKS:
+					return true
+				last_draw_page_ids = stable_draw_page_ids
+				last_resident_page_ids = stable_resident_page_ids
+				last_pending_request_ids = stable_pending_request_ids
+				last_pages_free = stable_d["pages_free"]
 	return false
 
 func test_the_map_is_the_stated_size_and_covers_the_world() -> void:
