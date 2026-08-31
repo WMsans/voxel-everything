@@ -66,6 +66,47 @@ func test_sphere_subtract_carves_a_visible_hole() -> void:
 	var c: Color = w.hooks().debug_raymarch_pixel(Vector3(hp.x, hp.y + 2.0, hp.z), Vector3(0, -1, 0))
 	assert_bool(c.r < 0.52 and c.g > 0.05).is_true()
 
+func test_subtract_resolves_optional_material_hardness_once() -> void:
+	var w := make_world()
+	var tool := make_tool(w)
+	var hit: Dictionary = w.hooks().debug_raycast(Vector3(40, 80, 40), Vector3(0, -1, 0))
+	assert_bool(hit["hit"]).is_true()
+	assert_int(hit["material"]).override_failure_message(
+		"debug_raycast did not expose the struck surface material").is_greater(0)
+	var hp: Vector3 = hit["pos"]
+
+	var r: Dictionary = tool.apply_sphere_subtract(hp, 3.0, 2) # rock hardness 3
+	assert_array(r["rejected"]).is_empty()
+	for i in range(10):
+		w.hooks().debug_stream_frame(CAM)
+
+	var region := Vector3i(floori(hp.x / 25.6), floori(hp.y / 25.6), floori(hp.z / 25.6))
+	var slot: int = w.hooks().debug_region_map_entry(region)
+	assert_int(slot).is_greater_equal(0)
+	var rd := w.hooks().debug_local_rd() as RenderingDevice
+	var bytes := rd.buffer_get_data(w.hooks().debug_op_pool(), slot * 256 * 32, 32)
+	var words := bytes.to_int32_array()
+	var floats := bytes.to_float32_array()
+	assert_int(words[1]).override_failure_message(
+		"the subtract op did not retain its selected centre material").is_equal(2)
+	assert_float(floats[5]).override_failure_message(
+		"rock hardness was not resolved once into the stored op radius").is_equal_approx(1.0, 0.0001)
+
+	# Omitting material means the caller already supplied an effective radius.
+	var raw_pos := hp + Vector3(4.0, 0, 0)
+	var raw: Dictionary = tool.apply_sphere_subtract(raw_pos, 2.0)
+	assert_array(raw["rejected"]).is_empty()
+	for i in range(10):
+		w.hooks().debug_stream_frame(CAM)
+	bytes = rd.buffer_get_data(w.hooks().debug_op_pool(), slot * 256 * 32, 64)
+	words = bytes.to_int32_array()
+	floats = bytes.to_float32_array()
+	assert_int(words[9]).override_failure_message(
+		"the omitted subtract material did not default to 0").is_equal(0)
+	assert_float(floats[13]).override_failure_message(
+		"the omitted material unexpectedly changed the caller's effective radius"
+		).is_equal_approx(2.0, 0.0001)
+
 func test_sphere_add_places_material_4_in_open_sky() -> void:
 	var w := make_world()
 	var tool := make_tool(w)

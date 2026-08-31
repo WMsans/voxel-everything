@@ -12,6 +12,7 @@ struct RayHit {
 	float pos[3] = {0.0f, 0.0f, 0.0f};
 	float normal[3] = {0.0f, 0.0f, 0.0f};
 	float distance = 0.0f;
+	uint16_t material = 0;
 };
 
 // Sphere-traces the analytic field (G + each sample point's region ops) with no atlas and no

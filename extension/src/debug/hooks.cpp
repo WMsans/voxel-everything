@@ -5389,6 +5389,7 @@ Dictionary VoxelDebugHooks::debug_raycast(Vector3 origin, Vector3 dir) {
 	d["pos"] = Vector3(h.pos[0], h.pos[1], h.pos[2]);
 	d["normal"] = Vector3(h.normal[0], h.normal[1], h.normal[2]);
 	d["distance"] = h.distance;
+	d["material"] = static_cast<int>(h.material);
 	return d;
 }
 
