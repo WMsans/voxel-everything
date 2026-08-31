@@ -72,8 +72,12 @@ Shipped defaults, chosen by sweeping the two dials against these legs:
 | Near-field scale | `demo/main.tscn` `VoxelWorld.near_field_scale` | 0.40 |
 | Quality tier | default | High -- it costs ~0.2 ms here, so there is no reason to drop it |
 
-`near_field_scale` is the fraction of the internal 3D resolution the marcher runs at; the
-composite upsamples its G-buffer. Raise both towards 1.0 on a larger GPU. The benchmark
+`near_field_scale` is the fraction of the internal 3D resolution the marcher runs at. It
+buys VISIBILITY only: `composite.frag.glsl` resolves the material -- the triplanar albedo,
+the roughness and the AO -- once per full-resolution pixel from the position, normal and
+material id the marcher exports, so lowering the scale costs silhouette precision on the
+terrain edges and no texture detail (`tests/test_near_field_scale.gd` pins the second half
+of that). Raise both towards 1.0 on a larger GPU. The benchmark
 overrides them per run: `--render-scale=`, `--near-scale=`, `--quality=`, plus
 `--frames=`/`--warmup=`/`--screenshot=`.
 

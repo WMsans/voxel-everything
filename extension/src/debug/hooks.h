@@ -390,6 +390,12 @@ public:
 
 	Dictionary debug_deferred_probe(Vector3 pos, Vector3 fwd, int w, int h, int probe_mode);
 
+	// Near-field resolution decoupling: march at `march_scale` of the target size, composite
+	// into a full-size G-buffer, and report how much high-frequency detail survived in the
+	// albedo. Lowering the scale must not lower the detail -- resolving the material is the
+	// composite's job, at full resolution, from the geometry the marcher exports.
+	Dictionary debug_near_field_detail(Vector3 pos, Vector3 fwd, int w, int h, float march_scale);
+
 	bool debug_mesh_submit(Array chunks);
 
 	Array debug_mesh_collect();
@@ -447,6 +453,18 @@ protected:
 	static void _bind_methods();
 
 private:
+	// One 1x1 material-probe dispatch: raymarch.comp.glsl's pc.params.w > 0 path evaluates
+	// material_surface()/material_props() at a given point and normal with no marching. It
+	// OVERWRITES the raymarch pass's targets, so callers must finish reading those first.
+	bool probe_material(int mat, Vector3 p, Vector3 n, float rgb[3], float *roughness, float *ao);
+
+	// What composite.frag.glsl will resolve for a pixel the marcher described. The near field
+	// exports geometry plus a ray overlay and the composite turns that into an albedo and a
+	// gloss at full resolution, so a probe that reported only the marcher's own targets would
+	// no longer be reporting a colour anything downstream ever sees. `gloss_out` may be null.
+	Color resolve_near_field(int mat, Vector3 p, Vector3 n, Color overlay, float overlay_weight,
+			float *gloss_out);
+
 	VoxelWorld *world_ = nullptr;
 };
 } // namespace godot

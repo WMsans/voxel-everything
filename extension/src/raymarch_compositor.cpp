@@ -213,7 +213,7 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 
 	timings->begin(rd, "composite");
 	cmp->draw(rd, *gb, rmp->albedo_texture(), rmp->surface_texture(), rmp->hitpos_texture(),
-			view_proj, *materials, cam_pos, fade_start, fade_end);
+			view_proj, *materials, cp, fade_start, fade_end);
 	if (!cmp->last_draw_ok()) {
 		timings->cancel("composite");
 		abort_frame();
