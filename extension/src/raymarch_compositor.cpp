@@ -362,6 +362,7 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	static const float kNoSun[16] = {};
 	const bool use_sun = sun && sun->is_valid() && sun->rebuilds() > 0 &&
 			(beauty_flags & ve::kFlagSunMap) != 0u;
+	dp.shadow_depth_range = use_sun ? sun->depth_range() : 0.0f;
 	timings->begin(rd, "deferred");
 	SsaoPass *ssao = world->ssao_pass();
 	if (ssao) ssao->clear_result();

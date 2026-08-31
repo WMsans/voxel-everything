@@ -35,7 +35,12 @@ float sun_map_visibility(vec3 wpos, float ndl) {
 	vec2 uv = p.xy * 0.5 + 0.5;
 	if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return 1.0;
 	float slope = clamp(1.0 - abs(ndl), 0.0, 1.0);
-	float bias = sun.params.x * (0.5 + 2.0 * slope) + 0.0015;
+	// params.x is one shadow texel in world metres; params.y is the light-space depth range
+	// in the same metres. p.z and the stored depth are normalized [0,1], so the bias must be
+	// too. Scaling by params.x alone made the bias ~0.54 of the entire depth range at the
+	// demo's world size, which reported every pixel lit and left the far field flat.
+	float texel = sun.params.x / max(sun.params.y, 1e-6);
+	float bias = texel * (0.5 + 2.0 * slope) + 0.0015;
 	return (p.z + bias >= texture(sun_map, uv).r) ? 1.0 : 0.0;
 }
 

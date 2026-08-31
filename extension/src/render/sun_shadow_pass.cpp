@@ -107,6 +107,7 @@ void SunShadowPass::teardown() {
 	rebuilds_ = 0;
 	std::memset(view_proj_, 0, sizeof(view_proj_));
 	texel_world_ = 0.0f;
+	depth_range_ = 0.0f;
 }
 
 void SunShadowPass::mark_dirty() {
@@ -206,6 +207,7 @@ bool SunShadowPass::build(RenderingDevice *rd, LodPool &pool, LodRasterPass &ras
 	rd->draw_list_end();
 	std::memcpy(view_proj_, ortho.view_proj, sizeof(view_proj_));
 	texel_world_ = ortho.texel_world;
+	depth_range_ = ortho.depth_range;
 	dirty_ = false;
 	frames_since_ = 0;
 	rebuilds_++;
