@@ -1248,10 +1248,31 @@ Dictionary VoxelDebugHooks::debug_lod_stats() {
 	for (const ve::LodDrawItem &item : world_->context().lod->lod_walk_.draws)
 		draw_pages += item.page_count;
 	d["draw_pages"] = draw_pages;
+	// Expose the exact page identities used by the current camera cut, not just their
+	// aggregate count. A bounded pool may keep a drawable coarse cut while refinement
+	// requests remain pending; tests must prove that the actual scene page set is stable.
+	std::vector<ve::LodPageDraw> draw_page_list;
+	ve::lod_collect_page_draws(world_->context().lod->lod_walk_.draws,
+			world_->context().lod->lod_pages_of_, world_->context().lod->lod_page_quads_, &draw_page_list);
+	PackedInt32Array draw_page_ids;
+	for (const ve::LodPageDraw &page : draw_page_list) draw_page_ids.append(page.page);
+	d["draw_page_ids"] = draw_page_ids;
+	PackedInt32Array resident_page_ids;
+	for (const auto &page : world_->context().lod->lod_page_quads_)
+		if (page.second > 0) resident_page_ids.append(page.first);
+	d["resident_page_ids"] = resident_page_ids;
 	// Requests the last walk still wants built. Zero, with nothing in flight, is what
 	// "the far field has converged for this camera" means; tests wait on it instead of
-	// guessing a frame count.
+	// guessing a frame count. The exact request identities are also exported so a bounded
+	// pool fallback can distinguish a stable backlog from a rotating one.
 	d["requests_pending"] = static_cast<int>(world_->context().lod->lod_walk_.requests.size());
+	Array pending_request_ids;
+	for (const ve::LodBuildRequest &request : world_->context().lod->lod_walk_.requests) {
+		pending_request_ids.append(String::num_int64(request.level) + ":" +
+				String::num_int64(request.coord.x) + ":" + String::num_int64(request.coord.y) + ":" +
+				String::num_int64(request.coord.z));
+	}
+	d["pending_request_ids"] = pending_request_ids;
 	// LodArena::alloc is all-or-nothing, so this should always be zero -- but reporting a
 	// hardcoded 0 makes the test that asserts it vacuous. MEASURE the two shapes a
 	// partially funded build would actually take: a chunk holding a page the per-page quad
