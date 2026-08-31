@@ -8,8 +8,8 @@
 #include <vector>
 
 TEST_CASE("every material is at least as hard as the baseline") {
-	// hardness < 1.0 would make a carve reach outside op_world_aabb's pos +/- radius,
-	// and an op that reaches outside its declared AABB is dropped at region boundaries.
+	// Hardness models resistance: it may shrink a nominal removal dimension, never enlarge
+	// one. Softness is authored as a larger tool radius, not as a hardness below 1.0.
 	for (int i = 0; i < ve::kMaterialCount; i++)
 		CHECK(ve::kMaterials[i].hardness >= 1.0f);
 }
@@ -38,6 +38,18 @@ TEST_CASE("lookups map id i+1 to table entry i and fail soft out of range") {
 	CHECK(ve::material_glow(0) == doctest::Approx(0.0f));
 	CHECK(ve::material_hardness(9999) == doctest::Approx(1.0f));
 	CHECK(ve::material_glow(9999) == doctest::Approx(0.0f));
+}
+
+TEST_CASE("a removal's radius is scaled once, from the material the ray struck") {
+	REQUIRE(ve::material_hardness(2) == doctest::Approx(3.0f)); // rock
+	CHECK(ve::removal_radius(3.0f, 2) == doctest::Approx(1.0f));
+	CHECK(ve::removal_radius(3.0f, 1) == doctest::Approx(3.0f)); // baseline hardness 1.0
+	// The compatibility default: a caller that names no material gets its full radius.
+	CHECK(ve::removal_radius(3.0f, 0) == doctest::Approx(3.0f));
+	CHECK(ve::removal_radius(3.0f, 9999) == doctest::Approx(3.0f)); // unknown id, fail soft
+	// Never larger than nominal -- the property op_world_aabb's tightness rests on.
+	for (int i = 0; i <= ve::kMaterialCount; i++)
+		CHECK(ve::removal_radius(3.0f, static_cast<uint16_t>(i)) <= 3.0f);
 }
 
 // tools/convert_materials.sh cannot include a C++ header, so its MATERIALS array is a

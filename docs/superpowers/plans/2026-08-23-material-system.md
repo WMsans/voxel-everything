@@ -1,6 +1,11 @@
 # Material System Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: historical implementation record. Do not execute this plan.** The hardness
+> architecture in Tasks 2, 7, 8 and 9 (the GLSL hardness table, per-sample radius scaling,
+> and the Eikonal clamp with its GPU mirror) was superseded on 2026-08-31. Hardness is now
+> resolved once, from the centre ray's material, when the removal op is built; see
+> `docs/superpowers/specs/2026-08-23-material-system-design.md` §5. The task steps below are
+> kept only to document how the original implementation landed.
 
 **Goal:** Give every material a hardness and a glow alongside its existing texture maps, apply the glow in rendering and the hardness in carving, and add a demo scene for choosing the material being placed.
 

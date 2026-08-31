@@ -1,5 +1,6 @@
 #include "voxel_edit_tool.h"
 #include "voxel_world.h"
+#include "world/material_table.h"
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <algorithm>
 #include <cmath>
@@ -7,8 +8,10 @@
 using namespace godot;
 
 void VoxelEditTool::_bind_methods() {
-	ClassDB::bind_method(D_METHOD("apply_sphere_subtract", "pos", "radius"),
-			&VoxelEditTool::apply_sphere_subtract);
+	// `material` defaults to 0 (air), whose fail-soft hardness is 1.0, so every existing
+	// caller that passes only a position and a radius keeps carving at full size.
+	ClassDB::bind_method(D_METHOD("apply_sphere_subtract", "pos", "radius", "material"),
+			&VoxelEditTool::apply_sphere_subtract, DEFVAL(0));
 	ClassDB::bind_method(D_METHOD("apply_sphere_add", "pos", "radius", "material"),
 			&VoxelEditTool::apply_sphere_add);
 	ClassDB::bind_method(D_METHOD("apply_sphere_paint", "pos", "radius", "material"),
@@ -39,15 +42,22 @@ Dictionary VoxelEditTool::apply(uint32_t type, Vector3 pos, float radius, int ma
 	// Material is stored as a 16-bit id in the op and sampler; clamp hostile values.
 	op.material = static_cast<uint32_t>(std::clamp(material, 0, 65535));
 	op.pos[0] = pos.x; op.pos[1] = pos.y; op.pos[2] = pos.z;
-	op.radius = radius;
+	// Resistance is resolved HERE, once, from the material the centre ray struck -- never
+	// per sample inside the field. `radius` is the tool's nominal reach; what the op stores
+	// is its exact geometric reach, which is what op_world_aabb and every consumer built on
+	// it (region ranges, brick residency, the island blast impulse) then agree with.
+	// A future non-spherical removal scales its own dimensions the same way.
+	op.radius = type == ve::kOpSphereSubtract
+			? ve::removal_radius(radius, static_cast<uint16_t>(op.material))
+			: radius;
 	const ve::EditLog::AppendResult r = world->append_edit(op);
 	for (const ve::IVec3 &v : r.touched) touched.push_back(Vector3i(v.x, v.y, v.z));
 	for (const ve::IVec3 &v : r.rejected) rejected.push_back(Vector3i(v.x, v.y, v.z));
 	return out;
 }
 
-Dictionary VoxelEditTool::apply_sphere_subtract(Vector3 pos, float radius) {
-	return apply(ve::kOpSphereSubtract, pos, radius, 0);
+Dictionary VoxelEditTool::apply_sphere_subtract(Vector3 pos, float radius, int material) {
+	return apply(ve::kOpSphereSubtract, pos, radius, material);
 }
 
 Dictionary VoxelEditTool::apply_sphere_add(Vector3 pos, float radius, int material) {

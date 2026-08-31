@@ -149,37 +149,13 @@ func test_regeneration_is_idempotent() -> void:
 	w.hooks().debug_generate_pending()
 	check_bricks(w, bricks, SLOT, PackedByteArray(), 0, "regenerated")
 
-func test_hard_air_apron_clamp_matches_the_cpu_reference() -> void:
+func test_sharp_volume_step_bricks_match_the_cpu_reference() -> void:
 	var w := make_world()
-	# Brick (10,70,0) has terrain in y=[56.788,57.047]: every 16^3 cell sample ends
-	# at y=56.75 and is solid, while its positive apron at y=56.80 contains air. Paint the
-	# whole brick rock, then place a carve above it: rock's 0.2 m effective radius leaves the
-	# cells untouched, while baseline-hardness air sees the full 0.6 m radius. This forces the
-	# hardness discontinuity to exist ONLY on the apron the old 16^3 gate ignored.
-	var brick := Vector3i(10, 70, 0)
-	var ops := make_op(2, 2, Vector3(8.4, 56.4, 0.4), 2.0)
-	ops.append_array(make_op(0, 0, Vector3(8.4, 57.0, 0.4), 0.6))
-	w.hooks().debug_upload_region_ops(SLOT, ops, 2)
-	generate_region(w, REGION, SLOT, 2)
-	var d: Dictionary = w.hooks().debug_brick_diff(brick, SLOT, ops, 2)
-	assert_int(d["slot"]).is_greater_equal(0)
-	assert_int(d["sdf_max_diff"]).override_failure_message(
-		"hard/air apron SDF differs by %d encoded steps" % d["sdf_max_diff"]
-		).is_less_equal(1)
-	assert_int(d["mip_mismatch"]).is_equal(0)
-	assert_bool(d["palette_match"]).is_true()
-
-func test_clamped_seam_bricks_match_the_cpu_reference() -> void:
-	var w := make_world()
-	# The Eikonal clamp only changes bytes where the field violates the one-voxel-pitch
-	# Lipschitz bound, and until the hardness task switches on no analytic op produces such
-	# a seam. So this test injects one directly: a volume lattice whose SDF steps from -0.6
-	# to +0.6 between two adjacent planes (pitch 0.05 m, i.e. one brick voxel). Unioned in
-	# with kOpVolumeAdd it gives both bakes an identical discontinuous field; a sphere
-	# subtract supplies the gate's carve and the volume's rock (hardness 3.0) beside the
-	# terrain's grass (1.0) supplies the differing hardness. Bricks around that step MUST
-	# be clamped on BOTH sides to byte-identical results -- without the clamp the raw step
-	# is ~24 encoded steps wide, far past the suite's 1-step tolerance.
+	# The nastiest field the two bakes can be asked to agree on: a volume lattice whose SDF
+	# steps from -0.6 to +0.6 between two adjacent planes (pitch 0.05 m, one brick voxel).
+	# Unioned in with kOpVolumeAdd, the discontinuity lands squarely on the quantisation
+	# boundary, where a single differing rounding rule between ve::eval_brick and
+	# brick_gen.comp.glsl shows up as ~24 encoded steps rather than the suite's 1.
 	#
 	# The GPU pool stores every volume at kIslandDim (64) resolution, so the injected
 	# lattice is 64^3: a 3.15 m box spanning the surface, its step plane at y = 51.30.
@@ -203,9 +179,9 @@ func test_clamped_seam_bricks_match_the_cpu_reference() -> void:
 	# debug_island_frame); pump one frame so the GPU pool holds the bytes before generating.
 	w.hooks().debug_island_frame(1.0 / 60.0, Vector3.ZERO)
 	# kOpVolumeAdd: pos = lattice origin, radius = pitch, aux = [slot, dim]. The subtract
-	# sits BELOW the slab: it hollows the ground underneath (so the gate's carve condition
-	# holds on the step's own bricks) while leaving the step itself -- 2.4 m above the
-	# sphere centre vs its 2.2 m reach -- fully intact.
+	# sits BELOW the slab, hollowing the ground underneath so the step's own bricks carry a
+	# CSG chain rather than a lone volume op, while leaving the step itself -- 2.4 m above
+	# the sphere centre vs its 2.2 m reach -- fully intact.
 	var ops := make_op(4, 0, origin, PITCH, 0, DIM)
 	ops.append_array(make_op(0, 0, Vector3(14.0, 48.9, 14.0), 2.2))
 	w.hooks().debug_upload_region_ops(SLOT, ops, 2)
@@ -217,4 +193,4 @@ func test_clamped_seam_bricks_match_the_cpu_reference() -> void:
 		var brick := Vector3i(jobs[j * 8 + 0], jobs[j * 8 + 1], jobs[j * 8 + 2])
 		if (Vector3(brick) + Vector3(0.5, 0.5, 0.5) - centre_brick).length() <= 2.5:
 			seam_bricks.append(brick)
-	check_bricks(w, seam_bricks, SLOT, ops, 2, "clamped seam")
+	check_bricks(w, seam_bricks, SLOT, ops, 2, "sharp volume step")

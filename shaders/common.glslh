@@ -25,14 +25,6 @@ const int BRICK_VOXEL_COUNT = 4096;            // 16^3
 const int BRICK_SDF_COUNT = 4913;              // 17^3
 const float BRICK_SDF_MAX = float(BRICK_VOXELS); // last valid lattice coordinate
 
-// ve::kClampIterations. A magnitude travels at most SDF_RANGE before saturating, in steps
-// of VOXEL_SIZE, so ceil(0.64 / 0.05) = 13 passes reach any sample -- but snapshot-Jacobi
-// delivers each pull one pass later than an in-place sweep, and the worst inputs the Task 8
-// probe could construct (too-steep ramps, a quantised carve) took 13 passes to reach a
-// fixed point. The shipped count is that observed worst case doubled. It MUST stay equal
-// to kClampIterations in world/brick.h.
-const int CLAMP_ITERATIONS = 26;
-
 // A cell of the min-max chain holds no surface unless its range straddles this value.
 // It is exactly ve::encode_sdf(0.0f).
 const uint ENCODED_ZERO = 128u;

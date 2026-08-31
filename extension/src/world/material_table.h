@@ -15,7 +15,7 @@ namespace ve {
 struct MaterialDef {
 	const char *name;      // picker label
 	const char *asset;     // "04" -> assets/materials/04_basecolor.png, ...
-	float hardness;        // >= 1.0; divides a carve's radius. 1.0 = full radius.
+	float hardness;        // >= 1.0; divides a removal's nominal size. 1.0 = full size.
 	float glow;            // emissive strength; 0.0 = not emissive
 	float glow_rgb[3];
 	float flat_albedo[3];  // far-field and unknown-layer fallback
@@ -33,9 +33,9 @@ inline constexpr MaterialDef kMaterials[] = {
 
 inline constexpr int kMaterialCount = static_cast<int>(sizeof(kMaterials) / sizeof(kMaterials[0]));
 
-// A hardness below 1.0 would let a carve reach past op_world_aabb's pos +/- radius. Ops
-// that reach outside their declared AABB are dropped at region boundaries, so this is a
-// silent-data-loss bug, not a visual one. Caught at compile time instead.
+// Hardness models RESISTANCE: it may shrink a removal's nominal dimensions, never enlarge
+// them. Softness is expressed by authoring a larger tool radius, not by a hardness below
+// one. Caught at compile time so the table cannot express the other direction by accident.
 constexpr bool material_hardness_floor_holds() {
 	for (int i = 0; i < kMaterialCount; i++)
 		if (!(kMaterials[i].hardness >= 1.0f)) return false;
@@ -43,13 +43,30 @@ constexpr bool material_hardness_floor_holds() {
 }
 static_assert(material_hardness_floor_holds(), "material hardness must be >= 1.0");
 
-// Fail soft for air (0) and any id with no table entry: full-radius carve, no emission.
+// Fail soft for air (0) and any id with no table entry: full-size removal, no emission.
 float material_hardness(uint16_t id);
 float material_glow(uint16_t id);
 
-// The exact intended contents of shaders/material_table.glslh. That file is committed and a
-// unit test asserts it equals this string byte for byte; the test prints this text on
-// failure, so regenerating is copy-and-paste. Emitting at runtime and registering through
+// The effective size of a removal that a ray struck on `material`. Hardness is resolved
+// EXACTLY ONCE, here, before the op reaches any field evaluator: ve::apply_op and
+// shaders/field.glslh then see one ordinary sphere whose shape does not depend on the
+// material at the sample point. Scaling per sample instead kept the field's sign right but
+// destroyed its magnitude as a distance bound at a seam, which the near-field marcher
+// stepped straight through.
+//
+// The result is the op's EXACT geometric reach, so op_world_aabb (pos +/- radius) stays
+// tight and every consumer built on it -- region ranges, brick residency, connectivity
+// re-marking, op filtering -- agrees with what the evaluator draws.
+//
+// A future non-spherical removal scales its own dimensions through this same call; no field
+// evaluator gains a material branch.
+float removal_radius(float nominal_radius, uint16_t material);
+
+// The exact intended contents of shaders/material_table.glslh. Hardness is deliberately
+// NOT emitted: it is consumed once on the CPU at op construction (see removal_radius), so
+// no shader needs the table or a lookup. The file is committed and a unit test asserts it
+// equals this string byte for byte; the test prints this text on failure, so regenerating
+// is copy-and-paste. Emitting at runtime and registering through
 // load_shader_source's override map was rejected: BrickGenPass compiles brick_gen.comp.glsl
 // at render/orchestrator.cpp:182, before MaterialAtlas::initialize at :184, and
 // clear_shader_source_overrides() (called by tests) would leave the include unresolvable.

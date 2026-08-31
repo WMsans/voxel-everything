@@ -8,14 +8,6 @@
 
 const int MATERIAL_COUNT = 5;
 
-const float MAT_HARDNESS[MATERIAL_COUNT] = float[MATERIAL_COUNT](
-	1.000000, // grass_01
-	3.000000, // rock
-	1.400000, // ground_01
-	2.200000, // breakstone
-	1.100000 // ground_crack_01
-);
-
 const float MAT_GLOW[MATERIAL_COUNT] = float[MATERIAL_COUNT](
 	0.000000, // grass_01
 	0.000000, // rock
@@ -40,13 +32,10 @@ const vec3 MAT_FLAT_ALBEDO[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](
 	vec3(0.350000, 0.120000, 0.060000) // ground_crack_01
 );
 
-// Mirrors of ve::material_hardness / ve::material_glow, including their fail-soft
-// rule: air and any id with no table entry carve at full radius and emit nothing.
-float mat_hardness(uint id) {
-	int i = int(id) - 1;
-	return (i < 0 || i >= MATERIAL_COUNT) ? 1.0 : MAT_HARDNESS[i];
-}
-
+// Mirror of ve::material_glow, including its fail-soft rule: air and any id with
+// no table entry emit nothing. There is deliberately no hardness here -- a removal's
+// size is resolved once on the CPU by ve::removal_radius before the op is uploaded,
+// so every field sample sees one shape and no shader ever looks hardness up.
 float mat_glow(uint id) {
 	int i = int(id) - 1;
 	return (i < 0 || i >= MATERIAL_COUNT) ? 0.0 : MAT_GLOW[i];

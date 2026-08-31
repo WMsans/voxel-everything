@@ -103,6 +103,8 @@ func _process(_delta: float) -> void:
 	_player.global_position = xform.origin
 	_cam.global_transform = xform
 	for e in events_at(_frame):
+		# Scripted radii, deliberately unscaled: the capture must produce the same frames
+		# every run, so these carves do not depend on what happens to be under them.
 		_tool.apply_sphere_subtract(e[1], e[2])
 
 	# The image has to be read AFTER the frame it belongs to has been drawn.
