@@ -86,7 +86,7 @@ void CompositePass::invalidate_uniform_set(RenderingDevice *rd) {
 	if (rd && uset_.is_valid()) rd->free_rid(uset_);
 	uset_ = RID();
 	uset_shader_ = RID();
-	uset_src_albedo_ = RID();
+	uset_src_overlay_ = RID();
 	uset_src_surface_ = RID();
 	uset_src_hitpos_ = RID();
 	uset_material_albedo_ = RID();
@@ -102,7 +102,7 @@ void CompositePass::teardown() {
 		*r = RID();
 	}
 	uset_shader_ = RID();
-	uset_src_albedo_ = RID();
+	uset_src_overlay_ = RID();
 	uset_src_surface_ = RID();
 	uset_src_hitpos_ = RID();
 	uset_material_albedo_ = RID();
@@ -172,9 +172,9 @@ bool CompositePass::ensure_pipeline(RenderingDevice *rd, RID albedo, RID surface
 	return pipeline_.is_valid() && framebuffer_.is_valid();
 }
 
-void CompositePass::draw(RenderingDevice *rd, GBuffer &gb, RID src_albedo, RID src_surface,
+void CompositePass::draw(RenderingDevice *rd, GBuffer &gb, RID src_overlay, RID src_surface,
 		RID src_hitpos, const Projection &view_proj, const MaterialAtlas &materials,
-		const float cam_pos[3], float fade_start, float fade_end, RID marker) {
+		const ve::CameraParams &cam, float fade_start, float fade_end, RID marker) {
 	last_draw_ok_ = false;
 	const RID shader = marker.is_valid() ? shader_marker_ : shader_;
 	if (!shader.is_valid() || !gb.is_valid()) return;
@@ -185,7 +185,7 @@ void CompositePass::draw(RenderingDevice *rd, GBuffer &gb, RID src_albedo, RID s
 	u0->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
 	u0->set_binding(0);
 	u0->add_id(sampler_linear_);
-	u0->add_id(src_albedo);
+	u0->add_id(src_overlay);
 	u1.instantiate();
 	u1->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
 	u1->set_binding(1);
@@ -207,7 +207,7 @@ void CompositePass::draw(RenderingDevice *rd, GBuffer &gb, RID src_albedo, RID s
 	u4->add_id(sampler_nearest_);
 	u4->add_id(src_surface);
 
-	if (!(uset_.is_valid() && uset_shader_ == shader && src_albedo == uset_src_albedo_ &&
+	if (!(uset_.is_valid() && uset_shader_ == shader && src_overlay == uset_src_overlay_ &&
 			src_surface == uset_src_surface_ && src_hitpos == uset_src_hitpos_ &&
 			materials.albedo_array() == uset_material_albedo_ &&
 			materials.surface_array() == uset_material_surface_ &&
@@ -215,7 +215,7 @@ void CompositePass::draw(RenderingDevice *rd, GBuffer &gb, RID src_albedo, RID s
 		if (uset_.is_valid()) rd->free_rid(uset_);
 		uset_ = rd->uniform_set_create(Array::make(u0, u1, u2, u3, u4), shader, 0);
 		uset_shader_ = shader;
-		uset_src_albedo_ = src_albedo;
+		uset_src_overlay_ = src_overlay;
 		uset_src_surface_ = src_surface;
 		uset_src_hitpos_ = src_hitpos;
 		uset_material_albedo_ = materials.albedo_array();
@@ -224,18 +224,33 @@ void CompositePass::draw(RenderingDevice *rd, GBuffer &gb, RID src_albedo, RID s
 	}
 	if (!uset_.is_valid()) return;
 
+	// Exactly 128 bytes: Vulkan's guaranteed minimum push-constant size, so still portable.
+	// Both stages declare the same five vec4s (Godot rejects differing reflections between
+	// stages of one pipeline), and the vertex stage ignores everything but the block's shape.
 	PackedByteArray pc;
-	pc.resize(96);
+	pc.resize(128);
 	{
 		float *f = reinterpret_cast<float *>(pc.ptrw());
 		for (int c = 0; c < 4; c++)
 			for (int r = 0; r < 4; r++)
 				f[c * 4 + r] = view_proj.columns[c][r];
-		f[16] = cam_pos[0];
-		f[17] = cam_pos[1];
-		f[18] = cam_pos[2];
+		f[16] = cam.cam_pos[0];
+		f[17] = cam.cam_pos[1];
+		f[18] = cam.cam_pos[2];
+		// NOT cam.cam_pos[3]: the marcher's block hides the packed beauty flags in that slot.
 		f[19] = fade_start;
 		f[20] = fade_end;
+		f[21] = cam.cam_fwd[0];
+		f[22] = cam.cam_fwd[1];
+		f[23] = cam.cam_fwd[2];
+		f[24] = cam.cam_right[0];
+		f[25] = cam.cam_right[1];
+		f[26] = cam.cam_right[2];
+		f[27] = cam.params[0]; // tan(fov_x / 2)
+		f[28] = cam.cam_up[0];
+		f[29] = cam.cam_up[1];
+		f[30] = cam.cam_up[2];
+		f[31] = cam.params[1]; // tan(fov_y / 2)
 	}
 
 	PackedColorArray clears;

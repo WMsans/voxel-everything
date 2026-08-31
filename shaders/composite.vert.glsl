@@ -4,8 +4,10 @@
 // reflections between stages in the same pipeline.
 layout(push_constant, std430) uniform Push {
 	mat4 view_proj;
-	vec4 cam;  // xyz = camera position, w = fade start
-	vec4 fade; // x = fade end, yzw unused
+	vec4 cam;        // xyz = camera position, w = fade start
+	vec4 fade;       // x = fade end, yzw = camera forward
+	vec4 right_tanx; // xyz = camera right, w = tan(fov_x / 2)
+	vec4 up_tany;    // xyz = camera up,    w = tan(fov_y / 2)
 } pc;
 layout(location = 0) out vec2 uv_out;
 void main() {

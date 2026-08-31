@@ -39,27 +39,55 @@ func test_a_ground_hit_writes_a_material_and_a_normal() -> void:
 	assert_float(n.length()).is_equal_approx(1.0, 0.01)
 	assert_float(n.y).is_greater(0.7)
 
-func test_the_albedo_channel_is_albedo_and_not_shaded_colour() -> void:
+# The near field's G-buffer albedo is produced by composite.frag.glsl, not by the marcher --
+# the marcher exports geometry and a ray overlay, and the material is resolved once per
+# full-resolution pixel (see tests/test_near_field_scale.gd for why). So this contract is
+# asserted where the value is written: on the composited G-buffer, through a real march at
+# the shipped scale rather than a 1x1 probe.
+func test_the_composited_albedo_is_albedo_and_not_shaded_colour() -> void:
 	var w := make_world()
-	var lit_probe := probe_ground(w)
+	var lit: Dictionary = w.hooks().debug_near_field_detail(
+		Vector3(20.0, 75.0, 20.0), Vector3(0, -1, 0), 96, 96, 0.4)
+	assert_bool(lit["ran"]).is_true()
+	assert_bool(lit["center_hit"]).is_true()
 	w.set_effect_enabled("raymarched_sun_shadow", false)
-	var flat_probe := probe_ground(w)
-	var a: Color = lit_probe["albedo"]
-	var b: Color = flat_probe["albedo"]
-	# Turning the sun ray off moves the SUN channel and nothing else. If the raymarcher were
-	# still calling shade_terrain(), the light would be baked into the colour and the albedo
-	# would move with it. This is the contract the whole deferred stack rests on.
+	var flat: Dictionary = w.hooks().debug_near_field_detail(
+		Vector3(20.0, 75.0, 20.0), Vector3(0, -1, 0), 96, 96, 0.4)
+	var a: Color = lit["center_albedo"]
+	var b: Color = flat["center_albedo"]
+	# Turning the sun ray off moves the SUN channel and nothing else. If either stage were
+	# baking light into the colour, the albedo would move with it. This is the contract the
+	# whole deferred stack rests on.
 	assert_float(absf(a.r - b.r)).is_less(0.005)
 	assert_float(absf(a.g - b.g)).is_less(0.005)
 	assert_float(absf(a.b - b.b)).is_less(0.005)
-	assert_float(flat_probe["sun"]).is_greater_equal(lit_probe["sun"])
+	assert_float(float(flat["center_sun"])).is_greater_equal(float(lit["center_sun"]))
 	# ...and what is stored is the material's own albedo, darkened only by ambient occlusion
 	# (at most 35%), never by a lambert term.
-	var direct: Color = w.hooks().debug_material_probe(int(lit_probe["material"]),
-		lit_probe["position"], lit_probe["normal"])
-	assert_float(a.r).is_between(direct.r * 0.65 - 0.01, direct.r + 0.01)
-	assert_float(a.g).is_between(direct.g * 0.65 - 0.01, direct.g + 0.01)
-	assert_float(a.b).is_between(direct.b * 0.65 - 0.01, direct.b + 0.01)
+	var direct: Color = w.hooks().debug_material_probe(int(lit["center_material"]),
+		lit["center_position"], lit["center_normal"])
+	assert_float(a.r).is_between(direct.r * 0.65 - 0.02, direct.r + 0.02)
+	assert_float(a.g).is_between(direct.g * 0.65 - 0.02, direct.g + 0.02)
+	assert_float(a.b).is_between(direct.b * 0.65 - 0.02, direct.b + 0.02)
+
+# The marcher's own targets, unresolved. Its albedo image carries the ray OVERLAY: on an
+# ordinary lit hit there is nothing to overlay, so the weight is zero and the composite keeps
+# the whole material. A non-zero weight here on plain ground would mean a ray effect was
+# leaking into every pixel.
+func test_an_ordinary_hit_carries_no_ray_overlay() -> void:
+	var w := make_world()
+	var d := probe_ground(w)
+	assert_bool(d["hit"]).is_true()
+	assert_float(float(d["overlay_weight"])).is_equal_approx(0.0, 0.001)
+
+# ...and a miss is ALL overlay: the sky owns the pixel, at full weight.
+func test_a_miss_is_entirely_overlay() -> void:
+	var w := make_world()
+	var d: Dictionary = w.hooks().debug_raymarch_gbuffer(Vector3(20.0, 75.0, 20.0), Vector3(0, 1, 0))
+	assert_bool(d["hit"]).is_false()
+	assert_float(float(d["overlay_weight"])).is_equal_approx(1.0, 0.001)
+	var overlay: Color = d["overlay"]
+	assert_float(overlay.b).is_greater(overlay.r)
 
 func test_the_sky_writes_material_zero_and_keeps_the_sky_colour() -> void:
 	var w := make_world()

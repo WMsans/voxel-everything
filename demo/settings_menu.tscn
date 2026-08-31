@@ -147,7 +147,7 @@ layout_mode = 2
 unique_name_in_owner = true
 custom_minimum_size = Vector2(480, 0)
 layout_mode = 2
-text = "Near-field resolution is the fraction of the internal 3D resolution the raymarcher runs at; the composite upsamples its G-buffer back to full size. Below 100% the terrain silhouette is resolved on that coarser grid, which is what the stepped pixels along terrain edges are. Raise it to lose them, lower it to buy frame time."
+text = "Near-field resolution is the fraction of the internal 3D resolution the raymarcher runs at. Only the terrain SILHOUETTE is resolved on that coarser grid, which is what the stepped pixels along terrain edges are; the material texture is resolved per full-resolution pixel either way, so lowering this does not blur the ground. Raise it to lose the stepping, lower it to buy frame time."
 autowrap_mode = 3
 
 [node name="Buttons" type="HBoxContainer" parent="Center/Panel/Margin/Box"]

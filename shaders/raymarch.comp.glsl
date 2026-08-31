@@ -31,6 +31,17 @@ layout(set = 0, binding = 19) uniform sampler2DArray material_surface_tex;
 // this is one wide row rather than a square tile.
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
+// This pass exports a DESCRIPTION of what each ray found; composite.frag.glsl resolves the
+// material from it, once per full-resolution pixel. near_field_scale then buys march time
+// without costing texture detail -- see the note at the top of composite.frag.glsl.
+//
+//   out_albedo   rgb = ray overlay colour, a = sun visibility
+//   out_hitpos   xyz = world hit position, w = hit flag
+//   out_surface  xy = oct normal, z = material id, w = overlay weight
+//
+// The overlay is everything a ray knows that a surface does not: the sky on a miss, a glossy
+// reflection, the pending-edit tint, the cost view. Each folds into one colour and one weight
+// via overlay_mix(), and the composite mixes the pair over the material it resolves.
 layout(set = 0, binding = 0, rgba8) writeonly uniform image2D out_albedo;
 layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D out_hitpos;
 layout(set = 0, binding = 20, rgba16f) writeonly uniform image2D out_surface;
@@ -690,6 +701,17 @@ float island_sun_visibility(vec3 ro, int island_count, float max_shadow_dist) {
 	return clamp(res, 0.0, 1.0);
 }
 
+// Fold one more overlay over the ones already accumulated. Two mixes over the same base are
+// a single mix over that base -- mix(mix(b, c, w), nc, nw) = mix(b, c', w') with
+// w' = 1 - (1 - w)(1 - nw) -- which is what lets the composite apply the lot AFTER it
+// resolves the material the marcher never touched.
+void overlay_mix(inout vec3 c, inout float w, vec3 nc, float nw) {
+	float keep = w * (1.0 - nw);
+	float total = keep + nw;
+	if (total > 0.0) c = (c * keep + nc * nw) / total;
+	w = total;
+}
+
 void main() {
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
 	ivec2 size = imageSize(out_albedo);
@@ -725,30 +747,23 @@ void main() {
 
 	uint flags = floatBitsToUint(pc.cam_pos.w);
 
-	// Sky and misses: material 0 means "no voxel here". The albedo channel carries the sky
-	// gradient and the deferred pass passes material 0 straight through unlit, so sky_color()
-	// still lives in exactly one place.
-	vec3 albedo = sky_color(rd);
+	// Sky and misses: material 0 means "no voxel here", and the sky IS the whole pixel, so it
+	// goes into the overlay at full weight. The composite writes it through unchanged and the
+	// deferred pass passes material 0 on unlit -- sky_color() still lives in one place.
+	vec3 overlay = sky_color(rd);
+	float overlay_w = 1.0;
 	vec2 oct = oct_encode(-rd);
 	float mat_id = 0.0;
-	float gloss = 0.0;
-	float ao = 1.0;
 	float sun = 1.0;
 	vec4 hitpos = vec4(0.0);
 
 	if (best.hit) {
-		// The pixel's world footprint at the hit: the ray direction's screen derivative
-		// scaled by distance. tan_x/tan_y and the target size are already in the push
-		// constant, so this costs two multiplies and no extra state.
-		vec3 ddx = pc.cam_right.xyz * (2.0 * pc.params.x / float(size.x)) * best.t;
-		vec3 ddy = pc.cam_up.xyz * (2.0 * pc.params.y / float(size.y)) * best.t;
-		vec4 surf = material_surface(best.mat, best.p, best.n, ddx, ddy);
-		vec2 props = material_props(best.mat, best.p, best.n, ddx, ddy);
-		albedo = surf.rgb;
+		// A hit is the material's pixel, not the ray's: the overlay starts empty and the
+		// composite resolves the albedo, the gloss and the AO from what is stored below.
+		overlay = vec3(0.0);
+		overlay_w = 0.0;
 		oct = oct_encode(best.n);
 		mat_id = float(best.mat);
-		gloss = 1.0 - props.x;
-		ao = props.y;
 		hitpos = vec4(best.p, 1.0);
 		if ((flags & BEAUTY_RAY_SUN_SHADOW) != 0u) {
 			// One voxel of offset: less and the ray self-shadows on its own surface, more
@@ -758,25 +773,37 @@ void main() {
 			sun = min(terrain_sun_visibility(sro, sd),
 					island_sun_visibility(sro, island_count, sd));
 		}
-		if (pc.params.w < -0.5) gloss = 1.0;
-		if ((flags & BEAUTY_GLOSSY_RAYS) != 0u && gloss > GLOSSY_SDF_MIN_GLOSS) {
-			vec3 rr = normalize(reflect(rd, best.n));
-			vec3 rro = best.p + best.n * GLOSSY_SDF_BIAS;
-			int reflected_steps = GLOSSY_SDF_STEPS;
-			Hit reflected = march_terrain(rro, rr, GLOSSY_SDF_MAX_DIST, reflected_steps);
-			// A reflected ray leaves the primary tile, so its tile mask is invalid. AABB-reject
-			// every live island descriptor, sharing the same remaining 64-step budget.
-			for (int i = 0; i < island_count && reflected_steps > 0; i++)
-				march_island(i, rro, rr, reflected, reflected_steps);
-			vec3 reflected_albedo = sky_color(rr);
-			if (reflected.hit)
-				reflected_albedo = material_surface(reflected.mat, reflected.p,
-						reflected.n, ddx, ddy).rgb;
-			float ndv = clamp(dot(best.n, -rd), 0.0, 1.0);
-			float fresnel = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);
-			float weight = clamp(GLOSSY_SDF_STRENGTH * fresnel *
-					smoothstep(0.5, 1.0, gloss), 0.0, 0.85);
-			albedo = mix(albedo, reflected_albedo, weight);
+		if ((flags & BEAUTY_GLOSSY_RAYS) != 0u) {
+			// The only surviving material read on the primary path, and it is gated on the
+			// feature that needs it: a reflection is a property of the RAY, so it has to be
+			// resolved where the ray is, and its strength depends on the surface's gloss.
+			// The pixel's world footprint at the hit -- the ray direction's screen derivative
+			// scaled by distance -- is good enough for a reflection at march resolution.
+			vec3 ddx = pc.cam_right.xyz * (2.0 * pc.params.x / float(size.x)) * best.t;
+			vec3 ddy = pc.cam_up.xyz * (2.0 * pc.params.y / float(size.y)) * best.t;
+			float gloss = pc.params.w < -0.5
+					? 1.0
+					: 1.0 - material_props(best.mat, best.p, best.n, ddx, ddy).x;
+			if (gloss > GLOSSY_SDF_MIN_GLOSS) {
+				vec3 rr = normalize(reflect(rd, best.n));
+				vec3 rro = best.p + best.n * GLOSSY_SDF_BIAS;
+				int reflected_steps = GLOSSY_SDF_STEPS;
+				Hit reflected = march_terrain(rro, rr, GLOSSY_SDF_MAX_DIST, reflected_steps);
+				// A reflected ray leaves the primary tile, so its tile mask is invalid.
+				// AABB-reject every live island descriptor, sharing the same remaining
+				// 64-step budget.
+				for (int i = 0; i < island_count && reflected_steps > 0; i++)
+					march_island(i, rro, rr, reflected, reflected_steps);
+				vec3 reflected_albedo = sky_color(rr);
+				if (reflected.hit)
+					reflected_albedo = material_surface(reflected.mat, reflected.p,
+							reflected.n, ddx, ddy).rgb;
+				float ndv = clamp(dot(best.n, -rd), 0.0, 1.0);
+				float fresnel = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);
+				float weight = clamp(GLOSSY_SDF_STRENGTH * fresnel *
+						smoothstep(0.5, 1.0, gloss), 0.0, 0.85);
+				overlay_mix(overlay, overlay_w, reflected_albedo, weight);
+			}
 		}
 	}
 
@@ -788,7 +815,7 @@ void main() {
 		vec3 tint = et == 0u ? vec3(1.0, 0.55, 0.1)
 		          : et == 1u ? flat_material_albedo(4u)
 		          : flat_material_albedo(uint(edits.params.z));
-		albedo = mix(albedo, tint, 0.45);
+		overlay_mix(overlay, overlay_w, tint, 0.45);
 	}
 
 	// One heat unit per primary marching step; 512 heat units is white. Clamp the integer
@@ -801,37 +828,37 @@ void main() {
 	if (pc.params.w > 0.0) {
 		vec4 surf = material_surface(uint(pc.params.w), pc.cam_pos.xyz,
 				normalize(pc.cam_fwd.xyz), vec3(0.0), vec3(0.0));
+		vec2 props = material_props(uint(pc.params.w), pc.cam_pos.xyz,
+				normalize(pc.cam_fwd.xyz), vec3(0.0), vec3(0.0));
 		int cost_i = (px.y * size.x + px.x) * 2;
 		cost_out.v[cost_i + 0] = uint(65536 - primary_steps);
 		cost_out.v[cost_i + 1] =
 				(g_brick_cells & 0xFFFFu) | (min(g_region_cells, 0xFFFFu) << 16);
 		vec3 probe_albedo = (flags & BEAUTY_COST_VIEW) != 0u ? vec3(cost_heat) : surf.rgb;
 		imageStore(out_albedo, px, vec4(probe_albedo, 1.0));
-		imageStore(out_surface, px, vec4(0.0, 0.0, pc.params.w, 0.0));
+		// The oct slots carry the roughness and the AO instead of a normal: this dispatch has
+		// no geometry, and they are what the composite folds into a resolved pixel, so a
+		// caller can reproduce that fold from one probe rather than guessing at it.
+		imageStore(out_surface, px, vec4(props.x, props.y, pc.params.w, 0.0));
 		imageStore(out_hitpos, px, vec4(pc.cam_pos.xyz, 1.0));
 		return;
 	}
 
+	// The cost view replaces the whole pixel, so it is an overlay at full weight -- which also
+	// bypasses the AO fold and the sun, as it always has. Everything else in the G-buffer
+	// stays truthful: depth, normal, material and sun visibility are written exactly as they
+	// would be, so the depth test, the outlines and the LoD seam behave normally and the view
+	// can be toggled mid-flight.
 	if ((flags & BEAUTY_COST_VIEW) != 0u) {
-		// The final store below also bypasses AO and sun lighting. This makes the contract
-		// exact at both endpoints rather than merely preserving the heat before shading.
-		albedo = vec3(cost_heat);
-		// Everything else in the G-buffer stays truthful: depth, normal, material and sun
-		// visibility are written exactly as they would be, so the depth test, the outlines
-		// and the LoD seam behave normally and the view can be toggled mid-flight.
+		overlay = vec3(cost_heat);
+		overlay_w = 1.0;
+		sun = 1.0;
 	}
 
-	// AO has no channel of its own. The cel stack only ever multiplies the AMBIENT term by
-	// it, and folding it into the albedo here costs nothing and keeps hitpos.w the pure hit
-	// flag every existing reader already treats it as. 0.65 is how much of the map is
-	// allowed to darken the surface; a full multiply reads as dirt in the cel bands.
 	int cost_i = (px.y * size.x + px.x) * 2;
 	cost_out.v[cost_i + 0] = uint(65536 - primary_steps);
 	cost_out.v[cost_i + 1] = (g_brick_cells & 0xFFFFu) | (min(g_region_cells, 0xFFFFu) << 16);
-	if ((flags & BEAUTY_COST_VIEW) != 0u)
-		imageStore(out_albedo, px, vec4(vec3(cost_heat), 1.0));
-	else
-		imageStore(out_albedo, px, vec4(albedo * mix(1.0, ao, 0.65), sun));
-	imageStore(out_surface, px, vec4(oct, mat_id, gloss));
+	imageStore(out_albedo, px, vec4(overlay, sun));
+	imageStore(out_surface, px, vec4(oct, mat_id, overlay_w));
 	imageStore(out_hitpos, px, hitpos);
 }

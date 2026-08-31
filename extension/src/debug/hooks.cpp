@@ -238,6 +238,8 @@ void VoxelDebugHooks::_bind_methods() {
 			"shadow", "ao", "gloss"), &VoxelDebugHooks::debug_cel_reference);
 	ClassDB::bind_method(D_METHOD("debug_deferred_probe", "pos", "fwd", "w", "h", "probe_mode"),
 			&VoxelDebugHooks::debug_deferred_probe);
+	ClassDB::bind_method(D_METHOD("debug_near_field_detail", "pos", "fwd", "w", "h", "march_scale"),
+			&VoxelDebugHooks::debug_near_field_detail);
 	ClassDB::bind_method(D_METHOD("debug_material_atlas_stats"), &VoxelDebugHooks::debug_material_atlas_stats);
 	ClassDB::bind_method(D_METHOD("debug_material_alpha_stats", "layer"),
 			&VoxelDebugHooks::debug_material_alpha_stats);
@@ -374,7 +376,7 @@ Dictionary VoxelDebugHooks::debug_contact_shadow_probe(Vector3 pos, Vector3 fwd,
 	world_->lod_fade_band(&fade_start, &fade_end);
 	world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
 			world_->raymarch_pass()->surface_texture(), world_->raymarch_pass()->hitpos_texture(), view_proj,
-			*world_->material_atlas(), p, fade_start, fade_end);
+			*world_->material_atlas(), cp, fade_start, fade_end);
 	if (!world_->composite_pass()->last_draw_ok()) return d;
 	DeferredPass::Params dp;
 	const Projection inv = view_proj.inverse();
@@ -510,7 +512,7 @@ Dictionary VoxelDebugHooks::debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, in
 		world_->lod_fade_band(&fade_start, &fade_end);
 		world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
 				world_->raymarch_pass()->surface_texture(), world_->raymarch_pass()->hitpos_texture(), view_proj,
-				*world_->material_atlas(), p, fade_start, fade_end);
+				*world_->material_atlas(), cp, fade_start, fade_end);
 		if (!world_->composite_pass()->last_draw_ok()) break;
 		const bool ssgi_ok = world_->ssgi_pass()->render(device, *world_->gbuffer(), world_->beauty_camera()->buffer(),
 				prev_view_proj, i > 0, settings, static_cast<uint32_t>(i));
@@ -606,7 +608,7 @@ Dictionary VoxelDebugHooks::debug_ssao_probe(Vector3 pos, Vector3 fwd, int w, in
 		world_->lod_fade_band(&fade_start, &fade_end);
 		world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
 				world_->raymarch_pass()->surface_texture(), world_->raymarch_pass()->hitpos_texture(), view_proj,
-				*world_->material_atlas(), p, fade_start, fade_end);
+				*world_->material_atlas(), cp, fade_start, fade_end);
 		if (world_->composite_pass()->last_draw_ok())
 			ran = world_->ssao_pass()->render(device, *world_->gbuffer(),
 					world_->beauty_camera()->buffer(), settings);
@@ -754,7 +756,7 @@ Dictionary VoxelDebugHooks::debug_ssgi_reprojection_probe(Vector3 previous_pos, 
 			world_->lod_fade_band(&fade_start, &fade_end);
 			world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
 					world_->raymarch_pass()->surface_texture(), world_->raymarch_pass()->hitpos_texture(), view_proj,
-					*world_->material_atlas(), camera_position, fade_start, fade_end);
+					*world_->material_atlas(), camera, fade_start, fade_end);
 			if (!world_->composite_pass()->last_draw_ok()) return false;
 			const bool ssgi_ok = world_->ssgi_pass()->render(device, *world_->gbuffer(), world_->beauty_camera()->buffer(),
 					previous_mapping, have_history, settings, frame);
@@ -1588,7 +1590,7 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 	float probe_fade_end = ve::kLodFadeEndM;
 	world_->lod_fade_band(&probe_fade_start, &probe_fade_end);
 	world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
-			world_->raymarch_pass()->surface_texture(), world_->raymarch_pass()->hitpos_texture(), vp, *world_->material_atlas(), p,
+			world_->raymarch_pass()->surface_texture(), world_->raymarch_pass()->hitpos_texture(), vp, *world_->material_atlas(), cp,
 			probe_fade_start, probe_fade_end, marker);
 	if (!world_->composite_pass()->last_draw_ok()) {
 		cleanup();
@@ -3174,13 +3176,23 @@ Color VoxelDebugHooks::debug_raymarch_pixel(Vector3 origin, Vector3 dir) {
 	if (!world_->render_probe_pixel(origin, dir)) return Color(1, 0, 1);
 	RenderingDevice *device = world_->rd();
 	const PackedByteArray data = device->texture_get_data(world_->raymarch_pass()->albedo_texture(), 0);
+	const PackedByteArray sf = device->texture_get_data(world_->raymarch_pass()->surface_texture(), 0);
 	const PackedByteArray hp = device->texture_get_data(world_->raymarch_pass()->hitpos_texture(), 0);
-	if (data.size() < 4 || hp.size() < 16) return Color(1, 0, 1);
+	if (data.size() < 4 || sf.size() < 8 || hp.size() < 16) return Color(1, 0, 1);
 	const uint8_t *b = data.ptr();
+	const uint16_t *s = reinterpret_cast<const uint16_t *>(sf.ptr());
 	const float *hf = reinterpret_cast<const float *>(hp.ptr());
+	// The marcher's albedo target is the ray OVERLAY now, not a colour. Resolve the material
+	// the way the composite will, so "what colour is this pixel" keeps its old answer.
+	const float e[2] = {half_to_float(s[0]), half_to_float(s[1])};
+	float n[3];
+	ve::oct_decode(e, n);
+	const Color c = resolve_near_field(static_cast<int>(half_to_float(s[2]) + 0.5f),
+			Vector3(hf[0], hf[1], hf[2]), Vector3(n[0], n[1], n[2]),
+			Color(b[0] / 255.0f, b[1] / 255.0f, b[2] / 255.0f, 1.0f), half_to_float(s[3]), nullptr);
 	// Alpha stays the HIT FLAG, as every existing caller assumes -- the albedo image's own
 	// alpha is sun visibility and would read as "missed" for any shadowed pixel.
-	return Color(b[0] / 255.0f, b[1] / 255.0f, b[2] / 255.0f, hf[3]);
+	return Color(c.r, c.g, c.b, hf[3]);
 }
 
 Dictionary VoxelDebugHooks::debug_raymarch_probe(Vector3 origin, Vector3 dir) {
@@ -3190,10 +3202,22 @@ Dictionary VoxelDebugHooks::debug_raymarch_probe(Vector3 origin, Vector3 dir) {
 	RenderingDevice *device = world_->rd();
 	const PackedByteArray hp = device->texture_get_data(world_->raymarch_pass()->hitpos_texture(), 0);
 	const PackedByteArray col = device->texture_get_data(world_->raymarch_pass()->albedo_texture(), 0);
-	if (hp.size() < 16 || col.size() < 4) return d;
+	const PackedByteArray sf = device->texture_get_data(world_->raymarch_pass()->surface_texture(), 0);
+	if (hp.size() < 16 || col.size() < 4 || sf.size() < 8) return d;
 	const float *hf = reinterpret_cast<const float *>(hp.ptr());
 	const uint8_t *b = col.ptr();
-	d["color"] = Color(b[0] / 255.0f, b[1] / 255.0f, b[2] / 255.0f, 1.0);
+	const uint16_t *sv = reinterpret_cast<const uint16_t *>(sf.ptr());
+	const float oct_e[2] = {half_to_float(sv[0]), half_to_float(sv[1])};
+	float nrm[3];
+	ve::oct_decode(oct_e, nrm);
+	const int hit_mat = static_cast<int>(half_to_float(sv[2]) + 0.5f);
+	d["material"] = hit_mat;
+	d["normal"] = Vector3(nrm[0], nrm[1], nrm[2]);
+	// `color` is what the composite resolves for this pixel, not the marcher's overlay target
+	// -- the marcher stopped resolving materials when that moved to full resolution.
+	d["color"] = resolve_near_field(hit_mat, Vector3(hf[0], hf[1], hf[2]),
+			Vector3(nrm[0], nrm[1], nrm[2]),
+			Color(b[0] / 255.0f, b[1] / 255.0f, b[2] / 255.0f, 1.0f), half_to_float(sv[3]), nullptr);
 	if (hf[3] < 0.5f) return d; // sky miss
 	d["hit"] = true;
 	d["pos"] = Vector3(hf[0], hf[1], hf[2]);
@@ -3292,16 +3316,26 @@ Dictionary VoxelDebugHooks::debug_raymarch_gbuffer(Vector3 origin, Vector3 dir) 
 	const uint8_t *a = ab.ptr();
 	const uint16_t *s = reinterpret_cast<const uint16_t *>(sf.ptr());
 	const float *h = reinterpret_cast<const float *>(hp.ptr());
-	d["albedo"] = Color(a[0] / 255.0f, a[1] / 255.0f, a[2] / 255.0f, 1.0f);
 	d["sun"] = a[3] / 255.0f;
 	const float e[2] = {half_to_float(s[0]), half_to_float(s[1])};
 	float n[3];
 	ve::oct_decode(e, n);
 	d["normal"] = Vector3(n[0], n[1], n[2]);
-	d["material"] = static_cast<int>(half_to_float(s[2]) + 0.5f);
-	d["gloss"] = half_to_float(s[3]);
+	const int mat = static_cast<int>(half_to_float(s[2]) + 0.5f);
+	d["material"] = mat;
 	d["hit"] = h[3] > 0.5f;
 	d["position"] = Vector3(h[0], h[1], h[2]);
+	// What the marcher actually stored: the ray overlay and the weight the composite mixes it
+	// with. On an ordinary hit that is (0,0,0) at weight 0 -- the whole pixel is the material.
+	const Color overlay(a[0] / 255.0f, a[1] / 255.0f, a[2] / 255.0f, 1.0f);
+	d["overlay"] = overlay;
+	d["overlay_weight"] = half_to_float(s[3]);
+	// ...and what the composite resolves from it. `albedo` and `gloss` are G-BUFFER values,
+	// which is where they are produced now; this reproduces that resolve for one pixel.
+	float gloss = 0.0f;
+	d["albedo"] = resolve_near_field(mat, Vector3(h[0], h[1], h[2]), Vector3(n[0], n[1], n[2]),
+			overlay, half_to_float(s[3]), &gloss);
+	d["gloss"] = gloss;
 	return d;
 }
 
@@ -3743,7 +3777,7 @@ Dictionary VoxelDebugHooks::debug_ssr_probe(int fixture, int w, int h) {
 	world_->lod_fade_band(&fade_start, &fade_end);
 	world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
 			world_->raymarch_pass()->surface_texture(), world_->raymarch_pass()->hitpos_texture(), view_proj,
-			*world_->material_atlas(), camera_pos, fade_start, fade_end);
+			*world_->material_atlas(), camera_params, fade_start, fade_end);
 	if (!world_->composite_pass()->last_draw_ok()) return d;
 	auto float16 = [](float value) -> uint16_t {
 		uint32_t bits;
@@ -4203,11 +4237,22 @@ Dictionary VoxelDebugHooks::debug_glossy_sdf_probe(Vector3 origin, Vector3 dir) 
 	const uint8_t *a = ab.ptr();
 	const uint16_t *s = reinterpret_cast<const uint16_t *>(sf.ptr());
 	const float *h = reinterpret_cast<const float *>(hp.ptr());
-	d["albedo"] = Color(a[0] / 255.0f, a[1] / 255.0f, a[2] / 255.0f, 1.0f);
 	d["sun"] = a[3] / 255.0f;
-	d["gloss"] = half_to_float(s[3]);
-	d["material"] = static_cast<int>(half_to_float(s[2]) + 0.5f);
+	const int gmat = static_cast<int>(half_to_float(s[2]) + 0.5f);
+	d["material"] = gmat;
 	d["hit"] = h[3] > 0.5f;
+	// The reflection is the point of this probe and it lives in the overlay: the marcher mixed
+	// it there at the fresnel weight, and the composite mixes the pair over the material.
+	const Color goverlay(a[0] / 255.0f, a[1] / 255.0f, a[2] / 255.0f, 1.0f);
+	d["overlay"] = goverlay;
+	d["overlay_weight"] = half_to_float(s[3]);
+	float ggloss = 0.0f;
+	const float e[2] = {half_to_float(s[0]), half_to_float(s[1])};
+	float gn[3];
+	ve::oct_decode(e, gn);
+	d["albedo"] = resolve_near_field(gmat, Vector3(h[0], h[1], h[2]), Vector3(gn[0], gn[1], gn[2]),
+			goverlay, half_to_float(s[3]), &ggloss);
+	d["gloss"] = ggloss;
 	d["position"] = Vector3(h[0], h[1], h[2]);
 	return d;
 }
@@ -4410,7 +4455,7 @@ Dictionary VoxelDebugHooks::debug_deferred_probe(Vector3 pos, Vector3 fwd, int w
 	world_->lod_fade_band(&fade_start, &fade_end);
 	world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
 			world_->raymarch_pass()->surface_texture(), world_->raymarch_pass()->hitpos_texture(), view_proj,
-			*world_->material_atlas(), p, fade_start, fade_end);
+			*world_->material_atlas(), cp, fade_start, fade_end);
 	if (!world_->composite_pass()->last_draw_ok()) return d;
 	DeferredPass::Params dp;
 	const Projection inv = view_proj.inverse();
@@ -4456,6 +4501,146 @@ Dictionary VoxelDebugHooks::debug_deferred_probe(Vector3 pos, Vector3 fwd, int w
 	std::set<uint16_t> rows;
 	for (int y = 0; y < h; y++) rows.insert(values[(y * w + w / 2) * 4 + 2]);
 	d["distinct_rows"] = static_cast<int>(rows.size());
+	return d;
+}
+
+// Marches at a FRACTION of the target size and composites into a full-size G-buffer -- the
+// production near-field path, with near_field_scale made explicit. The reported detail is the
+// mean absolute albedo step between horizontally adjacent surface pixels: the high-frequency
+// energy a magnifying upsample destroys. Sky pixels (composite depth 0) are excluded, as is
+// any pair that straddles a silhouette, so the number measures texture, not edges.
+Dictionary VoxelDebugHooks::debug_near_field_detail(Vector3 pos, Vector3 fwd, int w, int h,
+		float march_scale) {
+	Dictionary d;
+	d["ran"] = false;
+	d["detail"] = 0.0f;
+	d["mean_luma"] = 0.0f;
+	d["hit_pixels"] = 0;
+	d["march_width"] = 0;
+	d["march_height"] = 0;
+	if (w <= 1 || h <= 1 || !(march_scale > 0.0f) || march_scale > 1.0f) return d;
+	world_->ensure_initialized();
+	RenderingDevice *device = world_->rd();
+	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() ||
+			!world_->raymarch_pass() || !world_->composite_pass() || !world_->gbuffer()) return d;
+	int quiet = 0;
+	for (int i = 0; i < 400 && quiet < 6; i++)
+		quiet = debug_stream_frame(pos) == 0 ? quiet + 1 : 0;
+
+	const float p[3] = {pos.x, pos.y, pos.z};
+	const float f[3] = {fwd.x, fwd.y, fwd.z};
+	const float up[3] = {0.0f, std::fabs(fwd.y) > 0.9f ? 0.0f : 1.0f,
+			std::fabs(fwd.y) > 0.9f ? 1.0f : 0.0f};
+	const float fov_y = 1.0471975512f;
+	const float aspect = static_cast<float>(w) / static_cast<float>(h);
+	const float tan_y = std::tan(fov_y * 0.5f);
+	const float tan_x = tan_y * aspect;
+	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, fov_y, aspect, 0.05f, 4000.0f, w, h);
+	Projection view_proj;
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++) view_proj.columns[c][r] = cam.view_proj[c * 4 + r];
+	ve::CameraParams cp = ve::CameraParams::looking_at(pos.x, pos.y, pos.z,
+			fwd.x, fwd.y, fwd.z, up[0], up[1], up[2]);
+	cp.params[0] = tan_x;
+	cp.params[1] = tan_y;
+	cp.params[2] = 200.0f;
+	const ve::WorldBounds wb = world_->world_bounds();
+	const ve::IVec3 ro = wb.origin_regions();
+	cp.dims[0] = world_->store_->config().world_size_regions.x;
+	cp.dims[1] = world_->store_->config().world_size_regions.y;
+	cp.dims[2] = world_->store_->config().world_size_regions.z;
+	cp.dims[3] = world_->island_slot_count();
+	cp.region_origin[0] = ro.x;
+	cp.region_origin[1] = ro.y;
+	cp.region_origin[2] = ro.z;
+	cp.atlas_bricks[0] = world_->store_->config().atlas_bricks.x;
+	cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
+	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
+	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
+	std::memcpy(&cp.cam_pos[3], &flags, sizeof(float));
+
+	const int rw = std::max(1, static_cast<int>(static_cast<float>(w) * march_scale));
+	const int rh = std::max(1, static_cast<int>(static_cast<float>(h) * march_scale));
+	// The G-buffer and the marcher's targets both change size across calls; the composite's
+	// framebuffer and uniform set reference both, so drop them before either moves.
+	world_->composite_pass()->release_targets();
+	world_->composite_pass()->invalidate_uniform_set(device);
+	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(w, h))) return d;
+	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
+	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp,
+			rw, rh, kNoEdit)) return d;
+	float fade_start = ve::kLodFadeStartM;
+	float fade_end = ve::kLodFadeEndM;
+	world_->lod_fade_band(&fade_start, &fade_end);
+	world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
+			world_->raymarch_pass()->surface_texture(), world_->raymarch_pass()->hitpos_texture(),
+			view_proj, *world_->material_atlas(), cp, fade_start, fade_end);
+	if (!world_->composite_pass()->last_draw_ok()) return d;
+	device->submit();
+	device->sync();
+
+	const PackedByteArray albedo = device->texture_get_data(world_->gbuffer()->albedo(), 0);
+	const PackedByteArray depth = device->texture_get_data(world_->gbuffer()->depth(), 0);
+	const int64_t pixels = static_cast<int64_t>(w) * h;
+	if (albedo.size() < pixels * 4 || depth.size() < pixels * 4) return d;
+	const uint8_t *a = albedo.ptr();
+	const float *z = reinterpret_cast<const float *>(depth.ptr());
+	// Reverse-Z: a composited surface writes a positive depth, a sky pixel writes exactly 0.
+	auto is_surface = [&](int64_t i) { return z[i] > 0.0f; };
+	double sum_step = 0.0;
+	int64_t steps = 0;
+	double mean_luma = 0.0;
+	int64_t hits = 0;
+	for (int y = 0; y < h; y++) {
+		for (int x = 0; x < w; x++) {
+			const int64_t i = static_cast<int64_t>(y) * w + x;
+			if (!is_surface(i)) continue;
+			hits++;
+			mean_luma += (0.2126 * a[i * 4] + 0.7152 * a[i * 4 + 1] + 0.0722 * a[i * 4 + 2]) / 255.0;
+			if (x + 1 >= w) continue;
+			const int64_t j = i + 1;
+			if (!is_surface(j)) continue;
+			sum_step += (std::abs(static_cast<int>(a[i * 4]) - static_cast<int>(a[j * 4])) +
+					std::abs(static_cast<int>(a[i * 4 + 1]) - static_cast<int>(a[j * 4 + 1])) +
+					std::abs(static_cast<int>(a[i * 4 + 2]) - static_cast<int>(a[j * 4 + 2]))) / 255.0;
+			steps++;
+		}
+	}
+	// The centre pixel's resolved G-buffer values. The albedo and the gloss are PRODUCED by
+	// the composite now, so this is where a test can read the values the deferred pass will
+	// light -- the marcher's own targets no longer hold a colour.
+	{
+		const int64_t c = (static_cast<int64_t>(h / 2)) * w + (w / 2);
+		d["center_albedo"] = Color(a[c * 4] / 255.0f, a[c * 4 + 1] / 255.0f,
+				a[c * 4 + 2] / 255.0f, 1.0f);
+		d["center_sun"] = a[c * 4 + 3] / 255.0f;
+		d["center_hit"] = is_surface(c);
+		// Reconstructed exactly the way deferred.comp.glsl reconstructs it, from the same
+		// depth attachment, so a caller comparing this against a material probe compares the
+		// point the deferred pass will actually shade -- not a nearby one.
+		const Projection inv_view_proj = view_proj.inverse();
+		const Vector2 c_ndc(((w / 2) + 0.5f) / static_cast<float>(w) * 2.0f - 1.0f,
+				((h / 2) + 0.5f) / static_cast<float>(h) * 2.0f - 1.0f);
+		const Vector4 c_h = inv_view_proj.xform(Vector4(c_ndc.x, c_ndc.y, z[c], 1.0f));
+		const float c_w = std::fabs(c_h.w) < 1e-9f ? 1e-9f : c_h.w;
+		d["center_position"] = Vector3(c_h.x / c_w, c_h.y / c_w, c_h.z / c_w);
+		const PackedByteArray surface = device->texture_get_data(world_->gbuffer()->surface(), 0);
+		if (surface.size() >= pixels * 8) {
+			const uint16_t *sv = reinterpret_cast<const uint16_t *>(surface.ptr());
+			d["center_material"] = static_cast<int>(half_to_float(sv[c * 4 + 2]) + 0.5f);
+			d["center_gloss"] = half_to_float(sv[c * 4 + 3]);
+			const float e[2] = {half_to_float(sv[c * 4]), half_to_float(sv[c * 4 + 1])};
+			float n[3];
+			ve::oct_decode(e, n);
+			d["center_normal"] = Vector3(n[0], n[1], n[2]);
+		}
+	}
+	d["ran"] = true;
+	d["march_width"] = rw;
+	d["march_height"] = rh;
+	d["hit_pixels"] = static_cast<int>(hits);
+	d["mean_luma"] = hits > 0 ? mean_luma / static_cast<double>(hits) : 0.0;
+	d["detail"] = steps > 0 ? sum_step / static_cast<double>(steps) : 0.0;
 	return d;
 }
 
@@ -4747,11 +4932,12 @@ bool VoxelDebugHooks::debug_poke_material_normal(int layer) {
 	return true;
 }
 
-Color VoxelDebugHooks::debug_material_probe(int mat, Vector3 p, Vector3 n) {
+bool VoxelDebugHooks::probe_material(int mat, Vector3 p, Vector3 n, float rgb[3],
+		float *roughness, float *ao) {
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
 	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass())
-		return Color(1, 0, 1);
+		return false;
 	ve::CameraParams cam = ve::CameraParams::looking_at(
 			p.x, p.y, p.z, n.x, n.y, n.z, 0, 1, 0);
 	// pc.params.w is the debug-probe flag in raymarch.comp.glsl; cam_pos and cam_fwd carry
@@ -4771,13 +4957,48 @@ Color VoxelDebugHooks::debug_material_probe(int mat, Vector3 p, Vector3 n) {
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, 1, 1,
 			kNoEdit))
-		return Color(1, 0, 1);
+		return false;
 	device->submit();
 	device->sync();
 	const PackedByteArray data = device->texture_get_data(world_->raymarch_pass()->albedo_texture(), 0);
-	if (data.size() < 4) return Color(1, 0, 1);
+	const PackedByteArray sf = device->texture_get_data(world_->raymarch_pass()->surface_texture(), 0);
+	if (data.size() < 4 || sf.size() < 8) return false;
 	const uint8_t *b = data.ptr();
-	return Color(b[0] / 255.0f, b[1] / 255.0f, b[2] / 255.0f, 1.0);
+	rgb[0] = b[0] / 255.0f;
+	rgb[1] = b[1] / 255.0f;
+	rgb[2] = b[2] / 255.0f;
+	// The probe path parks material_props() in the two oct slots -- it has no normal to pack
+	// there -- so one dispatch answers both halves of the material.
+	const uint16_t *s = reinterpret_cast<const uint16_t *>(sf.ptr());
+	if (roughness) *roughness = half_to_float(s[0]);
+	if (ao) *ao = half_to_float(s[1]);
+	return true;
+}
+
+Color VoxelDebugHooks::resolve_near_field(int mat, Vector3 p, Vector3 n, Color overlay,
+		float overlay_weight, float *gloss_out) {
+	if (gloss_out) *gloss_out = 0.0f;
+	// Material 0 is a miss: the overlay IS the pixel, which is how the sky reaches the screen.
+	if (mat <= 0) return Color(overlay.r, overlay.g, overlay.b, 1.0f);
+	float rgb[3] = {1.0f, 0.0f, 1.0f};
+	float roughness = 1.0f;
+	float ao = 1.0f;
+	if (!probe_material(mat, p, n, rgb, &roughness, &ao)) return Color(1, 0, 1);
+	if (gloss_out) *gloss_out = 1.0f - roughness;
+	// The composite's own two lines, mirrored: the AO fold on the material, then the overlay
+	// over the result. Keeping the 0.65 in step with composite.frag.glsl is what makes a probe
+	// comparable to a pixel.
+	const float fold = 1.0f + (ao - 1.0f) * 0.65f;
+	const float w = std::min(std::max(overlay_weight, 0.0f), 1.0f);
+	return Color(rgb[0] * fold * (1.0f - w) + overlay.r * w,
+			rgb[1] * fold * (1.0f - w) + overlay.g * w,
+			rgb[2] * fold * (1.0f - w) + overlay.b * w, 1.0f);
+}
+
+Color VoxelDebugHooks::debug_material_probe(int mat, Vector3 p, Vector3 n) {
+	float rgb[3] = {1.0f, 0.0f, 1.0f};
+	if (!probe_material(mat, p, n, rgb, nullptr, nullptr)) return Color(1, 0, 1);
+	return Color(rgb[0], rgb[1], rgb[2], 1.0);
 }
 
 bool VoxelDebugHooks::debug_init_atlas() {
