@@ -147,28 +147,42 @@ static void check_range_covers_every_flip(const ve::EditOp &op, float scan_m) {
 	CHECK(escaped == 0);
 }
 
-TEST_CASE("a harder material carves less than a softer one") {
-	// grass_01 is hardness 1.0 and rock is 3.0, so at 0.5 m from a 1 m carve's centre the
-	// grass is air (0.5 < 1.0) and the rock is still solid (0.5 > 1.0/3.0).
-	CHECK(carve_depth(1, 0.5f, 1.0f) > 0.0f);
-	CHECK(carve_depth(2, 0.5f, 1.0f) < 0.0f);
-}
-
-TEST_CASE("hardness 1.0 reproduces the unhardened carve exactly") {
-	REQUIRE(ve::material_hardness(1) == doctest::Approx(1.0f));
-	// A point 0.25 m inside a 1 m carve reads +0.75: the full-radius result.
-	CHECK(carve_depth(1, 0.25f, 1.0f) == doctest::Approx(0.75f));
-}
-
-TEST_CASE("air carves at full radius") {
-	// Material 0 has no hardness entry. Carving air changes nothing visible, but the
-	// evaluator must not divide by a garbage value on the way there.
+TEST_CASE("one stored subtract has one radius, whatever material it samples") {
+	// The regression this pins. Hardness is resolved once, into op.radius, before the op
+	// reaches the evaluator (ve::removal_radius), so the sphere apply_op draws is the same
+	// on both sides of a seam. Scaling here instead made the hard side stop short, which
+	// left the field's magnitude useless as a distance bound and let the near-field marcher
+	// step through the lip.
+	for (int i = 0; i < ve::kMaterialCount; i++) {
+		const uint16_t id = static_cast<uint16_t>(i + 1);
+		CHECK_MESSAGE(carve_depth(id, 0.25f, 1.0f) == doctest::Approx(0.75f),
+				ve::kMaterials[i].name << " changes the radius of a stored subtract");
+	}
+	// Air (no table entry) takes the same path: no lookup, no divide, same sphere.
 	CHECK(carve_depth(0, 0.25f, 1.0f) == doctest::Approx(0.75f));
 }
 
+TEST_CASE("the gradient path draws the same sphere as the value path") {
+	// apply_op_gradient is a separate evaluator and used to carry its own copy of the
+	// hardness term. Both must agree, for every material, or the two bakes diverge.
+	for (int i = 0; i < ve::kMaterialCount; i++) {
+		const uint16_t id = static_cast<uint16_t>(i + 1);
+		ve::EditOp op{};
+		op.type = ve::kOpSphereSubtract;
+		op.radius = 1.0f;
+		ve::FieldSample g{};
+		g.sdf = -1.0f;
+		g.material = id;
+		g = ve::apply_op_gradient(g, op, 0.25f, 0.0f, 0.0f);
+		CHECK_MESSAGE(g.sdf == doctest::Approx(carve_depth(id, 0.25f, 1.0f)),
+				ve::kMaterials[i].name << ": gradient and value evaluators disagree");
+	}
+}
+
 TEST_CASE("a carve never reaches past its own AABB") {
-	// This is the invariant the hardness >= 1.0 floor exists to protect. op_world_aabb
-	// reports pos +/- radius, and an op reaching outside it is dropped at region borders.
+	// op_world_aabb reports pos +/- radius, and an op reaching outside it is dropped at
+	// region borders -- silent data loss, not a visual artifact. op.radius is now the exact
+	// geometric reach, so the bound holds by construction for every material.
 	for (int i = 0; i < ve::kMaterialCount; i++) {
 		const uint16_t id = static_cast<uint16_t>(i + 1);
 		// Just outside the declared radius: must still be solid for EVERY material.

@@ -27,6 +27,12 @@ float material_hardness(uint16_t id) {
 	return kMaterials[i].hardness;
 }
 
+float removal_radius(float nominal_radius, uint16_t material) {
+	// material_hardness is floored at 1.0 (static_asserted in the header), so the effective
+	// radius is never larger than the nominal one and op_world_aabb stays a true bound.
+	return nominal_radius / material_hardness(material);
+}
+
 float material_glow(uint16_t id) {
 	const int i = static_cast<int>(id) - 1;
 	if (i < 0 || i >= kMaterialCount) return 0.0f;
@@ -46,12 +52,6 @@ std::string material_table_glsl() {
 	     "\n"
 	     "const int MATERIAL_COUNT = " << kMaterialCount << ";\n\n";
 
-	o << "const float MAT_HARDNESS[MATERIAL_COUNT] = float[MATERIAL_COUNT](\n";
-	for (int i = 0; i < kMaterialCount; i++)
-		o << "\t" << f(kMaterials[i].hardness) << (i + 1 < kMaterialCount ? "," : "")
-		  << " // " << kMaterials[i].name << "\n";
-	o << ");\n\n";
-
 	o << "const float MAT_GLOW[MATERIAL_COUNT] = float[MATERIAL_COUNT](\n";
 	for (int i = 0; i < kMaterialCount; i++)
 		o << "\t" << f(kMaterials[i].glow) << (i + 1 < kMaterialCount ? "," : "")
@@ -70,12 +70,10 @@ std::string material_table_glsl() {
 		  << " // " << kMaterials[i].name << "\n";
 	o << ");\n\n";
 
-	o << "// Mirrors of ve::material_hardness / ve::material_glow, including their fail-soft\n"
-	     "// rule: air and any id with no table entry carve at full radius and emit nothing.\n"
-	     "float mat_hardness(uint id) {\n"
-	     "\tint i = int(id) - 1;\n"
-	     "\treturn (i < 0 || i >= MATERIAL_COUNT) ? 1.0 : MAT_HARDNESS[i];\n"
-	     "}\n\n"
+	o << "// Mirror of ve::material_glow, including its fail-soft rule: air and any id with\n"
+	     "// no table entry emit nothing. There is deliberately no hardness here -- a removal's\n"
+	     "// size is resolved once on the CPU by ve::removal_radius before the op is uploaded,\n"
+	     "// so every field sample sees one shape and no shader ever looks hardness up.\n"
 	     "float mat_glow(uint id) {\n"
 	     "\tint i = int(id) - 1;\n"
 	     "\treturn (i < 0 || i >= MATERIAL_COUNT) ? 0.0 : MAT_GLOW[i];\n"

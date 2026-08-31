@@ -36,5 +36,5 @@ func test_ids_are_one_based_and_ascending() -> void:
 func test_every_material_is_at_least_baseline_hardness() -> void:
 	for m in make_world().material_table():
 		assert_float(m["hardness"]).override_failure_message(
-			"%s has hardness below 1.0, which lets a carve escape its own AABB" % m["name"]
+			"%s has hardness below 1.0, which would enlarge a nominal removal" % m["name"]
 			).is_greater_equal(1.0)

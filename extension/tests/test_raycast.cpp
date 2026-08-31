@@ -55,10 +55,9 @@ TEST_CASE("the trace sees edits: a crater moves the hit point down") {
 
 	const ve::RayHit after = ve::raycast(gen, log, o, d, 200.0f);
 	REQUIRE(after.hit);
-	// Hardness scaling makes the crater shallower where it passes through hard bands
-	// (rock resists the same radius three times as much), so the guaranteed drop is
-	// smaller than the pre-hardness 3.0 m -- but it must still be a real crater.
-	CHECK(after.pos[1] < before.pos[1] - 2.0f); // fell through the crater
+	// op.radius is the carve's exact geometric reach -- no per-sample scaling -- so the
+	// crater floor sits a full radius below its centre whatever bands it crossed.
+	CHECK(after.pos[1] < before.pos[1] - 3.5f); // fell through the crater
 }
 
 TEST_CASE("a ray that starts inside solid reports a hit at its origin") {
@@ -83,4 +82,50 @@ TEST_CASE("the direction is normalised for the caller") {
 	REQUIRE(b.hit);
 	CHECK(b.pos[1] == doctest::Approx(a.pos[1]).epsilon(0.001));
 	CHECK(b.distance == doctest::Approx(a.distance).epsilon(0.001));
+}
+
+TEST_CASE("the hit reports the material of the surface it struck") {
+	// The removal tools resolve hardness from this id, so "air at an ordinary surface" is
+	// not an acceptable answer: the tracer's hit tolerance can legitimately stop just
+	// OUTSIDE the surface, where the field carries no material, and the probe below the
+	// normal is what recovers it.
+	ve::AnalyticGenerator gen;
+	ve::EditLog log(bounds());
+	const float o[3] = {100.0f, 91.2f, 100.0f}; // 91.2 = 40 + kSurfaceY: well above the surface
+	const float d[3] = {0.0f, -1.0f, 0.0f};
+	const ve::RayHit h = ve::raycast(gen, log, o, d, 200.0f);
+	REQUIRE(h.hit);
+	CHECK(h.material != 0);
+	// It is the material of the solid under the hit, not some neighbouring band.
+	const ve::Sample inside = ve::eval_field(gen, nullptr, 0, h.pos[0], h.pos[1] - 0.1f, h.pos[2]);
+	REQUIRE(inside.sdf < 0.0f);
+	CHECK(h.material == inside.material);
+}
+
+TEST_CASE("a thin shell reports the shell's material, not the air behind it") {
+	// A single voxel-scale offset below the hit point steps clean through a thin wall and
+	// reports the hollow. The probe walks out in quarter-voxel steps and takes the FIRST
+	// solid it meets, so an 8 cm shell answers with its own material.
+	ve::AnalyticGenerator gen;
+	ve::EditLog log(bounds());
+	const float c[3] = {100.0f, 81.2f, 100.0f}; // 30 m of clear air above the surface
+	ve::EditOp shell{};
+	shell.type = ve::kOpSphereAdd;
+	shell.material = 4;
+	shell.pos[0] = c[0]; shell.pos[1] = c[1]; shell.pos[2] = c[2];
+	shell.radius = 1.0f;
+	REQUIRE_FALSE(log.append(shell).touched.empty());
+	ve::EditOp hollow{};
+	hollow.type = ve::kOpSphereSubtract;
+	hollow.pos[0] = c[0]; hollow.pos[1] = c[1]; hollow.pos[2] = c[2];
+	hollow.radius = 0.92f; // an 8 cm wall
+	REQUIRE_FALSE(log.append(hollow).touched.empty());
+
+	const float o[3] = {100.0f, 91.2f, 100.0f};
+	const float d[3] = {0.0f, -1.0f, 0.0f};
+	const ve::RayHit h = ve::raycast(gen, log, o, d, 200.0f);
+	REQUIRE(h.hit);
+	// The shell's crown, not the terrain 30 m below it.
+	REQUIRE(h.pos[1] == doctest::Approx(c[1] + 1.0f).epsilon(0.02));
+	CHECK(h.material == 4);
 }

@@ -79,11 +79,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not hit["hit"]:
 		return
 	var pos: Vector3 = hit["pos"]
+	# The material under the reticle sets how much this one blast takes: the tool resolves
+	# its hardness once, into a single smaller sphere. Rock resists; dirt does not.
+	var struck: int = hit["material"]
 	match mb.button_index:
 		MOUSE_BUTTON_LEFT:
 			match active_tool:
 				Tool.SUBTRACT:
-					_tool.apply_sphere_subtract(pos, radius)
+					_tool.apply_sphere_subtract(pos, radius, struck)
 					_kick(pos)
 				Tool.ADD:
 					_tool.apply_sphere_add(pos, radius * 0.7, fill_material)
@@ -106,9 +109,12 @@ func _drill() -> void:
 		return
 	var dir := -_cam.global_transform.basis.z.normalized()
 	var start: Vector3 = hit["pos"]
+	# One stroke, one hardness: the material the drill BIT INTO governs the whole bore, so
+	# the hole stays a uniform cylinder instead of pinching wherever it crosses a seam.
+	var struck: int = hit["material"]
 	var step := drill_length / float(maxi(drill_steps - 1, 1))
 	for i in range(drill_steps):
-		_tool.apply_sphere_subtract(start + dir * (step * i), drill_radius)
+		_tool.apply_sphere_subtract(start + dir * (step * i), drill_radius, struck)
 	_kick(start)
 
 func _kick(pos: Vector3) -> void:

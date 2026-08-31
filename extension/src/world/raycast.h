@@ -12,6 +12,10 @@ struct RayHit {
 	float pos[3] = {0.0f, 0.0f, 0.0f};
 	float normal[3] = {0.0f, 0.0f, 0.0f};
 	float distance = 0.0f;
+	// The material of the solid the ray struck, 0 only when nothing solid was found within
+	// the recovery band below the surface. Ray-driven removal tools feed this to
+	// VoxelEditTool::apply_sphere_subtract, which resolves its hardness once.
+	uint16_t material = 0;
 };
 
 // Sphere-traces the analytic field (G + each sample point's region ops) with no atlas and no

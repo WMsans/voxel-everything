@@ -55,35 +55,4 @@ struct Brick {
 uint8_t get_mat_index(const Brick &b, int idx);
 void set_mat_index(Brick &b, int idx, uint8_t v);
 
-// Per-point hardness makes a carve's radius vary with the material at the sample point.
-// That keeps the field's SIGN exactly right, so meshing, occupancy and collision are
-// unaffected -- but it destroys the MAGNITUDE as a distance bound at a material seam: the
-// field reports the distance to the soft material's crater wall while the barely-carved
-// hard lip stands much closer, and shaders/raymarch.comp.glsl steps t += max(d * 0.9, ...)
-// straight through it.
-//
-// clamp_brick_lattice restores the property the tracer needs: after it, no two adjacent
-// lattice samples differ by more than one voxel pitch. It only ever shrinks magnitudes and
-// never flips a sign, so occupancy classification (which compares against encoded zero) is
-// untouched. It works in the ENCODED uint8 space because shaders/brick_gen.comp.glsl
-// mirrors it against an r8 image, and the two must agree byte for byte.
-//
-// The relaxation runs as snapshot-Jacobi: every pass computes each sample's new value from
-// the previous pass's frozen state, so the result does not depend on the visiting order.
-// This matters because shaders/brick_gen.comp.glsl mirrors the clamp with 256 threads per
-// brick -- a Gauss-Seidel sweep here would be one arbitrary interleaving that no GPU
-// schedule can reproduce (cross-sign coupling makes the fixed point genuinely
-// order-dependent; see the Task 7 review). It still converges within kClampIterations
-// passes for any input: magnitudes only ever shrink, and Jacobi merely delays each
-// sample's pull by one pass compared to Gauss-Seidel.
-void clamp_brick_lattice(uint8_t *sdf);
-
-// Iterations to convergence. A magnitude can travel at most kSdfRange before it saturates,
-// in steps of kVoxelSize, so ceil(0.64 / 0.05) = 13 passes suffice from any input -- but
-// Jacobi reaches each sample one pass later than an in-place sweep would, and the Task 8
-// probe measured 13 passes to a fixed point on the worst inputs it could construct
-// (too-steep ramps, a quantised carve). The shipped count is that observed worst case
-// doubled. shaders/common.glslh mirrors this as CLAMP_ITERATIONS; the two must stay equal.
-inline constexpr int kClampIterations = 26;
-
 } // namespace ve
