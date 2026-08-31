@@ -6,8 +6,9 @@ namespace ve {
 
 // The authoritative material definition. Material id i + 1 is served by atlas layer i;
 // material 0 is air and has no layer. This table is mirrored into GLSL as
-// shaders/material_table.glslh (see material_table_glsl(), gated by a byte-exact test)
-// and into GDScript via VoxelWorld::material_table().
+// shaders/material_table.glslh for GPU shading properties (see material_table_glsl(),
+// gated by a byte-exact test) and into GDScript via VoxelWorld::material_table(). Hardness
+// remains CPU-side because it is resolved before an edit op is uploaded.
 //
 // `asset` is the two-digit prefix of this material's PNGs under assets/materials/, e.g.
 // "01" for 01_basecolor.png. It is a string rather than an index because the layer order
@@ -33,9 +34,8 @@ inline constexpr MaterialDef kMaterials[] = {
 
 inline constexpr int kMaterialCount = static_cast<int>(sizeof(kMaterials) / sizeof(kMaterials[0]));
 
-// A hardness below 1.0 would let a carve reach past op_world_aabb's pos +/- radius. Ops
-// that reach outside their declared AABB are dropped at region boundaries, so this is a
-// silent-data-loss bug, not a visual one. Caught at compile time instead.
+// Hardness is resistance: it may shrink a nominal removal dimension, never enlarge it.
+// Keep that semantic invariant compile-time checked.
 constexpr bool material_hardness_floor_holds() {
 	for (int i = 0; i < kMaterialCount; i++)
 		if (!(kMaterials[i].hardness >= 1.0f)) return false;
@@ -46,6 +46,10 @@ static_assert(material_hardness_floor_holds(), "material hardness must be >= 1.0
 // Fail soft for air (0) and any id with no table entry: full-radius carve, no emission.
 float material_hardness(uint16_t id);
 float material_glow(uint16_t id);
+
+// Resolve material resistance once, before a removal op enters the field evaluator. The
+// resulting dimension is an ordinary geometric radius shared by every point the op reaches.
+float removal_radius(float nominal_radius, uint16_t material);
 
 // The exact intended contents of shaders/material_table.glslh. That file is committed and a
 // unit test asserts it equals this string byte for byte; the test prints this text on

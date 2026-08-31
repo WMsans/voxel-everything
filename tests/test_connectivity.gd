@@ -100,11 +100,8 @@ func solid_at(w: VoxelWorld, p: Vector3) -> bool:
 
 func build_pillar(w: VoxelWorld, t: VoxelEditTool, x := PILLAR_X, z := PILLAR_Z) -> void:
 	# Five overlapping 1.2 m balls stacked into a 6 m column standing on the terrain.
-	# grass_01 (hardness 1.0) on purpose: this suite pins connectivity/extraction
-	# MECHANICS at fixed geometry, and a harder material would shrink every carve's
-	# effective radius (r / hardness) without touching what the assertions are about.
 	for i in range(5):
-		t.apply_sphere_add(Vector3(x, PILLAR_BASE + 1.0 * i, z), 1.2, 1)
+		t.apply_sphere_add(Vector3(x, PILLAR_BASE + 1.0 * i, z), 1.2, 4)
 	step(w, 90)
 
 func test_the_grid_and_the_flood_find_a_severed_pillar_top(timeout := 120000) -> void:
@@ -210,8 +207,7 @@ func test_a_dense_sphere_cut_pillar_top_falls_clear_of_the_cut(timeout := 180000
 	w.hooks().debug_set_merge_sleep_seconds(999.0)
 	var t := tool_of(w)
 	for i in range(8):
-		# grass_01 (hardness 1.0): see build_pillar -- mechanical fixture, hardness-neutral.
-		t.apply_sphere_add(Vector3(PILLAR_X, PILLAR_BASE + 1.4 * i, PILLAR_Z), 2.1, 1)
+		t.apply_sphere_add(Vector3(PILLAR_X, PILLAR_BASE + 1.4 * i, PILLAR_Z), 2.1, 4)
 	step(w, 120)
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 4.9, PILLAR_Z), 3.0)
 	step(w, 120)

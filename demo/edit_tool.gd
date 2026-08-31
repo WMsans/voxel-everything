@@ -79,11 +79,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not hit["hit"]:
 		return
 	var pos: Vector3 = hit["pos"]
+	var hit_material: int = hit["material"]
 	match mb.button_index:
 		MOUSE_BUTTON_LEFT:
 			match active_tool:
 				Tool.SUBTRACT:
-					_tool.apply_sphere_subtract(pos, radius)
+					_tool.apply_sphere_subtract(pos, radius, hit_material)
 					_kick(pos)
 				Tool.ADD:
 					_tool.apply_sphere_add(pos, radius * 0.7, fill_material)
@@ -106,9 +107,10 @@ func _drill() -> void:
 		return
 	var dir := -_cam.global_transform.basis.z.normalized()
 	var start: Vector3 = hit["pos"]
+	var hit_material: int = hit["material"]
 	var step := drill_length / float(maxi(drill_steps - 1, 1))
 	for i in range(drill_steps):
-		_tool.apply_sphere_subtract(start + dir * (step * i), drill_radius)
+		_tool.apply_sphere_subtract(start + dir * (step * i), drill_radius, hit_material)
 	_kick(start)
 
 func _kick(pos: Vector3) -> void:
