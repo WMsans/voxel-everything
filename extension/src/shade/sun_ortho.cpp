@@ -84,6 +84,7 @@ SunOrtho sun_ortho(const float sun_dir[3], const float lo[3], const float hi[3],
 			o.view_proj[c * 4 + rr] = rows[rr][c];
 
 	o.texel_world = std::max(w, h) / static_cast<float>(map_size);
+	o.depth_range = d;
 	o.valid = true;
 	return o;
 }
