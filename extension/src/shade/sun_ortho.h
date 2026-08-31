@@ -11,6 +11,7 @@ namespace ve {
 struct SunOrtho {
 	float view_proj[16] = {};
 	float texel_world = 0.0f; // one shadow texel, in world metres, in light space
+	float depth_range = 0.0f; // light-space depth extent, in world metres
 	bool valid = false;
 };
 

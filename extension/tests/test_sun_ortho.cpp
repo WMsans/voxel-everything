@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 #include "shade/sun_ortho.h"
 #include "shade/cel.h"
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -101,4 +102,35 @@ TEST_CASE("the matrix depends on nothing but the sun and the bounds") {
 	const ve::SunOrtho a = ve::sun_ortho(ve::kSunDir, kLo, kHi, 2048);
 	const ve::SunOrtho b = ve::sun_ortho(ve::kSunDir, kLo, kHi, 2048);
 	for (int i = 0; i < 16; i++) CHECK(a.view_proj[i] == doctest::Approx(b.view_proj[i]));
+}
+
+TEST_CASE("depth_range is the world box's extent along the light axis") {
+	const ve::SunOrtho o = ve::sun_ortho(ve::kSunDir, kLo, kHi, 2048);
+	REQUIRE(o.valid);
+	// Light-space depth runs along -kSunDir (away from the sun). kSunDir is unit length,
+	// so projecting the corners onto it gives metres directly.
+	float mn = 1e30f;
+	float mx = -1e30f;
+	for (int i = 0; i < 8; i++) {
+		const float p[3] = {(i & 1) ? kHi[0] : kLo[0], (i & 2) ? kHi[1] : kLo[1],
+				(i & 4) ? kHi[2] : kLo[2]};
+		const float c = -(p[0] * ve::kSunDir[0] + p[1] * ve::kSunDir[1] +
+				p[2] * ve::kSunDir[2]);
+		mn = std::min(mn, c);
+		mx = std::max(mx, c);
+	}
+	CHECK(o.depth_range == doctest::Approx(mx - mn).epsilon(1e-4));
+}
+
+// The regression pin for the flat far field. deferred.comp.glsl compares a bias against
+// NORMALIZED depth, so the texel size it scales must be normalized too. texel_world alone is
+// metres: at this world's size it is ~2.7, which as a bias over a [0,1] depth range reports
+// every pixel lit. The ratio is the quantity the shader actually needs.
+TEST_CASE("one shadow texel is a small fraction of the depth range") {
+	const ve::SunOrtho o = ve::sun_ortho(ve::kSunDir, kLo, kHi, 2048);
+	REQUIRE(o.valid);
+	REQUIRE(o.depth_range > 0.0f);
+	CHECK(o.texel_world / o.depth_range < 0.01f);
+	// And the un-normalized value is nowhere near usable as a depth bias. This is the bug.
+	CHECK(o.texel_world > 0.1f);
 }
