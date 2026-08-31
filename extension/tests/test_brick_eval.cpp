@@ -3,8 +3,36 @@
 #include "world/palette.h"
 #include "world/world_data.h"
 #include "generator/generator.h"
+#include <algorithm>
 #include <cmath>
 #include <set>
+
+namespace {
+
+// A planar rock/air surface that crosses only between cell plane 15 and the positive apron
+// plane 16 of brick (0,0,0). Every 16^3 cell sample is rock; only the 17^3 SDF apron sees
+// air, which catches gates that incorrectly derive their hardness range from cells alone.
+class ApronSurfaceGenerator : public ve::Generator {
+public:
+	ve::Sample sample(float x, float, float) const override {
+		const float sdf = x - 0.775f;
+		return {sdf, static_cast<uint16_t>(sdf <= 0.0f ? 2 : 0)};
+	}
+};
+
+float worst_lattice_step(const ve::Brick &brick) {
+	float worst = 0.0f;
+	for (int z = 0; z < ve::kBrickSdfStride; z++)
+		for (int y = 0; y < ve::kBrickSdfStride; y++)
+			for (int x = 0; x + 1 < ve::kBrickSdfStride; x++) {
+				const float a = ve::decode_sdf(brick.sdf[ve::sdf_index(x, y, z)]);
+				const float b = ve::decode_sdf(brick.sdf[ve::sdf_index(x + 1, y, z)]);
+				worst = std::max(worst, std::fabs(b - a));
+			}
+	return worst;
+}
+
+} // namespace
 
 TEST_CASE("palette_occupancy_order puts the most-used material in slot 0") {
 	const uint16_t pal[4] = {3, 1, 2, 0};
@@ -89,6 +117,21 @@ TEST_CASE("cell_state_field follows the generated lattice for a thin carve") {
 			? ve::kCellAir
 			: (mx <= ve::encode_sdf(0.0f) ? ve::kCellFull : ve::kCellSolid);
 		CHECK(ve::cell_state_field(gen, &cut, 1, cell) == expected);
+}
+
+TEST_CASE("eval_brick clamps a hard-air seam visible only on the positive apron") {
+	ApronSurfaceGenerator gen;
+	ve::EditOp carve{};
+	carve.type = ve::kOpSphereSubtract;
+	carve.pos[0] = 1.0f;
+	carve.pos[1] = 0.4f;
+	carve.pos[2] = 0.4f;
+	carve.radius = 0.6f;
+
+	ve::BrickEval eval{};
+	ve::eval_brick(gen, &carve, 1, {0, 0, 0}, &eval);
+	const float quantisation_slack = 2.0f * ve::kSdfRange / 255.0f;
+	CHECK(worst_lattice_step(eval.brick) <= ve::kVoxelSize + quantisation_slack);
 }
 
 TEST_CASE("eval_brick produces a signed lattice, a dominant-first palette and mips") {

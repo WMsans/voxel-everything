@@ -2,8 +2,10 @@
 #include "world/brick_clamp.h"
 #include "world/override_store.h"
 #include "world/palette.h"
+#include "world/material_table.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 namespace ve {
@@ -173,12 +175,22 @@ void eval_brick(const Generator &gen, const EditOp *ops, int op_count, IVec3 bri
 	// on each axis is the apron the shader's trilinear filter needs to cover the brick's
 	// last voxel slab. Materials stay on the 16^3 cell grid.
 	uint16_t mat[kBrickVoxelCount] = {};
+	bool has_subtract = false;
+	for (int i = 0; i < filtered_count && !has_subtract; i++)
+		has_subtract = filtered[i].type == kOpSphereSubtract;
+	float min_hardness = std::numeric_limits<float>::max();
+	float max_hardness = 0.0f;
 	for (int vz = 0; vz < kBrickSdfStride; vz++)
 		for (int vy = 0; vy < kBrickSdfStride; vy++)
 			for (int vx = 0; vx < kBrickSdfStride; vx++) {
 				const Sample s = eval_field(gen, filtered, filtered_count, bo[0] + vx * kVoxelSize,
 						bo[1] + vy * kVoxelSize, bo[2] + vz * kVoxelSize, volumes, overrides);
 				b.sdf[sdf_index(vx, vy, vz)] = encode_sdf(s.sdf);
+				if (has_subtract) {
+					const float hardness = material_hardness(s.material);
+					min_hardness = std::min(min_hardness, hardness);
+					max_hardness = std::max(max_hardness, hardness);
+				}
 				if (s.material == 0) continue;
 				// An apron sample seeds the cell the shader's clamp folds it into: a brick
 				// whose surface crosses only inside its last slab has no solid cell of its
@@ -193,7 +205,8 @@ void eval_brick(const Generator &gen, const EditOp *ops, int op_count, IVec3 bri
 	// Before spread_materials, which reads b.sdf to project air cells onto the surface, and
 	// before build_brick_mips, which reduces it. shaders/brick_gen.comp.glsl inserts the
 	// mirror of this between its Phase 1b and Phase 2 for exactly the same reason.
-	if (lattice_needs_clamp(mat, kBrickVoxelCount, filtered, filtered_count))
+	if (has_subtract &&
+			lattice_needs_clamp(min_hardness, max_hardness, filtered, filtered_count))
 		clamp_brick_lattice(b.sdf);
 
 	spread_materials(mat, b, gen, filtered, filtered_count, bo, volumes, overrides);

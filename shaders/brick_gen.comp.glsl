@@ -14,6 +14,7 @@
 // The filter is compacted serially after the parallel keep test so CSG order is preserved.
 shared uint s_ops[256];
 shared uint s_op_n;
+shared uint s_has_subtract;
 shared uint s_keep[256];
 #define FIELD_OP_INDEX(base, i) ((base) + s_ops[i])
 #include "field.glslh"
@@ -55,6 +56,10 @@ shared uint s_mip4[64];
 // observe another's same-iteration output -- see the clamp block in main().
 shared uint s_clamp_snap[(BRICK_SDF_COUNT + 3) / 4];
 shared uint s_needs_clamp;
+// Positive float bit patterns preserve numeric ordering, so integer atomics can reduce the
+// hardness range sampled across the full 17^3 lattice, including its positive apron.
+shared uint s_min_hardness;
+shared uint s_max_hardness;
 
 float lat(ivec3 base, ivec3 v) {
 	return decode_sdf(imageLoad(sdf_atlas, base + v).r);
@@ -93,21 +98,9 @@ uint clamp_bound(uint self, uint neighbour) {
 }
 
 // Mirror of ve::lattice_needs_clamp. Both halves must hold: a carve to distort the field,
-// and two materials whose hardness differs to distort it with.
-bool needs_clamp(uint op_base, uint op_n) {
-	bool has_subtract = false;
-	for (uint i = 0u; i < op_n && !has_subtract; i++)
-		has_subtract = field_op_pool.v[FIELD_OP_INDEX(op_base, i) * 2u].x == OP_SPHERE_SUBTRACT;
-	if (!has_subtract) return false;
-	bool seen = false;
-	float first = 0.0;
-	for (int i = 0; i < BRICK_VOXEL_COUNT; i++) {
-		if (s_mat[i] == 0u) continue;
-		float h = mat_hardness(s_mat[i]);
-		if (!seen) { first = h; seen = true; continue; }
-		if (h != first) return true;
-	}
-	return false;
+// and two samples (including baseline-hardness air) whose hardness differs.
+bool needs_clamp() {
+	return s_has_subtract != 0u && s_min_hardness != s_max_hardness;
 }
 
 int nearest_palette_slot(uint m) {
@@ -159,9 +152,16 @@ void main() {
 	barrier();
 	if (tid == 0u) {
 		uint n = 0u;
+		s_has_subtract = 0u;
 		for (uint i = 0u; i < op_count; i++)
-			if (s_keep[i] != 0u) s_ops[n++] = i;
+			if (s_keep[i] != 0u) {
+				s_ops[n++] = i;
+				if (field_op_pool.v[(op_base + i) * 2u].x == OP_SPHERE_SUBTRACT)
+					s_has_subtract = 1u;
+			}
 		s_op_n = n;
+		s_min_hardness = floatBitsToUint(1e30);
+		s_max_hardness = 0u;
 	}
 	barrier();
 
@@ -172,6 +172,10 @@ void main() {
 	if (tid < 4u) { s_pal[tid] = 0u; s_cnt[tid] = 0u; s_inv[tid] = tid; }
 
 	// Phase 1a: the 16^3 cell lattice — SDF plus each cell's own material sample.
+	// The range reduction is uniform-branch skipped for the overwhelmingly common case
+	// with no subtract op; each thread carries one local range across both lattice phases.
+	float local_min_hardness = 1e30;
+	float local_max_hardness = 0.0;
 	for (uint i = tid; i < uint(BRICK_VOXEL_COUNT); i += 256u) {
 		ivec3 v = cell_coord(i);
 		float sdf;
@@ -179,6 +183,11 @@ void main() {
 		eval_field(bo + vec3(v) * VOXEL_SIZE, op_base, s_op_n, sdf, mat);
 		imageStore(sdf_atlas, sdf_base + v, vec4(quantise_sdf(sdf)));
 		s_mat[i] = mat;
+		if (s_has_subtract != 0u) {
+			float hardness = mat_hardness(mat);
+			local_min_hardness = min(local_min_hardness, hardness);
+			local_max_hardness = max(local_max_hardness, hardness);
+		}
 	}
 	memoryBarrierShared();
 	barrier();
@@ -196,10 +205,19 @@ void main() {
 		uint mat;
 		eval_field(bo + vec3(v) * VOXEL_SIZE, op_base, s_op_n, sdf, mat);
 		imageStore(sdf_atlas, sdf_base + v, vec4(quantise_sdf(sdf)));
+		if (s_has_subtract != 0u) {
+			float hardness = mat_hardness(mat);
+			local_min_hardness = min(local_min_hardness, hardness);
+			local_max_hardness = max(local_max_hardness, hardness);
+		}
 		if (mat == 0u) continue;
 		ivec3 c = min(v, ivec3(BRICK_VOXELS - 1));
 		atomicCompSwap(s_mat[c.x + c.y * BRICK_VOXELS + c.z * BRICK_VOXELS * BRICK_VOXELS],
 				0u, mat);
+	}
+	if (s_has_subtract != 0u) {
+		atomicMin(s_min_hardness, floatBitsToUint(local_min_hardness));
+		atomicMax(s_max_hardness, floatBitsToUint(local_max_hardness));
 	}
 	memoryBarrierImage();
 	memoryBarrierShared();
@@ -219,7 +237,7 @@ void main() {
 	// would NOT have this property: cross-sign coupling makes the fixed point genuinely
 	// order-dependent (Task 7 review), so a racing workgroup lands on an arbitrary mixture
 	// of sweep orders that no CPU loop reproduces.
-	if (tid == 0u) s_needs_clamp = needs_clamp(op_base, s_op_n) ? 1u : 0u;
+	if (tid == 0u) s_needs_clamp = needs_clamp() ? 1u : 0u;
 	memoryBarrierShared();
 	barrier();
 	if (s_needs_clamp != 0u) {

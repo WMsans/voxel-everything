@@ -149,6 +149,26 @@ func test_regeneration_is_idempotent() -> void:
 	w.hooks().debug_generate_pending()
 	check_bricks(w, bricks, SLOT, PackedByteArray(), 0, "regenerated")
 
+func test_hard_air_apron_clamp_matches_the_cpu_reference() -> void:
+	var w := make_world()
+	# Brick (10,70,0) has terrain in y=[56.788,57.047]: every 16^3 cell sample ends
+	# at y=56.75 and is solid, while its positive apron at y=56.80 contains air. Paint the
+	# whole brick rock, then place a carve above it: rock's 0.2 m effective radius leaves the
+	# cells untouched, while baseline-hardness air sees the full 0.6 m radius. This forces the
+	# hardness discontinuity to exist ONLY on the apron the old 16^3 gate ignored.
+	var brick := Vector3i(10, 70, 0)
+	var ops := make_op(2, 2, Vector3(8.4, 56.4, 0.4), 2.0)
+	ops.append_array(make_op(0, 0, Vector3(8.4, 57.0, 0.4), 0.6))
+	w.hooks().debug_upload_region_ops(SLOT, ops, 2)
+	generate_region(w, REGION, SLOT, 2)
+	var d: Dictionary = w.hooks().debug_brick_diff(brick, SLOT, ops, 2)
+	assert_int(d["slot"]).is_greater_equal(0)
+	assert_int(d["sdf_max_diff"]).override_failure_message(
+		"hard/air apron SDF differs by %d encoded steps" % d["sdf_max_diff"]
+		).is_less_equal(1)
+	assert_int(d["mip_mismatch"]).is_equal(0)
+	assert_bool(d["palette_match"]).is_true()
+
 func test_clamped_seam_bricks_match_the_cpu_reference() -> void:
 	var w := make_world()
 	# The Eikonal clamp only changes bytes where the field violates the one-voxel-pitch
