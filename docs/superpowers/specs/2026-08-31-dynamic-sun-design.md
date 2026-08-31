@@ -289,10 +289,13 @@ attributing any failure to this work.
 
 ## 9. Implementation boundaries
 
+Created: `shade/sun_state.{h,cpp}` (the `SunState` value), `render/sun_ubo.{h,cpp}` (the shared
+UBO), `shaders/sun_light.glslh`.
+
 Touched: `shade/sun_ortho.{h,cpp}`, `shade/cel.{h,cpp}`, `render/sun_shadow_pass.{h,cpp}`, `render/deferred_pass.{h,cpp}`,
 `render/orchestrator.{h,cpp}`, `render/raymarch_pass.*`, `render/contact_shadow_pass.*`,
 `voxel_world.{h,cpp}`, `raymarch_compositor.cpp`, `debug/hooks.cpp`, `shaders/shade.glslh`,
-`shaders/sun_light.glslh` (new), `shaders/raymarch.comp.glsl`,
+`shaders/raymarch.comp.glsl`,
 `shaders/contact_shadow.comp.glsl`, `shaders/deferred.comp.glsl`, `shaders/cel.gdshaderinc`,
 `demo/main.tscn` (set `sun_light_path`).
 
