@@ -15,7 +15,7 @@ protected:
 	static void _bind_methods();
 
 public:
-	Dictionary apply_sphere_subtract(Vector3 pos, float radius, int material = 0);
+	Dictionary apply_sphere_subtract(Vector3 pos, float radius);
 	Dictionary apply_sphere_add(Vector3 pos, float radius, int material);
 	Dictionary apply_sphere_paint(Vector3 pos, float radius, int material);
 

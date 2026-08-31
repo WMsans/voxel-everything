@@ -33,10 +33,6 @@ float material_glow(uint16_t id) {
 	return kMaterials[i].glow;
 }
 
-float removal_radius(float nominal_radius, uint16_t material) {
-	return nominal_radius / material_hardness(material);
-}
-
 std::string material_table_glsl() {
 	std::ostringstream o;
 	o << "// GENERATED from extension/src/world/material_table.h (ve::kMaterials) by\n"
@@ -49,6 +45,12 @@ std::string material_table_glsl() {
 	     "// loader matches include tokens anywhere in a line and would self-include.\n"
 	     "\n"
 	     "const int MATERIAL_COUNT = " << kMaterialCount << ";\n\n";
+
+	o << "const float MAT_HARDNESS[MATERIAL_COUNT] = float[MATERIAL_COUNT](\n";
+	for (int i = 0; i < kMaterialCount; i++)
+		o << "\t" << f(kMaterials[i].hardness) << (i + 1 < kMaterialCount ? "," : "")
+		  << " // " << kMaterials[i].name << "\n";
+	o << ");\n\n";
 
 	o << "const float MAT_GLOW[MATERIAL_COUNT] = float[MATERIAL_COUNT](\n";
 	for (int i = 0; i < kMaterialCount; i++)
@@ -68,9 +70,12 @@ std::string material_table_glsl() {
 		  << " // " << kMaterials[i].name << "\n";
 	o << ");\n\n";
 
-	o << "// Mirrors of ve::material_glow, including its fail-soft rule: air and any id\n"
-	     "// with no table entry emit nothing. Hardness is resolved on the CPU before an\n"
-	     "// edit op is uploaded, so shaders need no hardness table or lookup.\n"
+	o << "// Mirrors of ve::material_hardness / ve::material_glow, including their fail-soft\n"
+	     "// rule: air and any id with no table entry carve at full radius and emit nothing.\n"
+	     "float mat_hardness(uint id) {\n"
+	     "\tint i = int(id) - 1;\n"
+	     "\treturn (i < 0 || i >= MATERIAL_COUNT) ? 1.0 : MAT_HARDNESS[i];\n"
+	     "}\n\n"
 	     "float mat_glow(uint id) {\n"
 	     "\tint i = int(id) - 1;\n"
 	     "\treturn (i < 0 || i >= MATERIAL_COUNT) ? 0.0 : MAT_GLOW[i];\n"

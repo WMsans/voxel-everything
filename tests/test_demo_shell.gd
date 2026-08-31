@@ -51,49 +51,6 @@ func test_wheel_changes_radius_within_bounds() -> void:
 		t.adjust_radius(-1)
 	assert_float(float(t.get("radius"))).is_greater_equal(0.5)
 
-func test_demo_carve_uses_the_center_ray_material() -> void:
-	var t := make_tool()
-	await get_tree().process_frame
-	var w: VoxelWorld = t.get_node("../World")
-	var cam: Camera3D = t.get_node("../Cam")
-	w.ensure_initialized()
-
-	var hit := {}
-	for x in range(20, 60):
-		for z in range(20, 60):
-			var candidate: Dictionary = w.hooks().debug_raycast(
-				Vector3(x, 80, z), Vector3.DOWN)
-			if candidate.get("material", 0) == 2: # rock hardness 3
-				hit = candidate
-				break
-		if not hit.is_empty():
-			break
-	assert_bool(hit.is_empty()).override_failure_message(
-		"the fixture could not find a rock surface for the demo ray").is_false()
-
-	var hp: Vector3 = hit["pos"]
-	cam.global_transform = Transform3D(
-		Basis.looking_at(Vector3.DOWN, Vector3.FORWARD), Vector3(hp.x, 80.0, hp.z))
-	t.set("radius", 3.0)
-	var click := InputEventMouseButton.new()
-	click.button_index = MOUSE_BUTTON_LEFT
-	click.pressed = true
-	var old_mode := Input.mouse_mode
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-	t._unhandled_input(click)
-	Input.mouse_mode = old_mode
-
-	for i in range(12):
-		w.hooks().debug_stream_frame(Vector3(hp.x, hp.y + 5.0, hp.z))
-	var region := Vector3i(floori(hp.x / 25.6), floori(hp.y / 25.6), floori(hp.z / 25.6))
-	var slot: int = w.hooks().debug_region_map_entry(region)
-	assert_int(slot).is_greater_equal(0)
-	var rd := w.hooks().debug_local_rd() as RenderingDevice
-	var bytes := rd.buffer_get_data(w.hooks().debug_op_pool(), slot * 256 * 32, 32)
-	assert_float(bytes.to_float32_array()[5]).override_failure_message(
-		"the demo did not scale its nominal radius by the center ray's rock hardness"
-		).is_equal_approx(1.0, 0.0001)
-
 # Emission above 1.0 only becomes visible bloom if the Environment asks for it. The engine
 # writes HDR into the colour buffer before Godot's glow stage; this is the other half.
 func test_the_demo_environment_has_glow_enabled() -> void:

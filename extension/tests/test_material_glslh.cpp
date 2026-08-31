@@ -4,8 +4,9 @@
 #include <iterator>
 #include <string>
 
-// The committed shaders/material_table.glslh is the GPU-shading mirror of ve::kMaterials.
-// This test keeps glow and fallback albedo synchronized with the authoritative CPU table.
+// The committed shaders/material_table.glslh is a MIRROR of ve::kMaterials. If they drift,
+// hardness carves differently on CPU and GPU and the field-diff test starts failing in a
+// place that gives no hint why. This test is the gate; its failure message is the fix.
 TEST_CASE("the committed GLSL mirror matches the C++ table") {
 	// The native test binary runs from extension/, so the repo root is one level up.
 	std::ifstream f("../shaders/material_table.glslh");

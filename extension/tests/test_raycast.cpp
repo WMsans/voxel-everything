@@ -22,76 +22,6 @@ TEST_CASE("a ray straight down from the sky lands on the surface") {
 	CHECK(h.distance == doctest::Approx(91.2f - h.pos[1]).epsilon(0.01));
 }
 
-TEST_CASE("a ray reports the material on the surface it strikes") {
-	ve::AnalyticGenerator gen;
-	ve::EditLog log(bounds());
-	const float o[3] = {100.0f, 91.2f, 100.0f};
-	const float d[3] = {0.0f, -1.0f, 0.0f};
-	const ve::RayHit surface = ve::raycast(gen, log, o, d, 200.0f);
-	REQUIRE(surface.hit);
-
-	ve::EditOp paint{};
-	paint.type = ve::kOpSpherePaint;
-	paint.material = 2;
-	paint.pos[0] = surface.pos[0];
-	paint.pos[1] = surface.pos[1];
-	paint.pos[2] = surface.pos[2];
-	paint.radius = 2.0f;
-	REQUIRE_FALSE(log.append(paint).touched.empty());
-
-	const ve::RayHit painted = ve::raycast(gen, log, o, d, 200.0f);
-	REQUIRE(painted.hit);
-	CHECK(painted.material == 2);
-}
-
-TEST_CASE("an air-side hit reports material on a thin solid shell") {
-	ve::AnalyticGenerator gen;
-	ve::EditLog log(bounds());
-	ve::EditOp add{};
-	add.type = ve::kOpSphereAdd;
-	add.material = 2;
-	add.pos[0] = 20.0f;
-	add.pos[1] = 70.0f;
-	add.pos[2] = 20.0f;
-	add.radius = 1.0f;
-	ve::EditOp hollow = add;
-	hollow.type = ve::kOpSphereSubtract;
-	hollow.material = 0;
-	hollow.radius = 0.99f; // 1 cm shell: thinner than the old first 2.5 cm probe
-	REQUIRE_FALSE(log.append(add).touched.empty());
-	REQUIRE_FALSE(log.append(hollow).touched.empty());
-
-	const float o[3] = {20.0f, 72.0f, 20.0f};
-	const float d[3] = {0.0f, -1.0f, 0.0f};
-	const ve::RayHit h = ve::raycast(gen, log, o, d, 10.0f);
-	REQUIRE(h.hit);
-	CHECK(h.material == 2);
-}
-
-TEST_CASE("thin-shell material recovery survives large-coordinate float spacing") {
-	ve::AnalyticGenerator gen;
-	ve::EditLog log(ve::WorldBounds{{125000, -64, 0}, {8, 8, 8}});
-	ve::EditOp add{};
-	add.type = ve::kOpSphereAdd;
-	add.material = 2;
-	add.pos[0] = 100100.0f;
-	add.pos[1] = 70.0f;
-	add.pos[2] = 20.0f;
-	add.radius = 1.0f;
-	ve::EditOp hollow = add;
-	hollow.type = ve::kOpSphereSubtract;
-	hollow.material = 0;
-	hollow.radius = 0.99f;
-	REQUIRE_FALSE(log.append(add).touched.empty());
-	REQUIRE_FALSE(log.append(hollow).touched.empty());
-
-	const float o[3] = {100102.0f, 70.0f, 20.0f};
-	const float d[3] = {-1.0f, 0.0f, 0.0f};
-	const ve::RayHit h = ve::raycast(gen, log, o, d, 10.0f);
-	REQUIRE(h.hit);
-	CHECK(h.material == 2);
-}
-
 TEST_CASE("a ray into the sky misses") {
 	ve::AnalyticGenerator gen;
 	ve::EditLog log(bounds());
@@ -125,8 +55,10 @@ TEST_CASE("the trace sees edits: a crater moves the hit point down") {
 
 	const ve::RayHit after = ve::raycast(gen, log, o, d, 200.0f);
 	REQUIRE(after.hit);
-	// The stored op radius is already effective and applies uniformly through every band.
-	CHECK(after.pos[1] < before.pos[1] - 3.0f); // fell through the crater
+	// Hardness scaling makes the crater shallower where it passes through hard bands
+	// (rock resists the same radius three times as much), so the guaranteed drop is
+	// smaller than the pre-hardness 3.0 m -- but it must still be a real crater.
+	CHECK(after.pos[1] < before.pos[1] - 2.0f); // fell through the crater
 }
 
 TEST_CASE("a ray that starts inside solid reports a hit at its origin") {
