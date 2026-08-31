@@ -22,6 +22,7 @@ public:
 	RID map() const { return map_; }
 	const float *view_proj() const { return view_proj_; }
 	float texel_world() const { return texel_world_; }
+	float depth_range() const { return depth_range_; }
 	int rebuilds() const { return rebuilds_; }
 	bool is_valid() const { return rd_ && map_.is_valid() && shader_.is_valid(); }
 
@@ -45,6 +46,7 @@ private:
 	int rebuilds_ = 0;
 	float view_proj_[16] = {};
 	float texel_world_ = 0.0f;
+	float depth_range_ = 0.0f;
 };
 
 } // namespace godot

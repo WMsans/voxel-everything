@@ -16,6 +16,10 @@ public:
 		float inv_view_proj[16] = {};
 		float cam_pos[3] = {};
 		float ambient[3] = {kAmbient[0], kAmbient[1], kAmbient[2]};
+		// Light-space depth extent of the sun ortho, in world metres. Only read when a sun
+		// map is bound; `render()` clears kFlagSunMap when it is not, so the default 0 is
+		// never divided by.
+		float shadow_depth_range = 0.0f;
 		uint32_t flags = 0;
 		int probe_mode = 0;
 	};

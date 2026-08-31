@@ -4382,6 +4382,7 @@ float VoxelDebugHooks::debug_sun_shadow_visibility(Vector3 p) {
 	dp.cam_pos[1] = p.y;
 	dp.cam_pos[2] = p.z;
 	dp.flags = ve::pack_flags(beauty);
+	dp.shadow_depth_range = use_sun ? world_->sun_shadow_pass()->depth_range() : 0.0f;
 	dp.probe_mode = 3;
 	static const float kNoSun[16] = {};
 	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(),

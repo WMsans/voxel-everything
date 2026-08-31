@@ -21,6 +21,24 @@ func make_world() -> VoxelWorld:
 	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
+# The bias bug scales with world size, which is why make_world()'s {8,5,8} world passes
+# against it: there the broken bias is ~20 m of world depth and the probe sits ~34 m under
+# the surface, so it still reads shadowed. At {16,5,16} the broken bias is
+#   texel_world * depth_range * 0.5 = 0.268 * 451.2 * 0.5 = ~60 m
+# which is deeper than the probe, so the old code reports LIT. The fixed bias is ~0.13 m.
+func make_big_world() -> VoxelWorld:
+	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	w.use_local_device = true
+	w.physics_enabled = false
+	w.world_origin_bricks = Vector3i(0, -64, 0)
+	w.world_size_regions = Vector3i(16, 5, 16)
+	w.max_lod_pages = 8192
+	add_child(w)
+	_worlds.append(w)
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
+	return w
+
 const SETTLE_BUDGET := 2500
 const QUIET_TICKS := 8
 
@@ -65,6 +83,15 @@ func test_something_actually_gets_drawn_into_it(timeout := 60000) -> void:
 	# A point well above everything is not.
 	assert_float(w.hooks().debug_sun_shadow_visibility(Vector3(60.0, 20.0, 60.0))).is_equal_approx(0.0, 0.01)
 	assert_float(w.hooks().debug_sun_shadow_visibility(Vector3(60.0, 300.0, 60.0))).is_equal_approx(1.0, 0.01)
+
+func test_the_bias_is_in_depth_units_not_metres(timeout := 120000) -> void:
+	var w := make_big_world()
+	assert_bool(await settle(w, Vector3(60, 80, 60), Vector3(1, -0.3, 1).normalized())).is_true()
+	w.hooks().debug_sun_shadow_build(true)
+	assert_int(w.hooks().debug_sun_shadow_stats()["rebuilds"]).is_greater(0)
+	# Well under the terrain surface: shadowed. Fails against a metres-scaled bias.
+	assert_float(w.hooks().debug_sun_shadow_visibility(Vector3(60.0, 20.0, 60.0))) \
+		.is_equal_approx(0.0, 0.01)
 
 func test_a_lazy_rebuild_does_not_fire_every_frame(timeout := 60000) -> void:
 	var w := make_world()
