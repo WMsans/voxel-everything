@@ -1,6 +1,5 @@
 #include "world/brick.h"
 #include "world/brick_clamp.h"
-#include "world/material_table.h"
 #include <cmath>
 #include <cstring>
 
@@ -60,23 +59,11 @@ void clamp_brick_lattice(uint8_t *sdf) {
 	}
 }
 
-bool lattice_needs_clamp(const uint16_t *mat, int count, const EditOp *ops, int op_count) {
-	bool has_subtract = false;
-	for (int i = 0; i < op_count && !has_subtract; i++)
-		has_subtract = ops[i].type == kOpSphereSubtract;
-	if (!has_subtract) return false;
-
-	// Two materials whose hardness DIFFERS. Two different materials that carve identically
-	// produce no discontinuity, so comparing ids rather than hardness would clamp bricks
-	// that never needed it.
-	bool seen = false;
-	float first = 0.0f;
-	for (int i = 0; i < count; i++) {
-		if (mat[i] == 0) continue;
-		const float h = material_hardness(mat[i]);
-		if (!seen) { first = h; seen = true; continue; }
-		if (h != first) return true;
-	}
+bool lattice_needs_clamp(float min_hardness, float max_hardness,
+		const EditOp *ops, int op_count) {
+	if (min_hardness == max_hardness) return false;
+	for (int i = 0; i < op_count; i++)
+		if (ops[i].type == kOpSphereSubtract) return true;
 	return false;
 }
 

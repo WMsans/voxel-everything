@@ -69,21 +69,18 @@ TEST_CASE("the clamp is idempotent") {
 	CHECK(a == b);
 }
 
-TEST_CASE("the gate is off until two materials of differing hardness meet") {
+TEST_CASE("the gate detects every hardness boundary a carve crosses") {
 	ve::EditOp carve{};
 	carve.type = ve::kOpSphereSubtract;
 	carve.radius = 1.0f;
-	const uint16_t one_material[4] = {1, 1, 1, 1};
-	const uint16_t two_same[4] = {0, 0, 0, 0};   // air only
-	CHECK_FALSE(ve::lattice_needs_clamp(one_material, 4, &carve, 1));
-	CHECK_FALSE(ve::lattice_needs_clamp(two_same, 4, &carve, 1));
+	// Air carves at baseline hardness 1.0. A grass surface therefore stays continuous,
+	// while a hard rock surface changes carve radius abruptly at its air boundary and needs
+	// the same repair as a boundary between two solid materials.
+	CHECK_FALSE(ve::lattice_needs_clamp(1.0f, 1.0f, &carve, 1)); // grass and air
+	CHECK(ve::lattice_needs_clamp(1.0f, 3.0f, &carve, 1));       // rock and air
 
-	// grass (1.0) beside rock (3.0) with a carve present: this is the case that distorts.
-	const uint16_t mixed[4] = {1, 2, 1, 2};
-	CHECK(ve::lattice_needs_clamp(mixed, 4, &carve, 1));
-
-	// Same materials, no subtract op: nothing distorts the field, so no clamp.
+	// The hardness boundary cannot distort the field without a subtract op.
 	ve::EditOp paint{};
 	paint.type = ve::kOpSpherePaint;
-	CHECK_FALSE(ve::lattice_needs_clamp(mixed, 4, &paint, 1));
+	CHECK_FALSE(ve::lattice_needs_clamp(1.0f, 3.0f, &paint, 1));
 }

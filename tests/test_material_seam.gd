@@ -101,3 +101,35 @@ func test_the_seam_carve_is_actually_asymmetric() -> void:
 	assert_int(soft_state).override_failure_message(
 		"the soft side of the seam did not carve: hardness is not being applied"
 		).is_not_equal(hard_state)
+
+func terrain_height(x: float, z: float) -> float:
+	return 51.2 + 6.0 * sin(x * 0.11) * cos(z * 0.13) \
+		+ 3.0 * sin(x * 0.031 + 1.7) * sin(z * 0.043) \
+		+ sin(x * 0.23 + z * 0.19)
+
+# A hard surface already forms a hardness seam with air: air uses the baseline 1.0 while
+# the solid uses its material hardness. This is the ordinary "break a rock" case, without
+# a second solid material in the same brick to accidentally switch the repair on.
+func test_rays_do_not_leak_through_a_hard_surface_beside_air() -> void:
+	var w := make_world()
+	var centre := Vector3(20.0, 49.56, 20.0)
+	w.hooks().debug_apply_sphere_paint(centre, 5.0, 2) # rock, hardness 3.0
+	settle(w)
+	w.hooks().debug_apply_sphere_subtract(centre, 3.0)
+	settle(w)
+
+	var leaks := 0
+	# The hard material only carves to radius 1.0. Rays in this annulus should hit the
+	# untouched procedural surface; a lattice left discontinuous at air steps through it.
+	# Use that closed-form surface as the oracle: the CPU raycast is also a sphere tracer and
+	# reproduces this bug, so comparing one leaky marcher to another would hide the artifact.
+	for i in range(24):
+		var angle := TAU * float(i) / 24.0
+		var origin := centre + Vector3(cos(angle) * 1.8, 8.0, sin(angle) * 1.8)
+		var marched: Dictionary = w.hooks().debug_raymarch_gbuffer(origin, Vector3(0, -1, 0))
+		var expected_y := terrain_height(origin.x, origin.z)
+		if not marched["hit"] or absf(float(marched["position"].y) - expected_y) > 0.15:
+			leaks += 1
+	assert_int(leaks).override_failure_message(
+		"%d of 24 rays leaked through a hard-material surface beside air" % leaks
+		).is_equal(0)
