@@ -7,8 +7,6 @@
 // NOTE: never put a literal include directive inside a comment in this file -- the loader
 // matches include tokens anywhere in a line and would self-include (cycle error).
 
-const vec3 SUN_DIR = vec3(0.5746958, 0.7662610, 0.2873479); // ve::kSunDir
-
 // ---- ve::oct_encode / ve::oct_decode -------------------------------------------------
 // NOT sign(): sign(0.0) is 0 and sign(-0.0) is -0, either of which folds a normal into the
 // wrong octant. The C++ mirror uses the same >= 0 test.
