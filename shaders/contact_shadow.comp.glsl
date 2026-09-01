@@ -3,6 +3,9 @@
 
 #define BEAUTY_CAMERA_SET 0
 #define BEAUTY_CAMERA_BINDING 4
+// Task 6 compatibility: this pass migrates to SunLight in Task 7. Keep its existing white
+// kSunDir behavior until that shared UBO binding is installed here.
+const vec3 SUN_DIR = vec3(0.5746958, 0.7662610, 0.2873479);
 #include "common.glslh"
 #include "shade.glslh"
 #include "beauty_camera.glslh"
