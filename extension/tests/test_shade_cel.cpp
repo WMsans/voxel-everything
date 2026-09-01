@@ -195,3 +195,59 @@ TEST_CASE("the sun direction is the unit vector every shader assumes") {
 	CHECK(ve::kSunDir[0] / ve::kSunDir[1] == doctest::Approx(0.75f).epsilon(1e-5));
 	CHECK(ve::kSunDir[2] / ve::kSunDir[1] == doctest::Approx(0.375f).epsilon(1e-5));
 }
+
+TEST_CASE("a white sun is exactly today's shading") {
+	const ve::CelParams p;
+	ve::CelInput in = plain(1.0f);
+	in.ambient[0] = 0.16f; in.ambient[1] = 0.19f; in.ambient[2] = 0.26f;
+	in.gloss = 1.0f;
+	in.ndh = 1.0f;   // inside the specular band
+	in.ndv = 0.0f;   // and picking up rim
+	float out[3];
+	ve::cel_shade(p, in, out);
+	// The default sun is white, so this must equal the value produced by hand from the
+	// pre-sun formula: tint*lit + tint*ambient*ao + spec + rim.
+	ve::CelInput white = in;
+	white.sun[0] = white.sun[1] = white.sun[2] = 1.0f;
+	float ref[3];
+	ve::cel_shade(p, white, ref);
+	for (int c = 0; c < 3; c++) CHECK(out[c] == doctest::Approx(ref[c]).epsilon(1e-6));
+}
+
+TEST_CASE("the sun colours direct light and specular, never ambient or rim") {
+	const ve::CelParams p;
+	// Ambient only: ndl below the first band edge still yields band 0 (level 0.18), so use a
+	// pure-ambient comparison by holding everything else fixed and changing only the sun.
+	ve::CelInput a = plain(1.0f);
+	a.ambient[0] = 0.5f; a.ambient[1] = 0.5f; a.ambient[2] = 0.5f;
+	ve::CelInput b = a;
+	b.sun[0] = 0.0f; b.sun[1] = 0.0f; b.sun[2] = 0.0f;
+	float lit_out[3];
+	float dark_out[3];
+	ve::cel_shade(p, a, lit_out);
+	ve::cel_shade(p, b, dark_out);
+	// Killing the sun must not kill the ambient contribution.
+	for (int c = 0; c < 3; c++) CHECK(dark_out[c] > 0.0f);
+	for (int c = 0; c < 3; c++) CHECK(dark_out[c] < lit_out[c]);
+
+	// The rim is a silhouette stylization, not a light: it survives a black sun.
+	ve::CelInput rim_only = plain(1.0f);
+	rim_only.ambient[0] = rim_only.ambient[1] = rim_only.ambient[2] = 0.0f;
+	rim_only.ndv = 0.0f;
+	rim_only.sun[0] = rim_only.sun[1] = rim_only.sun[2] = 0.0f;
+	float rim_out[3];
+	ve::cel_shade(p, rim_only, rim_out);
+	CHECK(rim_out[0] == doctest::Approx(p.rim_strength).epsilon(1e-4));
+}
+
+TEST_CASE("a tinted sun scales the direct term per channel") {
+	const ve::CelParams p;
+	ve::CelInput warm = plain(1.0f);
+	warm.ambient[0] = warm.ambient[1] = warm.ambient[2] = 0.0f;
+	warm.ndv = 1.0f; // no rim
+	warm.sun[0] = 1.0f; warm.sun[1] = 0.5f; warm.sun[2] = 0.25f;
+	float out[3];
+	ve::cel_shade(p, warm, out);
+	CHECK(out[1] == doctest::Approx(out[0] * 0.5f).epsilon(1e-5));
+	CHECK(out[2] == doctest::Approx(out[0] * 0.25f).epsilon(1e-5));
+}

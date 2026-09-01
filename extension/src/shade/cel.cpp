@@ -82,7 +82,8 @@ void cel_shade(const CelParams &p, const CelInput &in, float out[3]) {
 	const float rim = p.rim_strength * std::pow(1.0f - clamp01(in.ndv), p.rim_power);
 	const float ao = clamp01(in.ao);
 	for (int c = 0; c < 3; c++)
-		out[c] = tint[c] * lit + tint[c] * in.ambient[c] * ao + spec + rim;
+		out[c] = tint[c] * lit * in.sun[c] + tint[c] * in.ambient[c] * ao +
+				in.sun[c] * spec + rim;
 }
 
 } // namespace ve

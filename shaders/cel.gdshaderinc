@@ -25,8 +25,11 @@ vec3 ve_shadow_tint(vec3 albedo,float amount){float k=clamp(amount,0.0,1.0);
 	vec3 h=ve_rgb_to_hsv(albedo);h.x=fract(h.x+VE_HUE*k);
 	h.y=clamp(h.y*(1.0+(VE_SAT-1.0)*k),0.0,1.0);return ve_hsv_to_rgb(h);}
 vec3 ve_cel_shade(vec3 albedo,vec3 ambient,float ndl,float ndv,float ndh,
-		float shadow,float ao,float gloss){float sh=clamp(shadow,0.0,1.0);
+		float shadow,float ao,float gloss,vec3 sun){float sh=clamp(shadow,0.0,1.0);
 	float lit=ve_cel_level(ndl)*sh;vec3 tint=ve_shadow_tint(albedo,1.0-lit);
 	float spec=(gloss>0.0&&ndh>=VE_SPEC_EDGE)?gloss*VE_SPEC*sh:0.0;
 	float rim=VE_RIM*pow(1.0-clamp(ndv,0.0,1.0),VE_RIM_POWER);
-	return tint*lit+tint*ambient*clamp(ao,0.0,1.0)+vec3(spec+rim);}
+	return tint*lit*sun+tint*ambient*clamp(ao,0.0,1.0)+sun*spec+vec3(rim);}
+vec3 ve_cel_shade(vec3 albedo,vec3 ambient,float ndl,float ndv,float ndh,
+		float shadow,float ao,float gloss){
+	return ve_cel_shade(albedo,ambient,ndl,ndv,ndh,shadow,ao,gloss,vec3(1.0));}
