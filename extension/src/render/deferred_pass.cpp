@@ -59,6 +59,15 @@ void DeferredPass::initialize(RenderingDevice *rd) {
 	sampler_nearest_ = rd->sampler_create(sn);
 }
 
+void DeferredPass::set_sun_ubo(RID buffer) {
+	sun_light_ubo_ = buffer;
+	// The uniform set caches this RID; drop it so the next render rebuilds.
+	if (rd_ && uset_.is_valid()) {
+		rd_->free_rid(uset_);
+		uset_ = RID();
+	}
+}
+
 void DeferredPass::teardown() {
 	if (!rd_) return;
 	for (RID *r : {&uset_, &pipeline_, &shader_}) {
@@ -130,8 +139,8 @@ bool DeferredPass::ensure_uniform_set(RenderingDevice *rd, GBuffer &gb,
 		return true;
 	if (uset_.is_valid()) rd->free_rid(uset_);
 	uset_ = RID();
-	Ref<RDUniform> u[10];
-	for (int i = 0; i < 10; i++) u[i].instantiate();
+	Ref<RDUniform> u[11];
+	for (int i = 0; i < 11; i++) u[i].instantiate();
 	const RID textures[6] = {gb.albedo(), gb.surface(), gb.depth(), ssgi, sun_map, ssao};
 	for (int i = 0; i < 5; i++) {
 		u[i]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
@@ -158,8 +167,11 @@ bool DeferredPass::ensure_uniform_set(RenderingDevice *rd, GBuffer &gb,
 	u[9]->set_binding(9);
 	u[9]->add_id(materials.sampler());
 	u[9]->add_id(materials.surface_array());
+	u[10]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
+	u[10]->set_binding(10);
+	u[10]->add_id(sun_light_ubo_);
 	uset_ = rd->uniform_set_create(
-			Array::make(u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], u[9]),
+			Array::make(u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], u[9], u[10]),
 			shader_, 0);
 	if (!uset_.is_valid()) return false;
 	key_albedo_ = gb.albedo();

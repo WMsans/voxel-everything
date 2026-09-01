@@ -60,6 +60,15 @@ void ContactShadowPass::initialize(RenderingDevice *rd) {
 			!sampler_linear_.is_valid()) teardown();
 }
 
+void ContactShadowPass::set_sun_ubo(RID buffer) {
+	sun_light_ubo_ = buffer;
+	// The uniform set caches this RID; drop it so the next render rebuilds.
+	if (rd_ && uset_.is_valid()) {
+		rd_->free_rid(uset_);
+		uset_ = RID();
+	}
+}
+
 void ContactShadowPass::teardown() {
 	if (!rd_) return;
 	for (RID *r : {&uset_, &pipeline_, &shader_, &sampler_nearest_, &sampler_linear_, &mask_}) {
@@ -99,8 +108,8 @@ bool ContactShadowPass::ensure_uniform_set(RenderingDevice *rd, RID scene_color,
 	if (uset_.is_valid() && key_color_ == scene_color && key_depth_ == scene_depth &&
 			key_camera_ == camera_ubo) return true;
 	if (uset_.is_valid()) rd->free_rid(uset_);
-	Ref<RDUniform> u0, u1, u2, u3, u4;
-	for (Ref<RDUniform> *u : {&u0, &u1, &u2, &u3, &u4}) u->instantiate();
+	Ref<RDUniform> u0, u1, u2, u3, u4, u5;
+	for (Ref<RDUniform> *u : {&u0, &u1, &u2, &u3, &u4, &u5}) u->instantiate();
 	u0->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
 	u0->set_binding(0); u0->add_id(sampler_nearest_); u0->add_id(scene_depth);
 	u1->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
@@ -111,7 +120,9 @@ bool ContactShadowPass::ensure_uniform_set(RenderingDevice *rd, RID scene_color,
 	u3->set_binding(3); u3->add_id(scene_color);
 	u4->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
 	u4->set_binding(4); u4->add_id(camera_ubo);
-	uset_ = rd->uniform_set_create(Array::make(u0, u1, u2, u3, u4), shader_, 0);
+	u5->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
+	u5->set_binding(5); u5->add_id(sun_light_ubo_);
+	uset_ = rd->uniform_set_create(Array::make(u0, u1, u2, u3, u4, u5), shader_, 0);
 	if (!uset_.is_valid()) return false;
 	key_color_ = scene_color;
 	key_depth_ = scene_depth;
