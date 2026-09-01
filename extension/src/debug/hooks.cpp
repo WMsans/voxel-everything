@@ -4357,7 +4357,11 @@ Dictionary VoxelDebugHooks::debug_sun_shadow_stats() {
 	float lo[3];
 	float hi[3];
 	wb.aabb(lo, hi);
-	const ve::SunOrtho ortho = ve::sun_ortho(ve::kSunDir, lo, hi, SunShadowPass::kSize);
+	const ve::SunState sun_state = world_->sun_state();
+	const ve::SunOrtho ortho = sun_state.has_basis()
+			? ve::sun_ortho(sun_state.dir, sun_state.right, sun_state.up, lo, hi,
+					SunShadowPass::kSize)
+			: ve::sun_ortho(sun_state.dir, lo, hi, SunShadowPass::kSize);
 	d["map_valid"] = sun->map().is_valid();
 	d["ortho_valid"] = ortho.valid;
 	d["texel_world"] = ortho.valid ? ortho.texel_world : sun->texel_world();
@@ -4380,8 +4384,13 @@ void VoxelDebugHooks::debug_sun_shadow_build(bool force) {
 	float lo[3];
 	float hi[3];
 	wb.aabb(lo, hi);
+	const ve::SunState sun_state = world_->sun_state();
+	const ve::SunOrtho ortho = sun_state.has_basis()
+			? ve::sun_ortho(sun_state.dir, sun_state.right, sun_state.up, lo, hi,
+					SunShadowPass::kSize)
+			: ve::sun_ortho(sun_state.dir, lo, hi, SunShadowPass::kSize);
 	world_->sun_shadow_pass()->build(device, *world_->context().lod->lod_pool_, *world_->lod_raster_pass(),
-			ve::sun_ortho(ve::kSunDir, lo, hi, SunShadowPass::kSize), force);
+			ortho, force);
 	world_->prepare_lod_raster();
 }
 

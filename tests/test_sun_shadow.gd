@@ -119,3 +119,32 @@ func test_turning_the_sun_map_off_lights_everything(timeout := 60000) -> void:
 	w.hooks().debug_sun_shadow_build(true)
 	w.set_effect_enabled("sun_shadow_map", false)
 	assert_float(w.hooks().debug_sun_shadow_visibility(Vector3(60.0, 20.0, 60.0))).is_equal_approx(1.0, 0.01)
+
+# A day/night sweep must not lag twelve frames behind the sun. kMinFrames exists to stop LoD
+# churn from rebuilding constantly; a sun that actually moved is not churn.
+func test_a_moved_sun_rebuilds_without_waiting_for_the_throttle(timeout := 60000) -> void:
+	var w := make_world()
+	var light := DirectionalLight3D.new()
+	light.rotation = Vector3(-0.9, 0.3, 0.0)
+	add_child(light)
+	w.sun_light_path = w.get_path_to(light)
+	assert_bool(await settle(w, Vector3(60, 80, 60), Vector3(1, -0.3, 1).normalized())).is_true()
+	# Settle the map so the pass is clean and inside its throttle window.
+	w.hooks().debug_sun_shadow_build(true)
+	var before: int = w.hooks().debug_sun_shadow_stats()["rebuilds"]
+	var matrix_before: PackedFloat32Array = w.hooks().debug_sun_shadow_stats()["view_proj"]
+	# A clean pass refuses an unforced build...
+	w.hooks().debug_sun_shadow_build(false)
+	assert_int(w.hooks().debug_sun_shadow_stats()["rebuilds"]).is_equal(before)
+	# ...but not when the sun has moved.
+	light.rotation = Vector3(-0.5, 1.4, 0.0)
+	await get_tree().process_frame
+	w.hooks().debug_sun_shadow_build(false)
+	assert_int(w.hooks().debug_sun_shadow_stats()["rebuilds"]).is_equal(before + 1)
+	var matrix_after: PackedFloat32Array = w.hooks().debug_sun_shadow_stats()["view_proj"]
+	var moved := false
+	for i in range(16):
+		if absf(matrix_after[i] - matrix_before[i]) > 1e-5:
+			moved = true
+	assert_bool(moved).is_true()
+	light.queue_free()
