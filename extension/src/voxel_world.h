@@ -141,6 +141,7 @@ class VoxelWorld : public Node3D, public EditSink {
 
 	void drain_occupancy() { store_->drain_occupancy(); } // one-line delegation (Task 9)
 	void update_sun_state();
+	void publish_sun_state_to_local_device(RenderingDevice *device);
 	// EditSink port satisfied for WorldStore's spine; adapter body forwards to today's
 	// island-manager notification.
 	void on_edit_appended(const ve::EditOp &op, bool notify_islands) override;
