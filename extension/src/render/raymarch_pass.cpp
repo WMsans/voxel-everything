@@ -81,6 +81,15 @@ void RaymarchPass::set_materials(const MaterialAtlas &materials) {
 	}
 }
 
+void RaymarchPass::set_sun_ubo(RID buffer) {
+	sun_ubo_ = buffer;
+	// Same invalidation as set_materials: the uniform set caches this RID.
+	if (uset_.is_valid()) {
+		rd_->free_rid(uset_);
+		uset_ = RID();
+	}
+}
+
 void RaymarchPass::teardown() {
 	if (!rd_) return;
 	// Free order matters on Godot 4.7.1's RenderingDevice: freeing a texture (or shader)
@@ -94,6 +103,7 @@ void RaymarchPass::teardown() {
 		*r = RID();
 	}
 	uset_mask_ = RID();
+	sun_ubo_ = RID();
 	material_albedo_ = RID();
 	material_surface_ = RID();
 	material_sampler_ = RID();
@@ -130,8 +140,8 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 	width_ = w;
 	height_ = h;
 
-	Ref<RDUniform> u[31];
-	for (int i = 0; i < 31; i++) u[i].instantiate();
+	Ref<RDUniform> u[32];
+	for (int i = 0; i < 32; i++) u[i].instantiate();
 	u[0]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
 	u[0]->set_binding(0); u[0]->add_id(albedo_);
 	u[1]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
@@ -178,25 +188,27 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 	u[22]->set_binding(22); u[22]->add_id(atlas.region_slot_counts());
 	u[23]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
 	u[23]->set_binding(23); u[23]->add_id(cost_buf_);
-	// 24-26: the compact-normal pool -- packed payload plus BOTH offset tables (per volume
-	// slot, per override-brick slot). -1 in a table row means "no normals bound".
+	// Binding 24 is the shared SunLight UBO; it is owned by RenderOrchestrator and only
+	// mirrored here. The compact-normal pool follows it at bindings 25-27.
+	u[24]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
+	u[24]->set_binding(24); u[24]->add_id(sun_ubo_);
 	const RID normal_bufs[3] = {atlas.stored_normals().normal_buffer(),
 			atlas.stored_normals().volume_offsets_buffer(),
 			atlas.stored_normals().override_offsets_buffer()};
-	for (int i = 24; i <= 26; i++) {
+	for (int i = 25; i <= 27; i++) {
 		u[i]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-		u[i]->set_binding(i); u[i]->add_id(normal_bufs[i - 24]);
+		u[i]->set_binding(i); u[i]->add_id(normal_bufs[i - 25]);
 	}
-	// 27-30: the shared authoritative override pool (SDF bytes, material bytes, brick
+	// 28-31: the shared authoritative override pool (SDF bytes, material bytes, brick
 	// tables, region-to-table map) the field evaluator consults for shading normals.
 	const RID override_bufs[4] = {atlas.overrides().sdf_buffer(), atlas.overrides().mat_buffer(),
 			atlas.overrides().tables(), atlas.overrides().region_table_map()};
-	for (int i = 27; i <= 30; i++) {
+	for (int i = 28; i <= 31; i++) {
 		u[i]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-		u[i]->set_binding(i); u[i]->add_id(override_bufs[i - 27]);
+		u[i]->set_binding(i); u[i]->add_id(override_bufs[i - 28]);
 	}
 	Array uset_args;
-	for (int i = 0; i < 31; i++) uset_args.push_back(u[i]);
+	for (int i = 0; i < 32; i++) uset_args.push_back(u[i]);
 	uset_ = rd->uniform_set_create(uset_args, shader_, 0);
 }
 

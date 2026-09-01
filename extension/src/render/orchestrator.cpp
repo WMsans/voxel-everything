@@ -12,6 +12,7 @@
 #include "render/inject_pass.h"
 #include "render/gbuffer.h"
 #include "render/beauty_camera.h"
+#include "render/sun_ubo.h"
 #include "render/contact_shadow_pass.h"
 #include "render/ssgi_pass.h"
 #include "render/ssao_pass.h"
@@ -201,6 +202,15 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 	raymarch_pass_ = new RaymarchPass();
 	raymarch_pass_->initialize(device);
 	raymarch_pass_->set_materials(*materials_);
+	sun_ubo_ = new SunUbo();
+	if (!sun_ubo_->ensure(device)) {
+		UtilityFunctions::printerr("RenderOrchestrator: sun UBO creation failed");
+		delete sun_ubo_;
+		sun_ubo_ = nullptr;
+	} else if (raymarch_pass_) {
+		sun_ubo_->update(device, ve::SunState());
+		raymarch_pass_->set_sun_ubo(sun_ubo_->buffer());
+	}
 	composite_pass_ = new CompositePass();
 	composite_pass_->initialize(device);
 	deferred_pass_ = new DeferredPass();
@@ -264,6 +274,7 @@ void RenderOrchestrator::teardown_render_passes() {
 	if (beauty_camera_) { beauty_camera_->teardown(); delete beauty_camera_; beauty_camera_ = nullptr; }
 	if (gbuffer_) { delete gbuffer_; gbuffer_ = nullptr; }
 	if (raymarch_pass_) { delete raymarch_pass_; raymarch_pass_ = nullptr; }
+	if (sun_ubo_) { sun_ubo_->teardown(); delete sun_ubo_; sun_ubo_ = nullptr; }
 	if (lod_raster_pass_) { delete lod_raster_pass_; lod_raster_pass_ = nullptr; }
 	if (lod_cull_pass_) { delete lod_cull_pass_; lod_cull_pass_ = nullptr; }
 	if (hiz_pass_) {
