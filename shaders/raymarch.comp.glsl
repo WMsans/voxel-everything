@@ -2,7 +2,9 @@
 #version 460
 
 #define MATERIAL_LAYERS 16
-#define SUN_LIGHT_SET 0
+// Set 0's established bindings 24-30 belong to the compact-normal/override interface.
+// Keep that interface unchanged; SunLight uses binding 24 in its dedicated set 1.
+#define SUN_LIGHT_SET 1
 #define SUN_LIGHT_BINDING 24
 // The material arrays live at the end of set 0. They must be declared before common.glslh
 // so material_surface() can see them; the include defines the shared shading functions.
@@ -20,13 +22,13 @@ layout(set = 0, binding = 19) uniform sampler2DArray material_surface_tex;
 #define FIELD_OP_POOL_BINDING 10
 #define FIELD_VOLUME_SDF_BINDING 13
 #define FIELD_VOLUME_MAT_BINDING 14
-#define FIELD_VOLUME_NORMAL_BINDING 25
-#define FIELD_VOLUME_NORMAL_OFFSET_BINDING 26
-#define FIELD_OVERRIDE_SDF_BINDING 28
-#define FIELD_OVERRIDE_MAT_BINDING 29
-#define FIELD_OVERRIDE_TABLE_BINDING 30
-#define FIELD_OVERRIDE_REGION_BINDING 31
-#define FIELD_NORMAL_OVERRIDE_BINDING 27
+#define FIELD_VOLUME_NORMAL_BINDING 24
+#define FIELD_VOLUME_NORMAL_OFFSET_BINDING 25
+#define FIELD_OVERRIDE_SDF_BINDING 27
+#define FIELD_OVERRIDE_MAT_BINDING 28
+#define FIELD_OVERRIDE_TABLE_BINDING 29
+#define FIELD_OVERRIDE_REGION_BINDING 30
+#define FIELD_NORMAL_OVERRIDE_BINDING 26
 #define FIELD_OVERRIDE_TABLE(base) (field_override_region_map.table[int((base) / MAX_REGION_OPS)])
 #include "field.glslh"
 
