@@ -14,6 +14,7 @@
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
 #include <godot_cpp/classes/rd_uniform.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
+#include <godot_cpp/variant/packed_color_array.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <chrono>
 #include <cstring>
@@ -263,6 +264,22 @@ bool LodRasterPass::ensure_index_array(RenderingDevice *rd, LodPool &pool) {
 
 bool LodRasterPass::prepare_index_array(RenderingDevice *rd, LodPool &pool) {
 	return ensure_index_array(rd, pool);
+}
+
+bool LodRasterPass::clear_targets(RenderingDevice *rd, GBuffer &gb, RID marker) {
+	if (!gb.is_valid()) return false;
+	if (!ensure_pipeline(rd, gb, marker)) return false;
+	PackedColorArray clears;
+	clears.push_back(Color(0, 0, 0, 0)); // albedo
+	clears.push_back(Color(0, 0, 0, 0)); // surface
+	if (marker.is_valid()) clears.push_back(Color(0, 0, 0, 0));
+	// 0.0 is the reverse-Z far plane, the same value CompositePass clears depth to.
+	const int64_t dl = rd->draw_list_begin(framebuffer_,
+			RenderingDevice::DRAW_CLEAR_COLOR_ALL | RenderingDevice::DRAW_CLEAR_DEPTH,
+			clears, 0.0f);
+	if (dl < 0) return false;
+	rd->draw_list_end();
+	return true;
 }
 
 bool LodRasterPass::draw(RenderingDevice *rd, LodPool &pool, MaterialAtlas &materials,

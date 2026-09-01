@@ -40,20 +40,6 @@ void lod_collect_page_draws(const std::vector<LodDrawItem> &draws,
 	}
 }
 
-void lod_collect_shadow_page_draws(const std::map<LodKey, std::vector<int>> &pages_of,
-		const std::map<int, int> &page_quads, std::vector<LodPageDraw> *out) {
-	if (!out) return;
-	out->clear();
-	// LodKey orders by level ascending, so a reverse walk visits the coarsest chunks first.
-	for (auto it = pages_of.rbegin(); it != pages_of.rend(); ++it) {
-		for (int p : it->second) {
-			const auto quads_it = page_quads.find(p);
-			if (quads_it == page_quads.end()) continue;
-			out->push_back(LodPageDraw{p, quads_it->second});
-		}
-	}
-}
-
 LodCamera lod_camera_perspective(const float pos[3], const float fwd[3], const float up[3],
 		float fov_y_rad, float aspect, float z_near, float z_far, int vw, int vh) {
 	LodCamera c;
@@ -296,6 +282,47 @@ void LodTree::request(int level, IVec3 c, float area, LodWalkResult *out,
 	out->requests.push_back(LodBuildRequest{level, c, area});
 }
 
+// Spec §4's fade-band contingency. The screen-space-error test is the right rule everywhere
+// except the band where the near field hands over: there, the eye compares the two fields
+// directly, and the LoD side loses at any error the SSE test tolerates.
+bool LodTree::want_finer(int level, IVec3 c, float area) const {
+	if (level <= 0) return false;
+	const float chunk_distance_m = lod_chunk_distance(level, c, last_cam_pos_);
+	const bool near_dense = kLodNearDenseRadiusM > 0.0f &&
+			chunk_distance_m < kLodNearDenseRadiusM;
+	return near_dense || area > cfg_.sse_area_thresh;
+}
+
+// visit() without the frustum test, without the occlusion test, and without touching a
+// single node: the cut the SUN needs. Descending on the same rule visit() uses is the whole
+// point -- for ground the camera can see, the map then holds the very geometry the deferred
+// pass shades, so the only disagreement left is one shadow texel of quantisation. Terrain
+// outside the frustum still casts, at whatever level residency (built by the camera walk)
+// happens to reach there.
+void LodTree::shadow_visit(int level, IVec3 c, const LodCamera &cam,
+		std::vector<LodDrawItem> *out) const {
+	if (!lod_chunk_in_bounds(cfg_.bounds, level, c)) return;
+	const auto it = nodes_.find(key(level, c));
+	if (it == nodes_.end()) return;
+	const Node &n = it->second;
+	// Not drawable, and nothing below a node we do not have: the parent already emitted.
+	if (n.state != kLodReady) return;
+
+	float lo[3], hi[3];
+	lod_chunk_aabb(level, c, lo, hi);
+	float ss_min[3], ss_max[3];
+	const float area = lod_projected_area(cam, lo, hi, ss_min, ss_max);
+	if (want_finer(level, c, area) && children_ready(level, c)) {
+		const IVec3 base = lod_child_base(c);
+		for (int k = 0; k < 8; k++)
+			shadow_visit(level - 1,
+					{base.x + (k & 1), base.y + ((k >> 1) & 1), base.z + ((k >> 2) & 1)},
+					cam, out);
+		return;
+	}
+	out->push_back(LodDrawItem{level, c, n.page_first, n.page_count});
+}
+
 void LodTree::visit(int level, IVec3 c, const LodCamera &cam, const LodOcclusion *occ,
 		uint32_t frame, LodWalkResult *out) {
 	if (!lod_chunk_in_bounds(cfg_.bounds, level, c)) return;
@@ -325,14 +352,8 @@ void LodTree::visit(int level, IVec3 c, const LodCamera &cam, const LodOcclusion
 		return;
 	}
 
-	// Spec §4's fade-band contingency. The screen-space-error test is the right rule
-	// everywhere except the band where the near field hands over: there, the eye compares
-	// the two fields directly, and the LoD side loses at any error the SSE test tolerates.
-	const float chunk_distance_m = lod_chunk_distance(level, c, last_cam_pos_);
-	const bool near_dense = kLodNearDenseRadiusM > 0.0f && level > 0 &&
-			chunk_distance_m < kLodNearDenseRadiusM;
-	const bool want_finer = level > 0 && (near_dense || area > cfg_.sse_area_thresh);
-	if (want_finer && children_ready(level, c)) {
+	const bool refine = want_finer(level, c, area);
+	if (refine && children_ready(level, c)) {
 		const IVec3 base = lod_child_base(c);
 		for (int k = 0; k < 8; k++)
 			visit(level - 1, {base.x + (k & 1), base.y + ((k >> 1) & 1), base.z + ((k >> 2) & 1)},
@@ -342,7 +363,7 @@ void LodTree::visit(int level, IVec3 c, const LodCamera &cam, const LodOcclusion
 
 	out->draws.push_back(LodDrawItem{level, c, n.page_first, n.page_count});
 	if (n.dirty && !refine_blocked) request(level, c, area, out);
-	if (want_finer && !refine_blocked) {
+	if (refine && !refine_blocked) {
 		const IVec3 base = lod_child_base(c);
 		for (int k = 0; k < 8; k++) {
 			const IVec3 ch{base.x + (k & 1), base.y + ((k >> 1) & 1), base.z + ((k >> 2) & 1)};
@@ -357,6 +378,7 @@ void LodTree::visit(int level, IVec3 c, const LodCamera &cam, const LodOcclusion
 void LodTree::walk(const LodCamera &cam, const LodOcclusion *occ, uint32_t frame,
 		LodWalkResult *out) {
 	out->draws.clear();
+	out->shadow_draws.clear();
 	out->requests.clear();
 	last_walk_frame_ = frame;
 	lod_frustum_planes(cam.view_proj, planes_);
@@ -370,6 +392,14 @@ void LodTree::walk(const LodCamera &cam, const LodOcclusion *occ, uint32_t frame
 		for (int y = lo.y; y <= hi.y; y++)
 			for (int x = lo.x; x <= hi.x; x++)
 				visit(kLodLevels - 1, {x, y, z}, cam, occ, frame, out);
+
+	// The sun's cut, over the SAME resident tree the walk above just updated. It is a
+	// separate recursion rather than an extra output of visit() because visit() stops at the
+	// frustum and marks residency as it goes; this one must do neither.
+	for (int z = lo.z; z <= hi.z; z++)
+		for (int y = lo.y; y <= hi.y; y++)
+			for (int x = lo.x; x <= hi.x; x++)
+				shadow_visit(kLodLevels - 1, {x, y, z}, cam, &out->shadow_draws);
 
 	// Edits mark nodes at every level they touch, including levels the current cut does not
 	// visit. Consider every dirty node for re-request so a rebuild is not deferred until the

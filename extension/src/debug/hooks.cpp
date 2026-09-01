@@ -1343,9 +1343,10 @@ Dictionary VoxelDebugHooks::debug_lod_render_probe_culled(Vector3 pos, Vector3 f
 
 	if (!world_->gbuffer() || !world_->gbuffer()->ensure(device, nullptr, Vector2i(w, h))) return d;
 
-	// Clear to reverse-Z far (0) before drawing the far field. The G-buffer owns the
-	// attachment format used by both production producers.
-	device->texture_clear(world_->gbuffer()->depth(), Color(0.0f, 0.0f, 0.0f, 0.0f), 0, 1, 0, 1);
+	// Clear to reverse-Z far (0) before drawing the far field. Through a render pass, not
+	// texture_clear: that is a COLOUR clear and Godot's Metal driver refuses it on a depth
+	// format, which left this probe reading the previous probe's depth on that device.
+	if (!world_->lod_raster_pass()->clear_targets(device, *world_->gbuffer())) return d;
 	world_->lod_raster_pass()->set_cull_enabled(cull);
 	const int draw_count = world_->lod_raster_pass()->draw_page_count();
 	world_->context().lod->lod_pool_->upload_draw_args(world_->lod_raster_pass()->draw_pages());
@@ -1430,9 +1431,9 @@ Dictionary VoxelDebugHooks::debug_lod_gbuffer_probe(Vector3 pos, Vector3 fwd, in
 		for (int r = 0; r < 4; r++)
 			vp.columns[c][r] = cam.view_proj[c * 4 + r];
 
-	device->texture_clear(world_->gbuffer()->albedo(), Color(0, 0, 0, 0), 0, 1, 0, 1);
-	device->texture_clear(world_->gbuffer()->surface(), Color(0, 0, 0, 0), 0, 1, 0, 1);
-	device->texture_clear(world_->gbuffer()->depth(), Color(0, 0, 0, 0), 0, 1, 0, 1);
+	// One render-pass clear for all three attachments; see debug_lod_render_probe above for
+	// why the depth one cannot be a texture_clear.
+	if (!world_->lod_raster_pass()->clear_targets(device, *world_->gbuffer())) return d;
 	world_->lod_raster_pass()->set_cull_enabled(true);
 	world_->context().lod->lod_pool_->upload_draw_args(world_->lod_raster_pass()->draw_pages());
 	float fade_start = ve::kLodFadeStartM;

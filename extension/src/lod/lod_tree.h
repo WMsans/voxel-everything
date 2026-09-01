@@ -79,18 +79,6 @@ void lod_collect_page_draws(const std::vector<LodDrawItem> &draws,
 		const std::map<LodKey, std::vector<int>> &pages_of,
 		const std::map<int, int> &page_quads, std::vector<LodPageDraw> *out);
 
-// Every resident page, COARSEST LEVEL FIRST: the page list the sun shadow map rasterizes.
-//
-// The map cannot use the camera's cut, which is frustum culled -- terrain beside or behind the
-// camera has to keep shadowing. So it takes the resident set, and residency is a cache rather
-// than a partition: a coarse ancestor stays resident while its own finer children do, and both
-// describe the same ground. SunShadowPass therefore writes depth unconditionally and lets the
-// LAST page drawn own a texel, which makes this order the whole mechanism -- the finest
-// description of a piece of ground overwrites the coarser ones, while ground that only a
-// coarse page describes still casts.
-void lod_collect_shadow_page_draws(const std::map<LodKey, std::vector<int>> &pages_of,
-		const std::map<int, int> &page_quads, std::vector<LodPageDraw> *out);
-
 struct LodBuildRequest {
 	int level = 0;
 	IVec3 coord{};
@@ -99,6 +87,15 @@ struct LodBuildRequest {
 
 struct LodWalkResult {
 	std::vector<LodDrawItem> draws;
+	// The same cut as `draws`, minus the frustum test: what the SUN has to rasterize.
+	//
+	// A shadow map is not rendered from the camera, so terrain beside and behind it must
+	// keep casting -- but it still has to be a CUT, one description of each piece of ground.
+	// Feeding the map every RESIDENT page instead puts several LoD descriptions of the same
+	// ground in one texel; they disagree by metres (levels 5-7 are 12.8-51.2 m cells and are
+	// never evicted, so their tent-filtered surfaces bulge over the whole world), and
+	// whichever one happens to survive the depth test then shadows open sunlit ground.
+	std::vector<LodDrawItem> shadow_draws;
 	std::vector<LodBuildRequest> requests;
 };
 
@@ -175,6 +172,13 @@ private:
 
 	void visit(int level, IVec3 c, const LodCamera &cam, const LodOcclusion *occ,
 			uint32_t frame, LodWalkResult *out);
+	// The frustum-free twin of visit(): same descend rule, no state touched, no requests.
+	void shadow_visit(int level, IVec3 c, const LodCamera &cam,
+			std::vector<LodDrawItem> *out) const;
+	// Whether the cut descends below this node. ONE rule, read by the camera walk and by the
+	// shadow cut, so the two can never choose different levels for the same ground -- which
+	// is exactly what puts two surfaces metres apart in one shadow texel.
+	bool want_finer(int level, IVec3 c, float area) const;
 	bool children_ready(int level, IVec3 c) const;
 	void request(int level, IVec3 c, float area, LodWalkResult *out,
 			bool touch_residency = true);
