@@ -148,3 +148,49 @@ func test_a_moved_sun_rebuilds_without_waiting_for_the_throttle(timeout := 60000
 			moved = true
 	assert_bool(moved).is_true()
 	light.queue_free()
+
+# The whole point: rotating the light must change what is in shadow. Rather than betting on
+# one hand-picked point flipping over procedural terrain, sample a grid and assert the SET of
+# shadowed points differs. Over a 40-degree sun swing across real terrain, some must flip.
+func _shadow_mask(w: VoxelWorld) -> Array:
+	var mask: Array = []
+	for x in range(40, 121, 20):
+		for z in range(40, 121, 20):
+			# Just under the surface band, where occlusion actually varies with sun angle.
+			mask.append(w.hooks().debug_sun_shadow_visibility(Vector3(float(x), 58.0, float(z))))
+	return mask
+
+func test_moving_the_sun_moves_the_shadow(timeout := 60000) -> void:
+	var w := make_world()
+	var light := DirectionalLight3D.new()
+	add_child(light)
+	w.sun_light_path = w.get_path_to(light)
+	light.rotation = Vector3(-0.35, 0.0, 0.0) # low sun
+	assert_bool(await settle(w, Vector3(60, 80, 60), Vector3(1, -0.3, 1).normalized())).is_true()
+	await get_tree().process_frame
+	w.hooks().debug_sun_shadow_build(true)
+	var low: Array = _shadow_mask(w)
+	var low_matrix: PackedFloat32Array = w.hooks().debug_sun_shadow_stats()["view_proj"]
+
+	light.rotation = Vector3(-1.2, 2.4, 0.0) # high sun, opposite azimuth
+	await get_tree().process_frame
+	w.hooks().debug_sun_shadow_build(true)
+	var high: Array = _shadow_mask(w)
+	var high_matrix: PackedFloat32Array = w.hooks().debug_sun_shadow_stats()["view_proj"]
+
+	# The projection followed the node.
+	var matrix_moved := false
+	for i in range(16):
+		if absf(high_matrix[i] - low_matrix[i]) > 1e-5:
+			matrix_moved = true
+	assert_bool(matrix_moved).override_failure_message(
+		"the sun ortho did not change when the light rotated").is_true()
+
+	# And so did the image.
+	var flipped := 0
+	for i in range(low.size()):
+		if absf(float(high[i]) - float(low[i])) > 0.5:
+			flipped += 1
+	assert_int(flipped).override_failure_message(
+		"no sampled point changed shadow state across a 40-degree sun swing").is_greater(0)
+	light.queue_free()
