@@ -40,6 +40,20 @@ void lod_collect_page_draws(const std::vector<LodDrawItem> &draws,
 	}
 }
 
+void lod_collect_shadow_page_draws(const std::map<LodKey, std::vector<int>> &pages_of,
+		const std::map<int, int> &page_quads, std::vector<LodPageDraw> *out) {
+	if (!out) return;
+	out->clear();
+	// LodKey orders by level ascending, so a reverse walk visits the coarsest chunks first.
+	for (auto it = pages_of.rbegin(); it != pages_of.rend(); ++it) {
+		for (int p : it->second) {
+			const auto quads_it = page_quads.find(p);
+			if (quads_it == page_quads.end()) continue;
+			out->push_back(LodPageDraw{p, quads_it->second});
+		}
+	}
+}
+
 LodCamera lod_camera_perspective(const float pos[3], const float fwd[3], const float up[3],
 		float fov_y_rad, float aspect, float z_near, float z_far, int vw, int vh) {
 	LodCamera c;

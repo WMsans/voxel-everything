@@ -258,13 +258,28 @@ void LodSystem::prepare_raster() {
 	prepare_raster_locked();
 }
 
+// Every resident page casts, COARSEST LEVEL FIRST.
+//
+// The map must not use the camera's cut: that is frustum culled, so terrain beside or behind
+// the camera would stop shadowing. But residency is a cache, not a partition -- a coarse
+// ancestor stays resident while its own finer children do, and both describe the same ground.
+// Rasterized together with a nearest-to-the-sun depth test, the ancestor's tent-filtered
+// surface wins: it bulges metres above the one the camera draws (measured up to 7 m), and the
+// far field is then shadowed by a silhouette that is on no screen.
+//
+// Order is what resolves it. SunShadowPass writes depth unconditionally, so within one texel
+// the LAST page drawn wins; emitting coarse before fine means the finest description of a
+// piece of ground always overwrites the coarser ones, while ground that only a coarse page
+// describes still casts. std::map orders LodKey by level ascending, so this walks it backwards.
 void LodSystem::prepare_shadow_raster() {
 	std::lock_guard<std::mutex> lock(lod_mutex_);
 	if (!render()->lod_raster_pass() || !lod_pool_) return;
+	std::vector<ve::LodPageDraw> page_draws;
+	ve::lod_collect_shadow_page_draws(lod_pages_of_, lod_page_quads_, &page_draws);
 	std::vector<LodRasterPass::PageDraw> pages;
-	pages.reserve(lod_page_quads_.size());
-	for (const auto &kv : lod_page_quads_)
-		pages.push_back(LodRasterPass::PageDraw{kv.first, kv.second});
+	pages.reserve(page_draws.size());
+	for (const ve::LodPageDraw &pd : page_draws)
+		pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});
 	render()->lod_raster_pass()->set_draw_pages(pages);
 }
 
