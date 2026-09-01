@@ -79,6 +79,18 @@ void lod_collect_page_draws(const std::vector<LodDrawItem> &draws,
 		const std::map<LodKey, std::vector<int>> &pages_of,
 		const std::map<int, int> &page_quads, std::vector<LodPageDraw> *out);
 
+// Every resident page, COARSEST LEVEL FIRST: the page list the sun shadow map rasterizes.
+//
+// The map cannot use the camera's cut, which is frustum culled -- terrain beside or behind the
+// camera has to keep shadowing. So it takes the resident set, and residency is a cache rather
+// than a partition: a coarse ancestor stays resident while its own finer children do, and both
+// describe the same ground. SunShadowPass therefore writes depth unconditionally and lets the
+// LAST page drawn own a texel, which makes this order the whole mechanism -- the finest
+// description of a piece of ground overwrites the coarser ones, while ground that only a
+// coarse page describes still casts.
+void lod_collect_shadow_page_draws(const std::map<LodKey, std::vector<int>> &pages_of,
+		const std::map<int, int> &page_quads, std::vector<LodPageDraw> *out);
+
 struct LodBuildRequest {
 	int level = 0;
 	IVec3 coord{};

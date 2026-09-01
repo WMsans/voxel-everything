@@ -24,6 +24,7 @@ public:
 	float texel_world() const { return texel_world_; }
 	float depth_range() const { return depth_range_; }
 	int rebuilds() const { return rebuilds_; }
+	int last_pages() const { return last_pages_; } // pages rasterized by the last build
 	bool is_valid() const { return rd_ && map_.is_valid() && shader_.is_valid(); }
 
 private:
@@ -44,6 +45,7 @@ private:
 	bool dirty_ = true;
 	int frames_since_ = 0;
 	int rebuilds_ = 0;
+	int last_pages_ = 0;
 	float view_proj_[16] = {};
 	float texel_world_ = 0.0f;
 	float depth_range_ = 0.0f;

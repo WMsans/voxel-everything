@@ -4351,6 +4351,7 @@ Dictionary VoxelDebugHooks::debug_sun_shadow_stats() {
 	d["ortho_valid"] = false;
 	d["texel_world"] = 0.0f;
 	d["rebuilds"] = 0;
+	d["pages"] = 0;
 	d["view_proj"] = PackedFloat32Array();
 	world_->ensure_initialized();
 	SunShadowPass *sun = world_->sun_shadow_pass();
@@ -4368,6 +4369,7 @@ Dictionary VoxelDebugHooks::debug_sun_shadow_stats() {
 	d["ortho_valid"] = ortho.valid;
 	d["texel_world"] = ortho.valid ? ortho.texel_world : sun->texel_world();
 	d["rebuilds"] = sun->rebuilds();
+	d["pages"] = sun->last_pages();
 	PackedFloat32Array matrix;
 	matrix.resize(16);
 	const float *source = sun->rebuilds() > 0 ? sun->view_proj() :

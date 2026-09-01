@@ -105,6 +105,7 @@ void SunShadowPass::teardown() {
 	dirty_ = true;
 	frames_since_ = 0;
 	rebuilds_ = 0;
+	last_pages_ = 0;
 	std::memset(view_proj_, 0, sizeof(view_proj_));
 	texel_world_ = 0.0f;
 	depth_range_ = 0.0f;
@@ -138,7 +139,17 @@ bool SunShadowPass::ensure_pipeline(RenderingDevice *rd, LodRasterPass &raster) 
 	ds.instantiate();
 	ds->set_enable_depth_test(true);
 	ds->set_enable_depth_write(true);
-	ds->set_depth_compare_operator(RenderingDevice::COMPARE_OP_GREATER_OR_EQUAL);
+	// ALWAYS, not GREATER_OR_EQUAL. The page list carries the same ground at several LoD
+	// levels (LodSystem::prepare_shadow_raster explains why it must), and a nearest-to-the-sun
+	// test would keep the coarsest description of every texel -- a tent-filtered surface
+	// sitting metres above the one the camera draws, which reads as shadow over open ground.
+	// Writing unconditionally makes the LAST page drawn win, and the list is ordered coarsest
+	// first, so the finest description of a texel is the one that survives.
+	//
+	// The cost is that two surfaces of the SAME level in one texel -- the roof and floor of an
+	// overhang -- also resolve by draw order rather than by which is nearer the sun, so a far
+	// field overhang can cast from its floor. That is a missing shadow, not a false one.
+	ds->set_depth_compare_operator(RenderingDevice::COMPARE_OP_ALWAYS);
 	Ref<RDPipelineColorBlendState> cb;
 	cb.instantiate();
 	cb->set_attachments(Array());
@@ -216,6 +227,7 @@ bool SunShadowPass::build(RenderingDevice *rd, LodPool &pool, LodRasterPass &ras
 	depth_range_ = ortho.depth_range;
 	dirty_ = false;
 	frames_since_ = 0;
+	last_pages_ = static_cast<int>(pages.size());
 	rebuilds_++;
 	return true;
 }

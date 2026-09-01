@@ -764,3 +764,56 @@ TEST_CASE("page draws are emitted from the actual non-contiguous page list") {
 	CHECK(out[2].page == 99);
 	CHECK(out[2].quad_count == 3);
 }
+
+// SunShadowPass writes depth unconditionally and lets the last page drawn own a texel, so
+// this order IS the mechanism that stops a resident coarse ancestor from describing ground
+// its own finer children already describe. Coarsest first, always.
+TEST_CASE("shadow page draws are ordered coarsest level first") {
+	std::map<ve::LodKey, std::vector<int>> pages_of;
+	std::map<int, int> page_quads;
+	pages_of[ve::LodKey{0, 4, 0, 4}] = {30};
+	pages_of[ve::LodKey{3, 1, 0, 1}] = {10};
+	pages_of[ve::LodKey{1, 2, 0, 2}] = {20};
+	page_quads[30] = 3;
+	page_quads[10] = 1;
+	page_quads[20] = 2;
+
+	std::vector<ve::LodPageDraw> out;
+	ve::lod_collect_shadow_page_draws(pages_of, page_quads, &out);
+	REQUIRE(out.size() == 3);
+	CHECK(out[0].page == 10); // level 3
+	CHECK(out[1].page == 20); // level 1
+	CHECK(out[2].page == 30); // level 0
+	CHECK(out[0].quad_count == 1);
+	CHECK(out[2].quad_count == 3);
+}
+
+// Nothing may be dropped: ground that only a coarse page describes still has to cast, which
+// is why the shadow map takes the whole resident set rather than the camera's cut.
+TEST_CASE("shadow page draws keep every resident page") {
+	std::map<ve::LodKey, std::vector<int>> pages_of;
+	std::map<int, int> page_quads;
+	pages_of[ve::LodKey{2, 0, 0, 0}] = {1, 2};
+	pages_of[ve::LodKey{1, 0, 0, 0}] = {3};
+	pages_of[ve::LodKey{1, 1, 0, 1}] = {4};
+	for (int p = 1; p <= 4; p++) page_quads[p] = p;
+
+	std::vector<ve::LodPageDraw> out;
+	ve::lod_collect_shadow_page_draws(pages_of, page_quads, &out);
+	CHECK(out.size() == 4);
+	CHECK(out[0].page == 1); // the level-2 chunk's pages lead
+	CHECK(out[1].page == 2);
+}
+
+// A page whose quad count is gone was released; drawing it would read a stale arena range.
+TEST_CASE("shadow page draws skip a page with no quad count") {
+	std::map<ve::LodKey, std::vector<int>> pages_of;
+	std::map<int, int> page_quads;
+	pages_of[ve::LodKey{1, 0, 0, 0}] = {7, 8};
+	page_quads[7] = 5; // 8 was released
+
+	std::vector<ve::LodPageDraw> out;
+	ve::lod_collect_shadow_page_draws(pages_of, page_quads, &out);
+	REQUIRE(out.size() == 1);
+	CHECK(out[0].page == 7);
+}
