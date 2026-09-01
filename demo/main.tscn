@@ -59,6 +59,7 @@ size = Vector3(2, 2, 2)
 [node name="VoxelWorld" type="VoxelWorld" parent="." unique_id=948119314]
 near_field_scale = 0.4
 physics_center_path = NodePath("/root/Main/Player")
+sun_light_path = NodePath("/root/Main/DirectionalLight3D")
 process_mode = 3
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1621412302]
