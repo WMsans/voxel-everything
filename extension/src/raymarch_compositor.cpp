@@ -371,6 +371,10 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	const bool use_sun = sun && sun->is_valid() && sun->rebuilds() > 0 &&
 			(beauty_flags & ve::kFlagSunMap) != 0u;
 	dp.shadow_depth_range = use_sun ? sun->depth_range() : 0.0f;
+	// The map only shades what the LoD mesh drew; these are the distances the shader uses to
+	// tell the two fields apart, and they are the same pair the composite and raster got.
+	dp.fade_start = fade_start;
+	dp.fade_end = fade_end;
 	timings->begin(rd, "deferred");
 	SsaoPass *ssao = world->ssao_pass();
 	if (ssao) ssao->clear_result();

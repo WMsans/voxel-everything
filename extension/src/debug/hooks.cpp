@@ -125,6 +125,8 @@ void VoxelDebugHooks::_bind_methods() {
 			&VoxelDebugHooks::debug_sun_shadow_build);
 	ClassDB::bind_method(D_METHOD("debug_sun_shadow_visibility", "p"),
 			&VoxelDebugHooks::debug_sun_shadow_visibility);
+	ClassDB::bind_method(D_METHOD("debug_sun_shadow_shading", "p", "viewer"),
+			&VoxelDebugHooks::debug_sun_shadow_shading);
 	ClassDB::bind_method(D_METHOD("debug_init_physics"), &VoxelDebugHooks::debug_init_physics);
 	ClassDB::bind_method(D_METHOD("debug_teardown_physics"), &VoxelDebugHooks::debug_teardown_physics);
 	ClassDB::bind_method(D_METHOD("debug_mesh_lattice_diff", "chunk"), &VoxelDebugHooks::debug_mesh_lattice_diff);
@@ -4394,7 +4396,7 @@ void VoxelDebugHooks::debug_sun_shadow_build(bool force) {
 	world_->prepare_lod_raster();
 }
 
-float VoxelDebugHooks::debug_sun_shadow_visibility(Vector3 p) {
+float VoxelDebugHooks::sun_shadow_probe(Vector3 p, Vector3 viewer, int probe_mode) {
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
 	if (!device || !world_->gbuffer() || !world_->deferred_pass() || !world_->material_atlas()) return 1.0f;
@@ -4413,7 +4415,12 @@ float VoxelDebugHooks::debug_sun_shadow_visibility(Vector3 p) {
 	dp.cam_pos[2] = p.z;
 	dp.flags = ve::pack_flags(beauty);
 	dp.shadow_depth_range = use_sun ? world_->sun_shadow_pass()->depth_range() : 0.0f;
-	dp.probe_mode = 3;
+	world_->lod_fade_band(&dp.fade_start, &dp.fade_end);
+	dp.probe_mode = probe_mode;
+	// Mode 4 reads the viewer out of inv_view_proj's first row; mode 3 ignores it.
+	dp.inv_view_proj[0] = viewer.x;
+	dp.inv_view_proj[1] = viewer.y;
+	dp.inv_view_proj[2] = viewer.z;
 	static const float kNoSun[16] = {};
 	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(),
 			use_sun ? world_->sun_shadow_pass()->map() : RID(),
@@ -4426,6 +4433,14 @@ float VoxelDebugHooks::debug_sun_shadow_visibility(Vector3 p) {
 	if (data.size() < 8) return 1.0f;
 	const uint16_t *value = reinterpret_cast<const uint16_t *>(data.ptr());
 	return half_to_float(value[0]);
+}
+
+float VoxelDebugHooks::debug_sun_shadow_visibility(Vector3 p) {
+	return sun_shadow_probe(p, p, 3);
+}
+
+float VoxelDebugHooks::debug_sun_shadow_shading(Vector3 p, Vector3 viewer) {
+	return sun_shadow_probe(p, viewer, 4);
 }
 
 Dictionary VoxelDebugHooks::debug_deferred_probe(Vector3 pos, Vector3 fwd, int w, int h,

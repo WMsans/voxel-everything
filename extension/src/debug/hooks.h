@@ -449,10 +449,19 @@ public:
 	void debug_sun_shadow_build(bool force);
 
 	float debug_sun_shadow_visibility(Vector3 p);
+
+	// The sun-map term the SHADING path applies at `p` for a camera at `viewer`, gate
+	// included. debug_sun_shadow_visibility above stays the raw map, which is what the
+	// tests about what got rasterized want to ask.
+	float debug_sun_shadow_shading(Vector3 p, Vector3 viewer);
 protected:
 	static void _bind_methods();
 
 private:
+	// Shared body of the two sun-map probes above: `probe_mode` picks the raw map (3) or the
+	// shading path's gated term (4), and `viewer` is the camera position only the latter reads.
+	float sun_shadow_probe(Vector3 p, Vector3 viewer, int probe_mode);
+
 	// One 1x1 material-probe dispatch: raymarch.comp.glsl's pc.params.w > 0 path evaluates
 	// material_surface()/material_props() at a given point and normal with no marching. It
 	// OVERWRITES the raymarch pass's targets, so callers must finish reading those first.

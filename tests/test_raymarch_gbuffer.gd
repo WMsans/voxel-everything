@@ -211,3 +211,29 @@ func test_material_normal_map_bytes_do_not_change_gbuffer_normals() -> void:
 	assert_float((n0 - n1).length()).override_failure_message(
 		"G-buffer normal moved when the material normal map changed: %s -> %s" % [n0, n1]
 		).is_equal_approx(0.0, 0.0001)
+
+# The near field's shadow reach. The ortho sun map is rasterized from the LoD mesh, so it
+# only shades the pixels that mesh drew (see shaders/deferred.comp.glsl); the near field has
+# to find its own occluders, however far up the sun ray they are. This was capped at the
+# 7.68 m penumbra band while the map was believed to cover the near field too, which left an
+# occluder 25 m up-sun casting nothing at all.
+func test_the_near_field_marches_past_its_penumbra_band_for_an_occluder() -> void:
+	var w := make_tall_world()
+	var lit := probe_ground(w)
+	assert_bool(lit["hit"]).is_true()
+	assert_float(lit["sun"]).is_equal_approx(1.0, 0.02)
+	var ground: Vector3 = lit["position"]
+	# Well outside the 7.68 m penumbra band, and well inside the 60 m march.
+	const SUN := Vector3(0.5746958, 0.7662610, 0.2873479) # ve::kSunDir
+	w.hooks().debug_apply_sphere_add(ground + SUN * 25.0, 6.0, 1)
+	var quiet := 0
+	for i in range(400):
+		quiet = quiet + 1 if w.hooks().debug_stream_frame(Vector3(20.0, 56.2, 20.0)) == 0 else 0
+		if quiet >= 6:
+			break
+	var shaded := probe_ground(w)
+	assert_bool(shaded["hit"]).is_true()
+	# The blocker sits between this ground and the sun; the marched term has to see it.
+	assert_float(shaded["sun"]).override_failure_message(
+		"an occluder 25 m up-sun left the near field fully lit: sun=%s" % shaded["sun"]) \
+		.is_less(0.5)

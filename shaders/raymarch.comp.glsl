@@ -631,19 +631,6 @@ const int RAY_SHADOW_MAX_ISLANDS = 4;
 // far away is a shadow edge this band cannot soften anyway.
 const float RAY_SHADOW_PENUMBRA_DIST = RAY_SHADOW_K * SDF_RANGE; // 7.68 m
 
-// How far this ray is worth marching, given what else shades the pixel. Past the penumbra
-// distance the march contributes ONLY a hard binary occlusion test (see above) -- and the
-// deferred pass already min()s in sun_map_visibility(), a hard binary occlusion test taken
-// from a shadow map that covers the whole world rather than the near field's 60 m. So the
-// 7.68-60 m stretch was re-deriving, at ~0.64 m per sample because the band saturates
-// there, an answer the frame already had. What the march uniquely provides -- the softening
-// as an occluder approaches -- lives entirely inside the penumbra band.
-//
-// With the sun map off the march is the only shadow term there is, so it keeps full reach.
-float ray_shadow_dist(uint flags) {
-	return (flags & BEAUTY_SUN_MAP) != 0u ? RAY_SHADOW_PENUMBRA_DIST : RAY_SHADOW_DIST;
-}
-
 float terrain_sun_visibility(vec3 ro, float max_shadow_dist) {
 	float res = 1.0;
 	float t = 0.05;
@@ -776,9 +763,14 @@ void main() {
 			// One voxel of offset: less and the ray self-shadows on its own surface, more
 			// and thin ledges stop casting.
 			vec3 sro = best.p + best.n * 0.06;
-			const float sd = ray_shadow_dist(flags);
-			sun = min(terrain_sun_visibility(sro, sd),
-					island_sun_visibility(sro, island_count, sd));
+			// FULL reach, sun map or not. The map was once trusted to answer for the
+			// 7.68-60 m stretch, so the march stopped at the penumbra band; but the map is
+			// rasterized from the LoD mesh and shades only the pixels that mesh drew (see
+			// far_field_owns in shaders/deferred.comp.glsl), so for a near-field pixel this
+			// march is the ONLY shadow term there is. Stopping it early left an occluder
+			// 25 m up-sun casting nothing.
+			sun = min(terrain_sun_visibility(sro, RAY_SHADOW_DIST),
+					island_sun_visibility(sro, island_count, RAY_SHADOW_DIST));
 		}
 		if ((flags & BEAUTY_GLOSSY_RAYS) != 0u) {
 			// The only surviving material read on the primary path, and it is gated on the
