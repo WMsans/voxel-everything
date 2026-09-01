@@ -89,3 +89,50 @@ func test_the_lit_image_is_darker_where_the_sun_ray_says_it_is() -> void:
 	var d_flat: Dictionary = w.hooks().debug_deferred_probe(Vector3(20.0, 75.0, 20.0), Vector3(0, -1, 0), 64, 64, 0)
 	# Removing the shadow term can only brighten the image, never darken it.
 	assert_float(d_flat["mean_luma"]).is_greater_equal(float(d_lit["mean_luma"]) - 0.001)
+
+# Debug probes use a local RenderingDevice, so this is the runtime path that must publish the
+# cached scene SunState rather than leaving the orchestrator's white kSunDir seed in place.
+func test_authored_sun_drives_direct_direction_and_colour(timeout := 60000) -> void:
+	var w := make_world()
+	w.set_effect_enabled("sun_shadow_map", false)
+	w.set_effect_enabled("raymarched_sun_shadow", false)
+	w.set_effect_enabled("ssgi", false)
+	w.set_effect_enabled("ssao", false)
+	var light := DirectionalLight3D.new()
+	light.rotation = Vector3(-0.8, 0.0, 0.0)
+	light.light_color = Color(1.0, 0.0, 0.0)
+	light.light_energy = 1.0
+	add_child(light)
+	w.sun_light_path = w.get_path_to(light)
+	await get_tree().process_frame
+	var red: Dictionary = w.hooks().debug_deferred_probe(
+			Vector3(20.0, 75.0, 20.0), Vector3(0, -1, 0), 64, 64, 0)
+	assert_bool(red.has("center")).is_true()
+	var red_center: Color = red["center"]
+
+	light.light_color = Color(0.0, 0.0, 1.0)
+	await get_tree().process_frame
+	var blue: Dictionary = w.hooks().debug_deferred_probe(
+			Vector3(20.0, 75.0, 20.0), Vector3(0, -1, 0), 64, 64, 0)
+	assert_bool(blue.has("center")).is_true()
+	var blue_center: Color = blue["center"]
+	assert_float(red_center.r - blue_center.r).override_failure_message(
+			"authored sun colour did not reach direct lighting: red=%s blue=%s" % [red_center, blue_center]
+			).is_greater(0.02)
+	assert_float(blue_center.b - red_center.b).override_failure_message(
+			"authored sun colour did not reach direct lighting: red=%s blue=%s" % [red_center, blue_center]
+			).is_greater(0.02)
+
+	light.light_color = Color(1.0, 1.0, 1.0)
+	light.rotation = Vector3(-0.2, 0.0, 0.0)
+	await get_tree().process_frame
+	var high: Dictionary = w.hooks().debug_deferred_probe(
+			Vector3(20.0, 75.0, 20.0), Vector3(0, -1, 0), 64, 64, 0)
+	light.rotation = Vector3(-1.2, 0.0, 0.0)
+	await get_tree().process_frame
+	var low: Dictionary = w.hooks().debug_deferred_probe(
+			Vector3(20.0, 75.0, 20.0), Vector3(0, -1, 0), 64, 64, 0)
+	assert_float(absf(float(high["mean_luma"]) - float(low["mean_luma"]))).override_failure_message(
+			"authored sun direction did not change direct lighting: high=%s low=%s" %
+			[high["mean_luma"], low["mean_luma"]]).is_greater(0.01)
+	light.queue_free()

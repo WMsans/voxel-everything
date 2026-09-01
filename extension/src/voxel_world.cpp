@@ -27,6 +27,7 @@
 #include "render/lod_pool.h"
 #include "render/lod_raster_pass.h"
 #include "render/sun_shadow_pass.h"
+#include "render/sun_ubo.h"
 #include "render/lod_cull_pass.h"
 #include "render/hiz_pass.h"
 #include "lod/lod_contour.h"
@@ -562,8 +563,24 @@ ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
 	return r;
 }
 
+void VoxelWorld::publish_sun_state_to_local_device(RenderingDevice *device) {
+	if (!use_local_device_ || !device || !context_.render || !context_.render->sun_ubo()) return;
+	SunUbo *ubo = context_.render->sun_ubo();
+	if (ubo->ensure(device)) ubo->update(device, sun_state());
+}
+
 RenderingDevice *VoxelWorld::rd() const {
-	return context_.render->rd(); // one-line delegation (Task 12)
+	RenderingDevice *device = context_.render->rd();
+	// Debug hooks render directly on a world-owned local device rather than through the
+	// compositor callback. Refresh the main-thread scene snapshot and publish it before any
+	// hook can bind the raymarch/deferred passes. The normal main-device path remains render
+	// thread owned and publishes in RaymarchCompositor::_render_callback.
+	if (device && use_local_device_) {
+		VoxelWorld *self = const_cast<VoxelWorld *>(this);
+		self->update_sun_state();
+		self->publish_sun_state_to_local_device(device);
+	}
+	return device;
 }
 
 ve::WorldBounds VoxelWorld::world_bounds() const {
