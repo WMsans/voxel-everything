@@ -36,6 +36,7 @@ struct CelInput {
 	float shadow = 1.0f; // 1 = fully lit
 	float ao = 1.0f;
 	float gloss = 0.0f;
+	float sun[3] = {1, 1, 1}; // linear sun colour * energy; white reproduces the old output exactly
 };
 
 int cel_band(const CelParams &p, float ndl);
