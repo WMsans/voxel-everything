@@ -31,6 +31,9 @@ public:
 	// mirrors their RIDs into its uniform set. Call once after initialize() and before the
 	// first render (VoxelWorld does this).
 	void set_materials(const MaterialAtlas &materials);
+	// The sun UBO is owned by RenderOrchestrator; this pass only mirrors its RID into the
+	// uniform set. Call once after initialize() and before the first render.
+	void set_sun_ubo(RID buffer);
 	// `islands` may be null (no island support yet initialised) and `tile_mask` invalid (no
 	// cull pass has run); both fall back to the atlas's own all-ones single-entry mask.
 	bool render(RenderingDevice *rd, const GpuAtlas &atlas, const IslandAtlas *islands,
@@ -57,6 +60,8 @@ private:
 	// on sampler_ -- they are integer textures and cannot be filtered at all.
 	RID sampler_linear_;
 	RID edits_ubo_;   // 32-byte uniform buffer, updated every render
+	RID sun_ubo_; // NOT owned: RenderOrchestrator frees it
+	RID sun_uset_; // set 1 uniform set; NOT owned: RenderOrchestrator frees the buffer
 	RID material_albedo_, material_surface_, material_sampler_;
 	RID albedo_, surface_, hitpos_, cost_buf_, uset_, uset_mask_;
 	int width_ = 0, height_ = 0;

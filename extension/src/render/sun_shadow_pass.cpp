@@ -107,6 +107,7 @@ void SunShadowPass::teardown() {
 	rebuilds_ = 0;
 	std::memset(view_proj_, 0, sizeof(view_proj_));
 	texel_world_ = 0.0f;
+	depth_range_ = 0.0f;
 }
 
 void SunShadowPass::mark_dirty() {
@@ -183,7 +184,13 @@ bool SunShadowPass::build(RenderingDevice *rd, LodPool &pool, LodRasterPass &ras
 		const ve::SunOrtho &ortho, bool force) {
 	frames_since_++;
 	if (!is_valid() || !ortho.valid) return false;
-	if (!force && (!dirty_ || frames_since_ < kMinFrames)) return false;
+	// A sun that moved is not LoD churn. kMinFrames throttles rebuilds caused by pages
+	// coming and going; it must not make a day/night sweep lag twelve frames behind the
+	// light. Comparing the matrix keeps the policy here rather than in every caller, and
+	// leaves the camera-motion invariant intact: camera motion does not change this matrix.
+	const bool sun_moved = rebuilds_ > 0 &&
+			std::memcmp(view_proj_, ortho.view_proj, sizeof(view_proj_)) != 0;
+	if (!force && !sun_moved && (!dirty_ || frames_since_ < kMinFrames)) return false;
 	const std::vector<LodRasterPass::PageDraw> &pages = raster.draw_pages();
 	if (pages.empty()) return false;
 	if (!raster.prepare_index_array(rd, pool)) return false;
@@ -206,6 +213,7 @@ bool SunShadowPass::build(RenderingDevice *rd, LodPool &pool, LodRasterPass &ras
 	rd->draw_list_end();
 	std::memcpy(view_proj_, ortho.view_proj, sizeof(view_proj_));
 	texel_world_ = ortho.texel_world;
+	depth_range_ = ortho.depth_range;
 	dirty_ = false;
 	frames_since_ = 0;
 	rebuilds_++;

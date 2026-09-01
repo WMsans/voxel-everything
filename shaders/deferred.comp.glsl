@@ -1,11 +1,14 @@
 #[compute]
 #version 460
 
+#define SUN_LIGHT_SET 0
+#define SUN_LIGHT_BINDING 10
 #define MATERIAL_LAYERS 16
 layout(set = 0, binding = 8) uniform sampler2DArray material_albedo;
 layout(set = 0, binding = 9) uniform sampler2DArray material_surface_tex;
 #include "common.glslh"
 #include "shade.glslh"
+#include "sun_light.glslh"
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -35,7 +38,12 @@ float sun_map_visibility(vec3 wpos, float ndl) {
 	vec2 uv = p.xy * 0.5 + 0.5;
 	if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return 1.0;
 	float slope = clamp(1.0 - abs(ndl), 0.0, 1.0);
-	float bias = sun.params.x * (0.5 + 2.0 * slope) + 0.0015;
+	// params.x is one shadow texel in world metres; params.y is the light-space depth range
+	// in the same metres. p.z and the stored depth are normalized [0,1], so the bias must be
+	// too. Scaling by params.x alone made the bias ~0.54 of the entire depth range at the
+	// demo's world size, which reported every pixel lit and left the far field flat.
+	float texel = sun.params.x / max(sun.params.y, 1e-6);
+	float bias = texel * (0.5 + 2.0 * slope) + 0.0015;
 	return (p.z + bias >= texture(sun_map, uv).r) ? 1.0 : 0.0;
 }
 
@@ -82,9 +90,10 @@ void main() {
 
 	vec3 n = oct_decode(g1.xy);
 	vec3 v = normalize(pc.cam.xyz - wpos);
-	float ndl = dot(n, SUN_DIR);
+	vec3 sun_dir = sun_light.dir.xyz;
+	float ndl = dot(n, sun_dir);
 	float ndv = dot(n, v);
-	float ndh = dot(n, normalize(SUN_DIR + v));
+	float ndh = dot(n, normalize(sun_dir + v));
 	float shadow = g0.a;
 	if ((pc.flags.x & BEAUTY_SUN_MAP) != 0u)
 		shadow = min(shadow, sun_map_visibility(wpos, ndl));
@@ -94,7 +103,7 @@ void main() {
 	// visibility terms. The pass's sky pixels are exactly 1.0, so horizons are untouched.
 	float ao = 1.0;
 	if ((pc.flags.x & BEAUTY_SSAO) != 0u) ao = texture(ssao_tex, uv).r;
-	vec3 lit = cel_shade(g0.rgb, ambient, ndl, ndv, ndh, shadow, ao, g1.w);
+	vec3 lit = cel_shade(g0.rgb, ambient, ndl, ndv, ndh, shadow, ao, g1.w, sun_light.rgb.xyz);
 
 	// Emission is ADDED after shading, never lit: a glowing surface is its own light source.
 	// The whole block is skipped for any material whose table strength is zero, which is

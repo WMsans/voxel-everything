@@ -9,6 +9,7 @@ namespace godot {
 class ContactShadowPass {
 public:
 	~ContactShadowPass();
+	void set_sun_ubo(RID buffer);
 	void initialize(RenderingDevice *rd);
 	void teardown();
 	bool render(RenderingDevice *rd, RID scene_color, RID scene_depth, Vector2i size,
@@ -24,6 +25,7 @@ private:
 	RenderingDevice *rd_ = nullptr;
 	RID shader_, pipeline_, sampler_nearest_, sampler_linear_;
 	RID mask_, uset_;
+	RID sun_light_ubo_; // NOT owned: RenderOrchestrator frees it
 	RID key_color_, key_depth_, key_camera_;
 	Vector2i size_{0, 0};
 	float last_ms_ = 0.0f;

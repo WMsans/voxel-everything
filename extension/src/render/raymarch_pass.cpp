@@ -81,6 +81,19 @@ void RaymarchPass::set_materials(const MaterialAtlas &materials) {
 	}
 }
 
+void RaymarchPass::set_sun_ubo(RID buffer) {
+	sun_ubo_ = buffer;
+	// Same invalidation as set_materials: the uniform sets cache this RID.
+	if (uset_.is_valid()) {
+		rd_->free_rid(uset_);
+		uset_ = RID();
+	}
+	if (sun_uset_.is_valid()) {
+		rd_->free_rid(sun_uset_);
+		sun_uset_ = RID();
+	}
+}
+
 void RaymarchPass::teardown() {
 	if (!rd_) return;
 	// Free order matters on Godot 4.7.1's RenderingDevice: freeing a texture (or shader)
@@ -88,12 +101,13 @@ void RaymarchPass::teardown() {
 	// pipelines — so uset_ first, then pipeline_ before shader_, then the targets.
 	// uset_mask_ is only a cache key for an externally owned tile-mask RID (usually the
 	// IslandAtlas fallback mask); it must not be freed here.
-	for (RID *r : {&uset_, &pipeline_, &shader_, &albedo_, &surface_, &hitpos_, &cost_buf_,
+	for (RID *r : {&uset_, &sun_uset_, &pipeline_, &shader_, &albedo_, &surface_, &hitpos_, &cost_buf_,
 			 &sampler_, &sampler_linear_, &edits_ubo_}) {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
 	uset_mask_ = RID();
+	sun_ubo_ = RID();
 	material_albedo_ = RID();
 	material_surface_ = RID();
 	material_sampler_ = RID();
@@ -119,6 +133,9 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 	// Old uniform set references the old G-buffer targets: free it before them.
 	if (uset_.is_valid()) rd->free_rid(uset_);
 	uset_ = RID();
+	// The set-1 SunLight set is recreated with the target set; release its old RID first.
+	if (sun_uset_.is_valid()) rd->free_rid(sun_uset_);
+	sun_uset_ = RID();
 	if (albedo_.is_valid()) rd->free_rid(albedo_);
 	if (surface_.is_valid()) rd->free_rid(surface_);
 	if (hitpos_.is_valid()) rd->free_rid(hitpos_);
@@ -130,8 +147,8 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 	width_ = w;
 	height_ = h;
 
-	Ref<RDUniform> u[31];
-	for (int i = 0; i < 31; i++) u[i].instantiate();
+	Ref<RDUniform> u[32];
+	for (int i = 0; i < 32; i++) u[i].instantiate();
 	u[0]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
 	u[0]->set_binding(0); u[0]->add_id(albedo_);
 	u[1]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
@@ -196,8 +213,15 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 		u[i]->set_binding(i); u[i]->add_id(override_bufs[i - 27]);
 	}
 	Array uset_args;
-	for (int i = 0; i < 31; i++) uset_args.push_back(u[i]);
+	for (int i = 0; i < 32; i++) uset_args.push_back(u[i]);
 	uset_ = rd->uniform_set_create(uset_args, shader_, 0);
+
+	Ref<RDUniform> sun_uniform;
+	sun_uniform.instantiate();
+	sun_uniform->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
+	sun_uniform->set_binding(24);
+	sun_uniform->add_id(sun_ubo_);
+	sun_uset_ = rd->uniform_set_create(Array::make(sun_uniform), shader_, 1);
 }
 
 bool RaymarchPass::targets_need_rebuild(int width, int height, RID mask) const {
@@ -214,8 +238,8 @@ bool RaymarchPass::render(RenderingDevice *rd, const GpuAtlas &atlas,
 		rebuild_targets(rd, atlas, islands, mask, width, height);
 		uset_mask_ = mask;
 	}
-	if (!uset_.is_valid() || !albedo_.is_valid() || !surface_.is_valid() ||
-			!edits_ubo_.is_valid()) return false;
+	if (!uset_.is_valid() || !sun_uset_.is_valid() || !albedo_.is_valid() ||
+			!surface_.is_valid() || !edits_ubo_.is_valid()) return false;
 
 	// Recorded before the compute list: buffer_update errors while a list is open, and the
 	// deferred update still lands before the dispatch at submit.
@@ -239,6 +263,7 @@ bool RaymarchPass::render(RenderingDevice *rd, const GpuAtlas &atlas,
 	const int64_t list = rd->compute_list_begin();
 	rd->compute_list_bind_compute_pipeline(list, pipeline_);
 	rd->compute_list_bind_uniform_set(list, uset_, 0);
+	rd->compute_list_bind_uniform_set(list, sun_uset_, 1);
 	rd->compute_list_set_push_constant(list, pc, pc.size());
 	rd->compute_list_dispatch(list, (width + kRaymarchGroupX - 1) / kRaymarchGroupX,
 			(height + kRaymarchGroupY - 1) / kRaymarchGroupY, 1);

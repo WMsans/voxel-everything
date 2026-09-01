@@ -3,9 +3,12 @@
 
 #define BEAUTY_CAMERA_SET 0
 #define BEAUTY_CAMERA_BINDING 4
+#define SUN_LIGHT_SET 0
+#define SUN_LIGHT_BINDING 5
 #include "common.glslh"
 #include "shade.glslh"
 #include "beauty_camera.glslh"
+#include "sun_light.glslh"
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -35,7 +38,7 @@ float march(vec2 uv, float depth, ivec2 receiver_px) {
 	for (int i = 0; i < pc.dims.w; i++) {
 		float ray_t = pc.params.z + step_m * (float(i) + jitter);
 		if (ray_t > pc.params.x) break;
-		vec3 q = p + SUN_DIR * ray_t;
+		vec3 q = p + sun_light.dir.xyz * ray_t;
 		vec2 quv;
 		float qdepth;
 		if (!beauty_project(q, quv, qdepth)) break;

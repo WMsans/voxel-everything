@@ -27,6 +27,7 @@
 #include "render/lod_pool.h"
 #include "render/lod_raster_pass.h"
 #include "render/sun_shadow_pass.h"
+#include "render/sun_ubo.h"
 #include "render/lod_cull_pass.h"
 #include "render/hiz_pass.h"
 #include "lod/lod_contour.h"
@@ -63,6 +64,7 @@
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/classes/camera3d.hpp>
+#include <godot_cpp/classes/directional_light3d.hpp>
 #include <godot_cpp/classes/dir_access.hpp>
 #include <godot_cpp/classes/viewport.hpp>
 #include <godot_cpp/core/memory.hpp>
@@ -173,6 +175,8 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_physics_enabled"), &VoxelWorld::get_physics_enabled);
 	ClassDB::bind_method(D_METHOD("set_physics_center_path", "p"), &VoxelWorld::set_physics_center_path);
 	ClassDB::bind_method(D_METHOD("get_physics_center_path"), &VoxelWorld::get_physics_center_path);
+	ClassDB::bind_method(D_METHOD("set_sun_light_path", "p"), &VoxelWorld::set_sun_light_path);
+	ClassDB::bind_method(D_METHOD("get_sun_light_path"), &VoxelWorld::get_sun_light_path);
 	ClassDB::bind_method(D_METHOD("set_physics_radius_m", "v"), &VoxelWorld::set_physics_radius_m);
 	ClassDB::bind_method(D_METHOD("get_physics_radius_m"), &VoxelWorld::get_physics_radius_m);
 	ClassDB::bind_method(D_METHOD("set_physics_bubble_radius_m", "v"), &VoxelWorld::set_physics_bubble_radius_m);
@@ -212,6 +216,7 @@ void VoxelWorld::_bind_methods() {
 			"set_near_field_scale", "get_near_field_scale");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "physics_enabled"), "set_physics_enabled", "get_physics_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "physics_center_path"), "set_physics_center_path", "get_physics_center_path");
+	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "sun_light_path"), "set_sun_light_path", "get_sun_light_path");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "physics_radius_m"), "set_physics_radius_m", "get_physics_radius_m");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "physics_bubble_radius_m"), "set_physics_bubble_radius_m", "get_physics_bubble_radius_m");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_collider_chunks"), "set_max_collider_chunks", "get_max_collider_chunks");
@@ -295,6 +300,7 @@ void VoxelWorld::_process(double delta) {
 	// disabled, because edits and the debug hooks share this path.
 	drain_occupancy();
 	consolidation_->pump_async();
+	update_sun_state();
 	if (!physics_enabled_ || physics_center_path_.is_empty()) return;
 	Node3D *anchor = Object::cast_to<Node3D>(get_node_or_null(physics_center_path_));
 	if (!anchor) return;
@@ -302,6 +308,32 @@ void VoxelWorld::_process(double delta) {
 	physics_tick(anchor->get_global_position());
 	if (island_manager_) island_manager_->run_frame(static_cast<float>(delta),
 			anchor->get_global_position());
+}
+
+void VoxelWorld::update_sun_state() {
+	ve::SunState s; // defaults to kSunDir, white, no basis
+	DirectionalLight3D *light = Object::cast_to<DirectionalLight3D>(
+			sun_light_path_.is_empty() ? nullptr : get_node_or_null(sun_light_path_));
+	if (light) {
+		const Basis b = light->get_global_transform().basis;
+		// A DirectionalLight3D emits along its local -Z, so +Z points toward the sun.
+		const Vector3 dir = b.get_column(2).normalized();
+		const Vector3 right = b.get_column(0).normalized();
+		const Vector3 up = b.get_column(1).normalized();
+		s.dir[0] = dir.x; s.dir[1] = dir.y; s.dir[2] = dir.z;
+		s.right[0] = right.x; s.right[1] = right.y; s.right[2] = right.z;
+		s.up[0] = up.x; s.up[1] = up.y; s.up[2] = up.z;
+		// get_color() is sRGB as authored in the inspector; this engine shades in linear.
+		// Energy above 1 is passed through deliberately: the demo's additive bloom is the
+		// intended consumer of the overrange.
+		const Color c = light->get_color();
+		const float e = static_cast<float>(light->get_param(Light3D::PARAM_ENERGY));
+		s.rgb[0] = ve::srgb_to_linear(c.r) * e;
+		s.rgb[1] = ve::srgb_to_linear(c.g) * e;
+		s.rgb[2] = ve::srgb_to_linear(c.b) * e;
+	}
+	std::lock_guard<std::mutex> lock(sun_mutex_);
+	sun_state_ = s;
 }
 
 VoxelWorld::VoxelWorld() {
@@ -531,8 +563,24 @@ ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
 	return r;
 }
 
+void VoxelWorld::publish_sun_state_to_local_device(RenderingDevice *device) {
+	if (!use_local_device_ || !device || !context_.render || !context_.render->sun_ubo()) return;
+	SunUbo *ubo = context_.render->sun_ubo();
+	if (ubo->ensure(device)) ubo->update(device, sun_state());
+}
+
 RenderingDevice *VoxelWorld::rd() const {
-	return context_.render->rd(); // one-line delegation (Task 12)
+	RenderingDevice *device = context_.render->rd();
+	// Debug hooks render directly on a world-owned local device rather than through the
+	// compositor callback. Refresh the main-thread scene snapshot and publish it before any
+	// hook can bind the raymarch/deferred passes. The normal main-device path remains render
+	// thread owned and publishes in RaymarchCompositor::_render_callback.
+	if (device && use_local_device_) {
+		VoxelWorld *self = const_cast<VoxelWorld *>(this);
+		self->update_sun_state();
+		self->publish_sun_state_to_local_device(device);
+	}
+	return device;
 }
 
 ve::WorldBounds VoxelWorld::world_bounds() const {

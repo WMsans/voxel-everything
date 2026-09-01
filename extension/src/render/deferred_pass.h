@@ -16,11 +16,17 @@ public:
 		float inv_view_proj[16] = {};
 		float cam_pos[3] = {};
 		float ambient[3] = {kAmbient[0], kAmbient[1], kAmbient[2]};
+		// Light-space depth extent of the sun ortho, in world metres. Only read when a sun
+		// map is bound; `render()` clears kFlagSunMap when it is not, so the default 0 is
+		// never divided by.
+		float shadow_depth_range = 0.0f;
 		uint32_t flags = 0;
 		int probe_mode = 0;
 	};
 
 	~DeferredPass();
+	// The sun UBO is owned by RenderOrchestrator; this pass only mirrors its RID.
+	void set_sun_ubo(RID buffer);
 	void initialize(RenderingDevice *rd);
 	void teardown();
 	bool is_valid() const { return shader_.is_valid() && pipeline_.is_valid(); }
@@ -37,6 +43,7 @@ private:
 	RenderingDevice *rd_ = nullptr;
 	RID shader_, pipeline_, sampler_linear_, sampler_nearest_;
 	RID dummy_black_, dummy_far_, dummy_white_, sun_ubo_;
+	RID sun_light_ubo_; // NOT owned: RenderOrchestrator frees it
 	RID uset_;
 	RID key_albedo_, key_surface_, key_depth_, key_lit_, key_ssgi_, key_ssao_, key_sun_;
 	RID key_material_albedo_, key_material_surface_, key_material_sampler_;
