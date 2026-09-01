@@ -133,6 +133,9 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 	// Old uniform set references the old G-buffer targets: free it before them.
 	if (uset_.is_valid()) rd->free_rid(uset_);
 	uset_ = RID();
+	// The set-1 SunLight set is recreated with the target set; release its old RID first.
+	if (sun_uset_.is_valid()) rd->free_rid(sun_uset_);
+	sun_uset_ = RID();
 	if (albedo_.is_valid()) rd->free_rid(albedo_);
 	if (surface_.is_valid()) rd->free_rid(surface_);
 	if (hitpos_.is_valid()) rd->free_rid(hitpos_);
