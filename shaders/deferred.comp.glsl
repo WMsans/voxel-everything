@@ -2,9 +2,6 @@
 #version 460
 
 #define MATERIAL_LAYERS 16
-// Task 6 compatibility: this pass migrates to SunLight in Task 7. Keep its existing white
-// kSunDir behavior until that shared UBO binding is installed here.
-const vec3 SUN_DIR = vec3(0.5746958, 0.7662610, 0.2873479);
 layout(set = 0, binding = 8) uniform sampler2DArray material_albedo;
 layout(set = 0, binding = 9) uniform sampler2DArray material_surface_tex;
 #include "common.glslh"

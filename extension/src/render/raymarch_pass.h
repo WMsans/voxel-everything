@@ -61,6 +61,7 @@ private:
 	RID sampler_linear_;
 	RID edits_ubo_;   // 32-byte uniform buffer, updated every render
 	RID sun_ubo_; // NOT owned: RenderOrchestrator frees it
+	RID sun_uset_; // set 1 uniform set; NOT owned: RenderOrchestrator frees the buffer
 	RID material_albedo_, material_surface_, material_sampler_;
 	RID albedo_, surface_, hitpos_, cost_buf_, uset_, uset_mask_;
 	int width_ = 0, height_ = 0;
