@@ -47,6 +47,22 @@ float sun_map_visibility(vec3 wpos, float ndl) {
 	return (p.z + bias >= texture(sun_map, uv).r) ? 1.0 : 0.0;
 }
 
+// Did the LoD mesh draw this pixel? The sun map is rasterized from that mesh and from
+// nothing else, so it may only shade the pixels that mesh produced. The near field's surface
+// is the FINE field, which sits metres away from the mesh at the cut the far field draws --
+// a tent-filtered lattice several cells coarse -- so testing a raymarched pixel against this
+// map reports shadow over open sunlit ground, in the shape of the LoD geometry. The near
+// field marches its own sun ray instead; that term is already in g0.a.
+//
+// This is the very dither the two fields divide the screen with: lod.frag.glsl keeps a
+// fragment where bayer4(px) < t and composite.frag.glsl drops one there. Reproducing it
+// here -- same threshold, same pixel -- lands the map on exactly the pixels it describes.
+bool far_field_owns(ivec2 px, vec3 wpos, vec3 viewer) {
+	float t = clamp((distance(wpos, viewer) - sun.params.z) /
+			max(sun.params.w - sun.params.z, 1e-3), 0.0, 1.0);
+	return bayer4(px) < t;
+}
+
 void main() {
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
 	ivec2 size = imageSize(out_lit);
@@ -64,6 +80,17 @@ void main() {
 
 	if (pc.flags.y == 3u) {
 		float vis = ((pc.flags.x & BEAUTY_SUN_MAP) != 0u)
+				? sun_map_visibility(pc.cam.xyz, 1.0) : 1.0;
+		imageStore(out_lit, px, vec4(vis, vis, vis, 1.0));
+		return;
+	}
+
+	// Probe 4 is probe 3 plus the ownership gate: the term the SHADING path applies at
+	// pc.cam.xyz for a viewer at inv_view_proj[0].xyz. Probe 3 stays the raw map so the
+	// tests that ask what was rasterized keep asking exactly that.
+	if (pc.flags.y == 4u) {
+		float vis = ((pc.flags.x & BEAUTY_SUN_MAP) != 0u &&
+				far_field_owns(px, pc.cam.xyz, pc.inv_view_proj[0].xyz))
 				? sun_map_visibility(pc.cam.xyz, 1.0) : 1.0;
 		imageStore(out_lit, px, vec4(vis, vis, vis, 1.0));
 		return;
@@ -95,7 +122,7 @@ void main() {
 	float ndv = dot(n, v);
 	float ndh = dot(n, normalize(sun_dir + v));
 	float shadow = g0.a;
-	if ((pc.flags.x & BEAUTY_SUN_MAP) != 0u)
+	if ((pc.flags.x & BEAUTY_SUN_MAP) != 0u && far_field_owns(px, wpos, pc.cam.xyz))
 		shadow = min(shadow, sun_map_visibility(wpos, ndl));
 	vec3 ambient = pc.sky.rgb;
 	if ((pc.flags.x & BEAUTY_SSGI) != 0u) ambient += texture(ssgi_tex, uv).rgb;

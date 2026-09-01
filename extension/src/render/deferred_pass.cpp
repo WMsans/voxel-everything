@@ -208,7 +208,8 @@ bool DeferredPass::render(RenderingDevice *rd, GBuffer &gb, const MaterialAtlas 
 	for (int i = 0; i < 16; i++) uf[i] = sun_map.is_valid() ? sun_view_proj[i] : 0.0f;
 	uf[16] = shadow_texel;
 	uf[17] = p.shadow_depth_range;
-	uf[18] = uf[19] = 0.0f;
+	uf[18] = p.fade_start;
+	uf[19] = p.fade_end;
 	rd->buffer_update(sun_ubo_, 0, 80, ub);
 
 	static_assert(sizeof(float) * 28 == 112, "deferred push block");

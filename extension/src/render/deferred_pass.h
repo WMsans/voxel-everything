@@ -20,6 +20,11 @@ public:
 		// map is bound; `render()` clears kFlagSunMap when it is not, so the default 0 is
 		// never divided by.
 		float shadow_depth_range = 0.0f;
+		// The LoD hand-over band, in metres from the camera. The sun map is rasterized from
+		// the LoD mesh alone, so it may only shade the pixels that mesh drew; these two
+		// distances are how the shader recovers which field owns a pixel.
+		float fade_start = 0.0f;
+		float fade_end = 0.0f;
 		uint32_t flags = 0;
 		int probe_mode = 0;
 	};

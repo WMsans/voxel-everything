@@ -194,3 +194,41 @@ func test_moving_the_sun_moves_the_shadow(timeout := 60000) -> void:
 	assert_int(flipped).override_failure_message(
 		"no sampled point changed shadow state across a 40-degree sun swing").is_greater(0)
 	light.queue_free()
+
+# The map is rasterized from the LoD mesh and from nothing else, so it may only shade the
+# pixels that mesh drew. The near field's surface is the fine field, which sits metres away
+# from the mesh: tested against this map, open sunlit ground inside the near field reported
+# shadow. Sample sunlit surface points near the camera and require the shading path to leave
+# them lit; the raw map (debug_sun_shadow_visibility) is free to say whatever it rasterized.
+func test_the_lod_map_does_not_shadow_the_near_field(timeout := 120000) -> void:
+	var w := make_big_world()
+	var cam := Vector3(60, 90, 60)
+	assert_bool(await settle(w, cam, Vector3(1, -0.3, 1).normalized())).is_true()
+	w.hooks().debug_sun_shadow_build(true)
+	assert_int(w.hooks().debug_sun_shadow_stats()["rebuilds"]).is_greater(0)
+	var sun := Vector3(0.5746958, 0.7662610, 0.2873479) # ve::kSunDir
+	var fade_start: float = w.hooks().debug_lod_fade_band().x
+
+	var checked := 0
+	var darkened := 0
+	for x in range(24, 121, 8):
+		for z in range(24, 121, 8):
+			var hit: Dictionary = w.hooks().debug_raycast(Vector3(x, 200.0, z), Vector3(0, -1, 0))
+			if not hit["hit"]:
+				continue
+			var p: Vector3 = hit["pos"]
+			var n: Vector3 = hit["normal"]
+			# Only ground the sun can reach, and only inside the near field the raymarcher owns.
+			if n.dot(sun) <= 0.25 or p.distance_to(cam) >= fade_start:
+				continue
+			# The fine field is the near field's own geometry: if nothing solid is above this
+			# point along the sun ray, the pixel is lit and no shadow term may darken it.
+			if w.hooks().debug_raycast(p + n * 0.15, sun)["hit"]:
+				continue
+			checked += 1
+			if w.hooks().debug_sun_shadow_shading(p + n * 0.05, cam) < 0.5:
+				darkened += 1
+	assert_int(checked).override_failure_message(
+		"no sunlit near-field ground was sampled; the fixture, not the shader, is wrong").is_greater(50)
+	assert_int(darkened).override_failure_message(
+		"the LoD sun map darkened %d of %d sunlit near-field points" % [darkened, checked]).is_equal(0)
