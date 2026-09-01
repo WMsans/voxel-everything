@@ -1,14 +1,14 @@
 #[compute]
 #version 460
 
+#define SUN_LIGHT_SET 0
+#define SUN_LIGHT_BINDING 10
 #define MATERIAL_LAYERS 16
-// Task 6 compatibility: this pass migrates to SunLight in Task 7. Keep its existing white
-// kSunDir behavior until that shared UBO binding is installed here.
-const vec3 SUN_DIR = vec3(0.5746958, 0.7662610, 0.2873479);
 layout(set = 0, binding = 8) uniform sampler2DArray material_albedo;
 layout(set = 0, binding = 9) uniform sampler2DArray material_surface_tex;
 #include "common.glslh"
 #include "shade.glslh"
+#include "sun_light.glslh"
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -90,9 +90,10 @@ void main() {
 
 	vec3 n = oct_decode(g1.xy);
 	vec3 v = normalize(pc.cam.xyz - wpos);
-	float ndl = dot(n, SUN_DIR);
+	vec3 sun_dir = sun_light.dir.xyz;
+	float ndl = dot(n, sun_dir);
 	float ndv = dot(n, v);
-	float ndh = dot(n, normalize(SUN_DIR + v));
+	float ndh = dot(n, normalize(sun_dir + v));
 	float shadow = g0.a;
 	if ((pc.flags.x & BEAUTY_SUN_MAP) != 0u)
 		shadow = min(shadow, sun_map_visibility(wpos, ndl));
@@ -102,7 +103,7 @@ void main() {
 	// visibility terms. The pass's sky pixels are exactly 1.0, so horizons are untouched.
 	float ao = 1.0;
 	if ((pc.flags.x & BEAUTY_SSAO) != 0u) ao = texture(ssao_tex, uv).r;
-	vec3 lit = cel_shade(g0.rgb, ambient, ndl, ndv, ndh, shadow, ao, g1.w);
+	vec3 lit = cel_shade(g0.rgb, ambient, ndl, ndv, ndh, shadow, ao, g1.w, sun_light.rgb.xyz);
 
 	// Emission is ADDED after shading, never lit: a glowing surface is its own light source.
 	// The whole block is skipped for any material whose table strength is zero, which is
