@@ -52,6 +52,18 @@ public:
 			const float cam_pos[3], int draw_count,
 			float fade_start, float fade_end, RID marker = RID());
 
+	// Clears the G-buffer attachments this pass draws into: colour to zero, depth to the
+	// reverse-Z far plane (0). Production never needs it -- the raymarcher fills the
+	// G-buffer before the LoD draw -- but the debug probes render into throwaway targets
+	// with no producer in front of them and must start from a known state.
+	//
+	// It exists because RenderingDevice::texture_clear CANNOT clear a depth texture: it is
+	// a colour clear, and Godot's Metal driver rejects it outright ("invalid: depth or
+	// stencil texture format", clear_color_texture). The probes used to call it anyway, so
+	// on this device they measured whatever the last probe left behind. A render-pass clear
+	// is the portable way to clear a depth attachment.
+	bool clear_targets(RenderingDevice *rd, GBuffer &gb, RID marker = RID());
+
 private:
 	bool ensure_pipeline(RenderingDevice *rd, GBuffer &gb, RID marker);
 	bool ensure_uniform_set(RenderingDevice *rd, LodPool &pool, MaterialAtlas &materials,

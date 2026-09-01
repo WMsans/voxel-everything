@@ -765,55 +765,106 @@ TEST_CASE("page draws are emitted from the actual non-contiguous page list") {
 	CHECK(out[2].quad_count == 3);
 }
 
-// SunShadowPass writes depth unconditionally and lets the last page drawn own a texel, so
-// this order IS the mechanism that stops a resident coarse ancestor from describing ground
-// its own finer children already describe. Coarsest first, always.
-TEST_CASE("shadow page draws are ordered coarsest level first") {
-	std::map<ve::LodKey, std::vector<int>> pages_of;
-	std::map<int, int> page_quads;
-	pages_of[ve::LodKey{0, 4, 0, 4}] = {30};
-	pages_of[ve::LodKey{3, 1, 0, 1}] = {10};
-	pages_of[ve::LodKey{1, 2, 0, 2}] = {20};
-	page_quads[30] = 3;
-	page_quads[10] = 1;
-	page_quads[20] = 2;
+// --- the sun's cut (LodWalkResult::shadow_draws) ---------------------------------------
+//
+// The sun map is rasterized from this list. It must be a CUT, exactly like `draws`: the
+// moment two LoD levels of the same ground land in one 1.1 m shadow texel they disagree by
+// metres, and whichever survives the depth test shadows open sunlit ground. This was the
+// "false LoD shadow": the map was fed every RESIDENT page, so the never-evicted level-5-7
+// ancestors (12.8-51.2 m cells) arched over the whole world.
 
-	std::vector<ve::LodPageDraw> out;
-	ve::lod_collect_shadow_page_draws(pages_of, page_quads, &out);
-	REQUIRE(out.size() == 3);
-	CHECK(out[0].page == 10); // level 3
-	CHECK(out[1].page == 20); // level 1
-	CHECK(out[2].page == 30); // level 0
-	CHECK(out[0].quad_count == 1);
-	CHECK(out[2].quad_count == 3);
+// Same overlap invariant the camera cut is held to, on every frame of a settling run.
+TEST_CASE("the sun's cut never overlaps itself") {
+	ve::LodTreeConfig cfg;
+	cfg.bounds = demo_bounds();
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	ve::LodWalkResult r;
+	for (int f = 1; f <= 40; f++) {
+		t.walk(c, &occ, uint32_t(f), &r);
+		for (size_t i = 0; i < r.shadow_draws.size(); i++)
+			for (size_t j = i + 1; j < r.shadow_draws.size(); j++) {
+				const ve::LodDrawItem &a = r.shadow_draws[i];
+				const ve::LodDrawItem &b = r.shadow_draws[j];
+				if (a.level == b.level) {
+					CHECK(!(a.coord == b.coord));
+					continue;
+				}
+				const ve::LodDrawItem &lo = a.level < b.level ? a : b;
+				const ve::LodDrawItem &hi = a.level < b.level ? b : a;
+				ve::IVec3 up = lo.coord;
+				for (int l = lo.level; l < hi.level; l++) up = ve::lod_parent(up);
+				CHECK(!(up == hi.coord)) ;
+			}
+		for (const ve::LodBuildRequest &q : r.requests) t.note_ready(q.level, q.coord, 1, 1);
+	}
 }
 
-// Nothing may be dropped: ground that only a coarse page describes still has to cast, which
-// is why the shadow map takes the whole resident set rather than the camera's cut.
-TEST_CASE("shadow page draws keep every resident page") {
-	std::map<ve::LodKey, std::vector<int>> pages_of;
-	std::map<int, int> page_quads;
-	pages_of[ve::LodKey{2, 0, 0, 0}] = {1, 2};
-	pages_of[ve::LodKey{1, 0, 0, 0}] = {3};
-	pages_of[ve::LodKey{1, 1, 0, 1}] = {4};
-	for (int p = 1; p <= 4; p++) page_quads[p] = p;
+// The reason the map cannot just reuse `draws`: that list is frustum culled, and terrain
+// beside and behind the camera still has to cast.
+TEST_CASE("the sun's cut covers ground the camera cut culled away") {
+	ve::LodTreeConfig cfg;
+	cfg.bounds = demo_bounds();
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	settle(&t, c, &occ, 12);
+	ve::LodWalkResult r;
+	t.walk(c, &occ, 20000, &r);
 
-	std::vector<ve::LodPageDraw> out;
-	ve::lod_collect_shadow_page_draws(pages_of, page_quads, &out);
-	CHECK(out.size() == 4);
-	CHECK(out[0].page == 1); // the level-2 chunk's pages lead
-	CHECK(out[1].page == 2);
+	auto contains = [](const std::vector<ve::LodDrawItem> &v, const ve::LodDrawItem &d) {
+		for (const ve::LodDrawItem &e : v)
+			if (e.level == d.level && e.coord == d.coord) return true;
+		return false;
+	};
+	int behind = 0;
+	for (const ve::LodDrawItem &d : r.shadow_draws)
+		if (!contains(r.draws, d)) behind++;
+	CHECK(behind > 0);
+	// ...and nothing the camera draws may be missing from it, or a visible surface would be
+	// shaded against a map that does not contain it.
+	for (const ve::LodDrawItem &d : r.draws) CHECK(contains(r.shadow_draws, d));
 }
 
-// A page whose quad count is gone was released; drawing it would read a stale arena range.
-TEST_CASE("shadow page draws skip a page with no quad count") {
-	std::map<ve::LodKey, std::vector<int>> pages_of;
-	std::map<int, int> page_quads;
-	pages_of[ve::LodKey{1, 0, 0, 0}] = {7, 8};
-	page_quads[7] = 5; // 8 was released
+// The whole point of descending on the SAME rule: for ground the camera can see, the map
+// holds the very geometry the deferred pass shades, so the only disagreement left is one
+// texel of quantisation rather than a level's worth of tent filtering.
+TEST_CASE("the sun's cut picks the camera's level for ground the camera draws") {
+	ve::LodTreeConfig cfg;
+	cfg.bounds = demo_bounds();
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	settle(&t, c, &occ, 12);
+	ve::LodWalkResult r;
+	t.walk(c, &occ, 20000, &r);
+	REQUIRE(!r.draws.empty());
 
-	std::vector<ve::LodPageDraw> out;
-	ve::lod_collect_shadow_page_draws(pages_of, page_quads, &out);
-	REQUIRE(out.size() == 1);
-	CHECK(out[0].page == 7);
+	for (const ve::LodDrawItem &d : r.draws) {
+		bool same_level = false;
+		for (const ve::LodDrawItem &e : r.shadow_draws)
+			if (e.level == d.level && e.coord == d.coord) same_level = true;
+		CHECK(same_level);
+	}
+}
+
+// A subtree the camera never reached is not resident, so the sun's cut stops at the coarsest
+// ready ancestor rather than emitting nothing: unseen terrain still casts, just coarsely.
+TEST_CASE("the sun's cut stops at the coarsest ready node when nothing finer is resident") {
+	ve::LodTreeConfig cfg;
+	cfg.bounds = demo_bounds();
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	ve::LodWalkResult r;
+	t.walk(c, &occ, 1, &r);
+	REQUIRE(!r.requests.empty());
+	const ve::LodBuildRequest root = r.requests[0];
+	t.note_ready(root.level, root.coord, 1, 1);
+	t.walk(c, &occ, 2, &r);
+	int emitted = 0;
+	for (const ve::LodDrawItem &d : r.shadow_draws)
+		if (d.level == root.level && d.coord == root.coord) emitted++;
+	CHECK(emitted == 1);
 }

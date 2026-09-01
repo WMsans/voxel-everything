@@ -100,7 +100,6 @@ void SunShadowPass::teardown() {
 	key_quads_ = RID();
 	key_page_chunk_ = RID();
 	key_chunks_ = RID();
-	pipeline_front_face_set_ = false;
 	rd_ = nullptr;
 	dirty_ = true;
 	frames_since_ = 0;
@@ -115,12 +114,9 @@ void SunShadowPass::mark_dirty() {
 	dirty_ = true;
 }
 
-bool SunShadowPass::ensure_pipeline(RenderingDevice *rd, LodRasterPass &raster) {
+bool SunShadowPass::ensure_pipeline(RenderingDevice *rd) {
 	if (!map_.is_valid() || !shader_.is_valid()) return false;
-	const bool clockwise = raster.front_face_clockwise();
-	if (framebuffer_.is_valid() && pipeline_.is_valid() && pipeline_front_face_set_ &&
-			pipeline_front_face_clockwise_ == clockwise)
-		return true;
+	if (framebuffer_.is_valid() && pipeline_.is_valid()) return true;
 	if (pipeline_.is_valid()) rd->free_rid(pipeline_);
 	pipeline_ = RID();
 	if (framebuffer_.is_valid()) rd->free_rid(framebuffer_);
@@ -130,35 +126,44 @@ bool SunShadowPass::ensure_pipeline(RenderingDevice *rd, LodRasterPass &raster) 
 
 	Ref<RDPipelineRasterizationState> rs;
 	rs.instantiate();
-	rs->set_cull_mode(RenderingDevice::POLYGON_CULL_BACK);
-	rs->set_front_face(clockwise ? RenderingDevice::POLYGON_FRONT_FACE_CLOCKWISE :
-			RenderingDevice::POLYGON_FRONT_FACE_COUNTER_CLOCKWISE);
+	// NO CULLING, and no borrowed front-face convention.
+	//
+	// Winding is a property of the PROJECTION, not of the geometry: this pass inherited
+	// LodRasterPass::front_face_clockwise(), which was measured against the camera's
+	// reverse-Z perspective, and the sun's ortho has the opposite handedness. Front and back
+	// therefore swapped here, and the pass culled precisely the up-facing terrain quads it
+	// exists to record. What survived was the skirt curtains, which lod_append_skirts emits
+	// twice with opposite winding -- so the map held a wireframe of chunk boundaries and
+	// almost none of the ground, which is why its shadows had the wrong shape.
+	//
+	// Culling is only ever an optimisation for a depth-only pass. Letting GREATER_OR_EQUAL
+	// keep whichever surface is nearest the sun is what a shadow map means, it is correct
+	// under any projection, and it cannot be silently inverted by a matrix change again.
+	// The cost is bounded: both faces instead of one, but over the cut rather than the whole
+	// resident set (2313 -> 1687 pages on the demo view), on a depth-only target that
+	// rebuilds at most once every kMinFrames.
+	rs->set_cull_mode(RenderingDevice::POLYGON_CULL_DISABLED);
 	Ref<RDPipelineMultisampleState> ms;
 	ms.instantiate();
 	Ref<RDPipelineDepthStencilState> ds;
 	ds.instantiate();
 	ds->set_enable_depth_test(true);
 	ds->set_enable_depth_write(true);
-	// ALWAYS, not GREATER_OR_EQUAL. The page list carries the same ground at several LoD
-	// levels (LodSystem::prepare_shadow_raster explains why it must), and a nearest-to-the-sun
-	// test would keep the coarsest description of every texel -- a tent-filtered surface
-	// sitting metres above the one the camera draws, which reads as shadow over open ground.
-	// Writing unconditionally makes the LAST page drawn win, and the list is ordered coarsest
-	// first, so the finest description of a texel is the one that survives.
+	// Reverse-Z (near the sun = 1): GREATER_OR_EQUAL keeps the surface NEAREST the sun, which
+	// is what a shadow map means. An overhang's roof therefore wins over its own floor, and
+	// two chunks that overlap under a low sun resolve by geometry rather than by draw order.
 	//
-	// The cost is that two surfaces of the SAME level in one texel -- the roof and floor of an
-	// overhang -- also resolve by draw order rather than by which is nearer the sun, so a far
-	// field overhang can cast from its floor. That is a missing shadow, not a false one.
-	ds->set_depth_compare_operator(RenderingDevice::COMPARE_OP_ALWAYS);
+	// It was briefly ALWAYS, to let a coarsest-first page list end with the finest description
+	// of each texel. That was a workaround for the page list carrying several LoD levels of
+	// the same ground at once; LodSystem::prepare_shadow_raster now sends a cut instead, so
+	// there is one surface per texel and the honest test is back.
+	ds->set_depth_compare_operator(RenderingDevice::COMPARE_OP_GREATER_OR_EQUAL);
 	Ref<RDPipelineColorBlendState> cb;
 	cb.instantiate();
 	cb->set_attachments(Array());
 	pipeline_ = rd->render_pipeline_create(shader_, format, RenderingDevice::INVALID_ID,
 			RenderingDevice::RENDER_PRIMITIVE_TRIANGLES, rs, ms, ds, cb);
-	if (!pipeline_.is_valid()) return false;
-	pipeline_front_face_clockwise_ = clockwise;
-	pipeline_front_face_set_ = true;
-	return true;
+	return pipeline_.is_valid();
 }
 
 bool SunShadowPass::ensure_uniform_set(RenderingDevice *rd, LodPool &pool) {
@@ -205,7 +210,7 @@ bool SunShadowPass::build(RenderingDevice *rd, LodPool &pool, LodRasterPass &ras
 	const std::vector<LodRasterPass::PageDraw> &pages = raster.draw_pages();
 	if (pages.empty()) return false;
 	if (!raster.prepare_index_array(rd, pool)) return false;
-	if (!ensure_pipeline(rd, raster) || !ensure_uniform_set(rd, pool)) return false;
+	if (!ensure_pipeline(rd) || !ensure_uniform_set(rd, pool)) return false;
 	// The shadow pass and camera pass share this indirect-argument buffer. Upload the full
 	// drawable set before recording either draw list; the camera cull must not erase it first.
 	pool.upload_draw_args(pages);

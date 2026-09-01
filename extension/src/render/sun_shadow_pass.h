@@ -28,7 +28,7 @@ public:
 	bool is_valid() const { return rd_ && map_.is_valid() && shader_.is_valid(); }
 
 private:
-	bool ensure_pipeline(RenderingDevice *rd, LodRasterPass &raster);
+	bool ensure_pipeline(RenderingDevice *rd);
 	bool ensure_uniform_set(RenderingDevice *rd, LodPool &pool);
 
 	RenderingDevice *rd_ = nullptr;
@@ -40,8 +40,6 @@ private:
 	RID key_quads_;
 	RID key_page_chunk_;
 	RID key_chunks_;
-	bool pipeline_front_face_clockwise_ = false;
-	bool pipeline_front_face_set_ = false;
 	bool dirty_ = true;
 	int frames_since_ = 0;
 	int rebuilds_ = 0;

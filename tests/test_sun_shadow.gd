@@ -232,3 +232,80 @@ func test_the_lod_map_does_not_shadow_the_near_field(timeout := 120000) -> void:
 		"no sunlit near-field ground was sampled; the fixture, not the shader, is wrong").is_greater(50)
 	assert_int(darkened).override_failure_message(
 		"the LoD sun map darkened %d of %d sunlit near-field points" % [darkened, checked]).is_equal(0)
+
+# The map has to hold the GROUND -- not a wireframe of it, and not a coarser surface floating
+# over it. Both failures shipped, and neither was visible to any test here:
+#
+#  * SunShadowPass borrowed LodRasterPass::front_face_clockwise(), a winding measured against
+#    the CAMERA's reverse-Z perspective. The sun's ortho has the opposite handedness, so the
+#    pass culled exactly the up-facing terrain quads it exists to record; all that reached the
+#    map were the skirt curtains, which lod_append_skirts emits twice with opposite winding.
+#    test_something_actually_gets_drawn_into_it passed on those skirts alone.
+#  * The map was rasterized from every RESIDENT page, so the never-evicted level 5-7 ancestors
+#    (12.8-51.2 m cells) wrote their tent-filtered surfaces over ground their own children
+#    already described, 2 to 15 m too high, and shadowed open sunlit terrain.
+#
+# One bracket catches both: at each sampled patch of ground the stored surface must sit within
+# BRACKET_M of the real one. Too low (or absent) and the buried probe reads lit; too high and
+# the airborne probe reads shadowed.
+#
+# The ground is computed rather than raycast on purpose. debug_raycast reads the brick field,
+# which only exists inside the near field's residency radius -- the very region the far field
+# never builds -- so it cannot see the ground this map is made of. ve::AnalyticGenerator is a
+# pure height field, mirrored here as test_material_seam.gd already mirrors it.
+const BRACKET_M := 8.0
+
+func terrain_height(x: float, z: float) -> float:
+	return 51.2 + 6.0 * sin(x * 0.11) * cos(z * 0.13) \
+		+ 3.0 * sin(x * 0.031 + 1.7) * sin(z * 0.043) \
+		+ sin(x * 0.23 + z * 0.19)
+
+func terrain_normal(x: float, z: float) -> Vector3:
+	const E := 0.05
+	var dhdx := (terrain_height(x + E, z) - terrain_height(x - E, z)) / (2.0 * E)
+	var dhdz := (terrain_height(x, z + E) - terrain_height(x, z - E)) / (2.0 * E)
+	return Vector3(-dhdx, 1.0, -dhdz).normalized()
+
+# Does anything stand between this point and the sun? March the height field; a genuinely
+# shadowed patch says nothing about where the stored surface is, so it must be skipped.
+func sun_is_clear(p: Vector3, sun: Vector3) -> bool:
+	for i in range(1, 400):
+		var q := p + sun * (i * 0.5)
+		if q.y > 80.0:
+			return true
+		if q.y < terrain_height(q.x, q.z):
+			return false
+	return true
+
+func test_the_map_holds_the_ground_within_a_few_metres(timeout := 120000) -> void:
+	var w := make_big_world()
+	var cam := Vector3(60, 90, 60)
+	assert_bool(await settle(w, cam, Vector3(1, -0.3, 1).normalized())).is_true()
+	w.hooks().debug_sun_shadow_build(true)
+	assert_int(w.hooks().debug_sun_shadow_stats()["rebuilds"]).is_greater(0)
+	const SUN := Vector3(0.5746958, 0.7662610, 0.2873479) # ve::kSunDir
+
+	var checked := 0
+	var too_low := 0   # nothing above a buried point: the map is missing that ground
+	var too_high := 0  # an occluder over open ground: the map sits above the terrain
+	for x in range(40, 361, 20):
+		for z in range(40, 361, 20):
+			var n := terrain_normal(x, z)
+			if n.dot(SUN) <= 0.25:
+				continue
+			var p := Vector3(x, terrain_height(x, z), z)
+			if not sun_is_clear(p + n * 0.15, SUN):
+				continue
+			checked += 1
+			if w.hooks().debug_sun_shadow_visibility(p - SUN * BRACKET_M) > 0.5:
+				too_low += 1
+			if w.hooks().debug_sun_shadow_visibility(p + SUN * BRACKET_M) < 0.5:
+				too_high += 1
+	assert_int(checked).override_failure_message(
+		"no sunlit ground was sampled; the fixture, not the map, is wrong").is_greater(50)
+	assert_int(too_low).override_failure_message(
+		"%d of %d probes %.0f m UNDER the surface read lit: the map does not hold that ground"
+		% [too_low, checked, BRACKET_M]).is_less_equal(checked / 20)
+	assert_int(too_high).override_failure_message(
+		"%d of %d probes %.0f m ABOVE open ground read shadowed: the map sits over the terrain"
+		% [too_high, checked, BRACKET_M]).is_less_equal(checked / 20)
