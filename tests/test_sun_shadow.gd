@@ -157,7 +157,7 @@ func _shadow_mask(w: VoxelWorld) -> Array:
 	for x in range(40, 121, 20):
 		for z in range(40, 121, 20):
 			# Just under the surface band, where occlusion actually varies with sun angle.
-			mask.append(w.hooks().debug_sun_shadow_visibility(Vector3(float(x), 58.0, float(z))))
+			mask.append(w.hooks().debug_sun_shadow_visibility(Vector3(float(x), 50.0, float(z))))
 	return mask
 
 func test_moving_the_sun_moves_the_shadow(timeout := 60000) -> void:
