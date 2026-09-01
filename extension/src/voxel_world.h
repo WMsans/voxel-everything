@@ -35,6 +35,7 @@
 #include "render/orchestrator.h" // inline pass-graph delegations need the complete type
 #include "render/consolidate_pass.h"
 #include "shade/beauty_settings.h"
+#include "shade/sun_state.h"
 #include "world/edit_log.h"
 #include "world/raycast.h"
 #include "world/region.h"
@@ -61,6 +62,7 @@ class RaymarchPass;
 class CompositePass;
 class DeferredPass;
 class SunShadowPass;
+class SunUbo;
 class InjectPass;
 class WorldStreamer;
 class MeshService;
@@ -122,6 +124,9 @@ class VoxelWorld : public Node3D, public EditSink {
 
 	bool physics_enabled_ = true;
 	NodePath physics_center_path_;
+	NodePath sun_light_path_;
+	mutable std::mutex sun_mutex_;
+	ve::SunState sun_state_;
 	float physics_radius_m_ = 64.0f;
 	// Spec §6's "small bubbles around active bodies". Kept well under physics_radius_m_:
 	// see ColliderStreamer::set_body_bubble_radius_m for why a body-sized bubble is not a
@@ -135,6 +140,7 @@ class VoxelWorld : public Node3D, public EditSink {
 	int edit_rejections_ = 0; // append fan-out rejection stat; read by debug_stream_stats
 
 	void drain_occupancy() { store_->drain_occupancy(); } // one-line delegation (Task 9)
+	void update_sun_state();
 	// EditSink port satisfied for WorldStore's spine; adapter body forwards to today's
 	// island-manager notification.
 	void on_edit_appended(const ve::EditOp &op, bool notify_islands) override;
@@ -291,6 +297,14 @@ public:
 	bool get_physics_enabled() const { return physics_enabled_; }
 	void set_physics_center_path(const NodePath &p) { physics_center_path_ = p; }
 	NodePath get_physics_center_path() const { return physics_center_path_; }
+	void set_sun_light_path(const NodePath &p) { sun_light_path_ = p; }
+	NodePath get_sun_light_path() const { return sun_light_path_; }
+	// Copied, not referenced: _process writes this from the main thread while the render
+	// callback reads it.
+	ve::SunState sun_state() const {
+		std::lock_guard<std::mutex> lock(sun_mutex_);
+		return sun_state_;
+	}
 	void set_physics_radius_m(float v) { physics_radius_m_ = v; }
 	float get_physics_radius_m() const { return physics_radius_m_; }
 	void set_physics_bubble_radius_m(float v);
@@ -360,6 +374,7 @@ public:
 	CompositePass *composite_pass() { return context_.render->composite_pass(); }
 	DeferredPass *deferred_pass() { return context_.render->deferred_pass(); }
 	SunShadowPass *sun_shadow_pass() { return context_.render->sun_shadow_pass(); }
+	SunUbo *sun_ubo() { return context_.render->sun_ubo(); }
 	InjectPass *inject_pass() { return context_.render->inject_pass(); }
 	LodPool *lod_pool() { return context_.lod->pool(); }
 	LodRasterPass *lod_raster_pass() { return context_.render->lod_raster_pass(); }

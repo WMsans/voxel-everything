@@ -12,6 +12,7 @@
 #include "render/lod_pool.h"
 #include "render/lod_raster_pass.h"
 #include "render/sun_shadow_pass.h"
+#include "render/sun_ubo.h"
 #include "render/lod_cull_pass.h"
 #include "lod/lod_tree.h"
 #include "render/island_cull_pass.h"
@@ -123,6 +124,10 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	}
 	// Device-level operation: SSGI consumes this block before its compute list opens.
 	ubo->update(rd, view_proj, cam_pos, size, 0.05f, 4000.0f);
+	const ve::SunState sun_state = world->sun_state();
+	if (SunUbo *sun_ubo = world->sun_ubo()) {
+		if (sun_ubo->ensure(rd)) sun_ubo->update(rd, sun_state);
+	}
 
 	// Volumes before anything that evaluates the field: an op naming a slot may already be
 	// in the edit log, and the streamer is about to regenerate the bricks that read it.
@@ -251,8 +256,11 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 			float lo[3];
 			float hi[3];
 			wb.aabb(lo, hi);
-			const bool shadow_ok = sun->build(rd, *world->lod_pool(), *lod_raster,
-					ve::sun_ortho(ve::kSunDir, lo, hi, SunShadowPass::kSize), false);
+			const ve::SunOrtho ortho = sun_state.has_basis()
+					? ve::sun_ortho(sun_state.dir, sun_state.right, sun_state.up, lo, hi,
+							SunShadowPass::kSize)
+					: ve::sun_ortho(sun_state.dir, lo, hi, SunShadowPass::kSize);
+			const bool shadow_ok = sun->build(rd, *world->lod_pool(), *lod_raster, ortho, false);
 			if (shadow_ok) timings->end(rd, "sun_shadow");
 			else timings->cancel("sun_shadow");
 			world->prepare_lod_raster();
