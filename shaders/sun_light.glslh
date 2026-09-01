@@ -1,0 +1,10 @@
+// The sun, as data. Included by every pass that needs to know where the sun is or what colour
+// it is; the includer must define SUN_LIGHT_SET and SUN_LIGHT_BINDING first, the same way
+// beauty_camera.glslh is used. One buffer backs all of them (godot::SunUbo).
+//
+// NOTE: never put a literal include directive inside a comment in this file -- the loader
+// matches include tokens anywhere in a line and would self-include (cycle error).
+layout(set = SUN_LIGHT_SET, binding = SUN_LIGHT_BINDING, std140) uniform SunLight {
+	vec4 dir; // xyz = normalized, TOWARD the sun; w unused
+	vec4 rgb; // xyz = linear colour * energy; w unused
+} sun_light;

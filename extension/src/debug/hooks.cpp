@@ -1248,10 +1248,31 @@ Dictionary VoxelDebugHooks::debug_lod_stats() {
 	for (const ve::LodDrawItem &item : world_->context().lod->lod_walk_.draws)
 		draw_pages += item.page_count;
 	d["draw_pages"] = draw_pages;
+	// Expose the exact page identities used by the current camera cut, not just their
+	// aggregate count. A bounded pool may keep a drawable coarse cut while refinement
+	// requests remain pending; tests must prove that the actual scene page set is stable.
+	std::vector<ve::LodPageDraw> draw_page_list;
+	ve::lod_collect_page_draws(world_->context().lod->lod_walk_.draws,
+			world_->context().lod->lod_pages_of_, world_->context().lod->lod_page_quads_, &draw_page_list);
+	PackedInt32Array draw_page_ids;
+	for (const ve::LodPageDraw &page : draw_page_list) draw_page_ids.append(page.page);
+	d["draw_page_ids"] = draw_page_ids;
+	PackedInt32Array resident_page_ids;
+	for (const auto &page : world_->context().lod->lod_page_quads_)
+		if (page.second > 0) resident_page_ids.append(page.first);
+	d["resident_page_ids"] = resident_page_ids;
 	// Requests the last walk still wants built. Zero, with nothing in flight, is what
 	// "the far field has converged for this camera" means; tests wait on it instead of
-	// guessing a frame count.
+	// guessing a frame count. The exact request identities are also exported so a bounded
+	// pool fallback can distinguish a stable backlog from a rotating one.
 	d["requests_pending"] = static_cast<int>(world_->context().lod->lod_walk_.requests.size());
+	Array pending_request_ids;
+	for (const ve::LodBuildRequest &request : world_->context().lod->lod_walk_.requests) {
+		pending_request_ids.append(String::num_int64(request.level) + ":" +
+				String::num_int64(request.coord.x) + ":" + String::num_int64(request.coord.y) + ":" +
+				String::num_int64(request.coord.z));
+	}
+	d["pending_request_ids"] = pending_request_ids;
 	// LodArena::alloc is all-or-nothing, so this should always be zero -- but reporting a
 	// hardcoded 0 makes the test that asserts it vacuous. MEASURE the two shapes a
 	// partially funded build would actually take: a chunk holding a page the per-page quad
@@ -4336,7 +4357,11 @@ Dictionary VoxelDebugHooks::debug_sun_shadow_stats() {
 	float lo[3];
 	float hi[3];
 	wb.aabb(lo, hi);
-	const ve::SunOrtho ortho = ve::sun_ortho(ve::kSunDir, lo, hi, SunShadowPass::kSize);
+	const ve::SunState sun_state = world_->sun_state();
+	const ve::SunOrtho ortho = sun_state.has_basis()
+			? ve::sun_ortho(sun_state.dir, sun_state.right, sun_state.up, lo, hi,
+					SunShadowPass::kSize)
+			: ve::sun_ortho(sun_state.dir, lo, hi, SunShadowPass::kSize);
 	d["map_valid"] = sun->map().is_valid();
 	d["ortho_valid"] = ortho.valid;
 	d["texel_world"] = ortho.valid ? ortho.texel_world : sun->texel_world();
@@ -4359,8 +4384,13 @@ void VoxelDebugHooks::debug_sun_shadow_build(bool force) {
 	float lo[3];
 	float hi[3];
 	wb.aabb(lo, hi);
+	const ve::SunState sun_state = world_->sun_state();
+	const ve::SunOrtho ortho = sun_state.has_basis()
+			? ve::sun_ortho(sun_state.dir, sun_state.right, sun_state.up, lo, hi,
+					SunShadowPass::kSize)
+			: ve::sun_ortho(sun_state.dir, lo, hi, SunShadowPass::kSize);
 	world_->sun_shadow_pass()->build(device, *world_->context().lod->lod_pool_, *world_->lod_raster_pass(),
-			ve::sun_ortho(ve::kSunDir, lo, hi, SunShadowPass::kSize), force);
+			ortho, force);
 	world_->prepare_lod_raster();
 }
 
@@ -4382,6 +4412,7 @@ float VoxelDebugHooks::debug_sun_shadow_visibility(Vector3 p) {
 	dp.cam_pos[1] = p.y;
 	dp.cam_pos[2] = p.z;
 	dp.flags = ve::pack_flags(beauty);
+	dp.shadow_depth_range = use_sun ? world_->sun_shadow_pass()->depth_range() : 0.0f;
 	dp.probe_mode = 3;
 	static const float kNoSun[16] = {};
 	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(),

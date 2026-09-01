@@ -2,6 +2,10 @@
 #version 460
 
 #define MATERIAL_LAYERS 16
+// Set 0's established bindings 24-30 belong to the compact-normal/override interface.
+// Keep that interface unchanged; SunLight uses binding 24 in its dedicated set 1.
+#define SUN_LIGHT_SET 1
+#define SUN_LIGHT_BINDING 24
 // The material arrays live at the end of set 0. They must be declared before common.glslh
 // so material_surface() can see them; the include defines the shared shading functions.
 layout(set = 0, binding = 18) uniform sampler2DArray material_albedo;
@@ -10,6 +14,7 @@ layout(set = 0, binding = 19) uniform sampler2DArray material_surface_tex;
 #include "common.glslh"
 #include "brick_layout.glslh"
 #include "shade.glslh"
+#include "sun_light.glslh"
 
 // Task 7: normals are evaluated from the SOURCE field instead of differentiating the R8
 // atlas. field.glslh owns the op-pool declaration at binding 10; these macros name the
@@ -644,18 +649,20 @@ float terrain_sun_visibility(vec3 ro, float max_shadow_dist) {
 	float t = 0.05;
 	for (int i = 0; i < RAY_SHADOW_STEPS; i++) {
 		if (t > max_shadow_dist) break;
-		vec3 q = ro + SUN_DIR * t;
+		vec3 q = ro + sun_light.dir.xyz * t;
 		ivec3 brick = ivec3(floor(q / BRICK_SIZE));
 		int shadow_region = region_slot_of(brick);
 		if (shadow_region < 0) return 1.0;
-		// SUN_DIR has no zero component (it is the normalised vec3(0.6, 0.8, 0.3)),
-		// so this far-face division needs no primary-DDA-style zero guard. A resident but
-		// empty region cannot contain an occluder; skip its whole 25.6 m cell.
+		// The light supplies a normalized direction; the caller must avoid an exactly-zero
+		// component because this far-face division has no primary-DDA-style zero guard. A
+		// normalized node basis effectively never produces one, and ray_box already tolerates
+		// the infinities. A resident but empty region cannot contain an occluder; skip its whole
+		// 25.6 m cell.
 		if (region_slot_counts.n[shadow_region] == 0) {
 			vec3 rlo = floor(q / REGION_SIZE) * REGION_SIZE;
 			vec3 rhi = rlo + vec3(REGION_SIZE);
-			vec3 far = mix(rlo, rhi, step(0.0, SUN_DIR));
-			vec3 tf = (far - q) / SUN_DIR;
+			vec3 far = mix(rlo, rhi, step(0.0, sun_light.dir.xyz));
+			vec3 tf = (far - q) / sun_light.dir.xyz;
 			float skip = min(tf.x, min(tf.y, tf.z));
 			t += max(skip, 0.01) + 0.001;
 			continue;
@@ -680,13 +687,13 @@ float island_sun_visibility(vec3 ro, int island_count, float max_shadow_dist) {
 		vec3 lo = island_desc.v[i * 8 + 5].xyz;
 		vec3 hi = island_desc.v[i * 8 + 6].xyz;
 		float t0, t1;
-		if (!ray_box(ro, SUN_DIR, lo, hi, t0, t1)) continue;
+		if (!ray_box(ro, sun_light.dir.xyz, lo, hi, t0, t1)) continue;
 		Island isl;
 		if (!island_load(i, isl)) continue;
 		marched++;
 		mat3 inv = transpose(isl.basis);
 		vec3 ro_l = inv * (ro - isl.pos);
-		vec3 rd_l = inv * SUN_DIR;
+		vec3 rd_l = inv * sun_light.dir.xyz;
 		float t = max(t0, 0.05);
 		float tmax = min(t1, max_shadow_dist);
 		for (int k = 0; k < 48; k++) {
