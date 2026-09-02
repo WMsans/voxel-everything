@@ -113,14 +113,20 @@ void main() {
 	vec3 ddx = pc.right_tanx.xyz * (2.0 * pc.right_tanx.w * texel.x) * t;
 	vec3 ddy = pc.up_tany.xyz * (2.0 * pc.up_tany.w * texel.y) * t;
 	vec4 surf = material_surface(mat, p, n, ddx, ddy);
-	vec2 props = material_props(mat, p, n, ddx, ddy);
+	// `n` stays the GEOMETRIC normal above and below: it picked the triplanar weights, it
+	// refined the hit position against the marched tangent plane, and the marcher's own
+	// target still holds it. `shading_n` is the same normal bent by the material normal map,
+	// and it is what the G-buffer carries onward to the deferred pass -- so relief finer than
+	// a voxel lights, while traversal and the sun ray keep the surface they actually marched.
+	vec3 shading_n;
+	vec2 props = material_props_normal(mat, p, n, ddx, ddy, shading_n);
 	// AO has no channel of its own and the cel stack only multiplies the AMBIENT term by it,
 	// so it is folded into the albedo here -- the same fold, with the same 0.65, that
 	// lod.frag.glsl applies to the far field. It darkens the MATERIAL only: the overlay is a
 	// debug tint or a reflection, not a lit surface, and the marcher's own compositing put it
 	// on top.
 	out_albedo = vec4(mix(surf.rgb * mix(1.0, props.y, 0.65), ov.rgb, sf.w), ov.a);
-	out_surface = vec4(sf.xy, sf.z, 1.0 - props.x);
+	out_surface = vec4(oct_encode(shading_n), sf.z, 1.0 - props.x);
 
 	float d = distance(p, pc.cam.xyz);
 	float t_fade = clamp((d - pc.cam.w) / max(pc.fade.x - pc.cam.w, 1e-3), 0.0, 1.0);

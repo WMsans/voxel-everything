@@ -825,10 +825,12 @@ void main() {
 	// Debug material probe: a 1x1 dispatch calls material_surface() directly with zero
 	// gradients. pc.params.w is otherwise unused, so > 0 is the probe flag.
 	if (pc.params.w > 0.0) {
+		vec3 probe_n = normalize(pc.cam_fwd.xyz);
 		vec4 surf = material_surface(uint(pc.params.w), pc.cam_pos.xyz,
-				normalize(pc.cam_fwd.xyz), vec3(0.0), vec3(0.0));
-		vec2 props = material_props(uint(pc.params.w), pc.cam_pos.xyz,
-				normalize(pc.cam_fwd.xyz), vec3(0.0), vec3(0.0));
+				probe_n, vec3(0.0), vec3(0.0));
+		vec3 probe_shading_n;
+		vec2 props = material_props_normal(uint(pc.params.w), pc.cam_pos.xyz,
+				probe_n, vec3(0.0), vec3(0.0), probe_shading_n);
 		int cost_i = (px.y * size.x + px.x) * 2;
 		cost_out.v[cost_i + 0] = uint(65536 - primary_steps);
 		cost_out.v[cost_i + 1] =
@@ -839,7 +841,10 @@ void main() {
 		// no geometry, and they are what the composite folds into a resolved pixel, so a
 		// caller can reproduce that fold from one probe rather than guessing at it.
 		imageStore(out_surface, px, vec4(props.x, props.y, pc.params.w, 0.0));
-		imageStore(out_hitpos, px, vec4(pc.cam_pos.xyz, 1.0));
+		// The hit position is the probe's own input, so the slot is free: it carries the
+		// SHADING normal the map produces at zero gradients -- mip 0, no render path, no
+		// geometry -- which is the only way to ask what the art itself says.
+		imageStore(out_hitpos, px, vec4(probe_shading_n, 1.0));
 		return;
 	}
 

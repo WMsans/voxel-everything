@@ -274,10 +274,16 @@ public:
 	Dictionary debug_material_alpha_stats(int layer);
 
 	Color debug_material_probe(int mat, Vector3 p, Vector3 n);
+	// The shading normal the material normal map produces at `p` for geometric normal `n`,
+	// at mip 0 and with no geometry: what the ART says, isolated from every render path.
+	Vector3 debug_material_normal_probe(int mat, Vector3 p, Vector3 n);
 
 	// Task 7: rewrites one material layer's normal-map texels (surface array RG) so tests
 	// can prove the G-buffer normal never depends on the material normal map.
 	bool debug_poke_material_normal(int layer);
+	// Task 11: the inverse poke -- a flat (+Z) normal map over one layer, so a test can prove
+	// the shading normal returns to the geometric one when the map says nothing.
+	bool debug_flatten_material_normal(int layer);
 
 	int debug_stream_frame(Vector3 cam);
 
@@ -465,7 +471,8 @@ private:
 	// One 1x1 material-probe dispatch: raymarch.comp.glsl's pc.params.w > 0 path evaluates
 	// material_surface()/material_props() at a given point and normal with no marching. It
 	// OVERWRITES the raymarch pass's targets, so callers must finish reading those first.
-	bool probe_material(int mat, Vector3 p, Vector3 n, float rgb[3], float *roughness, float *ao);
+	bool probe_material(int mat, Vector3 p, Vector3 n, float rgb[3], float *roughness, float *ao,
+			float *shading_normal = nullptr);
 
 	// What composite.frag.glsl will resolve for a pixel the marcher described. The near field
 	// exports geometry plus a ray overlay and the composite turns that into an albedo and a

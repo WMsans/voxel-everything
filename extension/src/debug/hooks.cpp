@@ -246,7 +246,11 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_material_alpha_stats", "layer"),
 			&VoxelDebugHooks::debug_material_alpha_stats);
 	ClassDB::bind_method(D_METHOD("debug_material_probe", "mat", "p", "n"), &VoxelDebugHooks::debug_material_probe);
+	ClassDB::bind_method(D_METHOD("debug_material_normal_probe", "mat", "p", "n"),
+			&VoxelDebugHooks::debug_material_normal_probe);
 	ClassDB::bind_method(D_METHOD("debug_poke_material_normal", "layer"), &VoxelDebugHooks::debug_poke_material_normal);
+	ClassDB::bind_method(D_METHOD("debug_flatten_material_normal", "layer"),
+			&VoxelDebugHooks::debug_flatten_material_normal);
 	ClassDB::bind_method(D_METHOD("debug_sdf_atlas"), &VoxelDebugHooks::debug_sdf_atlas);
 	ClassDB::bind_method(D_METHOD("debug_local_rd"), &VoxelDebugHooks::debug_local_rd);
 	ClassDB::bind_method(D_METHOD("debug_load_shader", "res_path"), &VoxelDebugHooks::debug_load_shader);
@@ -1411,6 +1415,7 @@ Dictionary VoxelDebugHooks::debug_lod_gbuffer_probe(Vector3 pos, Vector3 fwd, in
 	d["gloss_max"] = 0.0f;
 	d["sun_min"] = 1.0f;
 	d["sun_max"] = 0.0f;
+	d["normal_mean"] = Vector3();
 	if (w <= 0 || h <= 0) return d;
 
 	debug_lod_tick(pos, fwd);
@@ -1457,6 +1462,11 @@ Dictionary VoxelDebugHooks::debug_lod_gbuffer_probe(Vector3 pos, Vector3 fwd, in
 			float gloss_max = 0.0f;
 			float sun_min = 1.0f;
 			float sun_max = 0.0f;
+			// The MEAN decoded normal over the covered pixels. A per-pixel normal cannot be
+			// compared across two renders -- the LoD walk may hand back a different page set --
+			// but the average orientation of a settled patch is stable, which is what makes it
+			// a usable before/after for "did the material normal map move the far field".
+			double nsum[3] = {0.0, 0.0, 0.0};
 			for (int i = 0; i < pixels; i++) {
 				const float material = Math::half_to_float(s[i * 4 + 2]);
 				if (material < 0.5f) continue;
@@ -1466,6 +1476,7 @@ Dictionary VoxelDebugHooks::debug_lod_gbuffer_probe(Vector3 pos, Vector3 fwd, in
 				ve::oct_decode(e, n);
 				const float length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
 				worst = std::max(worst, std::fabs(length - 1.0f));
+				nsum[0] += n[0]; nsum[1] += n[1]; nsum[2] += n[2];
 				gloss_max = std::max(gloss_max, Math::half_to_float(s[i * 4 + 3]));
 				const float sun = static_cast<float>(a[i * 4 + 3]) / 255.0f;
 				sun_min = std::min(sun_min, sun);
@@ -1476,6 +1487,11 @@ Dictionary VoxelDebugHooks::debug_lod_gbuffer_probe(Vector3 pos, Vector3 fwd, in
 			d["gloss_max"] = gloss_max;
 			d["sun_min"] = covered > 0 ? sun_min : 1.0f;
 			d["sun_max"] = covered > 0 ? sun_max : 1.0f;
+			if (covered > 0) {
+				const double inv = 1.0 / static_cast<double>(covered);
+				d["normal_mean"] = Vector3(static_cast<float>(nsum[0] * inv),
+						static_cast<float>(nsum[1] * inv), static_cast<float>(nsum[2] * inv));
+			}
 		}
 	}
 	world_->lod_raster_pass()->release_targets();
@@ -4683,6 +4699,61 @@ Dictionary VoxelDebugHooks::debug_near_field_detail(Vector3 pos, Vector3 fwd, in
 			ve::oct_decode(e, n);
 			d["center_normal"] = Vector3(n[0], n[1], n[2]);
 		}
+		// The MARCHER's own normal for the very same pixel, before composite.frag.glsl bent
+		// it with the material normal map. Only meaningful when the march ran at full
+		// resolution -- below that the marcher's pixel c does not exist.
+		if (rw == w && rh == h) {
+			const PackedByteArray march =
+					device->texture_get_data(world_->raymarch_pass()->surface_texture(), 0);
+			if (march.size() >= pixels * 8) {
+				const uint16_t *mv = reinterpret_cast<const uint16_t *>(march.ptr());
+				const float e[2] = {half_to_float(mv[c * 4]), half_to_float(mv[c * 4 + 1])};
+				float n[3];
+				ve::oct_decode(e, n);
+				d["center_geometric_normal"] = Vector3(n[0], n[1], n[2]);
+			}
+			// How much relief the SHIPPED art actually produces, and what it costs the
+			// outline pass. `normal_tilt_mean` is the mean 1 - dot(shading, geometric) over
+			// every covered pixel: zero means the map changed nothing anywhere, which is the
+			// state this whole path existed to leave. `normal_edge_fraction` is the fraction
+			// of adjacent covered pairs whose normals differ by more than the outline pass's
+			// own threshold -- every one of those is a pixel outline.comp.glsl would darken,
+			// so it is the speckle budget for turning the map on.
+			const PackedByteArray shaded =
+					device->texture_get_data(world_->gbuffer()->surface(), 0);
+			if (march.size() >= pixels * 8 && shaded.size() >= pixels * 8) {
+				const uint16_t *mv = reinterpret_cast<const uint16_t *>(march.ptr());
+				const uint16_t *gv = reinterpret_cast<const uint16_t *>(shaded.ptr());
+				auto decode = [](const uint16_t *v, int64_t i, float n[3]) {
+					const float e[2] = {half_to_float(v[i * 4]), half_to_float(v[i * 4 + 1])};
+					ve::oct_decode(e, n);
+				};
+				double tilt = 0.0;
+				int64_t tilted = 0;
+				int64_t pairs = 0, edges = 0;
+				for (int y = 0; y < h; y++) {
+					for (int x = 0; x < w; x++) {
+						const int64_t i = static_cast<int64_t>(y) * w + x;
+						if (!is_surface(i)) continue;
+						float g[3], m[3];
+						decode(gv, i, g);
+						decode(mv, i, m);
+						tilt += 1.0 - (g[0] * m[0] + g[1] * m[1] + g[2] * m[2]);
+						tilted++;
+						if (x + 1 >= w || !is_surface(i + 1)) continue;
+						float g1[3];
+						decode(gv, i + 1, g1);
+						pairs++;
+						if (1.0f - (g[0] * g1[0] + g[1] * g1[1] + g[2] * g1[2]) >
+								world_->beauty_settings().outline_normal_threshold)
+							edges++;
+					}
+				}
+				d["normal_tilt_mean"] = tilted > 0 ? tilt / static_cast<double>(tilted) : 0.0;
+				d["normal_edge_fraction"] = pairs > 0
+						? static_cast<double>(edges) / static_cast<double>(pairs) : 0.0;
+			}
+		}
 	}
 	d["ran"] = true;
 	d["march_width"] = rw;
@@ -4981,8 +5052,28 @@ bool VoxelDebugHooks::debug_poke_material_normal(int layer) {
 	return true;
 }
 
+// The other half of the poke: a FLAT map (tangent normal +Z) over every texel and mip of one
+// layer. A shading normal built by the whiteout blend must come back to the geometric normal
+// under it, which is the property that makes applying the map at full strength safe -- an
+// unauthored or averaged-away normal may not tilt a surface it says nothing about.
+bool VoxelDebugHooks::debug_flatten_material_normal(int layer) {
+	world_->ensure_initialized();
+	RenderingDevice *device = world_->rd();
+	if (!world_->initialized_ || !device || !world_->material_atlas()) return false;
+	if (layer < 0 || layer >= world_->material_atlas()->layer_count()) return false;
+	PackedByteArray data = device->texture_get_data(world_->material_atlas()->surface_array(), layer);
+	if (data.size() < 4) return false;
+	uint8_t *bytes = data.ptrw();
+	for (int64_t i = 0; i + 1 < data.size(); i += 4) {
+		bytes[i] = 128; // the closest an 8-bit unorm gets to XY = (0, 0)
+		bytes[i + 1] = 128;
+	}
+	device->texture_update(world_->material_atlas()->surface_array(), layer, data);
+	return true;
+}
+
 bool VoxelDebugHooks::probe_material(int mat, Vector3 p, Vector3 n, float rgb[3],
-		float *roughness, float *ao) {
+		float *roughness, float *ao, float *shading_normal) {
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
 	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass())
@@ -5021,7 +5112,23 @@ bool VoxelDebugHooks::probe_material(int mat, Vector3 p, Vector3 n, float rgb[3]
 	const uint16_t *s = reinterpret_cast<const uint16_t *>(sf.ptr());
 	if (roughness) *roughness = half_to_float(s[0]);
 	if (ao) *ao = half_to_float(s[1]);
+	if (shading_normal) {
+		const PackedByteArray hp =
+				device->texture_get_data(world_->raymarch_pass()->hitpos_texture(), 0);
+		if (hp.size() < 16) return false;
+		const float *h = reinterpret_cast<const float *>(hp.ptr());
+		shading_normal[0] = h[0];
+		shading_normal[1] = h[1];
+		shading_normal[2] = h[2];
+	}
 	return true;
+}
+
+Vector3 VoxelDebugHooks::debug_material_normal_probe(int mat, Vector3 p, Vector3 n) {
+	float rgb[3] = {1.0f, 0.0f, 1.0f};
+	float sn[3] = {0.0f, 0.0f, 0.0f};
+	if (!probe_material(mat, p, n, rgb, nullptr, nullptr, sn)) return Vector3();
+	return Vector3(sn[0], sn[1], sn[2]);
 }
 
 Color VoxelDebugHooks::resolve_near_field(int mat, Vector3 p, Vector3 n, Color overlay,

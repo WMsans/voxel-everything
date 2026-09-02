@@ -78,3 +78,27 @@ func test_the_lod_raster_no_longer_shades(timeout := 60000) -> void:
 	# the deferred pass, not the raster's.
 	assert_float(d["sun_min"]).is_equal_approx(1.0, 0.01)
 	assert_float(d["sun_max"]).is_equal_approx(1.0, 0.01)
+
+# The far field resolves its material through the same pair of calls the near field does
+# (see the comment at the top of shaders/composite.frag.glsl), so it must pick up the
+# material normal map too -- and it needs it more: a LoD quad's normal is flat across the
+# whole quad, so without the map a distant hillside is one unbroken facet.
+func test_the_material_normal_map_shapes_the_far_field_shading_normal(timeout := 60000) -> void:
+	var w := make_world()
+	var pos := Vector3(100.0, 100.0, 100.0)
+	var fwd := Vector3(0.3, -0.5, 0.3).normalized()
+	assert_bool(await settle(w, pos, fwd)).is_true()
+	var before: Dictionary = w.hooks().debug_lod_gbuffer_probe(pos, fwd, 128, 128)
+	assert_float(before["material_coverage"]).is_greater(0.2)
+	# Which material a page carries is the walk's business, so poke every layer.
+	for layer in range(16):
+		assert_bool(w.hooks().debug_poke_material_normal(layer)).is_true()
+	var after: Dictionary = w.hooks().debug_lod_gbuffer_probe(pos, fwd, 128, 128)
+	assert_float(after["material_coverage"]).is_greater(0.2)
+	assert_float(after["worst_normal_length_error"]).override_failure_message(
+		"a perturbed far-field normal did not survive the oct pack").is_less(0.02)
+	var n0: Vector3 = before["normal_mean"]
+	var n1: Vector3 = after["normal_mean"]
+	assert_float((n0 - n1).length()).override_failure_message(
+		"the material normal map did not move the far field: %s -> %s" % [n0, n1]
+		).is_greater(0.05)

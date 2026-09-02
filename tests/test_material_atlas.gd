@@ -77,3 +77,85 @@ func test_an_unknown_material_falls_back_to_flat_albedo() -> void:
 	var c: Color = w.hooks().debug_material_probe(9999, Vector3(10.0, 51.0, 10.0), Vector3(0, 1, 0))
 	assert_bool(c.r > 0.9 and c.g < 0.1 and c.b > 0.9).override_failure_message(
 		"an out-of-range material id should shade error magenta, got %s" % c).is_true()
+
+# The normal map was packed into the surface array's RG from the day the atlas was written
+# and read by nothing: every shading path took the geometric normal and stopped there, so no
+# terrain surface had any relief below the size of a voxel. It is applied where the material
+# is resolved -- composite.frag.glsl for the near field, lod.frag.glsl for the far one -- so
+# the normal the deferred pass lights carries the map and the MARCHER's own normal (which
+# traversal and the shadow ray bias read) stays geometric. See
+# tests/test_raymarch_gbuffer.gd for the other half of that split.
+#
+# debug_poke_material_normal rewrites a layer's RG with the hardest tilt the format holds,
+# so a shading normal that follows the map cannot stay where it was.
+func test_the_material_normal_map_shapes_the_near_field_shading_normal() -> void:
+	var w := make_world()
+	var pos := Vector3(20.0, 75.0, 20.0)
+	var fwd := Vector3(0.0, -1.0, 0.0)
+	var before: Dictionary = w.hooks().debug_near_field_detail(pos, fwd, 64, 64, 1.0)
+	assert_bool(before["ran"]).is_true()
+	assert_bool(before["center_hit"]).override_failure_message(
+		"the probe ray missed the terrain, so the normal below proves nothing").is_true()
+	var mat: int = before["center_material"]
+	assert_int(mat).is_greater(0)
+	# Layer i serves material id i + 1.
+	assert_bool(w.hooks().debug_poke_material_normal(mat - 1)).is_true()
+	var after: Dictionary = w.hooks().debug_near_field_detail(pos, fwd, 64, 64, 1.0)
+	assert_int(after["center_material"]).is_equal(mat)
+	var n0: Vector3 = before["center_normal"]
+	var n1: Vector3 = after["center_normal"]
+	assert_float(n1.length()).override_failure_message(
+		"the shading normal is not unit length: %s" % n1).is_equal_approx(1.0, 0.02)
+	assert_float((n0 - n1).length()).override_failure_message(
+		"the material normal map did not move the shading normal: %s -> %s" % [n0, n1]
+		).is_greater(0.1)
+
+# A flat map must return the geometric normal EXACTLY, or every surface acquires a permanent
+# tilt from its own texture. The whiteout blend has that property by construction; this pins
+# it, because it is the property that makes a strength of 1.0 safe to ship.
+func test_a_flat_normal_map_leaves_the_shading_normal_alone() -> void:
+	var w := make_world()
+	var pos := Vector3(20.0, 75.0, 20.0)
+	var fwd := Vector3(0.0, -1.0, 0.0)
+	var before: Dictionary = w.hooks().debug_near_field_detail(pos, fwd, 64, 64, 1.0)
+	assert_bool(before["center_hit"]).is_true()
+	var mat: int = before["center_material"]
+	assert_bool(w.hooks().debug_flatten_material_normal(mat - 1)).is_true()
+	var after: Dictionary = w.hooks().debug_near_field_detail(pos, fwd, 64, 64, 1.0)
+	var n_flat: Vector3 = after["center_normal"]
+	# The marcher's own normal for the SAME pixel, so the comparison is not against a
+	# neighbouring ray's surface.
+	var n_geo: Vector3 = after["center_geometric_normal"]
+	assert_float((n_flat - n_geo).length()).override_failure_message(
+		"a flat normal map tilted the surface: geometric %s, shaded %s" % [n_geo, n_flat]
+		).is_less(0.02)
+
+# The poke tests prove the map is WIRED. This one proves the SHIPPED ART says something
+# through it: probe every table material at mip 0 (zero gradients, no geometry, no render
+# path) and require the normal it produces to be a real tilt off the geometric one. A future
+# change that sets MATERIAL_NORMAL_STRENGTH to zero, drops the RG channels from pack_layer,
+# or ships flat normal art lands here rather than in a screenshot.
+#
+# ~10 degrees is what assets/materials actually carry (their normal maps have a per-channel
+# standard deviation around 20/255); the bound is set well under that so ordinary art
+# revisions do not trip it.
+func test_every_material_normal_map_carries_real_relief() -> void:
+	var w := make_world()
+	var up := Vector3(0, 1, 0)
+	for entry in w.material_table():
+		var mat: int = entry["id"]
+		var tilt := 0.0
+		var samples := 0
+		for i in range(100):
+			# An irrational-ish stride so the sample grid never lands on one texel row.
+			var p := Vector3(float(i % 10) * 0.0731, 0.0, float(i / 10) * 0.0917)
+			var sn: Vector3 = w.hooks().debug_material_normal_probe(mat, p, up)
+			assert_float(sn.length()).override_failure_message(
+				"material %d probed a non-unit shading normal %s" % [mat, sn]
+				).is_equal_approx(1.0, 0.02)
+			tilt += 1.0 - sn.dot(up)
+			samples += 1
+		var mean := tilt / float(samples)
+		assert_float(mean).override_failure_message(
+			"material %s (id %d) shades perfectly flat: its normal map reaches nothing"
+			% [entry["name"], mat]).is_greater(0.002) # ~3.6 degrees
