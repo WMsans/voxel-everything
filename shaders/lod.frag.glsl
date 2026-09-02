@@ -37,9 +37,13 @@ void main() {
 	vec3 ddx = dFdx(v_wpos);
 	vec3 ddy = dFdy(v_wpos);
 	vec4 surf = material_surface(v_material, v_wpos, v_normal, ddx, ddy);
-	vec2 props = material_props(v_material, v_wpos, v_normal, ddx, ddy);
+	// The far field needs the normal map more than the near field does: v_normal is flat
+	// across a whole LoD quad, so without it a distant hillside is one unbroken facet. Same
+	// call, same arguments as composite.frag.glsl, so the two fields cannot drift.
+	vec3 shading_n;
+	vec2 props = material_props_normal(v_material, v_wpos, v_normal, ddx, ddy, shading_n);
 	// Sun visibility is 1: shadowing the far field is the ortho shadow map's job, evaluated
 	// once in the deferred pass where the near field's raymarched term is also applied.
 	out_albedo = vec4(surf.rgb * mix(1.0, props.y, 0.65), 1.0);
-	out_surface = vec4(oct_encode(v_normal), float(v_material), 1.0 - props.x);
+	out_surface = vec4(oct_encode(shading_n), float(v_material), 1.0 - props.x);
 }

@@ -195,15 +195,24 @@ func test_the_march_leaves_no_isolated_holes_in_the_gbuffer() -> void:
 		"the view hit nothing, so the hole count below proves nothing").is_greater(20000)
 	assert_int(d["isolated_misses"]).is_equal(0)
 
-# Task 7's invariance contract: the G-buffer normal comes from the source field (or its
-# R8 fallback), NEVER from the material normal map. Rewriting a material layer's normal-
-# map texels with a hard tilt must not move the decoded normal by one bit.
+# Task 7's invariance contract, narrowed to the target it was always about: the MARCHER's
+# own G-buffer normal comes from the source field (or its R8 fallback), never from the
+# material normal map. Rewriting a material layer's normal-map texels with a hard tilt must
+# not move that decoded normal by one bit -- traversal, the shadow ray's bias and the
+# triplanar weights all read it, and none of them may follow a texture.
+#
+# The MERGED G-buffer is a different target with a different contract: composite.frag.glsl
+# perturbs the normal it writes there with exactly this map, which is what
+# test_material_atlas.gd's shading-normal test asserts.
+#
+# debug_poke_material_normal takes an ATLAS LAYER, and layer i serves material id i + 1.
+# Passing the id poked the next material's layer, which made this assertion vacuous.
 func test_material_normal_map_bytes_do_not_change_gbuffer_normals() -> void:
 	var w := make_world()
 	var before := probe_ground(w)
 	assert_bool(before["hit"]).is_true()
 	var mat: int = before["material"]
-	assert_bool(w.hooks().debug_poke_material_normal(mat)).is_true()
+	assert_bool(w.hooks().debug_poke_material_normal(mat - 1)).is_true()
 	var after := probe_ground(w)
 	assert_int(after["material"]).is_equal(mat)
 	var n0: Vector3 = before["normal"]
