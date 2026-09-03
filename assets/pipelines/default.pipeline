@@ -1,0 +1,8 @@
+# The terrain the engine shipped with, expressed as stages. Task 15's equivalence test
+# asserts this produces bit-identical bricks to ve::AnalyticGenerator.
+seed      1337
+lipschitz 2.0
+
+stage stages/hills.field.glslh
+stage stages/cave.field.glslh
+stage stages/height_bands.field.glslh

@@ -1,0 +1,20 @@
+//!stage     hills
+//!kind      field
+//!out       sdf : float
+//!out       height : float
+//!param     amp_a : float = 6.0
+//!param     amp_b : float = 3.0
+//!param     amp_c : float = 1.0
+//!lipschitz 2.0
+//!cpu       ve::stage_hills
+
+// Ported verbatim from ve::AnalyticGenerator::sample (generator.cpp). SURFACE_Y comes from
+// the prelude. `height` is published so the material stage can band on it without
+// recomputing the sum.
+void stage_hills(inout FieldCtx ctx) {
+	float x = ctx.p.x, z = ctx.p.z;
+	ctx.height = P.hills_amp_a * sin(x * 0.11) * cos(z * 0.13)
+	           + P.hills_amp_b * sin(x * 0.031 + 1.7) * sin(z * 0.043)
+	           + P.hills_amp_c * sin(x * 0.23 + z * 0.19);
+	ctx.sdf = ctx.p.y - SURFACE_Y - ctx.height;
+}
