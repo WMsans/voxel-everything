@@ -25,6 +25,7 @@ for f in ["src/render/shader_loader.cpp", "src/render/camera_params.cpp"]:
 # Same for LodSystem (Task 15): ensure_lod()/tick() drive GPU pools and raster passes.
 pure_sources = [s for s in pure_sources
                 if str(s) not in ("src/mesh/consolidation.cpp", "src/lod/lod_system.cpp")]
+test_env.Append(CPPDEFINES=[("VE_REPO_ROOT", '\\"' + Dir("#").abspath + '/..\\"')])
 tests = test_env.Program("build/tests/ve_tests", Glob("tests/*.cpp") + pure_sources)
 test_alias = Alias("test", [tests], tests[0].abspath)
 AlwaysBuild(test_alias)
