@@ -2,7 +2,7 @@
 // generator still produces it byte for byte. Catches codegen drift that no behavioural test
 // would notice until a shader failed to compile.
 //
-// Regenerate after an INTENTIONAL codegen change: VE_REGEN_GOLDEN=1 ./build.sh --test
+// Regenerate after an INTENTIONAL codegen change: cd extension && VE_REGEN_GOLDEN=1 ./build/tests/ve_tests
 #include <doctest/doctest.h>
 #include "terrain/field_codegen.h"
 #include "terrain/pipeline.h"

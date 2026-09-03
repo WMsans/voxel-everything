@@ -2,7 +2,7 @@
 // fixed set of bricks. Task 1 pins the field as a function; this pins everything eval_brick
 // derives from it, which is what actually reaches the atlas.
 //
-// Regenerate after an INTENTIONAL terrain change:  VE_REGEN_GOLDEN=1 ./build.sh --test
+// Regenerate after an INTENTIONAL terrain change:  cd extension && VE_REGEN_GOLDEN=1 ./build/tests/ve_tests
 #include <doctest/doctest.h>
 #include "world/brick_eval.h"
 #include "generator/generator.h"

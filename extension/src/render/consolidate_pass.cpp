@@ -187,7 +187,7 @@ bool ConsolidatePass::run(const ConsolidateJob &job, ConsolidateResult *out) {
 		} else if (job.gen == nullptr) {
 			for (auto &b : out->baked) b.normal_oct.clear();
 		} else {
-				const ve::Generator &gen = *job.gen;
+			const ve::Generator &gen = *job.gen;
 				for (size_t bi = 0; bi < out->baked.size(); bi++) {
 					const ve::IVec3 brick = job.bricks[bi];
 					float bo[3];

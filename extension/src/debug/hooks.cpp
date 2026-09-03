@@ -1,6 +1,8 @@
 #include "debug/hooks.h"
 
 #include "../voxel_world.h"
+#include "terrain/field_params_pack.h"
+#include <cstring>
 #include "mesh/consolidation.h"
 #include "render/gpu_atlas.h"
 #include "render/material_atlas.h"
@@ -4833,14 +4835,15 @@ void VoxelDebugHooks::debug_clear_shader_source_overrides() {
 }
 
 PackedByteArray VoxelDebugHooks::debug_field_params_bytes() {
-	// Same packing as FieldContextSet::initialize: dense values in a 16-stride-sized
-	// buffer (see that function for why both halves are load-bearing).
+	// Same packing as FieldContextSet::initialize; both go through
+	// ve::pack_field_params_bytes (see terrain/field_params_pack.h for why both halves
+	// of the dense-values-in-16-stride-sized-buffer shape are load-bearing).
 	const ve::ResolvedPipeline &p = world_->store_->terrain_pipeline();
+	const std::vector<uint8_t> packed = ve::pack_field_params_bytes(p);
 	PackedByteArray bytes;
-	bytes.resize(p.params.empty() ? 16 : int(p.params.size()) * 16);
-	bytes.fill(0);
-	for (size_t i = 0; i < p.params.size(); i++)
-		bytes.encode_float(int64_t(i) * 4, p.params[i].value);
+	bytes.resize(int(packed.size()));
+	if (!packed.empty())
+		std::memcpy(bytes.ptrw(), packed.data(), packed.size());
 	return bytes;
 }
 

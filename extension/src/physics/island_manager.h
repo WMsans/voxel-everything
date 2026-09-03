@@ -8,6 +8,7 @@
 #include "connectivity/components.h"
 #include "connectivity/contact_refine.h"
 #include "connectivity/flood_fill.h"
+#include "generator/generator.h"
 #include "physics/island_body.h"
 #include "render/island_atlas.h"
 #include "render/island_extract_pass.h"
