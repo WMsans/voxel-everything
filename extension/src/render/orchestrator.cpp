@@ -6,6 +6,7 @@
 #include "render/island_cull_pass.h"
 #include "render/region_pass.h"
 #include "render/brick_gen_pass.h"
+#include "render/field_context_set.h"
 #include "render/raymarch_pass.h"
 #include "render/composite_pass.h"
 #include "render/deferred_pass.h"
@@ -181,6 +182,21 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 	if (!region_pass_->initialize(device, *atlas_)) return GpuInitResult::kFailed;
 	gen_pass_ = new BrickGenPass();
 	if (!gen_pass_->initialize(device, *atlas_)) return GpuInitResult::kFailed;
+	field_context_ = new FieldContextSet();
+	{
+		// Plan A: no resolved pipeline reaches the GPU yet (a later task wires the
+		// default pipeline); the empty pipeline yields one zeroed vec4 of params and no
+		// sampled resources, which is exactly the Plan-A set-1 layout. Fail-soft like the
+		// other optional passes: nothing consumes set 1 until the field injection lands,
+		// and no shipped shader declares set 1 yet.
+		const ve::ResolvedPipeline empty;
+		if (!field_context_->initialize(device, gen_pass_->shader(), empty)) {
+			UtilityFunctions::printerr(
+					"RenderOrchestrator: field context set creation failed; continuing without set 1");
+			delete field_context_;
+			field_context_ = nullptr;
+		}
+	}
 	materials_ = new MaterialAtlas();
 	if (!materials_->initialize(device)) return GpuInitResult::kFailed;
 	// The four blocks below are the verbatim construction sequence moved into
@@ -287,6 +303,7 @@ void RenderOrchestrator::teardown_render_passes() {
 		hiz_pass_ = nullptr;
 	}
 	if (materials_) { delete materials_; materials_ = nullptr; }
+	if (field_context_) { delete field_context_; field_context_ = nullptr; }
 	if (gen_pass_) { delete gen_pass_; gen_pass_ = nullptr; }
 	if (region_pass_) { delete region_pass_; region_pass_ = nullptr; }
 }

@@ -14,6 +14,8 @@ public:
 	bool initialize(RenderingDevice *rd, const GpuAtlas &atlas);
 	void teardown();
 	bool is_valid() const { return pipeline_.is_valid(); }
+	// Task 16: FieldContextSet builds set 1 against this shader's set-1 layout.
+	RID shader() const { return shader_; }
 
 	// Records into an OPEN compute list. RegionPass::write_dispatch_args followed by
 	// compute_list_add_barrier must already have been recorded.
