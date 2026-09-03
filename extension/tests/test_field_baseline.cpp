@@ -2,7 +2,7 @@
 // replaces it. Every value is compared as raw float BITS, not with a tolerance -- the point
 // is that the ported pipeline reproduces today's terrain exactly, not approximately.
 //
-// Regenerate after an INTENTIONAL terrain change:  VE_REGEN_GOLDEN=1 ./build.sh --test
+// Regenerate after an INTENTIONAL terrain change:  cd extension && VE_REGEN_GOLDEN=1 ./build/tests/ve_tests
 #include <doctest/doctest.h>
 #include "generator/generator.h"
 #include <cstdio>

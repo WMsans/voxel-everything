@@ -1,4 +1,6 @@
 #include "render/field_context_set.h"
+#include "terrain/field_params_pack.h"
+#include <cstring>
 #include <godot_cpp/classes/rd_uniform.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 
@@ -12,18 +14,16 @@ bool FieldContextSet::initialize(RenderingDevice *rd, RID shader, const ve::Reso
 	if (rd == nullptr || !shader.is_valid()) return false;
 
 	// Params packing: values are DENSE (one float per 4 bytes, in pipeline order) in a
-	// buffer sized to Godot's 16-byte-stride expectation (16 bytes per param). The GLSL is
-	// std140, whose consecutive scalars pack densely -- and the driver reads them densely
-	// -- but Godot's uniform-set validation wants the 16-stride size, so a short buffer is
-	// rejected and a strided-values buffer misreads. The differential probe/engine suites
-	// pin the values end to end; touch this only if they go red together.
-	// A pipeline with no params still gets one vec4 (the generated `_unused`), so the
-	// buffer is never empty -- RenderingDevice rejects a zero-byte uniform buffer.
+	// buffer sized to Godot's 16-byte-stride expectation (16 bytes per param). See
+	// ve::pack_field_params_bytes for why both halves are load-bearing. A pipeline with
+	// no params still gets one vec4 (the generated `_unused`), so the buffer is never
+	// empty -- RenderingDevice rejects a zero-byte uniform buffer. The differential
+	// probe/engine suites pin the values end to end; touch this only if they go red together.
+	const std::vector<uint8_t> packed = ve::pack_field_params_bytes(p);
 	PackedByteArray bytes;
-	bytes.resize(p.params.empty() ? 16 : int(p.params.size()) * 16);
-	bytes.fill(0);
-	for (size_t i = 0; i < p.params.size(); i++)
-		bytes.encode_float(int64_t(i) * 4, p.params[i].value);
+	bytes.resize(int(packed.size()));
+	if (!packed.empty())
+		std::memcpy(bytes.ptrw(), packed.data(), packed.size());
 	params_ubo_ = rd->uniform_buffer_create(bytes.size(), bytes);
 	if (!params_ubo_.is_valid()) return false;
 
