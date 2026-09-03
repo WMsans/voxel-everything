@@ -1,0 +1,10 @@
+# ve::eval_brick baseline. Columns: bx by bz fnv1a-64.
+# Regenerate: VE_REGEN_GOLDEN=1 ./build.sh --test
+0 64 0 4d2f02f61b14f67f
+15 63 15 156faa6a7195fdca
+37 63 37 3bb4d9c7b44eaa74
+37 62 37 3bb4d9c7b44eaa74
+-25 60 -25 227e0f1f171c5f58
+0 40 0 bd8ac66fda42d81a
+0 90 0 3bb4d9c7b44eaa74
+1000 64 1000 97bd44a13f7086f5
