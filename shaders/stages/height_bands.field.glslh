@@ -1,0 +1,14 @@
+//!stage     height_bands
+//!kind      field
+//!in        sdf : float
+//!in        height : float
+//!out       material : uint
+//!lipschitz 1.0
+//!cpu       ve::stage_height_bands
+
+// Material 0 is air. Bands mirror AnalyticGenerator: rock above 4 m, grass above 1 m, dirt
+// below. Reads the sdf AFTER the cave stage, so carved space is correctly air.
+void stage_height_bands(inout FieldCtx ctx) {
+	if (ctx.sdf > 0.0) { ctx.material = 0u; return; }
+	ctx.material = ctx.height > 4.0 ? 2u : (ctx.height > 1.0 ? 1u : 3u);
+}
