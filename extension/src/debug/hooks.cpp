@@ -291,6 +291,8 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_occupancy_diff", "region"), &VoxelDebugHooks::debug_occupancy_diff);
 	ClassDB::bind_method(D_METHOD("debug_occupancy_fallback_diff", "region"), &VoxelDebugHooks::debug_occupancy_fallback_diff);
 	ClassDB::bind_method(D_METHOD("debug_cell_state", "cell"), &VoxelDebugHooks::debug_cell_state);
+	ClassDB::bind_method(D_METHOD("debug_generator_fingerprint"),
+			&VoxelDebugHooks::debug_generator_fingerprint);
 	ClassDB::bind_method(D_METHOD("debug_field_sdf", "p"), &VoxelDebugHooks::debug_field_sdf);
 	ClassDB::bind_method(D_METHOD("debug_occupancy_stats", "center"), &VoxelDebugHooks::debug_occupancy_stats);
 	ClassDB::bind_method(D_METHOD("debug_stream_frame", "cam"), &VoxelDebugHooks::debug_stream_frame);
@@ -5648,6 +5650,28 @@ Dictionary VoxelDebugHooks::debug_occupancy_diff(Vector3i region) {
 	d["mismatches"] = mismatches;
 	d["first_mismatch_brick"] = first;
 	return d;
+}
+
+PackedFloat32Array VoxelDebugHooks::debug_generator_fingerprint() {
+	PackedFloat32Array out;
+	if (world_ == nullptr || world_->store_.get() == nullptr ||
+			world_->store_->generator() == nullptr) {
+		return out;
+	}
+	const ve::Generator &gen = world_->store_->generator()->sampler();
+	// Same regimes as tests/golden/field_baseline.txt: surface, cave, deep, sky, far.
+	static const float kPts[][3] = {
+		{0.0f, 51.2f, 0.0f}, {12.3f, 55.0f, -7.8f}, {30.0f, 50.85f, 30.0f},
+		{-30.0f, 50.0f, -30.0f}, {0.0f, 20.0f, 0.0f}, {0.0f, 90.0f, 0.0f},
+		{800.0f, 51.2f, 800.0f}, {-800.0f, 51.2f, -800.0f},
+	};
+	for (const auto &p : kPts) {
+		ve::Sample s = gen.sample(p[0], p[1], p[2]);
+		out.push_back(s.sdf);
+		out.push_back(float(s.material));
+		out.push_back(0.0f);
+	}
+	return out;
 }
 
 float VoxelDebugHooks::debug_field_sdf(Vector3 p) {

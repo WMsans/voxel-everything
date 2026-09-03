@@ -5,6 +5,7 @@
 #include <godot_cpp/variant/color.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
+#include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 #include <godot_cpp/variant/rid.hpp>
@@ -238,6 +239,12 @@ public:
 	Dictionary debug_occupancy_diff(Vector3i region);
 
 	Dictionary debug_occupancy_fallback_diff(Vector3i region);
+
+	// Characterization hook (terrain pipeline Phase 0): samples the world's generator
+	// THROUGH THE SEAM at a fixed point set, so a refactor that swaps in a different or
+	// null generator is caught by value rather than by inspection. 3 floats per point:
+	// sdf, material, 0.
+	PackedFloat32Array debug_generator_fingerprint();
 
 	// The world field's signed distance at a point: generator + that point's region ops +
 	// the volume store, the same evaluation ve::raycast marches. Diagnostic.
