@@ -182,8 +182,10 @@ bool ConsolidatePass::run(const ConsolidateJob &job, ConsolidateResult *out) {
 		ve::VolumeSet volume_set;
 		if (!job.source.materialize(&base_store, &volume_set)) {
 			for (auto &b : out->baked) b.normal_oct.clear();
+		} else if (job.gen == nullptr) {
+			for (auto &b : out->baked) b.normal_oct.clear();
 		} else {
-				ve::AnalyticGenerator gen;
+				const ve::Generator &gen = *job.gen;
 				for (size_t bi = 0; bi < out->baked.size(); bi++) {
 					const ve::IVec3 brick = job.bricks[bi];
 					float bo[3];

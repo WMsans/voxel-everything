@@ -17,6 +17,10 @@ struct ConsolidateJob {
 	std::vector<ve::IVec3> bricks;
 	std::vector<ve::EditOp> ops;
 	ve::FieldSourceSnapshot source;
+
+	// Borrowed from WorldStore, captured when the job was submitted on the main thread.
+	// Never an owned AnalyticGenerator: the terrain pipeline can swap the world's field.
+	const ve::Generator *gen = nullptr;
 };
 
 struct ConsolidateResult {

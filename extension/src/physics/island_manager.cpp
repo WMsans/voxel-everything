@@ -313,6 +313,7 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 				continue;
 			}
 		}
+		job.gen = gen_;
 		job.override_table = world_->override_table_for_region(
 				ve::WorldBounds::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
 		// Refuse before allocating a volume slot or submitting: the extraction pass cannot
@@ -1048,6 +1049,7 @@ void IslandManager::start_merges() {
 		job.rest_origin[1] = xf.origin.y;
 		job.rest_origin[2] = xf.origin.z;
 		job.out_slot = out;
+		job.gen = gen_;
 		Merging m;
 		m.body_index = static_cast<int>(i);
 		m.out_slot = out;

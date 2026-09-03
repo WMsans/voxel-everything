@@ -2205,6 +2205,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 		ve::IVec3 lo = bricks[0], hi = bricks[0];
 		for (auto &b : bricks) { lo.x = std::min(lo.x, b.x); lo.y = std::min(lo.y, b.y); lo.z = std::min(lo.z, b.z); hi.x = std::max(hi.x, b.x); hi.y = std::max(hi.y, b.y); hi.z = std::max(hi.z, b.z); }
 		if (!world_->snapshot_field_sources(ops, lo, hi, &job.source)) return d;
+		job.gen = &world_->store_->generator()->sampler();
 	}
 	const int existing_table = world_->override_table_for_region(r);
 	if (existing_table >= 0) {
@@ -2746,6 +2747,7 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
 		ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
 		if (!world_->snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) return d;
+		job.gen = &world_->store_->generator()->sampler();
 	}
 
 	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
@@ -3176,6 +3178,7 @@ bool VoxelDebugHooks::debug_extract_submit(int id, Vector3i lo_cell, Vector3i hi
 		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
 		ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
 		if (!world_->snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) return false;
+		job.gen = &world_->store_->generator()->sampler();
 	}
 	std::vector<IslandExtractJob> jobs;
 	jobs.push_back(std::move(job));
