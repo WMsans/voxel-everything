@@ -224,12 +224,13 @@ bool IslandManager::window_is_fresh(const PendingWindow &w) const {
 }
 
 int IslandManager::run_connectivity(const PendingWindow &pw) {
+	if (gen_ == nullptr) return 0; // not initialized: no field, no connectivity
 	connectivity_runs_++;
 	ve::FloodWindow w = ve::FloodWindow::around(pw.lo, pw.hi, ve::kFloodWindowCells);
 	ve::LinkCuts cuts;
 	ve::FloodResult r;
 	LogContactProbe probe;
-	probe.gen = &gen_;
+	probe.gen = gen_;
 	probe.log = world_->edit_log();
 	probe.mu = &world_->edit_mutex();
 	probe.volumes = &world_->volumes();

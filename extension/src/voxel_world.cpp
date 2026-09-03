@@ -636,7 +636,8 @@ void VoxelWorld::ensure_physics_initialized() {
 	ccfg.max_builds_per_frame = mesh_jobs_per_frame_;
 	chunks_ = new ve::ChunkResidency(ccfg);
 	colliders_ = new ColliderStreamer();
-	colliders_->initialize(chunks_, store_->edit_log(), &store_->edit_mutex(), mesh_, max_collider_chunks_);
+	colliders_->initialize(chunks_, store_->edit_log(), &store_->edit_mutex(), mesh_, max_collider_chunks_,
+			&store_->generator()->sampler());
 	colliders_->set_shape_builds_per_frame(shape_builds_per_frame_);
 	colliders_->set_body_bubble_radius_m(physics_bubble_radius_m_);
 	// Publish the manager under edit_mutex_: append_edit_locked() can be called from a tool
@@ -649,6 +650,7 @@ void VoxelWorld::ensure_physics_initialized() {
 		std::lock_guard<std::mutex> island_lock(island_mutex_);
 		island_manager_ = new IslandManager();
 		island_manager_->initialize(this);
+		island_manager_->set_generator(&store_->generator()->sampler());
 	}
 	physics_ready_ = true;
 }
