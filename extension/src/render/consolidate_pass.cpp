@@ -1,4 +1,5 @@
 #include "render/consolidate_pass.h"
+#include "render/field_context_set.h"
 #include "render/shader_loader.h"
 #include "render/volume_pool.h"
 #include "generator/generator.h"
@@ -157,6 +158,7 @@ bool ConsolidatePass::run(const ConsolidateJob &job, ConsolidateResult *out) {
 	const int64_t list = rd_->compute_list_begin();
 	rd_->compute_list_bind_compute_pipeline(list, pipeline_);
 	rd_->compute_list_bind_uniform_set(list, uset_, 0);
+	if (field_context_ != nullptr) field_context_->bind(rd_, list);
 	rd_->compute_list_set_push_constant(list, pc, pc.size());
 	rd_->compute_list_dispatch(list, static_cast<uint32_t>(n), 1, 1);
 	rd_->compute_list_end();

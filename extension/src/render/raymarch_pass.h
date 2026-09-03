@@ -21,6 +21,7 @@ inline constexpr int kRaymarchGroupY = 8;
 class GpuAtlas;
 class IslandAtlas;
 class MaterialAtlas;
+class FieldContextSet;
 
 class RaymarchPass {
 public:
@@ -36,9 +37,10 @@ public:
 	void set_sun_ubo(RID buffer);
 	// `islands` may be null (no island support yet initialised) and `tile_mask` invalid (no
 	// cull pass has run); both fall back to the atlas's own all-ones single-entry mask.
+	// field_context is the orchestrator's set 1 (may be null when its build failed).
 	bool render(RenderingDevice *rd, const GpuAtlas &atlas, const IslandAtlas *islands,
 			RID tile_mask, const ve::CameraParams &cam, int width, int height,
-			const float edit_state[6]);
+			const float edit_state[6], const FieldContextSet *field_context);
 	bool targets_need_rebuild(int width, int height, RID mask) const;
 
 	RID albedo_texture() const { return albedo_; }
@@ -61,7 +63,7 @@ private:
 	RID sampler_linear_;
 	RID edits_ubo_;   // 32-byte uniform buffer, updated every render
 	RID sun_ubo_; // NOT owned: RenderOrchestrator frees it
-	RID sun_uset_; // set 1 uniform set; NOT owned: RenderOrchestrator frees the buffer
+	RID sun_uset_; // set 2 uniform set; NOT owned: RenderOrchestrator frees the buffer
 	RID material_albedo_, material_surface_, material_sampler_;
 	RID albedo_, surface_, hitpos_, cost_buf_, uset_, uset_mask_;
 	int width_ = 0, height_ = 0;

@@ -209,7 +209,8 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 		cmp->release_targets();
 		cmp->invalidate_uniform_set(rd);
 	}
-	if (!rmp->render(rd, *atlas, world->islands(), mask, cp, rw, rh, edit_state)) {
+	if (!rmp->render(rd, *atlas, world->islands(), mask, cp, rw, rh, edit_state,
+			world->field_context())) {
 		timings->cancel("raymarch");
 		abort_frame();
 		return;

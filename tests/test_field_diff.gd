@@ -20,6 +20,11 @@ var _rd: RenderingDevice
 func before_test() -> void:
 	_world = ClassDB.instantiate("VoxelWorld")
 	add_child(_world)
+	# The probes compile field.glslh through the shader-source override map, so the
+	# world must be initialized (pipeline load installs the generated override and the
+	# CPU generator) before any dispatch. Without this both sides silently fall back to
+	# the stub field and the built-in generator, and the suite proves nothing.
+	assert_bool(_world.hooks().debug_init_atlas()).is_true()
 	_rd = RenderingServer.create_local_rendering_device()
 
 func after_test() -> void:
@@ -56,6 +61,30 @@ func sample_points() -> PackedVector3Array:
 		pts.append(Vector3(rng.randf_range(700.0, 900.0), rng.randf_range(11.2, 71.2),
 			rng.randf_range(700.0, 900.0)))
 	return pts
+
+func _make_field_set(rd: RenderingDevice, shader: RID) -> RID:
+	# Set 1, mirroring FieldContextSet: binding 0 params UBO, binding 1 sector map (one
+	# int = -1, "no sector resident"). Plan A declares no sampled resources.
+	var params: PackedByteArray = _world.hooks().debug_field_params_bytes()
+	if params.is_empty():
+		params.resize(16)
+		params.fill(0)
+	var ubo := rd.uniform_buffer_create(params.size(), params)
+	var u0 := RDUniform.new()
+	u0.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
+	u0.binding = 0
+	u0.add_id(ubo)
+
+	var map_bytes := PackedByteArray()
+	map_bytes.resize(4)
+	map_bytes.encode_s32(0, -1)
+	var ssbo := rd.storage_buffer_create(map_bytes.size(), map_bytes)
+	var u1 := RDUniform.new()
+	u1.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	u1.binding = 1
+	u1.add_id(ssbo)
+
+	return rd.uniform_set_create([u0, u1], shader, 1)
 
 func run_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: int) -> PackedFloat32Array:
 	var code: String = _world.hooks().debug_load_shader("res://shaders/field_probe.comp.glsl")
@@ -101,6 +130,7 @@ func run_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: int) -> Pa
 	var list := _rd.compute_list_begin()
 	_rd.compute_list_bind_compute_pipeline(list, pipeline)
 	_rd.compute_list_bind_uniform_set(list, uset, 0)
+	_rd.compute_list_bind_uniform_set(list, _make_field_set(_rd, shader), 1)
 	_rd.compute_list_set_push_constant(list, push, push.size())
 	_rd.compute_list_dispatch(list, (pts.size() + 63) / 64, 1, 1)
 	_rd.compute_list_end()

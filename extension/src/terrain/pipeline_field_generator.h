@@ -27,6 +27,16 @@ private:
 	public:
 		explicit View(const PipelineFieldGenerator *owner) : owner_(owner) {}
 		Sample sample(float x, float y, float z) const override;
+		// Central differences over the pipeline field, exactly as Generator::sample_gradient
+		// computes them -- but reported EXACT. A stage pipeline has no analytic gradient;
+		// finite differences are the gradient on both sides (the generated GLSL does the
+		// same taps in base_field_gradient), and every exactness consumer treats the flag
+		// as "usable as the surface normal", which this is to ~1e-4 away from a CSG
+		// crease -- and at a crease both sides differentiate the identical taps, so they
+		// agree with each other. Reporting inexact here would empty the consolidation
+		// normal payload and the island fallback, and demote raymarch shading to the R8
+		// fallback everywhere.
+		FieldSample sample_gradient(float x, float y, float z) const override;
 		float lipschitz() const override { return owner_->pipeline_.lipschitz; }
 	private:
 		const PipelineFieldGenerator *owner_;

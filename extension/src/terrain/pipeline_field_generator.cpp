@@ -71,4 +71,13 @@ Sample PipelineFieldGenerator::View::sample(float x, float y, float z) const {
 	return s;
 }
 
+FieldSample PipelineFieldGenerator::View::sample_gradient(float x, float y, float z) const {
+	// The base implementation already differentiates through THIS view's sample() (the
+	// pipeline field) with the same epsilon the GPU uses; only the flag changes (see the
+	// header for why exact is the honest report here).
+	FieldSample fs = Generator::sample_gradient(x, y, z);
+	fs.exact_gradient = true;
+	return fs;
+}
+
 } // namespace ve

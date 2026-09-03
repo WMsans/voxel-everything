@@ -1,4 +1,5 @@
 #include "render/lod_build_pass.h"
+#include "render/field_context_set.h"
 #include "lod/lod_contour.h"
 #include "lod/lod_skirt.h"
 #include "render/shader_loader.h"
@@ -296,6 +297,7 @@ void LodBuildPass::push(int64_t list, const LodBuildJob &job, int job_index) {
 void LodBuildPass::record_field(int64_t list, const LodBuildJob &job, int job_index) {
 	rd_->compute_list_bind_compute_pipeline(list, field_pipeline_);
 	rd_->compute_list_bind_uniform_set(list, field_uset_, 0);
+	if (field_context_ != nullptr) field_context_->bind(rd_, list);
 	push(list, job, job_index);
 	const int g = groups(ve::kLodFineLattice);
 	rd_->compute_list_dispatch(list, g, g, g);

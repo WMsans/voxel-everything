@@ -58,6 +58,7 @@ class ConsolidationCoordinator;
 class MaterialAtlas;
 class RegionPass;
 class BrickGenPass;
+class FieldContextSet;
 class RaymarchPass;
 class CompositePass;
 class DeferredPass;
@@ -281,6 +282,13 @@ public:
 
 	void ensure_initialized();
 	bool is_initialized() const { return initialized_; }
+	// Compiles assets/pipelines/default.pipeline into the GPU field override plus the
+	// store's CPU generator. First successful load wins: shader-reload re-init must not
+	// swap the generator under in-flight physics/mesh jobs (set_generator deletes the
+	// old seam), so later calls are no-ops and pipeline edits take effect on fresh init.
+	void load_terrain_pipeline();
+	// The render device's set 1, for pass dispatch sites and debug hooks.
+	FieldContextSet *field_context();
 	// One-line delegations into RenderOrchestrator (Task 13), where the lifetime state
 	// lives now; kept so compositors, the debug facade and ClassDB compile unchanged.
 	void shutdown_render_resources();

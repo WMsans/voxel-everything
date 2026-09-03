@@ -10,6 +10,8 @@
 
 namespace godot {
 
+class FieldContextSet;
+
 struct ConsolidateJob {
 	ve::IVec3 region{};
 	int region_slot = -1;
@@ -19,7 +21,7 @@ struct ConsolidateJob {
 	ve::FieldSourceSnapshot source;
 
 	// Borrowed from WorldStore, captured when the job was submitted on the main thread.
-	// Never an owned AnalyticGenerator: the terrain pipeline can swap the world's field.
+	// Never an owned CPU generator: the terrain pipeline can swap the world's field.
 	const ve::Generator *gen = nullptr;
 };
 
@@ -39,10 +41,14 @@ public:
 	bool initialize(RenderingDevice *rd, OverridePool *pool, VolumePool *volumes, int max_bricks = 0);
 	void teardown();
 	bool is_valid() const { return pipeline_.is_valid(); }
+	// The worker device's set 1, owned by MeshService and valid for the worker's whole
+	// run. Borrowed, never freed here; bound beside set 0.
+	void set_field_context(const FieldContextSet *fc) { field_context_ = fc; }
 	bool run(const ConsolidateJob &job, ConsolidateResult *out);
 
 private:
 	RenderingDevice *rd_ = nullptr;
+	const FieldContextSet *field_context_ = nullptr;
 	OverridePool *pool_ = nullptr;
 	int max_bricks_ = 0;
 	RID shader_, pipeline_, uset_, ops_, jobs_;

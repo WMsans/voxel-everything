@@ -27,7 +27,7 @@ void main() {
 	vec3 p = points.p[i].xyz;
 	float sdf;
 	uint mat;
-	base_field(p, sdf, mat);
+	eval_base_field(p, sdf, mat);
 	for (uint op = 0u; op < pc.cfg.y; op++) {
 		if (op_touches_aabb(op, p, p, LATTICE_FILTER_PAD))
 			apply_field_op(op, p, sdf, mat);

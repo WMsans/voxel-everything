@@ -1,4 +1,5 @@
 #include "render/island_extract_pass.h"
+#include "render/field_context_set.h"
 #include "render/shader_loader.h"
 #include "render/volume_pool.h"
 #include "render/override_pool.h"
@@ -169,6 +170,7 @@ bool IslandExtractPass::extract(const IslandExtractJob &job, IslandExtractResult
 	const int64_t list = rd_->compute_list_begin();
 	rd_->compute_list_bind_compute_pipeline(list, pipeline_);
 	rd_->compute_list_bind_uniform_set(list, uset_, 0);
+	if (field_context_ != nullptr) field_context_->bind(rd_, list);
 	rd_->compute_list_set_push_constant(list, pc, pc.size());
 	const int g = (job.dim + 3) / 4;
 	rd_->compute_list_dispatch(list, g, g, g);
