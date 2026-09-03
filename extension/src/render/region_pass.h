@@ -6,6 +6,8 @@
 
 namespace godot {
 
+class FieldContextSet;
+
 // The residency machinery: activation probe, atlas-slot allocation and release, and the
 // indirect-dispatch argument write that hands the resulting job list to the generator.
 class RegionPass {
@@ -19,10 +21,11 @@ public:
 	// Records into an OPEN compute list. lo/hi are inclusive GLOBAL brick coordinates and
 	// must lie inside `region`; force_regen re-enqueues bricks that are already resident.
 	// generate_probe_misses is reserved for edit ranges whose exact lattice must supersede
-	// the coarse activation probe.
+	// the coarse activation probe. field_context is the orchestrator's set 1 (may be null
+	// when its build failed); bound beside the mark pipeline's set 0.
 	void mark(RenderingDevice *rd, int64_t list, ve::IVec3 region, int region_slot,
 			ve::IVec3 lo, ve::IVec3 hi, int op_count, bool force_regen,
-			bool generate_probe_misses = false);
+			bool generate_probe_misses, const FieldContextSet *field_context);
 	void release_region(RenderingDevice *rd, int64_t list, int region_slot);
 	void write_dispatch_args(RenderingDevice *rd, int64_t list);
 

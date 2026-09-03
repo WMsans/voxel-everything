@@ -27,6 +27,11 @@ public:
 	void debug_pump_shader_reload();
 
 	void debug_set_shader_override(const String &name, const String &source);
+	// Latch a shader reload (same latch VoxelWorld::request_shader_reload sets; the render
+	// callback pumps it) and drop every shader-source override. Thin wrappers for the
+	// pipeline reload test; the override setter above already existed.
+	void debug_request_shader_reload();
+	void debug_clear_shader_source_overrides();
 
 	// Differential self-check: runs the CPU-vs-GPU diff machinery the gdUnit suites use and
 	// returns a single dictionary a running demo can print.
@@ -244,6 +249,10 @@ public:
 	// THROUGH THE SEAM at a fixed point set, so a refactor that swaps in a different or
 	// null generator is caught by value rather than by inspection. 3 floats per point:
 	// sdf, material, 0.
+	// The set-1 params UBO contents for the world's terrain pipeline, std140-padded exactly
+	// as FieldContextSet packs them. Tests dispatching the field probes on their OWN local
+	// RenderingDevice need this to build a matching set 1.
+	PackedByteArray debug_field_params_bytes();
 	PackedFloat32Array debug_generator_fingerprint();
 
 	// The world field's signed distance at a point: generator + that point's region ops +

@@ -10,6 +10,7 @@
 
 namespace godot {
 
+class FieldContextSet;
 class VolumePool;
 class OverridePool;
 
@@ -33,7 +34,7 @@ struct IslandExtractJob {
 	ve::FieldSourceSnapshot snapshot;
 
 	// Borrowed from WorldStore, captured when the job was submitted on the main thread.
-	// Never an owned AnalyticGenerator: the terrain pipeline can swap the world's field.
+	// Never an owned CPU generator: the terrain pipeline can swap the world's field.
 	const ve::Generator *gen = nullptr;
 
 	// kResampleVolume only.
@@ -67,11 +68,15 @@ public:
 	bool is_valid() const { return pipeline_.is_valid(); }
 	OverridePool *overrides() { return overrides_; }
 	void set_override_pool(OverridePool *pool) { overrides_ = pool; }
+	// The worker device's set 1, owned by MeshService and valid for the worker's whole
+	// run. Borrowed, never freed here; bound beside set 0.
+	void set_field_context(const FieldContextSet *fc) { field_context_ = fc; }
 
 	bool extract(const IslandExtractJob &job, IslandExtractResult *out);
 
 private:
 	RenderingDevice *rd_ = nullptr;
+	const FieldContextSet *field_context_ = nullptr;
 	RID out_, boxes_, counts_, ops_;
 	RID shader_, pipeline_, uset_;
 	OverridePool *overrides_ = nullptr;

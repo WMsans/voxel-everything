@@ -11,16 +11,19 @@ bool FieldContextSet::initialize(RenderingDevice *rd, RID shader, const ve::Reso
 	rd_ = rd;
 	if (rd == nullptr || !shader.is_valid()) return false;
 
-	// std140 pads every scalar to 16 bytes. The generated UBO declares one scalar per param
-	// in pipeline order, so the CPU-side packing must pad identically. A pipeline with no
-	// params still gets one vec4 (the generated `_unused`), so the buffer is never empty --
-	// RenderingDevice rejects a zero-byte uniform buffer.
+	// Params packing: values are DENSE (one float per 4 bytes, in pipeline order) in a
+	// buffer sized to Godot's 16-byte-stride expectation (16 bytes per param). The GLSL is
+	// std140, whose consecutive scalars pack densely -- and the driver reads them densely
+	// -- but Godot's uniform-set validation wants the 16-stride size, so a short buffer is
+	// rejected and a strided-values buffer misreads. The differential probe/engine suites
+	// pin the values end to end; touch this only if they go red together.
+	// A pipeline with no params still gets one vec4 (the generated `_unused`), so the
+	// buffer is never empty -- RenderingDevice rejects a zero-byte uniform buffer.
 	PackedByteArray bytes;
-	const int count = p.params.empty() ? 4 : int(p.params.size()) * 4;
-	bytes.resize(count * 4);
+	bytes.resize(p.params.empty() ? 16 : int(p.params.size()) * 16);
 	bytes.fill(0);
 	for (size_t i = 0; i < p.params.size(); i++)
-		bytes.encode_float(int64_t(i) * 16, p.params[i].value);
+		bytes.encode_float(int64_t(i) * 4, p.params[i].value);
 	params_ubo_ = rd->uniform_buffer_create(bytes.size(), bytes);
 	if (!params_ubo_.is_valid()) return false;
 

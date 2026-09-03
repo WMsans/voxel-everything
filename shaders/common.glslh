@@ -32,6 +32,27 @@ const uint BRICK_FLAG_HAS_SURFACE = 1u;
 const uint BRICK_FLAG_HAS_MATERIAL = 2u;
 const uint BRICK_FLAG_CONSERVATIVE = 3u;
 
+// Field constants. They live here (not in field_ops.glslh) because the terrain pipeline's
+// generated field.glslh emits its stage bodies BEFORE the field_ops prelude, and a stage
+// body referencing SURFACE_Y would otherwise read it before its declaration. Every
+// field.glslh includer pulls common.glslh in first, so both the stub and the generated
+// source see these before any field code.
+const uint OP_SPHERE_SUBTRACT = 0u;
+const uint OP_SPHERE_ADD = 1u;
+const uint OP_SPHERE_PAINT = 2u;
+const uint OP_BOX_SUBTRACT = 3u;
+const uint OP_VOLUME_ADD = 4u;
+const uint MAX_REGION_OPS = 256u;
+// ve::kOccupancyCellSize -- a box op's extent is counted in 0.8 m occupancy cells.
+const float OCCUPANCY_CELL_SIZE = 0.8;
+// ve::kIslandDim ^ 3: the per-slot stride of both volume buffers. render/volume_pool.cpp
+// static_asserts that this matches, so changing the C++ constant breaks the BUILD.
+const int VOLUME_VOXELS = 262144;
+// Mirror of ve::kSurfaceY (extension/src/generator/generator.h): 51.2 = -origin_bricks.y *
+// kBrickSize for the default world origin (0, -64, 0). Must stay in lockstep with the CPU
+// constant; tests/test_field_diff.gd guards the agreement.
+const float SURFACE_Y = 51.2;
+
 float decode_sdf(float unorm) { return unorm * 2.0 * SDF_RANGE - SDF_RANGE; }
 
 // The BYTE ve::encode_sdf produces. Quantising here rather than leaning on the hardware's

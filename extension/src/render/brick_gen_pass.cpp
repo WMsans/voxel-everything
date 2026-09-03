@@ -1,4 +1,5 @@
 #include "render/brick_gen_pass.h"
+#include "render/field_context_set.h"
 #include "render/shader_loader.h"
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rd_shader_source.hpp>
@@ -110,7 +111,8 @@ void BrickGenPass::teardown() {
 	rd_ = nullptr;
 }
 
-void BrickGenPass::dispatch(RenderingDevice *rd, int64_t list, const GpuAtlas &atlas) {
+void BrickGenPass::dispatch(RenderingDevice *rd, int64_t list, const GpuAtlas &atlas,
+		const FieldContextSet *field_context) {
 	if (!pipeline_.is_valid()) return;
 	PackedByteArray pc;
 	pc.resize(16);
@@ -118,6 +120,7 @@ void BrickGenPass::dispatch(RenderingDevice *rd, int64_t list, const GpuAtlas &a
 	p[0] = atlas_bricks_.x; p[1] = atlas_bricks_.y; p[2] = atlas_bricks_.z; p[3] = 0;
 	rd->compute_list_bind_compute_pipeline(list, pipeline_);
 	rd->compute_list_bind_uniform_set(list, uset_, 0);
+	if (field_context != nullptr) field_context->bind(rd, list);
 	rd->compute_list_set_push_constant(list, pc, pc.size());
 	rd->compute_list_dispatch_indirect(list, atlas.dispatch_args(), 0);
 }

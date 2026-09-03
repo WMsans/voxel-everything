@@ -1,4 +1,5 @@
 #include "render/region_pass.h"
+#include "render/field_context_set.h"
 #include "render/shader_loader.h"
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rd_shader_source.hpp>
@@ -115,7 +116,7 @@ void RegionPass::teardown() {
 
 void RegionPass::mark(RenderingDevice *rd, int64_t list, ve::IVec3 region, int region_slot,
 		ve::IVec3 lo, ve::IVec3 hi, int op_count, bool force_regen,
-		bool generate_probe_misses) {
+		bool generate_probe_misses, const FieldContextSet *field_context) {
 	if (!mark_pipeline_.is_valid()) return;
 	const int64_t total = static_cast<int64_t>(hi.x - lo.x + 1) * (hi.y - lo.y + 1) *
 			(hi.z - lo.z + 1);
@@ -135,6 +136,7 @@ void RegionPass::mark(RenderingDevice *rd, int64_t list, ve::IVec3 region, int r
 
 	rd->compute_list_bind_compute_pipeline(list, mark_pipeline_);
 	rd->compute_list_bind_uniform_set(list, mark_uset_, 0);
+	if (field_context != nullptr) field_context->bind(rd, list);
 	// Phase 0 (release) is only meaningful when bricks may have gone inactive, which only
 	// an edit can cause. A plain stream-in scans a region whose table is entirely absent.
 	if (force_regen) {

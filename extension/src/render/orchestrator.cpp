@@ -184,13 +184,15 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 	if (!gen_pass_->initialize(device, *atlas_)) return GpuInitResult::kFailed;
 	field_context_ = new FieldContextSet();
 	{
-		// Plan A: no resolved pipeline reaches the GPU yet (a later task wires the
-		// default pipeline); the empty pipeline yields one zeroed vec4 of params and no
-		// sampled resources, which is exactly the Plan-A set-1 layout. Fail-soft like the
-		// other optional passes: nothing consumes set 1 until the field injection lands,
-		// and no shipped shader declares set 1 yet.
-		const ve::ResolvedPipeline empty;
-		if (!field_context_->initialize(device, gen_pass_->shader(), empty)) {
+		// The set-1 contents come from the stored terrain pipeline
+		// (VoxelWorld::load_terrain_pipeline ran before this graph build). An empty
+		// pipeline -- load failure -- yields one zeroed vec4 of params and no sampled
+		// resources, which is exactly the fallback stub field.glslh declares, so the
+		// bind-everywhere invariant holds in both worlds. Fail-soft like the other
+		// optional passes: a failed set build leaves the pointer null and the passes
+		// skip their set-1 bind.
+		if (!field_context_->initialize(device, gen_pass_->shader(),
+				handles_.store->terrain_pipeline())) {
 			UtilityFunctions::printerr(
 					"RenderOrchestrator: field context set creation failed; continuing without set 1");
 			delete field_context_;
@@ -214,7 +216,7 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 			handles_.store->edit_log(), &handles_.store->edit_mutex(),
 			handles_.store->pending_edits(), atlas_,
 			region_pass_, gen_pass_, handles_.store, handles_.store->overrides(),
-			&handles_.store->override_tables());
+			&handles_.store->override_tables(), field_context_);
 	raymarch_pass_ = new RaymarchPass();
 	raymarch_pass_->initialize(device);
 	raymarch_pass_->set_materials(*materials_);

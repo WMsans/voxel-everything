@@ -51,6 +51,30 @@ func generate_region(w: VoxelWorld, ops: PackedByteArray, op_count: int) -> void
 	w.hooks().debug_mark_region(region, 0, region * 32, region * 32 + Vector3i(31, 31, 31), op_count, true)
 	w.hooks().debug_generate_pending()
 
+func _make_field_set(rd: RenderingDevice, shader: RID) -> RID:
+	# Set 1, mirroring FieldContextSet: binding 0 params UBO, binding 1 sector map (one
+	# int = -1, "no sector resident"). Plan A declares no sampled resources.
+	var params: PackedByteArray = _worlds[0].hooks().debug_field_params_bytes()
+	if params.is_empty():
+		params.resize(16)
+		params.fill(0)
+	var ubo := rd.uniform_buffer_create(params.size(), params)
+	var u0 := RDUniform.new()
+	u0.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
+	u0.binding = 0
+	u0.add_id(ubo)
+
+	var map_bytes := PackedByteArray()
+	map_bytes.resize(4)
+	map_bytes.encode_s32(0, -1)
+	var ssbo := rd.storage_buffer_create(map_bytes.size(), map_bytes)
+	var u1 := RDUniform.new()
+	u1.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	u1.binding = 1
+	u1.add_id(ssbo)
+
+	return rd.uniform_set_create([u0, u1], shader, 1)
+
 func run_filtered_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: int,
 		volume: Array) -> PackedFloat32Array:
 	var code: String = _worlds[0].hooks().debug_load_shader("res://shaders/field_filter_probe.comp.glsl")
@@ -89,6 +113,7 @@ func run_filtered_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: i
 	var list := rd.compute_list_begin()
 	rd.compute_list_bind_compute_pipeline(list, pipeline)
 	rd.compute_list_bind_uniform_set(list, uset, 0)
+	rd.compute_list_bind_uniform_set(list, _make_field_set(rd, shader), 1)
 	rd.compute_list_set_push_constant(list, push, push.size())
 	rd.compute_list_dispatch(list, (pts.size() + 63) / 64, 1, 1)
 	rd.compute_list_end()
