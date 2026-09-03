@@ -2226,7 +2226,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 	world_->mesh_->run_sync([](MeshPass &) {});
 	std::vector<ConsolidateResult> results;
 	if (world_->mesh_->collect_consolidations(&results) != 1 || results[0].failed) return d;
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	int sdf_mismatches = 0, mat_mismatches = 0;
 	Dictionary first;
 	for (size_t bi = 0; bi < bricks.size() && bi < results[0].baked.size(); bi++) {
@@ -2390,7 +2390,7 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 		return d;
 
 	const float cell = ve::lod_cell_size(level);
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 
 	// 1. The fine lattice against the CPU field.
 	int fine_max_diff = 0;
@@ -2524,7 +2524,7 @@ Dictionary VoxelDebugHooks::debug_mesh_lattice_diff(Vector3i chunk) {
 	world_->mesh_->run_sync([&](MeshPass &pass) { ok = pass.run_field_sync(job, &gpu); });
 	if (!ok) return d;
 
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	const ve::DcGrid g = ve::chunk_dc_grid(c);
 	int max_diff = 0, over_one = 0;
 	bool pos = false, neg = false;
@@ -2577,7 +2577,7 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	if (gpu.failed) return d; // short readback: do not present partial data as a diff
 
 	const ve::DcGrid g = ve::chunk_dc_grid(c);
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 
 	// 1. The lattice against the CPU field. One encoded step of sin() drift is invisible.
 	int lat_max = 0, lat_over = 0;
@@ -2765,7 +2765,7 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 	for (size_t i = 0; i < boxes.size(); i++)
 		boxes[i].world_aabb(&aabbs[i * 6], &aabbs[i * 6 + 3]);
 	ve::VolumeData cpu;
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	ve::extract_island_volume(gen, job.ops.data(), static_cast<int>(job.ops.size()),
 			&world_->store_->volumes(), job.origin, job.voxel, job.dim, aabbs.data(),
 			static_cast<int>(boxes.size()), &cpu);
@@ -2796,7 +2796,7 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 	// Compute normal length and alignment vs CPU masked gradient
 	float min_len = 2.0f, min_align = 2.0f;
 	if (!gpu.normal_oct.empty()) {
-		ve::AnalyticGenerator agen;
+		const ve::Generator &agen = world_->store_->generator()->sampler();
 		for (size_t i = 0; i < gpu.normal_oct.size(); i++) {
 			float dec[3];
 			ve::oct_decode_snorm8(gpu.normal_oct[i], dec);
@@ -3490,7 +3490,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_normal_probe(Vector3 origin, Vector3 
 	// GPU's authoritative buffers mirror -- not from an inline analytic formula, so
 	// edits, stored volumes and consolidated overrides are all covered. For a pure
 	// procedural hit this reduces exactly to Task 1's analytic gradient.
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	std::lock_guard<std::mutex> edit_lock(world_->edit_mutex());
 	for (int y = 0; y < h; y++) {
 		for (int x = 0; x < w; x++) {
@@ -4968,7 +4968,7 @@ void VoxelDebugHooks::debug_store_volume(int slot, const PackedByteArray &sdf,
 }
 
 Vector2 VoxelDebugHooks::debug_eval_field(Vector3 p, const PackedByteArray &ops, int op_count) {
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	const ve::EditOp *ptr = nullptr;
 	if (op_count > 0) {
 		if (ops.size() < op_count * static_cast<int64_t>(sizeof(ve::EditOp))) {
@@ -4982,7 +4982,7 @@ Vector2 VoxelDebugHooks::debug_eval_field(Vector3 p, const PackedByteArray &ops,
 }
 
 Dictionary VoxelDebugHooks::debug_eval_field_gradient(Vector3 p, const PackedByteArray &ops, int op_count) {
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	const ve::EditOp *ptr = nullptr;
 	if (op_count > 0) {
 		if (ops.size() < op_count * static_cast<int64_t>(sizeof(ve::EditOp))) {
@@ -5212,7 +5212,7 @@ void VoxelDebugHooks::debug_upload_region_ops(int region_slot, const PackedByteA
 
 bool VoxelDebugHooks::debug_brick_has_surface(Vector3i brick, const PackedByteArray &ops,
 		int op_count) const {
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	const ve::EditOp *ptr = nullptr;
 	if (op_count > 0) {
 		if (ops.size() < op_count * static_cast<int64_t>(sizeof(ve::EditOp))) {
@@ -5273,7 +5273,7 @@ Dictionary VoxelDebugHooks::debug_brick_diff(Vector3i brick, int region_slot,
 	d["slot"] = slot;
 	if (slot < 0) return d;
 
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	ve::BrickEval ref{};
 	ve::eval_brick(gen, ptr, op_count, b, &ref, &world_->store_->volumes(), world_->store_->overrides());
 
@@ -5405,7 +5405,7 @@ Dictionary VoxelDebugHooks::debug_brick_flags(Vector3i region) {
 		std::lock_guard<std::mutex> lock(world_->edit_mutex());
 		ops = world_->store_->edit_log()->ops({region.x, region.y, region.z});
 	}
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	const int32_t *slots = reinterpret_cast<const int32_t *>(table.ptr());
 	const uint32_t *gpu_flags = reinterpret_cast<const uint32_t *>(flags.ptr());
 	int compared = 0;
@@ -5578,7 +5578,7 @@ Dictionary VoxelDebugHooks::debug_occupancy_fallback_diff(Vector3i region) {
 			static_cast<uint32_t>(rslot) * block_bytes, block_bytes);
 	if (gpu.size() < static_cast<int>(block_bytes)) return d;
 
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	int compared = 0, fallback = 0, mismatches = 0;
 	Vector3i first(-1, -1, -1);
 	for (int bi = 0; bi < ve::kRegionBrickCount; bi++) {
@@ -5630,7 +5630,7 @@ Dictionary VoxelDebugHooks::debug_occupancy_diff(Vector3i region) {
 		ops = world_->store_->edit_log()->ops({region.x, region.y, region.z});
 	}
 	const int32_t *slots = reinterpret_cast<const int32_t *>(table.ptr());
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	int compared = 0, mismatches = 0;
 	Vector3i first(-1, -1, -1);
 	for (int bi = 0; bi < ve::kRegionBrickCount; bi++) {
@@ -5679,7 +5679,7 @@ PackedFloat32Array VoxelDebugHooks::debug_generator_fingerprint() {
 
 float VoxelDebugHooks::debug_field_sdf(Vector3 p) {
 	if (!world_->store_->edit_log()) return 1e30f;
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	std::lock_guard<std::mutex> lock(world_->edit_mutex());
 	const std::vector<ve::EditOp> &ops =
 			world_->store_->edit_log()->ops(ve::WorldBounds::region_of_point(p.x, p.y, p.z));
@@ -5690,7 +5690,7 @@ float VoxelDebugHooks::debug_field_sdf(Vector3 p) {
 int VoxelDebugHooks::debug_cell_state(Vector3i cell) {
 	if (!world_->store_->edit_log()) return static_cast<int>(ve::kCellUnknown);
 	const ve::IVec3 c{cell.x, cell.y, cell.z};
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	std::lock_guard<std::mutex> lock(world_->edit_mutex());
 	const std::vector<ve::EditOp> &ops = world_->store_->edit_log()->ops(ve::WorldBounds::region_of_brick(c));
 	return static_cast<int>(ve::cell_state_field(gen, ops.data(),
@@ -5784,7 +5784,7 @@ Dictionary VoxelDebugHooks::debug_raycast(Vector3 origin, Vector3 dir) {
 	d["hit"] = false;
 	if (!world_->store_->edit_log()) return d;
 	std::lock_guard<std::mutex> lock(world_->edit_mutex());
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	const float o[3] = {origin.x, origin.y, origin.z};
 	const float f[3] = {dir.x, dir.y, dir.z};
 	const ve::RayHit h = ve::raycast(gen, *world_->store_->edit_log(), o, f, 200.0f, &world_->store_->volumes(), world_->store_->overrides());
