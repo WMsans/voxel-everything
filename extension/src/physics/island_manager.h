@@ -50,6 +50,8 @@ public:
 	}
 	float last_ms() const { return last_ms_; }
 	void set_merge_sleep_seconds(float v) { merge_sleep_s_ = v; }
+	// Borrowed, not owned; see the member comment.
+	void set_generator(const ve::Generator *gen) { gen_ = gen; }
 #ifdef DEBUG_ENABLED
 	void debug_set_max_dynamic_bodies(int v) {
 		// Test hook: keep the guardrail sane. Clamping (rather than rejecting) keeps tests
@@ -180,7 +182,10 @@ private:
 	void despawn(int index);
 
 	VoxelWorld *world_ = nullptr;
-	ve::AnalyticGenerator gen_;
+	// Borrowed from WorldStore via VoxelWorld, exactly like edit_log_. Never owned: the
+	// terrain pipeline can swap the world's generator, and a copy here would silently keep
+	// generating the old world for collision while the GPU generated the new one.
+	const ve::Generator *gen_ = nullptr;
 	std::mutex windows_mutex_; // guards windows_ against note_edit from tool threads
 	std::deque<PendingWindow> windows_;
 	std::vector<InFlight> in_flight_;
