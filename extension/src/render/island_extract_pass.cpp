@@ -202,8 +202,10 @@ bool IslandExtractPass::extract(const IslandExtractJob &job, IslandExtractResult
 		ve::VolumeSet volume_set;
 		if (!job.snapshot.materialize(&base_store, &volume_set)) {
 			out->data.normal_oct.clear();
+		} else if (job.gen == nullptr) {
+			out->data.normal_oct.clear();
 		} else {
-			ve::AnalyticGenerator gen;
+			const ve::Generator &gen = *job.gen;
 			bool any_fail = false;
 			for (int64_t i = 0; i < voxels; i++) {
 				uint16_t packed = out->data.normal_oct[static_cast<size_t>(i)];

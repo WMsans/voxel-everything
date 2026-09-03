@@ -32,6 +32,10 @@ struct IslandExtractJob {
 	std::vector<ve::CellBox> boxes;
 	ve::FieldSourceSnapshot snapshot;
 
+	// Borrowed from WorldStore, captured when the job was submitted on the main thread.
+	// Never an owned AnalyticGenerator: the terrain pipeline can swap the world's field.
+	const ve::Generator *gen = nullptr;
+
 	// kResampleVolume only.
 	ve::VolumeData source;
 	ve::EditOp source_op{};

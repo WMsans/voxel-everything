@@ -985,6 +985,7 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job->origin[0], job->origin[1], job->origin[2]);
 		ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
 		if (!snapshot_field_sources(job->ops, blo, bhi, &job->snapshot)) return false;
+		job->gen = &store_->generator()->sampler();
 	}
 
 	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
