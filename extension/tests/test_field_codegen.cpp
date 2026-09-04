@@ -2,6 +2,7 @@
 #include "terrain/field_codegen.h"
 #include "terrain/pipeline.h"
 #include "terrain/stage_manifest.h"
+#include <locale>
 
 namespace {
 
@@ -60,6 +61,30 @@ TEST_CASE("generated source declares the context, the params and the composition
 
 	CHECK(g.find("// PRELUDE MARKER") != std::string::npos);
 	CHECK(g.find("void base_field(") == std::string::npos);  // replaced, not kept
+}
+
+TEST_CASE("numeric codegen is independent of the process locale") {
+	class Punct final : public std::numpunct<char> {
+	protected:
+		char do_decimal_point() const override { return ','; }
+		char do_thousands_sep() const override { return '_'; }
+		std::string do_grouping() const override { return "\3"; }
+	};
+	const std::locale original = std::locale();
+	struct LocaleRestore {
+		const std::locale &original;
+		~LocaleRestore() { std::locale::global(original); }
+	} restore{original};
+	std::locale::global(std::locale(original, new Punct));
+
+	ve::ResolvedPipeline p = two_stage();
+	p.hash = 1234567890;
+	p.lipschitz = 1.25f;
+	p.resources.push_back({"sector.alpha", "texture2d_r32f", 1.5f});
+	const std::string g = ve::generate_field_glslh(p, "");
+	CHECK(g.find("// Pipeline hash: 1234567890\n") != std::string::npos);
+	CHECK(g.find("// Lipschitz bound: 1.25\n") != std::string::npos);
+	CHECK(g.find("const float sector_alpha_FALLBACK = 1.5;\n") != std::string::npos);
 }
 
 TEST_CASE("generation is deterministic") {
