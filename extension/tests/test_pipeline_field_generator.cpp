@@ -11,8 +11,11 @@ void tp_plane(ve::FieldCtx &ctx, const ve::StageSlots &s, const ve::StageParams 
 		const ve::FieldResources &) {
 	ctx.f(s.sdf) = ctx.v(s.p)[1] - p.at(0);
 }
-void tp_mat(ve::FieldCtx &ctx, const ve::StageSlots &s, const ve::StageParams &,
+float empty_stage_params_sentinel = 0.0f;
+const float *last_empty_stage_params = &empty_stage_params_sentinel;
+void tp_mat(ve::FieldCtx &ctx, const ve::StageSlots &s, const ve::StageParams &p,
 		const ve::FieldResources &) {
+	last_empty_stage_params = p.values;
 	ctx.f(s.material) = ctx.f(s.sdf) <= 0.0f ? 3.0f : 0.0f;
 }
 
@@ -56,6 +59,16 @@ TEST_CASE("stages run in order and the last sdf write wins") {
 	CHECK(g->eval(0.0f, 41.2f, 0.0f).material == 3);
 	CHECK(g->eval(0.0f, 61.2f, 0.0f).material == 0);
 	CHECK(g->is_cpu_exact());
+	delete g;
+}
+
+TEST_CASE("a stage with no parameters receives a null parameter slice") {
+	last_empty_stage_params = &empty_stage_params_sentinel;
+	std::string err;
+	ve::PipelineFieldGenerator *g = ve::PipelineFieldGenerator::create(build(), &err);
+	REQUIRE_MESSAGE(g != nullptr, err);
+	g->eval(0.0f, 41.2f, 0.0f);
+	CHECK(last_empty_stage_params == nullptr);
 	delete g;
 }
 

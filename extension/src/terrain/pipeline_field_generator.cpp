@@ -58,9 +58,9 @@ Sample PipelineFieldGenerator::View::sample(float x, float y, float z) const {
 		StageFn fn = owner_->fns_[i];
 		if (fn == nullptr) continue;  // GPU-only stage: the CPU field is already inexact
 		StageParams sp;
-		sp.values = owner_->param_values_.empty() ? nullptr
-				: &owner_->param_values_[size_t(owner_->param_base_[i])];
 		sp.count = owner_->param_count_[i];
+		sp.values = sp.count == 0 ? nullptr
+				: owner_->param_values_.data() + owner_->param_base_[i];
 		FieldResources res;
 		fn(ctx, owner_->slots_[i], sp, res);
 	}
