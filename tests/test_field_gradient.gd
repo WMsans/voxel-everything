@@ -15,6 +15,12 @@ const MAX_STEPS := 2.0
 const TIGHT_FRACTION := 0.99
 const GRAD_TIE_EPSILON := 0.01
 const GRAD_DOT_THRESHOLD := 0.9999
+# Looser threshold for pairs where the CPU side is inexact: since the terrain pipeline
+# landed, the CPU base gradient is finite differences (inexact by construction) while the
+# GPU base gradient differentiates the same field with the same taps. Libm-level field
+# noise is amplified by the 1/(2e) differentiation step, so demand directional agreement
+# rather than analytic-grade equality.
+const GRAD_DOT_THRESHOLD_INEXACT := 0.999
 
 const OP_SUBTRACT := 0
 const OP_ADD := 1
@@ -27,6 +33,9 @@ var _rd: RenderingDevice
 func before_test() -> void:
 	_world = ClassDB.instantiate("VoxelWorld")
 	add_child(_world)
+	# Initialized: the gradient probe compiles the generated field override against the
+	# pipeline CPU generator (see test_field_diff.gd).
+	assert_bool(_world.hooks().debug_init_atlas()).is_true()
 	_rd = RenderingServer.create_local_rendering_device()
 
 func after_test() -> void:
@@ -126,6 +135,30 @@ func sample_points() -> PackedVector3Array:
 		pts.append(Vector3(rng.randf_range(700.0, 900.0), rng.randf_range(11.2, 71.2), rng.randf_range(700.0, 900.0)))
 	return pts
 
+func _make_field_set(rd: RenderingDevice, shader: RID) -> RID:
+	# Set 1, mirroring FieldContextSet: binding 0 params UBO, binding 1 sector map (one
+	# int = -1, "no sector resident"). Plan A declares no sampled resources.
+	var params: PackedByteArray = _world.hooks().debug_field_params_bytes()
+	if params.is_empty():
+		params.resize(16)
+		params.fill(0)
+	var ubo := rd.uniform_buffer_create(params.size(), params)
+	var u0 := RDUniform.new()
+	u0.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
+	u0.binding = 0
+	u0.add_id(ubo)
+
+	var map_bytes := PackedByteArray()
+	map_bytes.resize(4)
+	map_bytes.encode_s32(0, -1)
+	var ssbo := rd.storage_buffer_create(map_bytes.size(), map_bytes)
+	var u1 := RDUniform.new()
+	u1.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	u1.binding = 1
+	u1.add_id(ssbo)
+
+	return rd.uniform_set_create([u0, u1], shader, 1)
+
 func run_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: int) -> PackedFloat32Array:
 	var code: String = _world.hooks().debug_load_shader("res://shaders/field_gradient_probe.comp.glsl")
 	assert_str(code).is_not_empty()
@@ -166,6 +199,7 @@ func run_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: int) -> Pa
 	var list := _rd.compute_list_begin()
 	_rd.compute_list_bind_compute_pipeline(list, pipeline)
 	_rd.compute_list_bind_uniform_set(list, uset, 0)
+	_rd.compute_list_bind_uniform_set(list, _make_field_set(_rd, shader), 1)
 	_rd.compute_list_set_push_constant(list, push, push.size())
 	_rd.compute_list_dispatch(list, (pts.size() + 63) / 64, 1, 1)
 	_rd.compute_list_end()
@@ -192,6 +226,9 @@ func compare(pts: PackedVector3Array, ops: PackedByteArray, op_count: int, label
 	var grad_compared := 0
 	var grad_mismatched := 0
 	var worst_dot := 1.0
+	var fdiff_compared := 0
+	var fdiff_mismatched := 0
+	var worst_fdiff_dot := 1.0
 	for i in range(pts.size()):
 		var cpu: Dictionary = _world.hooks().debug_eval_field_gradient(pts[i], ops, op_count)
 		var cpu_sdf: float = cpu["sdf"]
@@ -230,18 +267,37 @@ func compare(pts: PackedVector3Array, ops: PackedByteArray, op_count: int, label
 				grad_compared += 1
 				if dot <= GRAD_DOT_THRESHOLD:
 					grad_mismatched += 1
+		elif gpu_exact and not cpu_exact:
+			# Pipeline-CPU base gradient (finite differences, inexact) against the GPU
+			# base gradient (same taps, same field): directional agreement only.
+			var tie := estimate_tie_distance(pts[i], ops, op_count)
+			if tie <= GRAD_TIE_EPSILON:
+				continue
+			var cpu_len := cpu_grad.length()
+			var gpu_len := gpu_grad.length()
+			if cpu_len > 1e-6 and gpu_len > 1e-6:
+				var cn := cpu_grad / cpu_len
+				var gn := gpu_grad / gpu_len
+				var dot: float = cn.dot(gn)
+				worst_fdiff_dot = minf(worst_fdiff_dot, dot)
+				fdiff_compared += 1
+				if dot <= GRAD_DOT_THRESHOLD_INEXACT:
+					fdiff_mismatched += 1
 
 	assert_float(worst).override_failure_message(
 		"%s: worst sdf disagreement %.2f encoded steps" % [label, worst]).is_less(MAX_STEPS)
 	assert_float(float(within_one) / float(pts.size())).override_failure_message(
 		"%s: only %d/%d samples within one encoded step" % [label, within_one, pts.size()]
 		).is_greater(TIGHT_FRACTION)
-	assert_int(grad_compared).override_failure_message(
+	assert_int(grad_compared + fdiff_compared).override_failure_message(
 		"%s: no gradient pair was comparable, so the assertion below proves nothing" % label
 		).is_greater(0)
 	if grad_compared > 0:
 		assert_int(grad_mismatched).override_failure_message(
 			"%s: %d/%d gradient mismatches (worst dot %.5f)" % [label, grad_mismatched, grad_compared, worst_dot]).is_equal(0)
+	if fdiff_compared > 0:
+		assert_int(fdiff_mismatched).override_failure_message(
+			"%s: %d/%d finite-difference gradient mismatches (worst dot %.5f)" % [label, fdiff_mismatched, fdiff_compared, worst_fdiff_dot]).is_equal(0)
 
 func test_base_field_matches_the_cpu_generator() -> void:
 	compare(sample_points(), PackedByteArray(), 0, "base")

@@ -1,6 +1,8 @@
 #include "debug/hooks.h"
 
 #include "../voxel_world.h"
+#include "terrain/field_params_pack.h"
+#include <cstring>
 #include "mesh/consolidation.h"
 #include "render/gpu_atlas.h"
 #include "render/material_atlas.h"
@@ -25,6 +27,7 @@
 #include "render/shader_loader.h"
 #include "render/mesh_pass.h"
 #include "render/mesh_service.h"
+#include "render/field_context_set.h"
 #include "render/lod_build_pass.h"
 #include "render/lod_pool.h"
 #include "render/lod_raster_pass.h"
@@ -258,6 +261,12 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_shader_reload_stats"), &VoxelDebugHooks::debug_shader_reload_stats);
 	ClassDB::bind_method(D_METHOD("debug_set_shader_override", "name", "source"),
 			&VoxelDebugHooks::debug_set_shader_override);
+	ClassDB::bind_method(D_METHOD("debug_request_shader_reload"),
+			&VoxelDebugHooks::debug_request_shader_reload);
+	ClassDB::bind_method(D_METHOD("debug_clear_shader_source_overrides"),
+			&VoxelDebugHooks::debug_clear_shader_source_overrides);
+	ClassDB::bind_method(D_METHOD("debug_field_params_bytes"),
+			&VoxelDebugHooks::debug_field_params_bytes);
 	ClassDB::bind_method(D_METHOD("debug_self_check"), &VoxelDebugHooks::debug_self_check);
 	ClassDB::bind_method(D_METHOD("debug_store_volume", "slot", "sdf", "mat", "dim"), &VoxelDebugHooks::debug_store_volume);
 	ClassDB::bind_method(D_METHOD("debug_eval_field", "p", "ops", "op_count"), &VoxelDebugHooks::debug_eval_field);
@@ -291,6 +300,8 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_occupancy_diff", "region"), &VoxelDebugHooks::debug_occupancy_diff);
 	ClassDB::bind_method(D_METHOD("debug_occupancy_fallback_diff", "region"), &VoxelDebugHooks::debug_occupancy_fallback_diff);
 	ClassDB::bind_method(D_METHOD("debug_cell_state", "cell"), &VoxelDebugHooks::debug_cell_state);
+	ClassDB::bind_method(D_METHOD("debug_generator_fingerprint"),
+			&VoxelDebugHooks::debug_generator_fingerprint);
 	ClassDB::bind_method(D_METHOD("debug_field_sdf", "p"), &VoxelDebugHooks::debug_field_sdf);
 	ClassDB::bind_method(D_METHOD("debug_occupancy_stats", "center"), &VoxelDebugHooks::debug_occupancy_stats);
 	ClassDB::bind_method(D_METHOD("debug_stream_frame", "cam"), &VoxelDebugHooks::debug_stream_frame);
@@ -377,7 +388,7 @@ Dictionary VoxelDebugHooks::debug_contact_shadow_probe(Vector3 pos, Vector3 fwd,
 	cp.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
 	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
 	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
-	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp, w, h, no_edit)) return d;
+	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp, w, h, no_edit, world_->field_context())) return d;
 	float fade_start = ve::kLodFadeStartM, fade_end = ve::kLodFadeEndM;
 	world_->lod_fade_band(&fade_start, &fade_end);
 	world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
@@ -513,7 +524,7 @@ Dictionary VoxelDebugHooks::debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, in
 	bool ran = false;
 	for (int i = 0; i < frames; i++) {
 		world_->beauty_camera()->update(device, view_proj, p, Vector2i(w, h), 0.05f, 4000.0f);
-		if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp, w, h, no_edit)) break;
+		if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp, w, h, no_edit, world_->field_context())) break;
 		float fade_start = ve::kLodFadeStartM, fade_end = ve::kLodFadeEndM;
 		world_->lod_fade_band(&fade_start, &fade_end);
 		world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
@@ -609,7 +620,7 @@ Dictionary VoxelDebugHooks::debug_ssao_probe(Vector3 pos, Vector3 fwd, int w, in
 	world_->ssao_pass()->clear_result();
 	bool ran = false;
 	world_->beauty_camera()->update(device, view_proj, p, Vector2i(w, h), 0.05f, 4000.0f);
-	if (world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp, w, h, no_edit)) {
+	if (world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp, w, h, no_edit, world_->field_context())) {
 		float fade_start = ve::kLodFadeStartM, fade_end = ve::kLodFadeEndM;
 		world_->lod_fade_band(&fade_start, &fade_end);
 		world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
@@ -756,7 +767,7 @@ Dictionary VoxelDebugHooks::debug_ssgi_reprojection_probe(Vector3 previous_pos, 
 			const float camera_position[3] = {camera_pos.x, camera_pos.y, camera_pos.z};
 			world_->beauty_camera()->update(device, view_proj, camera_position, Vector2i(w, h), near_clip,
 					far_clip);
-			if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), camera, w, h, no_edit))
+			if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), camera, w, h, no_edit, world_->field_context()))
 				return false;
 			float fade_start = ve::kLodFadeStartM, fade_end = ve::kLodFadeEndM;
 			world_->lod_fade_band(&fade_start, &fade_end);
@@ -1563,7 +1574,7 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 	cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
 	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp, w, h, kNoEdit))
+	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp, w, h, kNoEdit, world_->field_context()))
 		return d;
 
 	auto make_target = [&](RID *out, RenderingDevice::DataFormat fmt, bool depth) {
@@ -2203,6 +2214,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 		ve::IVec3 lo = bricks[0], hi = bricks[0];
 		for (auto &b : bricks) { lo.x = std::min(lo.x, b.x); lo.y = std::min(lo.y, b.y); lo.z = std::min(lo.z, b.z); hi.x = std::max(hi.x, b.x); hi.y = std::max(hi.y, b.y); hi.z = std::max(hi.z, b.z); }
 		if (!world_->snapshot_field_sources(ops, lo, hi, &job.source)) return d;
+		job.gen = &world_->store_->generator()->sampler();
 	}
 	const int existing_table = world_->override_table_for_region(r);
 	if (existing_table >= 0) {
@@ -2223,7 +2235,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 	world_->mesh_->run_sync([](MeshPass &) {});
 	std::vector<ConsolidateResult> results;
 	if (world_->mesh_->collect_consolidations(&results) != 1 || results[0].failed) return d;
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	int sdf_mismatches = 0, mat_mismatches = 0;
 	Dictionary first;
 	for (size_t bi = 0; bi < bricks.size() && bi < results[0].baked.size(); bi++) {
@@ -2337,6 +2349,16 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 			memdelete(rd);
 			return;
 		}
+		// This diagnostic owns its device, so neither the worker's nor the
+		// orchestrator's set 1 can be borrowed: build one against this device and this
+		// pass's shader from the stored pipeline (empty when the pipeline failed to
+		// load, matching the fallback stub the shaders compiled against). Fail-soft to
+		// no set, as elsewhere.
+		FieldContextSet lod_context;
+		if (lod_context.initialize(rd, lod.field_shader(),
+				world_->store_->terrain_pipeline())) {
+			lod.set_field_context(&lod_context);
+		}
 		for (int slot = 0; slot < ve::kMaxVolumes; slot++) {
 			const ve::VolumeData *v = world_->store_->volumes().get(slot);
 			if (v) lod.volumes().upload(rd, slot, *v);
@@ -2353,6 +2375,8 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 						if (slot < 0) continue;
 						const ve::OverrideBrick *data = world_->store_->overrides()->data(slot);
 						if (!data || !lod.upload_override(slot, *data)) {
+							lod.set_field_context(nullptr);
+							lod_context.teardown();
 							lod.teardown();
 							memdelete(rd);
 							return;
@@ -2378,6 +2402,10 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 			}
 		}
 		lod.teardown();
+		// The borrowed set must die before its device does (stack destruction runs after
+		// memdelete below and would free RIDs on a dead device).
+		lod.set_field_context(nullptr);
+		lod_context.teardown();
 		memdelete(rd);
 	});
 	if (!ok || result.failed || static_cast<int>(fine_sdf.size()) != kFineCount ||
@@ -2387,7 +2415,7 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 		return d;
 
 	const float cell = ve::lod_cell_size(level);
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 
 	// 1. The fine lattice against the CPU field.
 	int fine_max_diff = 0;
@@ -2521,7 +2549,7 @@ Dictionary VoxelDebugHooks::debug_mesh_lattice_diff(Vector3i chunk) {
 	world_->mesh_->run_sync([&](MeshPass &pass) { ok = pass.run_field_sync(job, &gpu); });
 	if (!ok) return d;
 
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	const ve::DcGrid g = ve::chunk_dc_grid(c);
 	int max_diff = 0, over_one = 0;
 	bool pos = false, neg = false;
@@ -2574,7 +2602,7 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	if (gpu.failed) return d; // short readback: do not present partial data as a diff
 
 	const ve::DcGrid g = ve::chunk_dc_grid(c);
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 
 	// 1. The lattice against the CPU field. One encoded step of sin() drift is invisible.
 	int lat_max = 0, lat_over = 0;
@@ -2744,6 +2772,7 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
 		ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
 		if (!world_->snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) return d;
+		job.gen = &world_->store_->generator()->sampler();
 	}
 
 	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
@@ -2761,7 +2790,7 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 	for (size_t i = 0; i < boxes.size(); i++)
 		boxes[i].world_aabb(&aabbs[i * 6], &aabbs[i * 6 + 3]);
 	ve::VolumeData cpu;
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	ve::extract_island_volume(gen, job.ops.data(), static_cast<int>(job.ops.size()),
 			&world_->store_->volumes(), job.origin, job.voxel, job.dim, aabbs.data(),
 			static_cast<int>(boxes.size()), &cpu);
@@ -2792,7 +2821,7 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 	// Compute normal length and alignment vs CPU masked gradient
 	float min_len = 2.0f, min_align = 2.0f;
 	if (!gpu.normal_oct.empty()) {
-		ve::AnalyticGenerator agen;
+		const ve::Generator &agen = world_->store_->generator()->sampler();
 		for (size_t i = 0; i < gpu.normal_oct.size(); i++) {
 			float dec[3];
 			ve::oct_decode_snorm8(gpu.normal_oct[i], dec);
@@ -3174,6 +3203,7 @@ bool VoxelDebugHooks::debug_extract_submit(int id, Vector3i lo_cell, Vector3i hi
 		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
 		ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
 		if (!world_->snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) return false;
+		job.gen = &world_->store_->generator()->sampler();
 	}
 	std::vector<IslandExtractJob> jobs;
 	jobs.push_back(std::move(job));
@@ -3346,7 +3376,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_gbuffer(Vector3 origin, Vector3 dir) 
 	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
 	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, 1, 1, kNoEdit)) return d;
+	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, 1, 1, kNoEdit, world_->field_context())) return d;
 	device->submit();
 	device->sync();
 	const PackedByteArray ab = device->texture_get_data(world_->raymarch_pass()->albedo_texture(), 0);
@@ -3409,7 +3439,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_hole_probe(Vector3 origin, Vector3 di
 	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
 	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, w, h, kNoEdit)) return d;
+	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, w, h, kNoEdit, world_->field_context())) return d;
 	device->submit();
 	device->sync();
 	const PackedByteArray hp = device->texture_get_data(world_->raymarch_pass()->hitpos_texture(), 0);
@@ -3462,7 +3492,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_normal_probe(Vector3 origin, Vector3 
 	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
 	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, w, h, kNoEdit)) return d;
+	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, w, h, kNoEdit, world_->field_context())) return d;
 	device->submit();
 	device->sync();
 	const PackedByteArray surface = device->texture_get_data(world_->raymarch_pass()->surface_texture(), 0);
@@ -3485,7 +3515,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_normal_probe(Vector3 origin, Vector3 
 	// GPU's authoritative buffers mirror -- not from an inline analytic formula, so
 	// edits, stored volumes and consolidated overrides are all covered. For a pure
 	// procedural hit this reduces exactly to Task 1's analytic gradient.
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	std::lock_guard<std::mutex> edit_lock(world_->edit_mutex());
 	for (int y = 0; y < h; y++) {
 		for (int x = 0; x < w; x++) {
@@ -3620,7 +3650,7 @@ Dictionary VoxelDebugHooks::debug_island_normal_probe(int island_slot, Vector3 o
 	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
 	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, w, h, kNoEdit)) return d;
+	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, w, h, kNoEdit, world_->field_context())) return d;
 	device->submit();
 	device->sync();
 	const PackedByteArray surface = device->texture_get_data(world_->raymarch_pass()->surface_texture(), 0);
@@ -3812,7 +3842,7 @@ Dictionary VoxelDebugHooks::debug_ssr_probe(int fixture, int w, int h) {
 	std::memcpy(&camera_params.cam_pos[3], &probe_flags, sizeof(float));
 	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), camera_params, width, height,
-			no_edit)) return d;
+			no_edit, world_->field_context())) return d;
 	float fade_start = ve::kLodFadeStartM, fade_end = ve::kLodFadeEndM;
 	world_->lod_fade_band(&fade_start, &fade_end);
 	world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
@@ -4267,7 +4297,7 @@ Dictionary VoxelDebugHooks::debug_glossy_sdf_probe(Vector3 origin, Vector3 dir) 
 	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
 	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, 1, 1, kNoEdit)) return d;
+	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, 1, 1, kNoEdit, world_->field_context())) return d;
 	device->submit();
 	device->sync();
 	const PackedByteArray ab = device->texture_get_data(world_->raymarch_pass()->albedo_texture(), 0);
@@ -4513,7 +4543,7 @@ Dictionary VoxelDebugHooks::debug_deferred_probe(Vector3 pos, Vector3 fwd, int w
 	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
 	std::memcpy(&cp.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp, w, h, kNoEdit)) return d;
+	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp, w, h, kNoEdit, world_->field_context())) return d;
 	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(w, h))) return d;
 	float fade_start = ve::kLodFadeStartM;
 	float fade_end = ve::kLodFadeEndM;
@@ -4633,7 +4663,7 @@ Dictionary VoxelDebugHooks::debug_near_field_detail(Vector3 pos, Vector3 fwd, in
 	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(w, h))) return d;
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp,
-			rw, rh, kNoEdit)) return d;
+			rw, rh, kNoEdit, world_->field_context())) return d;
 	float fade_start = ve::kLodFadeStartM;
 	float fade_end = ve::kLodFadeEndM;
 	world_->lod_fade_band(&fade_start, &fade_end);
@@ -4794,6 +4824,27 @@ Dictionary VoxelDebugHooks::debug_shader_reload_stats() {
 
 void VoxelDebugHooks::debug_set_shader_override(const String &name, const String &source) {
 	ve::set_shader_source_override(name.utf8().get_data(), source.utf8().get_data());
+}
+
+void VoxelDebugHooks::debug_request_shader_reload() {
+	world_->request_shader_reload();
+}
+
+void VoxelDebugHooks::debug_clear_shader_source_overrides() {
+	ve::clear_shader_source_overrides();
+}
+
+PackedByteArray VoxelDebugHooks::debug_field_params_bytes() {
+	// Same packing as FieldContextSet::initialize; both go through
+	// ve::pack_field_params_bytes (see terrain/field_params_pack.h for why both halves
+	// of the dense-values-in-16-stride-sized-buffer shape are load-bearing).
+	const ve::ResolvedPipeline &p = world_->store_->terrain_pipeline();
+	const std::vector<uint8_t> packed = ve::pack_field_params_bytes(p);
+	PackedByteArray bytes;
+	bytes.resize(int(packed.size()));
+	if (!packed.empty())
+		std::memcpy(bytes.ptrw(), packed.data(), packed.size());
+	return bytes;
 }
 
 Dictionary VoxelDebugHooks::debug_self_check() {
@@ -4963,7 +5014,7 @@ void VoxelDebugHooks::debug_store_volume(int slot, const PackedByteArray &sdf,
 }
 
 Vector2 VoxelDebugHooks::debug_eval_field(Vector3 p, const PackedByteArray &ops, int op_count) {
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	const ve::EditOp *ptr = nullptr;
 	if (op_count > 0) {
 		if (ops.size() < op_count * static_cast<int64_t>(sizeof(ve::EditOp))) {
@@ -4977,7 +5028,7 @@ Vector2 VoxelDebugHooks::debug_eval_field(Vector3 p, const PackedByteArray &ops,
 }
 
 Dictionary VoxelDebugHooks::debug_eval_field_gradient(Vector3 p, const PackedByteArray &ops, int op_count) {
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	const ve::EditOp *ptr = nullptr;
 	if (op_count > 0) {
 		if (ops.size() < op_count * static_cast<int64_t>(sizeof(ve::EditOp))) {
@@ -5096,7 +5147,7 @@ bool VoxelDebugHooks::probe_material(int mat, Vector3 p, Vector3 n, float rgb[3]
 	cam.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, 1, 1,
-			kNoEdit))
+			kNoEdit, world_->field_context()))
 		return false;
 	device->submit();
 	device->sync();
@@ -5207,7 +5258,7 @@ void VoxelDebugHooks::debug_upload_region_ops(int region_slot, const PackedByteA
 
 bool VoxelDebugHooks::debug_brick_has_surface(Vector3i brick, const PackedByteArray &ops,
 		int op_count) const {
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	const ve::EditOp *ptr = nullptr;
 	if (op_count > 0) {
 		if (ops.size() < op_count * static_cast<int64_t>(sizeof(ve::EditOp))) {
@@ -5232,7 +5283,8 @@ void VoxelDebugHooks::debug_mark_region(Vector3i region, int region_slot, Vector
 	}
 	const int64_t list = device->compute_list_begin();
 	world_->region_pass()->mark(device, list, {region.x, region.y, region.z}, region_slot,
-			{lo.x, lo.y, lo.z}, {hi.x, hi.y, hi.z}, op_count, force);
+			{lo.x, lo.y, lo.z}, {hi.x, hi.y, hi.z}, op_count, force,
+			false, world_->field_context());
 	device->compute_list_end();
 	device->submit();
 	device->sync();
@@ -5244,7 +5296,7 @@ void VoxelDebugHooks::debug_generate_pending() {
 	const int64_t list = device->compute_list_begin();
 	world_->region_pass()->write_dispatch_args(device, list);
 	device->compute_list_add_barrier(list);
-	world_->gen_pass()->dispatch(device, list, *world_->atlas());
+	world_->gen_pass()->dispatch(device, list, *world_->atlas(), world_->field_context());
 	device->compute_list_end();
 	device->submit();
 	device->sync();
@@ -5268,7 +5320,7 @@ Dictionary VoxelDebugHooks::debug_brick_diff(Vector3i brick, int region_slot,
 	d["slot"] = slot;
 	if (slot < 0) return d;
 
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	ve::BrickEval ref{};
 	ve::eval_brick(gen, ptr, op_count, b, &ref, &world_->store_->volumes(), world_->store_->overrides());
 
@@ -5400,7 +5452,7 @@ Dictionary VoxelDebugHooks::debug_brick_flags(Vector3i region) {
 		std::lock_guard<std::mutex> lock(world_->edit_mutex());
 		ops = world_->store_->edit_log()->ops({region.x, region.y, region.z});
 	}
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	const int32_t *slots = reinterpret_cast<const int32_t *>(table.ptr());
 	const uint32_t *gpu_flags = reinterpret_cast<const uint32_t *>(flags.ptr());
 	int compared = 0;
@@ -5573,7 +5625,7 @@ Dictionary VoxelDebugHooks::debug_occupancy_fallback_diff(Vector3i region) {
 			static_cast<uint32_t>(rslot) * block_bytes, block_bytes);
 	if (gpu.size() < static_cast<int>(block_bytes)) return d;
 
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	int compared = 0, fallback = 0, mismatches = 0;
 	Vector3i first(-1, -1, -1);
 	for (int bi = 0; bi < ve::kRegionBrickCount; bi++) {
@@ -5625,7 +5677,7 @@ Dictionary VoxelDebugHooks::debug_occupancy_diff(Vector3i region) {
 		ops = world_->store_->edit_log()->ops({region.x, region.y, region.z});
 	}
 	const int32_t *slots = reinterpret_cast<const int32_t *>(table.ptr());
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	int compared = 0, mismatches = 0;
 	Vector3i first(-1, -1, -1);
 	for (int bi = 0; bi < ve::kRegionBrickCount; bi++) {
@@ -5650,9 +5702,31 @@ Dictionary VoxelDebugHooks::debug_occupancy_diff(Vector3i region) {
 	return d;
 }
 
+PackedFloat32Array VoxelDebugHooks::debug_generator_fingerprint() {
+	PackedFloat32Array out;
+	if (world_ == nullptr || world_->store_.get() == nullptr ||
+			world_->store_->generator() == nullptr) {
+		return out;
+	}
+	const ve::Generator &gen = world_->store_->generator()->sampler();
+	// Same regimes as tests/golden/field_baseline.txt: surface, cave, deep, sky, far.
+	static const float kPts[][3] = {
+		{0.0f, 51.2f, 0.0f}, {12.3f, 55.0f, -7.8f}, {30.0f, 50.85f, 30.0f},
+		{-30.0f, 50.0f, -30.0f}, {0.0f, 20.0f, 0.0f}, {0.0f, 90.0f, 0.0f},
+		{800.0f, 51.2f, 800.0f}, {-800.0f, 51.2f, -800.0f},
+	};
+	for (const auto &p : kPts) {
+		ve::Sample s = gen.sample(p[0], p[1], p[2]);
+		out.push_back(s.sdf);
+		out.push_back(float(s.material));
+		out.push_back(0.0f);
+	}
+	return out;
+}
+
 float VoxelDebugHooks::debug_field_sdf(Vector3 p) {
 	if (!world_->store_->edit_log()) return 1e30f;
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	std::lock_guard<std::mutex> lock(world_->edit_mutex());
 	const std::vector<ve::EditOp> &ops =
 			world_->store_->edit_log()->ops(ve::WorldBounds::region_of_point(p.x, p.y, p.z));
@@ -5663,7 +5737,7 @@ float VoxelDebugHooks::debug_field_sdf(Vector3 p) {
 int VoxelDebugHooks::debug_cell_state(Vector3i cell) {
 	if (!world_->store_->edit_log()) return static_cast<int>(ve::kCellUnknown);
 	const ve::IVec3 c{cell.x, cell.y, cell.z};
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	std::lock_guard<std::mutex> lock(world_->edit_mutex());
 	const std::vector<ve::EditOp> &ops = world_->store_->edit_log()->ops(ve::WorldBounds::region_of_brick(c));
 	return static_cast<int>(ve::cell_state_field(gen, ops.data(),
@@ -5757,7 +5831,7 @@ Dictionary VoxelDebugHooks::debug_raycast(Vector3 origin, Vector3 dir) {
 	d["hit"] = false;
 	if (!world_->store_->edit_log()) return d;
 	std::lock_guard<std::mutex> lock(world_->edit_mutex());
-	ve::AnalyticGenerator gen;
+	const ve::Generator &gen = world_->store_->generator()->sampler();
 	const float o[3] = {origin.x, origin.y, origin.z};
 	const float f[3] = {dir.x, dir.y, dir.z};
 	const ve::RayHit h = ve::raycast(gen, *world_->store_->edit_log(), o, f, 200.0f, &world_->store_->volumes(), world_->store_->overrides());

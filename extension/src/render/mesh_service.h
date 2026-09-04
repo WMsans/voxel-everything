@@ -14,9 +14,12 @@
 #include "render/consolidate_pass.h"
 #include "render/lod_build_pass.h"
 #include "render/mesh_pass.h"
+#include "terrain/pipeline.h"
 #include "world/region.h"
 
 namespace godot {
+
+class FieldContextSet;
 
 // One chunk of work, owning its op list. MeshJob points at a caller-owned array, which is
 // fine inside one call but not across a thread hand-off, so the queue carries the ops.
@@ -68,6 +71,9 @@ public:
 	// Spawns the thread and builds the pass on it. Blocks until that has succeeded or failed,
 	// so a caller can report the failure exactly where it used to.
 	bool start(const MeshPassConfig &cfg);
+	// The terrain pipeline the worker's set 1 is built from. Call before start() (VoxelWorld
+	// does this in ensure_physics_initialized); copied, read by the worker thread at run().
+	void set_terrain_pipeline(const ve::ResolvedPipeline &p);
 	void stop();
 	bool is_valid() const { return ready_.load(std::memory_order_acquire); }
 
@@ -210,6 +216,11 @@ private:
 	std::condition_variable done_cv_; // signals the caller: startup settled, sync task done
 
 	MeshPassConfig cfg_;
+	// The pipeline snapshot the worker's set 1 is built from; written pre-start.
+	ve::ResolvedPipeline terrain_pipeline_;
+	// The worker device's set 1, shared by the mesh/extract/lod/consolidate passes.
+	// Created on the worker thread (RIDs belong to its device), destroyed there too.
+	FieldContextSet *worker_field_context_ = nullptr;
 	std::vector<MeshRequest> pending_;  // submitted, not yet picked up
 	std::vector<MeshResult> results_;   // meshed, not yet collected
 	struct VolumeUpload {

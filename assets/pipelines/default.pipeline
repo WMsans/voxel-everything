@@ -1,0 +1,11 @@
+# The terrain the engine shipped with, expressed as stages. Task 15's equivalence test
+# asserts this produces bit-identical bricks to ve::AnalyticGenerator.
+# NOTE: overriding hills amp_* also requires updating the literals in stage_cave's CPU
+# mirror (extension/src/terrain/builtin_stages.cpp) -- the cave GLSL reads P.hills_*.
+# Edits apply on fresh world init (no C++ rebuild); shader reload keeps the loaded pipeline.
+seed      1337
+lipschitz 2.0
+
+stage stages/hills.field.glslh
+stage stages/cave.field.glslh
+stage stages/height_bands.field.glslh

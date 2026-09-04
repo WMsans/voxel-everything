@@ -62,7 +62,8 @@ void WorldStreamer::initialize(ve::RegionResidency *residency, ve::EditLog *edit
 		std::mutex *edit_mutex, std::vector<PendingEdit> *pending, GpuAtlas *atlas,
 		RegionPass *region_pass, BrickGenPass *brick_gen, WorldStore *store,
 		const ve::OverrideStore *overrides,
-		const std::map<std::tuple<int, int, int>, int> *override_tables) {
+		const std::map<std::tuple<int, int, int>, int> *override_tables,
+		const FieldContextSet *field_context) {
 	residency_ = residency;
 	edit_log_ = edit_log;
 	edit_mutex_ = edit_mutex;
@@ -74,6 +75,7 @@ void WorldStreamer::initialize(ve::RegionResidency *residency, ve::EditLog *edit
 	overrides_ = overrides;
 	override_tables_ = override_tables;
 	store_ = store;
+	field_context_ = field_context;
 	overflow_read_.instantiate();
 	free_read_.instantiate();
 	costs_read_.instantiate();
@@ -499,7 +501,8 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		const ve::IVec3 lo{lj.region.x * ve::kRegionBricks, lj.region.y * ve::kRegionBricks,
 				lj.region.z * ve::kRegionBricks};
 		const ve::IVec3 hi{lo.x + 31, lo.y + 31, lo.z + 31};
-		region_pass_->mark(rd, list, lj.region, lj.slot, lo, hi, lj.op_count, false);
+		region_pass_->mark(rd, list, lj.region, lj.slot, lo, hi, lj.op_count, false, false,
+				field_context_);
 		note_marked(lj.region, lj.seq);
 		any = true;
 	}
@@ -508,7 +511,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		// each job keeps one job's release phase from racing the previous job's allocate
 		// phase when two edits share bricks (the race the phase split exists to avoid).
 		rd->compute_list_add_barrier(list);
-		region_pass_->mark(rd, list, j.region, j.slot, j.lo, j.hi, j.op_count, true, true);
+		region_pass_->mark(rd, list, j.region, j.slot, j.lo, j.hi, j.op_count, true, true, field_context_);
 		note_marked(j.region, j.seq);
 		any = true;
 	}
@@ -541,16 +544,16 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 				// the thin probe-missed result is not undone. Per-edit ranges stay small
 				// even when edits are scattered, so the whole 32^3 region is never
 				// re-queued as exact-edit bricks during recovery.
-				region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, false);
+				region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, false, field_context_);
 				for (const ve::EditAabb &range : exact_ranges) {
 					rd->compute_list_add_barrier(list);
 					region_pass_->mark(rd, list, region, slot, range.lo, range.hi, op_count,
-							true, true);
+							true, true, field_context_);
 				}
 			} else {
 				// No exact edit range: this is the original plain force-regen recovery.
 				// Exact-edit mode would re-queue every brick in the 32^3 region.
-				region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, false);
+				region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, false, field_context_);
 			}
 			note_marked(region, seq);
 			any = true;
@@ -588,15 +591,15 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 			// Full-region force-regen first for general dropped/stale bricks; the disjoint
 			// exact AABBs second so probe-missed edits stay resident and generated without
 			// ever re-queueing the union of scattered edits.
-			region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, false);
+			region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, false, field_context_);
 			for (const ve::EditAabb &range : exact_ranges) {
 				rd->compute_list_add_barrier(list);
 				region_pass_->mark(rd, list, region, slot, range.lo, range.hi, op_count,
-						true, true);
+						true, true, field_context_);
 			}
 		} else {
 			// No exact edit range: plain force-regen only, as in the pre-Round-2 path.
-			region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, false);
+			region_pass_->mark(rd, list, region, slot, lo, hi, op_count, true, false, field_context_);
 		}
 		note_marked(region, seq);
 		any = true;
@@ -614,7 +617,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		// args write visible to the indirect dispatch below (removing it broke the
 		// pixel/magenta suites: stale job counts left bricks ungenerated).
 		rd->compute_list_add_barrier(list);
-		brick_gen_->dispatch(rd, list, *atlas_);
+		brick_gen_->dispatch(rd, list, *atlas_, field_context_);
 	}
 	rd->compute_list_end();
 

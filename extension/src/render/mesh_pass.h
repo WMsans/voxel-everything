@@ -12,6 +12,8 @@
 
 namespace godot {
 
+class FieldContextSet;
+
 struct MeshPassConfig {
 	int max_jobs = 2;      // chunks per batch
 	int max_verts = 16384; // a fully covered 6.4 m chunk holds ~4 100
@@ -53,6 +55,10 @@ public:
 	void teardown();
 	bool is_valid() const { return field_pipeline_.is_valid(); }
 	const MeshPassConfig &config() const { return cfg_; }
+	// The worker device's set 1, owned by MeshService and valid for the worker's whole
+	// run. Borrowed, never freed here; bound beside the field pass's set 0.
+	RID field_shader() const { return field_shader_; }
+	void set_field_context(const FieldContextSet *fc) { field_context_ = fc; }
 	VolumePool &volumes() { return volumes_; }
 	OverridePool &overrides() { return overrides_; }
 	bool upload_override(int slot, const ve::OverrideBrick &brick) { return overrides_.upload(slot, brick); }
@@ -101,6 +107,7 @@ private:
 	void reset_counts();
 
 	RenderingDevice *rd_ = nullptr;
+	const FieldContextSet *field_context_ = nullptr;
 	MeshPassConfig cfg_;
 	RID lattice_;     // R8_UNORM 3D, 130^3 encoded sdf
 	RID cells_;       // int32 per mesh cell: vertex index or -1

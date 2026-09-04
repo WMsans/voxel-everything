@@ -3,8 +3,11 @@
 
 #define MATERIAL_LAYERS 16
 // Set 0's established bindings 24-30 belong to the compact-normal/override interface.
-// Keep that interface unchanged; SunLight uses binding 24 in its dedicated set 1.
-#define SUN_LIGHT_SET 1
+// Keep that interface unchanged; SunLight uses binding 24 in its dedicated set 2. Set 1
+// belongs to the terrain pipeline's field context (FieldContextSet): the generated
+// field.glslh declares its params UBO and sector map there, so every field-consuming
+// pass binds set 1 and the sun cannot share it.
+#define SUN_LIGHT_SET 2
 #define SUN_LIGHT_BINDING 24
 // The material arrays live at the end of set 0. They must be declared before common.glslh
 // so material_surface() can see them; the include defines the shared shading functions.

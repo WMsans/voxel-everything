@@ -48,12 +48,13 @@ ColliderStreamer::~ColliderStreamer() {
 }
 
 void ColliderStreamer::initialize(ve::ChunkResidency *chunks, ve::EditLog *edit_log,
-		std::mutex *edit_mutex, MeshService *mesh, int max_slots) {
+		std::mutex *edit_mutex, MeshService *mesh, int max_slots, const ve::Generator *gen) {
 	teardown();
 	chunks_ = chunks;
 	edit_log_ = edit_log;
 	edit_mutex_ = edit_mutex;
 	mesh_ = mesh;
+	gen_ = gen;
 	const size_t slots = static_cast<size_t>(std::max(0, max_slots));
 	const size_t bodies = slots * ve::kColliderOctants;
 	bodies_.assign(bodies, RID());
@@ -90,6 +91,7 @@ void ColliderStreamer::teardown() {
 	edit_log_ = nullptr;
 	edit_mutex_ = nullptr;
 	mesh_ = nullptr;
+	gen_ = nullptr;
 }
 
 void ColliderStreamer::set_space(RID space) {
@@ -443,6 +445,7 @@ int ColliderStreamer::run_frame(float cx, float cy, float cz) {
 int ColliderStreamer::run_frame(float cx, float cy, float cz, const float *extra_centers,
 		int extra_count) {
 	if (!chunks_ || !mesh_ || !mesh_->is_valid()) return 0;
+	if (gen_ == nullptr) return 0; // not initialized: no field, no collider
 	const Clock::time_point t_frame = Clock::now();
 	last_plan_ms_ = 0.0f;
 	last_apply_ms_ = 0.0f;
@@ -542,7 +545,7 @@ int ColliderStreamer::run_frame(float cx, float cy, float cz, const float *extra
 		radii.insert(radii.end(), static_cast<size_t>(bubbles), bubble_radius_m_);
 	}
 	LogProbe probe;
-	probe.gen = &gen_;
+	probe.gen = gen_;
 	probe.log = edit_log_;
 	probe.mu = edit_mutex_;
 	const int build_cap = (mesh_->busy() || !inbox_.empty() || !pending_.empty()) ? 0 : -1;

@@ -21,6 +21,11 @@
 #include "render/brick_gen_pass.h"
 #include "render/world_streamer.h"
 #include "render/shader_loader.h"
+#include "render/field_context_set.h"
+#include "terrain/pipeline.h"
+#include "terrain/stage_manifest.h"
+#include "terrain/field_codegen.h"
+#include "terrain/pipeline_field_generator.h"
 #include "render/mesh_pass.h"
 #include "render/mesh_service.h"
 #include "render/lod_build_pass.h"
@@ -52,6 +57,7 @@
 #include "shade/cel.h"
 #include "shade/sun_ortho.h"
 #include <godot_cpp/classes/project_settings.hpp>
+#include <godot_cpp/classes/file_access.hpp>
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/scene_tree.hpp>
 #include <godot_cpp/classes/window.hpp>
@@ -484,10 +490,94 @@ void VoxelWorld::_exit_tree() {
 	context_.render->release_devices();
 }
 
+namespace {
+
+// Reads a res:// text file into a std::string. The terrain pipeline's parsers are pure C++
+// and take strings, which is what keeps them in the native test suite; this is the only
+// place Godot's FileAccess touches them.
+bool read_res_text(const String &path, std::string *out) {
+	Ref<FileAccess> f = FileAccess::open(path, FileAccess::READ);
+	if (f.is_null()) return false;
+	*out = f->get_as_text().utf8().get_data();
+	return true;
+}
+
+} // namespace
+
+// Compiles assets/pipelines/default.pipeline into (a) a generated field.glslh installed as a
+// shader-source override and (b) a PipelineFieldGenerator on the seam. On ANY failure the
+// world keeps today's hardcoded terrain: a bad pipeline must degrade, never kill the world.
+//
+// First successful load wins (the stages-nonempty guard): shader-reload re-init re-runs
+// ensure_initialized, and set_generator deletes the old seam, so a reload-time swap could
+// pull the field out from under in-flight physics/mesh jobs. Pipeline edits therefore take
+// effect on fresh init, where nothing can hold the old seam mid-evaluation.
+void VoxelWorld::load_terrain_pipeline() {
+	if (!store_->terrain_pipeline().stages.empty()) return;
+	std::string src, err;
+	if (!read_res_text("res://assets/pipelines/default.pipeline", &src)) {
+		UtilityFunctions::push_warning("terrain pipeline: cannot read default.pipeline; "
+				"keeping the built-in field");
+		return;
+	}
+	ve::PipelineDesc desc;
+	if (!ve::parse_pipeline_desc(src, &desc, &err)) {
+		UtilityFunctions::push_error(String("terrain pipeline: ") + err.c_str());
+		return;
+	}
+
+	std::vector<ve::StageManifest> loaded;
+	for (const ve::PipelineStageRef &r : desc.stages) {
+		std::string stage_src;
+		const String path = String("res://shaders/") + r.path.c_str();
+		if (!read_res_text(path, &stage_src)) {
+			UtilityFunctions::push_error("terrain pipeline: cannot read " + path);
+			return;
+		}
+		ve::StageManifest m;
+		if (!ve::parse_stage_manifest(stage_src, &m, &err)) {
+			UtilityFunctions::push_error(path + String(": ") + err.c_str());
+			return;
+		}
+		loaded.push_back(m);
+	}
+
+	ve::ResolvedPipeline resolved;
+	if (!ve::resolve_pipeline(desc, loaded, &resolved, &err)) {
+		UtilityFunctions::push_error(String("terrain pipeline: ") + err.c_str());
+		return;
+	}
+
+	std::string prelude;
+	if (!read_res_text("res://shaders/field_ops.glslh", &prelude)) {
+		UtilityFunctions::push_error("terrain pipeline: cannot read field_ops.glslh");
+		return;
+	}
+
+	// The CPU half must succeed BEFORE the GPU override is installed. Installing the override
+	// first and then failing here would leave the GPU on the pipeline's field and the CPU on
+	// the built-in one -- the exact divergence Phase 0 exists to prevent.
+	ve::PipelineFieldGenerator *gen = ve::PipelineFieldGenerator::create(resolved, &err);
+	if (gen == nullptr) {
+		UtilityFunctions::push_error(String("terrain pipeline: ") + err.c_str());
+		return;
+	}
+
+	ve::set_shader_source_override("field.glslh", ve::generate_field_glslh(resolved, prelude));
+	store_->set_terrain_pipeline(resolved);
+	store_->set_generator(gen); // WorldStore takes ownership, as it does today
+}
+
+FieldContextSet *VoxelWorld::field_context() {
+	return context_.render ? context_.render->field_context() : nullptr;
+}
+
 void VoxelWorld::ensure_initialized() {
 	// Admission gate moved with the lifetime state (Task 13); same mutex-guarded check.
 	if (context_.render->shutdown_in_progress()) return;
 	if (initialized_) return;
+	// The GPU graph compiles shaders that must already see the overridden field.glslh.
+	load_terrain_pipeline();
 	// Device acquisition + the whole GPU graph construction live in RenderOrchestrator
 	// (Task 12), in the exact allocation order this body used. Only the lifetime flag
 	// and the failure routing remain here.
@@ -600,12 +690,16 @@ int VoxelWorld::island_slot_count() const {
 
 void VoxelWorld::ensure_physics_initialized() {
 	if (physics_ready_) return;
+	// Physics-first worlds must see the same field the graphics init would install: the
+	// worker's set 1 is built from the stored pipeline, so load here too (first wins).
+	load_terrain_pipeline();
 	// The CPU cores are shared with the streaming path and outlive both
 	// (voxel_world.h); created through the same WorldStore lazy paths as the
 	// streaming init, so physics-first worlds get identical objects.
 	store_->ensure_edit_log(world_bounds());
 	store_->ensure_overrides(store_->config().max_override_bricks);
 	mesh_ = new MeshService();
+	mesh_->set_terrain_pipeline(store_->terrain_pipeline());
 	MeshPassConfig mcfg;
 	mcfg.max_jobs = mesh_jobs_per_frame_;
 	mcfg.max_override_bricks = store_->overrides() ? store_->overrides()->capacity() : store_->config().max_override_bricks;
@@ -636,7 +730,8 @@ void VoxelWorld::ensure_physics_initialized() {
 	ccfg.max_builds_per_frame = mesh_jobs_per_frame_;
 	chunks_ = new ve::ChunkResidency(ccfg);
 	colliders_ = new ColliderStreamer();
-	colliders_->initialize(chunks_, store_->edit_log(), &store_->edit_mutex(), mesh_, max_collider_chunks_);
+	colliders_->initialize(chunks_, store_->edit_log(), &store_->edit_mutex(), mesh_, max_collider_chunks_,
+			&store_->generator()->sampler());
 	colliders_->set_shape_builds_per_frame(shape_builds_per_frame_);
 	colliders_->set_body_bubble_radius_m(physics_bubble_radius_m_);
 	// Publish the manager under edit_mutex_: append_edit_locked() can be called from a tool
@@ -649,6 +744,7 @@ void VoxelWorld::ensure_physics_initialized() {
 		std::lock_guard<std::mutex> island_lock(island_mutex_);
 		island_manager_ = new IslandManager();
 		island_manager_->initialize(this);
+		island_manager_->set_generator(&store_->generator()->sampler());
 	}
 	physics_ready_ = true;
 }
@@ -983,6 +1079,7 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job->origin[0], job->origin[1], job->origin[2]);
 		ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
 		if (!snapshot_field_sources(job->ops, blo, bhi, &job->snapshot)) return false;
+		job->gen = &store_->generator()->sampler();
 	}
 
 	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
@@ -1045,7 +1142,7 @@ bool VoxelWorld::render_probe_pixel(Vector3 origin, Vector3 dir) {
 	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!raymarch_pass()->render(device, *atlas(), islands(), RID(), cam, 1, 1,
-			kNoEdit))
+			kNoEdit, field_context()))
 		return false;
 	device->submit();
 	device->sync();

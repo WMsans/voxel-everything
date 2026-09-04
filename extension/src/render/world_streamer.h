@@ -20,6 +20,7 @@ struct PendingEdit;      // defined in core/world_store.h; here only the pointer
 struct OccupancyBlock;   // defined in core/world_store.h; here only the pointer type is needed
 class WorldStore;
 class MeshService;
+class FieldContextSet;
 
 // Drives one frame of world maintenance on the render thread: residency loads/evictions,
 // edit fan-out, one compute list holding every mark + the indirect generation dispatch.
@@ -30,7 +31,8 @@ public:
 			std::mutex *edit_mutex, std::vector<PendingEdit> *pending, GpuAtlas *atlas,
 			RegionPass *region_pass, BrickGenPass *brick_gen, WorldStore *store,
 			const ve::OverrideStore *overrides,
-			const std::map<std::tuple<int, int, int>, int> *override_tables);
+			const std::map<std::tuple<int, int, int>, int> *override_tables,
+			const FieldContextSet *field_context = nullptr);
 	void set_mesh_service(MeshService *mesh) { mesh_ = mesh; }
 	// A consolidation changes the base bytes without leaving an edit for the normal edit
 	// fan-out. Queue a full-region force mark so the render atlas cannot retain pre-bake data.
@@ -76,6 +78,8 @@ private:
 	GpuAtlas *atlas_ = nullptr;
 	RegionPass *region_pass_ = nullptr;
 	BrickGenPass *brick_gen_ = nullptr;
+	// The orchestrator's set 1, borrowed; bound at every mark/generation dispatch.
+	const FieldContextSet *field_context_ = nullptr;
 	MeshService *mesh_ = nullptr;
 	const ve::OverrideStore *overrides_ = nullptr;
 	const std::map<std::tuple<int, int, int>, int> *override_tables_ = nullptr;

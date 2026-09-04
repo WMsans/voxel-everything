@@ -1,4 +1,5 @@
 #include "render/island_extract_pass.h"
+#include "render/field_context_set.h"
 #include "render/shader_loader.h"
 #include "render/volume_pool.h"
 #include "render/override_pool.h"
@@ -169,6 +170,7 @@ bool IslandExtractPass::extract(const IslandExtractJob &job, IslandExtractResult
 	const int64_t list = rd_->compute_list_begin();
 	rd_->compute_list_bind_compute_pipeline(list, pipeline_);
 	rd_->compute_list_bind_uniform_set(list, uset_, 0);
+	if (field_context_ != nullptr) field_context_->bind(rd_, list);
 	rd_->compute_list_set_push_constant(list, pc, pc.size());
 	const int g = (job.dim + 3) / 4;
 	rd_->compute_list_dispatch(list, g, g, g);
@@ -202,8 +204,10 @@ bool IslandExtractPass::extract(const IslandExtractJob &job, IslandExtractResult
 		ve::VolumeSet volume_set;
 		if (!job.snapshot.materialize(&base_store, &volume_set)) {
 			out->data.normal_oct.clear();
+		} else if (job.gen == nullptr) {
+			out->data.normal_oct.clear();
 		} else {
-			ve::AnalyticGenerator gen;
+			const ve::Generator &gen = *job.gen;
 			bool any_fail = false;
 			for (int64_t i = 0; i < voxels; i++) {
 				uint16_t packed = out->data.normal_oct[static_cast<size_t>(i)];

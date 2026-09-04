@@ -1,0 +1,21 @@
+//!stage     cave
+//!kind      field
+//!in        sdf : float
+//!out       sdf : float
+//!param     cx : float = 30.0
+//!param     cz : float = 30.0
+//!param     depth : float = 2.0
+//!param     radius : float = 5.0
+//!lipschitz 1.0
+//!cpu       ve::stage_cave
+
+// CSG subtract of one sphere, exactly as AnalyticGenerator does it. max(a, -b) cannot raise
+// the gradient bound, hence lipschitz 1.0.
+void stage_cave(inout FieldCtx ctx) {
+	float h = P.hills_amp_a * sin(P.cave_cx * 0.11) * cos(P.cave_cz * 0.13)
+	        + P.hills_amp_b * sin(P.cave_cx * 0.031 + 1.7) * sin(P.cave_cz * 0.043)
+	        + P.hills_amp_c * sin(P.cave_cx * 0.23 + P.cave_cz * 0.19);
+	float cy = SURFACE_Y + h - P.cave_depth;
+	float sphere = length(ctx.p - vec3(P.cave_cx, cy, P.cave_cz)) - P.cave_radius;
+	ctx.sdf = max(ctx.sdf, -sphere);
+}
