@@ -224,12 +224,13 @@ bool IslandManager::window_is_fresh(const PendingWindow &w) const {
 }
 
 int IslandManager::run_connectivity(const PendingWindow &pw) {
+	if (gen_ == nullptr) return 0; // not initialized: no field, no connectivity
 	connectivity_runs_++;
 	ve::FloodWindow w = ve::FloodWindow::around(pw.lo, pw.hi, ve::kFloodWindowCells);
 	ve::LinkCuts cuts;
 	ve::FloodResult r;
 	LogContactProbe probe;
-	probe.gen = &gen_;
+	probe.gen = gen_;
 	probe.log = world_->edit_log();
 	probe.mu = &world_->edit_mutex();
 	probe.volumes = &world_->volumes();
@@ -312,6 +313,7 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 				continue;
 			}
 		}
+		job.gen = gen_;
 		job.override_table = world_->override_table_for_region(
 				ve::WorldBounds::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
 		// Refuse before allocating a volume slot or submitting: the extraction pass cannot
@@ -1047,6 +1049,7 @@ void IslandManager::start_merges() {
 		job.rest_origin[1] = xf.origin.y;
 		job.rest_origin[2] = xf.origin.z;
 		job.out_slot = out;
+		job.gen = gen_;
 		Merging m;
 		m.body_index = static_cast<int>(i);
 		m.out_slot = out;

@@ -32,7 +32,7 @@ public:
 	~ColliderStreamer();
 
 	void initialize(ve::ChunkResidency *chunks, ve::EditLog *edit_log, std::mutex *edit_mutex,
-			MeshService *mesh, int max_slots);
+			MeshService *mesh, int max_slots, const ve::Generator *gen);
 	void teardown();
 	void set_space(RID space);
 	void set_shape_builds_per_frame(int v) { max_builds_per_frame_ = v; }
@@ -119,9 +119,10 @@ private:
 	ve::EditLog *edit_log_ = nullptr;
 	std::mutex *edit_mutex_ = nullptr;
 	MeshService *mesh_ = nullptr;
-	// Spec §9 defers a configurable generator; when G becomes one, this moves to VoxelWorld
-	// and is handed in, exactly like the edit log.
-	ve::AnalyticGenerator gen_;
+	// Borrowed from WorldStore via VoxelWorld, exactly like edit_log_. Never owned: the
+	// terrain pipeline can swap the world's generator, and a copy here would silently keep
+	// generating the old world for collision while the GPU generated the new one.
+	const ve::Generator *gen_ = nullptr;
 
 	RID space_;
 	std::vector<RID> bodies_;

@@ -12,6 +12,8 @@
 
 namespace godot {
 
+class FieldContextSet;
+
 struct LodBuildConfig {
 	int max_jobs = 8; // chunks per batch; default allows multi-job batches without trapping callers
 };
@@ -41,6 +43,12 @@ public:
 	void teardown();
 	bool is_valid() const { return field_pipeline_.is_valid(); }
 	const LodBuildConfig &config() const { return cfg_; }
+	// The pass's field shader, for building a set 1 against it on diagnostics' own
+	// devices (debug_lod_diff runs its own LodBuildPass on a per-call device).
+	RID field_shader() const { return field_shader_; }
+	// The worker device's set 1, owned by MeshService and valid for the worker's whole
+	// run. Borrowed, never freed here; bound beside the field pass's set 0.
+	void set_field_context(const FieldContextSet *fc) { field_context_ = fc; }
 	VolumePool &volumes() { return volumes_; }
 	OverridePool &overrides() { return *overrides_; }
 	void set_override_pool(OverridePool *pool) { overrides_ = pool; }
@@ -81,6 +89,7 @@ private:
 	void read_job(int job_index, LodBuildResult *out);
 
 	RenderingDevice *rd_ = nullptr;
+	const FieldContextSet *field_context_ = nullptr;
 	LodBuildConfig cfg_;
 	RID fine_sdf_;     // R8_UNORM 3D, 69^3 encoded sdf
 	RID fine_mat_;     // R16_UINT 3D, 69^3 material

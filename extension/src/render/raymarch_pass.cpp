@@ -1,4 +1,5 @@
 #include "render/raymarch_pass.h"
+#include "render/field_context_set.h"
 #include "render/gpu_atlas.h"
 #include "render/island_atlas.h"
 #include "render/material_atlas.h"
@@ -133,7 +134,7 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 	// Old uniform set references the old G-buffer targets: free it before them.
 	if (uset_.is_valid()) rd->free_rid(uset_);
 	uset_ = RID();
-	// The set-1 SunLight set is recreated with the target set; release its old RID first.
+	// The set-2 SunLight set is recreated with the target set; release its old RID first.
 	if (sun_uset_.is_valid()) rd->free_rid(sun_uset_);
 	sun_uset_ = RID();
 	if (albedo_.is_valid()) rd->free_rid(albedo_);
@@ -221,7 +222,7 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas,
 	sun_uniform->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
 	sun_uniform->set_binding(24);
 	sun_uniform->add_id(sun_ubo_);
-	sun_uset_ = rd->uniform_set_create(Array::make(sun_uniform), shader_, 1);
+	sun_uset_ = rd->uniform_set_create(Array::make(sun_uniform), shader_, 2);
 }
 
 bool RaymarchPass::targets_need_rebuild(int width, int height, RID mask) const {
@@ -230,7 +231,8 @@ bool RaymarchPass::targets_need_rebuild(int width, int height, RID mask) const {
 
 bool RaymarchPass::render(RenderingDevice *rd, const GpuAtlas &atlas,
 		const IslandAtlas *islands, RID tile_mask, const ve::CameraParams &cam,
-		int width, int height, const float edit_state[6]) {
+		int width, int height, const float edit_state[6],
+		const FieldContextSet *field_context) {
 	if (!shader_.is_valid()) return false;
 	if (!islands || !islands->is_valid()) return false;
 	const RID mask = tile_mask.is_valid() ? tile_mask : islands->fallback_mask();
@@ -263,7 +265,8 @@ bool RaymarchPass::render(RenderingDevice *rd, const GpuAtlas &atlas,
 	const int64_t list = rd->compute_list_begin();
 	rd->compute_list_bind_compute_pipeline(list, pipeline_);
 	rd->compute_list_bind_uniform_set(list, uset_, 0);
-	rd->compute_list_bind_uniform_set(list, sun_uset_, 1);
+	rd->compute_list_bind_uniform_set(list, sun_uset_, 2);
+	if (field_context != nullptr) field_context->bind(rd, list);
 	rd->compute_list_set_push_constant(list, pc, pc.size());
 	rd->compute_list_dispatch(list, (width + kRaymarchGroupX - 1) / kRaymarchGroupX,
 			(height + kRaymarchGroupY - 1) / kRaymarchGroupY, 1);

@@ -22,6 +22,7 @@
 #include "generator/edit_ops.h"
 #include "generator/field_generator.h"
 #include "generator/volume_set.h"
+#include "terrain/pipeline.h"
 #include "world/field_source_snapshot.h"
 #include "world/edit_log.h"
 #include "world/region.h"
@@ -120,6 +121,12 @@ public:
 	// before ensure_initialized() streams the base world, so the raw replace needs no
 	// guard. Takes ownership of `generator` (a null pointer resets to the default).
 	void set_generator(ve::FieldGenerator *generator);
+
+	// The compiled terrain pipeline. Empty until VoxelWorld::load_terrain_pipeline()
+	// succeeds; the generator seam falls back to ProceduralFieldGenerator until then.
+	// RenderOrchestrator builds set 1 from this, and MeshService builds the worker copy.
+	const ve::ResolvedPipeline &terrain_pipeline() const { return terrain_pipeline_; }
+	void set_terrain_pipeline(const ve::ResolvedPipeline &p) { terrain_pipeline_ = p; }
 
 	ve::EditLog *edit_log() { return edit_log_; }
 	ve::OverrideStore *overrides() { return overrides_; }
@@ -276,6 +283,8 @@ private:
 
 	// The world-generation seam (spec §4); owned, see the constructor comment.
 	ve::FieldGenerator *generator_ = nullptr;
+	// The compiled terrain pipeline; empty until the first successful load.
+	ve::ResolvedPipeline terrain_pipeline_;
 };
 
 } // namespace godot

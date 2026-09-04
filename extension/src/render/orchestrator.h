@@ -63,6 +63,7 @@ class HizPass;
 class GBuffer;
 class CameraUbo;
 class SunUbo;
+class FieldContextSet;
 class ContactShadowPass;
 class SsgiPass;
 class SsaoPass;
@@ -203,6 +204,7 @@ public:
 	GBuffer *gbuffer() { return gbuffer_; }
 	CameraUbo *beauty_camera() { return beauty_camera_; }
 	SunUbo *sun_ubo() { return sun_ubo_; }
+	FieldContextSet *field_context() { return field_context_; }
 	ContactShadowPass *contact_shadow_pass() { return contact_shadow_pass_; }
 	SsgiPass *ssgi_pass() { return ssgi_pass_; }
 	SsaoPass *ssao_pass() { return ssao_pass_; }
@@ -275,6 +277,7 @@ private:
 	DeferredPass *deferred_pass_ = nullptr;
 	SunShadowPass *sun_shadow_pass_ = nullptr;
 	SunUbo *sun_ubo_ = nullptr;
+	FieldContextSet *field_context_ = nullptr;
 	InjectPass *inject_pass_ = nullptr;
 	LodRasterPass *lod_raster_pass_ = nullptr;
 	LodCullPass *lod_cull_pass_ = nullptr;
