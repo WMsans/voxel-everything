@@ -44,26 +44,53 @@ SurfaceSample read_surface(ivec2 px) {
 	}
 	return s;
 }
-bool edge(SurfaceSample a, SurfaceSample b) {
-	if (a.depth <= 0.0) return false;
-	if (b.depth <= 0.0) return !b.solid;
-	// One pixel of screen motion walks a FLAT surface further along the view ray the more
-	// edge-on it is seen, by 1 / |n . v|. A fixed relative threshold therefore fires on every
-	// grazing slope -- most of the ground below the horizon -- and speckles it with dots.
-	// Scaling the tolerance by the same factor keeps the test measuring depth DISCONTINUITY
-	// rather than incidence angle.
+// One pixel of screen motion walks a FLAT surface further along the view ray the more
+// edge-on it is seen, by 1 / |n . v|. A fixed relative threshold therefore fires on every
+// grazing slope -- most of the ground below the horizon -- and speckles it with dots.
+// Scaling the tolerance by the same factor keeps the test measuring depth DISCONTINUITY
+// rather than incidence angle.
+bool depth_break(SurfaceSample a, SurfaceSample b) {
 	float ndv = a.kind != 0 ? max(abs(dot(a.n, a.view)), OUTLINE_MIN_NDV) : 1.0;
 	float rel = abs(a.linear_depth - b.linear_depth) /
 		max(min(a.linear_depth, b.linear_depth), 1e-3);
-	if (rel > pc.params.x / ndv) return true;
+	return rel > pc.params.x / ndv;
+}
+
+// A neighbour with neither depth nor material is the sky -- or it is a hole the far field's
+// raster left behind. Where two LoD levels meet on a chunk face the two chunks contour
+// DIFFERENT lattices, so their quads do not share corners and the seam between them opens by
+// a few centimetres; projected, that is a gap narrower than a pixel, which the rasteriser
+// resolves as the odd missing pixel scattered along the boundary. In the G-buffer such a
+// pixel is byte-for-byte a sky pixel, and reading it as a silhouette is what drew a dashed
+// dark line along every level boundary in the far field -- the artifact was invisible with
+// outlines off, because nothing but this pass was reacting to it.
+//
+// Width is what separates the two: sky keeps being sky, while a one-pixel hole has the SAME
+// surface back at a continuous depth immediately behind it. So look one pixel further in the
+// same direction and let the far side arbitrate. Off the edge of the frame there is nothing
+// to ask, so the pixel keeps its silhouette.
+bool background_continues(SurfaceSample a, ivec2 px, ivec2 step) {
+	ivec2 far_px = px + step * 2;
+	if (any(greaterThanEqual(far_px, pc.dims.xy))) return true;
+	SurfaceSample c = read_surface(far_px);
+	if (c.depth <= 0.0) return true;   // still nothing behind it: a real silhouette
+	return depth_break(a, c);          // a different surface, so a real silhouette too
+}
+
+bool edge(SurfaceSample a, SurfaceSample b, ivec2 px, ivec2 step) {
+	if (a.depth <= 0.0) return false;
+	if (b.depth <= 0.0) return !b.solid && background_continues(a, px, step);
+	if (depth_break(a, b)) return true;
 	return a.kind != 0 && a.kind == b.kind && 1.0 - dot(a.n, b.n) > pc.params.y;
 }
 void main() {
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
 	if (any(greaterThanEqual(px, pc.dims.xy))) return;
 	SurfaceSample c = read_surface(px); bool e = false;
-	if (px.x + 1 < pc.dims.x) e = edge(c, read_surface(px + ivec2(1, 0)));
-	if (!e && px.y + 1 < pc.dims.y) e = edge(c, read_surface(px + ivec2(0, 1)));
+	if (px.x + 1 < pc.dims.x)
+		e = edge(c, read_surface(px + ivec2(1, 0)), px, ivec2(1, 0));
+	if (!e && px.y + 1 < pc.dims.y)
+		e = edge(c, read_surface(px + ivec2(0, 1)), px, ivec2(0, 1));
 	if (!e) return;
 	vec4 color = imageLoad(scene_color, px);
 	imageStore(scene_color, px, vec4(color.rgb * pc.params.z, color.a));

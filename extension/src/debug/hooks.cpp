@@ -4121,11 +4121,17 @@ Dictionary VoxelDebugHooks::debug_outline_probe(int fixture, bool have_dynamic_n
 	//
 	//   5  seam hole  one column lost its depth to the near/far dither while its g-buffer
 	//                 surface survived. Not a silhouette; nothing may darken.
-	//   6  real sky   the same column with material 0 as well. That IS a silhouette.
+	//   6  real sky   everything from that column rightwards is background, material 0 and
+	//                 all. That IS a silhouette, and its last terrain column must darken.
 	//   7  grazing    a depth ramp seen almost edge-on, holding the relative depth step at
 	//                 a constant 6% -- over the old flat 4% threshold, under the incidence-
 	//                 scaled one -- with a genuine cliff at column 24 that must still show.
-	const bool hole_fixture = fixture == 5 || fixture == 6;
+	//   8  chunk-face crack  ONE column with neither depth nor material, with the same
+	//                 surface at a continuous depth on both sides. That is the hairline hole
+	//                 the far field's raster leaves where two LoD levels meet on a chunk
+	//                 face, and it is a rasterisation gap, not a silhouette.
+	const bool hole_fixture = fixture == 5 || fixture == 8;
+	const bool sky_fixture = fixture == 6;
 	const int hole_column = width / 2;
 	const int cliff_column = 24;
 	const float kGrazingStep = 0.06f;   // relative depth step per column
@@ -4159,17 +4165,21 @@ Dictionary VoxelDebugHooks::debug_outline_probe(int fixture, bool have_dynamic_n
 			depth[p] = depth_line && right_side ? 20.0f : 10.0f;
 			if (fixture == 7) depth[p] = ramp[x];
 			if (hole_fixture && x == hole_column) depth[p] = 0.0f;
+			if (sky_fixture && x >= hole_column) depth[p] = 0.0f;
 			gb_depth[p] = depth[p];
 			color[p * 4 + 0] = one; color[p * 4 + 1] = one;
 			color[p * 4 + 2] = one; color[p * 4 + 3] = one;
 			const bool terrain = fixture == 2;
-			// Fixture 6's hole column is the only place a covered fixture writes material 0.
+			// Fixture 5 keeps its surface through the hole -- that is the whole point of it.
+			// Fixtures 6 and 8 drop the material too; they differ only in how WIDE the gap is,
+			// which is the one thing that tells sky apart from a raster hole.
 			const bool covered = terrain || fixture == 5 || fixture == 7 ||
-					(fixture == 6 && x != hole_column);
+					(sky_fixture && x < hole_column) ||
+					(fixture == 8 && x != hole_column);
 			const bool up = !right_side;
 			surface[p * 4 + 0] = up ? half : one;
 			surface[p * 4 + 1] = up ? one : half;
-			if (fixture == 5 || fixture == 6 || fixture == 7) {
+			if (fixture == 5 || fixture == 6 || fixture == 7 || fixture == 8) {
 				// A real encoded normal, so the shader's oct_decode returns the vector the
 				// incidence term needs rather than an arbitrary pair of fp16 constants. The
 				// camera looks down +z here, so an incidence cosine of c is a normal whose

@@ -41,6 +41,15 @@ func test_a_seam_hole_is_not_a_silhouette() -> void:
 func test_real_sky_is_still_a_silhouette() -> void:
 	assert_int(make_world().hooks().debug_outline_probe(6, false)["dark_columns"]).is_equal(1)
 
+# Where two LoD levels meet on a chunk face the two meshes are reconstructed from different
+# lattices, so their quads do not share corners and the raster leaves a hairline gap -- often
+# under one pixel wide. In the G-buffer that gap is indistinguishable from sky: no depth, no
+# material. Reading it as a silhouette drew a dashed dark line along every level boundary in
+# the far field. What tells the two apart is width: sky keeps going, a raster hole has the
+# same surface back at a continuous depth one pixel further on.
+func test_a_one_pixel_raster_hole_is_not_a_silhouette() -> void:
+	assert_int(make_world().hooks().debug_outline_probe(8, false)["dark_columns"]).is_equal(0)
+
 # A flat surface seen almost edge-on moves a long way along the view ray per pixel, so a
 # view-independent relative depth threshold reports the whole grazing slope as edges. Only
 # the genuine cliff planted in the ramp may darken.
