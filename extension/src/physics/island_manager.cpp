@@ -543,7 +543,6 @@ bool IslandManager::crumble_component(const InFlight &f) {
 			for (int y = rlo.y; y <= rhi.y; y++)
 				for (int x = rlo.x; x <= rhi.x; x++) {
 					const ve::IVec3 region{x, y, z};
-					if (!world_->edit_log()->bounds().contains_region(region)) continue;
 					const auto it = std::find(regions.begin(), regions.end(), region);
 					if (it == regions.end()) {
 						regions.push_back(region);
@@ -664,7 +663,6 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		std::vector<ve::IVec3> carve_regions;
 		std::vector<ve::IVec3> restore_regions;
 		const auto add_region = [&](std::vector<ve::IVec3> &out, ve::IVec3 r) {
-			if (!world_->edit_log()->bounds().contains_region(r)) return;
 			if (std::find(out.begin(), out.end(), r) == out.end()) out.push_back(r);
 		};
 		for (const ve::CellBox &box : f.boxes) {
@@ -1121,7 +1119,6 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 			for (int y = rlo.y; y <= rhi.y; y++)
 				for (int x = rlo.x; x <= rhi.x; x++) {
 					const ve::IVec3 region{x, y, z};
-					if (!world_->edit_log()->bounds().contains_region(region)) continue;
 					if (std::find(paste_regions.begin(), paste_regions.end(), region) ==
 							paste_regions.end())
 						paste_regions.push_back(region);
