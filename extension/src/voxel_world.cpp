@@ -645,12 +645,16 @@ ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
 	// split.
 	if (!store_->edit_log()) return {};
 	ve::EditLog::AppendResult r = store_->append_edit_locked(op, notify_islands);
+	if (r.oversized) {
+		UtilityFunctions::printerr("VoxelWorld: edit op exceeds the bounded region span — spec §8 fail-soft");
+	}
 	if (!r.rejected.empty()) {
 		edit_rejections_ += static_cast<int>(r.rejected.size());
 		UtilityFunctions::printerr("VoxelWorld: region op list full, op rejected (",
 				r.rejected[0].x, ", ", r.rejected[0].y, ", ", r.rejected[0].z,
 				") — spec §8 fail-soft");
 	}
+	if (r.touched.empty()) return r;
 	// The LoD half of the fan-out moved verbatim into LodSystem::note_edit (Task 15): it
 	// checks its tree, takes lod_mutex under edit_mutex exactly as this block did.
 	if (!r.touched.empty()) context_.lod->note_edit(op);

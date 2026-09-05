@@ -120,6 +120,11 @@ void op_region_range(const EditOp &op, IVec3 *lo, IVec3 *hi);
 // can produce, and still four orders of magnitude short of the pathological case.
 inline constexpr int kMaxOpRegionSpan = 64;
 
+// Rejects unknown operation types and non-finite or out-of-range geometry before any
+// coordinate-to-region conversion. Callers that receive externally supplied EditOps use this
+// as a fail-soft gate; it does not change the public append result shape.
+bool edit_op_is_well_formed(const EditOp &op);
+
 // The largest per-axis span of the op's region range, in regions.
 int op_region_span(const EditOp &op);
 bool op_region_span_ok(const EditOp &op);
