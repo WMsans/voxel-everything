@@ -26,6 +26,7 @@
 #include "world/field_source_snapshot.h"
 #include "world/edit_log.h"
 #include "world/region.h"
+#include "world/region_archive.h"
 #include "world/override_store.h"
 #include "world/region_window.h"
 #include "world/residency.h"
@@ -122,6 +123,11 @@ public:
 	// RenderOrchestrator builds set 1 from this, and MeshService builds the worker copy.
 	const ve::ResolvedPipeline &terrain_pipeline() const { return terrain_pipeline_; }
 	void set_terrain_pipeline(const ve::ResolvedPipeline &p) { terrain_pipeline_ = p; }
+
+	// Where a region's edits go when they leave RAM. Nothing evicts edits in the unbounded-
+	// world rework -- they are bounded by digging, not travel -- so today this only ever holds
+	// what a caller explicitly hands it. Sub-project C replaces the implementation.
+	ve::RegionArchive &archive() { return archive_; }
 
 	ve::EditLog *edit_log() { return edit_log_; }
 	ve::OverrideStore *overrides() { return overrides_; }
@@ -259,6 +265,7 @@ public:
 
 private:
 	ve::WorldConfig config_;
+	ve::PinnedRegionArchive archive_;
 	// The CPU cores are shared with the streaming path and outlive both GPU
 	// objects and physics teardown: a re-init re-streams the same world, edits
 	// included. This is also what a future save/reload will do (saves ARE the
