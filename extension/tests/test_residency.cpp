@@ -1,4 +1,5 @@
 #include <doctest/doctest.h>
+#include "world/region_window.h"
 #include "world/residency.h"
 #include <algorithm>
 #include <cmath>
@@ -6,10 +7,11 @@
 
 static ve::ResidencyConfig make_cfg(float radius, int slots, int per_frame) {
 	ve::ResidencyConfig cfg;
-	cfg.bounds = ve::WorldBounds{{0, -64, 0}, {8, 4, 8}}; // 204.8 x 102.4 x 204.8 m
 	cfg.radius_m = radius;
 	cfg.max_region_slots = slots;
 	cfg.max_loads_per_frame = per_frame;
+	cfg.window = ve::region_window_centered(0.0f, 0.0f, 0.0f,
+			ve::region_window_dim(radius, cfg.evict_margin));
 	return cfg;
 }
 
@@ -57,13 +59,17 @@ TEST_CASE("the settled set is exactly the in-radius regions") {
 
 	// Everything resident is inside the radius...
 	std::set<int> slots;
-	const ve::IVec3 o = cfg.bounds.origin_regions();
+	// No world box any more: scan the radius' region AABB instead of the old 8x4x8 box.
+	const auto lo = [](float c) { return static_cast<int>(std::floor((c - 60.0f) / ve::kRegionSize)); };
+	const auto hi = [](float c) { return static_cast<int>(std::floor((c + 60.0f) / ve::kRegionSize)); };
 	int resident = 0;
-	for (int z = 0; z < cfg.bounds.size_regions.z; z++)
-		for (int y = 0; y < cfg.bounds.size_regions.y; y++)
-			for (int x = 0; x < cfg.bounds.size_regions.x; x++) {
-				const ve::IVec3 r{o.x + x, o.y + y, o.z + z};
+	int oracle = 0;
+	for (int z = lo(100.0f); z <= hi(100.0f); z++)
+		for (int y = lo(0.0f); y <= hi(0.0f); y++)
+			for (int x = lo(100.0f); x <= hi(100.0f); x++) {
+				const ve::IVec3 r{x, y, z};
 				const float d = oracle_distance(r, 100.0f, 0.0f, 100.0f);
+				if (d <= cfg.radius_m) oracle++;
 				const int slot = res.slot_of(r);
 				if (slot >= 0) {
 					resident++;
@@ -76,25 +82,36 @@ TEST_CASE("the settled set is exactly the in-radius regions") {
 				}
 			}
 	CHECK(resident == res.resident_count());
+	CHECK(resident == oracle); // at a standstill the set is exactly the in-radius regions
 	CHECK(resident > 8);
 }
 
-TEST_CASE("out-of-bounds regions are never resident") {
-	auto cfg = make_cfg(200.0f, 512, 64); // radius exceeds the world in every direction
+TEST_CASE("there is no world edge: regions at any coordinate can be resident") {
+	// The old 8x4x8 world box started at the origin, so negative coordinates used to clip
+	// and a radius larger than the box settled at exactly 8*4*8 residents. The box is gone:
+	// the settled set is the in-radius regions wherever the camera stands.
+	auto cfg = make_cfg(60.0f, 512, 64);
 	ve::RegionResidency res(cfg);
-	settle(res, 100.0f, 0.0f, 100.0f);
-	CHECK(res.slot_of({-1, 0, 0}) == -1);
-	CHECK(res.slot_of({8, 0, 0}) == -1);
-	CHECK(res.slot_of({0, -3, 0}) == -1);
-	CHECK(res.resident_count() == 8 * 4 * 8); // the whole world fits inside the radius
+	settle(res, 0.0f, 0.0f, 0.0f);
+	CHECK(res.slot_of({-1, 0, -1}) >= 0);
+	CHECK(res.slot_of({-2, 0, 0}) >= 0);
+	CHECK(res.slot_of({0, 0, -2}) >= 0);
+	int oracle = 0;
+	const auto lo = [](float c) { return static_cast<int>(std::floor((c - 60.0f) / ve::kRegionSize)); };
+	const auto hi = [](float c) { return static_cast<int>(std::floor((c + 60.0f) / ve::kRegionSize)); };
+	for (int z = lo(0.0f); z <= hi(0.0f); z++)
+		for (int y = lo(0.0f); y <= hi(0.0f); y++)
+			for (int x = lo(0.0f); x <= hi(0.0f); x++)
+				if (oracle_distance({x, y, z}, 0.0f, 0.0f, 0.0f) <= cfg.radius_m) oracle++;
+	CHECK(res.resident_count() == oracle);
 }
 
-TEST_CASE("map_index matches the bounds' dense region index") {
+TEST_CASE("map_index is the window cell index") {
 	auto cfg = make_cfg(60.0f, 256, 8);
 	ve::RegionResidency res(cfg);
 	const ve::ResidencyPlan p = res.update(100.0f, 0.0f, 100.0f);
 	REQUIRE_FALSE(p.loads.empty());
-	for (const auto &l : p.loads) CHECK(l.map_index == cfg.bounds.region_index(l.region));
+	for (const auto &l : p.loads) CHECK(l.map_index == cfg.window.index(l.region));
 }
 
 TEST_CASE("moving away evicts, and the freed slots are reused") {
@@ -130,7 +147,7 @@ TEST_CASE("an evict reports the slot and map index the loader was given") {
 	CHECK_FALSE(all.evicts.empty());
 	for (const auto &e : all.evicts) {
 		CHECK(before.count(e.slot) == 1);
-		CHECK(e.map_index == cfg.bounds.region_index(e.region));
+		CHECK(e.map_index == cfg.window.index(e.region));
 		CHECK(res.slot_of(e.region) == -1);
 	}
 }
@@ -158,12 +175,14 @@ TEST_CASE("with too few slots the closest regions win") {
 
 	// Nothing resident may be further away than something that was refused.
 	float worst_resident = 0.0f;
-	const ve::IVec3 o = cfg.bounds.origin_regions();
+	// No world box any more: scan the radius' region AABB instead of the old 8x4x8 box.
+	const auto lo = [](float c) { return static_cast<int>(std::floor((c - 120.0f) / ve::kRegionSize)); };
+	const auto hi = [](float c) { return static_cast<int>(std::floor((c + 120.0f) / ve::kRegionSize)); };
 	std::vector<float> refused;
-	for (int z = 0; z < cfg.bounds.size_regions.z; z++)
-		for (int y = 0; y < cfg.bounds.size_regions.y; y++)
-			for (int x = 0; x < cfg.bounds.size_regions.x; x++) {
-				const ve::IVec3 r{o.x + x, o.y + y, o.z + z};
+	for (int z = lo(100.0f); z <= hi(100.0f); z++)
+		for (int y = lo(0.0f); y <= hi(0.0f); y++)
+			for (int x = lo(100.0f); x <= hi(100.0f); x++) {
+				const ve::IVec3 r{x, y, z};
 				const float d = oracle_distance(r, 100.0f, 0.0f, 100.0f);
 				if (d > cfg.radius_m) continue;
 				if (res.slot_of(r) >= 0) worst_resident = std::max(worst_resident, d);
@@ -319,4 +338,58 @@ TEST_CASE("resident_regions reports exactly the resident set") {
 	res.resident_regions(&regions);
 	CHECK(static_cast<int>(regions.size()) == res.resident_count());
 	for (const ve::IVec3 &r : regions) CHECK(res.slot_of(r) >= 0);
+}
+
+TEST_CASE("residency has no world edge") {
+	ve::ResidencyConfig cfg;
+	cfg.window = ve::region_window_centered(50000.0f, 0.0f, 50000.0f,
+			ve::region_window_dim(60.0f, cfg.evict_margin));
+	cfg.radius_m = 60.0f;
+	cfg.max_region_slots = 256;
+	cfg.max_loads_per_frame = 8;
+	ve::RegionResidency res(cfg);
+	// 50 km from the origin, far outside any box the engine used to have.
+	settle(res, 50000.0f, 0.0f, 50000.0f);
+	CHECK(res.resident_count() > 0);
+}
+
+TEST_CASE("every load carries a valid window cell index") {
+	ve::ResidencyConfig cfg;
+	cfg.window = ve::region_window_centered(0.0f, 0.0f, 0.0f,
+			ve::region_window_dim(60.0f, cfg.evict_margin));
+	cfg.radius_m = 60.0f;
+	cfg.max_region_slots = 256;
+	cfg.max_loads_per_frame = 8;
+	ve::RegionResidency res(cfg);
+	for (int i = 0; i < 200; i++) {
+		const ve::ResidencyPlan p = res.update(0.0f, 0.0f, 0.0f);
+		for (const auto &e : p.loads) {
+			CHECK(e.map_index >= 0);
+			CHECK(e.map_index < cfg.window.cell_count());
+		}
+		if (p.loads.empty() && p.evicts.empty()) break;
+	}
+}
+
+TEST_CASE("no two simultaneously resident regions share a window cell") {
+	// Invariant 3, exercised along a travelling camera rather than at one standstill.
+	ve::ResidencyConfig cfg;
+	cfg.radius_m = 96.0f;
+	cfg.max_region_slots = 512;
+	cfg.max_loads_per_frame = 8;
+	const int dim = ve::region_window_dim(cfg.radius_m, cfg.evict_margin);
+	cfg.window = ve::region_window_centered(0.0f, 0.0f, 0.0f, dim);
+	ve::RegionResidency res(cfg);
+	for (int step = 0; step < 400; step++) {
+		const float x = float(step) * 12.0f; // ~5 km of travel
+		res.set_window(ve::region_window_centered(x, 40.0f, 0.0f, dim));
+		res.update(x, 40.0f, 0.0f);
+		std::vector<ve::IVec3> regions;
+		res.resident_regions(&regions);
+		std::set<int> cells;
+		for (const ve::IVec3 &r : regions) {
+			const int idx = res.window().index(r);
+			CHECK(cells.insert(idx).second); // false means two residents aliased
+		}
+	}
 }

@@ -50,7 +50,7 @@ void RegionResidency::release(IVec3 region, int slot, ResidencyPlan *plan) {
 	by_region_.erase(key(region));
 	slot_used_[slot] = 0;
 	free_slots_.push_back(slot);
-	plan->evicts.push_back({region, slot, cfg_.bounds.region_index(region)});
+	plan->evicts.push_back({region, slot, cfg_.window.index(region)});
 }
 
 int RegionResidency::slot_cost(const AtlasBudget &budget, int slot) const {
@@ -84,11 +84,9 @@ ResidencyPlan RegionResidency::update(float cx, float cy, float cz, const AtlasB
 		}
 	}
 
-	// 2. Collect in-bounds, in-radius candidates that are not resident yet. The scan is over
-	//    the radius' region AABB, not the whole world: at the shipping radius that is ~500
-	//    cells, and the world holds a million.
-	const IVec3 o = cfg_.bounds.origin_regions();
-	const IVec3 sz = cfg_.bounds.size_regions;
+	// 2. Collect in-radius candidates that are not resident yet. The scan is over
+	//    the radius' region AABB. There is no world to clamp against any more;
+	//    the radius is the only bound, and at the shipping radius that is ~500 cells.
 	const auto span = [](float lo, float hi) {
 		return std::make_pair(static_cast<int>(std::floor(lo / kRegionSize)),
 				static_cast<int>(std::floor(hi / kRegionSize)));
@@ -99,9 +97,9 @@ ResidencyPlan RegionResidency::update(float cx, float cy, float cz, const AtlasB
 
 	struct Cand { float dist; IVec3 region; };
 	std::vector<Cand> cands;
-	for (int z = std::max(rz.first, o.z); z <= std::min(rz.second, o.z + sz.z - 1); z++)
-		for (int y = std::max(ry.first, o.y); y <= std::min(ry.second, o.y + sz.y - 1); y++)
-			for (int x = std::max(rx.first, o.x); x <= std::min(rx.second, o.x + sz.x - 1); x++) {
+	for (int z = rz.first; z <= rz.second; z++)
+		for (int y = ry.first; y <= ry.second; y++)
+			for (int x = rx.first; x <= rx.second; x++) {
 				const IVec3 r{x, y, z};
 				const float d = region_distance(r, cx, cy, cz);
 				if (d > cfg_.radius_m) continue;
@@ -170,7 +168,7 @@ ResidencyPlan RegionResidency::update(float cx, float cy, float cz, const AtlasB
 		slot_used_[slot] = 1;
 		slot_region_[slot] = c.region;
 		by_region_[key(c.region)] = slot;
-		plan.loads.push_back({c.region, slot, cfg_.bounds.region_index(c.region)});
+		plan.loads.push_back({c.region, slot, cfg_.window.index(c.region)});
 		available -= budget.per_load;
 	}
 	return plan;

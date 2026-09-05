@@ -20,8 +20,6 @@ func make_world() -> VoxelWorld:
 	w.use_local_device = true
 	w.atlas_bricks = ATLAS
 	w.max_region_slots = REGION_SLOTS
-	w.world_origin_bricks = ORIGIN
-	w.world_size_regions = REGIONS
 	w.residency_radius_m = RADIUS
 	add_child(w)
 	w.ensure_initialized()
@@ -92,8 +90,10 @@ func test_moving_the_camera_streams_the_new_neighbourhood_and_recycles_slots() -
 	assert_int(s["overflow_ever"]).is_equal(0)
 	var free_now: int = w.hooks().debug_atlas_stats()["free_slots"]
 	# used_now < used_before + slack: slack tolerates terrain-density variation between the
-	# two spots; a leak of the whole old neighbourhood (~6k bricks) would blow past it.
-	assert_int(free_now).is_greater(ATLAS.x * ATLAS.y * ATLAS.z - used_before - 2048)
+	# two spots (measured 3.4k: the second ball holds more shell); a leak of the whole old
+	# neighbourhood (~8.6k bricks) would still blow past it, and a round trip returns to the
+	# exact brick count, so recycling is proven separately.
+	assert_int(free_now).is_greater(ATLAS.x * ATLAS.y * ATLAS.z - used_before - 4096)
 
 func make_op(type: int, material: int, pos: Vector3, radius: float) -> PackedByteArray:
 	var b := StreamPeerBuffer.new()
@@ -119,8 +119,6 @@ func test_an_oversubscribed_atlas_keeps_slots_for_edits() -> void:
 	w.use_local_device = true
 	w.atlas_bricks = SMALL_ATLAS
 	w.max_region_slots = REGION_SLOTS
-	w.world_origin_bricks = ORIGIN
-	w.world_size_regions = REGIONS
 	w.residency_radius_m = RADIUS
 	add_child(w)
 	w.ensure_initialized()
@@ -189,8 +187,6 @@ func test_flight_never_drops_the_bricks_it_is_streaming_in() -> void:
 	w.use_local_device = true
 	w.atlas_bricks = SMALL_ATLAS
 	w.max_region_slots = 64 # region slots are plentiful: the ATLAS is the binding pool
-	w.world_origin_bricks = ORIGIN
-	w.world_size_regions = REGIONS
 	w.residency_radius_m = RADIUS
 	add_child(w)
 	w.ensure_initialized()
@@ -250,8 +246,6 @@ func test_a_starved_atlas_heals_instead_of_keeping_the_holes() -> void:
 	w.use_local_device = true
 	w.atlas_bricks = SMALL_ATLAS
 	w.max_region_slots = REGION_SLOTS
-	w.world_origin_bricks = ORIGIN
-	w.world_size_regions = REGIONS
 	w.residency_radius_m = RADIUS
 	add_child(w)
 	w.ensure_initialized()
@@ -319,8 +313,6 @@ func test_job_overflow_recovers_via_force_regen() -> void:
 	w.atlas_bricks = ATLAS
 	w.max_region_slots = REGION_SLOTS
 	w.max_brick_jobs = 8
-	w.world_origin_bricks = ORIGIN
-	w.world_size_regions = REGIONS
 	w.residency_radius_m = RADIUS
 	add_child(w)
 	w.ensure_initialized()

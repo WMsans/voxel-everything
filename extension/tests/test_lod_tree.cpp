@@ -7,13 +7,6 @@
 
 namespace {
 
-ve::WorldBounds demo_bounds() {
-	ve::WorldBounds b;
-	b.origin_bricks = {0, -64, 0};
-	b.size_regions = {64, 8, 64}; // 1638.4 x 204.8 x 1638.4 m
-	return b;
-}
-
 // Looking down -Z from just above the terrain, which sits at y ~ 51.2 (M2 errata 9).
 ve::LodCamera cam_at(float x, float y, float z) {
 	const float pos[3] = {x, y, z};
@@ -36,14 +29,13 @@ struct AllOccluded : ve::LodOcclusion {
 // is empty, and the other root chunks are empty too, so the normal walk can descend to the
 // target without generating a flood of sibling requests; the target itself is left for the
 // caller to mark dirty.
-void make_ready_path(ve::LodTree *t, const ve::WorldBounds &bounds, const ve::IVec3 &root,
+void make_ready_path(ve::LodTree *t, float stream_radius_m, const ve::IVec3 &root,
 		const ve::IVec3 &target) {
-	ve::IVec3 rlo, rhi;
-	ve::lod_root_range(bounds, &rlo, &rhi);
-	for (int z = rlo.z; z <= rhi.z; z++)
-		for (int y = rlo.y; y <= rhi.y; y++)
-			for (int x = rlo.x; x <= rhi.x; x++)
-				if (!(ve::IVec3{x, y, z} == root)) t->note_empty(ve::kLodLevels - 1, {x, y, z});
+	const float cam[3] = {0.0f, 62.0f, 0.0f};
+	std::vector<ve::IVec3> roots;
+	ve::lod_roots_in_radius(cam, stream_radius_m, &roots);
+	for (const ve::IVec3 &r : roots)
+		if (!(r == root)) t->note_empty(ve::kLodLevels - 1, r);
 
 	ve::IVec3 child = target;
 	for (int level = 0; level < ve::kLodLevels - 1; level++) {
@@ -64,12 +56,12 @@ void make_ready_path(ve::LodTree *t, const ve::WorldBounds &bounds, const ve::IV
 
 // Builds a fully ready level-1 chunk: all eight level-0 children are ready with one page,
 // every ancestor on the path to the root is ready, and every other root is empty.
-void make_ready_full_level0(ve::LodTree *t, const ve::WorldBounds &bounds,
+void make_ready_full_level0(ve::LodTree *t, float stream_radius_m,
 		const ve::IVec3 &l1) {
 	ve::IVec3 root = l1;
 	for (int i = 1; i < ve::kLodLevels - 1; i++) root = ve::lod_parent(root);
 	const ve::IVec3 first_child = ve::lod_child_base(l1);
-	make_ready_path(t, bounds, root, first_child);
+	make_ready_path(t, stream_radius_m, root, first_child);
 	const ve::IVec3 base = first_child;
 	for (int k = 0; k < 8; k++) {
 		const ve::IVec3 child{base.x + (k & 1), base.y + ((k >> 1) & 1), base.z + ((k >> 2) & 1)};
@@ -94,7 +86,7 @@ void settle(ve::LodTree *t, const ve::LodCamera &c, const ve::LodOcclusion *occ,
 
 TEST_CASE("the roots come from the world bounds and start unknown") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	ve::LodWalkResult r;
 	NoOcclusion occ;
@@ -110,7 +102,7 @@ TEST_CASE("the roots come from the world bounds and start unknown") {
 // to preserve, so it is checked on every frame of a settling run, not only at the end.
 TEST_CASE("the emitted cut never overlaps and never leaves a gap under a drawn parent") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -138,7 +130,7 @@ TEST_CASE("the emitted cut never overlaps and never leaves a gap under a drawn p
 
 TEST_CASE("a node is only descended into when all eight children are ready") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -165,7 +157,7 @@ TEST_CASE("a node is only descended into when all eight children are ready") {
 // the sibling test, otherwise a hole in the terrain would freeze the whole subtree.
 TEST_CASE("an empty child counts as ready and draws nothing") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -181,7 +173,7 @@ TEST_CASE("an empty child counts as ready and draws nothing") {
 // Levels 5, 6 and 7 are permanently resident: turning around shows coarse terrain, not sky.
 TEST_CASE("coarse levels are never evicted and fine ones are") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	settle(&t, cam_at(800.0f, 60.0f, 800.0f), &occ, 30);
@@ -195,7 +187,7 @@ TEST_CASE("coarse levels are never evicted and fine ones are") {
 
 TEST_CASE("a marked node is never evicted for age") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -211,7 +203,7 @@ TEST_CASE("a marked node is never evicted for age") {
 // wrongly hidden chunk would be a hole that heals only when the camera moves.
 TEST_CASE("occlusion stops requests but never removes a drawn chunk") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion none;
 	AllOccluded all;
@@ -233,7 +225,7 @@ TEST_CASE("occlusion stops requests but never removes a drawn chunk") {
 // Stale beats missing (engine spec section 8).
 TEST_CASE("an edit re-requests a chunk without un-drawing it") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -262,8 +254,11 @@ TEST_CASE("an edit re-requests a chunk without un-drawing it") {
 // off-screen dirty node survive the per-walk cap instead of being starved at the tail.
 TEST_CASE("dirty sweep requests are deduped before the cap and not starved") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
-	cfg.max_requests_per_walk = 2;
+	cfg.stream_radius_m = 1638.4f;
+	// Box gone: the camera-centred root forest holds more roots than the single old root,
+	// so walk 1 emits four requests instead of two. The cap stays exact-fit, so the dedup
+	// below still proves the duplicate would have starved the off-screen node.
+	cfg.max_requests_per_walk = 4;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -273,7 +268,7 @@ TEST_CASE("dirty sweep requests are deduped before the cap and not starved") {
 	// normal walk, so only the dirty sweep asks for it.
 	const ve::IVec3 drawn_coord = ve::lod_chunk_of_point(0, 800.0f, 51.0f, 650.0f);
 	const ve::IVec3 root = ve::lod_chunk_of_point(ve::kLodLevels - 1, 800.0f, 51.0f, 650.0f);
-	make_ready_path(&t, cfg.bounds, root, drawn_coord);
+	make_ready_path(&t, 1638.4f, root, drawn_coord);
 	t.note_ready_dirty(0, drawn_coord);
 
 	const int off_level = 2;
@@ -311,7 +306,7 @@ TEST_CASE("dirty sweep requests are deduped before the cap and not starved") {
 // pressure could never evict it.
 TEST_CASE("dirty sweep requests do not mark off-screen nodes resident") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -346,7 +341,7 @@ TEST_CASE("dirty sweep requests do not mark off-screen nodes resident") {
 // simulates that branch at the tree level.
 TEST_CASE("a refused rebuild with resident pages stays drawable and is retried") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -390,7 +385,7 @@ TEST_CASE("a refused rebuild with resident pages stays drawable and is retried")
 // Direct unit test for the ready-with-dirty transition used by a refused/failed rebuild.
 TEST_CASE("note_ready_dirty keeps old pages drawable and dirty for retry") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -423,7 +418,7 @@ TEST_CASE("note_ready_dirty keeps old pages drawable and dirty for retry") {
 // is never re-requested (empty is a terminal answer).
 TEST_CASE("an empty result after a resident chunk stops drawing it and clears the page range") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -450,7 +445,7 @@ TEST_CASE("an empty result after a resident chunk stops drawing it and clears th
 
 TEST_CASE("requests are capped and ordered largest first") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	cfg.max_requests_per_walk = 4;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
@@ -467,7 +462,7 @@ TEST_CASE("requests are capped and ordered largest first") {
 
 TEST_CASE("an op smaller than half a cell does not dirty that level") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -485,7 +480,7 @@ TEST_CASE("an op smaller than half a cell does not dirty that level") {
 // so building it burns pages to draw nothing (spec section 6.4).
 TEST_CASE("chunks entirely inside the fade start are never requested") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -504,7 +499,7 @@ TEST_CASE("chunks entirely inside the fade start are never requested") {
 // leaves a permanent hole.
 TEST_CASE("a failed build is retried") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -525,7 +520,7 @@ TEST_CASE("a failed build is retried") {
 // with duplicates and nothing else is ever built.
 TEST_CASE("a building node is not re-requested") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -541,7 +536,7 @@ TEST_CASE("a building node is not re-requested") {
 // drawing its old page range. The build-in-flight bit is separate from drawability.
 TEST_CASE("a ready node stays drawable while a rebuild is in flight") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -572,7 +567,7 @@ TEST_CASE("a ready node stays drawable while a rebuild is in flight") {
 // must survive note_ready, so the next walk re-requests the node instead of dropping the edit.
 TEST_CASE("an edit during an in-flight build survives note_ready") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -614,7 +609,7 @@ TEST_CASE("an edit during an in-flight build survives note_ready") {
 // the node terminal kLodEmpty with dirty=false, permanently discarding the edit.
 TEST_CASE("an edit during an in-flight build survives stale note_empty") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -651,12 +646,12 @@ TEST_CASE("an edit during an in-flight build survives stale note_empty") {
 
 TEST_CASE("near-dense radius forces level 0 inside the radius even when SSE would accept level 1") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
 	const ve::IVec3 l1 = ve::lod_chunk_of_point(1, 800.0f, 51.0f, 500.0f);
-	make_ready_full_level0(&t, cfg.bounds, l1);
+	make_ready_full_level0(&t, 1638.4f, l1);
 
 	float lo[3], hi[3];
 	ve::lod_chunk_aabb(1, l1, lo, hi);
@@ -678,12 +673,12 @@ TEST_CASE("near-dense radius forces level 0 inside the radius even when SSE woul
 
 TEST_CASE("outside the near-dense radius the SSE threshold still decides") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
 	const ve::IVec3 l1 = ve::lod_chunk_of_point(1, 800.0f, 51.0f, 450.0f);
-	make_ready_full_level0(&t, cfg.bounds, l1);
+	make_ready_full_level0(&t, 1638.4f, l1);
 
 	float lo[3], hi[3];
 	ve::lod_chunk_aabb(1, l1, lo, hi);
@@ -705,12 +700,12 @@ TEST_CASE("outside the near-dense radius the SSE threshold still decides") {
 
 TEST_CASE("a starved arena refuses pages without dropping the near-dense walk's draw set") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
 	const ve::IVec3 l1 = ve::lod_chunk_of_point(1, 800.0f, 51.0f, 500.0f);
-	make_ready_full_level0(&t, cfg.bounds, l1);
+	make_ready_full_level0(&t, 1638.4f, l1);
 
 	ve::LodWalkResult r;
 	t.walk(c, &occ, 1u, &r);
@@ -776,7 +771,7 @@ TEST_CASE("page draws are emitted from the actual non-contiguous page list") {
 // Same overlap invariant the camera cut is held to, on every frame of a settling run.
 TEST_CASE("the sun's cut never overlaps itself") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -805,7 +800,7 @@ TEST_CASE("the sun's cut never overlaps itself") {
 // beside and behind the camera still has to cast.
 TEST_CASE("the sun's cut covers ground the camera cut culled away") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -832,7 +827,7 @@ TEST_CASE("the sun's cut covers ground the camera cut culled away") {
 // texel of quantisation rather than a level's worth of tent filtering.
 TEST_CASE("the sun's cut picks the camera's level for ground the camera draws") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -853,7 +848,7 @@ TEST_CASE("the sun's cut picks the camera's level for ground the camera draws") 
 // ready ancestor rather than emitting nothing: unseen terrain still casts, just coarsely.
 TEST_CASE("the sun's cut stops at the coarsest ready node when nothing finer is resident") {
 	ve::LodTreeConfig cfg;
-	cfg.bounds = demo_bounds();
+	cfg.stream_radius_m = 1638.4f;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
@@ -867,4 +862,73 @@ TEST_CASE("the sun's cut stops at the coarsest ready node when nothing finer is 
 	for (const ve::LodDrawItem &d : r.shadow_draws)
 		if (d.level == root.level && d.coord == root.coord) emitted++;
 	CHECK(emitted == 1);
+}
+
+TEST_CASE("the walk builds a root forest around the camera, anywhere in the world") {
+	ve::LodTreeConfig cfg;
+	cfg.stream_radius_m = 1638.4f;
+	ve::LodTree tree(cfg);
+	NoOcclusion occ;
+	ve::LodWalkResult out;
+	// 50 km from the origin: outside every box the engine ever had.
+	tree.walk(cam_at(50000.0f, 62.0f, 50000.0f), &occ, 1, &out);
+	CHECK(!out.requests.empty());
+	// Every request must sit within the stream radius of the camera.
+	const float cam[3] = {50000.0f, 62.0f, 50000.0f};
+	for (const ve::LodBuildRequest &q : out.requests)
+		CHECK(ve::lod_chunk_distance(q.level, q.coord, cam) <= cfg.stream_radius_m);
+}
+
+TEST_CASE("a larger stream radius asks for more roots") {
+	NoOcclusion occ;
+	ve::LodWalkResult small, large;
+	ve::LodTreeConfig a; a.stream_radius_m = 1638.4f;
+	ve::LodTreeConfig b; b.stream_radius_m = 4000.0f;
+	ve::LodTree ta(a), tb(b);
+	ta.walk(cam_at(0.0f, 62.0f, 0.0f), &occ, 1, &small);
+	tb.walk(cam_at(0.0f, 62.0f, 0.0f), &occ, 1, &large);
+	CHECK(large.requests.size() >= small.requests.size());
+}
+
+TEST_CASE("coarse nodes outside the stream radius are evictable") {
+	ve::LodTreeConfig cfg;
+	cfg.stream_radius_m = 1638.4f;
+	cfg.evict_frames = 10;
+	ve::LodTree tree(cfg);
+	NoOcclusion occ;
+	ve::LodWalkResult out;
+
+	// Walk at the origin so nodes near it are marked at frame 1.
+	tree.walk(cam_at(0.0f, 62.0f, 0.0f), &occ, 1, &out);
+	tree.note_ready(ve::kLodLevels - 1, {0, 0, 0}, 0, 1);
+	const int after_first = tree.node_count();
+	CHECK(after_first > 0);
+
+	// Travel far away and let the age rule run. The node at the origin is a level-7 node,
+	// which the old exemption made permanently immortal.
+	for (uint32_t f = 2; f < 40; f++) {
+		ve::LodWalkResult w;
+		tree.walk(cam_at(50000.0f, 62.0f, 50000.0f), &occ, f, &w);
+	}
+	std::vector<ve::LodDrawItem> evicted;
+	tree.collect_evictions(40, 0, &evicted);
+	CHECK(std::any_of(evicted.begin(), evicted.end(),
+			[](const ve::LodDrawItem &d) { return d.level == ve::kLodLevels - 1; }));
+}
+
+TEST_CASE("coarse nodes inside the stream radius keep their exemption") {
+	ve::LodTreeConfig cfg;
+	cfg.stream_radius_m = 1638.4f;
+	cfg.evict_frames = 10;
+	ve::LodTree tree(cfg);
+	NoOcclusion occ;
+	ve::LodWalkResult out;
+	tree.walk(cam_at(0.0f, 62.0f, 0.0f), &occ, 1, &out);
+	tree.note_ready(ve::kLodLevels - 1, {0, 0, 0}, 0, 1);
+	// Frame 200 with no further walks: the node is stale by age but still inside the radius.
+	std::vector<ve::LodDrawItem> evicted;
+	tree.collect_evictions(200, 0, &evicted);
+	CHECK(std::none_of(evicted.begin(), evicted.end(), [](const ve::LodDrawItem &d) {
+		return d.level == ve::kLodLevels - 1 && d.coord.x == 0 && d.coord.z == 0;
+	}));
 }

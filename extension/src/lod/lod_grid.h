@@ -1,6 +1,7 @@
 #pragma once
 #include "generator/edit_ops.h"
 #include "world/region.h"
+#include <vector>
 
 namespace ve {
 
@@ -81,9 +82,12 @@ IVec3 lod_child_base(IVec3 c);
 float lod_chunk_distance(int level, IVec3 c, const float p[3]);
 float lod_chunk_far_distance(int level, IVec3 c, const float p[3]);
 
-bool lod_chunk_in_bounds(const WorldBounds &b, int level, IVec3 c);
-// Inclusive root-level chunk range covering the whole world.
-void lod_root_range(const WorldBounds &b, IVec3 *lo, IVec3 *hi);
+// The root-level chunks intersecting a sphere of `radius_m` around the camera. This is what
+// replaced the world AABB: an unbounded world has no edge to enumerate from, so the forest of
+// octree roots follows the camera. Air roots cost one build each to discover and then prune
+// their whole subtree (LodTree::visit treats kLodEmpty as terminal), so a generous radius is
+// paid for in one-time builds, not per frame.
+void lod_roots_in_radius(const float cam_pos[3], float radius_m, std::vector<IVec3> *out);
 
 // Inclusive chunk range whose stored quads an op can move. LoD field consumers use the
 // shared lattice pad (or the larger two-cell LoD overlap pad) so narrow-band influence is not

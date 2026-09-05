@@ -24,10 +24,12 @@ enum CellState : uint8_t {
 	kCellFull = 3,    // no air sample at all
 };
 
-// Which cells hold matter, kept for the whole world and for as long as the world lives, in
-// sparse per-region blocks. Regions arrive from the GPU mark pass (Task 8) and are never
-// evicted from here even when the region leaves the atlas: 8 KB per region is cheap next to
-// re-probing, and connectivity windows routinely reach past the residency ball.
+// Which cells hold matter, kept in sparse per-region blocks. Regions arrive from the GPU mark
+// pass and are retained while they are near the camera: a region's occupancy is recomputable
+// from the mark pass against edits and overrides, so dropping a distant block is lossless, and
+// in an unbounded world retaining every block ever probed grows with distance travelled
+// (~92 MB per 4 km). A dropped block reads back as kCellUnknown -- "nobody has looked" -- which
+// is the state this grid must never confuse with air.
 //
 // Not thread-safe. It is written and read on the main thread only; the render thread hands
 // blocks over through VoxelWorld's occupancy inbox (Task 8).
@@ -50,6 +52,10 @@ public:
 	int64_t block_seq(IVec3 region) const; // -1 when the region has no block
 	int region_count() const { return static_cast<int>(blocks_.size()); }
 	void clear();
+
+	// Drop every block whose region lies further than retention_m from the point. Returns the
+	// number dropped. Main thread only, like every other method here.
+	int evict_outside(float cx, float cy, float cz, float retention_m);
 
 	// 0..kRegionBrickCount-1, x fastest then y then z, floor-modulo so negative cells land
 	// on the last cell of the region below rather than off the front of the block.

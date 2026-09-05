@@ -63,26 +63,25 @@ float lod_chunk_far_distance(int level, IVec3 c, const float p[3]) {
 	return std::sqrt(d2);
 }
 
-bool lod_chunk_in_bounds(const WorldBounds &b, int level, IVec3 c) {
-	float wlo[3], whi[3];
-	b.aabb(wlo, whi);
-	float clo[3], chi[3];
-	lod_chunk_aabb(level, c, clo, chi);
-	for (int a = 0; a < 3; a++) {
-		if (chi[a] <= wlo[a] || clo[a] >= whi[a]) return false;
-	}
-	return true;
-}
-
-void lod_root_range(const WorldBounds &b, IVec3 *lo, IVec3 *hi) {
-	float wlo[3], whi[3];
-	b.aabb(wlo, whi);
+void lod_roots_in_radius(const float cam_pos[3], float radius_m, std::vector<IVec3> *out) {
+	out->clear();
+	if (!cam_pos || !out || radius_m <= 0.0f) return;
 	const int top = kLodLevels - 1;
-	*lo = lod_chunk_of_point(top, wlo[0], wlo[1], wlo[2]);
-	// The world's maximum corner is exclusive; nudge inside so a world whose extent lands
-	// exactly on a chunk boundary does not claim an extra empty root on every axis.
-	const float e = lod_chunk_size(top) * 1e-4f;
-	*hi = lod_chunk_of_point(top, whi[0] - e, whi[1] - e, whi[2] - e);
+	const float s = lod_chunk_size(top);
+	const IVec3 lo{static_cast<int>(std::floor((cam_pos[0] - radius_m) / s)),
+			static_cast<int>(std::floor((cam_pos[1] - radius_m) / s)),
+			static_cast<int>(std::floor((cam_pos[2] - radius_m) / s))};
+	const IVec3 hi{static_cast<int>(std::floor((cam_pos[0] + radius_m) / s)),
+			static_cast<int>(std::floor((cam_pos[1] + radius_m) / s)),
+			static_cast<int>(std::floor((cam_pos[2] + radius_m) / s))};
+	for (int z = lo.z; z <= hi.z; z++)
+		for (int y = lo.y; y <= hi.y; y++)
+			for (int x = lo.x; x <= hi.x; x++) {
+				const IVec3 c{x, y, z};
+				// The sphere test, not the AABB: it trims roughly half the corner candidates.
+				if (lod_chunk_distance(top, c, cam_pos) > radius_m) continue;
+				out->push_back(c);
+			}
 }
 
 void op_lod_chunk_range(const EditOp &op, int level, IVec3 *lo, IVec3 *hi) {

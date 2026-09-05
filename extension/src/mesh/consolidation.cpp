@@ -198,7 +198,7 @@ void ConsolidationCoordinator::pump_async() {
 			consolidation_slots_.push_back(slot);
 		}
 		for (size_t i = 0; i < result.bricks.size(); i++) {
-			const int bi = ve::WorldBounds::brick_index_in_region(result.bricks[i]);
+			const int bi = ve::brick_index_in_region(result.bricks[i]);
 			consolidation_entries_.erase(std::remove_if(consolidation_entries_.begin(),
 					consolidation_entries_.end(), [bi](const std::pair<int, int> &entry) {
 						return entry.first == bi;
@@ -314,7 +314,7 @@ void ConsolidationCoordinator::pump_async() {
 				const int slot = store_->overrides()->slot_of(brick);
 				if (slot < 0) continue;
 				consolidation_old_entries_.emplace_back(
-						ve::WorldBounds::brick_index_in_region(brick), slot);
+						ve::brick_index_in_region(brick), slot);
 				consolidation_old_slots_.push_back(slot);
 				consolidation_old_bricks_.push_back(*store_->overrides()->data(slot));
 			}
@@ -448,7 +448,7 @@ bool ConsolidationCoordinator::force_region(ve::IVec3 r) {
 				const ve::IVec3 b{base.x + x, base.y + y, base.z + z};
 				const int slot = store_->overrides()->slot_of(b);
 				if (slot < 0) continue;
-				old_entries.emplace_back(ve::WorldBounds::brick_index_in_region(b), slot);
+				old_entries.emplace_back(ve::brick_index_in_region(b), slot);
 				old_slots.push_back(slot);
 				old_bricks.push_back(*store_->overrides()->data(slot));
 			}
@@ -487,7 +487,7 @@ bool ConsolidationCoordinator::force_region(ve::IVec3 r) {
 	std::vector<std::pair<int, int>> entries;
 	entries.reserve(bricks.size());
 	for (size_t i = 0; i < bricks.size(); i++)
-		entries.emplace_back(ve::WorldBounds::brick_index_in_region(bricks[i]), slots[i]);
+		entries.emplace_back(ve::brick_index_in_region(bricks[i]), slots[i]);
 
 	// Stage render bytes first and check every upload. The old CPU bytes/table remain the
 	// rollback source until both devices have published the complete replacement.

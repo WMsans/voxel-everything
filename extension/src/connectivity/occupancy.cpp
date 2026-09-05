@@ -1,4 +1,5 @@
 #include "connectivity/occupancy.h"
+#include "world/residency.h"
 
 namespace ve {
 
@@ -39,13 +40,13 @@ void OccupancyGrid::set_block(IVec3 region, const uint8_t *bytes, int64_t seq) {
 }
 
 void OccupancyGrid::set_cell(IVec3 cell, CellState s, int64_t seq) {
-	Block *b = ensure(WorldBounds::region_of_brick(cell));
+	Block *b = ensure(ve::region_of_brick(cell));
 	write_packed(b->bytes.data(), cell_index_in_region(cell), static_cast<uint8_t>(s));
 	if (seq > b->seq) b->seq = seq;
 }
 
 CellState OccupancyGrid::state(IVec3 cell) const {
-	const auto it = blocks_.find(key(WorldBounds::region_of_brick(cell)));
+	const auto it = blocks_.find(key(ve::region_of_brick(cell)));
 	if (it == blocks_.end()) return kCellUnknown;
 	return static_cast<CellState>(read_packed(it->second.bytes.data(),
 			cell_index_in_region(cell)));
@@ -62,6 +63,20 @@ int64_t OccupancyGrid::block_seq(IVec3 region) const {
 
 void OccupancyGrid::clear() {
 	blocks_.clear();
+}
+
+int OccupancyGrid::evict_outside(float cx, float cy, float cz, float retention_m) {
+	int dropped = 0;
+	for (auto it = blocks_.begin(); it != blocks_.end();) {
+		const IVec3 r{it->first.x, it->first.y, it->first.z};
+		if (RegionResidency::region_distance(r, cx, cy, cz) > retention_m) {
+			it = blocks_.erase(it);
+			dropped++;
+		} else {
+			++it;
+		}
+	}
+	return dropped;
 }
 
 } // namespace ve

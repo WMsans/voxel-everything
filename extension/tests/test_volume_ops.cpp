@@ -196,7 +196,7 @@ TEST_CASE("a volume op adds exactly what its lattice holds") {
 
 TEST_CASE("raycast with volumes misses the lattice apron and only hits solid") {
 	AnalyticGenerator gen;
-	EditLog log(WorldBounds{{0, -64, 0}, {64, 8, 64}});
+	EditLog log;
 	VolumeSet volumes;
 	const int slot = volumes.allocate();
 	REQUIRE(slot == 0);
@@ -224,7 +224,7 @@ TEST_CASE("raycast with volumes misses the lattice apron and only hits solid") {
 
 TEST_CASE("raycast with an empty VolumeStore keeps the pure-field hit_eps behavior") {
 	AnalyticGenerator gen;
-	EditLog log(WorldBounds{{0, -64, 0}, {64, 8, 64}});
+	EditLog log;
 	VolumeSet volumes; // non-null, but no volume op exists anywhere in the log
 	// The ray starts at y = 47.603, where the field is +0.0262, and the tracer's
 	// min_step lands it at y = 47.578, where the field is +0.00119 -- positive, but
@@ -246,8 +246,7 @@ TEST_CASE("raycast with an empty VolumeStore keeps the pure-field hit_eps behavi
 
 TEST_CASE("raycast with a released volume slot keeps the pure-field hit_eps behavior") {
 	AnalyticGenerator gen;
-	const WorldBounds bounds{{0, -64, 0}, {64, 8, 64}};
-	EditLog log(bounds);
+	EditLog log;
 	VolumeSet volumes;
 	const int slot = volumes.allocate();
 	REQUIRE(slot == 0);
@@ -259,7 +258,7 @@ TEST_CASE("raycast with a released volume slot keeps the pure-field hit_eps beha
 	const EditOp op = make_volume_add(slot, op_origin, 0.05f, 32);
 	REQUIRE_FALSE(log.append(op).touched.empty());
 
-	const EditLog no_op_log(bounds);
+	const EditLog no_op_log;
 	const float o[3] = {100.0f, 47.603f, 100.0f};
 	const float d[3] = {0.0f, -1.0f, 0.0f};
 	const RayHit no_op = raycast(gen, no_op_log, o, d, 2.0f);

@@ -14,8 +14,6 @@ func make_world() -> VoxelWorld:
 	w.use_local_device = true
 	w.atlas_bricks = ATLAS
 	w.max_region_slots = REGION_SLOTS
-	w.world_origin_bricks = Vector3i(0, -64, 0)
-	w.world_size_regions = REGIONS
 	add_child(w)
 	assert_bool(w.hooks().debug_init_atlas()).is_true()
 	return w
@@ -138,8 +136,6 @@ func test_exhausting_the_atlas_sets_the_overflow_bit_and_does_not_crash() -> voi
 	w.use_local_device = true
 	w.atlas_bricks = Vector3i(2, 2, 2)   # 8 slots — far too few
 	w.max_region_slots = REGION_SLOTS
-	w.world_origin_bricks = Vector3i(0, -64, 0)
-	w.world_size_regions = REGIONS
 	add_child(w)
 	assert_bool(w.hooks().debug_init_atlas()).is_true()
 	mark_whole_region(w, REGION, SLOT, false)

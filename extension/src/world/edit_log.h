@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <vector>
 
@@ -14,6 +15,10 @@ namespace ve {
 // caller logs it — spec §8's fail-soft rule, "warn + no-op".
 inline constexpr int kMaxRegionOps = 256;
 inline constexpr int kConsolidateAtOps = 192;
+// L7 is one 1638.4 m chunk (64 regions), and gather_lod_ops pads it by two L7 cells
+// before this helper adds the lattice pad. Keep that valid query room while bounding a
+// hostile AABB to at most 128^3 region-map lookups; the edit-append guard remains 64.
+inline constexpr int kMaxCollectorRegionSpan = 128;
 
 // The ordered CSG op lists that turn G into the current world (spec §2). An op is appended
 // to EVERY region it touches, so reconstructing any brick needs only that brick's own
@@ -23,9 +28,12 @@ public:
 	struct AppendResult {
 		std::vector<IVec3> touched;  // in-bounds regions whose list grew
 		std::vector<IVec3> rejected; // in-bounds regions already holding kMaxRegionOps
+		// Set when the op's region span exceeds ve::kMaxOpRegionSpan: the op is refused
+		// outright rather than iterated, so touched and rejected stay empty.
+		bool oversized = false;
 	};
 
-	explicit EditLog(const WorldBounds &bounds) : bounds_(bounds) {}
+	EditLog() = default;
 
 	AppendResult append(const EditOp &op);
 	const std::vector<EditOp> &ops(IVec3 region) const;
@@ -38,7 +46,6 @@ public:
 	// override on the next bake.
 	void clear_region_through(IVec3 region, uint64_t seq);
 	int region_count() const { return static_cast<int>(lists_.size()); }
-	const WorldBounds &bounds() const { return bounds_; }
 	void clear() {
 		lists_.clear();
 		seqs_.clear();
@@ -55,7 +62,6 @@ private:
 		}
 	};
 
-	WorldBounds bounds_;
 	std::map<Key, std::vector<EditOp>> lists_;
 	std::map<Key, std::vector<uint64_t>> seqs_;
 	uint64_t next_seq_ = 1;
@@ -75,21 +81,36 @@ private:
 // distinct sequences and are therefore preserved as separate ops.
 inline void collect_ops_for_aabb(const EditLog &log, const float lo[3], const float hi[3],
 		std::vector<EditOp> *out) {
+	if (!out) return;
 	out->clear();
 	if (!lo || !hi || lo[0] > hi[0] || lo[1] > hi[1] || lo[2] > hi[2]) return;
+	for (int a = 0; a < 3; a++)
+		if (!std::isfinite(lo[a]) || !std::isfinite(hi[a])) return;
 
 	constexpr float kPad = kLatticeFilterPad;
-	constexpr float kInvRegion = 1.0f / kRegionSize;
 	int rlo_a[3] = {0, 0, 0}, rhi_a[3] = {0, 0, 0};
 	for (int a = 0; a < 3; a++) {
-		const float qlo = lo[a] - kPad;
-		const float qhi = hi[a] + kPad;
-		rlo_a[a] = static_cast<int>(std::floor(qlo * kInvRegion));
-		rhi_a[a] = static_cast<int>(std::ceil(qhi * kInvRegion)) - 1;
+		const double qlo = static_cast<double>(lo[a]) - kPad;
+		const double qhi = static_cast<double>(hi[a]) + kPad;
+		const double rlo = std::floor(qlo / static_cast<double>(kRegionSize));
+		const double rhi = std::ceil(qhi / static_cast<double>(kRegionSize)) - 1.0;
+		if (!std::isfinite(rlo) || !std::isfinite(rhi) ||
+				rlo < static_cast<double>(std::numeric_limits<int>::min()) ||
+				rhi > static_cast<double>(std::numeric_limits<int>::max()))
+			return;
+		rlo_a[a] = static_cast<int>(rlo);
+		rhi_a[a] = static_cast<int>(rhi);
 		if (rhi_a[a] < rlo_a[a]) return;
 	}
 	const ve::IVec3 rlo{rlo_a[0], rlo_a[1], rlo_a[2]};
 	const ve::IVec3 rhi{rhi_a[0], rhi_a[1], rhi_a[2]};
+	const auto span = [](int low, int high) -> uint64_t {
+		return high < low ? 0u : static_cast<uint64_t>(high) - static_cast<uint64_t>(low) + 1u;
+	};
+	if (span(rlo.x, rhi.x) > kMaxCollectorRegionSpan ||
+			span(rlo.y, rhi.y) > kMaxCollectorRegionSpan ||
+			span(rlo.z, rhi.z) > kMaxCollectorRegionSpan)
+		return;
 
 	const auto intersects = [&](const EditOp &op) {
 		return op_touches_aabb(op, lo, hi, kPad);
@@ -104,7 +125,6 @@ inline void collect_ops_for_aabb(const EditLog &log, const float lo[3], const fl
 		for (int y = rlo.y; y <= rhi.y; y++)
 			for (int x = rlo.x; x <= rhi.x; x++) {
 				const ve::IVec3 region{x, y, z};
-				if (!log.bounds().contains_region(region)) continue;
 				const std::vector<EditOp> &ops = log.ops(region);
 				const std::vector<uint64_t> &seqs = log.seqs(region);
 				// Both vectors are kept parallel by append(); defensive size handling keeps

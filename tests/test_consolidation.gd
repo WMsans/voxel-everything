@@ -12,8 +12,6 @@ func make_world() -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.physics_enabled = false
-	w.world_origin_bricks = Vector3i(0, -64, 0)
-	w.world_size_regions = Vector3i(8, 5, 8)
 	add_child(w)
 	_worlds.append(w)
 	w.ensure_initialized()
@@ -72,7 +70,8 @@ func test_reconsolidation_preserves_previous_bake(timeout := 120000) -> void:
 func test_full_pool_refusal_preserves_edit_log_after_actual_exhaustion() -> void:
 	var w := make_world()
 	w.hooks().debug_stream_region(Vector3i(0, -2, 0))
-	assert_bool(w.hooks().debug_fill_override_pool()).is_true()
+	# The fill publishes through the streamed region's tenant slot.
+	assert_bool(w.hooks().debug_fill_override_pool(Vector3i(0, -2, 0))).is_true()
 	assert_int(w.hooks().debug_override_used()).is_equal(8192)
 	w.hooks().debug_apply_sphere_subtract(Vector3(12.8, 51.2, 12.8), 2.0)
 	var before := w.hooks().debug_region_op_count(Vector3i(0, 2, 0))
@@ -85,7 +84,8 @@ func test_debug_fill_refuses_offscreen_region_without_touching_slot_zero() -> vo
 	var w := make_world()
 	w.hooks().debug_stream_frame(Vector3(1000.0, 1000.0, 1000.0))
 	assert_int(w.hooks().debug_slot_of_region(Vector3i(0, 2, 0))).is_equal(-1)
-	assert_bool(w.hooks().debug_fill_override_pool()).is_false()
+	# (0, -2, 0) is 1700 m from the stream camera: non-resident, so the fill refuses.
+	assert_bool(w.hooks().debug_fill_override_pool(Vector3i(0, -2, 0))).is_false()
 	assert_int(w.hooks().debug_override_used()).is_equal(0)
 
 func test_failed_consolidation_preserves_old_publication() -> void:
@@ -320,8 +320,6 @@ func test_a_full_pool_refuses_and_changes_nothing(timeout := 60000) -> void:
 	w.use_local_device = true
 	w.physics_enabled = false
 	w.max_override_bricks = 4
-	w.world_origin_bricks = Vector3i(0, -64, 0)
-	w.world_size_regions = Vector3i(8, 5, 8)
 	add_child(w)
 	_worlds.append(w)
 	w.ensure_initialized()

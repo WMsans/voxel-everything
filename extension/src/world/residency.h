@@ -1,12 +1,15 @@
 #pragma once
 #include "world/region.h"
+#include "world/region_window.h"
 #include <map>
 #include <vector>
 
 namespace ve {
 
 struct ResidencyConfig {
-	WorldBounds bounds{};
+	// The near-field region map's index space. Sized from radius_m x evict_margin so no two
+	// simultaneously resident regions can share a cell (see ve::region_window_dim).
+	RegionWindow window{};
 	float radius_m = 96.0f;
 	int max_region_slots = 512;
 	int max_loads_per_frame = 4;
@@ -41,7 +44,7 @@ struct ResidencyPlan {
 	struct Entry {
 		IVec3 region;
 		int slot = -1;
-		int map_index = -1; // WorldBounds::region_index(region)
+		int map_index = -1; // RegionWindow::index(region); always a valid window cell
 	};
 	std::vector<Entry> loads;
 	std::vector<Entry> evicts;
@@ -76,6 +79,9 @@ public:
 	int resident_count() const { return static_cast<int>(by_region_.size()); }
 	void resident_regions(std::vector<IVec3> *out) const;
 	void clear();
+	const RegionWindow &window() const { return cfg_.window; }
+	// The window follows the camera. Called once per frame by the streamer, before update().
+	void set_window(const RegionWindow &w) { cfg_.window = w; }
 	const ResidencyConfig &config() const { return cfg_; }
 
 	// Plan-evict the furthest resident region whose coords are not in `exclude`, so an

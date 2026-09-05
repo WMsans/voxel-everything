@@ -256,7 +256,6 @@ bool LodTree::children_ready(int level, IVec3 c) const {
 	const IVec3 base = lod_child_base(c);
 	for (int k = 0; k < 8; k++) {
 		const IVec3 ch{base.x + (k & 1), base.y + ((k >> 1) & 1), base.z + ((k >> 2) & 1)};
-		if (!lod_chunk_in_bounds(cfg_.bounds, level - 1, ch)) continue; // outside is "done"
 		const auto it = nodes_.find(key(level - 1, ch));
 		if (it == nodes_.end()) return false;
 		if (it->second.state != kLodReady && it->second.state != kLodEmpty) return false;
@@ -266,7 +265,7 @@ bool LodTree::children_ready(int level, IVec3 c) const {
 
 void LodTree::request(int level, IVec3 c, float area, LodWalkResult *out,
 		bool touch_residency) {
-	if (!lod_chunk_in_bounds(cfg_.bounds, level, c)) return;
+	if (lod_chunk_distance(level, c, last_cam_pos_) > cfg_.stream_radius_m) return;
 	// Never build what the fragment shader would discard on every pixel (spec section 6.4).
 	if (lod_chunk_far_distance(level, c, last_cam_pos_) < cfg_.fade_start_m) return;
 	Node &n = nodes_[key(level, c)];
@@ -301,7 +300,7 @@ bool LodTree::want_finer(int level, IVec3 c, float area) const {
 // happens to reach there.
 void LodTree::shadow_visit(int level, IVec3 c, const LodCamera &cam,
 		std::vector<LodDrawItem> *out) const {
-	if (!lod_chunk_in_bounds(cfg_.bounds, level, c)) return;
+	if (lod_chunk_distance(level, c, last_cam_pos_) > cfg_.stream_radius_m) return;
 	const auto it = nodes_.find(key(level, c));
 	if (it == nodes_.end()) return;
 	const Node &n = it->second;
@@ -325,7 +324,7 @@ void LodTree::shadow_visit(int level, IVec3 c, const LodCamera &cam,
 
 void LodTree::visit(int level, IVec3 c, const LodCamera &cam, const LodOcclusion *occ,
 		uint32_t frame, LodWalkResult *out) {
-	if (!lod_chunk_in_bounds(cfg_.bounds, level, c)) return;
+	if (lod_chunk_distance(level, c, last_cam_pos_) > cfg_.stream_radius_m) return;
 	float lo[3], hi[3];
 	lod_chunk_aabb(level, c, lo, hi);
 
@@ -386,20 +385,14 @@ void LodTree::walk(const LodCamera &cam, const LodOcclusion *occ, uint32_t frame
 	last_cam_pos_[1] = cam.pos[1];
 	last_cam_pos_[2] = cam.pos[2];
 
-	IVec3 lo{}, hi{};
-	lod_root_range(cfg_.bounds, &lo, &hi);
-	for (int z = lo.z; z <= hi.z; z++)
-		for (int y = lo.y; y <= hi.y; y++)
-			for (int x = lo.x; x <= hi.x; x++)
-				visit(kLodLevels - 1, {x, y, z}, cam, occ, frame, out);
+	std::vector<IVec3> roots;
+	lod_roots_in_radius(cam.pos, cfg_.stream_radius_m, &roots);
+	for (const IVec3 &r : roots) visit(kLodLevels - 1, r, cam, occ, frame, out);
 
 	// The sun's cut, over the SAME resident tree the walk above just updated. It is a
 	// separate recursion rather than an extra output of visit() because visit() stops at the
 	// frustum and marks residency as it goes; this one must do neither.
-	for (int z = lo.z; z <= hi.z; z++)
-		for (int y = lo.y; y <= hi.y; y++)
-			for (int x = lo.x; x <= hi.x; x++)
-				shadow_visit(kLodLevels - 1, {x, y, z}, cam, &out->shadow_draws);
+	for (const IVec3 &r : roots) shadow_visit(kLodLevels - 1, r, cam, &out->shadow_draws);
 
 	// Edits mark nodes at every level they touch, including levels the current cut does not
 	// visit. Consider every dirty node for re-request so a rebuild is not deferred until the
@@ -483,7 +476,15 @@ void LodTree::collect_evictions(uint32_t frame, int want_pages, std::vector<LodD
 	};
 	std::vector<Cand> cands;
 	for (const auto &kv : nodes_) {
-		if (kv.first.level >= cfg_.resident_level_from) continue;
+		// Levels at or above resident_level_from are exempt -- but only while they are still
+		// inside the stream radius. Without the distance arm this exemption is a leak: an
+		// unbounded world leaves a permanently resident coarse node behind at every place the
+		// camera has ever been.
+		if (kv.first.level >= cfg_.resident_level_from) {
+			const IVec3 c{kv.first.x, kv.first.y, kv.first.z};
+			if (lod_chunk_distance(kv.first.level, c, last_cam_pos_) <= cfg_.stream_radius_m)
+				continue;
+		}
 		if (kv.second.building) continue;
 		if (kv.second.state == kLodBuilding) continue;
 		const uint32_t age = frame >= kv.second.last_marked ? frame - kv.second.last_marked : 0u;

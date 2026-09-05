@@ -15,7 +15,6 @@ struct ChunkProbe {
 };
 
 struct ChunkResidencyConfig {
-	WorldBounds bounds{};
 	float radius_m = 64.0f;   // spec §6: collision streams in a ~64 m radius
 	// Eight times the old 160, because a 6.4 m chunk covers an eighth of the volume the
 	// 12.8 m one did; this is the same ball, parcelled finer.

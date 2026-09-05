@@ -88,7 +88,7 @@ struct LogContactProbe : ve::ContactProbe {
 
 	int contact_samples(ve::IVec3 cell, int axis) const override {
 		std::lock_guard<std::mutex> lock(*mu);
-		const std::vector<ve::EditOp> &ops = log->ops(ve::WorldBounds::region_of_brick(cell));
+		const std::vector<ve::EditOp> &ops = log->ops(ve::region_of_brick(cell));
 		return ve::contact_samples_field(*gen, ops.data(), static_cast<int>(ops.size()), cell,
 				axis, face_samples, volumes);
 	}
@@ -212,8 +212,8 @@ bool IslandManager::window_is_fresh(const PendingWindow &w) const {
 	// no block at all is "unknown", which the flood treats as anchored ground -- it cannot
 	// hide an island, so it does not hold the window up either.
 	const ve::OccupancyGrid &grid = world_->occupancy();
-	const ve::IVec3 rlo = ve::WorldBounds::region_of_brick(w.lo);
-	const ve::IVec3 rhi = ve::WorldBounds::region_of_brick(w.hi);
+	const ve::IVec3 rlo = ve::region_of_brick(w.lo);
+	const ve::IVec3 rhi = ve::region_of_brick(w.hi);
 	for (int z = rlo.z; z <= rhi.z; z++)
 		for (int y = rlo.y; y <= rhi.y; y++)
 			for (int x = rlo.x; x <= rhi.x; x++) {
@@ -305,8 +305,8 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 			}
 			ve::collect_ops_for_aabb(*world_->edit_log(), wlo, whi, &job.ops);
 			float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
-			ve::IVec3 blo = ve::WorldBounds::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
-			ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
+			ve::IVec3 blo = ve::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
+			ve::IVec3 bhi = ve::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
 			if (!world_->snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) {
 				refused_++;
 				refused_op_cap_++;
@@ -315,7 +315,7 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 		}
 		job.gen = gen_;
 		job.override_table = world_->override_table_for_region(
-				ve::WorldBounds::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
+				ve::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
 		// Refuse before allocating a volume slot or submitting: the extraction pass cannot
 		// evaluate more than kMaxRegionOps ops, so this component can never be carved by the
 		// current field/worker limits. Fail-soft leaves it attached.
@@ -543,7 +543,6 @@ bool IslandManager::crumble_component(const InFlight &f) {
 			for (int y = rlo.y; y <= rhi.y; y++)
 				for (int x = rlo.x; x <= rhi.x; x++) {
 					const ve::IVec3 region{x, y, z};
-					if (!world_->edit_log()->bounds().contains_region(region)) continue;
 					const auto it = std::find(regions.begin(), regions.end(), region);
 					if (it == regions.end()) {
 						regions.push_back(region);
@@ -664,7 +663,6 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		std::vector<ve::IVec3> carve_regions;
 		std::vector<ve::IVec3> restore_regions;
 		const auto add_region = [&](std::vector<ve::IVec3> &out, ve::IVec3 r) {
-			if (!world_->edit_log()->bounds().contains_region(r)) return;
 			if (std::find(out.begin(), out.end(), r) == out.end()) out.push_back(r);
 		};
 		for (const ve::CellBox &box : f.boxes) {
@@ -925,7 +923,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 					for (int y = box.lo.y; y <= box.hi.y; y++)
 						for (int x = box.lo.x; x <= box.hi.x; x++) {
 							const ve::IVec3 region =
-									ve::WorldBounds::region_of_brick({x, y, z});
+									ve::region_of_brick({x, y, z});
 							if (std::find(carved_regions.begin(), carved_regions.end(), region) !=
 									carved_regions.end())
 								world_->occupancy().set_cell(
@@ -1121,7 +1119,6 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 			for (int y = rlo.y; y <= rhi.y; y++)
 				for (int x = rlo.x; x <= rhi.x; x++) {
 					const ve::IVec3 region{x, y, z};
-					if (!world_->edit_log()->bounds().contains_region(region)) continue;
 					if (std::find(paste_regions.begin(), paste_regions.end(), region) ==
 							paste_regions.end())
 						paste_regions.push_back(region);

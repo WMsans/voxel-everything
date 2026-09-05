@@ -4,15 +4,12 @@ extends GdUnitTestSuite
 # and a local RenderingDevice allocates its own copy on top of the running editor's.
 const ATLAS := Vector3i(8, 8, 8)      # 512 slots
 const REGION_SLOTS := 8
-const REGIONS := Vector3i(4, 2, 4)
 
 func make_world() -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.atlas_bricks = ATLAS
 	w.max_region_slots = REGION_SLOTS
-	w.world_origin_bricks = Vector3i(0, -64, 0)
-	w.world_size_regions = REGIONS
 	add_child(w)
 	return w
 
@@ -22,7 +19,9 @@ func test_atlas_allocates_and_reports_its_geometry() -> void:
 	var s: Dictionary = w.hooks().debug_atlas_stats()
 	assert_int(s["slot_count"]).is_equal(512)
 	assert_int(s["free_slots"]).is_equal(512)     # nothing allocated yet
-	assert_int(s["region_map_entries"]).is_equal(4 * 2 * 4)
+	# The region map follows the camera-centred residency window, not the old world box:
+	# the default residency_radius_m (96 m) sizes a dim-16 window, so 16*16*16 cells.
+	assert_int(s["region_map_entries"]).is_equal(16 * 16 * 16)
 	assert_int(s["job_count"]).is_equal(0)
 	assert_int(s["overflow"]).is_equal(0)
 
@@ -45,7 +44,8 @@ func test_region_map_starts_empty_and_takes_single_entry_writes() -> void:
 	assert_bool(w.hooks().debug_init_atlas()).is_true()
 	var rd := w.hooks().debug_local_rd() as RenderingDevice
 	var before := rd.buffer_get_data(w.hooks().debug_region_map()).to_int32_array()
-	assert_int(before.size()).is_equal(4 * 2 * 4)
+	# Same window-sized map: every cell starts at -1.
+	assert_int(before.size()).is_equal(16 * 16 * 16)
 	for v in before:
 		assert_int(v).is_equal(-1)
 	w.hooks().debug_set_region_map_entry(5, 3)

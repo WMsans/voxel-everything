@@ -101,12 +101,12 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	// Provisional reach; the real one is the fade band's end, read below once the streamer
 	// has run. 0 = no near-field hits.
 	cp.params[2] = near_field_enabled ? 200.0f : 0.0f;
-	const Vector3i sr = world->get_world_size_regions();
-	cp.dims[0] = sr.x; cp.dims[1] = sr.y; cp.dims[2] = sr.z;
+	const ve::RegionWindow win = world->region_window();
+	cp.dims[0] = win.dim; cp.dims[1] = win.dim; cp.dims[2] = win.dim;
 	cp.dims[3] = world->island_slot_count();
-	const Vector3i ob = world->get_world_origin_bricks();
-	cp.region_origin[0] = ob.x / 32; cp.region_origin[1] = ob.y / 32;
-	cp.region_origin[2] = ob.z / 32;
+	cp.region_origin[0] = win.origin.x;
+	cp.region_origin[1] = win.origin.y;
+	cp.region_origin[2] = win.origin.z;
 	cp.region_origin[3] = 0; // Task 11 sets the cull grid
 	const Vector3i ab = world->get_atlas_bricks();
 	cp.atlas_bricks[0] = ab.x; cp.atlas_bricks[1] = ab.y; cp.atlas_bricks[2] = ab.z;
@@ -140,6 +140,19 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	WorldStreamer *st = world->streamer();
 	if (st) st->run_frame(rd, cam.origin.x, cam.origin.y, cam.origin.z);
 	timings->end(rd, "stream");
+	// run_frame() recentres the toroidal region window. Refresh the already-built camera
+	// push data for that published window; do not run streaming a second time just to obtain
+	// constants that the existing run has already made current.
+	{
+		const ve::RegionWindow streamed_win = world->region_window();
+		cp.dims[0] = streamed_win.dim;
+		cp.dims[1] = streamed_win.dim;
+		cp.dims[2] = streamed_win.dim;
+		cp.dims[3] = world->island_slot_count();
+		cp.region_origin[0] = streamed_win.origin.x;
+		cp.region_origin[1] = streamed_win.origin.y;
+		cp.region_origin[2] = streamed_win.origin.z;
+	}
 
 	RaymarchPass *rmp = world->raymarch_pass();
 	GpuAtlas *atlas = world->atlas();
@@ -253,10 +266,14 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 			if (!use_sun_shadow) return;
 			world->prepare_lod_shadow_raster();
 			timings->begin(rd, "sun_shadow");
-			const ve::WorldBounds wb = world->world_bounds();
-			float lo[3];
-			float hi[3];
-			wb.aabb(lo, hi);
+			// There is no world AABB to fit. The ortho follows the camera at the stream
+			// radius: identical to the old world box at the 1638.4 m default. At a larger
+			// radius the same map stretches further and shadow texels coarsen proportionally
+			// -- cascades are sub-project B.
+			const Vector3 c = cam.origin;
+			const float r = world->get_stream_radius_m();
+			const float lo[3] = {c.x - r, c.y - r, c.z - r};
+			const float hi[3] = {c.x + r, c.y + r, c.z + r};
 			const ve::SunOrtho ortho = sun_state.has_basis()
 					? ve::sun_ortho(sun_state.dir, sun_state.right, sun_state.up, lo, hi,
 							SunShadowPass::kSize)

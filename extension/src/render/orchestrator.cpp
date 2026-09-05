@@ -73,10 +73,6 @@ void RenderOrchestrator::release_devices() {
 	main_rd_ = nullptr;
 }
 
-ve::WorldBounds RenderOrchestrator::world_bounds() const {
-	return ve::world_bounds(handles_.store->config());
-}
-
 bool RenderOrchestrator::initialize_downsample(RenderingDevice *rd) {
 	teardown_downsample();
 	if (!rd) return false;
@@ -171,7 +167,8 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 	cfg.max_region_slots = config.max_region_slots;
 	cfg.max_brick_jobs = config.max_brick_jobs;
 	cfg.max_override_bricks = config.max_override_bricks;
-	cfg.bounds = world_bounds();
+	cfg.region_window = ve::region_window_centered(0.0f, 0.0f, 0.0f,
+			ve::region_window_dim(config.residency_radius_m, ve::ResidencyConfig{}.evict_margin));
 	if (*handles_.normal_pool_bytes > 0) cfg.normal_pool_bytes = *handles_.normal_pool_bytes; // test initializer
 	if (!atlas_->initialize(device, cfg)) { delete atlas_; atlas_ = nullptr; return GpuInitResult::kAtlasFailed; }
 	islands_ = new IslandAtlas();
@@ -203,14 +200,14 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 	if (!materials_->initialize(device)) return GpuInitResult::kFailed;
 	// The four blocks below are the verbatim construction sequence moved into
 	// WorldStore; their call positions relative to the GPU setup are load-bearing.
-	handles_.store->ensure_edit_log(world_bounds());
+	handles_.store->ensure_edit_log();
 	handles_.store->ensure_overrides(atlas_->overrides().capacity());
 	if (!atlas_->replay_overrides(device, *handles_.store->overrides(),
 			handles_.store->override_tables())) {
 		UtilityFunctions::printerr("VoxelWorld: override replay into render pool failed");
 		return GpuInitResult::kFailed;
 	}
-	handles_.store->ensure_residency(world_bounds());
+	handles_.store->ensure_residency();
 	*handles_.streamer = new WorldStreamer();
 	(*handles_.streamer)->initialize(handles_.store->residency(),
 			handles_.store->edit_log(), &handles_.store->edit_mutex(),

@@ -1,0 +1,153 @@
+scons: Reading SConscript files ...
+Building for architecture universal on platform macos
+scons: done reading SConscript files.
+scons: Building targets ...
+g++ -o tests/test_beauty_settings.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_beauty_settings.cpp
+g++ -o tests/test_box_merge.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_box_merge.cpp
+g++ -o tests/test_brick.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_brick.cpp
+g++ -o tests/test_brick_baseline.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_brick_baseline.cpp
+g++ -o tests/test_brick_eval.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_brick_eval.cpp
+g++ -o tests/test_brick_field.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_brick_field.cpp
+g++ -o tests/test_brick_flags.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_brick_flags.cpp
+g++ -o tests/test_brick_mip.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_brick_mip.cpp
+g++ -o tests/test_camera_params.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_camera_params.cpp
+g++ -o tests/test_chunk_residency.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_chunk_residency.cpp
+g++ -o tests/test_components.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_components.cpp
+g++ -o tests/test_contact_refine.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_contact_refine.cpp
+g++ -o tests/test_dual_contour.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_dual_contour.cpp
+g++ -o tests/test_edit_aabb.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_edit_aabb.cpp
+g++ -o tests/test_edit_log.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_edit_log.cpp
+g++ -o tests/test_edit_ops.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_edit_ops.cpp
+In file included from tests/test_edit_aabb.cpp:2:
+src/render/edit_aabb.h:72:31: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   72 |                                 const EditAabb merged_box{std::min(a.lo.x, b.lo.x),
+      |                                                           ^~~~~~~~~~~~~~~~~~~~~~~~~
+      |                                                           {
+   73 |                                                 std::min(a.lo.y, b.lo.y),
+      |                                                 ~~~~~~~~~~~~~~~~~~~~~~~~~
+   74 |                                                 std::min(a.lo.z, b.lo.z),
+      |                                                 ~~~~~~~~~~~~~~~~~~~~~~~~
+      |                                                                         }
+src/render/edit_aabb.h:75:7: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   75 |                                                 std::max(a.hi.x, b.hi.x),
+      |                                                 ^~~~~~~~~~~~~~~~~~~~~~~~~
+      |                                                 {
+   76 |                                                 std::max(a.hi.y, b.hi.y),
+      |                                                 ~~~~~~~~~~~~~~~~~~~~~~~~~
+   77 |                                                 std::max(a.hi.z, b.hi.z)};
+      |                                                 ~~~~~~~~~~~~~~~~~~~~~~~~
+      |                                                                         }
+g++ -o tests/test_field_baseline.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_field_baseline.cpp
+g++ -o tests/test_field_codegen.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_field_codegen.cpp
+2 warnings generated.
+g++ -o tests/test_field_codegen_golden.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_field_codegen_golden.cpp
+g++ -o tests/test_field_gradient.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_field_gradient.cpp
+g++ -o tests/test_field_params_pack.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_field_params_pack.cpp
+g++ -o tests/test_flood_fill.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_flood_fill.cpp
+g++ -o tests/test_generator.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_generator.cpp
+g++ -o tests/test_lod_arena.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_lod_arena.cpp
+g++ -o tests/test_lod_contour.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_lod_contour.cpp
+tests/test_field_gradient.cpp:253:13: warning: unused variable 'op2' [-Wunused-variable]
+  253 |         ve::EditOp op2 = make_box(0,0,0, 0.8f,1.6f,1.6f);
+      |                    ^~~
+g++ -o tests/test_lod_grid.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_lod_grid.cpp
+g++ -o tests/test_lod_quad.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_lod_quad.cpp
+1 warning generated.
+g++ -o tests/test_lod_reduce.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_lod_reduce.cpp
+g++ -o tests/test_lod_skirt.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_lod_skirt.cpp
+g++ -o tests/test_lod_tree.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_lod_tree.cpp
+g++ -o tests/test_main.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_main.cpp
+g++ -o tests/test_material_field.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_material_field.cpp
+g++ -o tests/test_material_glslh.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_material_glslh.cpp
+g++ -o tests/test_material_table.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_material_table.cpp
+g++ -o tests/test_mesh_chunk.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_mesh_chunk.cpp
+g++ -o tests/test_normal_range_allocator.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_normal_range_allocator.cpp
+g++ -o tests/test_occupancy.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_occupancy.cpp
+g++ -o tests/test_octant_split.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_octant_split.cpp
+g++ -o tests/test_op_filter.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_op_filter.cpp
+g++ -o tests/test_override_store.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_override_store.cpp
+g++ -o tests/test_palette.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_palette.cpp
+g++ -o tests/test_pipeline_equivalence.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_pipeline_equivalence.cpp
+g++ -o tests/test_pipeline_field_generator.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_pipeline_field_generator.cpp
+g++ -o tests/test_pipeline_parse.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_pipeline_parse.cpp
+g++ -o tests/test_pipeline_resolve.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_pipeline_resolve.cpp
+g++ -o tests/test_raycast.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_raycast.cpp
+g++ -o tests/test_region.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_region.cpp
+g++ -o tests/test_residency.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_residency.cpp
+g++ -o tests/test_shade_cel.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_shade_cel.cpp
+g++ -o tests/test_shade_oct.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_shade_oct.cpp
+g++ -o tests/test_shader_loader.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_shader_loader.cpp
+g++ -o tests/test_stage_library.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_stage_library.cpp
+g++ -o tests/test_stage_manifest.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_stage_manifest.cpp
+g++ -o tests/test_stored_normals.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_stored_normals.cpp
+g++ -o tests/test_sun_light_shader.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_sun_light_shader.cpp
+g++ -o tests/test_sun_ortho.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_sun_ortho.cpp
+g++ -o tests/test_sun_state.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_sun_state.cpp
+g++ -o tests/test_volume_ops.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_volume_ops.cpp
+g++ -o tests/test_world_data.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party tests/test_world_data.cpp
+g++ -o src/world/brick.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/world/brick.cpp
+g++ -o src/world/brick_eval.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/world/brick_eval.cpp
+g++ -o src/world/brick_flags.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/world/brick_flags.cpp
+g++ -o src/world/brick_mip.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/world/brick_mip.cpp
+g++ -o src/world/edit_log.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/world/edit_log.cpp
+g++ -o src/world/field_source_snapshot.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/world/field_source_snapshot.cpp
+g++ -o src/world/material_table.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/world/material_table.cpp
+g++ -o src/world/normal_range_allocator.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/world/normal_range_allocator.cpp
+g++ -o src/world/override_store.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/world/override_store.cpp
+g++ -o src/world/palette.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/world/palette.cpp
+g++ -o src/world/raycast.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/world/raycast.cpp
+g++ -o src/world/region.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/world/region.cpp
+g++ -o src/world/residency.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/world/residency.cpp
+g++ -o src/world/world_data.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/world/world_data.cpp
+g++ -o src/generator/edit_ops.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/generator/edit_ops.cpp
+g++ -o src/generator/generator.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/generator/generator.cpp
+g++ -o src/generator/volume_set.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/generator/volume_set.cpp
+In file included from src/generator/generator.cpp:1:
+src/generator/generator.h:52:11: warning: private field 'seed_' is not used [-Wunused-private-field]
+   52 |         uint32_t seed_;
+      |                  ^
+1 warning generated.
+g++ -o src/core/world_store.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/core/world_store.cpp
+g++ -o src/terrain/builtin_stages.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/terrain/builtin_stages.cpp
+g++ -o src/terrain/field_codegen.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/terrain/field_codegen.cpp
+g++ -o src/terrain/field_params_pack.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/terrain/field_params_pack.cpp
+g++ -o src/terrain/pipeline.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/terrain/pipeline.cpp
+g++ -o src/terrain/pipeline_field_generator.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/terrain/pipeline_field_generator.cpp
+g++ -o src/terrain/stage_library.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/terrain/stage_library.cpp
+g++ -o src/terrain/stage_manifest.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/terrain/stage_manifest.cpp
+g++ -o src/mesh/box_merge.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/mesh/box_merge.cpp
+g++ -o src/mesh/chunk_residency.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/mesh/chunk_residency.cpp
+g++ -o src/mesh/dual_contour.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/mesh/dual_contour.cpp
+g++ -o src/mesh/mesh_chunk.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/mesh/mesh_chunk.cpp
+g++ -o src/mesh/octant_split.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/mesh/octant_split.cpp
+g++ -o src/connectivity/components.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/connectivity/components.cpp
+g++ -o src/connectivity/contact_refine.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/connectivity/contact_refine.cpp
+src/mesh/chunk_residency.cpp:255:34: warning: missing field 'probed' initializer [-Wmissing-field-initializers]
+  255 |                                 want.push_back({nearest(c), c});
+      |                                                              ^
+g++ -o src/connectivity/flood_fill.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/connectivity/flood_fill.cpp
+g++ -o src/connectivity/occupancy.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/connectivity/occupancy.cpp
+g++ -o src/lod/lod_arena.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/lod/lod_arena.cpp
+g++ -o src/lod/lod_contour.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/lod/lod_contour.cpp
+g++ -o src/lod/lod_grid.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/lod/lod_grid.cpp
+1 warning generated.
+g++ -o src/lod/lod_quad.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/lod/lod_quad.cpp
+g++ -o src/lod/lod_reduce.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/lod/lod_reduce.cpp
+g++ -o src/lod/lod_skirt.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/lod/lod_skirt.cpp
+g++ -o src/lod/lod_tree.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/lod/lod_tree.cpp
+g++ -o src/shade/beauty_settings.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/shade/beauty_settings.cpp
+g++ -o src/shade/cel.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/shade/cel.cpp
+g++ -o src/shade/oct.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/shade/oct.cpp
+g++ -o src/shade/sun_ortho.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/shade/sun_ortho.cpp
+g++ -o src/shade/sun_state.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/shade/sun_state.cpp
+g++ -o src/render/shader_loader.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/render/shader_loader.cpp
+g++ -o src/render/camera_params.o -c -std=c++20 -O1 -g -Wall -Wextra -DVE_REPO_ROOT=\"/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/..\" -Isrc -Ithird_party src/render/camera_params.cpp
+g++ -o build/tests/ve_tests tests/test_beauty_settings.o tests/test_box_merge.o tests/test_brick.o tests/test_brick_baseline.o tests/test_brick_eval.o tests/test_brick_field.o tests/test_brick_flags.o tests/test_brick_mip.o tests/test_camera_params.o tests/test_chunk_residency.o tests/test_components.o tests/test_contact_refine.o tests/test_dual_contour.o tests/test_edit_aabb.o tests/test_edit_log.o tests/test_edit_ops.o tests/test_field_baseline.o tests/test_field_codegen.o tests/test_field_codegen_golden.o tests/test_field_gradient.o tests/test_field_params_pack.o tests/test_flood_fill.o tests/test_generator.o tests/test_lod_arena.o tests/test_lod_contour.o tests/test_lod_grid.o tests/test_lod_quad.o tests/test_lod_reduce.o tests/test_lod_skirt.o tests/test_lod_tree.o tests/test_main.o tests/test_material_field.o tests/test_material_glslh.o tests/test_material_table.o tests/test_mesh_chunk.o tests/test_normal_range_allocator.o tests/test_occupancy.o tests/test_octant_split.o tests/test_op_filter.o tests/test_override_store.o tests/test_palette.o tests/test_pipeline_equivalence.o tests/test_pipeline_field_generator.o tests/test_pipeline_parse.o tests/test_pipeline_resolve.o tests/test_raycast.o tests/test_region.o tests/test_residency.o tests/test_shade_cel.o tests/test_shade_oct.o tests/test_shader_loader.o tests/test_stage_library.o tests/test_stage_manifest.o tests/test_stored_normals.o tests/test_sun_light_shader.o tests/test_sun_ortho.o tests/test_sun_state.o tests/test_volume_ops.o tests/test_world_data.o src/world/brick.o src/world/brick_eval.o src/world/brick_flags.o src/world/brick_mip.o src/world/edit_log.o src/world/field_source_snapshot.o src/world/material_table.o src/world/normal_range_allocator.o src/world/override_store.o src/world/palette.o src/world/raycast.o src/world/region.o src/world/residency.o src/world/world_data.o src/generator/edit_ops.o src/generator/generator.o src/generator/volume_set.o src/core/world_store.o src/terrain/builtin_stages.o src/terrain/field_codegen.o src/terrain/field_params_pack.o src/terrain/pipeline.o src/terrain/pipeline_field_generator.o src/terrain/stage_library.o src/terrain/stage_manifest.o src/mesh/box_merge.o src/mesh/chunk_residency.o src/mesh/dual_contour.o src/mesh/mesh_chunk.o src/mesh/octant_split.o src/connectivity/components.o src/connectivity/contact_refine.o src/connectivity/flood_fill.o src/connectivity/occupancy.o src/lod/lod_arena.o src/lod/lod_contour.o src/lod/lod_grid.o src/lod/lod_quad.o src/lod/lod_reduce.o src/lod/lod_skirt.o src/lod/lod_tree.o src/shade/beauty_settings.o src/shade/cel.o src/shade/oct.o src/shade/sun_ortho.o src/shade/sun_state.o src/render/shader_loader.o src/render/camera_params.o
+/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/build/tests/ve_tests
+[doctest] doctest version is "2.4.11"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases:     426 |     426 passed | 0 failed | 0 skipped
+[doctest] assertions: 9812754 | 9812754 passed | 0 failed |
+[doctest] Status: SUCCESS!
+scons: done building targets.

@@ -1,0 +1,41 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+Metal 4.0 - Forward+ - Using Device #0: Apple - Apple M1 (Apple7)
+
+ERROR: Condition "buffer_size == 0" is true. Returning: ERR_INVALID_PARAMETER
+   at: _load_from_buffer (core/io/image.cpp:4553)
+ERROR: Condition "buffer_size == 0" is true. Returning: ERR_INVALID_PARAMETER
+   at: _load_from_buffer (core/io/image.cpp:4553)
+ERROR: Condition "buffer_size == 0" is true. Returning: ERR_INVALID_PARAMETER
+   at: _load_from_buffer (core/io/image.cpp:4553)
+ERROR: Condition "buffer_size == 0" is true. Returning: ERR_INVALID_PARAMETER
+   at: _load_from_buffer (core/io/image.cpp:4553)
+BENCH camera fov=75.00 viewport=2675x1440 internal_3d=1592x857 render_scale=0.65 near_field_scale=0.40 quality_tier=3 fade_band_start=38.40 fade_band_end=48.00
+BENCH mode=--benchmark-edit-bounded frames=900
+BENCH frame_avg_ms=24.50 fps=40.8
+BENCH p50=24.24 p95=26.19 p99=27.31 max=35.12 min_fps=28.5 over_16.6ms=900 (100.0%)
+BENCH lod_summary lod_cpu_record_ms_p50=0.01 lod_cpu_record_ms_p99=0.04 draw_pages_p50=471 draw_pages_p99=670 culled_ratio_p50=0.102 culled_ratio_p99=0.102 chunks_resident_p50=1042 chunks_resident_p99=1042 pages_used_p50=3501 pages_used_p99=3501
+BENCH avg_ms build_ms=0.06 island_ms=1.26 lod_ms=0.01 phys_apply_ms=3.99 phys_body_ms=0.00 phys_collect_ms=2.90 phys_faces_ms=0.02 phys_plan_ms=1.05 phys_setdata_ms=0.04 phys_submit_ms=0.00 phys_tris=2763.38 physics_tick_ms=5.04 stream_readback_ms=0.00 stream_total_ms=0.07
+BENCH max_ms build_ms=0.22 island_ms=31.97 lod_ms=0.05 phys_apply_ms=40.59 phys_body_ms=0.04 phys_collect_ms=8.85 phys_faces_ms=0.18 phys_plan_ms=1.79 phys_setdata_ms=0.16 phys_submit_ms=0.01 phys_tris=8098.00 physics_tick_ms=41.46 stream_readback_ms=0.05 stream_total_ms=0.13
+BENCH worst_frame(35.12ms) build_ms=0.18 island_ms=0.00 lod_ms=0.04 phys_apply_ms=40.59 phys_body_ms=0.02 phys_collect_ms=3.17 phys_faces_ms=0.04 phys_plan_ms=0.86 phys_setdata_ms=0.13 phys_submit_ms=0.00 phys_tris=3272.00 physics_tick_ms=41.46 stream_readback_ms=0.01 stream_total_ms=0.12
+BENCH gpu_raymarch samples=0 p50_ms=0.000 p99_ms=0.000
+BENCH gpu_stream samples=0 p50_ms=0.000 p99_ms=0.000
+BENCH gpu_lod samples=0 p50_ms=0.000 p99_ms=0.000
+BENCH gpu_ssgi samples=0 p50_ms=0.000 p99_ms=0.000
+BENCH gpu_ssr samples=0 p50_ms=0.000 p99_ms=0.000
+BENCH gpu_shadows samples=0 p50_ms=0.000 p99_ms=0.000
+BENCH gpu_outlines samples=0 p50_ms=0.000 p99_ms=0.000
+BENCH gpu_unattributed samples=0 p50_ms=0.000 p99_ms=0.000
+BENCH gpu_custom_frame samples=0 p50_ms=0.000 p99_ms=0.000
+BENCH budget_verdict raymarch=UNMEASURED lod=UNMEASURED ssgi=UNMEASURED ssr=UNMEASURED shadows=UNMEASURED outlines=UNMEASURED frame=WARN
+BENCH gpu_timing valid_samples=0 dropped_pairs=0 lod_source=timestamp lod_ms_source=cpu_record
+BENCH gpu_timestamp_normalization mode=deterministic_vulkan_nanoseconds_to_microseconds unit=live_vulkan_nanoseconds_normalized scale_to_us=0.001000 normalized=true
+BENCH timing_condition display_driver=macOS vsync_requested=disabled vsync_actual=disabled verdict_qualified=false
+BENCH regions=114 overflow=0 overrides=0/8192 consolidations=0 refusals=0
+BENCH chunks=743 pending=417 bodies=326 bodies_raw=1301 failures=0 build_ms=0.15 collect_ms=5.83
+BENCH islands=0 debris=0 spawned=0 merged=0 refused=0 cx_runs=67
+WARNING: BENCH: frame budget exceeded (target 16.6ms)
+     at: push_warning (core/variant/variant_utility.cpp:1033)
+     GDScript backtrace (most recent call first):
+         [0] _report (res://demo/benchmark.gd:516)
+         [1] _process (res://demo/benchmark.gd:221)
+EXIT_STATUS=0
