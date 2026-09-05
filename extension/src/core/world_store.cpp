@@ -70,6 +70,9 @@ int WorldStore::drain_occupancy() {
 		if (b.seq < occupancy_.block_seq(b.region)) continue;
 		occupancy_.set_block(b.region, b.bytes.data(), b.seq);
 	}
+	// The unbounded world means blocks accumulate with distance travelled. Dropping a distant
+	// one is lossless: it re-reads as kCellUnknown and the mark pass refills it on return.
+	occupancy_.evict_outside(center_[0], center_[1], center_[2], config_.occupancy_retention_m);
 	return static_cast<int>(blocks.size());
 }
 

@@ -140,7 +140,7 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_override_region_table", "region_slot"),
 			&VoxelDebugHooks::debug_override_region_table);
 	ClassDB::bind_method(D_METHOD("debug_override_used"), &VoxelDebugHooks::debug_override_used);
-	ClassDB::bind_method(D_METHOD("debug_fill_override_pool"), &VoxelDebugHooks::debug_fill_override_pool);
+	ClassDB::bind_method(D_METHOD("debug_fill_override_pool", "region"), &VoxelDebugHooks::debug_fill_override_pool);
 	ClassDB::bind_method(D_METHOD("debug_override_render_state", "brick"),
 			&VoxelDebugHooks::debug_override_render_state);
 	ClassDB::bind_method(D_METHOD("debug_lod_diff", "level", "coord"), &VoxelDebugHooks::debug_lod_diff);
@@ -380,11 +380,10 @@ Dictionary VoxelDebugHooks::debug_contact_shadow_probe(Vector3 pos, Vector3 fwd,
 	ve::CameraParams cp = ve::CameraParams::looking_at(pos.x, pos.y, pos.z,
 			fwd.x, fwd.y, fwd.z, up[0], up[1], up[2]);
 	cp.params[0] = tan_x; cp.params[1] = tan_y; cp.params[2] = 200.0f;
-	const ve::WorldBounds wb = world_->world_bounds();
-	const ve::IVec3 ro = wb.origin_regions();
-	cp.dims[0] = world_->store_->config().world_size_regions.x; cp.dims[1] = world_->store_->config().world_size_regions.y;
-	cp.dims[2] = world_->store_->config().world_size_regions.z; cp.dims[3] = world_->island_slot_count();
-	cp.region_origin[0] = ro.x; cp.region_origin[1] = ro.y; cp.region_origin[2] = ro.z;
+	const ve::RegionWindow win = world_->region_window();
+	cp.dims[0] = win.dim; cp.dims[1] = win.dim;
+	cp.dims[2] = win.dim; cp.dims[3] = world_->island_slot_count();
+	cp.region_origin[0] = win.origin.x; cp.region_origin[1] = win.origin.y; cp.region_origin[2] = win.origin.z;
 	cp.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
 	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
 	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
@@ -506,11 +505,10 @@ Dictionary VoxelDebugHooks::debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, in
 	ve::CameraParams cp = ve::CameraParams::looking_at(pos.x, pos.y, pos.z,
 			fwd.x, fwd.y, fwd.z, up[0], up[1], up[2]);
 	cp.params[0] = tan_x; cp.params[1] = tan_y; cp.params[2] = 200.0f;
-	const ve::WorldBounds wb = world_->world_bounds();
-	const ve::IVec3 ro = wb.origin_regions();
-	cp.dims[0] = world_->store_->config().world_size_regions.x; cp.dims[1] = world_->store_->config().world_size_regions.y;
-	cp.dims[2] = world_->store_->config().world_size_regions.z; cp.dims[3] = world_->island_slot_count();
-	cp.region_origin[0] = ro.x; cp.region_origin[1] = ro.y; cp.region_origin[2] = ro.z;
+	const ve::RegionWindow win = world_->region_window();
+	cp.dims[0] = win.dim; cp.dims[1] = win.dim;
+	cp.dims[2] = win.dim; cp.dims[3] = world_->island_slot_count();
+	cp.region_origin[0] = win.origin.x; cp.region_origin[1] = win.origin.y; cp.region_origin[2] = win.origin.z;
 	cp.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
 	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
 	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
@@ -608,11 +606,10 @@ Dictionary VoxelDebugHooks::debug_ssao_probe(Vector3 pos, Vector3 fwd, int w, in
 	ve::CameraParams cp = ve::CameraParams::looking_at(pos.x, pos.y, pos.z,
 			fwd.x, fwd.y, fwd.z, up[0], up[1], up[2]);
 	cp.params[0] = tan_x; cp.params[1] = tan_y; cp.params[2] = 200.0f;
-	const ve::WorldBounds wb = world_->world_bounds();
-	const ve::IVec3 ro = wb.origin_regions();
-	cp.dims[0] = world_->store_->config().world_size_regions.x; cp.dims[1] = world_->store_->config().world_size_regions.y;
-	cp.dims[2] = world_->store_->config().world_size_regions.z; cp.dims[3] = world_->island_slot_count();
-	cp.region_origin[0] = ro.x; cp.region_origin[1] = ro.y; cp.region_origin[2] = ro.z;
+	const ve::RegionWindow win = world_->region_window();
+	cp.dims[0] = win.dim; cp.dims[1] = win.dim;
+	cp.dims[2] = win.dim; cp.dims[3] = world_->island_slot_count();
+	cp.region_origin[0] = win.origin.x; cp.region_origin[1] = win.origin.y; cp.region_origin[2] = win.origin.z;
 	cp.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
 	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
 	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
@@ -732,15 +729,14 @@ Dictionary VoxelDebugHooks::debug_ssgi_reprojection_probe(Vector3 previous_pos, 
 			result.params[0] = tan_x;
 			result.params[1] = tan_y;
 			result.params[2] = 200.0f;
-			const ve::WorldBounds wb = world_->world_bounds();
-			const ve::IVec3 ro = wb.origin_regions();
-			result.dims[0] = world_->store_->config().world_size_regions.x;
-			result.dims[1] = world_->store_->config().world_size_regions.y;
-			result.dims[2] = world_->store_->config().world_size_regions.z;
+			const ve::RegionWindow win = world_->region_window();
+			result.dims[0] = win.dim;
+			result.dims[1] = win.dim;
+			result.dims[2] = win.dim;
 			result.dims[3] = world_->island_slot_count();
-			result.region_origin[0] = ro.x;
-			result.region_origin[1] = ro.y;
-			result.region_origin[2] = ro.z;
+			result.region_origin[0] = win.origin.x;
+			result.region_origin[1] = win.origin.y;
+			result.region_origin[2] = win.origin.z;
 			result.atlas_bricks[0] = world_->store_->config().atlas_bricks.x;
 			result.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
 			result.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
@@ -1561,15 +1557,14 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 	cp.params[0] = tan_x;
 	cp.params[1] = tan_y;
 	cp.params[2] = 200.0f;
-	const ve::WorldBounds wb = world_->world_bounds();
-	const ve::IVec3 ro = wb.origin_regions();
-	cp.dims[0] = world_->store_->config().world_size_regions.x;
-	cp.dims[1] = world_->store_->config().world_size_regions.y;
-	cp.dims[2] = world_->store_->config().world_size_regions.z;
+	const ve::RegionWindow win = world_->region_window();
+	cp.dims[0] = win.dim;
+	cp.dims[1] = win.dim;
+	cp.dims[2] = win.dim;
 	cp.dims[3] = world_->island_slot_count();
-	cp.region_origin[0] = ro.x;
-	cp.region_origin[1] = ro.y;
-	cp.region_origin[2] = ro.z;
+	cp.region_origin[0] = win.origin.x;
+	cp.region_origin[1] = win.origin.y;
+	cp.region_origin[2] = win.origin.z;
 	cp.atlas_bricks[0] = world_->store_->config().atlas_bricks.x;
 	cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
 	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
@@ -2056,11 +2051,15 @@ int VoxelDebugHooks::debug_override_used() const {
 	return world_->store_->overrides() ? world_->store_->overrides()->used() : 0;
 }
 
-bool VoxelDebugHooks::debug_fill_override_pool() {
+bool VoxelDebugHooks::debug_fill_override_pool(Vector3i region_in) {
 	world_->ensure_physics_initialized();
 	std::unique_lock<std::mutex> edit_lock(world_->edit_mutex());
 	if (!world_->atlas() || !world_->mesh_ || !world_->store_->overrides() || world_->store_->overrides()->used() != 0) return false;
-	const ve::IVec3 region = world_->world_bounds().origin_regions();
+	// The fill publishes through the target region's tenant slot, so the region must be
+	// resident -- the caller names the region it streamed. No world box exists to provide
+	// a canonical one, and a window-derived one would defeat the offscreen-refusal test
+	// (streaming far away recentres the window onto resident ground).
+	const ve::IVec3 region{region_in.x, region_in.y, region_in.z};
 	const int region_slot = world_->store_->residency() ? world_->store_->residency()->slot_of(region) : -1;
 	// This hook is allowed to fill only the target region's actual tenant. Slot 0 is a
 	// valid visible tenant for some other region; using it as an off-screen fallback can
@@ -3365,12 +3364,11 @@ Dictionary VoxelDebugHooks::debug_raymarch_gbuffer(Vector3 origin, Vector3 dir) 
 	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass()) return d;
 	ve::CameraParams cam = ve::CameraParams::looking_at(
 			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
-	const ve::WorldBounds wb = world_->world_bounds();
-	const ve::IVec3 ro = wb.origin_regions();
-	cam.dims[0] = world_->store_->config().world_size_regions.x; cam.dims[1] = world_->store_->config().world_size_regions.y;
-	cam.dims[2] = world_->store_->config().world_size_regions.z;
+	const ve::RegionWindow win = world_->region_window();
+	cam.dims[0] = win.dim; cam.dims[1] = win.dim;
+	cam.dims[2] = win.dim;
 	cam.dims[3] = world_->island_slot_count();
-	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
+	cam.region_origin[0] = win.origin.x; cam.region_origin[1] = win.origin.y; cam.region_origin[2] = win.origin.z;
 	cam.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
 	cam.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
 	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
@@ -3429,11 +3427,10 @@ Dictionary VoxelDebugHooks::debug_raymarch_hole_probe(Vector3 origin, Vector3 di
 	cam.params[0] = tan_y * aspect;
 	cam.params[1] = tan_y;
 	cam.params[2] = 200.0f;
-	const ve::WorldBounds wb = world_->world_bounds();
-	const ve::IVec3 ro = wb.origin_regions();
-	cam.dims[0] = world_->store_->config().world_size_regions.x; cam.dims[1] = world_->store_->config().world_size_regions.y;
-	cam.dims[2] = world_->store_->config().world_size_regions.z; cam.dims[3] = world_->island_slot_count();
-	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
+	const ve::RegionWindow win = world_->region_window();
+	cam.dims[0] = win.dim; cam.dims[1] = win.dim;
+	cam.dims[2] = win.dim; cam.dims[3] = world_->island_slot_count();
+	cam.region_origin[0] = win.origin.x; cam.region_origin[1] = win.origin.y; cam.region_origin[2] = win.origin.z;
 	cam.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
 	cam.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
 	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
@@ -3482,11 +3479,10 @@ Dictionary VoxelDebugHooks::debug_raymarch_normal_probe(Vector3 origin, Vector3 
 	cam.params[0] = tan_y * aspect;
 	cam.params[1] = tan_y;
 	cam.params[2] = 200.0f;
-	const ve::WorldBounds wb = world_->world_bounds();
-	const ve::IVec3 ro = wb.origin_regions();
-	cam.dims[0] = world_->store_->config().world_size_regions.x; cam.dims[1] = world_->store_->config().world_size_regions.y;
-	cam.dims[2] = world_->store_->config().world_size_regions.z; cam.dims[3] = world_->island_slot_count();
-	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
+	const ve::RegionWindow win = world_->region_window();
+	cam.dims[0] = win.dim; cam.dims[1] = win.dim;
+	cam.dims[2] = win.dim; cam.dims[3] = world_->island_slot_count();
+	cam.region_origin[0] = win.origin.x; cam.region_origin[1] = win.origin.y; cam.region_origin[2] = win.origin.z;
 	cam.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
 	cam.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
 	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
@@ -3640,11 +3636,10 @@ Dictionary VoxelDebugHooks::debug_island_normal_probe(int island_slot, Vector3 o
 	cam.params[0] = tan_y * aspect;
 	cam.params[1] = tan_y;
 	cam.params[2] = 200.0f;
-	const ve::WorldBounds wb = world_->world_bounds();
-	const ve::IVec3 ro = wb.origin_regions();
-	cam.dims[0] = world_->store_->config().world_size_regions.x; cam.dims[1] = world_->store_->config().world_size_regions.y;
-	cam.dims[2] = world_->store_->config().world_size_regions.z; cam.dims[3] = world_->island_slot_count();
-	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
+	const ve::RegionWindow win = world_->region_window();
+	cam.dims[0] = win.dim; cam.dims[1] = win.dim;
+	cam.dims[2] = win.dim; cam.dims[3] = world_->island_slot_count();
+	cam.region_origin[0] = win.origin.x; cam.region_origin[1] = win.origin.y; cam.region_origin[2] = win.origin.z;
 	cam.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
 	cam.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
 	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
@@ -3826,15 +3821,14 @@ Dictionary VoxelDebugHooks::debug_ssr_probe(int fixture, int w, int h) {
 	camera_params.params[0] = std::tan(1.0471975512f * 0.5f) * aspect;
 	camera_params.params[1] = std::tan(1.0471975512f * 0.5f);
 	camera_params.params[2] = 200.0f;
-	const ve::WorldBounds probe_bounds = world_->world_bounds();
-	const ve::IVec3 probe_origin = probe_bounds.origin_regions();
-	camera_params.dims[0] = world_->store_->config().world_size_regions.x;
-	camera_params.dims[1] = world_->store_->config().world_size_regions.y;
-	camera_params.dims[2] = world_->store_->config().world_size_regions.z;
+	const ve::RegionWindow win = world_->region_window();
+	camera_params.dims[0] = win.dim;
+	camera_params.dims[1] = win.dim;
+	camera_params.dims[2] = win.dim;
 	camera_params.dims[3] = world_->island_slot_count();
-	camera_params.region_origin[0] = probe_origin.x;
-	camera_params.region_origin[1] = probe_origin.y;
-	camera_params.region_origin[2] = probe_origin.z;
+	camera_params.region_origin[0] = win.origin.x;
+	camera_params.region_origin[1] = win.origin.y;
+	camera_params.region_origin[2] = win.origin.z;
 	camera_params.atlas_bricks[0] = world_->store_->config().atlas_bricks.x;
 	camera_params.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
 	camera_params.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
@@ -4287,11 +4281,10 @@ Dictionary VoxelDebugHooks::debug_glossy_sdf_probe(Vector3 origin, Vector3 dir) 
 	cam.params[1] = 0.0f;
 	cam.params[2] = 200.0f;
 	cam.params[3] = -1.0f;
-	const ve::WorldBounds wb = world_->world_bounds();
-	const ve::IVec3 ro = wb.origin_regions();
-	cam.dims[0] = world_->store_->config().world_size_regions.x; cam.dims[1] = world_->store_->config().world_size_regions.y;
-	cam.dims[2] = world_->store_->config().world_size_regions.z; cam.dims[3] = world_->island_slot_count();
-	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
+	const ve::RegionWindow win = world_->region_window();
+	cam.dims[0] = win.dim; cam.dims[1] = win.dim;
+	cam.dims[2] = win.dim; cam.dims[3] = world_->island_slot_count();
+	cam.region_origin[0] = win.origin.x; cam.region_origin[1] = win.origin.y; cam.region_origin[2] = win.origin.z;
 	cam.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
 	cam.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
 	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
@@ -4403,10 +4396,17 @@ Dictionary VoxelDebugHooks::debug_sun_shadow_stats() {
 	world_->ensure_initialized();
 	SunShadowPass *sun = world_->sun_shadow_pass();
 	if (!sun) return d;
-	const ve::WorldBounds wb = world_->world_bounds();
-	float lo[3];
-	float hi[3];
-	wb.aabb(lo, hi);
+	// There is no world AABB to fit. Cover the resident neighbourhood at the stream radius:
+	// the same box the compositor fits around its camera, centred here on the residency
+	// window the streamer keeps glued to it. Fixed for a fixed window, so the map matrix
+	// still never moves under LOD-only camera motion.
+	const ve::RegionWindow win = world_->region_window();
+	const float src = world_->get_stream_radius_m();
+	const float scx = (win.origin.x + win.dim * 0.5f) * ve::kRegionSize;
+	const float scy = (win.origin.y + win.dim * 0.5f) * ve::kRegionSize;
+	const float scz = (win.origin.z + win.dim * 0.5f) * ve::kRegionSize;
+	const float lo[3] = {scx - src, scy - src, scz - src};
+	const float hi[3] = {scx + src, scy + src, scz + src};
 	const ve::SunState sun_state = world_->sun_state();
 	const ve::SunOrtho ortho = sun_state.has_basis()
 			? ve::sun_ortho(sun_state.dir, sun_state.right, sun_state.up, lo, hi,
@@ -4431,10 +4431,17 @@ void VoxelDebugHooks::debug_sun_shadow_build(bool force) {
 	RenderingDevice *device = world_->rd();
 	if (!device || !world_->sun_shadow_pass() || !world_->context().lod->lod_pool_ || !world_->lod_raster_pass()) return;
 	world_->prepare_lod_shadow_raster();
-	const ve::WorldBounds wb = world_->world_bounds();
-	float lo[3];
-	float hi[3];
-	wb.aabb(lo, hi);
+	// There is no world AABB to fit. Cover the resident neighbourhood at the stream radius:
+	// the same box the compositor fits around its camera, centred here on the residency
+	// window the streamer keeps glued to it. Fixed for a fixed window, so the map matrix
+	// still never moves under LOD-only camera motion.
+	const ve::RegionWindow win = world_->region_window();
+	const float src = world_->get_stream_radius_m();
+	const float scx = (win.origin.x + win.dim * 0.5f) * ve::kRegionSize;
+	const float scy = (win.origin.y + win.dim * 0.5f) * ve::kRegionSize;
+	const float scz = (win.origin.z + win.dim * 0.5f) * ve::kRegionSize;
+	const float lo[3] = {scx - src, scy - src, scz - src};
+	const float hi[3] = {scx + src, scy + src, scz + src};
 	const ve::SunState sun_state = world_->sun_state();
 	const ve::SunOrtho ortho = sun_state.has_basis()
 			? ve::sun_ortho(sun_state.dir, sun_state.right, sun_state.up, lo, hi,
@@ -4528,15 +4535,14 @@ Dictionary VoxelDebugHooks::debug_deferred_probe(Vector3 pos, Vector3 fwd, int w
 	cp.params[0] = tan_x;
 	cp.params[1] = tan_y;
 	cp.params[2] = 200.0f;
-	const ve::WorldBounds wb = world_->world_bounds();
-	const ve::IVec3 ro = wb.origin_regions();
-	cp.dims[0] = world_->store_->config().world_size_regions.x;
-	cp.dims[1] = world_->store_->config().world_size_regions.y;
-	cp.dims[2] = world_->store_->config().world_size_regions.z;
+	const ve::RegionWindow win = world_->region_window();
+	cp.dims[0] = win.dim;
+	cp.dims[1] = win.dim;
+	cp.dims[2] = win.dim;
 	cp.dims[3] = world_->island_slot_count();
-	cp.region_origin[0] = ro.x;
-	cp.region_origin[1] = ro.y;
-	cp.region_origin[2] = ro.z;
+	cp.region_origin[0] = win.origin.x;
+	cp.region_origin[1] = win.origin.y;
+	cp.region_origin[2] = win.origin.z;
 	cp.atlas_bricks[0] = world_->store_->config().atlas_bricks.x;
 	cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
 	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
@@ -4639,15 +4645,14 @@ Dictionary VoxelDebugHooks::debug_near_field_detail(Vector3 pos, Vector3 fwd, in
 	cp.params[0] = tan_x;
 	cp.params[1] = tan_y;
 	cp.params[2] = 200.0f;
-	const ve::WorldBounds wb = world_->world_bounds();
-	const ve::IVec3 ro = wb.origin_regions();
-	cp.dims[0] = world_->store_->config().world_size_regions.x;
-	cp.dims[1] = world_->store_->config().world_size_regions.y;
-	cp.dims[2] = world_->store_->config().world_size_regions.z;
+	const ve::RegionWindow win = world_->region_window();
+	cp.dims[0] = win.dim;
+	cp.dims[1] = win.dim;
+	cp.dims[2] = win.dim;
 	cp.dims[3] = world_->island_slot_count();
-	cp.region_origin[0] = ro.x;
-	cp.region_origin[1] = ro.y;
-	cp.region_origin[2] = ro.z;
+	cp.region_origin[0] = win.origin.x;
+	cp.region_origin[1] = win.origin.y;
+	cp.region_origin[2] = win.origin.z;
 	cp.atlas_bricks[0] = world_->store_->config().atlas_bricks.x;
 	cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
 	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
@@ -5137,12 +5142,11 @@ bool VoxelDebugHooks::probe_material(int mat, Vector3 p, Vector3 n, float rgb[3]
 	cam.params[1] = 0.0f;
 	cam.params[2] = 0.0f;
 	cam.params[3] = static_cast<float>(mat);
-	const ve::WorldBounds wb = world_->world_bounds();
-	const ve::IVec3 ro = wb.origin_regions();
-	cam.dims[0] = world_->store_->config().world_size_regions.x; cam.dims[1] = world_->store_->config().world_size_regions.y;
-	cam.dims[2] = world_->store_->config().world_size_regions.z;
+	const ve::RegionWindow win = world_->region_window();
+	cam.dims[0] = win.dim; cam.dims[1] = win.dim;
+	cam.dims[2] = win.dim;
 	cam.dims[3] = world_->island_slot_count();
-	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
+	cam.region_origin[0] = win.origin.x; cam.region_origin[1] = win.origin.y; cam.region_origin[2] = win.origin.z;
 	cam.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
 	cam.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
@@ -5760,6 +5764,11 @@ int VoxelDebugHooks::debug_stream_frame(Vector3 cam) {
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
 	if (!world_->initialized_ || !device || !world_->streamer_) return 0;
+	// The retention sweep in drain_occupancy() (called below and from _process) evicts
+	// around this centre. Hook-driven tests move the camera without any physics anchor,
+	// so the streamer camera is the only correct centre here; without it, observing
+	// beyond 256 m of the origin would evict the very blocks under test.
+	world_->store_->set_center(cam.x, cam.y, cam.z);
 	const int actions = world_->streamer_->run_frame(device, cam.x, cam.y, cam.z);
 	device->submit();
 	device->sync();
@@ -5800,8 +5809,9 @@ int VoxelDebugHooks::debug_slot_of_region(Vector3i region) const {
 int VoxelDebugHooks::debug_region_map_entry(Vector3i region) {
 	RenderingDevice *device = world_->rd();
 	if (!world_->initialized_ || !device || !world_->atlas()) return -1;
-	const int idx = world_->world_bounds().region_index({region.x, region.y, region.z});
-	if (idx < 0) return -1;
+	// Toroidal and total: every region has a cell, so there is no out-of-world -1 anymore.
+	// An unstreamed region reads the -1 the evict path (or the init fill) wrote to its cell.
+	const int idx = world_->region_window().index({region.x, region.y, region.z});
 	const PackedByteArray b = device->buffer_get_data(world_->atlas()->region_map(), idx * 4, 4);
 	return b.size() >= 4 ? *reinterpret_cast<const int32_t *>(b.ptr()) : -1;
 }
@@ -5809,16 +5819,17 @@ int VoxelDebugHooks::debug_region_map_entry(Vector3i region) {
 bool VoxelDebugHooks::debug_region_map_consistent() {
 	RenderingDevice *device = world_->rd();
 	if (!world_->initialized_ || !device || !world_->atlas() || !world_->store_->residency()) return false;
-	const ve::WorldBounds wb = world_->world_bounds();
+	const ve::RegionWindow win = world_->region_window();
 	const PackedByteArray b = device->buffer_get_data(world_->atlas()->region_map());
 	const int32_t *map = reinterpret_cast<const int32_t *>(b.ptr());
-	const ve::IVec3 o = wb.origin_regions();
-	const ve::IVec3 sz = wb.size_regions;
-	for (int z = 0; z < sz.z; z++)
-		for (int y = 0; y < sz.y; y++)
-			for (int x = 0; x < sz.x; x++) {
-				const ve::IVec3 r{o.x + x, o.y + y, o.z + z};
-				const int gpu_slot = map[x + y * sz.x + z * sz.x * sz.y];
+	// The index is toroidal and origin-independent, so the whole window is checked cell
+	// for cell: a live entry sits exactly where residency says it should, and anything
+	// else must hold the -1 the evict path (or init fill) wrote.
+	for (int z = 0; z < win.dim; z++)
+		for (int y = 0; y < win.dim; y++)
+			for (int x = 0; x < win.dim; x++) {
+				const ve::IVec3 r{win.origin.x + x, win.origin.y + y, win.origin.z + z};
+				const int gpu_slot = map[win.index(r)];
 				const int cpu_slot = world_->store_->residency()->slot_of(r);
 				if (gpu_slot != cpu_slot) return false;
 				if (gpu_slot >= 0 && !(world_->store_->residency()->region_of_slot(gpu_slot) == r)) return false;

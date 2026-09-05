@@ -42,8 +42,14 @@ float sun_map_visibility(vec3 wpos, float ndl) {
 	// in the same metres. p.z and the stored depth are normalized [0,1], so the bias must be
 	// too. Scaling by params.x alone made the bias ~0.54 of the entire depth range at the
 	// demo's world size, which reported every pixel lit and left the far field flat.
+	// Every term is texel-relative, and deliberately so: the unbounded ortho spans the
+	// stream radius (thousands of metres of depth range), where the old absolute +0.0015
+	// contributed ~7 m of slop on its own and unseated the stored surface from the ground
+	// it rasterized. The +1.0 texel is the old guard refactored into range-independent
+	// units (it was ~2 texels at the old range); acne protection still scales with the
+	// slope, as before.
 	float texel = sun.params.x / max(sun.params.y, 1e-6);
-	float bias = texel * (0.5 + 2.0 * slope) + 0.0015;
+	float bias = texel * (1.5 + 2.0 * slope);
 	return (p.z + bias >= texture(sun_map, uv).r) ? 1.0 : 0.0;
 }
 

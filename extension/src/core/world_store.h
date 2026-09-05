@@ -42,20 +42,14 @@ struct WorldConfig {
 	int max_region_slots = 512;
 	int max_brick_jobs = 16384;
 	int max_override_bricks = 8192;
-	ve::IVec3 world_origin_bricks{0, -64, 0};
-	ve::IVec3 world_size_regions{64, 8, 64};
 	float residency_radius_m = 96.0f;
+	// The far field's horizon. Defaults to 1638.4 m, exactly the reach of the fixed world
+	// this replaced, so the unbounded rework is a no-visual-change refactor at its default.
+	float stream_radius_m = 1638.4f;
+	// Where occupancy blocks are dropped. Connectivity windows reach 102.4 m
+	// (kFloodWindowCells x 2 expansions), so this carries 2.5x headroom.
+	float occupancy_retention_m = 256.0f;
 };
-
-// Project a config snapshot into the world-space bounds every consumer agrees on
-// (origin in bricks, size in regions). Single source of truth for VoxelWorld,
-// LodSystem, and RenderOrchestrator.
-inline WorldBounds world_bounds(const WorldConfig &c) {
-	WorldBounds b;
-	b.origin_bricks = {c.world_origin_bricks.x, c.world_origin_bricks.y, c.world_origin_bricks.z};
-	b.size_regions = {c.world_size_regions.x, c.world_size_regions.y, c.world_size_regions.z};
-	return b;
-}
 
 } // namespace ve
 
@@ -147,8 +141,8 @@ public:
 		config_.max_override_bricks =
 				overrides_ ? std::min(requested, overrides_->capacity()) : requested;
 	}
-	void set_world_origin_bricks(const ve::IVec3 &v) { config_.world_origin_bricks = v; }
-	void set_world_size_regions(const ve::IVec3 &v) { config_.world_size_regions = v; }
+	void set_stream_radius_m(float v) { config_.stream_radius_m = v; }
+	void set_occupancy_retention_m(float v) { config_.occupancy_retention_m = v; }
 	void set_residency_radius_m(float v) { config_.residency_radius_m = v; }
 	// Region -> override table map. Task 7's ledger ruling: consumers add accessors rather
 	// than growing friendship; ConsolidationCoordinator (Task 11) reads and assigns tables
@@ -181,6 +175,17 @@ public:
 	void set_sinks(EditSink *edits, ConsolidationSink *consolidation) {
 		edit_sink_ = edits;
 		consolidation_sink_ = consolidation;
+	}
+	// Retention-sweep centre for the occupancy grid (drain_occupancy's evict_outside call).
+	// Written from the main thread by VoxelWorld::_process, read by drain_occupancy on the
+	// same thread: no synchronisation needed. Keeps its last value while the physics anchor
+	// is unset, which is correct -- an unset anchor means nothing is moving, so nothing
+	// needs evicting.
+	float center_[3] = {0.0f, 0.0f, 0.0f};
+	void set_center(float x, float y, float z) {
+		center_[0] = x;
+		center_[1] = y;
+		center_[2] = z;
 	}
 	// --- occupancy cluster + edit sequence (moved verbatim from VoxelWorld, Task 9) ---
 	// Main thread only (same contract as the pre-split field).

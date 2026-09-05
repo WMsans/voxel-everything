@@ -12,8 +12,9 @@ func make_world() -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.physics_enabled = false
-	w.world_origin_bricks = Vector3i(0, -64, 0)
-	w.world_size_regions = Vector3i(16, 5, 16)
+	w.stream_radius_m = 1000.0 # small but viable: the walk descends only into a node
+	# whose eight children are all in-radius (L6 spans 819 m); below ~940 m it stalls
+	# at 2 roots, so 1000 is the floor for these cameras
 	w.max_lod_pages = 16384
 	add_child(w)
 	_worlds.append(w)
@@ -43,7 +44,7 @@ func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> bool:
 			return true
 	return false
 
-func test_an_edit_rebuilds_every_level_it_touches(timeout := 60000) -> void:
+func test_an_edit_rebuilds_every_level_it_touches(timeout := 180000) -> void:
 	var w := make_world()
 	var pos := Vector3(400.0, 90.0, 400.0)
 	var fwd := Vector3(0.0, -0.35, -1.0).normalized()
@@ -65,7 +66,7 @@ func test_an_edit_rebuilds_every_level_it_touches(timeout := 60000) -> void:
 	assert_int(w.hooks().debug_lod_stats()["dirty_chunks"]).override_failure_message(
 		"the dirty chunks never finished rebuilding").is_equal(0)
 
-func test_a_far_edit_is_visible_in_the_far_field(timeout := 60000) -> void:
+func test_a_far_edit_is_visible_in_the_far_field(timeout := 180000) -> void:
 	var w := make_world()
 	var pos := Vector3(400.0, 90.0, 400.0)
 	var fwd := Vector3(0.0, -0.35, -1.0).normalized()

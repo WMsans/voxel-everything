@@ -253,10 +253,14 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 			if (!use_sun_shadow) return;
 			world->prepare_lod_shadow_raster();
 			timings->begin(rd, "sun_shadow");
-			const ve::WorldBounds wb = world->world_bounds();
-			float lo[3];
-			float hi[3];
-			wb.aabb(lo, hi);
+			// There is no world AABB to fit. The ortho follows the camera at the stream
+			// radius: identical to the old world box at the 1638.4 m default. At a larger
+			// radius the same map stretches further and shadow texels coarsen proportionally
+			// -- cascades are sub-project B.
+			const Vector3 c = cam.origin;
+			const float r = world->get_stream_radius_m();
+			const float lo[3] = {c.x - r, c.y - r, c.z - r};
+			const float hi[3] = {c.x + r, c.y + r, c.z + r};
 			const ve::SunOrtho ortho = sun_state.has_basis()
 					? ve::sun_ortho(sun_state.dir, sun_state.right, sun_state.up, lo, hi,
 							SunShadowPass::kSize)

@@ -12,27 +12,30 @@ func make_world() -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.physics_enabled = false
-	w.world_origin_bricks = Vector3i(0, -64, 0)
-	w.world_size_regions = Vector3i(8, 5, 8)
-	w.max_lod_pages = 4096
+	# The walk needs whole in-radius sibling sets (L6 spans 819 m); this suite's
+	# cameras need ~1310 m (measured to the farthest L6 sibling), and the bracket needs
+	# the map to hold ground to 360 m -- so 1400 with margin.
+	w.stream_radius_m = 1400.0
+	w.max_lod_pages = 16384
 	add_child(w)
 	_worlds.append(w)
 	assert_bool(w.hooks().debug_init_atlas()).is_true()
 	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
-# The bias bug scales with world size, which is why make_world()'s {8,5,8} world passes
-# against it: there the broken bias is ~20 m of world depth and the probe sits ~34 m under
-# the surface, so it still reads shadowed. At {16,5,16} the broken bias is
-#   texel_world * depth_range * 0.5 = 0.268 * 451.2 * 0.5 = ~60 m
-# which is deeper than the probe, so the old code reports LIT. The fixed bias is ~0.13 m.
+# The bias bug scales with the shadow map's texel size. At the 1400 m stream radius the
+# ortho spans 2800 m, so one texel is 1.37 m of world and the broken bias is
+#   texel_world * depth_range * 0.5 = 1.37 * 4564 * 0.5 = ~3100 m
+# which is far deeper than the probe, so metre-scaled bias reports LIT. The fixed bias
+# stays in the centimetres. make_big_world funds the pool (16384 pages) so the map holds
+# dense ground all the way out to the bracket's 360 m samples.
 func make_big_world() -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.physics_enabled = false
-	w.world_origin_bricks = Vector3i(0, -64, 0)
-	w.world_size_regions = Vector3i(16, 5, 16)
-	w.max_lod_pages = 4096
+	# Same horizon; the funded pool holds the dense ground the bracket samples to 360 m.
+	w.stream_radius_m = 1400.0
+	w.max_lod_pages = 16384
 	add_child(w)
 	_worlds.append(w)
 	assert_bool(w.hooks().debug_init_atlas()).is_true()

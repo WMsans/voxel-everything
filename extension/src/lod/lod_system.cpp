@@ -41,10 +41,6 @@ void LodSystem::gather_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *
 	if (out->size() > ve::kMaxRegionOps) out->resize(ve::kMaxRegionOps);
 }
 
-ve::WorldBounds LodSystem::world_bounds() const {
-	return ve::world_bounds(store()->config());
-}
-
 void LodSystem::ensure_lod() {
 	if (lod_tree_ && lod_pool_ && lod_pool_->page_count() > 0) return;
 	handles_.ensure_initialized_thunk(handles_.ensure_initialized_self);
@@ -52,7 +48,7 @@ void LodSystem::ensure_lod() {
 	if (!device) return;
 	if (!lod_tree_) {
 		ve::LodTreeConfig cfg;
-		cfg.bounds = world_bounds();
+		cfg.stream_radius_m = store()->config().stream_radius_m;
 		lod_tree_ = new ve::LodTree(cfg);
 	}
 	if (!lod_pool_) lod_pool_ = new LodPool();

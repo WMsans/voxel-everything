@@ -24,8 +24,6 @@ func make_world() -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.physics_enabled = false
-	w.world_origin_bricks = Vector3i(0, -64, 0)
-	w.world_size_regions = Vector3i(8, 5, 8)
 	w.residency_radius_m = 30.0
 	# Sizing rule of thumb (see test_streaming.gd): only regions CROSSING the surface hold
 	# bricks, ~1500 each for the demo hills, and a 30 m ball holds a handful of them.

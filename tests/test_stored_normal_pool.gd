@@ -19,8 +19,6 @@ func make_small_world(normal_budget: int) -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.physics_enabled = false
-	w.world_origin_bricks = Vector3i(0, -64, 0)
-	w.world_size_regions = Vector3i(8, 5, 8)
 	w.residency_radius_m = 40.0
 	w.atlas_bricks = Vector3i(32, 16, 32)
 	w.max_region_slots = 64

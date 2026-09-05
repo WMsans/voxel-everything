@@ -169,10 +169,12 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_max_brick_jobs"), &VoxelWorld::get_max_brick_jobs);
 	ClassDB::bind_method(D_METHOD("set_max_override_bricks", "v"), &VoxelWorld::set_max_override_bricks);
 	ClassDB::bind_method(D_METHOD("get_max_override_bricks"), &VoxelWorld::get_max_override_bricks);
-	ClassDB::bind_method(D_METHOD("set_world_origin_bricks", "v"), &VoxelWorld::set_world_origin_bricks);
-	ClassDB::bind_method(D_METHOD("get_world_origin_bricks"), &VoxelWorld::get_world_origin_bricks);
-	ClassDB::bind_method(D_METHOD("set_world_size_regions", "v"), &VoxelWorld::set_world_size_regions);
-	ClassDB::bind_method(D_METHOD("get_world_size_regions"), &VoxelWorld::get_world_size_regions);
+	ClassDB::bind_method(D_METHOD("set_stream_radius_m", "v"), &VoxelWorld::set_stream_radius_m);
+	ClassDB::bind_method(D_METHOD("get_stream_radius_m"), &VoxelWorld::get_stream_radius_m);
+	ClassDB::bind_method(D_METHOD("set_occupancy_retention_m", "v"),
+			&VoxelWorld::set_occupancy_retention_m);
+	ClassDB::bind_method(D_METHOD("get_occupancy_retention_m"),
+			&VoxelWorld::get_occupancy_retention_m);
 	ClassDB::bind_method(D_METHOD("set_residency_radius_m", "v"), &VoxelWorld::set_residency_radius_m);
 	ClassDB::bind_method(D_METHOD("get_residency_radius_m"), &VoxelWorld::get_residency_radius_m);
 	ClassDB::bind_method(D_METHOD("set_near_field_scale", "v"), &VoxelWorld::set_near_field_scale);
@@ -215,8 +217,10 @@ void VoxelWorld::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_region_slots"), "set_max_region_slots", "get_max_region_slots");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_brick_jobs"), "set_max_brick_jobs", "get_max_brick_jobs");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_override_bricks"), "set_max_override_bricks", "get_max_override_bricks");
-	ADD_PROPERTY(PropertyInfo(Variant::VECTOR3I, "world_origin_bricks"), "set_world_origin_bricks", "get_world_origin_bricks");
-	ADD_PROPERTY(PropertyInfo(Variant::VECTOR3I, "world_size_regions"), "set_world_size_regions", "get_world_size_regions");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "stream_radius_m"), "set_stream_radius_m",
+			"get_stream_radius_m");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "occupancy_retention_m"),
+			"set_occupancy_retention_m", "get_occupancy_retention_m");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "residency_radius_m"), "set_residency_radius_m", "get_residency_radius_m");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "near_field_scale", PROPERTY_HINT_RANGE, "0.1,1.0,0.01"),
 			"set_near_field_scale", "get_near_field_scale");
@@ -304,6 +308,13 @@ Array VoxelWorld::material_table() const {
 void VoxelWorld::_process(double delta) {
 	// Unconditional: the grid and consolidation queue must keep draining even with physics
 	// disabled, because edits and the debug hooks share this path.
+	// The retention sweep inside drain_occupancy() needs a centre, and this is the only
+	// main-thread place that has one. Resolved before the physics_enabled_ early-out below,
+	// because occupancy must keep draining (and evicting) with physics disabled.
+	if (Node3D *c = Object::cast_to<Node3D>(get_node_or_null(physics_center_path_))) {
+		const Vector3 p = c->get_global_position();
+		store_->set_center(p.x, p.y, p.z);
+	}
 	drain_occupancy();
 	consolidation_->pump_async();
 	update_sun_state();
@@ -671,10 +682,6 @@ RenderingDevice *VoxelWorld::rd() const {
 		self->publish_sun_state_to_local_device(device);
 	}
 	return device;
-}
-
-ve::WorldBounds VoxelWorld::world_bounds() const {
-	return ve::world_bounds(store_->config());
 }
 
 int VoxelWorld::island_slot_count() const {
@@ -1129,12 +1136,11 @@ bool VoxelWorld::render_probe_pixel(Vector3 origin, Vector3 dir) {
 	// The probe is a read-only diagnostic: it must not mutate the streamed world.
 	ve::CameraParams cam = ve::CameraParams::looking_at(
 			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
-	const ve::WorldBounds wb = world_bounds();
-	const ve::IVec3 ro = wb.origin_regions();
-	cam.dims[0] = store_->config().world_size_regions.x; cam.dims[1] = store_->config().world_size_regions.y;
-	cam.dims[2] = store_->config().world_size_regions.z;
+	const ve::RegionWindow win = region_window();
+	cam.dims[0] = win.dim; cam.dims[1] = win.dim;
+	cam.dims[2] = win.dim;
 	cam.dims[3] = island_slot_count();
-	cam.region_origin[0] = ro.x; cam.region_origin[1] = ro.y; cam.region_origin[2] = ro.z;
+	cam.region_origin[0] = win.origin.x; cam.region_origin[1] = win.origin.y; cam.region_origin[2] = win.origin.z;
 	cam.atlas_bricks[0] = store_->config().atlas_bricks.x; cam.atlas_bricks[1] = store_->config().atlas_bricks.y;
 	cam.atlas_bricks[2] = store_->config().atlas_bricks.z;
 	const uint32_t flags = ve::pack_flags(beauty_settings());

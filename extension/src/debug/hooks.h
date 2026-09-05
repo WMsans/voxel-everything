@@ -367,7 +367,10 @@ public:
 
 	// Test-only fixture: publish one valid table containing every override slot, exhausting
 	// the real 8192-slot store so refusal tests do not rely on an oversized plan shortcut.
-	bool debug_fill_override_pool();
+	// The target region is explicit: it must be resident (the fill publishes through its
+	// tenant slot), so callers name the region they streamed; a far-away stream leaves it
+	// non-resident and the fill refuses, which is what the offscreen-refusal test leans on.
+	bool debug_fill_override_pool(Vector3i region);
 
 	Dictionary debug_override_render_state(Vector3i brick);
 

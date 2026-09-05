@@ -260,7 +260,6 @@ public:
 	bool preflight_shaders(RenderingDevice *rd, String *out_error);
 
 private:
-	ve::WorldBounds world_bounds() const; // store-config projection, as VoxelWorld's
 	bool ensure_downsample_set(RenderingDevice *device, RID src, RID dst);
 
 	Collaborators handles_;

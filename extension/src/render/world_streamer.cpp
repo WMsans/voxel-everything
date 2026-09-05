@@ -302,6 +302,10 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 	const int reserve = stream_slot_reserve(atlas_->atlas_slot_count(),
 			residency_->config().max_loads_per_frame * budget.per_load);
 	budget.available = free_slots - reserve;
+	// The window follows the camera. Recentring is free: the toroidal index needs no shift and
+	// no re-upload, because a region leaves residency (writing -1 through
+	// set_region_map_entry) long before its cell could be reused by a region dim regions away.
+	residency_->set_window(ve::region_window_centered(cx, cy, cz, residency_->window().dim));
 	ve::ResidencyPlan plan = residency_->update(cx, cy, cz, budget);
 	// Charge this frame's loads against the free count until a fresh reading catches up with
 	// them. Evictions are deliberately NOT credited back here: under-counting what is free

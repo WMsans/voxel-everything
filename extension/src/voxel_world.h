@@ -253,20 +253,10 @@ public:
 	int get_max_brick_jobs() const { return store_->config().max_brick_jobs; }
 	void set_max_override_bricks(int v) { store_->set_max_override_bricks(v); }
 	int get_max_override_bricks() const { return store_->config().max_override_bricks; }
-	void set_world_origin_bricks(Vector3i v) {
-		store_->set_world_origin_bricks({v.x, v.y, v.z});
-	}
-	Vector3i get_world_origin_bricks() const {
-		return {store_->config().world_origin_bricks.x, store_->config().world_origin_bricks.y,
-				store_->config().world_origin_bricks.z};
-	}
-	void set_world_size_regions(Vector3i v) {
-		store_->set_world_size_regions({v.x, v.y, v.z});
-	}
-	Vector3i get_world_size_regions() const {
-		return {store_->config().world_size_regions.x, store_->config().world_size_regions.y,
-				store_->config().world_size_regions.z};
-	}
+	void set_stream_radius_m(float v) { store_->set_stream_radius_m(v); }
+	float get_stream_radius_m() const { return store_->config().stream_radius_m; }
+	void set_occupancy_retention_m(float v) { store_->set_occupancy_retention_m(v); }
+	float get_occupancy_retention_m() const { return store_->config().occupancy_retention_m; }
 	void set_residency_radius_m(float v) { store_->set_residency_radius_m(v); }
 	float get_residency_radius_m() const { return store_->config().residency_radius_m; }
 	// Fraction of the engine's internal 3D resolution the near-field marcher runs at; the
@@ -365,7 +355,6 @@ public:
 	void prepare_lod_shadow_raster();
 	RenderingDevice *rd() const; // one-line delegation into RenderOrchestrator
 	GpuTimings *gpu_timings() { return context_.render->gpu_timings(); }
-	ve::WorldBounds world_bounds() const;
 
 	GpuAtlas *atlas() { return context_.render->atlas(); }
 	MaterialAtlas *material_atlas() { return context_.render->materials(); }
@@ -376,6 +365,8 @@ public:
 	// take island_mutex_ before touching island_manager_ / island_slots_.
 	int island_slot_count() const;
 	WorldStreamer *streamer() { return streamer_; }
+	// The near-field region map's current window. Read by RaymarchCompositor for the
+	// push constants and by the debug hooks.
 	ve::RegionWindow region_window() const { return store_->residency() ? store_->residency()->window() : ve::RegionWindow{}; }
 	ve::EditLog *edit_log() { return store_->edit_log(); }
 	ve::VolumeSet &volumes() { return store_->volumes(); }
