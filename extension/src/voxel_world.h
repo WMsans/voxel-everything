@@ -376,6 +376,7 @@ public:
 	// take island_mutex_ before touching island_manager_ / island_slots_.
 	int island_slot_count() const;
 	WorldStreamer *streamer() { return streamer_; }
+	ve::RegionWindow region_window() const { return store_->residency() ? store_->residency()->window() : ve::RegionWindow{}; }
 	ve::EditLog *edit_log() { return store_->edit_log(); }
 	ve::VolumeSet &volumes() { return store_->volumes(); }
 	RaymarchPass *raymarch_pass() { return context_.render->raymarch_pass(); }

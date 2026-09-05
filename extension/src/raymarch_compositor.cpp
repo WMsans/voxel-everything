@@ -101,12 +101,12 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	// Provisional reach; the real one is the fade band's end, read below once the streamer
 	// has run. 0 = no near-field hits.
 	cp.params[2] = near_field_enabled ? 200.0f : 0.0f;
-	const Vector3i sr = world->get_world_size_regions();
-	cp.dims[0] = sr.x; cp.dims[1] = sr.y; cp.dims[2] = sr.z;
+	const ve::RegionWindow win = world->region_window();
+	cp.dims[0] = win.dim; cp.dims[1] = win.dim; cp.dims[2] = win.dim;
 	cp.dims[3] = world->island_slot_count();
-	const Vector3i ob = world->get_world_origin_bricks();
-	cp.region_origin[0] = ob.x / 32; cp.region_origin[1] = ob.y / 32;
-	cp.region_origin[2] = ob.z / 32;
+	cp.region_origin[0] = win.origin.x;
+	cp.region_origin[1] = win.origin.y;
+	cp.region_origin[2] = win.origin.z;
 	cp.region_origin[3] = 0; // Task 11 sets the cull grid
 	const Vector3i ab = world->get_atlas_bricks();
 	cp.atlas_bricks[0] = ab.x; cp.atlas_bricks[1] = ab.y; cp.atlas_bricks[2] = ab.z;

@@ -94,13 +94,19 @@ layout(push_constant, std430) uniform Push {
 uint g_brick_cells = 0u;
 uint g_region_cells = 0u;
 
-// Region-table slot for the region holding a GLOBAL brick coord; -1 outside the world or
-// not resident. `>> 5` is an arithmetic shift: floor(b / 32), correct for negatives.
+// Region-table slot for the region holding a GLOBAL brick coord; -1 outside the window or not
+// resident. `>> 5` is an arithmetic shift: floor(b / 32), correct for negatives. The window
+// test stays -- a ray marching past the window must still miss -- but the INDEX is toroidal,
+// because the map is a camera-centred window rather than a dense grid over a fixed world.
+// Two regions that alias are pc.dims regions apart and two simultaneously resident regions are
+// at most 2 * radius * margin apart, so a live collision is arithmetically impossible
+// (ve::region_window_dim).
 int region_slot_of(ivec3 brick) {
 	ivec3 r = brick >> 5;
 	ivec3 l = r - pc.region_origin.xyz;
 	if (any(lessThan(l, ivec3(0))) || any(greaterThanEqual(l, pc.dims.xyz))) return -1;
-	return region_map.slot[l.x + l.y * pc.dims.x + l.z * pc.dims.x * pc.dims.y];
+	ivec3 w = r & (pc.dims.xyz - 1);
+	return region_map.slot[w.x + w.y * pc.dims.x + w.z * pc.dims.x * pc.dims.y];
 }
 
 // Atlas slot of a brick within a KNOWN region table; -1 when absent. `& 31` is the
