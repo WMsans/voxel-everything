@@ -256,6 +256,19 @@ bool LodTree::children_ready(int level, IVec3 c) const {
 	const IVec3 base = lod_child_base(c);
 	for (int k = 0; k < 8; k++) {
 		const IVec3 ch{base.x + (k & 1), base.y + ((k >> 1) & 1), base.z + ((k >> 2) & 1)};
+		// Whatever request() refuses for being outside the far field, this gate must not wait
+		// for, or the refusal stops being an edge and becomes a permanent stall. This is the
+		// world-bounds skip that the radius replaced: it matters most at the root, because a
+		// root chunk is 1638.4 m across -- exactly the default stream radius -- so every root
+		// but the camera's own has children past the radius, and waiting on those pins a
+		// whole root at level 7, drawing 51.2 m cells over ground that should be metres.
+		//
+		// request()'s OTHER refusal, the fade start, is deliberately not mirrored here: the
+		// far field's coarse parent still has to cover the handover band, and skipping those
+		// children instead leaves it uncovered (measured on debug_seam_probe: 674 of 1258
+		// band pixels claimed by neither field, against 25 of 1308 with only this skip).
+		if (lod_chunk_distance(level - 1, ch, last_cam_pos_) > cfg_.stream_radius_m)
+			continue; // outside the far field, therefore "done"
 		const auto it = nodes_.find(key(level - 1, ch));
 		if (it == nodes_.end()) return false;
 		if (it->second.state != kLodReady && it->second.state != kLodEmpty) return false;

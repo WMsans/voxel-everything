@@ -16,7 +16,10 @@ func make_world() -> VoxelWorld:
 	# cameras need ~1310 m (measured to the farthest L6 sibling), and the bracket needs
 	# the map to hold ground to 360 m -- so 1400 with margin.
 	w.stream_radius_m = 1400.0
-	w.max_lod_pages = 16384
+	# 32768, the shipped default (LodSystem::max_lod_pages_): 16384 was enough only while
+	# the walk stalled on out-of-radius siblings and drew coarse roots instead of the far
+	# field; a complete cut at this stream radius needs more.
+	w.max_lod_pages = 32768
 	add_child(w)
 	_worlds.append(w)
 	assert_bool(w.hooks().debug_init_atlas()).is_true()
@@ -35,7 +38,10 @@ func make_big_world() -> VoxelWorld:
 	w.physics_enabled = false
 	# Same horizon; the funded pool holds the dense ground the bracket samples to 360 m.
 	w.stream_radius_m = 1400.0
-	w.max_lod_pages = 16384
+	# 32768, the shipped default (LodSystem::max_lod_pages_): 16384 was enough only while
+	# the walk stalled on out-of-radius siblings and drew coarse roots instead of the far
+	# field; a complete cut at this stream radius needs more.
+	w.max_lod_pages = 32768
 	add_child(w)
 	_worlds.append(w)
 	assert_bool(w.hooks().debug_init_atlas()).is_true()

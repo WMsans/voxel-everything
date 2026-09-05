@@ -932,3 +932,101 @@ TEST_CASE("coarse nodes inside the stream radius keep their exemption") {
 		return d.level == ve::kLodLevels - 1 && d.coord.x == 0 && d.coord.z == 0;
 	}));
 }
+
+namespace {
+
+// settle(), but the world is a SURFACE rather than a solid: a chunk is ready only where the
+// ground plane crosses it, and empty everywhere else, which is what lets the walk prune air
+// the way the real mesher does. Answering every request "ready" instead refines a whole
+// volume to level 0 and takes minutes.
+constexpr float kGroundY = 51.2f;
+
+void settle_over_ground(ve::LodTree *t, const ve::LodCamera &c, const ve::LodOcclusion *occ) {
+	ve::LodWalkResult r;
+	for (int f = 1; f <= 4000; f++) {
+		t->walk(c, occ, uint32_t(f), &r);
+		for (const ve::LodBuildRequest &q : r.requests) {
+			float lo[3], hi[3];
+			ve::lod_chunk_aabb(q.level, q.coord, lo, hi);
+			if (lo[1] < kGroundY && hi[1] > kGroundY) t->note_ready(q.level, q.coord, 1, 1);
+			else t->note_empty(q.level, q.coord);
+		}
+		if (r.requests.empty() && f > 2) return;
+	}
+	// Fail instead of hanging if a regression leaves requests never draining.
+	REQUIRE(r.requests.empty());
+}
+
+} // namespace
+
+// A settled cut must never draw a chunk it asked to refine. Refinement is gated on
+// children_ready(), and request() refuses any chunk beyond the stream radius -- so if the two
+// disagree about which children exist, the gate can never open and the walk emits the coarse
+// parent forever. A root chunk is exactly one default stream radius across, so every root
+// except the camera's own has children past the radius: this is the case that stalls.
+TEST_CASE("a settled cut never draws a chunk the walk wanted finer") {
+	ve::LodTreeConfig cfg;
+	cfg.stream_radius_m = 1638.4f;
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(819.2f, 62.0f, 1500.0f);
+	settle_over_ground(&t, c, &occ);
+
+	ve::LodWalkResult r;
+	t.walk(c, &occ, 20000, &r);
+	const float cam[3] = {819.2f, 62.0f, 1500.0f};
+	int stalled = 0;
+	int worst_level = 0;
+	float worst_dist = 0.0f;
+	for (const ve::LodDrawItem &d : r.draws) {
+		if (d.level == 0) continue; // nothing finer exists
+		// The fade start is the one refusal children_ready() does NOT mirror, by design: a
+		// chunk whose children all sit inside the handover band keeps drawing itself so the
+		// band stays covered. Those stalls are the contract, not the bug, so skip them.
+		const ve::IVec3 base = ve::lod_child_base(d.coord);
+		bool fade_holds_it = false;
+		for (int k = 0; k < 8; k++) {
+			const ve::IVec3 ch{base.x + (k & 1), base.y + ((k >> 1) & 1), base.z + ((k >> 2) & 1)};
+			if (ve::lod_chunk_far_distance(d.level - 1, ch, cam) < cfg.fade_start_m)
+				fade_holds_it = true;
+		}
+		if (fade_holds_it) continue;
+
+		float lo[3], hi[3], ss_min[3], ss_max[3];
+		ve::lod_chunk_aabb(d.level, d.coord, lo, hi);
+		const float area = ve::lod_projected_area(c, lo, hi, ss_min, ss_max);
+		const float dist = ve::lod_chunk_distance(d.level, d.coord, cam);
+		const bool wanted_finer = (ve::kLodNearDenseRadiusM > 0.0f &&
+				dist < ve::kLodNearDenseRadiusM) || area > cfg.sse_area_thresh;
+		if (!wanted_finer) continue;
+		stalled++;
+		if (d.level > worst_level) {
+			worst_level = d.level;
+			worst_dist = dist;
+		}
+	}
+	CHECK_MESSAGE(stalled == 0, "the walk wanted ", stalled,
+			" drawn chunks finer and never got there; coarsest was level ", worst_level,
+			" (", ve::lod_cell_size(worst_level), " m cells) at ", worst_dist, " m");
+}
+
+// The two gates must agree about the far field's edge. Whatever request() refuses to build
+// for being outside it, children_ready() must not wait for -- otherwise the refusal is a
+// permanent stall rather than a bounded world.
+TEST_CASE("a root the forest admits can always refine") {
+	ve::LodTreeConfig cfg;
+	cfg.stream_radius_m = 1638.4f;
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(819.2f, 62.0f, 1500.0f);
+	settle_over_ground(&t, c, &occ);
+
+	ve::LodWalkResult r;
+	t.walk(c, &occ, 20000, &r);
+	int roots_drawn = 0;
+	for (const ve::LodDrawItem &d : r.draws)
+		if (d.level == ve::kLodLevels - 1) roots_drawn++;
+	CHECK_MESSAGE(roots_drawn == 0, roots_drawn,
+			" root chunks were drawn whole, at ", ve::lod_cell_size(ve::kLodLevels - 1),
+			" m cells");
+}

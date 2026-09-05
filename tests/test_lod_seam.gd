@@ -14,7 +14,11 @@ func make_world(residency_radius := 96.0) -> VoxelWorld:
 	w.physics_enabled = false
 	w.stream_radius_m = 1300.0 # the walk needs whole in-radius sibling sets (L6 spans
 	# 819 m); this suite's cameras need ~1210 m, so 1300 is the floor here
-	w.max_lod_pages = 16384
+	# 32768, the shipped default (LodSystem::max_lod_pages_): 16384 was enough only while
+	# the walk stalled on out-of-radius siblings and drew coarse roots instead of the far
+	# field. This suite's settle() result is not asserted, so a starved pool does not fail
+	# it -- it just measures the seam on a world that never converged.
+	w.max_lod_pages = 32768
 	w.residency_radius_m = residency_radius
 	add_child(w)
 	_worlds.append(w)

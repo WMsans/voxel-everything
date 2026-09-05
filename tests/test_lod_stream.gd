@@ -15,7 +15,10 @@ func make_world() -> VoxelWorld:
 	w.stream_radius_m = 1000.0 # small but viable: the walk descends only into a node
 	# whose eight children are all in-radius (L6 spans 819 m); below ~940 m it stalls
 	# at 2 roots, so 1000 is the floor for these cameras
-	w.max_lod_pages = 16384
+	# 32768, the shipped default (LodSystem::max_lod_pages_): 16384 was enough only while
+	# the walk stalled on out-of-radius siblings and drew coarse roots instead of the far
+	# field; a complete cut for this camera needs ~19k pages.
+	w.max_lod_pages = 32768
 	add_child(w)
 	_worlds.append(w)
 	assert_bool(w.hooks().debug_init_atlas()).is_true()

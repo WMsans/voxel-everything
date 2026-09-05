@@ -21,6 +21,9 @@ func after_test() -> void:
 			w.free()
 	_worlds.clear()
 
+# `pages` is the page budget under test. The convergence tests pass 32768, the shipped
+# default: 16384 was enough only while the walk stalled on out-of-radius siblings and
+# drew coarse roots instead of the far field; a complete cut here needs ~19k pages.
 func make_world(pages: int = 256) -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
@@ -57,7 +60,7 @@ func test_the_pool_starts_empty_and_sized() -> void:
 	assert_int(d["chunks_resident"]).is_equal(0)
 
 func test_ticking_streams_chunks_in(timeout := 120000) -> void:
-	var w := make_world(16384)
+	var w := make_world(32768)  # see make_world's note
 	var ticks: int = await settle(w, NEAR_POS, NEAR_FWD)
 	var d := w.hooks().debug_lod_stats()
 	assert_int(ticks).override_failure_message(
@@ -91,7 +94,7 @@ func test_a_tiny_pool_degrades_to_coarse_instead_of_breaking(timeout := 60000) -
 		"a starving pool drew nothing at all: %s" % d).is_greater(0)
 
 func test_pages_come_back_when_chunks_are_evicted(timeout := 180000) -> void:
-	var w := make_world(16384)
+	var w := make_world(32768)  # see make_world's note
 	assert_int(await settle(w, NEAR_POS, NEAR_FWD)).override_failure_message(
 		"the near view never converged: %s" % w.hooks().debug_lod_stats()).is_greater(0)
 	var used_near: int = w.hooks().debug_lod_stats()["pages_used"]

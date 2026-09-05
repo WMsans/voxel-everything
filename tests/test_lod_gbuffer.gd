@@ -14,7 +14,10 @@ func make_world() -> VoxelWorld:
 	w.physics_enabled = false
 	w.stream_radius_m = 1300.0 # the walk needs whole in-radius sibling sets (L6 spans
 	# 819 m); this suite's cameras need ~1210 m, so 1300 is the floor here
-	w.max_lod_pages = 16384
+	# 32768, the shipped default (LodSystem::max_lod_pages_): 16384 was enough only while
+	# the walk stalled on out-of-radius siblings and drew coarse roots instead of the far
+	# field; a complete cut for this camera needs ~19k pages.
+	w.max_lod_pages = 32768
 	add_child(w)
 	_worlds.append(w)
 	assert_bool(w.hooks().debug_init_atlas()).is_true()
