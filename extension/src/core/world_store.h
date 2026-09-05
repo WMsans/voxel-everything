@@ -27,6 +27,7 @@
 #include "world/edit_log.h"
 #include "world/region.h"
 #include "world/override_store.h"
+#include "world/region_window.h"
 #include "world/residency.h"
 
 namespace ve {
@@ -216,12 +217,13 @@ public:
 		if (!overrides_)
 			overrides_ = new ve::OverrideStore(capacity);
 	}
-	void ensure_residency(const ve::WorldBounds &bounds) {
+	void ensure_residency() {
 		if (!residency_) {
 			ve::ResidencyConfig rcfg;
-			rcfg.bounds = bounds;
 			rcfg.radius_m = config_.residency_radius_m;
 			rcfg.max_region_slots = config_.max_region_slots;
+			rcfg.window = ve::region_window_centered(0.0f, 0.0f, 0.0f,
+					ve::region_window_dim(rcfg.radius_m, rcfg.evict_margin));
 			residency_ = new ve::RegionResidency(rcfg);
 		}
 	}
