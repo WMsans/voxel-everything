@@ -2143,13 +2143,13 @@ Dictionary VoxelDebugHooks::debug_override_render_state(Vector3i brick) {
 	RenderingDevice *device = world_->rd();
 	if (!device || !world_->atlas() || !world_->store_->overrides()) return d;
 	const ve::IVec3 b{brick.x, brick.y, brick.z};
-	const ve::IVec3 r = ve::WorldBounds::region_of_brick(b);
+	const ve::IVec3 r = ve::region_of_brick(b);
 	const int region_slot = world_->store_->residency() ? world_->store_->residency()->slot_of(r) : -1;
 	if (region_slot < 0) return d;
 	const int table = world_->atlas()->overrides().region_table(region_slot);
 	int table_slot = -1;
 	if (table >= 0) {
-		const int bi = ve::WorldBounds::brick_index_in_region(b);
+		const int bi = ve::brick_index_in_region(b);
 		const PackedByteArray entry = device->buffer_get_data(world_->atlas()->overrides().tables(),
 				static_cast<uint32_t>((table * ve::kRegionBrickCount + bi) * 4), 4);
 		if (entry.size() >= 4) table_slot = *reinterpret_cast<const int32_t *>(entry.ptr());
@@ -2226,7 +2226,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 					const ve::IVec3 b{base.x + x, base.y + y, base.z + z};
 					const int slot = world_->store_->overrides()->slot_of(b);
 					if (slot >= 0) existing_entries.emplace_back(
-							ve::WorldBounds::brick_index_in_region(b), slot);
+							ve::brick_index_in_region(b), slot);
 				}
 		if (!world_->mesh_->set_override_region(r, job.region_slot, existing_table, existing_entries)) return d;
 	}
@@ -2331,7 +2331,7 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 	bool ok = false;
 	float origin[3];
 	ve::lod_chunk_origin(level, c, origin);
-	const ve::IVec3 region = ve::WorldBounds::region_of_point(origin[0], origin[1], origin[2]);
+	const ve::IVec3 region = ve::region_of_point(origin[0], origin[1], origin[2]);
 	const int override_table = world_->override_table_for_region(region);
 	world_->mesh_->run_sync([&](MeshPass &pass) {
 		(void)pass;
@@ -2380,7 +2380,7 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 							memdelete(rd);
 							return;
 						}
-						override_entries.emplace_back(ve::WorldBounds::brick_index_in_region(b), slot);
+						override_entries.emplace_back(ve::brick_index_in_region(b), slot);
 					}
 			lod.set_override_table(0, override_table, override_entries);
 		}
@@ -2763,13 +2763,13 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 	if (!ve::plan_island_lattice(wlo, whi, ve::kIslandDim, &job.voxel, job.origin)) return d;
 	job.dim = ve::kIslandDim;
 	job.override_table = world_->override_table_for_region(
-			ve::WorldBounds::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
+			ve::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
 	{
 		std::lock_guard<std::mutex> lock(world_->edit_mutex());
 		ve::collect_ops_for_aabb(*world_->store_->edit_log(), wlo, whi, &job.ops);
 		float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
-		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
-		ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
+		ve::IVec3 blo = ve::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
+		ve::IVec3 bhi = ve::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
 		if (!world_->snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) return d;
 		job.gen = &world_->store_->generator()->sampler();
 	}
@@ -3194,13 +3194,13 @@ bool VoxelDebugHooks::debug_extract_submit(int id, Vector3i lo_cell, Vector3i hi
 	if (!ve::plan_island_lattice(wlo, whi, ve::kIslandDim, &job.voxel, job.origin)) return false;
 	job.dim = ve::kIslandDim;
 	job.override_table = world_->override_table_for_region(
-			ve::WorldBounds::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
+			ve::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
 	{
 		std::lock_guard<std::mutex> lock(world_->edit_mutex());
 		ve::collect_ops_for_aabb(*world_->store_->edit_log(), wlo, whi, &job.ops);
 		float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
-		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
-		ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
+		ve::IVec3 blo = ve::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
+		ve::IVec3 bhi = ve::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
 		if (!world_->snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) return false;
 		job.gen = &world_->store_->generator()->sampler();
 	}
@@ -3290,10 +3290,10 @@ Dictionary VoxelDebugHooks::debug_raymarch_probe(Vector3 origin, Vector3 dir) {
 	if (hf[3] < 0.5f) return d; // sky miss
 	d["hit"] = true;
 	d["pos"] = Vector3(hf[0], hf[1], hf[2]);
-	const ve::IVec3 brick = ve::WorldBounds::brick_of_point(hf[0], hf[1], hf[2]);
+	const ve::IVec3 brick = ve::brick_of_point(hf[0], hf[1], hf[2]);
 	d["brick"] = Vector3i(brick.x, brick.y, brick.z);
 	// Reproduce the shader's lookups on the CPU to report what the mips said there.
-	const ve::IVec3 rs_region = ve::WorldBounds::region_of_brick(brick);
+	const ve::IVec3 rs_region = ve::region_of_brick(brick);
 	const int rslot = debug_region_map_entry(Vector3i(rs_region.x, rs_region.y, rs_region.z));
 	if (rslot < 0) return d;
 	const int slot = debug_region_table_slot(rslot, Vector3i(brick.x, brick.y, brick.z));
@@ -3528,7 +3528,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_normal_probe(Vector3 origin, Vector3 
 			const float hitz = hp[i * 4 + 2];
 			// CPU reference gradient over this region's op span.
 			const std::vector<ve::EditOp> &ops =
-					world_->store_->edit_log()->ops(ve::WorldBounds::region_of_point(hitx, hity, hitz));
+					world_->store_->edit_log()->ops(ve::region_of_point(hitx, hity, hitz));
 			const ve::FieldSample fs = ve::eval_field_gradient(gen, ops.data(),
 					static_cast<int>(ops.size()), hitx, hity, hitz, &world_->store_->volumes(), world_->store_->overrides());
 			if (!fs.exact_gradient) continue;
@@ -4899,7 +4899,7 @@ Dictionary VoxelDebugHooks::debug_self_check() {
 	d["field_mismatches"] = field_mismatches;
 
 	// Brick differential on a small spread of resident bricks near the camera/centre.
-	const ve::IVec3 region = ve::WorldBounds::region_of_point(center.x, center.y, center.z);
+	const ve::IVec3 region = ve::region_of_point(center.x, center.y, center.z);
 	int brick_mismatches = 0;
 	const int rslot = debug_region_map_entry(Vector3i(region.x, region.y, region.z));
 	if (rslot >= 0) {
@@ -4918,7 +4918,7 @@ Dictionary VoxelDebugHooks::debug_self_check() {
 		for (int dz = -1; dz <= 1 && checked < 6; dz++)
 			for (int dy = -1; dy <= 1 && checked < 6; dy++)
 				for (int dx = -1; dx <= 1 && checked < 6; dx++) {
-					const ve::IVec3 b = ve::WorldBounds::brick_of_point(
+					const ve::IVec3 b = ve::brick_of_point(
 							center.x + dx * 4.0f, center.y + dy * 4.0f, center.z + dz * 4.0f);
 					const Dictionary bd = debug_brick_diff(Vector3i(b.x, b.y, b.z), rslot, ops, op_count);
 					if (!bd.has("slot") || int(bd["slot"]) < 0) continue;
@@ -5557,7 +5557,7 @@ PackedInt32Array VoxelDebugHooks::debug_jobs() {
 int VoxelDebugHooks::debug_region_table_slot(int region_slot, Vector3i brick) {
 	RenderingDevice *device = world_->rd();
 	if (!device || !world_->atlas()) return -1;
-	const int bi = ve::WorldBounds::brick_index_in_region({brick.x, brick.y, brick.z});
+	const int bi = ve::brick_index_in_region({brick.x, brick.y, brick.z});
 	const uint32_t offset =
 			(static_cast<uint32_t>(region_slot) * ve::kRegionBrickCount + bi) * 4;
 	const PackedByteArray b = device->buffer_get_data(world_->atlas()->region_tables(), offset, 4);
@@ -5733,7 +5733,7 @@ float VoxelDebugHooks::debug_field_sdf(Vector3 p) {
 	const ve::Generator &gen = world_->store_->generator()->sampler();
 	std::lock_guard<std::mutex> lock(world_->edit_mutex());
 	const std::vector<ve::EditOp> &ops =
-			world_->store_->edit_log()->ops(ve::WorldBounds::region_of_point(p.x, p.y, p.z));
+			world_->store_->edit_log()->ops(ve::region_of_point(p.x, p.y, p.z));
 	return ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()), p.x, p.y, p.z,
 			&world_->store_->volumes(), world_->store_->overrides()).sdf;
 }
@@ -5743,7 +5743,7 @@ int VoxelDebugHooks::debug_cell_state(Vector3i cell) {
 	const ve::IVec3 c{cell.x, cell.y, cell.z};
 	const ve::Generator &gen = world_->store_->generator()->sampler();
 	std::lock_guard<std::mutex> lock(world_->edit_mutex());
-	const std::vector<ve::EditOp> &ops = world_->store_->edit_log()->ops(ve::WorldBounds::region_of_brick(c));
+	const std::vector<ve::EditOp> &ops = world_->store_->edit_log()->ops(ve::region_of_brick(c));
 	return static_cast<int>(ve::cell_state_field(gen, ops.data(),
 			static_cast<int>(ops.size()), c, &world_->store_->volumes(), world_->store_->overrides()));
 }
@@ -5755,7 +5755,7 @@ Dictionary VoxelDebugHooks::debug_occupancy_stats(Vector3 center) {
 	d["edit_seq"] = static_cast<int64_t>(world_->edit_seq());
 	// The block covering the streaming centre, so a test can tell "the grid has been told
 	// about this edit" from "some other region's block arrived".
-	const ve::IVec3 r = ve::WorldBounds::region_of_point(center.x, center.y, center.z);
+	const ve::IVec3 r = ve::region_of_point(center.x, center.y, center.z);
 	d["seq_at_center"] = static_cast<int64_t>(world_->occupancy().block_seq(r));
 	return d;
 }

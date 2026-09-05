@@ -40,13 +40,13 @@ void OccupancyGrid::set_block(IVec3 region, const uint8_t *bytes, int64_t seq) {
 }
 
 void OccupancyGrid::set_cell(IVec3 cell, CellState s, int64_t seq) {
-	Block *b = ensure(WorldBounds::region_of_brick(cell));
+	Block *b = ensure(ve::region_of_brick(cell));
 	write_packed(b->bytes.data(), cell_index_in_region(cell), static_cast<uint8_t>(s));
 	if (seq > b->seq) b->seq = seq;
 }
 
 CellState OccupancyGrid::state(IVec3 cell) const {
-	const auto it = blocks_.find(key(WorldBounds::region_of_brick(cell)));
+	const auto it = blocks_.find(key(ve::region_of_brick(cell)));
 	if (it == blocks_.end()) return kCellUnknown;
 	return static_cast<CellState>(read_packed(it->second.bytes.data(),
 			cell_index_in_region(cell)));

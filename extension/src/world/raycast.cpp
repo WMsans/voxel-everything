@@ -10,7 +10,7 @@ namespace {
 // The op list that governs a point is the list of the region containing it (spec §2: an op
 // is appended to every region it touches, so no neighbour walk is needed).
 const std::vector<EditOp> &ops_at(const EditLog &log, float x, float y, float z) {
-	return log.ops(WorldBounds::region_of_point(x, y, z));
+	return log.ops(ve::region_of_point(x, y, z));
 }
 
 Sample sample_at(const Generator &gen, const EditLog &log, float x, float y, float z,
