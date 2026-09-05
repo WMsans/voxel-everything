@@ -696,7 +696,7 @@ void VoxelWorld::ensure_physics_initialized() {
 	// The CPU cores are shared with the streaming path and outlive both
 	// (voxel_world.h); created through the same WorldStore lazy paths as the
 	// streaming init, so physics-first worlds get identical objects.
-	store_->ensure_edit_log(world_bounds());
+	store_->ensure_edit_log();
 	store_->ensure_overrides(store_->config().max_override_bricks);
 	mesh_ = new MeshService();
 	mesh_->set_terrain_pipeline(store_->terrain_pipeline());

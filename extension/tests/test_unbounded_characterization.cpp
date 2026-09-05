@@ -52,15 +52,16 @@ TEST_CASE("characterization: settled residency at the demo spawn") {
 }
 
 TEST_CASE("characterization: edit fan-out at the old world edge") {
-	ve::EditLog log(demo_bounds());
+	ve::EditLog log;
 	ve::EditOp op{};
 	op.type = ve::kOpSphereSubtract;
-	// Region 63 is the last in x; this sphere straddles the old world edge at 1638.4 m.
 	op.pos[0] = 1638.0f; op.pos[1] = 0.0f; op.pos[2] = 8.0f;
 	op.radius = 4.0f;
 	const ve::EditLog::AppendResult r = log.append(op);
 	CHECK(r.rejected.empty());
-	// Today the clamp drops every region past x = 63. After the refactor those regions exist.
-	for (const ve::IVec3 &t : r.touched) CHECK(t.x <= 63);
 	CHECK(!r.touched.empty());
+	// CHANGED by the unbounded-world refactor: region 64 used to be clamped away because it
+	// lay past the 1638.4 m world edge. There is no edge now, so the op reaches it.
+	CHECK(std::any_of(r.touched.begin(), r.touched.end(),
+			[](const ve::IVec3 &t) { return t.x == 64; }));
 }

@@ -203,7 +203,7 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 	if (!materials_->initialize(device)) return GpuInitResult::kFailed;
 	// The four blocks below are the verbatim construction sequence moved into
 	// WorldStore; their call positions relative to the GPU setup are load-bearing.
-	handles_.store->ensure_edit_log(world_bounds());
+	handles_.store->ensure_edit_log();
 	handles_.store->ensure_overrides(atlas_->overrides().capacity());
 	if (!atlas_->replay_overrides(device, *handles_.store->overrides(),
 			handles_.store->override_tables())) {

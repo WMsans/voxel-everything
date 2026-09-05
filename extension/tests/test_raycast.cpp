@@ -4,11 +4,9 @@
 #include "generator/generator.h"
 #include <cmath>
 
-static ve::WorldBounds bounds() { return ve::WorldBounds{{0, -64, 0}, {64, 8, 64}}; }
-
 TEST_CASE("a ray straight down from the sky lands on the surface") {
 	ve::AnalyticGenerator gen;
-	ve::EditLog log(bounds());
+	ve::EditLog log;
 	const float o[3] = {100.0f, 91.2f, 100.0f}; // 91.2 = 40 + kSurfaceY: well above the surface
 	const float d[3] = {0.0f, -1.0f, 0.0f};
 	const ve::RayHit h = ve::raycast(gen, log, o, d, 200.0f);
@@ -24,7 +22,7 @@ TEST_CASE("a ray straight down from the sky lands on the surface") {
 
 TEST_CASE("a ray into the sky misses") {
 	ve::AnalyticGenerator gen;
-	ve::EditLog log(bounds());
+	ve::EditLog log;
 	const float o[3] = {100.0f, 91.2f, 100.0f}; // 91.2 = 40 + kSurfaceY: well above the surface
 	const float d[3] = {0.0f, 1.0f, 0.0f};
 	CHECK_FALSE(ve::raycast(gen, log, o, d, 200.0f).hit);
@@ -32,7 +30,7 @@ TEST_CASE("a ray into the sky misses") {
 
 TEST_CASE("max_dist bounds the trace") {
 	ve::AnalyticGenerator gen;
-	ve::EditLog log(bounds());
+	ve::EditLog log;
 	const float o[3] = {100.0f, 91.2f, 100.0f}; // 91.2 = 40 + kSurfaceY: well above the surface
 	const float d[3] = {0.0f, -1.0f, 0.0f};
 	CHECK_FALSE(ve::raycast(gen, log, o, d, 5.0f).hit);
@@ -41,7 +39,7 @@ TEST_CASE("max_dist bounds the trace") {
 
 TEST_CASE("the trace sees edits: a crater moves the hit point down") {
 	ve::AnalyticGenerator gen;
-	ve::EditLog log(bounds());
+	ve::EditLog log;
 	const float o[3] = {100.0f, 91.2f, 100.0f}; // 91.2 = 40 + kSurfaceY: well above the surface
 	const float d[3] = {0.0f, -1.0f, 0.0f};
 	const ve::RayHit before = ve::raycast(gen, log, o, d, 200.0f);
@@ -62,7 +60,7 @@ TEST_CASE("the trace sees edits: a crater moves the hit point down") {
 
 TEST_CASE("a ray that starts inside solid reports a hit at its origin") {
 	ve::AnalyticGenerator gen;
-	ve::EditLog log(bounds());
+	ve::EditLog log;
 	const float o[3] = {100.0f, -30.0f, 100.0f}; // well underground
 	const float d[3] = {0.0f, 1.0f, 0.0f};
 	const ve::RayHit h = ve::raycast(gen, log, o, d, 100.0f);
@@ -72,7 +70,7 @@ TEST_CASE("a ray that starts inside solid reports a hit at its origin") {
 
 TEST_CASE("the direction is normalised for the caller") {
 	ve::AnalyticGenerator gen;
-	ve::EditLog log(bounds());
+	ve::EditLog log;
 	const float o[3] = {100.0f, 91.2f, 100.0f}; // 91.2 = 40 + kSurfaceY: well above the surface
 	const float unit[3] = {0.0f, -1.0f, 0.0f};
 	const float scaled[3] = {0.0f, -7.5f, 0.0f};
@@ -90,7 +88,7 @@ TEST_CASE("the hit reports the material of the surface it struck") {
 	// OUTSIDE the surface, where the field carries no material, and the probe below the
 	// normal is what recovers it.
 	ve::AnalyticGenerator gen;
-	ve::EditLog log(bounds());
+	ve::EditLog log;
 	const float o[3] = {100.0f, 91.2f, 100.0f}; // 91.2 = 40 + kSurfaceY: well above the surface
 	const float d[3] = {0.0f, -1.0f, 0.0f};
 	const ve::RayHit h = ve::raycast(gen, log, o, d, 200.0f);
@@ -107,7 +105,7 @@ TEST_CASE("a thin shell reports the shell's material, not the air behind it") {
 	// reports the hollow. The probe walks out in quarter-voxel steps and takes the FIRST
 	// solid it meets, so an 8 cm shell answers with its own material.
 	ve::AnalyticGenerator gen;
-	ve::EditLog log(bounds());
+	ve::EditLog log;
 	const float c[3] = {100.0f, 81.2f, 100.0f}; // 30 m of clear air above the surface
 	ve::EditOp shell{};
 	shell.type = ve::kOpSphereAdd;
