@@ -5,6 +5,7 @@
 #include "world/edit_log.h"
 #include "world/region_window.h"
 #include "world/residency.h"
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -38,6 +39,7 @@ TEST_CASE("invariant: ten kilometres of travel does not grow the LoD tree withou
 	}
 	// The forest around one camera is tens of roots plus what the walk touched. If the
 	// eviction exemption were still unconditional this would be hundreds of stranded nodes.
+	CHECK(peak < 4000);
 	CHECK(tree.node_count() < peak * 2);
 	CHECK(tree.node_count() < 4000);
 }
@@ -52,11 +54,15 @@ TEST_CASE("invariant: there is no world edge") {
 	const auto r = log.append(op);
 	CHECK(!r.oversized);
 	CHECK(!r.touched.empty());
+	const ve::IVec3 expected_region = ve::region_of_point(op.pos[0], op.pos[1], op.pos[2]);
+	CHECK(std::find(r.touched.begin(), r.touched.end(), expected_region) != r.touched.end());
 
 	const float cam[3] = {50000.0f, -50000.0f, 50000.0f};
 	std::vector<ve::IVec3> roots;
 	ve::lod_roots_in_radius(cam, 1638.4f, &roots);
 	CHECK(!roots.empty());
+	const ve::IVec3 own_root = ve::lod_chunk_of_point(ve::kLodLevels - 1, cam[0], cam[1], cam[2]);
+	CHECK(std::find(roots.begin(), roots.end(), own_root) != roots.end());
 }
 
 TEST_CASE("invariant: the region lattice is exact at 100 km") {
