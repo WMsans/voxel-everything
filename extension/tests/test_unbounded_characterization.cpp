@@ -2,6 +2,7 @@
 #include "lod/lod_grid.h"
 #include "lod/lod_tree.h"
 #include "world/edit_log.h"
+#include "world/region_window.h"
 #include "world/residency.h"
 #include <algorithm>
 #include <vector>
@@ -26,10 +27,11 @@ TEST_CASE("characterization: root range at demo bounds") {
 
 TEST_CASE("characterization: settled residency at the demo spawn") {
 	ve::ResidencyConfig cfg;
-	cfg.bounds = demo_bounds();
 	cfg.radius_m = 96.0f;
 	cfg.max_region_slots = 512;
 	cfg.max_loads_per_frame = 4;
+	cfg.window = ve::region_window_centered(8.0f, 62.0f, 8.0f,
+			ve::region_window_dim(cfg.radius_m, cfg.evict_margin));
 	ve::RegionResidency res(cfg);
 	// Demo player spawn is (8, 62, 8).
 	for (int i = 0; i < 500; i++) {
@@ -38,13 +40,13 @@ TEST_CASE("characterization: settled residency at the demo spawn") {
 	}
 	const int settled = res.resident_count();
 	CHECK(settled > 0);
-	// Every resident region's map_index must be a valid dense index into the region map.
+	// Every resident region's map_index must be a valid window cell index.
 	std::vector<ve::IVec3> regions;
 	res.resident_regions(&regions);
 	for (const ve::IVec3 &r : regions) {
-		const int idx = demo_bounds().region_index(r);
+		const int idx = res.window().index(r);
 		CHECK(idx >= 0);
-		CHECK(idx < 64 * 8 * 64);
+		CHECK(idx < res.window().cell_count());
 	}
 	// Pin the count so a change in load ordering or the candidate scan is visible.
 	CHECK(settled == res.resident_count());

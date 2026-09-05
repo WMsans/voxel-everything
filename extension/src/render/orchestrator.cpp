@@ -210,7 +210,7 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 		UtilityFunctions::printerr("VoxelWorld: override replay into render pool failed");
 		return GpuInitResult::kFailed;
 	}
-	handles_.store->ensure_residency(world_bounds());
+	handles_.store->ensure_residency();
 	*handles_.streamer = new WorldStreamer();
 	(*handles_.streamer)->initialize(handles_.store->residency(),
 			handles_.store->edit_log(), &handles_.store->edit_mutex(),
