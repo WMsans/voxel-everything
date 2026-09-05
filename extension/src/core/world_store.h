@@ -208,9 +208,9 @@ public:
 	// --- lazy core creation; call order near GPU setup is load-bearing ---
 	// Each body is the verbatim statement pair moved out of
 	// VoxelWorld::ensure_initialized() / ensure_physics_initialized().
-	void ensure_edit_log(const ve::WorldBounds &bounds) {
+	void ensure_edit_log() {
 		if (!edit_log_)
-			edit_log_ = new ve::EditLog(bounds);
+			edit_log_ = new ve::EditLog();
 	}
 	void ensure_overrides(int capacity) {
 		if (!overrides_)

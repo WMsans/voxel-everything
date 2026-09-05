@@ -23,9 +23,12 @@ public:
 	struct AppendResult {
 		std::vector<IVec3> touched;  // in-bounds regions whose list grew
 		std::vector<IVec3> rejected; // in-bounds regions already holding kMaxRegionOps
+		// Set when the op's region span exceeds ve::kMaxOpRegionSpan: the op is refused
+		// outright rather than iterated, so touched and rejected stay empty.
+		bool oversized = false;
 	};
 
-	explicit EditLog(const WorldBounds &bounds) : bounds_(bounds) {}
+	EditLog() = default;
 
 	AppendResult append(const EditOp &op);
 	const std::vector<EditOp> &ops(IVec3 region) const;
@@ -38,7 +41,6 @@ public:
 	// override on the next bake.
 	void clear_region_through(IVec3 region, uint64_t seq);
 	int region_count() const { return static_cast<int>(lists_.size()); }
-	const WorldBounds &bounds() const { return bounds_; }
 	void clear() {
 		lists_.clear();
 		seqs_.clear();
@@ -55,7 +57,6 @@ private:
 		}
 	};
 
-	WorldBounds bounds_;
 	std::map<Key, std::vector<EditOp>> lists_;
 	std::map<Key, std::vector<uint64_t>> seqs_;
 	uint64_t next_seq_ = 1;
@@ -90,6 +91,11 @@ inline void collect_ops_for_aabb(const EditLog &log, const float lo[3], const fl
 	}
 	const ve::IVec3 rlo{rlo_a[0], rlo_a[1], rlo_a[2]};
 	const ve::IVec3 rhi{rhi_a[0], rhi_a[1], rhi_a[2]};
+	// Same bound as the append path: without the world edge, a hostile AABB would sweep an
+	// unbounded region range. See ve::kMaxOpRegionSpan.
+	if (rhi.x - rlo.x + 1 > kMaxOpRegionSpan || rhi.y - rlo.y + 1 > kMaxOpRegionSpan ||
+			rhi.z - rlo.z + 1 > kMaxOpRegionSpan)
+		return;
 
 	const auto intersects = [&](const EditOp &op) {
 		return op_touches_aabb(op, lo, hi, kPad);
@@ -104,7 +110,6 @@ inline void collect_ops_for_aabb(const EditLog &log, const float lo[3], const fl
 		for (int y = rlo.y; y <= rhi.y; y++)
 			for (int x = rlo.x; x <= rhi.x; x++) {
 				const ve::IVec3 region{x, y, z};
-				if (!log.bounds().contains_region(region)) continue;
 				const std::vector<EditOp> &ops = log.ops(region);
 				const std::vector<uint64_t> &seqs = log.seqs(region);
 				// Both vectors are kept parallel by append(); defensive size handling keeps
