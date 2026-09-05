@@ -113,4 +113,15 @@ void box_sdf_gradient(const float lo[3], const float hi[3], float x, float y, fl
 void op_brick_range(const EditOp &op, IVec3 *lo, IVec3 *hi);
 void op_region_range(const EditOp &op, IVec3 *lo, IVec3 *hi);
 
+// The world used to be a box, and clamping an op's region range to it doubled as a DoS
+// guard: without a bound, a hostile radius (~1e5 m) makes the append loop iterate ~4.8e14
+// cells and freeze for minutes. The world has no edge any more, so the bound is stated
+// directly. 64 regions is 1638.4 m -- an order of magnitude past any tool radius the demo
+// can produce, and still four orders of magnitude short of the pathological case.
+inline constexpr int kMaxOpRegionSpan = 64;
+
+// The largest per-axis span of the op's region range, in regions.
+int op_region_span(const EditOp &op);
+bool op_region_span_ok(const EditOp &op);
+
 } // namespace ve

@@ -201,3 +201,29 @@ TEST_CASE("the brick range covers every brick the op flips active or inactive") 
 	// A sphere ADD in open air: the same margin on the other side of the CSG.
 	check_range_covers_every_flip(sphere(ve::kOpSphereAdd, 8.0f, 62.0f, 8.0f, 1.0f, 4), 3.0f);
 }
+
+TEST_CASE("op_region_span measures the largest axis span in regions") {
+	ve::EditOp op{};
+	op.type = ve::kOpSphereSubtract;
+	op.pos[0] = 0.0f; op.pos[1] = 0.0f; op.pos[2] = 0.0f;
+	op.radius = 1.0f;
+	// A 1 m sphere at the origin touches at most a couple of regions on each axis.
+	CHECK(ve::op_region_span(op) <= 2);
+	CHECK(ve::op_region_span_ok(op));
+}
+
+TEST_CASE("a hostile radius is rejected rather than iterated") {
+	ve::EditOp op{};
+	op.type = ve::kOpSphereSubtract;
+	op.radius = 1.0e5f; // 100 km: 7813 regions per axis, 4.8e11 cells
+	CHECK(ve::op_region_span(op) > ve::kMaxOpRegionSpan);
+	CHECK(!ve::op_region_span_ok(op));
+}
+
+TEST_CASE("the cap admits the largest legitimate edit") {
+	ve::EditOp op{};
+	op.type = ve::kOpSphereSubtract;
+	// kMaxOpRegionSpan is 64 regions = 1638.4 m, far past any tool radius the demo produces.
+	op.radius = 100.0f;
+	CHECK(ve::op_region_span_ok(op));
+}

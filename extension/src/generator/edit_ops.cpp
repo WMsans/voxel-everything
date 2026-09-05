@@ -349,4 +349,15 @@ void op_region_range(const EditOp &op, IVec3 *lo, IVec3 *hi) {
 	padded_range(op, kRegionSize, kBrickFilterPad, lo, hi);
 }
 
+int op_region_span(const EditOp &op) {
+	IVec3 lo{}, hi{};
+	op_region_range(op, &lo, &hi);
+	const int sx = hi.x - lo.x + 1;
+	const int sy = hi.y - lo.y + 1;
+	const int sz = hi.z - lo.z + 1;
+	return std::max(sx, std::max(sy, sz));
+}
+
+bool op_region_span_ok(const EditOp &op) { return op_region_span(op) <= kMaxOpRegionSpan; }
+
 } // namespace ve
