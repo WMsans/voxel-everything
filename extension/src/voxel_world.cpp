@@ -724,7 +724,6 @@ void VoxelWorld::ensure_physics_initialized() {
 		if (d) mesh_->submit_volume(slot, *d);
 	}
 	ve::ChunkResidencyConfig ccfg;
-	ccfg.bounds = world_bounds();
 	ccfg.radius_m = physics_radius_m_;
 	ccfg.max_chunks = max_collider_chunks_;
 	ccfg.max_builds_per_frame = mesh_jobs_per_frame_;
