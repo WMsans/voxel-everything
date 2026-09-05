@@ -140,6 +140,19 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	WorldStreamer *st = world->streamer();
 	if (st) st->run_frame(rd, cam.origin.x, cam.origin.y, cam.origin.z);
 	timings->end(rd, "stream");
+	// run_frame() recentres the toroidal region window. Refresh the already-built camera
+	// push data for that published window; do not run streaming a second time just to obtain
+	// constants that the existing run has already made current.
+	{
+		const ve::RegionWindow streamed_win = world->region_window();
+		cp.dims[0] = streamed_win.dim;
+		cp.dims[1] = streamed_win.dim;
+		cp.dims[2] = streamed_win.dim;
+		cp.dims[3] = world->island_slot_count();
+		cp.region_origin[0] = streamed_win.origin.x;
+		cp.region_origin[1] = streamed_win.origin.y;
+		cp.region_origin[2] = streamed_win.origin.z;
+	}
 
 	RaymarchPass *rmp = world->raymarch_pass();
 	GpuAtlas *atlas = world->atlas();

@@ -2,6 +2,7 @@
 #include "connectivity/occupancy.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace ve {
 
@@ -17,14 +18,67 @@ float sphere_sdf(const EditOp &op, float x, float y, float z) {
 // margin plus its one-voxel apron, while stored-lattice consumers use the representable SDF
 // range plus one 5 cm pitch.
 void padded_range(const EditOp &op, float pitch, float pad, IVec3 *lo, IVec3 *hi) {
+	if (!lo || !hi || !edit_op_is_well_formed(op)) {
+		if (lo) *lo = {};
+		if (hi) *hi = {};
+		return;
+	}
 	float a[3], b[3];
 	op_world_aabb(op, a, b);
-	const auto cell = [pitch](float v) { return static_cast<int>(std::floor(v / pitch)); };
-	*lo = {cell(a[0] - pad), cell(a[1] - pad), cell(a[2] - pad)};
-	*hi = {cell(b[0] + pad), cell(b[1] + pad), cell(b[2] + pad)};
+	for (int axis = 0; axis < 3; axis++) {
+		if (!std::isfinite(a[axis]) || !std::isfinite(b[axis])) {
+			*lo = {};
+			*hi = {kMaxOpRegionSpan, 0, 0};
+			return;
+		}
+	}
+	const auto cell = [pitch](float v, int *out) {
+		const double q = std::floor(static_cast<double>(v) / static_cast<double>(pitch));
+		if (!std::isfinite(q) || q < static_cast<double>(std::numeric_limits<int>::min()) ||
+				q > static_cast<double>(std::numeric_limits<int>::max()))
+			return false;
+		*out = static_cast<int>(q);
+		return true;
+	};
+	int lo_a[3], hi_a[3];
+	for (int axis = 0; axis < 3; axis++) {
+		if (!cell(a[axis] - pad, &lo_a[axis]) || !cell(b[axis] + pad, &hi_a[axis])) {
+			// A finite float can still be too large for the integer region lattice. Return
+			// a deliberately over-cap range so append rejects it without converting again.
+			*lo = {};
+			*hi = {kMaxOpRegionSpan, 0, 0};
+			return;
+		}
+	}
+	*lo = {lo_a[0], lo_a[1], lo_a[2]};
+	*hi = {hi_a[0], hi_a[1], hi_a[2]};
 }
 
 } // namespace
+
+bool edit_op_is_well_formed(const EditOp &op) {
+	for (float p : op.pos)
+		if (!std::isfinite(p)) return false;
+	switch (op.type) {
+		case kOpSphereSubtract:
+		case kOpSphereAdd:
+		case kOpSpherePaint:
+			return std::isfinite(op.radius) && op.radius > 0.0f;
+		case kOpBoxSubtract: {
+			int n[3] = {0, 0, 0};
+			unpack_extent3(op.aux[0], &n[0], &n[1], &n[2]);
+			return n[0] > 0 && n[1] > 0 && n[2] > 0 && std::isfinite(op.radius) &&
+					op.radius >= 0.0f;
+		}
+		case kOpVolumeAdd:
+			// These bounds mirror sample_field_volume(): rejecting them here prevents a
+			// malformed op from reaching either a huge region conversion or an SSBO index.
+			return op.aux[0] < 64u && op.aux[1] >= 2u && op.aux[1] <= 64u &&
+					std::isfinite(op.radius) && op.radius > 0.0f;
+		default:
+			return false;
+	}
+}
 
 uint32_t pack_extent3(int nx, int ny, int nz) {
 	const auto c = [](int v) { return static_cast<uint32_t>(v < 1 ? 1 : (v > 1023 ? 1023 : v)); };
@@ -74,6 +128,11 @@ EditOp make_volume_add(int slot, const float origin[3], float voxel, int dim) {
 }
 
 void op_world_aabb(const EditOp &op, float lo[3], float hi[3]) {
+	if (!lo || !hi) return;
+	if (!edit_op_is_well_formed(op)) {
+		for (int a = 0; a < 3; a++) lo[a] = hi[a] = 0.0f;
+		return;
+	}
 	switch (op.type) {
 		case kOpBoxSubtract: {
 			int n[3] = {1, 1, 1};
@@ -350,6 +409,7 @@ void op_region_range(const EditOp &op, IVec3 *lo, IVec3 *hi) {
 }
 
 int op_region_span(const EditOp &op) {
+	if (!edit_op_is_well_formed(op)) return 0;
 	IVec3 lo{}, hi{};
 	op_region_range(op, &lo, &hi);
 	const int sx = hi.x - lo.x + 1;
@@ -358,6 +418,8 @@ int op_region_span(const EditOp &op) {
 	return std::max(sx, std::max(sy, sz));
 }
 
-bool op_region_span_ok(const EditOp &op) { return op_region_span(op) <= kMaxOpRegionSpan; }
+bool op_region_span_ok(const EditOp &op) {
+	return edit_op_is_well_formed(op) && op_region_span(op) <= kMaxOpRegionSpan;
+}
 
 } // namespace ve

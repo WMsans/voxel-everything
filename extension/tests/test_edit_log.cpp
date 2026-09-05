@@ -1,7 +1,10 @@
 #include <doctest/doctest.h>
 #include "world/edit_log.h"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <limits>
+#include "lod/lod_grid.h"
 
 static ve::EditOp sphere(float x, float y, float z, float r) {
 	ve::EditOp op{};
@@ -191,6 +194,41 @@ TEST_CASE("clear drops everything") {
 	CHECK(log.op_count({0, 0, 0}) == 0);
 	CHECK(log.ops({0, 0, 0}).empty());
 	CHECK(log.seqs({0, 0, 0}).empty());
+}
+
+TEST_CASE("the padded L7 collector query is not mistaken for a hostile query") {
+	ve::EditLog log;
+	log.append(sphere(0.0f, 0.0f, 0.0f, 1.0f));
+	float lo[3], hi[3];
+	ve::lod_chunk_aabb(ve::kLodLevels - 1, {0, 0, 0}, lo, hi);
+	const float pad = 2.0f * ve::lod_cell_size(ve::kLodLevels - 1);
+	for (int a = 0; a < 3; a++) {
+		lo[a] -= pad;
+		hi[a] += pad;
+	}
+	std::vector<ve::EditOp> ops;
+	ve::collect_ops_for_aabb(log, lo, hi, &ops);
+	REQUIRE(ops.size() == 1);
+	CHECK(ops[0].pos[0] == doctest::Approx(0.0f));
+}
+
+TEST_CASE("malformed edit ops fail soft without entering the append log") {
+	ve::EditLog log;
+	ve::EditOp unknown = sphere(0.0f, 0.0f, 0.0f, 1.0f);
+	unknown.type = 99;
+	const auto unknown_result = log.append(unknown);
+	CHECK(unknown_result.touched.empty());
+	CHECK(unknown_result.rejected.empty());
+	CHECK(!unknown_result.oversized);
+	CHECK(log.region_count() == 0);
+
+	ve::EditOp nonfinite = sphere(0.0f, 0.0f, 0.0f, 1.0f);
+	nonfinite.pos[0] = std::numeric_limits<float>::quiet_NaN();
+	const auto nonfinite_result = log.append(nonfinite);
+	CHECK(nonfinite_result.touched.empty());
+	CHECK(nonfinite_result.rejected.empty());
+	CHECK(!nonfinite_result.oversized);
+	CHECK(log.region_count() == 0);
 }
 
 TEST_CASE("an op far outside the old world box is accepted") {

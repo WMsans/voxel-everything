@@ -10,6 +10,7 @@ const std::vector<uint64_t> kEmptySeqs;
 
 EditLog::AppendResult EditLog::append(const EditOp &op) {
 	AppendResult result;
+	if (!edit_op_is_well_formed(op)) return result;
 	IVec3 lo{}, hi{};
 	op_region_range(op, &lo, &hi);
 	// The world has no edge, so there is nothing to clamp against. The bound that used to
