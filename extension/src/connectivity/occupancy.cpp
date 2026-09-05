@@ -1,4 +1,5 @@
 #include "connectivity/occupancy.h"
+#include "world/residency.h"
 
 namespace ve {
 
@@ -62,6 +63,20 @@ int64_t OccupancyGrid::block_seq(IVec3 region) const {
 
 void OccupancyGrid::clear() {
 	blocks_.clear();
+}
+
+int OccupancyGrid::evict_outside(float cx, float cy, float cz, float retention_m) {
+	int dropped = 0;
+	for (auto it = blocks_.begin(); it != blocks_.end();) {
+		const IVec3 r{it->first.x, it->first.y, it->first.z};
+		if (RegionResidency::region_distance(r, cx, cy, cz) > retention_m) {
+			it = blocks_.erase(it);
+			dropped++;
+		} else {
+			++it;
+		}
+	}
+	return dropped;
 }
 
 } // namespace ve

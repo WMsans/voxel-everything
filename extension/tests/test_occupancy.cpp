@@ -1,6 +1,7 @@
 #include "connectivity/occupancy.h"
 #include "world/brick_eval.h"
 #include <doctest/doctest.h>
+#include <algorithm>
 #include <vector>
 
 using namespace ve;
@@ -140,4 +141,45 @@ TEST_CASE("an op that empties a cell moves it from full to air") {
 	cut.pos[2] = 8.4f;
 	cut.radius = 3.0f; // comfortably swallows the 0.8 m cell and its probe lattice
 	CHECK(cell_state_field(gen, &cut, 1, cell) == kCellAir);
+}
+
+TEST_CASE("blocks outside the retention radius are dropped") {
+	ve::OccupancyGrid g;
+	std::vector<uint8_t> block(ve::kOccupancyBlockBytes, 0);
+	g.set_block({0, 0, 0}, block.data(), 1);
+	g.set_block({100, 0, 100}, block.data(), 1); // 2560 m away
+	CHECK(g.region_count() == 2);
+
+	const int dropped = g.evict_outside(0.0f, 0.0f, 0.0f, 256.0f);
+	CHECK(dropped == 1);
+	CHECK(g.region_count() == 1);
+	CHECK(g.has_region({0, 0, 0}));
+	CHECK(!g.has_region({100, 0, 100}));
+}
+
+TEST_CASE("eviction is lossless for regions that come back") {
+	// Dropping a block must read as 'nobody has looked', never as 'air'. kCellUnknown is the
+	// zero state precisely so a re-streamed region cannot be mistaken for empty space.
+	ve::OccupancyGrid g;
+	std::vector<uint8_t> block(ve::kOccupancyBlockBytes, 0);
+	g.set_cell({4000, 0, 4000}, ve::kCellAir, 1);
+	CHECK(g.state({4000, 0, 4000}) == ve::kCellAir);
+	g.evict_outside(0.0f, 0.0f, 0.0f, 256.0f);
+	CHECK(g.state({4000, 0, 4000}) == ve::kCellUnknown);
+	CHECK(g.is_solid({4000, 0, 4000})); // unknown counts as solid, as it always has
+}
+
+TEST_CASE("a walk of ten kilometres does not grow the grid without bound") {
+	ve::OccupancyGrid g;
+	std::vector<uint8_t> block(ve::kOccupancyBlockBytes, 0);
+	int peak = 0;
+	for (int step = 0; step < 400; step++) {
+		const float x = float(step) * 25.6f; // one region per step, ~10 km
+		const ve::IVec3 r{step, 0, 0};
+		g.set_block(r, block.data(), 1);
+		g.evict_outside(x, 0.0f, 0.0f, 256.0f);
+		peak = std::max(peak, g.region_count());
+	}
+	// 256 m retention is 10 regions each way; the grid must plateau, not accumulate 400.
+	CHECK(peak <= 32);
 }
