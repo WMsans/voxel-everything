@@ -1076,14 +1076,14 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 	if (!ve::plan_island_lattice(wlo, whi, ve::kIslandDim, &job->voxel, job->origin)) return false;
 	job->dim = ve::kIslandDim;
 	job->override_table = override_table_for_region(
-			ve::WorldBounds::region_of_point(job->origin[0], job->origin[1], job->origin[2]));
+			ve::region_of_point(job->origin[0], job->origin[1], job->origin[2]));
 	{
 		std::lock_guard<std::mutex> lock(store_->edit_mutex());
 		if (!store_->edit_log()) return false;
 		ve::collect_ops_for_aabb(*store_->edit_log(), wlo, whi, &job->ops);
 		float lattice_hi[3] = {job->origin[0] + (job->dim - 1) * job->voxel, job->origin[1] + (job->dim - 1) * job->voxel, job->origin[2] + (job->dim - 1) * job->voxel};
-		ve::IVec3 blo = ve::WorldBounds::brick_of_point(job->origin[0], job->origin[1], job->origin[2]);
-		ve::IVec3 bhi = ve::WorldBounds::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
+		ve::IVec3 blo = ve::brick_of_point(job->origin[0], job->origin[1], job->origin[2]);
+		ve::IVec3 bhi = ve::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
 		if (!snapshot_field_sources(job->ops, blo, bhi, &job->snapshot)) return false;
 		job->gen = &store_->generator()->sampler();
 	}

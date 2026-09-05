@@ -422,7 +422,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 							const ve::IVec3 b{base.x + x, base.y + y, base.z + z};
 							const int slot = overrides_->slot_of(b);
 							if (slot >= 0)
-								entries.emplace_back(ve::WorldBounds::brick_index_in_region(b), slot);
+								entries.emplace_back(ve::brick_index_in_region(b), slot);
 						}
 			}
 		}

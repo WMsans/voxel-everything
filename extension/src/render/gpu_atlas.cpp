@@ -301,7 +301,7 @@ bool GpuAtlas::replay_overrides(RenderingDevice *rd, const ve::OverrideStore &st
 					else
 						stored_normals_.release_override(rd, slot);
 					overrides_.set_table_entry(rd, table,
-						ve::WorldBounds::brick_index_in_region(brick), slot);
+						ve::brick_index_in_region(brick), slot);
 				}
 		}
 	return true;
