@@ -1,0 +1,19 @@
+scons: Reading SConscript files ...
+Building for architecture universal on platform macos
+scons: done reading SConscript files.
+scons: Building targets ...
+/Users/jeremyzhao/Development/godot/voxel-everything/.worktrees/unbounded-world/extension/build/tests/ve_tests
+[doctest] doctest version is "2.4.11"
+[doctest] run with "--help" for options
+===============================================================================
+tests/test_unbounded_characterization.cpp:22:
+TEST CASE:  characterization: settled residency at the demo spawn
+
+tests/test_unbounded_characterization.cpp:47: MESSAGE: settled resident regions: 390
+
+===============================================================================
+[doctest] test cases:     459 |     459 passed | 0 failed | 0 skipped
+[doctest] assertions: 9816469 | 9816469 passed | 0 failed |
+[doctest] Status: SUCCESS!
+scons: done building targets.
+
