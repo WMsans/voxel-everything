@@ -7,22 +7,16 @@
 #include <algorithm>
 #include <vector>
 
-// The shipped demo world: 64 x 8 x 64 regions of 25.6 m, origin at y = -51.2 m.
-static ve::WorldBounds demo_bounds() {
-	ve::WorldBounds b;
-	b.origin_bricks = {0, -64, 0};
-	b.size_regions = {64, 8, 64};
-	return b;
-}
-
-TEST_CASE("characterization: root range at demo bounds") {
-	ve::IVec3 lo{}, hi{};
-	ve::lod_root_range(demo_bounds(), &lo, &hi);
-	// An L7 chunk is 1638.4 m and the world is exactly 1638.4 m across in XZ: one root.
-	CHECK(lo.x == 0); CHECK(hi.x == 0);
-	CHECK(lo.z == 0); CHECK(hi.z == 0);
-	// Y spans [-51.2, 153.6) m, which lands inside the single root row at y = 0.
-	CHECK(lo.y == -1); CHECK(hi.y == 0);
+TEST_CASE("characterization: root forest at the demo spawn") {
+	// CHANGED by the unbounded-world refactor: root selection used to come from the world
+	// AABB, which was exactly one L7 chunk wide in XZ. It now follows the camera.
+	const float cam[3] = {8.0f, 62.0f, 8.0f};
+	std::vector<ve::IVec3> roots;
+	ve::lod_roots_in_radius(cam, 1638.4f, &roots);
+	CHECK(roots.size() >= 8);
+	CHECK(roots.size() <= 27);
+	const ve::IVec3 own = ve::lod_chunk_of_point(ve::kLodLevels - 1, cam[0], cam[1], cam[2]);
+	CHECK(std::find(roots.begin(), roots.end(), own) != roots.end());
 }
 
 TEST_CASE("characterization: settled residency at the demo spawn") {
