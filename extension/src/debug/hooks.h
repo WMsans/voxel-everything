@@ -192,6 +192,7 @@ public:
 
 	void debug_reset_frame_counters();
 
+	// region_index is a region-window cell index (unbounded world: no world-box index anymore).
 	void debug_set_region_map_entry(int region_index, int region_slot);
 
 	void debug_upload_region_ops(int region_slot, const PackedByteArray &ops, int count);

@@ -5227,7 +5227,7 @@ Dictionary VoxelDebugHooks::debug_atlas_stats() {
 	if (!world_->atlas() || !world_->atlas()->is_valid() || !device) return d;
 	d["slot_count"] = world_->atlas()->atlas_slot_count();
 	d["free_slots"] = world_->atlas()->read_free_count(device);
-	d["region_map_entries"] = world_->atlas()->region_map_entries();
+	d["region_map_entries"] = world_->atlas()->region_map_entries(); // window cell count, not world-box size
 	d["job_count"] = world_->atlas()->read_job_count(device);
 	d["overflow"] = static_cast<int>(world_->atlas()->read_overflow(device));
 	// Memory bounds (Task 6): the R8 atlas byte count is pinned so a regression that
