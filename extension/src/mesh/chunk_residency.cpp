@@ -179,9 +179,6 @@ ChunkPlan ChunkResidency::update(const float *centers, const float *radii, int c
 			for (int y = ry.first; y <= ry.second; y++)
 				for (int x = rx.first; x <= rx.second; x++) {
 					const IVec3 c{x, y, z};
-					// A chunk is 16 bricks and the world is region-aligned (32 bricks), so a
-					// chunk is either wholly inside or wholly outside: one corner decides.
-					if (!cfg_.bounds.contains_brick(chunk_min_brick(c))) continue;
 					if (chunk_distance(c, cx, cy, cz) > r) continue;
 					if (dedupe && !seen.insert(key(c)).second) continue;
 					if (slot_of(c) >= 0) continue;
