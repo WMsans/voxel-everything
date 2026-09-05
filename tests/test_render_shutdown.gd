@@ -104,8 +104,6 @@ func test_physics_teardown_preserves_the_normal_pool_and_its_invariants(timeout 
 	var world: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	world.use_local_device = true
 	world.physics_enabled = false
-	world.world_origin_bricks = Vector3i(0, -64, 0)
-	world.world_size_regions = Vector3i(8, 5, 8)
 	world.residency_radius_m = 40.0
 	world.atlas_bricks = Vector3i(32, 16, 32)
 	world.max_region_slots = 64

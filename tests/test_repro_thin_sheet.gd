@@ -19,8 +19,6 @@ func make_world(max_jobs := 16384, stream_radius := 40.0) -> VoxelWorld:
 	w.use_local_device = true
 	w.max_brick_jobs = max_jobs
 	w.physics_enabled = false
-	w.world_origin_bricks = Vector3i(0, -64, 0)
-	w.world_size_regions = Vector3i(8, 5, 8)
 	w.residency_radius_m = stream_radius
 	w.atlas_bricks = Vector3i(48, 24, 48)
 	w.max_region_slots = 64
@@ -38,8 +36,6 @@ func make_tall_world(max_jobs := 16384, stream_radius := 40.0) -> VoxelWorld:
 	w.use_local_device = true
 	w.max_brick_jobs = max_jobs
 	w.physics_enabled = false
-	w.world_origin_bricks = Vector3i(0, -64, 0)
-	w.world_size_regions = Vector3i(8, 7, 8)
 	w.residency_radius_m = stream_radius
 	w.atlas_bricks = Vector3i(48, 24, 48)
 	w.max_region_slots = 64

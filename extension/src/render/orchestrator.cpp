@@ -73,10 +73,6 @@ void RenderOrchestrator::release_devices() {
 	main_rd_ = nullptr;
 }
 
-ve::WorldBounds RenderOrchestrator::world_bounds() const {
-	return ve::world_bounds(handles_.store->config());
-}
-
 bool RenderOrchestrator::initialize_downsample(RenderingDevice *rd) {
 	teardown_downsample();
 	if (!rd) return false;
