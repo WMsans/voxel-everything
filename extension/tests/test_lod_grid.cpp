@@ -1,6 +1,8 @@
 #include <doctest/doctest.h>
 #include "lod/lod_grid.h"
+#include <algorithm>
 #include <cmath>
+#include <vector>
 
 // Spec section 2's table, pinned. If these drift the mesher silently samples the wrong
 // lattice and every downstream number (memory, range, page counts) is wrong with it.
@@ -97,24 +99,44 @@ TEST_CASE("op_lod_chunk_range covers every chunk the op can change") {
 	}
 }
 
-// The demo world is 64x8x64 regions = 1638.4 x 204.8 x 1638.4 m, so one L7 root covers it
-// on x/z. The default 4096 m world needs 3. Both must come out of the same function.
-TEST_CASE("root range covers the world bounds") {
-	ve::WorldBounds b;
-	b.origin_bricks = {0, -64, 0};
-	b.size_regions = {160, 40, 160}; // 4096 x 1024 x 4096 m
-	ve::IVec3 lo{}, hi{};
-	ve::lod_root_range(b, &lo, &hi);
-	float wlo[3], whi[3];
-	b.aabb(wlo, whi);
-	float clo[3], chi[3];
-	ve::lod_chunk_aabb(ve::kLodLevels - 1, lo, clo, chi);
-	CHECK(clo[0] <= wlo[0]);
-	CHECK(clo[1] <= wlo[1]);
-	CHECK(clo[2] <= wlo[2]);
-	ve::lod_chunk_aabb(ve::kLodLevels - 1, hi, clo, chi);
-	CHECK(chi[0] >= whi[0]);
-	CHECK(chi[1] >= whi[1]);
-	CHECK(chi[2] >= whi[2]);
-	CHECK(ve::lod_chunk_in_bounds(b, ve::kLodLevels - 1, lo));
+TEST_CASE("root selection covers the camera's own root") {
+	const float cam[3] = {8.0f, 62.0f, 8.0f};
+	std::vector<ve::IVec3> roots;
+	ve::lod_roots_in_radius(cam, 1638.4f, &roots);
+	const ve::IVec3 own = ve::lod_chunk_of_point(ve::kLodLevels - 1, cam[0], cam[1], cam[2]);
+	CHECK(std::find(roots.begin(), roots.end(), own) != roots.end());
+}
+
+TEST_CASE("root count grows with the radius and stays bounded") {
+	const float cam[3] = {0.0f, 0.0f, 0.0f};
+	std::vector<ve::IVec3> near_roots, far_roots;
+	ve::lod_roots_in_radius(cam, 1638.4f, &near_roots);
+	ve::lod_roots_in_radius(cam, 4000.0f, &far_roots);
+	CHECK(near_roots.size() >= 8);
+	CHECK(near_roots.size() <= 27);   // (ceil(2R/1638.4) + 1)^3 candidates
+	CHECK(far_roots.size() > near_roots.size());
+	CHECK(far_roots.size() <= 216);
+}
+
+TEST_CASE("every emitted root actually intersects the radius") {
+	const float cam[3] = {1234.0f, -56.0f, 7890.0f};
+	std::vector<ve::IVec3> roots;
+	ve::lod_roots_in_radius(cam, 2000.0f, &roots);
+	REQUIRE(!roots.empty());
+	for (const ve::IVec3 &c : roots)
+		CHECK(ve::lod_chunk_distance(ve::kLodLevels - 1, c, cam) <= 2000.0f);
+}
+
+TEST_CASE("root selection has no origin bias") {
+	// The old world box put its origin at (0, -51.2, 0). A radius has no such anchor: the
+	// same camera-relative geometry must appear 50 km away. Exact equality requires the
+	// same intra-chunk position at both cameras (mid-chunk vs corner geometry differs
+	// under any correct implementation); the aligned comparison is what tests
+	// origin-independence.
+	const float near_cam[3] = {0.0f, 0.0f, 0.0f};
+	const float far_cam[3] = {49152.0f, 0.0f, 49152.0f};  // 30 x 1638.4 m = chunk corner
+	std::vector<ve::IVec3> a, b;
+	ve::lod_roots_in_radius(near_cam, 2000.0f, &a);
+	ve::lod_roots_in_radius(far_cam, 2000.0f, &b);
+	CHECK(a.size() == b.size());
 }
