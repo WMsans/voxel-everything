@@ -171,7 +171,8 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 	cfg.max_region_slots = config.max_region_slots;
 	cfg.max_brick_jobs = config.max_brick_jobs;
 	cfg.max_override_bricks = config.max_override_bricks;
-	cfg.bounds = world_bounds();
+	cfg.region_window = ve::region_window_centered(0.0f, 0.0f, 0.0f,
+			ve::region_window_dim(config.residency_radius_m, ve::ResidencyConfig{}.evict_margin));
 	if (*handles_.normal_pool_bytes > 0) cfg.normal_pool_bytes = *handles_.normal_pool_bytes; // test initializer
 	if (!atlas_->initialize(device, cfg)) { delete atlas_; atlas_ = nullptr; return GpuInitResult::kAtlasFailed; }
 	islands_ = new IslandAtlas();

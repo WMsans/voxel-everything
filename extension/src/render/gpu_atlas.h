@@ -13,6 +13,7 @@
 #include "world/brick_flags.h"
 #include "world/edit_log.h"
 #include "world/region.h"
+#include "world/region_window.h"
 #include "world/override_store.h"
 
 namespace godot {
@@ -24,7 +25,9 @@ struct GpuAtlasConfig {
 	int max_override_bricks = OverridePool::kDefaultCapacity;
 	// Hard total for the compact-normal pool (packed payload + both offset tables).
 	uint32_t normal_pool_bytes = StoredNormalPool::kDefaultBudgetBytes;
-	ve::WorldBounds bounds{};
+	// The near-field region map's index space (ve::RegionWindow). Camera-centred and
+	// toroidal, so this buffer is ~16 KB rather than one entry per region in a fixed world.
+	ve::RegionWindow region_window{};
 };
 
 // Owns every GPU resource the voxel world needs. Nothing else creates or frees RIDs in the
@@ -41,10 +44,7 @@ public:
 	int atlas_slot_count() const {
 		return cfg_.atlas_bricks.x * cfg_.atlas_bricks.y * cfg_.atlas_bricks.z;
 	}
-	int region_map_entries() const {
-		return cfg_.bounds.size_regions.x * cfg_.bounds.size_regions.y *
-				cfg_.bounds.size_regions.z;
-	}
+	int region_map_entries() const { return cfg_.region_window.cell_count(); }
 
 	RID sdf_atlas() const { return sdf_atlas_; }
 	RID mat_atlas() const { return mat_atlas_; }
