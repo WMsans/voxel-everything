@@ -20,29 +20,17 @@ int floor_div(int a, int b);
 int floor_mod(int a, int b);
 
 // Brick coordinates are GLOBAL: the world-space corner of brick b is b * kBrickSize, with
-// no origin term. WorldBounds::origin_bricks only decides membership and map indexing.
+// no origin term: brick coordinates name world space directly.
 void brick_world_origin(IVec3 b, float out[3]);
 void brick_world_aabb(IVec3 b, float lo[3], float hi[3]);
 
-// A bounded, region-aligned world placed on the global brick lattice.
-struct WorldBounds {
-	IVec3 origin_bricks{0, 0, 0};  // multiple of kRegionBricks on every axis
-	IVec3 size_regions{1, 1, 1};
-
-	IVec3 size_bricks() const;
-	IVec3 origin_regions() const;
-
-	static IVec3 region_of_brick(IVec3 b);
-	static IVec3 brick_of_point(float x, float y, float z);
-	static IVec3 region_of_point(float x, float y, float z);
-	// 0..kRegionBrickCount-1, x fastest, y, then z.
-	static int brick_index_in_region(IVec3 b);
-
-	bool contains_region(IVec3 r) const;
-	bool contains_brick(IVec3 b) const;
-	// Dense index into the region map (x fastest), or -1 when outside.
-	int region_index(IVec3 r) const;
-	void aabb(float lo[3], float hi[3]) const;
-};
+// The brick and region lattices are GLOBAL and unbounded: brick b's world corner is
+// b * kBrickSize with no origin term, and every integer coordinate names a real region. There
+// is no world extent -- see docs/superpowers/specs/2026-09-04-unbounded-world-design.md.
+IVec3 region_of_brick(IVec3 b);
+IVec3 brick_of_point(float x, float y, float z);
+IVec3 region_of_point(float x, float y, float z);
+// 0..kRegionBrickCount-1, x fastest, y, then z.
+int brick_index_in_region(IVec3 b);
 
 } // namespace ve

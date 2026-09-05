@@ -31,6 +31,10 @@ ve::EditLog::AppendResult WorldStore::append_edit_locked(const ve::EditOp &op,
 		bool notify_islands) {
 	if (!edit_log_) return {};
 	ve::EditLog::AppendResult r = edit_log_->append(op);
+	// Empty results are fail-soft no-ops: malformed/oversized operations and fully rejected
+	// operations changed no field state, so they must not advance the edit sequence, wake
+	// connectivity, or enter the render-thread pending queue.
+	if (r.touched.empty()) return r;
 	// Queue before the list reaches its hard cap. The bake is asynchronous, so the spare 64
 	// entries absorb edits appended while the worker is in flight.
 	for (const ve::IVec3 &region : r.touched)
@@ -70,6 +74,9 @@ int WorldStore::drain_occupancy() {
 		if (b.seq < occupancy_.block_seq(b.region)) continue;
 		occupancy_.set_block(b.region, b.bytes.data(), b.seq);
 	}
+	// The unbounded world means blocks accumulate with distance travelled. Dropping a distant
+	// one is lossless: it re-reads as kCellUnknown and the mark pass refills it on return.
+	occupancy_.evict_outside(center_[0], center_[1], center_[2], config_.occupancy_retention_m);
 	return static_cast<int>(blocks.size());
 }
 

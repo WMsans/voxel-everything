@@ -100,7 +100,10 @@ struct LodWalkResult {
 };
 
 struct LodTreeConfig {
-	WorldBounds bounds{};
+	// The far field's extent. There is no world edge: the octree's roots are the level-7
+	// chunks intersecting a sphere of this radius around the camera, and nodes beyond it lose
+	// their eviction exemption (see collect_evictions).
+	float stream_radius_m = 1638.4f;
 	float sse_area_thresh = kLodSseAreaThresh;
 	int resident_level_from = kLodResidentLevelFrom;
 	uint32_t evict_frames = kLodEvictFrames;

@@ -18,7 +18,6 @@ static const int kAmplePool =
 
 static ve::ChunkResidencyConfig make_cfg(int max_chunks, int builds = 2, int probes = 4096) {
 	ve::ChunkResidencyConfig cfg;
-	cfg.bounds = ve::WorldBounds{{0, -64, 0}, {8, 4, 8}};
 	cfg.radius_m = 64.0f;
 	cfg.max_chunks = max_chunks;
 	cfg.max_builds_per_frame = builds;
@@ -374,4 +373,21 @@ TEST_CASE("stale note_empty clears in-flight without hiding the re-added chunk")
 	bool readded = false;
 	for (const auto &b : p2.builds) readded = readded || b.chunk == c;
 	CHECK(readded);
+}
+
+TEST_CASE("collider chunks stream 50 km from the origin") {
+	ve::ChunkResidencyConfig cfg;
+	cfg.radius_m = 64.0f;
+	cfg.max_chunks = kAmplePool;
+	cfg.max_builds_per_frame = 2;
+	cfg.max_probes_per_frame = 4096;
+	ve::ChunkResidency res(cfg);
+	// A probe that finds a surface everywhere, so the radius is the only bound left.
+	struct Everywhere : ve::ChunkProbe {
+		bool chunk_has_surface(ve::IVec3) const override { return true; }
+	} probe;
+	// 50 km from the origin, far outside every box the engine used to have.
+	const float c[3] = {50000.0f, 62.0f, 50000.0f};
+	res.update(c, nullptr, 1, probe);
+	CHECK(res.resident_count() > 0);
 }

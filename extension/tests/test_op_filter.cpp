@@ -62,7 +62,7 @@ TEST_CASE("filtered box evaluation agrees with the unfiltered oracle") {
 		v.aux[0] = ve::pack_extent3(1, 1, 1);
 		return v;
 	}();
-	ve::EditLog log({{0, 0, 0}, {4, 8, 4}});
+	ve::EditLog log;
 	log.append(op);
 	const float lo[3] = {0.0f, 40.0f, 0.0f}, hi[3] = {0.8f, 40.8f, 0.8f};
 	std::vector<ve::EditOp> filtered;
@@ -87,7 +87,7 @@ TEST_CASE("filtered volume evaluation agrees with the unfiltered oracle") {
 	REQUIRE(volumes.store(slot, std::move(data)));
 	const float origin[3] = {1.4f, 80.0f, 0.0f};
 	const ve::EditOp op = ve::make_volume_add(slot, origin, 0.05f, 2);
-	ve::EditLog log({{0, 0, 0}, {4, 8, 4}});
+	ve::EditLog log;
 	log.append(op);
 	const float lo[3] = {0.0f, 80.0f, 0.0f}, hi[3] = {0.8f, 80.8f, 0.8f};
 	std::vector<ve::EditOp> filtered;

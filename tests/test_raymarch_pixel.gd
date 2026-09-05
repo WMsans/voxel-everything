@@ -13,8 +13,6 @@ func make_world() -> VoxelWorld:
 	w.use_local_device = true
 	w.atlas_bricks = ATLAS
 	w.max_region_slots = REGION_SLOTS
-	w.world_origin_bricks = Vector3i(0, -64, 0)
-	w.world_size_regions = Vector3i(4, 5, 4)
 	w.residency_radius_m = 45.0
 	add_child(w)
 	w.ensure_initialized()

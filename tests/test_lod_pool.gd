@@ -25,8 +25,9 @@ func make_world(pages: int = 256) -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.physics_enabled = false
-	w.world_origin_bricks = Vector3i(0, -64, 0)
-	w.world_size_regions = Vector3i(8, 5, 8)
+	w.stream_radius_m = 1000.0 # small but viable: the walk descends only into a node
+	# whose eight children are all in-radius (L6 spans 819 m); below ~940 m it stalls
+	# at 2 roots, so 1000 is the floor for these cameras
 	w.max_lod_pages = pages
 	add_child(w)
 	_worlds.append(w)
@@ -55,15 +56,15 @@ func test_the_pool_starts_empty_and_sized() -> void:
 	assert_int(d["pages_free"]).is_equal(256)
 	assert_int(d["chunks_resident"]).is_equal(0)
 
-func test_ticking_streams_chunks_in(timeout := 60000) -> void:
-	var w := make_world(2048)
+func test_ticking_streams_chunks_in(timeout := 120000) -> void:
+	var w := make_world(16384)
 	var ticks: int = await settle(w, NEAR_POS, NEAR_FWD)
 	var d := w.hooks().debug_lod_stats()
 	assert_int(ticks).override_failure_message(
 		"the far field never converged: %s" % d).is_greater(0)
 	assert_int(d["chunks_resident"]).override_failure_message(
 		"settling produced no resident chunks: %s" % d).is_greater(0)
-	assert_int(d["pages_free"]).is_less(2048)
+	assert_int(d["pages_free"]).is_less(16384)
 	assert_int(d["draw_pages"]).override_failure_message(
 		"chunks are resident but nothing is in the draw list").is_greater(0)
 
@@ -89,8 +90,8 @@ func test_a_tiny_pool_degrades_to_coarse_instead_of_breaking(timeout := 60000) -
 	assert_int(d["draw_pages"]).override_failure_message(
 		"a starving pool drew nothing at all: %s" % d).is_greater(0)
 
-func test_pages_come_back_when_chunks_are_evicted(timeout := 60000) -> void:
-	var w := make_world(2048)
+func test_pages_come_back_when_chunks_are_evicted(timeout := 180000) -> void:
+	var w := make_world(16384)
 	assert_int(await settle(w, NEAR_POS, NEAR_FWD)).override_failure_message(
 		"the near view never converged: %s" % w.hooks().debug_lod_stats()).is_greater(0)
 	var used_near: int = w.hooks().debug_lod_stats()["pages_used"]

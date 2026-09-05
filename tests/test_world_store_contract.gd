@@ -49,8 +49,6 @@ func test_consolidation_refusal_accounting() -> void:
 	_world = ClassDB.instantiate("VoxelWorld")
 	_world.use_local_device = true
 	_world.physics_enabled = false
-	_world.world_origin_bricks = Vector3i(0, -64, 0)
-	_world.world_size_regions = Vector3i(8, 5, 8)
 	add_child(_world)
 	_world.ensure_initialized()
 	_world.hooks().debug_stream_region(Vector3i(0, 2, 0))
@@ -129,8 +127,7 @@ func test_lod_fade_band_is_single_source_of_truth(timeout := 60000) -> void:
 	_world = ClassDB.instantiate("VoxelWorld")
 	_world.use_local_device = true
 	_world.physics_enabled = false
-	_world.world_origin_bricks = Vector3i(0, -64, 0)
-	_world.world_size_regions = Vector3i(8, 5, 8)
+	_world.stream_radius_m = 1000.0 # keep this test small: the walk needs whole in-radius sibling sets (L6 spans 819 m)
 	add_child(_world)
 	assert_bool(_world.hooks().debug_init_atlas()).is_true()
 	assert_bool(_world.hooks().debug_init_physics()).is_true()

@@ -22,8 +22,6 @@ func test_self_check_reports_zero_mismatches_on_a_clean_world(timeout := 120000)
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.physics_enabled = false
-	w.world_origin_bricks = Vector3i(0, -64, 0)
-	w.world_size_regions = Vector3i(8, 5, 8)
 	add_child(w)
 	_worlds.append(w)
 	w.ensure_initialized()

@@ -296,7 +296,7 @@ bool MeshService::replay_overrides(const ve::OverrideStore &store,
 							uploaded = false;
 							return;
 						}
-						pass.set_override_entry(table, ve::WorldBounds::brick_index_in_region(brick), slot);
+						pass.set_override_entry(table, ve::brick_index_in_region(brick), slot);
 					}
 			// The region-slot map is intentionally not guessed here; residency restores it on
 			// stream-in, while the table bytes are safe to replay globally.
@@ -821,7 +821,7 @@ void MeshService::run() {
 			for (LodBuildJob &job : lod_jobs) {
 				float origin[3];
 				ve::lod_chunk_origin(job.level, job.coord, origin);
-				const ve::IVec3 rr = ve::WorldBounds::region_of_point(origin[0], origin[1], origin[2]);
+				const ve::IVec3 rr = ve::region_of_point(origin[0], origin[1], origin[2]);
 				auto table_it = override_tables_.find(std::tuple<int, int, int>{rr.x, rr.y, rr.z});
 				if (job.override_table < 0 && table_it != override_tables_.end())
 					job.override_table = table_it->second;

@@ -14,8 +14,6 @@ func make_world() -> VoxelWorld:
     world.physics_enabled = false
     world.atlas_bricks = Vector3i(32, 16, 32)
     world.max_region_slots = 64
-    world.world_origin_bricks = Vector3i(0, -64, 0)
-    world.world_size_regions = Vector3i(8, 5, 8)
     add_child(world)
     _worlds.append(world)
     assert_bool(world.hooks().debug_init_atlas()).is_true()

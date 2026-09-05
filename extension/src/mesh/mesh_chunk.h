@@ -45,7 +45,7 @@ inline constexpr int kChunkProbeSteps = 4;                      // 5^3 = 125 sam
 IVec3 chunk_of_brick(IVec3 brick);
 IVec3 chunk_of_point(float x, float y, float z);
 IVec3 region_of_chunk(IVec3 chunk);
-IVec3 chunk_min_brick(IVec3 chunk); // the chunk's lowest brick, for WorldBounds membership
+IVec3 chunk_min_brick(IVec3 chunk); // the chunk's lowest brick, for region membership
 void chunk_world_origin(IVec3 chunk, float out[3]);
 
 // Distance from a point to the chunk's world AABB; 0 inside.

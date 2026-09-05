@@ -52,7 +52,7 @@ const OverrideBrick *OverrideStore::data(int slot) const {
 
 bool OverrideStore::sample(float x, float y, float z, Sample *out) const {
 	if (!out) return false;
-	const IVec3 brick = WorldBounds::brick_of_point(x, y, z);
+	const IVec3 brick = ve::brick_of_point(x, y, z);
 	const int slot = slot_of(brick);
 	if (slot < 0) return false;
 	const OverrideBrick &b = bricks_[static_cast<size_t>(slot)];
@@ -94,7 +94,7 @@ bool OverrideStore::sample_gradient(float x, float y, float z, FieldSample *out)
 	if (!out) return false;
 	Sample base{};
 	if (!sample(x, y, z, &base)) return false;
-	const IVec3 brick = WorldBounds::brick_of_point(x, y, z);
+	const IVec3 brick = ve::brick_of_point(x, y, z);
 	const int slot = slot_of(brick);
 	if (slot < 0) return false;
 	const OverrideBrick &b = bricks_[static_cast<size_t>(slot)];

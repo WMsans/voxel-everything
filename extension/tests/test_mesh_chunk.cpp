@@ -28,7 +28,7 @@ TEST_CASE("a chunk is 8 bricks and never straddles a region border") {
 					const float e = 0.01f, s = ve::kChunkSize - 0.01f;
 					const float p[3] = {o[0] + ((k & 1) ? s : e), o[1] + ((k & 2) ? s : e),
 							o[2] + ((k & 4) ? s : e)};
-					CHECK(ve::WorldBounds::region_of_point(p[0], p[1], p[2]) == r);
+					CHECK(ve::region_of_point(p[0], p[1], p[2]) == r);
 				}
 			}
 }

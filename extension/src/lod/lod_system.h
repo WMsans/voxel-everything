@@ -126,7 +126,6 @@ private:
 	WorldStore *store() const { return handles_.store; }
 	RenderOrchestrator *render() const { return *handles_.render; }
 	MeshService *mesh() const { return *handles_.mesh; }
-	ve::WorldBounds world_bounds() const; // store-config projection, as VoxelWorld's
 
 	Collaborators handles_;
 
