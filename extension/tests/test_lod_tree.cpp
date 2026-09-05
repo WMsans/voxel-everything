@@ -889,3 +889,46 @@ TEST_CASE("a larger stream radius asks for more roots") {
 	tb.walk(cam_at(0.0f, 62.0f, 0.0f), &occ, 1, &large);
 	CHECK(large.requests.size() >= small.requests.size());
 }
+
+TEST_CASE("coarse nodes outside the stream radius are evictable") {
+	ve::LodTreeConfig cfg;
+	cfg.stream_radius_m = 1638.4f;
+	cfg.evict_frames = 10;
+	ve::LodTree tree(cfg);
+	NoOcclusion occ;
+	ve::LodWalkResult out;
+
+	// Walk at the origin so nodes near it are marked at frame 1.
+	tree.walk(cam_at(0.0f, 62.0f, 0.0f), &occ, 1, &out);
+	tree.note_ready(ve::kLodLevels - 1, {0, 0, 0}, 0, 1);
+	const int after_first = tree.node_count();
+	CHECK(after_first > 0);
+
+	// Travel far away and let the age rule run. The node at the origin is a level-7 node,
+	// which the old exemption made permanently immortal.
+	for (uint32_t f = 2; f < 40; f++) {
+		ve::LodWalkResult w;
+		tree.walk(cam_at(50000.0f, 62.0f, 50000.0f), &occ, f, &w);
+	}
+	std::vector<ve::LodDrawItem> evicted;
+	tree.collect_evictions(40, 0, &evicted);
+	CHECK(std::any_of(evicted.begin(), evicted.end(),
+			[](const ve::LodDrawItem &d) { return d.level == ve::kLodLevels - 1; }));
+}
+
+TEST_CASE("coarse nodes inside the stream radius keep their exemption") {
+	ve::LodTreeConfig cfg;
+	cfg.stream_radius_m = 1638.4f;
+	cfg.evict_frames = 10;
+	ve::LodTree tree(cfg);
+	NoOcclusion occ;
+	ve::LodWalkResult out;
+	tree.walk(cam_at(0.0f, 62.0f, 0.0f), &occ, 1, &out);
+	tree.note_ready(ve::kLodLevels - 1, {0, 0, 0}, 0, 1);
+	// Frame 200 with no further walks: the node is stale by age but still inside the radius.
+	std::vector<ve::LodDrawItem> evicted;
+	tree.collect_evictions(200, 0, &evicted);
+	CHECK(std::none_of(evicted.begin(), evicted.end(), [](const ve::LodDrawItem &d) {
+		return d.level == ve::kLodLevels - 1 && d.coord.x == 0 && d.coord.z == 0;
+	}));
+}

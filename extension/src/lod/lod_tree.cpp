@@ -476,7 +476,15 @@ void LodTree::collect_evictions(uint32_t frame, int want_pages, std::vector<LodD
 	};
 	std::vector<Cand> cands;
 	for (const auto &kv : nodes_) {
-		if (kv.first.level >= cfg_.resident_level_from) continue;
+		// Levels at or above resident_level_from are exempt -- but only while they are still
+		// inside the stream radius. Without the distance arm this exemption is a leak: an
+		// unbounded world leaves a permanently resident coarse node behind at every place the
+		// camera has ever been.
+		if (kv.first.level >= cfg_.resident_level_from) {
+			const IVec3 c{kv.first.x, kv.first.y, kv.first.z};
+			if (lod_chunk_distance(kv.first.level, c, last_cam_pos_) <= cfg_.stream_radius_m)
+				continue;
+		}
 		if (kv.second.building) continue;
 		if (kv.second.state == kLodBuilding) continue;
 		const uint32_t age = frame >= kv.second.last_marked ? frame - kv.second.last_marked : 0u;
