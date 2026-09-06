@@ -208,6 +208,10 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::get_max_lod_chunk_records);
 	ClassDB::bind_method(D_METHOD("set_lod_builds_per_frame", "v"), &VoxelWorld::set_lod_builds_per_frame);
 	ClassDB::bind_method(D_METHOD("get_lod_builds_per_frame"), &VoxelWorld::get_lod_builds_per_frame);
+	ClassDB::bind_method(D_METHOD("set_terrain_pipeline_path", "v"),
+			&VoxelWorld::set_terrain_pipeline_path);
+	ClassDB::bind_method(D_METHOD("get_terrain_pipeline_path"),
+			&VoxelWorld::get_terrain_pipeline_path);
 	ClassDB::bind_method(D_METHOD("set_quality_tier", "v"), &VoxelWorld::set_quality_tier);
 	ClassDB::bind_method(D_METHOD("get_quality_tier"), &VoxelWorld::get_quality_tier);
 	ClassDB::bind_method(D_METHOD("set_effect_enabled", "name", "on"),
@@ -247,6 +251,8 @@ void VoxelWorld::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_lod_chunk_records"),
 			"set_max_lod_chunk_records", "get_max_lod_chunk_records");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_builds_per_frame"), "set_lod_builds_per_frame", "get_lod_builds_per_frame");
+	ADD_PROPERTY(PropertyInfo(Variant::STRING, "terrain_pipeline_path"),
+			"set_terrain_pipeline_path", "get_terrain_pipeline_path");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "quality_tier", PROPERTY_HINT_ENUM,
 			"Off,Low,Medium,High"), "set_quality_tier", "get_quality_tier");
 }
@@ -539,8 +545,9 @@ bool read_res_text(const String &path, std::string *out) {
 void VoxelWorld::load_terrain_pipeline() {
 	if (!store_->terrain_pipeline().stages.empty()) return;
 	std::string src, err;
-	if (!read_res_text("res://assets/pipelines/default.pipeline", &src)) {
-		UtilityFunctions::push_warning("terrain pipeline: cannot read default.pipeline; "
+	if (!read_res_text(terrain_pipeline_path_, &src)) {
+		UtilityFunctions::push_warning("terrain pipeline: cannot read ",
+				terrain_pipeline_path_, "; "
 				"keeping the built-in field");
 		return;
 	}

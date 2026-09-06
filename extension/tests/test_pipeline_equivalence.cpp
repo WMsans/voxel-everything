@@ -1,5 +1,10 @@
-// THE GATE. The stage pipeline must reproduce ve::AnalyticGenerator exactly -- same sdf
-// bits, same materials, same whole bricks. Anything less means the port changed the world.
+// THE GATE. The frozen golden pipeline must reproduce ve::AnalyticGenerator exactly --
+// same sdf bits, same materials, same whole bricks. Anything less means the port changed
+// the world.
+//
+// These cases run against assets/pipelines/golden.pipeline (byte-for-byte the pipeline
+// that shipped before relief landed in default.pipeline), so demo terrain can evolve in
+// default.pipeline without discarding the proof that the generator did not move.
 #include <doctest/doctest.h>
 #include "terrain/pipeline.h"
 #include "terrain/pipeline_field_generator.h"
@@ -21,12 +26,12 @@ std::string slurp(const std::string &p) {
 	return o.str();
 }
 
-std::unique_ptr<ve::PipelineFieldGenerator> default_pipeline() {
+std::unique_ptr<ve::PipelineFieldGenerator> golden_pipeline() {
 	const std::string root(VE_REPO_ROOT);
 	ve::PipelineDesc d;
 	std::string err;
 	REQUIRE_MESSAGE(ve::parse_pipeline_desc(
-			slurp(root + "/assets/pipelines/default.pipeline"), &d, &err), err);
+			slurp(root + "/assets/pipelines/golden.pipeline"), &d, &err), err);
 	std::vector<ve::StageManifest> loaded;
 	for (const auto &r : d.stages) {
 		ve::StageManifest m;
@@ -44,8 +49,8 @@ uint32_t bits(float f) { uint32_t u; std::memcpy(&u, &f, 4); return u; }
 
 } // namespace
 
-TEST_CASE("the default pipeline reproduces the analytic field over the baseline corpus") {
-	auto g = default_pipeline();
+TEST_CASE("the frozen golden pipeline reproduces the analytic field over the baseline corpus") {
+	auto g = golden_pipeline();
 	ve::AnalyticGenerator ref;
 	uint32_t s = 20260903u;
 	auto next = [&s](float lo, float hi) {
@@ -64,8 +69,8 @@ TEST_CASE("the default pipeline reproduces the analytic field over the baseline 
 	CHECK(checked == 512);
 }
 
-TEST_CASE("the default pipeline reproduces whole bricks") {
-	auto g = default_pipeline();
+TEST_CASE("the frozen golden pipeline reproduces whole bricks") {
+	auto g = golden_pipeline();
 	ve::AnalyticGenerator ref;
 	const ve::IVec3 bricks[] = {
 		{0, 64, 0}, {15, 63, 15}, {37, 63, 37}, {37, 62, 37},
@@ -82,7 +87,7 @@ TEST_CASE("the default pipeline reproduces whole bricks") {
 }
 
 TEST_CASE("the pipeline reports the analytic generator's lipschitz bound") {
-	auto g = default_pipeline();
+	auto g = golden_pipeline();
 	ve::AnalyticGenerator ref;
 	CHECK(g->sampler().lipschitz() == doctest::Approx(ref.lipschitz()));
 }

@@ -15,6 +15,9 @@ var _rd: RenderingDevice
 
 func before_test() -> void:
 	_world = ClassDB.instantiate("VoxelWorld")
+	# The corpora prove the GENERATOR did not move, not that one terrain is blessed. They
+	# are pinned to the frozen pipeline so demo terrain can change without invalidating them.
+	_world.terrain_pipeline_path = "res://assets/pipelines/golden.pipeline"
 	add_child(_world)
 	# Initialized: this suite pins the generated pipeline field, not the fallback stub
 	# (see test_field_diff.gd).

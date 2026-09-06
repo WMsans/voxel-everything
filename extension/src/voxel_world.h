@@ -143,6 +143,9 @@ class VoxelWorld : public Node3D, public EditSink {
 	WorldStreamer *streamer_ = nullptr;
 	int overflow_seen_ = 0;                   // sticky OR of frame overflow bits (tests)
 	int edit_rejections_ = 0; // append fan-out rejection stat; read by debug_stream_stats
+	// The golden corpora pin their own frozen pipeline through this, so demo terrain can
+	// change without invalidating the proof that the generator did not move.
+	String terrain_pipeline_path_ = "res://assets/pipelines/default.pipeline";
 
 	void drain_occupancy() { store_->drain_occupancy(); } // one-line delegation (Task 9)
 	void update_sun_state();
@@ -324,6 +327,8 @@ public:
 	int get_max_lod_chunk_records() const { return lod_->max_lod_chunk_records(); }
 	void set_lod_builds_per_frame(int v) { lod_->set_lod_builds_per_frame(v); }
 	int get_lod_builds_per_frame() const { return lod_->lod_builds_per_frame(); }
+	void set_terrain_pipeline_path(const String &v) { terrain_pipeline_path_ = v; }
+	String get_terrain_pipeline_path() const { return terrain_pipeline_path_; }
 
 	// One-line delegations into RenderOrchestrator (Task 14 move); the ClassDB surface
 	// and call sites compile unchanged. The effect/quality setters run on the main

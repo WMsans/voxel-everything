@@ -1,0 +1,13 @@
+# FROZEN. The three stages the engine shipped with, kept byte-for-byte so
+# tests/golden/{field,brick}_baseline.txt stay valid.
+#
+# The golden corpora exist to prove the GENERATOR did not move. Regenerating them whenever
+# the demo terrain changes would discard exactly that proof, so the corpora are pinned to
+# this pipeline and demo terrain evolves in default.pipeline instead.
+# Do not add stages here.
+seed      1337
+lipschitz 2.0
+
+stage stages/hills.field.glslh
+stage stages/cave.field.glslh
+stage stages/height_bands.field.glslh
