@@ -76,6 +76,10 @@ func test_sub_texel_motion_rebuilds_no_cascade(timeout := 120000) -> void:
 	var before := []
 	for c in range(3):
 		before.append(int(w.hooks().debug_sun_shadow_stats(c)["rebuilds"]))
+	for c in range(3):
+		assert_int(before[c]).override_failure_message(
+			"cascade %d never built (rebuilds=%d): map is empty, stillness check is vacuous" % [c, before[c]]
+		).is_greater(0)
 	# One tenth of cascade 0's texel -- far inside every cascade's snap grid.
 	var texel0: float = w.hooks().debug_sun_shadow_stats(0)["texel_world"]
 	for i in range(6):
@@ -106,6 +110,18 @@ func test_the_min_level_clamp_does_not_peter_pan(timeout := 180000) -> void:
 		w_off.hooks().debug_sun_shadow_build(c, true)
 	var off: float = w_off.hooks().debug_sun_shadow_visibility(probe)
 
+	var on_pages: int = w_on.hooks().debug_sun_shadow_stats(2)["pages"]
+	var off_pages: int = w_off.hooks().debug_sun_shadow_stats(2)["pages"]
+	assert_int(on_pages).override_failure_message(
+		"clamped cascade 2 drew %d pages: map is empty, peter-pan check is vacuous" % on_pages
+	).is_greater(0)
+	assert_int(off_pages).override_failure_message(
+		"unclamped cascade 2 drew %d pages: map is empty, peter-pan check is vacuous" % off_pages
+	).is_greater(0)
+	assert_float(off).override_failure_message(
+		"unclamped probe reads %f: map is empty, peter-pan check is vacuous" % off
+	).is_less(0.5)
+
 	# Deep underground is shadowed either way. If the clamp lifted the stored surface off
 	# the ground, the clamped map would report this point LIT.
 	assert_float(on).override_failure_message(
@@ -121,6 +137,11 @@ func test_needs_rebuild_agrees_with_what_build_does(timeout := 120000) -> void:
 	assert_bool(await settle(w, Vector3(60, 80, 60), fwd)).is_true()
 	for c in range(3):
 		w.hooks().debug_sun_shadow_build(c, true)
+	for c in range(3):
+		var built := int(w.hooks().debug_sun_shadow_stats(c)["rebuilds"])
+		assert_int(built).override_failure_message(
+			"cascade %d never built (rebuilds=%d): agree-check runs against empty state" % [c, built]
+		).is_greater(0)
 	# Nothing has moved and nothing is dirty, so no cascade should want a rebuild -- and an
 	# unforced build must then decline for exactly the cascades that said so.
 	for c in range(3):
@@ -137,12 +158,18 @@ func test_the_clamp_reduces_the_far_cascade_page_count(timeout := 180000) -> voi
 	assert_bool(await settle(w_on, Vector3(60, 80, 60), Vector3(1, -0.3, 1).normalized())).is_true()
 	w_on.hooks().debug_sun_shadow_build(2, true)
 	var on: int = w_on.hooks().debug_sun_shadow_stats(2)["pages"]
+	assert_int(on).override_failure_message(
+		"clamped cascade 2 drew %d pages: map is empty, pages check is vacuous" % on
+	).is_greater(0)
 
 	var w_off := make_world(4000.0)
 	w_off.sun_cascade_min_level = false
 	assert_bool(await settle(w_off, Vector3(60, 80, 60), Vector3(1, -0.3, 1).normalized())).is_true()
 	w_off.hooks().debug_sun_shadow_build(2, true)
 	var off: int = w_off.hooks().debug_sun_shadow_stats(2)["pages"]
+	assert_int(off).override_failure_message(
+		"unclamped cascade 2 drew %d pages: map is empty, pages check is vacuous" % off
+	).is_greater(0)
 
 	assert_int(on).override_failure_message(
 		"clamped cascade 2 drew %d pages, unclamped %d" % [on, off]).is_less_equal(off)
