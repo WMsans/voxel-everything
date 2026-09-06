@@ -1030,3 +1030,37 @@ TEST_CASE("a root the forest admits can always refine") {
 			" root chunks were drawn whole, at ", ve::lod_cell_size(ve::kLodLevels - 1),
 			" m cells");
 }
+
+// CHARACTERIZATION (Task 0). Pins the shadow cut that walk() produces today, so the
+// Task 2 rewrite into LodTree::shadow_cut() can be shown to be neutral at the old radius.
+// This test is REWRITTEN in Task 2 to call shadow_cut(); until then it must pass unchanged.
+TEST_CASE("characterization: the shadow cut at 1638.4 m is frustum-free and non-overlapping") {
+	ve::LodTreeConfig cfg;
+	cfg.stream_radius_m = 1638.4f;
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	settle(&t, c, &occ, 8);
+	ve::LodWalkResult r;
+	t.walk(c, &occ, 9999u, &r);
+
+	// The sun's cut sees what the camera's cut cannot: it is never smaller.
+	CHECK(r.shadow_draws.size() >= r.draws.size());
+	CHECK(!r.shadow_draws.empty());
+
+	// And it is a cut: no emitted chunk is an ancestor of another.
+	for (size_t i = 0; i < r.shadow_draws.size(); i++)
+		for (size_t j = i + 1; j < r.shadow_draws.size(); j++) {
+			const ve::LodDrawItem &a = r.shadow_draws[i];
+			const ve::LodDrawItem &b = r.shadow_draws[j];
+			if (a.level == b.level) {
+				CHECK(!(a.coord == b.coord));
+				continue;
+			}
+			const ve::LodDrawItem &lo = a.level < b.level ? a : b;
+			const ve::LodDrawItem &hi = a.level < b.level ? b : a;
+			ve::IVec3 up = lo.coord;
+			for (int l = lo.level; l < hi.level; l++) up = ve::lod_parent(up);
+			CHECK(!(up == hi.coord));
+		}
+}
