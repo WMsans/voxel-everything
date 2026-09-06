@@ -1,0 +1,34 @@
+//!stage     relief
+//!kind      field
+//!in        sdf : float
+//!in        height : float
+//!out       sdf : float
+//!out       height : float
+//!param     amp_a : float = 250.0
+//!param     freq_a : float = 0.0004
+//!param     amp_b : float = 60.0
+//!param     freq_b : float = 0.00083333
+//!lipschitz 1.0
+//!cpu       ve::stage_relief
+
+// Long-wavelength relief, so a 4 km horizon has something on it. hills() is +/-10 m over
+// ~200 m wavelengths, which subtends 1.4 px at 4 km: a flat sliver on the horizon line.
+//
+// The WAVELENGTHS are set by the Lipschitz bound, not by taste. The pipeline declares 2.0,
+// and understating that is a correctness bug (raycast steps by 1/lipschitz and would
+// overshoot a surface). hills() already contributes 0.983 and 1.099 per axis, leaving
+// about 0.15 of amplitude-times-frequency budget: at 250 m that buys a 15.7 km wavelength
+// and at 60 m a 7.5 km one. Across the visible 4 km that is still 250-350 m of height
+// change -- a genuine landscape, and about 42 px of relief at the horizon.
+//
+// Phases are zero so relief(0, 0) = 0 and the demo player's spawn is undisturbed.
+//
+// Purely additive: it runs AFTER hills, so a pipeline that omits this line is byte-for-byte
+// the pipeline that shipped before (assets/pipelines/golden.pipeline is exactly that).
+void stage_relief(inout FieldCtx ctx) {
+	float x = ctx.p.x, z = ctx.p.z;
+	float r = P.relief_amp_a * sin(x * P.relief_freq_a) * cos(z * P.relief_freq_a)
+	        + P.relief_amp_b * sin(x * P.relief_freq_b) * cos(z * P.relief_freq_b);
+	ctx.height += r;
+	ctx.sdf    -= r;
+}

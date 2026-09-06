@@ -16,12 +16,18 @@ layout(set = 0, binding = 0) uniform sampler2D gb_albedo;
 layout(set = 0, binding = 1) uniform sampler2D gb_surface;
 layout(set = 0, binding = 2) uniform sampler2D gb_depth;
 layout(set = 0, binding = 3) uniform sampler2D ssgi_tex;
-layout(set = 0, binding = 4) uniform sampler2D sun_map;
+layout(set = 0, binding = 4) uniform sampler2DArray sun_map;
 layout(set = 0, binding = 7) uniform sampler2D ssao_tex;
 layout(set = 0, binding = 5, rgba16f) writeonly uniform image2D out_lit;
+#define SUN_CASCADES 3
 layout(set = 0, binding = 6, std140) uniform SunBlock {
-	mat4 view_proj;
-	vec4 params;
+	mat4 view_proj[SUN_CASCADES];
+	// per cascade: x = one shadow texel in world metres, y = light-space depth range in the
+	// same metres; zw on cascade 0 carries the LoD fade band (fade_start, fade_end),
+	// unused on the other cascades
+	vec4 params[SUN_CASCADES];
+	// xyz = the cascade radii; w = the count actually in use (1 when the radius collapsed)
+	vec4 splits;
 } sun;
 
 layout(push_constant, std430) uniform Push {
@@ -31,26 +37,35 @@ layout(push_constant, std430) uniform Push {
 	uvec4 flags;
 } pc;
 
-float sun_map_visibility(vec3 wpos, float ndl) {
-	vec4 c = sun.view_proj * vec4(wpos, 1.0);
-	if (c.w <= 0.0) return 1.0;
-	vec3 p = c.xyz / c.w;
+// The fits are camera-centred SPHERES, so a point at distance d is inside cascade i exactly
+// when d < radius_i. Selection is a scalar compare -- no depth-slice arithmetic and no
+// split-plane seam to reconcile against the projection. That is what the sphere fit buys.
+int sun_cascade_of(float d) {
+	int n = int(sun.splits.w);
+	for (int i = 0; i < SUN_CASCADES; i++) {
+		if (i >= n) break;
+		if (d < sun.splits[i]) return i;
+	}
+	return n - 1;
+}
+
+float sun_map_visibility(vec3 wpos, float ndl, float view_dist) {
+	int c = sun_cascade_of(view_dist);
+	vec4 clip = sun.view_proj[c] * vec4(wpos, 1.0);
+	if (clip.w <= 0.0) return 1.0;
+	vec3 p = clip.xyz / clip.w;
 	vec2 uv = p.xy * 0.5 + 0.5;
+	// Outside the outermost cascade's map there is no shadow information, and "lit" is the
+	// honest answer -- this is also what makes "beyond the last cascade" need no branch.
 	if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return 1.0;
 	float slope = clamp(1.0 - abs(ndl), 0.0, 1.0);
-	// params.x is one shadow texel in world metres; params.y is the light-space depth range
-	// in the same metres. p.z and the stored depth are normalized [0,1], so the bias must be
-	// too. Scaling by params.x alone made the bias ~0.54 of the entire depth range at the
-	// demo's world size, which reported every pixel lit and left the far field flat.
-	// Every term is texel-relative, and deliberately so: the unbounded ortho spans the
-	// stream radius (thousands of metres of depth range), where the old absolute +0.0015
-	// contributed ~7 m of slop on its own and unseated the stored surface from the ground
-	// it rasterized. The +1.0 texel is the old guard refactored into range-independent
-	// units (it was ~2 texels at the old range); acne protection still scales with the
-	// slope, as before.
-	float texel = sun.params.x / max(sun.params.y, 1e-6);
+	// p.z and the stored depth are normalized [0,1], so the bias must be too. Every term is
+	// texel-relative and deliberately so: a cascade spans thousands of metres of depth
+	// range, where an absolute bias contributes metres of slop and unseats the stored
+	// surface from the ground it rasterized. Per cascade, because the texels differ by ~10x.
+	float texel = sun.params[c].x / max(sun.params[c].y, 1e-6);
 	float bias = texel * (1.5 + 2.0 * slope);
-	return (p.z + bias >= texture(sun_map, uv).r) ? 1.0 : 0.0;
+	return (p.z + bias >= texture(sun_map, vec3(uv, float(c))).r) ? 1.0 : 0.0;
 }
 
 // Did the LoD mesh draw this pixel? The sun map is rasterized from that mesh and from
@@ -64,8 +79,8 @@ float sun_map_visibility(vec3 wpos, float ndl) {
 // fragment where bayer4(px) < t and composite.frag.glsl drops one there. Reproducing it
 // here -- same threshold, same pixel -- lands the map on exactly the pixels it describes.
 bool far_field_owns(ivec2 px, vec3 wpos, vec3 viewer) {
-	float t = clamp((distance(wpos, viewer) - sun.params.z) /
-			max(sun.params.w - sun.params.z, 1e-3), 0.0, 1.0);
+	float t = clamp((distance(wpos, viewer) - sun.params[0].z) /
+			max(sun.params[0].w - sun.params[0].z, 1e-3), 0.0, 1.0);
 	return bayer4(px) < t;
 }
 
@@ -86,7 +101,8 @@ void main() {
 
 	if (pc.flags.y == 3u) {
 		float vis = ((pc.flags.x & BEAUTY_SUN_MAP) != 0u)
-				? sun_map_visibility(pc.cam.xyz, 1.0) : 1.0;
+				? sun_map_visibility(pc.cam.xyz, 1.0,
+						distance(pc.cam.xyz, pc.inv_view_proj[0].xyz)) : 1.0;
 		imageStore(out_lit, px, vec4(vis, vis, vis, 1.0));
 		return;
 	}
@@ -97,7 +113,8 @@ void main() {
 	if (pc.flags.y == 4u) {
 		float vis = ((pc.flags.x & BEAUTY_SUN_MAP) != 0u &&
 				far_field_owns(px, pc.cam.xyz, pc.inv_view_proj[0].xyz))
-				? sun_map_visibility(pc.cam.xyz, 1.0) : 1.0;
+				? sun_map_visibility(pc.cam.xyz, 1.0,
+						distance(pc.cam.xyz, pc.inv_view_proj[0].xyz)) : 1.0;
 		imageStore(out_lit, px, vec4(vis, vis, vis, 1.0));
 		return;
 	}
@@ -129,7 +146,7 @@ void main() {
 	float ndh = dot(n, normalize(sun_dir + v));
 	float shadow = g0.a;
 	if ((pc.flags.x & BEAUTY_SUN_MAP) != 0u && far_field_owns(px, wpos, pc.cam.xyz))
-		shadow = min(shadow, sun_map_visibility(wpos, ndl));
+		shadow = min(shadow, sun_map_visibility(wpos, ndl, distance(wpos, pc.cam.xyz)));
 	vec3 ambient = pc.sky.rgb;
 	if ((pc.flags.x & BEAUTY_SSGI) != 0u) ambient += texture(ssgi_tex, uv).rgb;
 	// HBAO multiplies the ambient term only: sun lighting, spec and rim keep their own

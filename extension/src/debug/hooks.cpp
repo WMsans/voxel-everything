@@ -52,6 +52,7 @@
 #include "world/raycast.h"
 #include "shade/oct.h"
 #include "shade/cel.h"
+#include "shade/sun_cascades.h"
 #include "shade/sun_ortho.h"
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/engine.hpp>
@@ -122,9 +123,9 @@ void VoxelDebugHooks::_bind_methods() {
 			&VoxelDebugHooks::debug_hiz_occluded);
 	ClassDB::bind_method(D_METHOD("debug_lod_cull_probe", "pos", "fwd"),
 			&VoxelDebugHooks::debug_lod_cull_probe);
-	ClassDB::bind_method(D_METHOD("debug_sun_shadow_stats"),
+	ClassDB::bind_method(D_METHOD("debug_sun_shadow_stats", "cascade"),
 			&VoxelDebugHooks::debug_sun_shadow_stats);
-	ClassDB::bind_method(D_METHOD("debug_sun_shadow_build", "force"),
+	ClassDB::bind_method(D_METHOD("debug_sun_shadow_build", "cascade", "force"),
 			&VoxelDebugHooks::debug_sun_shadow_build);
 	ClassDB::bind_method(D_METHOD("debug_sun_shadow_visibility", "p"),
 			&VoxelDebugHooks::debug_sun_shadow_visibility);
@@ -400,8 +401,7 @@ Dictionary VoxelDebugHooks::debug_contact_shadow_probe(Vector3 pos, Vector3 fwd,
 		for (int r = 0; r < 4; r++) dp.inv_view_proj[c * 4 + r] = inv.columns[c][r];
 	dp.cam_pos[0] = pos.x; dp.cam_pos[1] = pos.y; dp.cam_pos[2] = pos.z;
 	dp.flags = ve::pack_flags(world_->beauty_settings());
-	static const float no_sun[16] = {};
-	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), RID(), no_sun, 0.0f, dp))
+	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), RID(), dp))
 		return d;
 	auto make_scratch = [&]() -> RID {
 		Ref<RDTextureFormat> tf; tf.instantiate();
@@ -512,7 +512,6 @@ Dictionary VoxelDebugHooks::debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, in
 	cp.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
 	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
 	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
-	static const float no_sun[16] = {};
 	const ve::BeautySettings settings = world_->beauty_settings();
 	world_->ssgi_pass()->clear_result();
 	float prev_view_proj[16] = {};
@@ -539,7 +538,7 @@ Dictionary VoxelDebugHooks::debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, in
 		dp.flags = ve::pack_flags(settings);
 		if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(),
 				(ssgi_ok ? world_->ssgi_pass()->result() : RID()),
-				RID(), RID(), no_sun, 0.0f, dp)) break;
+				RID(), RID(), dp)) break;
 		world_->downsample_history(device, world_->gbuffer()->lit(), *world_->gbuffer());
 	}
 	device->submit();
@@ -634,9 +633,8 @@ Dictionary VoxelDebugHooks::debug_ssao_probe(Vector3 pos, Vector3 fwd, int w, in
 			for (int r = 0; r < 4; r++) dp.inv_view_proj[c * 4 + r] = inv.columns[c][r];
 		dp.cam_pos[0] = pos.x; dp.cam_pos[1] = pos.y; dp.cam_pos[2] = pos.z;
 		dp.flags = ve::pack_flags(settings);
-		static const float kNoSun[16] = {};
 		world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(),
-				RID(), ran ? world_->ssao_pass()->result() : RID(), RID(), kNoSun, 0.0f, dp);
+				RID(), ran ? world_->ssao_pass()->result() : RID(), RID(), dp);
 	}
 	device->submit();
 	device->sync();
@@ -746,7 +744,6 @@ Dictionary VoxelDebugHooks::debug_ssgi_reprojection_probe(Vector3 previous_pos, 
 			previous_up);
 	const ve::CameraParams current_params = make_camera_params(current_pos, current_fwd, current_up);
 	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
-	static const float no_sun[16] = {};
 	const ve::BeautySettings settings = world_->beauty_settings();
 	world_->ssgi_pass()->clear_result();
 	float previous_matrix[16], current_matrix[16];
@@ -782,7 +779,7 @@ Dictionary VoxelDebugHooks::debug_ssgi_reprojection_probe(Vector3 previous_pos, 
 			dp.cam_pos[2] = camera_pos.z;
 			dp.flags = ve::pack_flags(settings);
 			return world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), world_->ssgi_pass()->result(), RID(), RID(),
-					no_sun, 0.0f, dp);
+				dp);
 	};
 	auto read_luma = [&]() {
 		const Vector2i half = world_->gbuffer()->half_size();
@@ -1252,6 +1249,12 @@ Dictionary VoxelDebugHooks::debug_lod_stats() {
 	d["pages_used"] = (world_->context().lod->lod_pool_ ? world_->context().lod->lod_pool_->page_count() : 0) -
 			(world_->context().lod->lod_pool_ ? world_->context().lod->lod_pool_->free_pages() : 0);
 	d["chunks_resident"] = static_cast<int>(world_->context().lod->lod_pages_of_.size());
+	LodPool *pool = world_->context().lod->lod_pool_;
+	d["chunk_records"] = pool ? pool->chunk_record_count() : 0;
+	d["chunk_records_used"] = pool ? pool->chunk_records_used() : 0;
+	d["chunk_records_high_water"] = pool ? pool->chunk_records_high_water() : 0;
+	d["pages_high_water"] = pool ? pool->pages_high_water() : 0;
+	d["budget_bound"] = pool ? String(pool->budget_bound()) : String("none");
 	int dirty_chunks = 0;
 	int dirty_levels = 0;
 	if (world_->context().lod->lod_tree_) world_->context().lod->lod_tree_->dirty_stats(&dirty_chunks, &dirty_levels);
@@ -1307,6 +1310,10 @@ Dictionary VoxelDebugHooks::debug_lod_stats() {
 	const int unowned = used_pages - static_cast<int>(owned_pages);
 	d["partial_allocations"] = partial + (unowned > 0 ? unowned : 0);
 	d["builds_in_flight"] = world_->mesh_ && world_->mesh_->lod_busy() ? 1 : 0;
+	// The benchmark's horizon metric watches this key: frames until the request queue
+	// drains and stays drained. Same count as requests_pending, exported under the name
+	// the horizon tracker reads.
+	d["lod_pending"] = static_cast<int>(world_->context().lod->lod_walk_.requests.size());
 	// Async cull stats readback; zero until the first readback lands (safe "nothing culled").
 	d["culled_ratio"] = world_->lod_cull_pass() ? world_->lod_cull_pass()->culled_ratio() : 0.0f;
 	return d;
@@ -1666,8 +1673,7 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 	dp.cam_pos[1] = pos.y;
 	dp.cam_pos[2] = pos.z;
 	dp.flags = ve::pack_flags(world_->beauty_settings());
-	static const float kNoSun[16] = {};
-	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), RID(), kNoSun, 0.0f, dp) ||
+	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), RID(), dp) ||
 			!world_->inject_pass()->draw(device, color, depth, world_->gbuffer()->lit(), world_->gbuffer()->depth())) {
 		cleanup();
 		return d;
@@ -4369,8 +4375,7 @@ Dictionary VoxelDebugHooks::debug_cel_diff(Color albedo, Color ambient, float nd
 	p.inv_view_proj[11] = shadow;
 	p.inv_view_proj[12] = ao;
 	p.inv_view_proj[13] = gloss;
-	static const float kNoSun[16] = {};
-	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), RID(), kNoSun, 0.0f, p))
+	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), RID(), p))
 		return d;
 	device->submit();
 	device->sync();
@@ -4394,9 +4399,13 @@ Dictionary VoxelDebugHooks::debug_cel_diff(Color albedo, Color ambient, float nd
 	return d;
 }
 
-Dictionary VoxelDebugHooks::debug_sun_shadow_stats() {
+Dictionary VoxelDebugHooks::debug_sun_shadow_stats(int cascade) {
 	Dictionary d;
 	d["size"] = SunShadowPass::kSize;
+	d["cascades"] = 0;
+	d["cascade"] = cascade;
+	d["radius"] = 0.0f;
+	d["min_level"] = 0;
 	d["map_valid"] = false;
 	d["ortho_valid"] = false;
 	d["texel_world"] = 0.0f;
@@ -4406,36 +4415,61 @@ Dictionary VoxelDebugHooks::debug_sun_shadow_stats() {
 	world_->ensure_initialized();
 	SunShadowPass *sun = world_->sun_shadow_pass();
 	if (!sun) return d;
-	// The SHIPPING fit, not a second one that happens to agree. This hook used to centre its
-	// own box on the region window while the compositor centred on the camera, so the matrix
-	// the tests inspected was not the matrix that was rasterized -- which is how a shimmering
-	// shadow map passed a suite containing "the matrix does not move with the camera".
-	const ve::SunOrtho ortho = world_->sun_ortho();
+	ve::SunCascade c[ve::kSunCascades];
+	const int n = ve::sun_cascades(world_->get_stream_radius_m(), SunShadowPass::kSize, c);
+	d["cascades"] = n;
+	if (cascade < 0 || cascade >= n) return d;
+	d["radius"] = c[cascade].radius;
+	d["min_level"] = c[cascade].min_level;
+	// The SHIPPING fit, not a second one that happens to agree.
+	const ve::SunOrtho ortho = world_->sun_ortho(cascade);
 	d["map_valid"] = sun->map().is_valid();
 	d["ortho_valid"] = ortho.valid;
-	d["texel_world"] = ortho.valid ? ortho.texel_world : sun->texel_world();
-	d["rebuilds"] = sun->rebuilds();
-	d["pages"] = sun->last_pages();
+	d["texel_world"] = ortho.valid ? ortho.texel_world : sun->texel_world(cascade);
+	d["rebuilds"] = sun->rebuilds(cascade);
+	d["pages"] = sun->last_pages(cascade);
+	// Exposed so a test can assert the query and the build agree. They share
+	// should_rebuild(), so agreement is structural -- but a cut skipped on a false negative
+	// is a shadow that silently stops updating, which is worth pinning. This is the LIVE
+	// poll: each read advances the throttle exactly as the compositor's per-frame poll
+	// does. rebuild_pending below is the non-advancing snapshot for display.
+	d["needs_rebuild"] = sun->needs_rebuild(cascade, ortho);
+	d["rebuild_pending"] = sun->rebuild_pending(cascade, ortho);
 	PackedFloat32Array matrix;
 	matrix.resize(16);
-	const float *source = sun->rebuilds() > 0 ? sun->view_proj() :
-			(ortho.valid ? ortho.view_proj : sun->view_proj());
-	for (int i = 0; i < 16; i++) matrix[i] = source[i];
+	const float *source = sun->rebuilds(cascade) > 0 ? sun->view_proj(cascade) :
+			(ortho.valid ? ortho.view_proj : sun->view_proj(cascade));
+	for (int i = 0; i < 16; i++) matrix.set(i, source[i]);
 	d["view_proj"] = matrix;
 	return d;
 }
 
-void VoxelDebugHooks::debug_sun_shadow_build(bool force) {
+bool VoxelDebugHooks::debug_sun_shadow_build(int cascade, bool force) {
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!device || !world_->sun_shadow_pass() || !world_->context().lod->lod_pool_ || !world_->lod_raster_pass()) return;
-	world_->prepare_lod_shadow_raster();
+	if (!device || !world_->sun_shadow_pass() || !world_->context().lod->lod_pool_ || !world_->lod_raster_pass()) return false;
+	ve::SunCascade c[ve::kSunCascades];
+	const int n = ve::sun_cascades(world_->get_stream_radius_m(), SunShadowPass::kSize, c);
+	if (cascade < 0 || cascade >= n) return false;
 	// The shipping fit; see debug_sun_shadow_stats() above for why this must not be a
 	// second, locally reasonable one.
-	const ve::SunOrtho ortho = world_->sun_ortho();
-	world_->sun_shadow_pass()->build(device, *world_->context().lod->lod_pool_, *world_->lod_raster_pass(),
-			ortho, force);
+	const ve::SunOrtho ortho = world_->sun_ortho(cascade);
+	// The compositor's poll-then-build, mirrored: the poll advances the per-cascade
+	// throttle, and a decline skips the cut (for cascade 2 the expensive half) exactly
+	// as the game path does -- so an unforced hook build behaves like one compositor
+	// frame, and forced builds skip the poll. The raster is restored on both paths.
+	if (!force && !world_->sun_shadow_pass()->needs_rebuild(cascade, ortho)) {
+		world_->prepare_lod_raster();
+		return false;
+	}
+	// The cascade's cut, at the clamp the world is configured with -- the same cut the
+	// compositor would produce, so the knob measures through this hook too.
+	world_->prepare_lod_shadow_raster(c[cascade].radius,
+			world_->get_sun_cascade_min_level() ? c[cascade].min_level : 0);
+	const bool did = world_->sun_shadow_pass()->build(device, *world_->context().lod->lod_pool_, *world_->lod_raster_pass(),
+			cascade, ortho, force);
 	world_->prepare_lod_raster();
+	return did;
 }
 
 float VoxelDebugHooks::sun_shadow_probe(Vector3 p, Vector3 viewer, int probe_mode) {
@@ -4449,25 +4483,46 @@ float VoxelDebugHooks::sun_shadow_probe(Vector3 p, Vector3 viewer, int probe_mod
 	}
 	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(1, 1))) return 1.0f;
 	const ve::BeautySettings beauty = world_->beauty_settings();
-	const bool use_sun = world_->sun_shadow_pass() && world_->sun_shadow_pass()->is_valid() &&
-			world_->sun_shadow_pass()->rebuilds() > 0 && beauty.sun_shadow_map;
+	SunShadowPass *sun = world_->sun_shadow_pass();
+	ve::SunCascade cascades[ve::kSunCascades];
+	const int cascade_count = ve::sun_cascades(world_->get_stream_radius_m(),
+			SunShadowPass::kSize, cascades);
+	const bool use_sun = sun && sun->is_valid() &&
+			sun->rebuilds(0) > 0 && beauty.sun_shadow_map;
 	DeferredPass::Params dp;
 	dp.cam_pos[0] = p.x;
 	dp.cam_pos[1] = p.y;
 	dp.cam_pos[2] = p.z;
 	dp.flags = ve::pack_flags(beauty);
-	dp.shadow_depth_range = use_sun ? world_->sun_shadow_pass()->depth_range() : 0.0f;
+	dp.cascade_count = use_sun ? cascade_count : 0;
+	for (int i = 0; i < cascade_count && use_sun; i++) {
+		const float *vp = sun->view_proj(i);
+		for (int k = 0; k < 16; k++) dp.sun_view_proj[i][k] = vp[k];
+		dp.shadow_texel[i] = sun->texel_world(i);
+		dp.shadow_depth_range_c[i] = sun->depth_range(i);
+		dp.cascade_split[i] = cascades[i].radius;
+	}
 	world_->lod_fade_band(&dp.fade_start, &dp.fade_end);
 	dp.probe_mode = probe_mode;
-	// Mode 4 reads the viewer out of inv_view_proj's first row; mode 3 ignores it.
-	dp.inv_view_proj[0] = viewer.x;
-	dp.inv_view_proj[1] = viewer.y;
-	dp.inv_view_proj[2] = viewer.z;
-	static const float kNoSun[16] = {};
+	// Mode 4 reads the viewer out of inv_view_proj's first row; mode 3 ignores it. Probe 3
+	// asks what the map says at p, and the map is per-cascade: the cascade is selected by
+	// viewing distance, so the viewer must be a real camera position, not p itself (which
+	// would pin the distance at 0 and always read cascade 0). The last walk's camera is the
+	// position the fits were centred on; without one yet, fall back to p (old behaviour).
+	float viewer_pos[3] = { viewer.x, viewer.y, viewer.z };
+	if (probe_mode == 3) {
+		float cam[3];
+		if (world_->context().lod->last_camera(cam)) {
+			viewer_pos[0] = cam[0];
+			viewer_pos[1] = cam[1];
+			viewer_pos[2] = cam[2];
+		}
+	}
+	dp.inv_view_proj[0] = viewer_pos[0];
+	dp.inv_view_proj[1] = viewer_pos[1];
+	dp.inv_view_proj[2] = viewer_pos[2];
 	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(),
-			use_sun ? world_->sun_shadow_pass()->map() : RID(),
-			use_sun ? world_->sun_shadow_pass()->view_proj() : kNoSun,
-			use_sun ? world_->sun_shadow_pass()->texel_world() : 0.0f, dp))
+			use_sun ? sun->map() : RID(), dp))
 		return 1.0f;
 	device->submit();
 	device->sync();
@@ -4554,7 +4609,7 @@ Dictionary VoxelDebugHooks::debug_deferred_probe(Vector3 pos, Vector3 fwd, int w
 	dp.cam_pos[2] = pos.z;
 	dp.flags = flags;
 	dp.probe_mode = probe_mode;
-	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), RID(), kNoEdit, 0.0f, dp))
+	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), RID(), dp))
 		return d;
 	device->submit();
 	device->sync();

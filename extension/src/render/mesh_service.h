@@ -103,6 +103,9 @@ public:
 	bool submit_lod(std::vector<LodBuildJob> jobs);
 	// True while a LoD batch is queued or being built.
 	bool lod_busy() const { return lod_busy_.load(std::memory_order_acquire); }
+	// The LodBuildPass's per-batch job cap. LodSystem must clamp its batch to THIS, not to
+	// a literal: a copy of the number means raising max_jobs silently changes nothing.
+	int lod_max_jobs() const;
 	int collect_lod(std::vector<LodBuildResult> *out);
 
 	bool submit_consolidations(std::vector<ConsolidateJob> jobs);
@@ -234,6 +237,10 @@ private:
 	ConsolidatePass *consolidate_ = nullptr;       // worker thread only
 	std::vector<LodBuildJob> pending_lod_;
 	std::vector<LodBuildResult> lod_results_;
+	// Mirrors the LodBuildConfig::max_jobs the worker pass was initialised with. Written
+	// once on the worker thread during startup (before ready_ is published), read-only
+	// afterwards, so plain-int visibility through the startup release is sufficient.
+	int lod_max_jobs_ = 8;
 	struct OverrideUpdate {
 		bool clear = false;
 		ve::IVec3 region{};

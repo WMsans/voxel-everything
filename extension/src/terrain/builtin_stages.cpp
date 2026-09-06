@@ -45,8 +45,23 @@ void stage_height_bands(FieldCtx &ctx, const StageSlots &s, const StageParams &,
 	ctx.f(material) = h > 4.0f ? 2.0f : (h > 1.0f ? 1.0f : 3.0f);
 }
 
+// Line-for-line equivalent of shaders/stages/relief.field.glslh; tests/test_field_diff.gd
+// is what catches drift. extra[] holds this stage's WRITES in declaration order, then its
+// reads -- and sdf/height are declared both in and out, so each resolves to one slot.
+void stage_relief(FieldCtx &ctx, const StageSlots &s, const StageParams &p,
+		const FieldResources &) {
+	const int sdf = s.extra[0];    // //!out sdf
+	const int height = s.extra[1]; // //!out height
+	const float x = ctx.v(s.p)[0], z = ctx.v(s.p)[2];
+	const float r = p.at(0) * sinf(x * p.at(1)) * cosf(z * p.at(1))
+	              + p.at(2) * sinf(x * p.at(3)) * cosf(z * p.at(3));
+	ctx.f(height) += r;
+	ctx.f(sdf) -= r;
+}
+
 VE_REGISTER_STAGE("ve::stage_hills", stage_hills);
 VE_REGISTER_STAGE("ve::stage_cave", stage_cave);
 VE_REGISTER_STAGE("ve::stage_height_bands", stage_height_bands);
+VE_REGISTER_STAGE("ve::stage_relief", stage_relief);
 
 } // namespace ve

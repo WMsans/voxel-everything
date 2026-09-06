@@ -55,6 +55,7 @@
 #include "world/raycast.h"
 #include "shade/oct.h"
 #include "shade/cel.h"
+#include "shade/sun_cascades.h"
 #include "shade/sun_ortho.h"
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/file_access.hpp>
@@ -185,6 +186,10 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_physics_center_path"), &VoxelWorld::get_physics_center_path);
 	ClassDB::bind_method(D_METHOD("set_sun_light_path", "p"), &VoxelWorld::set_sun_light_path);
 	ClassDB::bind_method(D_METHOD("get_sun_light_path"), &VoxelWorld::get_sun_light_path);
+	ClassDB::bind_method(D_METHOD("set_sun_cascade_min_level", "v"),
+			&VoxelWorld::set_sun_cascade_min_level);
+	ClassDB::bind_method(D_METHOD("get_sun_cascade_min_level"),
+			&VoxelWorld::get_sun_cascade_min_level);
 	ClassDB::bind_method(D_METHOD("set_physics_radius_m", "v"), &VoxelWorld::set_physics_radius_m);
 	ClassDB::bind_method(D_METHOD("get_physics_radius_m"), &VoxelWorld::get_physics_radius_m);
 	ClassDB::bind_method(D_METHOD("set_physics_bubble_radius_m", "v"), &VoxelWorld::set_physics_bubble_radius_m);
@@ -197,8 +202,16 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_shape_builds_per_frame"), &VoxelWorld::get_shape_builds_per_frame);
 	ClassDB::bind_method(D_METHOD("set_max_lod_pages", "v"), &VoxelWorld::set_max_lod_pages);
 	ClassDB::bind_method(D_METHOD("get_max_lod_pages"), &VoxelWorld::get_max_lod_pages);
+	ClassDB::bind_method(D_METHOD("set_max_lod_chunk_records", "v"),
+			&VoxelWorld::set_max_lod_chunk_records);
+	ClassDB::bind_method(D_METHOD("get_max_lod_chunk_records"),
+			&VoxelWorld::get_max_lod_chunk_records);
 	ClassDB::bind_method(D_METHOD("set_lod_builds_per_frame", "v"), &VoxelWorld::set_lod_builds_per_frame);
 	ClassDB::bind_method(D_METHOD("get_lod_builds_per_frame"), &VoxelWorld::get_lod_builds_per_frame);
+	ClassDB::bind_method(D_METHOD("set_terrain_pipeline_path", "v"),
+			&VoxelWorld::set_terrain_pipeline_path);
+	ClassDB::bind_method(D_METHOD("get_terrain_pipeline_path"),
+			&VoxelWorld::get_terrain_pipeline_path);
 	ClassDB::bind_method(D_METHOD("set_quality_tier", "v"), &VoxelWorld::set_quality_tier);
 	ClassDB::bind_method(D_METHOD("get_quality_tier"), &VoxelWorld::get_quality_tier);
 	ClassDB::bind_method(D_METHOD("set_effect_enabled", "name", "on"),
@@ -227,13 +240,19 @@ void VoxelWorld::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "physics_enabled"), "set_physics_enabled", "get_physics_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "physics_center_path"), "set_physics_center_path", "get_physics_center_path");
 	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "sun_light_path"), "set_sun_light_path", "get_sun_light_path");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "sun_cascade_min_level"),
+			"set_sun_cascade_min_level", "get_sun_cascade_min_level");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "physics_radius_m"), "set_physics_radius_m", "get_physics_radius_m");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "physics_bubble_radius_m"), "set_physics_bubble_radius_m", "get_physics_bubble_radius_m");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_collider_chunks"), "set_max_collider_chunks", "get_max_collider_chunks");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "mesh_jobs_per_frame"), "set_mesh_jobs_per_frame", "get_mesh_jobs_per_frame");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "shape_builds_per_frame"), "set_shape_builds_per_frame", "get_shape_builds_per_frame");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_lod_pages"), "set_max_lod_pages", "get_max_lod_pages");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_lod_chunk_records"),
+			"set_max_lod_chunk_records", "get_max_lod_chunk_records");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_builds_per_frame"), "set_lod_builds_per_frame", "get_lod_builds_per_frame");
+	ADD_PROPERTY(PropertyInfo(Variant::STRING, "terrain_pipeline_path"),
+			"set_terrain_pipeline_path", "get_terrain_pipeline_path");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "quality_tier", PROPERTY_HINT_ENUM,
 			"Off,Low,Medium,High"), "set_quality_tier", "get_quality_tier");
 }
@@ -526,8 +545,9 @@ bool read_res_text(const String &path, std::string *out) {
 void VoxelWorld::load_terrain_pipeline() {
 	if (!store_->terrain_pipeline().stages.empty()) return;
 	std::string src, err;
-	if (!read_res_text("res://assets/pipelines/default.pipeline", &src)) {
-		UtilityFunctions::push_warning("terrain pipeline: cannot read default.pipeline; "
+	if (!read_res_text(terrain_pipeline_path_, &src)) {
+		UtilityFunctions::push_warning("terrain pipeline: cannot read ",
+				terrain_pipeline_path_, "; "
 				"keeping the built-in field");
 		return;
 	}
@@ -1027,20 +1047,28 @@ void VoxelWorld::prepare_lod_raster() {
 	context_.lod->prepare_raster();
 }
 
-void VoxelWorld::prepare_lod_shadow_raster() {
-	context_.lod->prepare_shadow_raster();
+void VoxelWorld::prepare_lod_shadow_raster(float radius, int min_level) {
+	context_.lod->prepare_shadow_raster(radius, min_level);
 }
 
-ve::SunOrtho VoxelWorld::sun_ortho() const {
+int VoxelWorld::sun_cascade_count() const {
+	ve::SunCascade c[ve::kSunCascades];
+	return ve::sun_cascades(get_stream_radius_m(), SunShadowPass::kSize, c);
+}
+
+ve::SunOrtho VoxelWorld::sun_ortho(int cascade) const {
 	float cam[3];
 	if (!context_.lod->last_camera(cam)) return ve::SunOrtho();
+	ve::SunCascade c[ve::kSunCascades];
+	const int n = ve::sun_cascades(get_stream_radius_m(), SunShadowPass::kSize, c);
+	if (n <= 0 || cascade < 0 || cascade >= n) return ve::SunOrtho();
 	const ve::SunState sun = sun_state();
 	// A scene light hands over a basis that rotates continuously; a bare direction has to
 	// have one derived, which is ill-conditioned near the zenith. Same choice as before.
 	return sun.has_basis()
-			? ve::sun_ortho_sphere(sun.dir, sun.right, sun.up, cam, get_stream_radius_m(),
+			? ve::sun_ortho_sphere(sun.dir, sun.right, sun.up, cam, c[cascade].radius,
 					SunShadowPass::kSize)
-			: ve::sun_ortho_sphere(sun.dir, cam, get_stream_radius_m(), SunShadowPass::kSize);
+			: ve::sun_ortho_sphere(sun.dir, cam, c[cascade].radius, SunShadowPass::kSize);
 }
 
 void VoxelWorld::lod_fade_band(float *fade_start, float *fade_end) const {

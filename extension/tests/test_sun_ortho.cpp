@@ -357,3 +357,17 @@ TEST_CASE("the sphere fit accepts the light's own basis") {
 	for (int i = 0; i < 16; i++)
 		CHECK(given.view_proj[i] == doctest::Approx(derived.view_proj[i]).epsilon(1e-5));
 }
+
+// CHARACTERIZATION (Task 0). The exact fit that ships today at the old default radius.
+// Task 1 introduces cascades; the outermost cascade must reproduce THIS matrix, bit for
+// bit, at this radius. If cascades change these numbers, they changed what ships.
+TEST_CASE("characterization: the shipping fit at stream_radius 1638.4") {
+	const float cam[3] = {800.0f, 60.0f, 800.0f};
+	const ve::SunOrtho o = ve::sun_ortho_sphere(ve::kSunDir, cam, 1638.4f, 2048);
+	REQUIRE(o.valid);
+	// 2 * 1638.4 / 2047 -- the texel depends on the radius and the map size and on
+	// nothing else: not the sun's direction, not the camera's position.
+	CHECK(o.texel_world == doctest::Approx(1.600782f).epsilon(1e-5));
+	// 4R: the sphere spans 2R with R of margin on each side (fit_sphere's half_depth).
+	CHECK(o.depth_range == doctest::Approx(4.0f * 1638.4f).epsilon(1e-4));
+}

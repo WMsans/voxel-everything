@@ -25,6 +25,7 @@ const WARMUP := 60
 # chunk queue is actually empty (or this cap is hit, which is reported either way).
 const SETTLE_CAP := 1500
 const SETTLE_QUIET_FRAMES := 10
+const HORIZON_QUIET_FRAMES := 30
 const FRAMES := 300
 const ISLAND_FRAMES := 900
 const EDIT_BOUNDED_FRAMES := 900
@@ -63,6 +64,7 @@ var _prev_lod := {}
 var _worst := {}
 var _worst_ms := 0.0
 var _lod_ms_samples: PackedFloat32Array = PackedFloat32Array()
+var _lod_pending_samples: PackedFloat32Array = PackedFloat32Array()
 var _draw_pages_samples: PackedFloat32Array = PackedFloat32Array()
 var _culled_ratio_samples: PackedFloat32Array = PackedFloat32Array()
 var _chunks_resident_samples: PackedFloat32Array = PackedFloat32Array()
@@ -84,6 +86,8 @@ var _warmup := WARMUP
 var _settle := false
 var _settle_quiet := 0
 var _settled_at := -1
+var _horizon_quiet := 0
+var _horizon_at := -1
 var _screenshot_path := ""
 
 func _effects_off_from_args(args: PackedStringArray) -> PackedStringArray:
@@ -270,6 +274,14 @@ func _process(delta: float) -> void:
 	var lod: Dictionary = _prev_lod
 	_prev_lod = _world.hooks().debug_lod_stats()
 	_lod_ms_samples.append(float(perf.get("lod_ms", 0.0)))
+	_lod_pending_samples.append(float(int(lod.get("lod_pending", 0))))
+	# The far field's own settle. The existing `settle` counts physics chunks_pending only
+	# and says nothing about whether the horizon has arrived.
+	if _horizon_at < 0 and lod.has("lod_pending"):
+		var pending: int = int(lod.get("lod_pending", 0))
+		_horizon_quiet = _horizon_quiet + 1 if pending == 0 else 0
+		if _horizon_quiet >= HORIZON_QUIET_FRAMES:
+			_horizon_at = _frames
 	_draw_pages_samples.append(float(lod.get("draw_pages", 0)))
 	_culled_ratio_samples.append(float(lod.get("culled_ratio", 0.0)))
 	_chunks_resident_samples.append(float(lod.get("chunks_resident", 0)))
@@ -285,12 +297,15 @@ func _process(delta: float) -> void:
 		_draining = true
 
 func _terrain_height(x: float, z: float) -> float:
-	# Mirror of extension/src/generator/generator.cpp and shaders/field.glslh. Used only to
+	# Mirror of extension/src/generator/generator.cpp and shaders/field.glslh, INCLUDING the
+	# relief stage (shaders/stages/relief.field.glslh at its default params). Used only to
 	# hold the ridge leg close to the floor; the benchmark does not modify the world.
 	return 51.2 + (
 			6.0 * sin(x * 0.11) * cos(z * 0.13)
 			+ 3.0 * sin(x * 0.031 + 1.7) * sin(z * 0.043)
-			+ 1.0 * sin(x * 0.23 + z * 0.19))
+			+ 1.0 * sin(x * 0.23 + z * 0.19)
+			+ 250.0 * sin(x * 0.0004) * cos(z * 0.0004)
+			+ 60.0 * sin(x * 0.00083333) * cos(z * 0.00083333))
 
 func _fire_edit() -> void:
 	# Sweep the aim so successive edits hit fresh ground instead of re-carving one hole:
@@ -431,6 +446,13 @@ func _report() -> void:
 	if _settled_at >= 0:
 		print("BENCH settle frames_to_quiet=%d capped=%s" % [
 			_settled_at, str(_settled_at >= SETTLE_CAP).to_lower()])
+	print("BENCH horizon frames_to_horizon=%d capped=%s" % [
+		_horizon_at if _horizon_at >= 0 else _frames,
+		str(_horizon_at < 0).to_lower()])
+	var sorted_lod_pending := _lod_pending_samples.duplicate()
+	sorted_lod_pending.sort()
+	print("BENCH lod_pending p50=%d p99=%d" % [
+		int(_percentile(sorted_lod_pending, 0.50)), int(_percentile(sorted_lod_pending, 0.99))])
 	print("BENCH frame_avg_ms=%.2f fps=%.1f" % [avg, 1000.0 / avg])
 	print("BENCH p50=%.2f p95=%.2f p99=%.2f max=%.2f min_fps=%.1f over_16.6ms=%d (%.1f%%)" % [
 		_percentile(sorted, 0.50), _percentile(sorted, 0.95), _percentile(sorted, 0.99),
@@ -512,5 +534,16 @@ func _report() -> void:
 		isl.get("live_islands", -1), isl.get("live_debris", -1),
 		isl.get("islands_spawned", -1), isl.get("islands_merged", -1),
 		isl.get("refused", -1), isl.get("connectivity_runs", -1)])
+	var lps: Dictionary = _world.hooks().debug_lod_stats()
+	print("BENCH lod_pool chunk_records=%d used=%d high_water=%d pages_high_water=%d budget_bound=%s" % [
+		lps.get("chunk_records", -1), lps.get("chunk_records_used", -1),
+		lps.get("chunk_records_high_water", -1), lps.get("pages_high_water", -1),
+		str(lps.get("budget_bound", "unknown"))])
+	for i in range(3):
+		var sc: Dictionary = _world.hooks().debug_sun_shadow_stats(i)
+		print("BENCH sun_cascade i=%d cascades=%d radius=%.1f min_level=%d pages=%d rebuilds=%d map_valid=%s" % [
+			i, sc.get("cascades", -1), float(sc.get("radius", -1.0)),
+			sc.get("min_level", -1), sc.get("pages", -1), sc.get("rebuilds", -1),
+			str(sc.get("map_valid", false)).to_lower()])
 	if avg > TARGET_MS:
 		push_warning("BENCH: frame budget exceeded (target %.1fms)" % TARGET_MS)

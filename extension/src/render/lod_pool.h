@@ -17,7 +17,10 @@ class LodPool {
 public:
 	~LodPool();
 
-	bool initialize(RenderingDevice *rd, int max_pages);
+	// max_chunk_records was a private compile-time 8192. It is a parameter so a test can
+	// drive it small: the exhaustion path below is unreachable otherwise, and an untested
+	// degradation path is a cliff waiting for a bigger world.
+	bool initialize(RenderingDevice *rd, int max_pages, int max_chunk_records);
 	void teardown();
 
 	// All-or-nothing: either every page the quads need is allocated and uploaded, or nothing
@@ -40,11 +43,23 @@ public:
 	const std::vector<uint32_t> &page_chunk_cpu() const { return page_chunk_cpu_; }
 
 	int page_count() const { return arena_.capacity(); }
-	int chunk_record_count() const { return kChunkRecords; }
+	int chunk_record_count() const { return max_chunk_records_; }
+	int chunk_records_used() const {
+		return max_chunk_records_ - static_cast<int>(free_chunk_slots_.size());
+	}
+	int chunk_records_high_water() const { return chunk_records_high_water_; }
+	int pages_high_water() const { return pages_high_water_; }
+	// Which pool refused the last upload: "none", "chunk_records" or "pages".
+	const char *budget_bound() const { return budget_bound_; }
 	int free_pages() const { return arena_.free_pages(); }
 
 private:
-	static constexpr int kChunkRecords = 8192;
+	int max_chunk_records_ = 0;
+	int chunk_records_high_water_ = 0;
+	int pages_high_water_ = 0;
+	const char *budget_bound_ = "none";
+	bool warned_records_ = false;
+	bool warned_pages_ = false;
 	static constexpr uint32_t kNoChunk = 0xffffffffu;
 
 	int allocate_chunk_slot();

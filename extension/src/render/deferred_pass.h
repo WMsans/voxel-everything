@@ -2,6 +2,7 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <cstdint>
+#include "shade/sun_cascades.h"
 
 namespace godot {
 
@@ -16,10 +17,16 @@ public:
 		float inv_view_proj[16] = {};
 		float cam_pos[3] = {};
 		float ambient[3] = {kAmbient[0], kAmbient[1], kAmbient[2]};
-		// Light-space depth extent of the sun ortho, in world metres. Only read when a sun
-		// map is bound; `render()` clears kFlagSunMap when it is not, so the default 0 is
-		// never divided by.
-		float shadow_depth_range = 0.0f;
+		// Per-cascade sun state. `cascade_count` is what ve::sun_cascades() returned: 1 when
+		// the stream radius collapsed the set, which is exactly the pre-cascade behaviour.
+		float sun_view_proj[ve::kSunCascades][16] = {};
+		float shadow_texel[ve::kSunCascades] = {};
+		// Light-space depth extent of each cascade's ortho, in world metres. Only read when
+		// a sun map is bound; render() clears kFlagSunMap when it is not, so the default 0
+		// is never divided by.
+		float shadow_depth_range_c[ve::kSunCascades] = {};
+		float cascade_split[ve::kSunCascades] = {};
+		int cascade_count = 0;
 		// The LoD hand-over band, in metres from the camera. The sun map is rasterized from
 		// the LoD mesh alone, so it may only shade the pixels that mesh drew; these two
 		// distances are how the shader recovers which field owns a pixel.
@@ -36,8 +43,7 @@ public:
 	void teardown();
 	bool is_valid() const { return shader_.is_valid() && pipeline_.is_valid(); }
 	bool render(RenderingDevice *rd, GBuffer &gb, const MaterialAtlas &materials,
-			RID ssgi, RID ssao, RID sun_map, const float sun_view_proj[16],
-			float shadow_texel, const Params &p);
+			RID ssgi, RID ssao, RID sun_map, const Params &p);
 	float last_ms() const { return last_ms_; }
 
 private:

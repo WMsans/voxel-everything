@@ -11,11 +11,12 @@ LodPool::~LodPool() {
 	teardown();
 }
 
-bool LodPool::initialize(RenderingDevice *rd, int max_pages) {
+bool LodPool::initialize(RenderingDevice *rd, int max_pages, int max_chunk_records) {
 	teardown();
 	if (!rd || max_pages <= 0) return false;
 	rd_ = rd;
 	max_pages_ = max_pages;
+	max_chunk_records_ = max_chunk_records > 0 ? max_chunk_records : 8192;
 	arena_ = ve::LodArena(max_pages);
 
 	// The arena is large at shipping defaults (32768 pages * 6 KB = 192 MB). Pass no initial
@@ -47,7 +48,7 @@ bool LodPool::initialize(RenderingDevice *rd, int max_pages) {
 	page_quads_ = rd_->storage_buffer_create(static_cast<uint32_t>(page_entries), zero);
 
 	PackedByteArray chunk_zero;
-	chunk_zero.resize(static_cast<int64_t>(kChunkRecords) * 32);
+	chunk_zero.resize(static_cast<int64_t>(max_chunk_records_) * 32);
 	chunks_ = rd_->storage_buffer_create(static_cast<uint32_t>(chunk_zero.size()), chunk_zero);
 
 	PackedByteArray args_zero;
@@ -65,9 +66,9 @@ bool LodPool::initialize(RenderingDevice *rd, int max_pages) {
 	page_chunk_cpu_.assign(static_cast<size_t>(max_pages), kNoChunk);
 	page_quads_cpu_.assign(static_cast<size_t>(max_pages), 0);
 	free_chunk_slots_.clear();
-	free_chunk_slots_.reserve(kChunkRecords);
-	for (int i = kChunkRecords - 1; i >= 0; i--) free_chunk_slots_.push_back(i);
-	chunk_used_.assign(kChunkRecords, 0);
+	free_chunk_slots_.reserve(max_chunk_records_);
+	for (int i = max_chunk_records_ - 1; i >= 0; i--) free_chunk_slots_.push_back(i);
+	chunk_used_.assign(max_chunk_records_, 0);
 	return true;
 }
 
@@ -116,10 +117,31 @@ bool LodPool::upload(int level, ve::IVec3 coord, const std::vector<ve::LodQuad> 
 	if (!rd_ || !quads_.is_valid() || quads.empty() || !pages_out) return false;
 	const int pages_needed = ve::lod_pages_for_quads(static_cast<int>(quads.size()));
 	if (pages_needed <= 0 || pages_needed > ve::kLodMaxPagesPerChunk) return false;
-	if (pages_needed > arena_.free_pages()) return false;
+	if (pages_needed > arena_.free_pages()) {
+		budget_bound_ = "pages";
+		if (!warned_pages_) {
+			warned_pages_ = true;
+			// Once per run: the horizon stops arriving instead of the ground disappearing,
+			// which is deliberate -- but it must be diagnosable, not silent. Both pools
+			// used to take this same path with nothing to tell them apart.
+			UtilityFunctions::push_warning(
+					"LodPool: page arena exhausted (", arena_.capacity(),
+					" pages); the horizon will stop growing. Raise max_lod_pages.");
+		}
+		return false;
+	}
 
 	const int chunk_slot = allocate_chunk_slot();
-	if (chunk_slot < 0) return false;
+	if (chunk_slot < 0) {
+		budget_bound_ = "chunk_records";
+		if (!warned_records_) {
+			warned_records_ = true;
+			UtilityFunctions::push_warning(
+					"LodPool: chunk records exhausted (", max_chunk_records_,
+					"); the horizon will stop growing. Raise max_lod_chunk_records.");
+		}
+		return false;
+	}
 
 	std::vector<int> pages;
 	if (!arena_.alloc(pages_needed, &pages)) {
@@ -177,6 +199,9 @@ bool LodPool::upload(int level, ve::IVec3 coord, const std::vector<ve::LodQuad> 
 	}
 
 	pages_out->assign(pages.begin(), pages.end());
+	budget_bound_ = "none";
+	chunk_records_high_water_ = std::max(chunk_records_high_water_, chunk_records_used());
+	pages_high_water_ = std::max(pages_high_water_, arena_.used_pages());
 	return true;
 }
 

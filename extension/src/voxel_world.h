@@ -125,6 +125,9 @@ class VoxelWorld : public Node3D, public EditSink {
 	std::unique_ptr<RenderOrchestrator> render_;
 
 	bool physics_enabled_ = true;
+	// The A/B knob for the shadow cut's minimum-level clamp (spec section 3). On by
+	// default; off restores an unclamped cut for measurement.
+	bool sun_cascade_min_level_ = true;
 	NodePath physics_center_path_;
 	NodePath sun_light_path_;
 	mutable std::mutex sun_mutex_;
@@ -140,6 +143,9 @@ class VoxelWorld : public Node3D, public EditSink {
 	WorldStreamer *streamer_ = nullptr;
 	int overflow_seen_ = 0;                   // sticky OR of frame overflow bits (tests)
 	int edit_rejections_ = 0; // append fan-out rejection stat; read by debug_stream_stats
+	// The golden corpora pin their own frozen pipeline through this, so demo terrain can
+	// change without invalidating the proof that the generator did not move.
+	String terrain_pipeline_path_ = "res://assets/pipelines/default.pipeline";
 
 	void drain_occupancy() { store_->drain_occupancy(); } // one-line delegation (Task 9)
 	void update_sun_state();
@@ -317,8 +323,12 @@ public:
 	int get_shape_builds_per_frame() const { return shape_builds_per_frame_; }
 	void set_max_lod_pages(int v) { lod_->set_max_lod_pages(v); }
 	int get_max_lod_pages() const { return lod_->max_lod_pages(); }
+	void set_max_lod_chunk_records(int v) { lod_->set_max_lod_chunk_records(v); }
+	int get_max_lod_chunk_records() const { return lod_->max_lod_chunk_records(); }
 	void set_lod_builds_per_frame(int v) { lod_->set_lod_builds_per_frame(v); }
 	int get_lod_builds_per_frame() const { return lod_->lod_builds_per_frame(); }
+	void set_terrain_pipeline_path(const String &v) { terrain_pipeline_path_ = v; }
+	String get_terrain_pipeline_path() const { return terrain_pipeline_path_; }
 
 	// One-line delegations into RenderOrchestrator (Task 14 move); the ClassDB surface
 	// and call sites compile unchanged. The effect/quality setters run on the main
@@ -353,19 +363,15 @@ public:
 	void lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ);
 	// Push the current walk's page list (with per-page quad counts) into the raster pass.
 	void prepare_lod_raster();
-	void prepare_lod_shadow_raster();
-	// The sun's projection for THIS frame, and the only place it is fitted.
-	//
-	// It used to be fitted at three call sites -- the compositor's, and one in each of the
-	// debug facade's two shadow entry points -- and when the unbounded world took the world
-	// AABB away they drifted apart: the compositor started following the raw camera while
-	// the debug path followed the region window. The result was a render path that shimmered
-	// and a test suite that could not see it, because the invariant those tests pin was
-	// still true of the matrix they were shown. One accessor, one matrix, one thing to test.
-	//
-	// Centred on the last LoD walk's camera and radiused at the stream radius: exactly the
-	// set LodTree::shadow_visit rasterises. Invalid before the first lod_tick().
-	ve::SunOrtho sun_ortho() const;
+	void prepare_lod_shadow_raster(float radius, int min_level);
+	// The SHIPPING fit for one cascade. One place it is written down, read by both the
+	// render path and the debug facade -- this hook used to centre its own box while the
+	// compositor centred on the camera, which is how a shimmering shadow map passed a suite
+	// containing "the matrix does not move with the camera".
+	ve::SunOrtho sun_ortho(int cascade) const;
+	int sun_cascade_count() const;
+	void set_sun_cascade_min_level(bool v) { sun_cascade_min_level_ = v; }
+	bool get_sun_cascade_min_level() const { return sun_cascade_min_level_; }
 	RenderingDevice *rd() const; // one-line delegation into RenderOrchestrator
 	GpuTimings *gpu_timings() { return context_.render->gpu_timings(); }
 

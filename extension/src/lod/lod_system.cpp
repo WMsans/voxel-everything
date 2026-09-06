@@ -52,7 +52,8 @@ void LodSystem::ensure_lod() {
 		lod_tree_ = new ve::LodTree(cfg);
 	}
 	if (!lod_pool_) lod_pool_ = new LodPool();
-	if (lod_pool_->page_count() == 0 && !lod_pool_->initialize(device, max_lod_pages_))
+	if (lod_pool_->page_count() == 0 &&
+			!lod_pool_->initialize(device, max_lod_pages_, max_lod_chunk_records_))
 		UtilityFunctions::printerr("VoxelWorld: LodPool initialize failed");
 }
 
@@ -82,6 +83,7 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 	// tick had a tree to walk, and a stale centre would drag the shadow map behind the view.
 	for (int a = 0; a < 3; a++) last_cam_[a] = cam.pos[a];
 	has_last_cam_ = true;
+	lod_shadow_cam_ = cam;
 	ensure_lod();
 	if (!lod_tree_ || !lod_pool_) return;
 	// The gate that decides which chunks are worth building has to agree with the fragment
@@ -215,10 +217,10 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 	// flags back.
 	std::vector<ve::LodBuildRequest> batch_requests;
 	if (mesh() && !mesh()->lod_busy()) {
-		// MeshService's LodBuildPass currently supports at most 8 LoD jobs per batch.
-		// lod_builds_per_frame_ is user-facing and may be higher; submit_lod would reject
-		// anything above the mesher's cap, so clamp the actual batch take here.
-		const int take = std::min<int>({lod_builds_per_frame_, int(lod_walk_.requests.size()), 8});
+		// The batch cap is the MESHER's, read from it rather than copied: a literal here
+		// silently defeats any change to LodBuildConfig::max_jobs.
+		const int take = std::min<int>({lod_builds_per_frame_,
+				int(lod_walk_.requests.size()), mesh()->lod_max_jobs()});
 		batch_requests.assign(lod_walk_.requests.begin(), lod_walk_.requests.begin() + take);
 		for (const ve::LodBuildRequest &q : batch_requests)
 			lod_tree_->note_building(q.level, q.coord);
@@ -266,7 +268,7 @@ void LodSystem::prepare_raster() {
 }
 
 // The sun's cut: ONE description of each piece of ground, the level the camera walk chose,
-// everywhere in the world rather than only inside the frustum (LodWalkResult::shadow_draws).
+// everywhere in the world rather than only inside the frustum (see shadow_cut() below).
 //
 // It used to be every RESIDENT page instead, because the camera's own list is frustum culled
 // and terrain beside or behind the camera has to keep casting. But residency is a cache, not
@@ -277,12 +279,13 @@ void LodSystem::prepare_raster() {
 // 15 m above open sunlit ground. Ordering the draws coarsest-first and writing depth
 // unconditionally only moved the problem: the finest page wins the texels it covers, and the
 // coarse bulge keeps every texel it does not.
-void LodSystem::prepare_shadow_raster() {
+void LodSystem::prepare_shadow_raster(float radius, int min_level) {
 	std::lock_guard<std::mutex> lock(lod_mutex_);
-	if (!render()->lod_raster_pass() || !lod_pool_) return;
+	if (!render()->lod_raster_pass() || !lod_pool_ || !lod_tree_) return;
+	std::vector<ve::LodDrawItem> cut;
+	lod_tree_->shadow_cut(lod_shadow_cam_, radius, min_level, &cut);
 	std::vector<ve::LodPageDraw> page_draws;
-	ve::lod_collect_page_draws(lod_walk_.shadow_draws, lod_pages_of_, lod_page_quads_,
-			&page_draws);
+	ve::lod_collect_page_draws(cut, lod_pages_of_, lod_page_quads_, &page_draws);
 	std::vector<LodRasterPass::PageDraw> pages;
 	pages.reserve(page_draws.size());
 	for (const ve::LodPageDraw &pd : page_draws)

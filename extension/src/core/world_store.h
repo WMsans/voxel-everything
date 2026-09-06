@@ -44,9 +44,12 @@ struct WorldConfig {
 	int max_brick_jobs = 16384;
 	int max_override_bricks = 8192;
 	float residency_radius_m = 96.0f;
-	// The far field's horizon. Defaults to 1638.4 m, exactly the reach of the fixed world
-	// this replaced, so the unbounded rework is a no-visual-change refactor at its default.
-	float stream_radius_m = 1638.4f;
+	// The far field's horizon. 4000 m is the shipped view distance; the sun's three
+	// cascades and the terrain's relief are sized from it (ve::sun_cascades,
+	// shaders/stages/relief.field.glslh). Lowering it is supported and collapses the
+	// cascade set gracefully -- at or below 409.4 m it becomes a single map, which is
+	// exactly the pre-cascade behaviour.
+	float stream_radius_m = 4000.0f;
 	// Where occupancy blocks are dropped. Connectivity windows reach 102.4 m
 	// (kFloodWindowCells x 2 expansions), so this carries 2.5x headroom.
 	float occupancy_retention_m = 256.0f;

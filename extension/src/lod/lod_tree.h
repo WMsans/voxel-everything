@@ -87,15 +87,6 @@ struct LodBuildRequest {
 
 struct LodWalkResult {
 	std::vector<LodDrawItem> draws;
-	// The same cut as `draws`, minus the frustum test: what the SUN has to rasterize.
-	//
-	// A shadow map is not rendered from the camera, so terrain beside and behind it must
-	// keep casting -- but it still has to be a CUT, one description of each piece of ground.
-	// Feeding the map every RESIDENT page instead puts several LoD descriptions of the same
-	// ground in one texel; they disagree by metres (levels 5-7 are 12.8-51.2 m cells and are
-	// never evicted, so their tent-filtered surfaces bulge over the whole world), and
-	// whichever one happens to survive the depth test then shadows open sunlit ground.
-	std::vector<LodDrawItem> shadow_draws;
 	std::vector<LodBuildRequest> requests;
 };
 
@@ -119,6 +110,25 @@ public:
 
 	// One walk per frame against the CURRENT camera. `occ` may be null (no readback yet).
 	void walk(const LodCamera &cam, const LodOcclusion *occ, uint32_t frame, LodWalkResult *out);
+
+	// The SUN's cut, for one cascade: the same descend rule walk() uses, minus the frustum
+	// test, bounded by `radius` and floored at `min_level`.
+	//
+	// A shadow map is not rendered from the camera, so terrain beside and behind it must
+	// keep casting -- but it still has to be a CUT, one description of each piece of ground.
+	// Feeding the map every RESIDENT page instead puts several LoD descriptions of the same
+	// ground in one texel; they disagree by metres and whichever survives the depth test
+	// then shadows open sunlit ground.
+	//
+	// `min_level` floors the descent where the cascade's shadow texel cannot hold the
+	// detail anyway (ve::sun_cascades). That is still ONE description per piece of ground,
+	// so the failure above cannot return; what it trades is a bounded disagreement between
+	// this coarse surface and the camera's finer one, which the texel-relative bias spans.
+	//
+	// MUST be called after walk() for the same camera and frame: want_finer() and
+	// children_ready() read last_cam_pos_, which walk() refreshes.
+	void shadow_cut(const LodCamera &cam, float radius, int min_level,
+			std::vector<LodDrawItem> *out) const;
 
 	void note_building(int level, IVec3 c);
 	void note_ready(int level, IVec3 c, int page_first, int page_count);
@@ -176,7 +186,7 @@ private:
 	void visit(int level, IVec3 c, const LodCamera &cam, const LodOcclusion *occ,
 			uint32_t frame, LodWalkResult *out);
 	// The frustum-free twin of visit(): same descend rule, no state touched, no requests.
-	void shadow_visit(int level, IVec3 c, const LodCamera &cam,
+	void shadow_visit(int level, IVec3 c, const LodCamera &cam, float radius, int min_level,
 			std::vector<LodDrawItem> *out) const;
 	// Whether the cut descends below this node. ONE rule, read by the camera walk and by the
 	// shadow cut, so the two can never choose different levels for the same ground -- which

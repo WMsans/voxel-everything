@@ -760,7 +760,7 @@ TEST_CASE("page draws are emitted from the actual non-contiguous page list") {
 	CHECK(out[2].quad_count == 3);
 }
 
-// --- the sun's cut (LodWalkResult::shadow_draws) ---------------------------------------
+// --- the sun's cut (LodTree::shadow_cut) ------------------------------------------------
 //
 // The sun map is rasterized from this list. It must be a CUT, exactly like `draws`: the
 // moment two LoD levels of the same ground land in one 1.1 m shadow texel they disagree by
@@ -778,10 +778,12 @@ TEST_CASE("the sun's cut never overlaps itself") {
 	ve::LodWalkResult r;
 	for (int f = 1; f <= 40; f++) {
 		t.walk(c, &occ, uint32_t(f), &r);
-		for (size_t i = 0; i < r.shadow_draws.size(); i++)
-			for (size_t j = i + 1; j < r.shadow_draws.size(); j++) {
-				const ve::LodDrawItem &a = r.shadow_draws[i];
-				const ve::LodDrawItem &b = r.shadow_draws[j];
+		std::vector<ve::LodDrawItem> cut;
+		t.shadow_cut(c, 1638.4f, 0, &cut);
+		for (size_t i = 0; i < cut.size(); i++)
+			for (size_t j = i + 1; j < cut.size(); j++) {
+				const ve::LodDrawItem &a = cut[i];
+				const ve::LodDrawItem &b = cut[j];
 				if (a.level == b.level) {
 					CHECK(!(a.coord == b.coord));
 					continue;
@@ -807,6 +809,8 @@ TEST_CASE("the sun's cut covers ground the camera cut culled away") {
 	settle(&t, c, &occ, 12);
 	ve::LodWalkResult r;
 	t.walk(c, &occ, 20000, &r);
+	std::vector<ve::LodDrawItem> cut;
+	t.shadow_cut(c, 1638.4f, 0, &cut);
 
 	auto contains = [](const std::vector<ve::LodDrawItem> &v, const ve::LodDrawItem &d) {
 		for (const ve::LodDrawItem &e : v)
@@ -814,12 +818,12 @@ TEST_CASE("the sun's cut covers ground the camera cut culled away") {
 		return false;
 	};
 	int behind = 0;
-	for (const ve::LodDrawItem &d : r.shadow_draws)
+	for (const ve::LodDrawItem &d : cut)
 		if (!contains(r.draws, d)) behind++;
 	CHECK(behind > 0);
 	// ...and nothing the camera draws may be missing from it, or a visible surface would be
 	// shaded against a map that does not contain it.
-	for (const ve::LodDrawItem &d : r.draws) CHECK(contains(r.shadow_draws, d));
+	for (const ve::LodDrawItem &d : r.draws) CHECK(contains(cut, d));
 }
 
 // The whole point of descending on the SAME rule: for ground the camera can see, the map
@@ -835,10 +839,12 @@ TEST_CASE("the sun's cut picks the camera's level for ground the camera draws") 
 	ve::LodWalkResult r;
 	t.walk(c, &occ, 20000, &r);
 	REQUIRE(!r.draws.empty());
+	std::vector<ve::LodDrawItem> cut;
+	t.shadow_cut(c, 1638.4f, 0, &cut);
 
 	for (const ve::LodDrawItem &d : r.draws) {
 		bool same_level = false;
-		for (const ve::LodDrawItem &e : r.shadow_draws)
+		for (const ve::LodDrawItem &e : cut)
 			if (e.level == d.level && e.coord == d.coord) same_level = true;
 		CHECK(same_level);
 	}
@@ -858,8 +864,10 @@ TEST_CASE("the sun's cut stops at the coarsest ready node when nothing finer is 
 	const ve::LodBuildRequest root = r.requests[0];
 	t.note_ready(root.level, root.coord, 1, 1);
 	t.walk(c, &occ, 2, &r);
+	std::vector<ve::LodDrawItem> cut;
+	t.shadow_cut(c, 1638.4f, 0, &cut);
 	int emitted = 0;
-	for (const ve::LodDrawItem &d : r.shadow_draws)
+	for (const ve::LodDrawItem &d : cut)
 		if (d.level == root.level && d.coord == root.coord) emitted++;
 	CHECK(emitted == 1);
 }
@@ -1029,4 +1037,138 @@ TEST_CASE("a root the forest admits can always refine") {
 	CHECK_MESSAGE(roots_drawn == 0, roots_drawn,
 			" root chunks were drawn whole, at ", ve::lod_cell_size(ve::kLodLevels - 1),
 			" m cells");
+}
+
+// CHARACTERIZATION (Task 0, rewritten in Task 2 onto shadow_cut). Same properties as
+// before the rewrite: the sun's cut is frustum-free, so never smaller than the camera's,
+// and it is a CUT -- no chunk is an ancestor of another.
+TEST_CASE("characterization: the shadow cut at 1638.4 m is frustum-free and non-overlapping") {
+	ve::LodTreeConfig cfg;
+	cfg.stream_radius_m = 1638.4f;
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	settle(&t, c, &occ, 8);
+	ve::LodWalkResult r;
+	t.walk(c, &occ, 9999u, &r);
+
+	std::vector<ve::LodDrawItem> cut;
+	t.shadow_cut(c, 1638.4f, 0, &cut);
+
+	CHECK(cut.size() >= r.draws.size());
+	CHECK(!cut.empty());
+
+	for (size_t i = 0; i < cut.size(); i++)
+		for (size_t j = i + 1; j < cut.size(); j++) {
+			const ve::LodDrawItem &a = cut[i];
+			const ve::LodDrawItem &b = cut[j];
+			if (a.level == b.level) {
+				CHECK(!(a.coord == b.coord));
+				continue;
+			}
+			const ve::LodDrawItem &lo = a.level < b.level ? a : b;
+			const ve::LodDrawItem &hi = a.level < b.level ? b : a;
+			ve::IVec3 up = lo.coord;
+			for (int l = lo.level; l < hi.level; l++) up = ve::lod_parent(up);
+			CHECK(!(up == hi.coord));
+		}
+}
+
+// The clamp is the whole reason cascade 2 is affordable: at a 3.908 m texel a level-0
+// chunk is three texels across, and kLodNearDenseRadiusM FORCES level 0 within 300 m.
+TEST_CASE("shadow_cut emits nothing below min_level") {
+	ve::LodTreeConfig cfg;
+	cfg.stream_radius_m = 1638.4f;
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	settle(&t, c, &occ, 8);
+
+	for (const int min_level : {0, 1, 3}) {
+		std::vector<ve::LodDrawItem> cut;
+		t.shadow_cut(c, 1638.4f, min_level, &cut);
+		CHECK(!cut.empty());
+		for (const ve::LodDrawItem &d : cut) CHECK(d.level >= min_level);
+	}
+}
+
+// Clamping must not break the property the map depends on. The cut need not be COMPLETE --
+// a node absent from the tree is skipped, exactly as before -- but one piece of ground may
+// never be described twice, or two surfaces metres apart land in one shadow texel.
+TEST_CASE("a clamped shadow cut still never describes one piece of ground twice") {
+	ve::LodTreeConfig cfg;
+	cfg.stream_radius_m = 1638.4f;
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	settle(&t, c, &occ, 8);
+
+	std::vector<ve::LodDrawItem> cut;
+	t.shadow_cut(c, 1638.4f, 3, &cut);
+	REQUIRE(!cut.empty());
+	for (size_t i = 0; i < cut.size(); i++)
+		for (size_t j = i + 1; j < cut.size(); j++) {
+			const ve::LodDrawItem &a = cut[i];
+			const ve::LodDrawItem &b = cut[j];
+			if (a.level == b.level) {
+				CHECK(!(a.coord == b.coord));
+				continue;
+			}
+			const ve::LodDrawItem &lo = a.level < b.level ? a : b;
+			const ve::LodDrawItem &hi = a.level < b.level ? b : a;
+			ve::IVec3 up = lo.coord;
+			for (int l = lo.level; l < hi.level; l++) up = ve::lod_parent(up);
+			CHECK(!(up == hi.coord));
+		}
+}
+
+// Clamping is a saving, not a rearrangement: a coarser cut is a SMALLER cut.
+TEST_CASE("a coarser min_level yields a smaller cut") {
+	ve::LodTreeConfig cfg;
+	cfg.stream_radius_m = 1638.4f;
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	settle(&t, c, &occ, 8);
+
+	std::vector<ve::LodDrawItem> fine, coarse;
+	t.shadow_cut(c, 1638.4f, 0, &fine);
+	t.shadow_cut(c, 1638.4f, 3, &coarse);
+	CHECK(coarse.size() <= fine.size());
+	CHECK(!coarse.empty());
+}
+
+// Each cascade asks for its own radius, so a smaller radius must actually cut less.
+TEST_CASE("a smaller radius yields a subset of the larger cut") {
+	ve::LodTreeConfig cfg;
+	cfg.stream_radius_m = 1638.4f;
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	settle(&t, c, &occ, 8);
+
+	std::vector<ve::LodDrawItem> near_cut, far_cut;
+	t.shadow_cut(c, 409.4f, 0, &near_cut);
+	t.shadow_cut(c, 1638.4f, 0, &far_cut);
+	CHECK(near_cut.size() <= far_cut.size());
+	// Everything in the near cut is genuinely inside the near radius.
+	for (const ve::LodDrawItem &d : near_cut) {
+		const float p[3] = {c.pos[0], c.pos[1], c.pos[2]};
+		CHECK(ve::lod_chunk_distance(d.level, d.coord, p) <= 409.4f + 1e-3f);
+	}
+}
+
+TEST_CASE("shadow_cut clears its output and refuses a non-positive radius") {
+	ve::LodTreeConfig cfg;
+	cfg.stream_radius_m = 1638.4f;
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	settle(&t, c, &occ, 8);
+
+	std::vector<ve::LodDrawItem> cut{ve::LodDrawItem{0, ve::IVec3{9, 9, 9}, 0, 0}};
+	t.shadow_cut(c, 0.0f, 0, &cut);
+	CHECK(cut.empty());
+	t.shadow_cut(c, -5.0f, 0, &cut);
+	CHECK(cut.empty());
 }
