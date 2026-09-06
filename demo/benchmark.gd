@@ -25,6 +25,7 @@ const WARMUP := 60
 # chunk queue is actually empty (or this cap is hit, which is reported either way).
 const SETTLE_CAP := 1500
 const SETTLE_QUIET_FRAMES := 10
+const HORIZON_QUIET_FRAMES := 30
 const FRAMES := 300
 const ISLAND_FRAMES := 900
 const EDIT_BOUNDED_FRAMES := 900
@@ -63,6 +64,7 @@ var _prev_lod := {}
 var _worst := {}
 var _worst_ms := 0.0
 var _lod_ms_samples: PackedFloat32Array = PackedFloat32Array()
+var _lod_pending_samples: PackedFloat32Array = PackedFloat32Array()
 var _draw_pages_samples: PackedFloat32Array = PackedFloat32Array()
 var _culled_ratio_samples: PackedFloat32Array = PackedFloat32Array()
 var _chunks_resident_samples: PackedFloat32Array = PackedFloat32Array()
@@ -84,6 +86,8 @@ var _warmup := WARMUP
 var _settle := false
 var _settle_quiet := 0
 var _settled_at := -1
+var _horizon_quiet := 0
+var _horizon_at := -1
 var _screenshot_path := ""
 
 func _effects_off_from_args(args: PackedStringArray) -> PackedStringArray:
@@ -270,6 +274,14 @@ func _process(delta: float) -> void:
 	var lod: Dictionary = _prev_lod
 	_prev_lod = _world.hooks().debug_lod_stats()
 	_lod_ms_samples.append(float(perf.get("lod_ms", 0.0)))
+	_lod_pending_samples.append(float(int(lod.get("lod_pending", 0))))
+	# The far field's own settle. The existing `settle` counts physics chunks_pending only
+	# and says nothing about whether the horizon has arrived.
+	if _horizon_at < 0 and lod.has("lod_pending"):
+		var pending: int = int(lod.get("lod_pending", 0))
+		_horizon_quiet = _horizon_quiet + 1 if pending == 0 else 0
+		if _horizon_quiet >= HORIZON_QUIET_FRAMES:
+			_horizon_at = _frames
 	_draw_pages_samples.append(float(lod.get("draw_pages", 0)))
 	_culled_ratio_samples.append(float(lod.get("culled_ratio", 0.0)))
 	_chunks_resident_samples.append(float(lod.get("chunks_resident", 0)))
@@ -431,6 +443,13 @@ func _report() -> void:
 	if _settled_at >= 0:
 		print("BENCH settle frames_to_quiet=%d capped=%s" % [
 			_settled_at, str(_settled_at >= SETTLE_CAP).to_lower()])
+	print("BENCH horizon frames_to_horizon=%d capped=%s" % [
+		_horizon_at if _horizon_at >= 0 else _frames,
+		str(_horizon_at < 0).to_lower()])
+	var sorted_lod_pending := _lod_pending_samples.duplicate()
+	sorted_lod_pending.sort()
+	print("BENCH lod_pending p50=%d p99=%d" % [
+		int(_percentile(sorted_lod_pending, 0.50)), int(_percentile(sorted_lod_pending, 0.99))])
 	print("BENCH frame_avg_ms=%.2f fps=%.1f" % [avg, 1000.0 / avg])
 	print("BENCH p50=%.2f p95=%.2f p99=%.2f max=%.2f min_fps=%.1f over_16.6ms=%d (%.1f%%)" % [
 		_percentile(sorted, 0.50), _percentile(sorted, 0.95), _percentile(sorted, 0.99),

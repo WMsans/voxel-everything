@@ -217,10 +217,10 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 	// flags back.
 	std::vector<ve::LodBuildRequest> batch_requests;
 	if (mesh() && !mesh()->lod_busy()) {
-		// MeshService's LodBuildPass currently supports at most 8 LoD jobs per batch.
-		// lod_builds_per_frame_ is user-facing and may be higher; submit_lod would reject
-		// anything above the mesher's cap, so clamp the actual batch take here.
-		const int take = std::min<int>({lod_builds_per_frame_, int(lod_walk_.requests.size()), 8});
+		// The batch cap is the MESHER's, read from it rather than copied: a literal here
+		// silently defeats any change to LodBuildConfig::max_jobs.
+		const int take = std::min<int>({lod_builds_per_frame_,
+				int(lod_walk_.requests.size()), mesh()->lod_max_jobs()});
 		batch_requests.assign(lod_walk_.requests.begin(), lod_walk_.requests.begin() + take);
 		for (const ve::LodBuildRequest &q : batch_requests)
 			lod_tree_->note_building(q.level, q.coord);

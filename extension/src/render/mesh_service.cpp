@@ -159,6 +159,10 @@ int MeshService::collect_extracts(std::vector<IslandExtractResult> *out) {
 	return n;
 }
 
+int MeshService::lod_max_jobs() const {
+	return lod_max_jobs_;
+}
+
 bool MeshService::submit_lod(std::vector<LodBuildJob> jobs) {
 	if (jobs.empty() || !is_valid() || !worker_state_valid_.load(std::memory_order_acquire)) return false;
 	{
@@ -510,6 +514,7 @@ void MeshService::run() {
 		lod_->set_override_pool(&pass.overrides());
 		LodBuildConfig lod_cfg;
 		lod_cfg.max_jobs = kLodMaxJobsPerBatch;
+		lod_max_jobs_ = lod_cfg.max_jobs;
 		if (lod_->initialize(rd, lod_cfg)) {
 			lod_available_.store(true, std::memory_order_release);
 		} else {

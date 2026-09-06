@@ -1310,6 +1310,10 @@ Dictionary VoxelDebugHooks::debug_lod_stats() {
 	const int unowned = used_pages - static_cast<int>(owned_pages);
 	d["partial_allocations"] = partial + (unowned > 0 ? unowned : 0);
 	d["builds_in_flight"] = world_->mesh_ && world_->mesh_->lod_busy() ? 1 : 0;
+	// The benchmark's horizon metric watches this key: frames until the request queue
+	// drains and stays drained. Same count as requests_pending, exported under the name
+	// the horizon tracker reads.
+	d["lod_pending"] = static_cast<int>(world_->context().lod->lod_walk_.requests.size());
 	// Async cull stats readback; zero until the first readback lands (safe "nothing culled").
 	d["culled_ratio"] = world_->lod_cull_pass() ? world_->lod_cull_pass()->culled_ratio() : 0.0f;
 	return d;
