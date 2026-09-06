@@ -1249,6 +1249,12 @@ Dictionary VoxelDebugHooks::debug_lod_stats() {
 	d["pages_used"] = (world_->context().lod->lod_pool_ ? world_->context().lod->lod_pool_->page_count() : 0) -
 			(world_->context().lod->lod_pool_ ? world_->context().lod->lod_pool_->free_pages() : 0);
 	d["chunks_resident"] = static_cast<int>(world_->context().lod->lod_pages_of_.size());
+	LodPool *pool = world_->context().lod->lod_pool_;
+	d["chunk_records"] = pool ? pool->chunk_record_count() : 0;
+	d["chunk_records_used"] = pool ? pool->chunk_records_used() : 0;
+	d["chunk_records_high_water"] = pool ? pool->chunk_records_high_water() : 0;
+	d["pages_high_water"] = pool ? pool->pages_high_water() : 0;
+	d["budget_bound"] = pool ? String(pool->budget_bound()) : String("none");
 	int dirty_chunks = 0;
 	int dirty_levels = 0;
 	if (world_->context().lod->lod_tree_) world_->context().lod->lod_tree_->dirty_stats(&dirty_chunks, &dirty_levels);

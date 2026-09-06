@@ -116,6 +116,8 @@ public:
 	int max_lod_pages() const { return max_lod_pages_; }
 	void set_lod_builds_per_frame(int v) { lod_builds_per_frame_ = v; }
 	int lod_builds_per_frame() const { return lod_builds_per_frame_; }
+	void set_max_lod_chunk_records(int v) { max_lod_chunk_records_ = v; }
+	int max_lod_chunk_records() const { return max_lod_chunk_records_; }
 
 private:
 	// Temporary Task-15 surface: the debug facade pokes the moved members directly today,
@@ -140,6 +142,7 @@ private:
 
 	// Member ORDER mirrors the pre-split block in voxel_world.h.
 	int max_lod_pages_ = 32768;
+	int max_lod_chunk_records_ = 8192;
 	int lod_builds_per_frame_ = 8;
 	mutable std::mutex lod_mutex_;
 	ve::LodTree *lod_tree_ = nullptr;

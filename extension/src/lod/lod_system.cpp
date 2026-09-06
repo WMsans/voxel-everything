@@ -52,7 +52,8 @@ void LodSystem::ensure_lod() {
 		lod_tree_ = new ve::LodTree(cfg);
 	}
 	if (!lod_pool_) lod_pool_ = new LodPool();
-	if (lod_pool_->page_count() == 0 && !lod_pool_->initialize(device, max_lod_pages_))
+	if (lod_pool_->page_count() == 0 &&
+			!lod_pool_->initialize(device, max_lod_pages_, max_lod_chunk_records_))
 		UtilityFunctions::printerr("VoxelWorld: LodPool initialize failed");
 }
 

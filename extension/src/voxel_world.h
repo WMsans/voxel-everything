@@ -320,6 +320,8 @@ public:
 	int get_shape_builds_per_frame() const { return shape_builds_per_frame_; }
 	void set_max_lod_pages(int v) { lod_->set_max_lod_pages(v); }
 	int get_max_lod_pages() const { return lod_->max_lod_pages(); }
+	void set_max_lod_chunk_records(int v) { lod_->set_max_lod_chunk_records(v); }
+	int get_max_lod_chunk_records() const { return lod_->max_lod_chunk_records(); }
 	void set_lod_builds_per_frame(int v) { lod_->set_lod_builds_per_frame(v); }
 	int get_lod_builds_per_frame() const { return lod_->lod_builds_per_frame(); }
 
