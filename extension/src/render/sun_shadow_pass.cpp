@@ -226,14 +226,25 @@ bool SunShadowPass::should_rebuild(const Cascade &c, const ve::SunOrtho &ortho,
 	return c.dirty && c.frames_since >= kMinFrames;
 }
 
-bool SunShadowPass::needs_rebuild(int cascade, const ve::SunOrtho &ortho) const {
+bool SunShadowPass::needs_rebuild(int cascade, const ve::SunOrtho &ortho) {
+	// The throttle advance lives HERE, in the per-frame poll, not in build(): the
+	// compositor asks this once per cascade per frame and skips build() when it
+	// declines, so a counter advanced only inside build() would sit at 0 forever and
+	// the gate could never open. build() keeps the same rule as a pure re-check.
+	Cascade &c = c_[clamp_index(cascade)];
+	c.frames_since++;
+	return should_rebuild(c, ortho, false);
+}
+
+bool SunShadowPass::rebuild_pending(int cascade, const ve::SunOrtho &ortho) const {
 	return should_rebuild(c_[clamp_index(cascade)], ortho, false);
 }
 
 bool SunShadowPass::build(RenderingDevice *rd, LodPool &pool, LodRasterPass &raster,
 		int cascade, const ve::SunOrtho &ortho, bool force) {
 	Cascade &c = c_[clamp_index(cascade)];
-	c.frames_since++;
+	// Pure gate: the throttle advance happens in needs_rebuild(), which the caller asks
+	// first (the compositor polls, then skips this call when the poll declines).
 	if (!should_rebuild(c, ortho, force)) return false;
 	const std::vector<LodRasterPass::PageDraw> &pages = raster.draw_pages();
 	if (pages.empty()) return false;

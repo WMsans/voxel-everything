@@ -32,9 +32,19 @@ public:
 
 	// Whether build() would do work for this cascade. Split out of build() so a caller can
 	// skip producing the cascade's LoD cut too -- for cascade 2 that cut is the expensive
-	// half, and it is skipped on most frames. MUST stay in agreement with build()'s own
+	// half, and it is skipped on most frames. THE POLL ADVANCES THE THROTTLE: every call
+	// moves frames_since one step, then evaluates the shared rule, so the first build
+	// fires kMinFrames polls after the cascade dirties. The advance must live here and
+	// not in build(), because the compositor skips build() when the poll declines -- a
+	// counter advanced only inside build() could never reach kMinFrames and no cascade
+	// would ever build in the game path. MUST stay in agreement with build()'s own
 	// early-out; both call the same private test rather than stating the rule twice.
-	bool needs_rebuild(int cascade, const ve::SunOrtho &ortho) const;
+	bool needs_rebuild(int cascade, const ve::SunOrtho &ortho);
+
+	// The same rule as a pure snapshot: no counter advance. For display and diagnostics
+	// (debug_sun_shadow_stats' rebuild_pending pin), where reading must not perturb the
+	// throttle the poll above drives.
+	bool rebuild_pending(int cascade, const ve::SunOrtho &ortho) const;
 
 	bool build(RenderingDevice *rd, LodPool &pool, LodRasterPass &raster, int cascade,
 			const ve::SunOrtho &ortho, bool force);

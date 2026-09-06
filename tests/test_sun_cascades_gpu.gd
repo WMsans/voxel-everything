@@ -151,6 +151,31 @@ func test_needs_rebuild_agrees_with_what_build_does(timeout := 120000) -> void:
 			"cascade %d: needs_rebuild=%s but build returned %s" % [c, wants, did]
 		).is_equal(wants)
 
+# The compositor's game-path sequence, driven with nothing but unforced calls: poll the
+# live needs_rebuild pin (each read advances the per-cascade throttle, exactly as the
+# compositor's per-frame poll does) and build unforced when it says so. Before the
+# throttle advance moved into the poll, the pin was a pure query over a counter nothing
+# advanced, so the gate never opened and every cascade stayed at rebuilds=0; after the
+# fix it opens kMinFrames polls past the last dirty, around iteration 12 here.
+func test_the_compositor_sequence_builds_without_force(timeout := 120000) -> void:
+	var w := make_world(4000.0)
+	var fwd := Vector3(1, -0.3, 1).normalized()
+	var origin := Vector3(60.0, 80.0, 60.0)
+	assert_bool(await settle(w, origin, fwd)).is_true()
+	var pins := [[], [], []]
+	for i in range(40):
+		for c in range(3):
+			var st: Dictionary = w.hooks().debug_sun_shadow_stats(c)
+			var pin: bool = st["needs_rebuild"]
+			pins[c].append(pin)
+			if pin:
+				w.hooks().debug_sun_shadow_build(c, false)
+	for c in range(3):
+		var n := int(w.hooks().debug_sun_shadow_stats(c)["rebuilds"])
+		assert_int(n).override_failure_message(
+			"cascade %d never built in 40 unforced polls (pins=%s): the throttle gate never opened" % [c, str(pins[c])]
+		).is_greater_equal(1)
+
 # The clamp is a saving. If it is on and costs the same, it is not doing anything.
 func test_the_clamp_reduces_the_far_cascade_page_count(timeout := 180000) -> void:
 	var w_on := make_world(4000.0)

@@ -4430,8 +4430,11 @@ Dictionary VoxelDebugHooks::debug_sun_shadow_stats(int cascade) {
 	d["pages"] = sun->last_pages(cascade);
 	// Exposed so a test can assert the query and the build agree. They share
 	// should_rebuild(), so agreement is structural -- but a cut skipped on a false negative
-	// is a shadow that silently stops updating, which is worth pinning.
+	// is a shadow that silently stops updating, which is worth pinning. This is the LIVE
+	// poll: each read advances the throttle exactly as the compositor's per-frame poll
+	// does. rebuild_pending below is the non-advancing snapshot for display.
 	d["needs_rebuild"] = sun->needs_rebuild(cascade, ortho);
+	d["rebuild_pending"] = sun->rebuild_pending(cascade, ortho);
 	PackedFloat32Array matrix;
 	matrix.resize(16);
 	const float *source = sun->rebuilds(cascade) > 0 ? sun->view_proj(cascade) :
@@ -4448,13 +4451,21 @@ bool VoxelDebugHooks::debug_sun_shadow_build(int cascade, bool force) {
 	ve::SunCascade c[ve::kSunCascades];
 	const int n = ve::sun_cascades(world_->get_stream_radius_m(), SunShadowPass::kSize, c);
 	if (cascade < 0 || cascade >= n) return false;
+	// The shipping fit; see debug_sun_shadow_stats() above for why this must not be a
+	// second, locally reasonable one.
+	const ve::SunOrtho ortho = world_->sun_ortho(cascade);
+	// The compositor's poll-then-build, mirrored: the poll advances the per-cascade
+	// throttle, and a decline skips the cut (for cascade 2 the expensive half) exactly
+	// as the game path does -- so an unforced hook build behaves like one compositor
+	// frame, and forced builds skip the poll. The raster is restored on both paths.
+	if (!force && !world_->sun_shadow_pass()->needs_rebuild(cascade, ortho)) {
+		world_->prepare_lod_raster();
+		return false;
+	}
 	// The cascade's cut, at the clamp the world is configured with -- the same cut the
 	// compositor would produce, so the knob measures through this hook too.
 	world_->prepare_lod_shadow_raster(c[cascade].radius,
 			world_->get_sun_cascade_min_level() ? c[cascade].min_level : 0);
-	// The shipping fit; see debug_sun_shadow_stats() above for why this must not be a
-	// second, locally reasonable one.
-	const ve::SunOrtho ortho = world_->sun_ortho(cascade);
 	const bool did = world_->sun_shadow_pass()->build(device, *world_->context().lod->lod_pool_, *world_->lod_raster_pass(),
 			cascade, ortho, force);
 	world_->prepare_lod_raster();

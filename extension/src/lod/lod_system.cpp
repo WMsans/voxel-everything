@@ -268,7 +268,7 @@ void LodSystem::prepare_raster() {
 }
 
 // The sun's cut: ONE description of each piece of ground, the level the camera walk chose,
-// everywhere in the world rather than only inside the frustum (LodWalkResult::shadow_draws).
+// everywhere in the world rather than only inside the frustum (see shadow_cut() below).
 //
 // It used to be every RESIDENT page instead, because the camera's own list is frustum culled
 // and terrain beside or behind the camera has to keep casting. But residency is a cache, not

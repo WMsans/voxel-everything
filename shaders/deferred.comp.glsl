@@ -23,7 +23,8 @@ layout(set = 0, binding = 5, rgba16f) writeonly uniform image2D out_lit;
 layout(set = 0, binding = 6, std140) uniform SunBlock {
 	mat4 view_proj[SUN_CASCADES];
 	// per cascade: x = one shadow texel in world metres, y = light-space depth range in the
-	// same metres, zw unused
+	// same metres; zw on cascade 0 carries the LoD fade band (fade_start, fade_end),
+	// unused on the other cascades
 	vec4 params[SUN_CASCADES];
 	// xyz = the cascade radii; w = the count actually in use (1 when the radius collapsed)
 	vec4 splits;
