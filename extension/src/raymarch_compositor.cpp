@@ -266,18 +266,11 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 			if (!use_sun_shadow) return;
 			world->prepare_lod_shadow_raster();
 			timings->begin(rd, "sun_shadow");
-			// There is no world AABB to fit. The ortho follows the camera at the stream
-			// radius: identical to the old world box at the 1638.4 m default. At a larger
-			// radius the same map stretches further and shadow texels coarsen proportionally
-			// -- cascades are sub-project B.
-			const Vector3 c = cam.origin;
-			const float r = world->get_stream_radius_m();
-			const float lo[3] = {c.x - r, c.y - r, c.z - r};
-			const float hi[3] = {c.x + r, c.y + r, c.z + r};
-			const ve::SunOrtho ortho = sun_state.has_basis()
-					? ve::sun_ortho(sun_state.dir, sun_state.right, sun_state.up, lo, hi,
-							SunShadowPass::kSize)
-					: ve::sun_ortho(sun_state.dir, lo, hi, SunShadowPass::kSize);
+			// There is no world AABB to fit, so the map follows the camera at the stream
+			// radius. VoxelWorld::sun_ortho() is the one place that fit is written down --
+			// the debug facade reads the same one, so what the tests pin is what ships. It
+			// is centred on the walk lod_tick() just ran, which is `cam` above.
+			const ve::SunOrtho ortho = world->sun_ortho();
 			const bool shadow_ok = sun->build(rd, *world->lod_pool(), *lod_raster, ortho, false);
 			if (shadow_ok) timings->end(rd, "sun_shadow");
 			else timings->cancel("sun_shadow");

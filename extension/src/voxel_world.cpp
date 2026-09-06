@@ -1031,6 +1031,18 @@ void VoxelWorld::prepare_lod_shadow_raster() {
 	context_.lod->prepare_shadow_raster();
 }
 
+ve::SunOrtho VoxelWorld::sun_ortho() const {
+	float cam[3];
+	if (!context_.lod->last_camera(cam)) return ve::SunOrtho();
+	const ve::SunState sun = sun_state();
+	// A scene light hands over a basis that rotates continuously; a bare direction has to
+	// have one derived, which is ill-conditioned near the zenith. Same choice as before.
+	return sun.has_basis()
+			? ve::sun_ortho_sphere(sun.dir, sun.right, sun.up, cam, get_stream_radius_m(),
+					SunShadowPass::kSize)
+			: ve::sun_ortho_sphere(sun.dir, cam, get_stream_radius_m(), SunShadowPass::kSize);
+}
+
 void VoxelWorld::lod_fade_band(float *fade_start, float *fade_end) const {
 	context_.lod->fade_band(fade_start, fade_end);
 }

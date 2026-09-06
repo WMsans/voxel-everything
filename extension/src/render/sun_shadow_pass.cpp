@@ -200,13 +200,19 @@ bool SunShadowPass::build(RenderingDevice *rd, LodPool &pool, LodRasterPass &ras
 		const ve::SunOrtho &ortho, bool force) {
 	frames_since_++;
 	if (!is_valid() || !ortho.valid) return false;
-	// A sun that moved is not LoD churn. kMinFrames throttles rebuilds caused by pages
-	// coming and going; it must not make a day/night sweep lag twelve frames behind the
-	// light. Comparing the matrix keeps the policy here rather than in every caller, and
-	// leaves the camera-motion invariant intact: camera motion does not change this matrix.
-	const bool sun_moved = rebuilds_ > 0 &&
+	// The projection moved, so what is stored no longer describes what will be sampled:
+	// rebuild now rather than at the throttle's convenience. kMinFrames exists to damp pages
+	// coming and going; it must not make a day/night sweep lag twelve frames behind the sun,
+	// nor leave the map a texel behind the camera it follows.
+	//
+	// Comparing the whole matrix keeps that policy here rather than in every caller, and it
+	// is affordable precisely because sun_ortho_sphere() snaps: an unsnapped camera-following
+	// fit differs on every frame the camera moves at all, and this test degenerated into a
+	// full 2048^2 pass over the whole cut, every frame. Snapped, it fires once per texel of
+	// travel -- which is exactly when the map genuinely has to be redrawn.
+	const bool projection_moved = rebuilds_ > 0 &&
 			std::memcmp(view_proj_, ortho.view_proj, sizeof(view_proj_)) != 0;
-	if (!force && !sun_moved && (!dirty_ || frames_since_ < kMinFrames)) return false;
+	if (!force && !projection_moved && (!dirty_ || frames_since_ < kMinFrames)) return false;
 	const std::vector<LodRasterPass::PageDraw> &pages = raster.draw_pages();
 	if (pages.empty()) return false;
 	if (!raster.prepare_index_array(rd, pool)) return false;

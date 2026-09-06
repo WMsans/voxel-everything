@@ -35,6 +35,7 @@
 #include "render/orchestrator.h" // inline pass-graph delegations need the complete type
 #include "render/consolidate_pass.h"
 #include "shade/beauty_settings.h"
+#include "shade/sun_ortho.h"
 #include "shade/sun_state.h"
 #include "world/edit_log.h"
 #include "world/raycast.h"
@@ -353,6 +354,18 @@ public:
 	// Push the current walk's page list (with per-page quad counts) into the raster pass.
 	void prepare_lod_raster();
 	void prepare_lod_shadow_raster();
+	// The sun's projection for THIS frame, and the only place it is fitted.
+	//
+	// It used to be fitted at three call sites -- the compositor's, and one in each of the
+	// debug facade's two shadow entry points -- and when the unbounded world took the world
+	// AABB away they drifted apart: the compositor started following the raw camera while
+	// the debug path followed the region window. The result was a render path that shimmered
+	// and a test suite that could not see it, because the invariant those tests pin was
+	// still true of the matrix they were shown. One accessor, one matrix, one thing to test.
+	//
+	// Centred on the last LoD walk's camera and radiused at the stream radius: exactly the
+	// set LodTree::shadow_visit rasterises. Invalid before the first lod_tick().
+	ve::SunOrtho sun_ortho() const;
 	RenderingDevice *rd() const; // one-line delegation into RenderOrchestrator
 	GpuTimings *gpu_timings() { return context_.render->gpu_timings(); }
 

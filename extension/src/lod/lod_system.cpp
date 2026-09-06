@@ -78,6 +78,10 @@ void LodSystem::fade_band(float *fade_start, float *fade_end) const {
 void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 	using LodKey = ve::LodKey;
 	std::unique_lock<std::mutex> lock(lod_mutex_);
+	// Recorded before the early-outs: the sun ortho needs the camera whether or not this
+	// tick had a tree to walk, and a stale centre would drag the shadow map behind the view.
+	for (int a = 0; a < 3; a++) last_cam_[a] = cam.pos[a];
+	has_last_cam_ = true;
 	ensure_lod();
 	if (!lod_tree_ || !lod_pool_) return;
 	// The gate that decides which chunks are worth building has to agree with the fragment
@@ -247,6 +251,13 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 
 	lock.lock();
 	prepare_raster_locked();
+}
+
+bool LodSystem::last_camera(float out[3]) const {
+	std::lock_guard<std::mutex> lock(lod_mutex_);
+	if (!has_last_cam_) return false;
+	for (int a = 0; a < 3; a++) out[a] = last_cam_[a];
+	return true;
 }
 
 void LodSystem::prepare_raster() {

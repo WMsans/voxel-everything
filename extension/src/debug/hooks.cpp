@@ -4406,22 +4406,11 @@ Dictionary VoxelDebugHooks::debug_sun_shadow_stats() {
 	world_->ensure_initialized();
 	SunShadowPass *sun = world_->sun_shadow_pass();
 	if (!sun) return d;
-	// There is no world AABB to fit. Cover the resident neighbourhood at the stream radius:
-	// the same box the compositor fits around its camera, centred here on the residency
-	// window the streamer keeps glued to it. Fixed for a fixed window, so the map matrix
-	// still never moves under LOD-only camera motion.
-	const ve::RegionWindow win = world_->region_window();
-	const float src = world_->get_stream_radius_m();
-	const float scx = (win.origin.x + win.dim * 0.5f) * ve::kRegionSize;
-	const float scy = (win.origin.y + win.dim * 0.5f) * ve::kRegionSize;
-	const float scz = (win.origin.z + win.dim * 0.5f) * ve::kRegionSize;
-	const float lo[3] = {scx - src, scy - src, scz - src};
-	const float hi[3] = {scx + src, scy + src, scz + src};
-	const ve::SunState sun_state = world_->sun_state();
-	const ve::SunOrtho ortho = sun_state.has_basis()
-			? ve::sun_ortho(sun_state.dir, sun_state.right, sun_state.up, lo, hi,
-					SunShadowPass::kSize)
-			: ve::sun_ortho(sun_state.dir, lo, hi, SunShadowPass::kSize);
+	// The SHIPPING fit, not a second one that happens to agree. This hook used to centre its
+	// own box on the region window while the compositor centred on the camera, so the matrix
+	// the tests inspected was not the matrix that was rasterized -- which is how a shimmering
+	// shadow map passed a suite containing "the matrix does not move with the camera".
+	const ve::SunOrtho ortho = world_->sun_ortho();
 	d["map_valid"] = sun->map().is_valid();
 	d["ortho_valid"] = ortho.valid;
 	d["texel_world"] = ortho.valid ? ortho.texel_world : sun->texel_world();
@@ -4441,22 +4430,9 @@ void VoxelDebugHooks::debug_sun_shadow_build(bool force) {
 	RenderingDevice *device = world_->rd();
 	if (!device || !world_->sun_shadow_pass() || !world_->context().lod->lod_pool_ || !world_->lod_raster_pass()) return;
 	world_->prepare_lod_shadow_raster();
-	// There is no world AABB to fit. Cover the resident neighbourhood at the stream radius:
-	// the same box the compositor fits around its camera, centred here on the residency
-	// window the streamer keeps glued to it. Fixed for a fixed window, so the map matrix
-	// still never moves under LOD-only camera motion.
-	const ve::RegionWindow win = world_->region_window();
-	const float src = world_->get_stream_radius_m();
-	const float scx = (win.origin.x + win.dim * 0.5f) * ve::kRegionSize;
-	const float scy = (win.origin.y + win.dim * 0.5f) * ve::kRegionSize;
-	const float scz = (win.origin.z + win.dim * 0.5f) * ve::kRegionSize;
-	const float lo[3] = {scx - src, scy - src, scz - src};
-	const float hi[3] = {scx + src, scy + src, scz + src};
-	const ve::SunState sun_state = world_->sun_state();
-	const ve::SunOrtho ortho = sun_state.has_basis()
-			? ve::sun_ortho(sun_state.dir, sun_state.right, sun_state.up, lo, hi,
-					SunShadowPass::kSize)
-			: ve::sun_ortho(sun_state.dir, lo, hi, SunShadowPass::kSize);
+	// The shipping fit; see debug_sun_shadow_stats() above for why this must not be a
+	// second, locally reasonable one.
+	const ve::SunOrtho ortho = world_->sun_ortho();
 	world_->sun_shadow_pass()->build(device, *world_->context().lod->lod_pool_, *world_->lod_raster_pass(),
 			ortho, force);
 	world_->prepare_lod_raster();

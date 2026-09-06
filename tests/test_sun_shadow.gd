@@ -70,22 +70,89 @@ func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> bool:
 
 func test_the_map_is_the_stated_size_and_covers_the_world() -> void:
 	var w := make_world()
+	# An unbounded world has no box to fit, so the sun ortho is fitted to the CAMERA: there
+	# is no projection at all until a walk has told the engine where the camera is.
+	w.hooks().debug_lod_tick(Vector3(60, 80, 60), Vector3(1, -0.3, 1).normalized())
 	var d: Dictionary = w.hooks().debug_sun_shadow_stats()
 	assert_int(d["size"]).is_equal(2048)
 	assert_bool(d["ortho_valid"]).is_true()
 	assert_float(d["texel_world"]).is_between(0.1, 20.0)
 
-# The whole point of a bounded world and a fixed sun: the matrix never changes, so nothing
-# can shimmer and no rebuild is ever needed for camera motion alone.
-func test_the_matrix_does_not_move_with_the_camera(timeout := 60000) -> void:
+# Element (row r, column c) of a godot::Projection is view_proj[c * 4 + r]. Returns where a
+# world point lands in the 2048 map, in texels.
+func _map_texel(view_proj: PackedFloat32Array, p: Vector3) -> Vector2:
+	var x: float = view_proj[0] * p.x + view_proj[4] * p.y + view_proj[8] * p.z + view_proj[12]
+	var y: float = view_proj[1] * p.x + view_proj[5] * p.y + view_proj[9] * p.z + view_proj[13]
+	return Vector2((x * 0.5 + 0.5) * 2048.0, (y * 0.5 + 0.5) * 2048.0)
+
+# THE SHIMMER PIN, at the level where it actually shipped.
+#
+# This used to read "the matrix does not move with the camera", which was free when the world
+# was a box and the sun was fixed. The unbounded world took the box away and the compositor
+# started fitting the ortho to the raw camera -- so the grid slid continuously, every
+# silhouette in the map re-quantised every frame, and the far field's shadows crawled. The
+# test did not notice, because the debug hook fitted its OWN box (centred on the region
+# window) and dutifully reported a matrix nobody rasterized with.
+#
+# So: the invariant is no longer "does not move" -- a camera-following map has to move. It is
+# that the map moves in WHOLE TEXELS, keeping its grid pinned in world space, which is what
+# leaves a static object's shadow identical frame to frame. And it is asserted against the
+# matrix the pass actually built, which is now the only one there is.
+func test_the_map_moves_by_whole_texels_as_the_camera_walks(timeout := 120000) -> void:
 	var w := make_world()
-	assert_bool(await settle(w, Vector3(60, 80, 60), Vector3(1, -0.3, 1).normalized())).is_true()
+	var fwd := Vector3(1, -0.3, 1).normalized()
+	assert_bool(await settle(w, Vector3(60, 80, 60), fwd)).is_true()
 	w.hooks().debug_sun_shadow_build(true)
-	var a: PackedFloat32Array = w.hooks().debug_sun_shadow_stats()["view_proj"]
-	assert_bool(await settle(w, Vector3(180, 90, 40), Vector3(-1, -0.4, 0).normalized())).is_true()
-	var b: PackedFloat32Array = w.hooks().debug_sun_shadow_stats()["view_proj"]
-	for i in range(16):
-		assert_float(b[i]).is_equal_approx(a[i], 1e-6)
+	var stats: Dictionary = w.hooks().debug_sun_shadow_stats()
+	var texel: float = stats["texel_world"]
+	assert_float(texel).is_greater(0.0)
+	var feature := Vector3(40.0, 52.0, 90.0)
+	var base := _map_texel(stats["view_proj"], feature)
+	# A tenth of a texel, most of a texel, several texels, and a long walk.
+	for step in [texel * 0.1, texel * 0.9, texel * 6.0, 137.0]:
+		var rebuilds: int = w.hooks().debug_sun_shadow_stats()["rebuilds"]
+		w.hooks().debug_lod_tick(Vector3(60.0 + step, 80.0, 60.0 - 0.6 * step), fwd)
+		await get_tree().process_frame
+		w.hooks().debug_sun_shadow_build(true)
+		# Otherwise a refused build would leave the previous matrix in place and every
+		# assertion below would pass by comparing it with itself.
+		assert_int(w.hooks().debug_sun_shadow_stats()["rebuilds"]).override_failure_message(
+			"the forced rebuild at step %.2f m was refused" % step).is_equal(rebuilds + 1)
+		var moved := _map_texel(w.hooks().debug_sun_shadow_stats()["view_proj"], feature)
+		var d := moved - base
+		assert_float(absf(d.x - roundf(d.x))).override_failure_message(
+			"a %.2f m camera step moved the grid %.3f texels in x, not a whole number"
+			% [step, d.x]).is_less(0.02)
+		assert_float(absf(d.y - roundf(d.y))).override_failure_message(
+			"a %.2f m camera step moved the grid %.3f texels in y, not a whole number"
+			% [step, d.y]).is_less(0.02)
+
+# The same snap, seen from the rebuild throttle. SunShadowPass rebuilds whenever the matrix
+# differs, so an unsnapped camera-following fit means a full 2048^2 pass over the entire
+# shadow cut on EVERY frame the camera moves at all. Inside one texel of travel there is
+# nothing new to draw, and nothing must be drawn.
+func test_sub_texel_camera_motion_does_not_rebuild_the_map(timeout := 60000) -> void:
+	var w := make_world()
+	var fwd := Vector3(1, -0.3, 1).normalized()
+	var origin := Vector3(60, 80, 60)
+	assert_bool(await settle(w, origin, fwd)).is_true()
+	w.hooks().debug_sun_shadow_build(true)
+	var texel: float = w.hooks().debug_sun_shadow_stats()["texel_world"]
+	var before: int = w.hooks().debug_sun_shadow_stats()["rebuilds"]
+	# Well past kMinFrames, so only a moved projection could rebuild now. The walk covers
+	# 0.38 of a texel in total, which can straddle at most ONE grid line -- so at most one
+	# rebuild is legitimate. The unsnapped fit this replaces rebuilt on all twenty.
+	for i in range(20):
+		w.hooks().debug_lod_tick(origin + Vector3(0.02 * i, 0.0, 0.01 * i) * texel, fwd)
+		w.hooks().debug_sun_shadow_build(false)
+	assert_int(w.hooks().debug_sun_shadow_stats()["rebuilds"]).override_failure_message(
+		"sub-texel camera motion rebuilt the shadow map %d times"
+		% [int(w.hooks().debug_sun_shadow_stats()["rebuilds"]) - before]).is_less_equal(before + 1)
+	before = w.hooks().debug_sun_shadow_stats()["rebuilds"]
+	# A step the grid can actually represent does rebuild it, immediately.
+	w.hooks().debug_lod_tick(origin + Vector3(4.0 * texel, 0.0, 0.0), fwd)
+	w.hooks().debug_sun_shadow_build(false)
+	assert_int(w.hooks().debug_sun_shadow_stats()["rebuilds"]).is_equal(before + 1)
 
 func test_something_actually_gets_drawn_into_it(timeout := 60000) -> void:
 	var w := make_world()

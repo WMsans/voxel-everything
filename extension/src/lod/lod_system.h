@@ -78,6 +78,12 @@ public:
 
 	// Was VoxelWorld::lod_tick; render thread (compositor callback).
 	void tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ);
+	// Where the last walk was run from. The shadow cut is a distance test against exactly
+	// this point (LodTree::shadow_visit), so it is also the centre the sun ortho must fit --
+	// and having ONE place to read it from is what stops the render path and the debug path
+	// fitting two different boxes, which is how the camera-follow shimmer shipped unseen.
+	// Written under lod_mutex_ by tick(); false until the first tick.
+	bool last_camera(float out[3]) const;
 	// Push the current walk's page list (with per-page quad counts) into the raster pass.
 	void prepare_raster();
 	void prepare_shadow_raster();
@@ -132,7 +138,7 @@ private:
 	// Member ORDER mirrors the pre-split block in voxel_world.h.
 	int max_lod_pages_ = 32768;
 	int lod_builds_per_frame_ = 8;
-	std::mutex lod_mutex_;
+	mutable std::mutex lod_mutex_;
 	ve::LodTree *lod_tree_ = nullptr;
 	class LodPool *lod_pool_ = nullptr;
 	uint32_t lod_frame_ = 0;
@@ -141,6 +147,8 @@ private:
 	std::map<int, int> lod_page_quads_; // page -> number of quads stored in that page
 	std::set<ve::LodKey> lod_overflow_logged_; // once-per-chunk overflow diagnostics
 	int lod_pressure_ = 0;
+	float last_cam_[3] = {};
+	bool has_last_cam_ = false;
 };
 
 } // namespace godot
