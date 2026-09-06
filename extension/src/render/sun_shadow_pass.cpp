@@ -33,15 +33,29 @@ bool SunShadowPass::initialize(RenderingDevice *rd) {
 	tf->set_format(RenderingDevice::DATA_FORMAT_D32_SFLOAT);
 	tf->set_width(kSize);
 	tf->set_height(kSize);
+	tf->set_array_layers(kCascades);
+	tf->set_texture_type(RenderingDevice::TEXTURE_TYPE_2D_ARRAY);
 	tf->set_usage_bits(RenderingDevice::TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
 			RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT);
 	Ref<RDTextureView> tv;
 	tv.instantiate();
 	map_ = rd_->texture_create(tf, tv, {});
 	if (!map_.is_valid()) {
-		UtilityFunctions::printerr("SunShadowPass: shadow map creation failed");
+		UtilityFunctions::printerr("SunShadowPass: shadow map array creation failed");
 		teardown();
 		return false;
+	}
+
+	// One framebuffer per layer. A shared slice is what lets cascade 0's frequent rebuilds
+	// be isolated from cascade 2's expensive one; a single atlased framebuffer would force
+	// them to rebuild together and throw the amortization away.
+	for (int i = 0; i < kCascades; i++) {
+		c_[i].slice = rd_->texture_create_shared_from_slice(tv, map_, i, 0);
+		if (!c_[i].slice.is_valid()) {
+			UtilityFunctions::printerr("SunShadowPass: cascade slice ", i, " failed");
+			teardown();
+			return false;
+		}
 	}
 
 	std::string err;
@@ -87,42 +101,41 @@ bool SunShadowPass::initialize(RenderingDevice *rd) {
 
 void SunShadowPass::teardown() {
 	if (rd_) {
-		for (RID *r : {&uset_, &pipeline_, &framebuffer_, &shader_, &map_}) {
-			if (r->is_valid()) rd_->free_rid(*r);
-			*r = RID();
+		for (int i = 0; i < kCascades; i++) {
+			for (RID *r : {&c_[i].framebuffer, &c_[i].slice})
+				if (r->is_valid()) rd_->free_rid(*r);
+			c_[i] = Cascade{};
 		}
+		for (RID *r : {&uset_, &pipeline_, &shader_, &map_})
+			if (r->is_valid()) rd_->free_rid(*r);
 	}
 	uset_ = RID();
 	pipeline_ = RID();
-	framebuffer_ = RID();
 	shader_ = RID();
 	map_ = RID();
 	key_quads_ = RID();
 	key_page_chunk_ = RID();
 	key_chunks_ = RID();
 	rd_ = nullptr;
-	dirty_ = true;
-	frames_since_ = 0;
-	rebuilds_ = 0;
-	last_pages_ = 0;
-	std::memset(view_proj_, 0, sizeof(view_proj_));
-	texel_world_ = 0.0f;
-	depth_range_ = 0.0f;
 }
 
 void SunShadowPass::mark_dirty() {
-	dirty_ = true;
+	// A page appearing or leaving can change any cascade, so all of them are dirtied. The
+	// per-cascade throttle is what keeps that from costing three full rasters.
+	for (int i = 0; i < kCascades; i++) {
+		c_[i].dirty = true;
+		c_[i].frames_since = 0;
+	}
 }
 
 bool SunShadowPass::ensure_pipeline(RenderingDevice *rd) {
-	if (!map_.is_valid() || !shader_.is_valid()) return false;
-	if (framebuffer_.is_valid() && pipeline_.is_valid()) return true;
-	if (pipeline_.is_valid()) rd->free_rid(pipeline_);
-	pipeline_ = RID();
-	if (framebuffer_.is_valid()) rd->free_rid(framebuffer_);
-	framebuffer_ = rd->framebuffer_create(Array::make(map_));
-	if (!framebuffer_.is_valid()) return false;
-	const int64_t format = rd->framebuffer_get_format(framebuffer_);
+	if (c_[0].framebuffer.is_valid() && pipeline_.is_valid()) return true;
+	for (int i = 0; i < kCascades; i++) {
+		if (c_[i].framebuffer.is_valid()) rd->free_rid(c_[i].framebuffer);
+		c_[i].framebuffer = rd->framebuffer_create(Array::make(c_[i].slice));
+		if (!c_[i].framebuffer.is_valid()) return false;
+	}
+	const int64_t format = rd->framebuffer_get_format(c_[0].framebuffer);
 
 	Ref<RDPipelineRasterizationState> rs;
 	rs.instantiate();
@@ -196,23 +209,32 @@ bool SunShadowPass::ensure_uniform_set(RenderingDevice *rd, LodPool &pool) {
 	return true;
 }
 
-bool SunShadowPass::build(RenderingDevice *rd, LodPool &pool, LodRasterPass &raster,
-		const ve::SunOrtho &ortho, bool force) {
-	frames_since_++;
+// THE rebuild rule, in one place. The projection moving means what is stored no longer
+// describes what will be sampled: rebuild now rather than at the throttle's convenience.
+// kMinFrames exists to damp pages coming and going; it must not make a day/night sweep lag
+// twelve frames behind the sun, nor leave a cascade a texel behind the camera it follows.
+//
+// Comparing the whole matrix is affordable precisely because sun_ortho_sphere() snaps: an
+// unsnapped camera-following fit differs on every frame the camera moves at all, and this
+// test would degenerate into a full 2048^2 pass over the whole cut, every frame.
+bool SunShadowPass::should_rebuild(const Cascade &c, const ve::SunOrtho &ortho,
+		bool force) const {
 	if (!is_valid() || !ortho.valid) return false;
-	// The projection moved, so what is stored no longer describes what will be sampled:
-	// rebuild now rather than at the throttle's convenience. kMinFrames exists to damp pages
-	// coming and going; it must not make a day/night sweep lag twelve frames behind the sun,
-	// nor leave the map a texel behind the camera it follows.
-	//
-	// Comparing the whole matrix keeps that policy here rather than in every caller, and it
-	// is affordable precisely because sun_ortho_sphere() snaps: an unsnapped camera-following
-	// fit differs on every frame the camera moves at all, and this test degenerated into a
-	// full 2048^2 pass over the whole cut, every frame. Snapped, it fires once per texel of
-	// travel -- which is exactly when the map genuinely has to be redrawn.
-	const bool projection_moved = rebuilds_ > 0 &&
-			std::memcmp(view_proj_, ortho.view_proj, sizeof(view_proj_)) != 0;
-	if (!force && !projection_moved && (!dirty_ || frames_since_ < kMinFrames)) return false;
+	const bool projection_moved = c.rebuilds > 0 &&
+			std::memcmp(c.view_proj, ortho.view_proj, sizeof(c.view_proj)) != 0;
+	if (force || projection_moved) return true;
+	return c.dirty && c.frames_since >= kMinFrames;
+}
+
+bool SunShadowPass::needs_rebuild(int cascade, const ve::SunOrtho &ortho) const {
+	return should_rebuild(c_[clamp_index(cascade)], ortho, false);
+}
+
+bool SunShadowPass::build(RenderingDevice *rd, LodPool &pool, LodRasterPass &raster,
+		int cascade, const ve::SunOrtho &ortho, bool force) {
+	Cascade &c = c_[clamp_index(cascade)];
+	c.frames_since++;
+	if (!should_rebuild(c, ortho, force)) return false;
 	const std::vector<LodRasterPass::PageDraw> &pages = raster.draw_pages();
 	if (pages.empty()) return false;
 	if (!raster.prepare_index_array(rd, pool)) return false;
@@ -220,7 +242,7 @@ bool SunShadowPass::build(RenderingDevice *rd, LodPool &pool, LodRasterPass &ras
 	// The shadow pass and camera pass share this indirect-argument buffer. Upload the full
 	// drawable set before recording either draw list; the camera cull must not erase it first.
 	pool.upload_draw_args(pages);
-	const int64_t dl = rd->draw_list_begin(framebuffer_, RenderingDevice::DRAW_CLEAR_DEPTH,
+	const int64_t dl = rd->draw_list_begin(c.framebuffer, RenderingDevice::DRAW_CLEAR_DEPTH,
 			PackedColorArray(), 0.0f);
 	if (dl < 0) return false;
 	rd->draw_list_bind_render_pipeline(dl, pipeline_);
@@ -233,12 +255,12 @@ bool SunShadowPass::build(RenderingDevice *rd, LodPool &pool, LodRasterPass &ras
 	rd->draw_list_set_push_constant(dl, pc, pc.size());
 	rd->draw_list_draw_indirect(dl, true, pool.args_buffer(), 0, static_cast<int>(pages.size()), 20);
 	rd->draw_list_end();
-	std::memcpy(view_proj_, ortho.view_proj, sizeof(view_proj_));
-	texel_world_ = ortho.texel_world;
-	depth_range_ = ortho.depth_range;
-	dirty_ = false;
-	frames_since_ = 0;
-	last_pages_ = static_cast<int>(pages.size());
-	rebuilds_++;
+	std::memcpy(c.view_proj, ortho.view_proj, sizeof(c.view_proj));
+	c.texel_world = ortho.texel_world;
+	c.depth_range = ortho.depth_range;
+	c.dirty = false;
+	c.frames_since = 0;
+	c.last_pages = static_cast<int>(pages.size());
+	c.rebuilds++;
 	return true;
 }
