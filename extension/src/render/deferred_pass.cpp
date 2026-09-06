@@ -121,9 +121,9 @@ bool DeferredPass::ensure_dummies(RenderingDevice *rd) {
 	far.fill(0);
 	dummy_far_ = make_1x1(RenderingDevice::DATA_FORMAT_R32_SFLOAT, far);
 	PackedByteArray zeros;
-	zeros.resize(80);
+	zeros.resize(256);
 	zeros.fill(0);
-	sun_ubo_ = rd->uniform_buffer_create(80, zeros);
+	sun_ubo_ = rd->uniform_buffer_create(256, zeros);
 	return dummy_black_.is_valid() && dummy_far_.is_valid() && dummy_white_.is_valid() && sun_ubo_.is_valid();
 }
 
@@ -188,8 +188,7 @@ bool DeferredPass::ensure_uniform_set(RenderingDevice *rd, GBuffer &gb,
 }
 
 bool DeferredPass::render(RenderingDevice *rd, GBuffer &gb, const MaterialAtlas &materials,
-		RID ssgi, RID ssao, RID sun_map, const float sun_view_proj[16], float shadow_texel,
-		const Params &p) {
+		RID ssgi, RID ssao, RID sun_map, const Params &p) {
 	if (!is_valid() || !gb.is_valid()) return false;
 	if (!ensure_dummies(rd)) return false;
 	const auto t0 = std::chrono::steady_clock::now();
@@ -202,15 +201,23 @@ bool DeferredPass::render(RenderingDevice *rd, GBuffer &gb, const MaterialAtlas 
 	const RID sun_bound = sun_map.is_valid() ? sun_map : dummy_far_;
 	if (!ensure_uniform_set(rd, gb, materials, ssgi_bound, ssao_bound, sun_bound)) return false;
 
+	// std140: mat4[3] = 192 B, then vec4[3] = 48 B, then vec4 splits = 16 B. 256 total.
 	PackedByteArray ub;
-	ub.resize(80);
+	ub.resize(256);
+	ub.fill(0);
 	float *uf = reinterpret_cast<float *>(ub.ptrw());
-	for (int i = 0; i < 16; i++) uf[i] = sun_map.is_valid() ? sun_view_proj[i] : 0.0f;
-	uf[16] = shadow_texel;
-	uf[17] = p.shadow_depth_range;
-	uf[18] = p.fade_start;
-	uf[19] = p.fade_end;
-	rd->buffer_update(sun_ubo_, 0, 80, ub);
+	const int n = sun_map.is_valid() ? p.cascade_count : 0;
+	for (int c = 0; c < ve::kSunCascades; c++)
+		for (int i = 0; i < 16; i++)
+			uf[c * 16 + i] = c < n ? p.sun_view_proj[c][i] : 0.0f;
+	for (int c = 0; c < ve::kSunCascades; c++) {
+		uf[48 + c * 4 + 0] = c < n ? p.shadow_texel[c] : 0.0f;
+		uf[48 + c * 4 + 1] = c < n ? p.shadow_depth_range_c[c] : 0.0f;
+	}
+	for (int c = 0; c < ve::kSunCascades; c++)
+		uf[60 + c] = c < n ? p.cascade_split[c] : 0.0f;
+	uf[63] = float(n);
+	rd->buffer_update(sun_ubo_, 0, 256, ub);
 
 	static_assert(sizeof(float) * 28 == 112, "deferred push block");
 	PackedByteArray pcb;
