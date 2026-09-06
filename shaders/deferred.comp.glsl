@@ -78,8 +78,8 @@ float sun_map_visibility(vec3 wpos, float ndl, float view_dist) {
 // fragment where bayer4(px) < t and composite.frag.glsl drops one there. Reproducing it
 // here -- same threshold, same pixel -- lands the map on exactly the pixels it describes.
 bool far_field_owns(ivec2 px, vec3 wpos, vec3 viewer) {
-	float t = clamp((distance(wpos, viewer) - sun.params.z) /
-			max(sun.params.w - sun.params.z, 1e-3), 0.0, 1.0);
+	float t = clamp((distance(wpos, viewer) - sun.params[0].z) /
+			max(sun.params[0].w - sun.params[0].z, 1e-3), 0.0, 1.0);
 	return bayer4(px) < t;
 }
 

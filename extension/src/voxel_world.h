@@ -125,6 +125,9 @@ class VoxelWorld : public Node3D, public EditSink {
 	std::unique_ptr<RenderOrchestrator> render_;
 
 	bool physics_enabled_ = true;
+	// The A/B knob for the shadow cut's minimum-level clamp (spec section 3). On by
+	// default; off restores an unclamped cut for measurement.
+	bool sun_cascade_min_level_ = true;
 	NodePath physics_center_path_;
 	NodePath sun_light_path_;
 	mutable std::mutex sun_mutex_;
@@ -353,19 +356,15 @@ public:
 	void lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ);
 	// Push the current walk's page list (with per-page quad counts) into the raster pass.
 	void prepare_lod_raster();
-	void prepare_lod_shadow_raster();
-	// The sun's projection for THIS frame, and the only place it is fitted.
-	//
-	// It used to be fitted at three call sites -- the compositor's, and one in each of the
-	// debug facade's two shadow entry points -- and when the unbounded world took the world
-	// AABB away they drifted apart: the compositor started following the raw camera while
-	// the debug path followed the region window. The result was a render path that shimmered
-	// and a test suite that could not see it, because the invariant those tests pin was
-	// still true of the matrix they were shown. One accessor, one matrix, one thing to test.
-	//
-	// Centred on the last LoD walk's camera and radiused at the stream radius: exactly the
-	// set LodTree::shadow_visit rasterises. Invalid before the first lod_tick().
-	ve::SunOrtho sun_ortho() const;
+	void prepare_lod_shadow_raster(float radius, int min_level);
+	// The SHIPPING fit for one cascade. One place it is written down, read by both the
+	// render path and the debug facade -- this hook used to centre its own box while the
+	// compositor centred on the camera, which is how a shimmering shadow map passed a suite
+	// containing "the matrix does not move with the camera".
+	ve::SunOrtho sun_ortho(int cascade) const;
+	int sun_cascade_count() const;
+	void set_sun_cascade_min_level(bool v) { sun_cascade_min_level_ = v; }
+	bool get_sun_cascade_min_level() const { return sun_cascade_min_level_; }
 	RenderingDevice *rd() const; // one-line delegation into RenderOrchestrator
 	GpuTimings *gpu_timings() { return context_.render->gpu_timings(); }
 

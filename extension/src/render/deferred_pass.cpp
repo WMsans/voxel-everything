@@ -214,6 +214,8 @@ bool DeferredPass::render(RenderingDevice *rd, GBuffer &gb, const MaterialAtlas 
 		uf[48 + c * 4 + 0] = c < n ? p.shadow_texel[c] : 0.0f;
 		uf[48 + c * 4 + 1] = c < n ? p.shadow_depth_range_c[c] : 0.0f;
 	}
+	uf[48 + 0*4 + 2] = n > 0 ? p.fade_start : 0.0f;
+	uf[48 + 0*4 + 3] = n > 0 ? p.fade_end : 0.0f;
 	for (int c = 0; c < ve::kSunCascades; c++)
 		uf[60 + c] = c < n ? p.cascade_split[c] : 0.0f;
 	uf[63] = float(n);

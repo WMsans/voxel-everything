@@ -86,7 +86,10 @@ public:
 	bool last_camera(float out[3]) const;
 	// Push the current walk's page list (with per-page quad counts) into the raster pass.
 	void prepare_raster();
-	void prepare_shadow_raster();
+	// One cascade's shadow cut, pushed into the raster pass. Radius and min_level come from
+	// ve::sun_cascades(); the caller skips this entirely for a cascade that will not
+	// rebuild, which for cascade 2 is most frames.
+	void prepare_shadow_raster(float radius, int min_level);
 	// The near/far seam for this frame, derived from how far the near field's brick data is
 	// actually complete. One source of truth: the composite, the LoD raster and the LoD
 	// build gate must all fade at the same two distances or the band belongs to no field.
@@ -149,6 +152,10 @@ private:
 	int lod_pressure_ = 0;
 	float last_cam_[3] = {};
 	bool has_last_cam_ = false;
+	// The camera the last walk ran with. shadow_cut() needs the whole LodCamera (it
+	// projects chunk AABBs), not just the position, and it must be the SAME camera the walk
+	// used or the two cuts choose different levels for the same ground.
+	ve::LodCamera lod_shadow_cam_;
 };
 
 } // namespace godot

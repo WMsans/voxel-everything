@@ -55,6 +55,7 @@
 #include "world/raycast.h"
 #include "shade/oct.h"
 #include "shade/cel.h"
+#include "shade/sun_cascades.h"
 #include "shade/sun_ortho.h"
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/file_access.hpp>
@@ -185,6 +186,10 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_physics_center_path"), &VoxelWorld::get_physics_center_path);
 	ClassDB::bind_method(D_METHOD("set_sun_light_path", "p"), &VoxelWorld::set_sun_light_path);
 	ClassDB::bind_method(D_METHOD("get_sun_light_path"), &VoxelWorld::get_sun_light_path);
+	ClassDB::bind_method(D_METHOD("set_sun_cascade_min_level", "v"),
+			&VoxelWorld::set_sun_cascade_min_level);
+	ClassDB::bind_method(D_METHOD("get_sun_cascade_min_level"),
+			&VoxelWorld::get_sun_cascade_min_level);
 	ClassDB::bind_method(D_METHOD("set_physics_radius_m", "v"), &VoxelWorld::set_physics_radius_m);
 	ClassDB::bind_method(D_METHOD("get_physics_radius_m"), &VoxelWorld::get_physics_radius_m);
 	ClassDB::bind_method(D_METHOD("set_physics_bubble_radius_m", "v"), &VoxelWorld::set_physics_bubble_radius_m);
@@ -227,6 +232,8 @@ void VoxelWorld::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "physics_enabled"), "set_physics_enabled", "get_physics_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "physics_center_path"), "set_physics_center_path", "get_physics_center_path");
 	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "sun_light_path"), "set_sun_light_path", "get_sun_light_path");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "sun_cascade_min_level"),
+			"set_sun_cascade_min_level", "get_sun_cascade_min_level");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "physics_radius_m"), "set_physics_radius_m", "get_physics_radius_m");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "physics_bubble_radius_m"), "set_physics_bubble_radius_m", "get_physics_bubble_radius_m");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_collider_chunks"), "set_max_collider_chunks", "get_max_collider_chunks");
@@ -1027,20 +1034,28 @@ void VoxelWorld::prepare_lod_raster() {
 	context_.lod->prepare_raster();
 }
 
-void VoxelWorld::prepare_lod_shadow_raster() {
-	context_.lod->prepare_shadow_raster();
+void VoxelWorld::prepare_lod_shadow_raster(float radius, int min_level) {
+	context_.lod->prepare_shadow_raster(radius, min_level);
 }
 
-ve::SunOrtho VoxelWorld::sun_ortho() const {
+int VoxelWorld::sun_cascade_count() const {
+	ve::SunCascade c[ve::kSunCascades];
+	return ve::sun_cascades(get_stream_radius_m(), SunShadowPass::kSize, c);
+}
+
+ve::SunOrtho VoxelWorld::sun_ortho(int cascade) const {
 	float cam[3];
 	if (!context_.lod->last_camera(cam)) return ve::SunOrtho();
+	ve::SunCascade c[ve::kSunCascades];
+	const int n = ve::sun_cascades(get_stream_radius_m(), SunShadowPass::kSize, c);
+	if (n <= 0 || cascade < 0 || cascade >= n) return ve::SunOrtho();
 	const ve::SunState sun = sun_state();
 	// A scene light hands over a basis that rotates continuously; a bare direction has to
 	// have one derived, which is ill-conditioned near the zenith. Same choice as before.
 	return sun.has_basis()
-			? ve::sun_ortho_sphere(sun.dir, sun.right, sun.up, cam, get_stream_radius_m(),
+			? ve::sun_ortho_sphere(sun.dir, sun.right, sun.up, cam, c[cascade].radius,
 					SunShadowPass::kSize)
-			: ve::sun_ortho_sphere(sun.dir, cam, get_stream_radius_m(), SunShadowPass::kSize);
+			: ve::sun_ortho_sphere(sun.dir, cam, c[cascade].radius, SunShadowPass::kSize);
 }
 
 void VoxelWorld::lod_fade_band(float *fade_start, float *fade_end) const {

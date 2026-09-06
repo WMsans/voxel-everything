@@ -82,6 +82,7 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 	// tick had a tree to walk, and a stale centre would drag the shadow map behind the view.
 	for (int a = 0; a < 3; a++) last_cam_[a] = cam.pos[a];
 	has_last_cam_ = true;
+	lod_shadow_cam_ = cam;
 	ensure_lod();
 	if (!lod_tree_ || !lod_pool_) return;
 	// The gate that decides which chunks are worth building has to agree with the fragment
@@ -277,12 +278,13 @@ void LodSystem::prepare_raster() {
 // 15 m above open sunlit ground. Ordering the draws coarsest-first and writing depth
 // unconditionally only moved the problem: the finest page wins the texels it covers, and the
 // coarse bulge keeps every texel it does not.
-void LodSystem::prepare_shadow_raster() {
+void LodSystem::prepare_shadow_raster(float radius, int min_level) {
 	std::lock_guard<std::mutex> lock(lod_mutex_);
-	if (!render()->lod_raster_pass() || !lod_pool_) return;
+	if (!render()->lod_raster_pass() || !lod_pool_ || !lod_tree_) return;
+	std::vector<ve::LodDrawItem> cut;
+	lod_tree_->shadow_cut(lod_shadow_cam_, radius, min_level, &cut);
 	std::vector<ve::LodPageDraw> page_draws;
-	ve::lod_collect_page_draws(lod_walk_.shadow_draws, lod_pages_of_, lod_page_quads_,
-			&page_draws);
+	ve::lod_collect_page_draws(cut, lod_pages_of_, lod_page_quads_, &page_draws);
 	std::vector<LodRasterPass::PageDraw> pages;
 	pages.reserve(page_draws.size());
 	for (const ve::LodPageDraw &pd : page_draws)

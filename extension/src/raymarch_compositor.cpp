@@ -20,6 +20,7 @@
 #include "render/world_streamer.h"
 #include "shade/beauty_settings.h"
 #include "shade/cel.h"
+#include "shade/sun_cascades.h"
 #include "shade/sun_ortho.h"
 #include <godot_cpp/classes/render_scene_buffers_rd.hpp>
 #include <godot_cpp/classes/render_scene_data.hpp>
@@ -250,6 +251,10 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	LodRasterPass *lod_raster = world->lod_raster_pass();
 	LodCullPass *lod_cull = world->lod_cull_pass();
 	SunShadowPass *sun = world->sun_shadow_pass();
+	ve::SunCascade cascades[ve::kSunCascades];
+	const int cascade_count = ve::sun_cascades(world->get_stream_radius_m(),
+			SunShadowPass::kSize, cascades);
+	const bool clamp_levels = world->get_sun_cascade_min_level();
 	if (world->lod_pool() && lod_raster && world->material_atlas()) {
 		ve::LodCamera lod_cam;
 		for (int c = 0; c < 4; c++)
@@ -264,16 +269,18 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 		const bool use_sun_shadow = sun && (beauty_flags & ve::kFlagSunMap) != 0u;
 		auto build_sun_shadow = [&]() {
 			if (!use_sun_shadow) return;
-			world->prepare_lod_shadow_raster();
 			timings->begin(rd, "sun_shadow");
-			// There is no world AABB to fit, so the map follows the camera at the stream
-			// radius. VoxelWorld::sun_ortho() is the one place that fit is written down --
-			// the debug facade reads the same one, so what the tests pin is what ships. It
-			// is centred on the walk lod_tick() just ran, which is `cam` above.
-			const ve::SunOrtho ortho = world->sun_ortho();
-			const bool shadow_ok = sun->build(rd, *world->lod_pool(), *lod_raster, ortho, false);
-			if (shadow_ok) timings->end(rd, "sun_shadow");
-			else timings->cancel("sun_shadow");
+			for (int i = 0; i < cascade_count; i++) {
+				const ve::SunOrtho ortho = world->sun_ortho(i);
+				// Ask BEFORE producing the cut: for cascade 2 the cut is the expensive
+				// half, and it is skipped on most frames because a 3.9 m texel only
+				// re-snaps every 3.9 m of travel.
+				if (!sun->needs_rebuild(i, ortho)) continue;
+				world->prepare_lod_shadow_raster(cascades[i].radius,
+						clamp_levels ? cascades[i].min_level : 0);
+				sun->build(rd, *world->lod_pool(), *lod_raster, i, ortho, false);
+			}
+			timings->end(rd, "sun_shadow");
 			world->prepare_lod_raster();
 		};
 		// Device-level indirect-argument uploads precede the cull list; draw() only opens
@@ -378,10 +385,18 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	dp.cam_pos[1] = cam.origin.y;
 	dp.cam_pos[2] = cam.origin.z;
 	dp.flags = beauty_flags;
-	static const float kNoSun[16] = {};
-	const bool use_sun = sun && sun->is_valid() && sun->rebuilds() > 0 &&
+	// The old `static const float kNoSun[16]` fallback goes with the single-map path: the
+	// UBO fill zeroes every cascade past `cascade_count` itself.
+	const bool use_sun = sun && sun->is_valid() && sun->rebuilds(0) > 0 &&
 			(beauty_flags & ve::kFlagSunMap) != 0u;
-	dp.shadow_depth_range = use_sun ? sun->depth_range() : 0.0f;
+	dp.cascade_count = use_sun ? cascade_count : 0;
+	for (int i = 0; i < cascade_count && use_sun; i++) {
+		const float *vp = sun->view_proj(i);
+		for (int k = 0; k < 16; k++) dp.sun_view_proj[i][k] = vp[k];
+		dp.shadow_texel[i] = sun->texel_world(i);
+		dp.shadow_depth_range_c[i] = sun->depth_range(i);
+		dp.cascade_split[i] = cascades[i].radius;
+	}
 	// The map only shades what the LoD mesh drew; these are the distances the shader uses to
 	// tell the two fields apart, and they are the same pair the composite and raster got.
 	dp.fade_start = fade_start;
@@ -396,10 +411,9 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 		if (ssao_ok) timings->end(rd, "ssao");
 		else timings->cancel("ssao");
 	}
-	const bool deferred_ok = deferred->render(rd, *gb, *materials, ssgi_ok ? ssgi->result() : RID(),
-			ssao_ok ? ssao->result() : RID(),
-			use_sun ? sun->map() : RID(), use_sun ? sun->view_proj() : kNoSun,
-			use_sun ? sun->texel_world() : 0.0f, dp);
+	const bool deferred_ok = deferred->render(rd, *gb, *materials,
+			ssgi_ok ? ssgi->result() : RID(), ssao_ok ? ssao->result() : RID(),
+			use_sun ? sun->map() : RID(), dp);
 	if (!deferred_ok) {
 		timings->cancel("deferred");
 		abort_frame();

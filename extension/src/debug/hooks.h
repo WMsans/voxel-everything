@@ -470,9 +470,9 @@ public:
 	Dictionary debug_lod_cull_probe(Vector3 pos, Vector3 fwd);
 
 	// --- Task 8 hooks ---
-	Dictionary debug_sun_shadow_stats();
+	Dictionary debug_sun_shadow_stats(int cascade);
 
-	void debug_sun_shadow_build(bool force);
+	bool debug_sun_shadow_build(int cascade, bool force);
 
 	float debug_sun_shadow_visibility(Vector3 p);
 
