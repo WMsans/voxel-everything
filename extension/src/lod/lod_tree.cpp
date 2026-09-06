@@ -305,15 +305,20 @@ bool LodTree::want_finer(int level, IVec3 c, float area) const {
 	return near_dense || area > cfg_.sse_area_thresh;
 }
 
-// visit() without the frustum test, without the occlusion test, and without touching a
-// single node: the cut the SUN needs. Descending on the same rule visit() uses is the whole
-// point -- for ground the camera can see, the map then holds the very geometry the deferred
-// pass shades, so the only disagreement left is one shadow texel of quantisation. Terrain
-// outside the frustum still casts, at whatever level residency (built by the camera walk)
-// happens to reach there.
-void LodTree::shadow_visit(int level, IVec3 c, const LodCamera &cam,
+void LodTree::shadow_cut(const LodCamera &cam, float radius, int min_level,
 		std::vector<LodDrawItem> *out) const {
-	if (lod_chunk_distance(level, c, last_cam_pos_) > cfg_.stream_radius_m) return;
+	if (!out) return;
+	out->clear();
+	if (!(radius > 0.0f)) return;
+	std::vector<IVec3> roots;
+	lod_roots_in_radius(cam.pos, radius, &roots);
+	for (const IVec3 &r : roots)
+		shadow_visit(kLodLevels - 1, r, cam, radius, min_level, out);
+}
+
+void LodTree::shadow_visit(int level, IVec3 c, const LodCamera &cam, float radius,
+		int min_level, std::vector<LodDrawItem> *out) const {
+	if (lod_chunk_distance(level, c, cam.pos) > radius) return;
 	const auto it = nodes_.find(key(level, c));
 	if (it == nodes_.end()) return;
 	const Node &n = it->second;
@@ -324,12 +329,14 @@ void LodTree::shadow_visit(int level, IVec3 c, const LodCamera &cam,
 	lod_chunk_aabb(level, c, lo, hi);
 	float ss_min[3], ss_max[3];
 	const float area = lod_projected_area(cam, lo, hi, ss_min, ss_max);
-	if (want_finer(level, c, area) && children_ready(level, c)) {
+	// level > min_level is the ONLY addition to the descend rule. Everything below the
+	// cascade's texel is detail the map cannot store.
+	if (level > min_level && want_finer(level, c, area) && children_ready(level, c)) {
 		const IVec3 base = lod_child_base(c);
 		for (int k = 0; k < 8; k++)
 			shadow_visit(level - 1,
 					{base.x + (k & 1), base.y + ((k >> 1) & 1), base.z + ((k >> 2) & 1)},
-					cam, out);
+					cam, radius, min_level, out);
 		return;
 	}
 	out->push_back(LodDrawItem{level, c, n.page_first, n.page_count});
@@ -390,7 +397,6 @@ void LodTree::visit(int level, IVec3 c, const LodCamera &cam, const LodOcclusion
 void LodTree::walk(const LodCamera &cam, const LodOcclusion *occ, uint32_t frame,
 		LodWalkResult *out) {
 	out->draws.clear();
-	out->shadow_draws.clear();
 	out->requests.clear();
 	last_walk_frame_ = frame;
 	lod_frustum_planes(cam.view_proj, planes_);
@@ -401,11 +407,6 @@ void LodTree::walk(const LodCamera &cam, const LodOcclusion *occ, uint32_t frame
 	std::vector<IVec3> roots;
 	lod_roots_in_radius(cam.pos, cfg_.stream_radius_m, &roots);
 	for (const IVec3 &r : roots) visit(kLodLevels - 1, r, cam, occ, frame, out);
-
-	// The sun's cut, over the SAME resident tree the walk above just updated. It is a
-	// separate recursion rather than an extra output of visit() because visit() stops at the
-	// frustum and marks residency as it goes; this one must do neither.
-	for (const IVec3 &r : roots) shadow_visit(kLodLevels - 1, r, cam, &out->shadow_draws);
 
 	// Edits mark nodes at every level they touch, including levels the current cut does not
 	// visit. Consider every dirty node for re-request so a rebuild is not deferred until the
