@@ -297,12 +297,15 @@ func _process(delta: float) -> void:
 		_draining = true
 
 func _terrain_height(x: float, z: float) -> float:
-	# Mirror of extension/src/generator/generator.cpp and shaders/field.glslh. Used only to
+	# Mirror of extension/src/generator/generator.cpp and shaders/field.glslh, INCLUDING the
+	# relief stage (shaders/stages/relief.field.glslh at its default params). Used only to
 	# hold the ridge leg close to the floor; the benchmark does not modify the world.
 	return 51.2 + (
 			6.0 * sin(x * 0.11) * cos(z * 0.13)
 			+ 3.0 * sin(x * 0.031 + 1.7) * sin(z * 0.043)
-			+ 1.0 * sin(x * 0.23 + z * 0.19))
+			+ 1.0 * sin(x * 0.23 + z * 0.19)
+			+ 250.0 * sin(x * 0.0004) * cos(z * 0.0004)
+			+ 60.0 * sin(x * 0.00083333) * cos(z * 0.00083333))
 
 func _fire_edit() -> void:
 	# Sweep the aim so successive edits hit fresh ground instead of re-carving one hole:
@@ -531,5 +534,16 @@ func _report() -> void:
 		isl.get("live_islands", -1), isl.get("live_debris", -1),
 		isl.get("islands_spawned", -1), isl.get("islands_merged", -1),
 		isl.get("refused", -1), isl.get("connectivity_runs", -1)])
+	var lps: Dictionary = _world.hooks().debug_lod_stats()
+	print("BENCH lod_pool chunk_records=%d used=%d high_water=%d pages_high_water=%d budget_bound=%s" % [
+		lps.get("chunk_records", -1), lps.get("chunk_records_used", -1),
+		lps.get("chunk_records_high_water", -1), lps.get("pages_high_water", -1),
+		str(lps.get("budget_bound", "unknown"))])
+	for i in range(3):
+		var sc: Dictionary = _world.hooks().debug_sun_shadow_stats(i)
+		print("BENCH sun_cascade i=%d cascades=%d radius=%.1f min_level=%d pages=%d rebuilds=%d map_valid=%s" % [
+			i, sc.get("cascades", -1), float(sc.get("radius", -1.0)),
+			sc.get("min_level", -1), sc.get("pages", -1), sc.get("rebuilds", -1),
+			str(sc.get("map_valid", false)).to_lower()])
 	if avg > TARGET_MS:
 		push_warning("BENCH: frame budget exceeded (target %.1fms)" % TARGET_MS)

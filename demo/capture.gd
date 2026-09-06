@@ -41,13 +41,16 @@ func _ready() -> void:
 	_world.add_child(_tool)
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(OUT_DIR))
 
-# Mirror of extension/src/generator/generator.cpp and shaders/field.glslh, as
-# demo/benchmark.gd already keeps one. Used only to hold the path above the ground.
+# Mirror of extension/src/generator/generator.cpp and shaders/field.glslh, INCLUDING the
+# relief stage (shaders/stages/relief.field.glslh at its default params). Used only to
+# hold the path above the ground.
 func terrain_height(x: float, z: float) -> float:
 	return 51.2 + (
 			6.0 * sin(x * 0.11) * cos(z * 0.13)
 			+ 3.0 * sin(x * 0.031 + 1.7) * sin(z * 0.043)
-			+ 1.0 * sin(x * 0.23 + z * 0.19))
+			+ 1.0 * sin(x * 0.23 + z * 0.19)
+			+ 250.0 * sin(x * 0.0004) * cos(z * 0.0004)
+			+ 60.0 * sin(x * 0.00083333) * cos(z * 0.00083333))
 
 func camera_at(frame: int) -> Transform3D:
 	# A slow arc across a ridge, dropping toward the ground as it goes: the near field fills
