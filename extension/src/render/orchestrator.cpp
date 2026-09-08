@@ -134,6 +134,11 @@ bool RenderOrchestrator::ensure_downsample_set(RenderingDevice *rd, RID src, RID
 	return true;
 }
 
+bool RenderOrchestrator::has_history() const {
+	return has_history_ && history_texture_.is_valid() && gbuffer_ &&
+			gbuffer_->history() == history_texture_;
+}
+
 void RenderOrchestrator::finish_beauty_frame(const float view_proj[16]) {
 	if (view_proj) std::memcpy(prev_view_proj_, view_proj, sizeof(prev_view_proj_));
 	beauty_frame_++;
@@ -155,6 +160,7 @@ bool RenderOrchestrator::downsample_history(RenderingDevice *rd, RID src, GBuffe
 	rd->compute_list_dispatch(list, (half.x + 7) / 8, (half.y + 7) / 8, 1);
 	rd->compute_list_end();
 	has_history_ = true;
+	history_texture_ = gb.history();
 	return true;
 }
 
@@ -318,6 +324,7 @@ void RenderOrchestrator::teardown_atlas_pool() {
 
 void RenderOrchestrator::reset_history_state() {
 	has_history_ = false;
+	history_texture_ = RID();
 	beauty_frame_ = 0;
 	std::memset(prev_view_proj_, 0, sizeof(prev_view_proj_));
 }

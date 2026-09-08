@@ -214,7 +214,13 @@ public:
 
 	// --- history/beauty frame state (moved with the pass graph) ---
 	const float *prev_view_proj() const { return prev_view_proj_; }
-	bool has_history() const { return has_history_; }
+	// True only while the history texture the last downsample wrote into is STILL the one the
+	// G-buffer hands out. A viewport reconfigure -- which a runtime render-scale change is --
+	// makes the engine drop the voxel_gbuf context, and GBuffer::ensure() recreates `history`
+	// with undefined contents. The latch describes a texture, not an epoch, so it has to fall
+	// with the texture it described; otherwise SSGI bounces uninitialised memory into a
+	// temporal accumulator whose neighbourhood clamp then spreads it a texel per frame.
+	bool has_history() const;
 	uint32_t beauty_frame() const { return beauty_frame_; }
 	int normal_roughness_state() const { return normal_roughness_state_; }
 	void set_normal_roughness_state(int state) { normal_roughness_state_ = state; }
@@ -291,6 +297,8 @@ private:
 	GpuTimings gpu_timings_;
 	float prev_view_proj_[16] = {};
 	bool has_history_ = false;
+	// The history texture has_history_ refers to; see has_history().
+	RID history_texture_;
 	uint32_t beauty_frame_ = 0;
 	int normal_roughness_state_ = -1;
 	RID downsample_shader_, downsample_pipeline_, downsample_sampler_, downsample_uset_;

@@ -101,6 +101,8 @@ void VoxelDebugHooks::_bind_methods() {
 			&VoxelDebugHooks::debug_ssgi_probe);
 	ClassDB::bind_method(D_METHOD("debug_ssao_probe", "pos", "fwd", "w", "h"),
 			&VoxelDebugHooks::debug_ssao_probe);
+	ClassDB::bind_method(D_METHOD("debug_ssgi_history_latch_probe", "w", "h", "w2", "h2"),
+			&VoxelDebugHooks::debug_ssgi_history_latch_probe);
 	ClassDB::bind_method(D_METHOD("debug_ssgi_reprojection_probe", "previous_pos",
 			"previous_fwd", "current_pos", "current_fwd", "w", "h"),
 			&VoxelDebugHooks::debug_ssgi_reprojection_probe);
@@ -675,6 +677,33 @@ Dictionary VoxelDebugHooks::debug_ssao_probe(Vector3 pos, Vector3 fwd, int w, in
 	d["min_ao"] = min_ao;
 	d["max_ao"] = max_ao;
 	d["mean_ao"] = mean_ao / static_cast<double>(pixels);
+	return d;
+}
+
+// A runtime render-scale change reconfigures the viewport, which makes the engine drop the
+// voxel_gbuf context; GBuffer::ensure() then recreates `history` with UNDEFINED contents.
+// This probe reproduces that reallocation and reports whether has_history() still claims a
+// history exists. If it does, SSGI bounces whatever was left in that memory.
+Dictionary VoxelDebugHooks::debug_ssgi_history_latch_probe(int w, int h, int w2, int h2) {
+	Dictionary d;
+	d["ran"] = false;
+	d["after_write"] = false;
+	d["reallocated"] = false;
+	d["after_realloc"] = true;
+	if (w <= 0 || h <= 0 || w2 <= 0 || h2 <= 0) return d;
+	world_->ensure_initialized();
+	RenderingDevice *device = world_->rd();
+	if (!world_->initialized_ || !device || !world_->gbuffer()) return d;
+	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(w, h))) return d;
+	// The production path writes the history at the end of every frame; do the same once so
+	// the latch is genuinely set before the reallocation.
+	if (!world_->downsample_history(device, world_->gbuffer()->lit(), *world_->gbuffer())) return d;
+	d["after_write"] = world_->has_history();
+	const int before = world_->gbuffer()->reallocations();
+	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(w2, h2))) return d;
+	d["reallocated"] = world_->gbuffer()->reallocations() > before;
+	d["after_realloc"] = world_->has_history();
+	d["ran"] = true;
 	return d;
 }
 
