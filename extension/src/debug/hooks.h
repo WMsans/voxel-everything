@@ -60,6 +60,11 @@ public:
 	Dictionary debug_ssgi_reprojection_probe(Vector3 previous_pos, Vector3 previous_fwd,
 			Vector3 current_pos, Vector3 current_fwd, int w, int h);
 
+	// Writes a history, then reallocates the G-buffer at a second size the way a runtime
+	// render-scale change does, and reports whether the "a history exists" latch survived
+	// the reallocation. It must not: the new texture is uninitialised.
+	Dictionary debug_ssgi_history_latch_probe(int w, int h, int w2, int h2);
+
 	int debug_island_frame(float dt, Vector3 center);
 
 	Dictionary debug_island_stats();

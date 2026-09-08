@@ -77,3 +77,20 @@ func test_temporal_history_uses_previous_camera_mapping() -> void:
 	assert_bool(d["non_identity"]).is_true()
 	assert_float(float(d["mapping_delta"])).override_failure_message(
 		"temporal lit history did not respond to previous-frame camera mapping").is_greater(0.0001)
+
+# ...and the same must hold after the G-buffer is thrown away and rebuilt. A runtime render
+# scale change reconfigures the viewport, the engine drops the voxel_gbuf context, and
+# GBuffer::ensure() recreates `history` with undefined contents. The latch that says "a
+# history exists" describes the OLD texture, so it has to fall with it -- otherwise SSGI
+# bounces uninitialised memory into a temporal accumulator that spreads it a texel per frame.
+func test_the_history_latch_falls_when_the_gbuffer_is_reallocated() -> void:
+	var w := make_world()
+	var d: Dictionary = w.hooks().debug_ssgi_history_latch_probe(128, 128, 96, 96)
+	assert_bool(d["ran"]).override_failure_message("probe did not run").is_true()
+	assert_bool(d["after_write"]).override_failure_message(
+		"writing a history did not set the latch, so the test proves nothing").is_true()
+	assert_bool(d["reallocated"]).override_failure_message(
+		"the second ensure() did not reallocate, so the test proves nothing").is_true()
+	assert_bool(d["after_realloc"]).override_failure_message(
+		"the latch survived the reallocation: SSGI will sample an uninitialised history"
+	).is_false()
