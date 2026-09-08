@@ -39,6 +39,17 @@ func capture() -> void:
 		else:
 			deferred = deferred.replace("return (p.z + bias >= texture(sun_map, vec3(uv, float(c))).r) ? 1.0 : 0.0;", "float visible = 0.0; vec2 duv = 1.0 / vec2(textureSize(sun_map, 0).xy); for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) visible += (p.z + bias >= texture(sun_map, vec3(uv + vec2(x,y) * duv, float(c))).r) ? 1.0 : 0.0; return visible / 9.0;")
 		world.hooks().debug_set_shader_override("deferred.comp.glsl", deferred)
+	# "rim-ungated" is the pre-fix shader exactly: the cel rim driven by grazing angle alone,
+	# which on open ground is a proxy for distance and paints the far field white. "rim-gate"
+	# renders the gate itself, so the band it fires on can be seen rather than argued about.
+	if diagnostic in ["rim-ungated", "rim-gate"]:
+		var deferred := FileAccess.get_file_as_string("res://shaders/deferred.comp.glsl")
+		if diagnostic == "rim-ungated":
+			deferred = deferred.replace("silhouette_gate(px, size)", "1.0")
+		else:
+			deferred = deferred.replace("\tvec3 lit = cel_shade(",
+				"\timageStore(out_lit, px, vec4(sil, sil, sil, 1.0)); return;\n\tvec3 lit = cel_shade(")
+		world.hooks().debug_set_shader_override("deferred.comp.glsl", deferred)
 	if diagnostic in ["albedo", "normals", "levels", "ribbons"]:
 		var deferred := FileAccess.get_file_as_string("res://shaders/deferred.comp.glsl")
 		deferred = deferred.replace("uint mat = uint(g1.z + 0.5);", "imageStore(out_lit, px, vec4(g0.rgb, 1.0)); return; uint mat = uint(g1.z + 0.5);")

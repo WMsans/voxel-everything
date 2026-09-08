@@ -86,6 +86,44 @@ bool far_field_owns(ivec2 px, vec3 wpos, vec3 viewer) {
 	return bayer4(px) < t;
 }
 
+// cel_shade ends with `+ vec3(rim)`, where rim = 0.35 * pow(1 - ndv, 3). It is the only
+// UNMODULATED WHITE term in the ramp, and the spec is explicit that it is "a stylization of
+// silhouette, not a light". pow(1 - ndv, k) is a fair silhouette proxy on a closed, curved
+// object: ndv collapses only in the few pixels before the surface turns away.
+//
+// Open ground breaks the proxy. The normal is up and the view is level, so ndv falls to 0
+// with DISTANCE and never recovers -- the rim reaches its full 0.35 across the whole far
+// field. Decomposed in linear space, the far field measured +0.153/+0.160/+0.158 over the
+// near field: equal in all three channels, which is what identifies additive white rather
+// than fog (that would pull toward the sky's blue) or a lighting scale (that would be
+// multiplicative). At 4 km of view distance the proxy is wrong over most of the frame.
+//
+// So ask what a rim actually means rather than what correlates with it: does the surface END
+// here? Sky, and anything the LoD fade dropped, write 0.0 into the depth attachment -- it is
+// reverse-Z (every pass sets COMPARE_OP_GREATER_OR_EQUAL), so 0.0 is the far plane and
+// "background" is a plain compare with no threshold to tune and nothing to drift with
+// distance. Receding ground has background nowhere near it and gates to exactly 0, however
+// grazing it gets, which is the whole point.
+//
+// A COUNT over a small ring rather than one tap, because the count is also the softness: a
+// pixel on the skyline has half the ring in background, one a few pixels in has none, and the
+// rim fades across the band between instead of stopping dead at a single pixel.
+const ivec2 kRimGateTaps[12] = ivec2[12](
+		ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1),
+		ivec2(2, 0), ivec2(-2, 0), ivec2(0, 2), ivec2(0, -2),
+		ivec2(2, 2), ivec2(-2, 2), ivec2(2, -2), ivec2(-2, -2));
+
+float silhouette_gate(ivec2 px, ivec2 size) {
+	float background = 0.0;
+	for (int i = 0; i < 12; i++) {
+		ivec2 q = clamp(px + kRimGateTaps[i], ivec2(0), size - ivec2(1));
+		if (texelFetch(gb_depth, q, 0).r <= 0.0) background += 1.0;
+	}
+	// Half the ring is background at the silhouette itself, so scale by two to let a true
+	// edge still reach full strength.
+	return clamp(background * (2.0 / 12.0), 0.0, 1.0);
+}
+
 void main() {
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
 	ivec2 size = imageSize(out_lit);
@@ -126,7 +164,9 @@ void main() {
 	vec4 g1 = texelFetch(gb_surface, px, 0);
 	uint mat = uint(g1.z + 0.5);
 	if (mat == 0u && pc.flags.y != 2u) {
-		imageStore(out_lit, px, vec4(g0.rgb, 1.0));
+		// Probe 5 reads the rim gate, and background has no surface to gate -- report 0
+		// rather than the sky's colour so the readback is the gate and nothing else.
+		imageStore(out_lit, px, pc.flags.y == 5u ? vec4(0.0, 0.0, 0.0, 1.0) : vec4(g0.rgb, 1.0));
 		return;
 	}
 
@@ -155,7 +195,23 @@ void main() {
 	// visibility terms. The pass's sky pixels are exactly 1.0, so horizons are untouched.
 	float ao = 1.0;
 	if ((pc.flags.x & BEAUTY_SSAO) != 0u) ao = texture(ssao_tex, uv).r;
-	vec3 lit = cel_shade(g0.rgb, ambient, ndl, ndv, ndh, shadow, ao, g1.w, sun_light.rgb.xyz);
+	// ndv feeds nothing in cel_shade but the rim, so handing it 1.0 (face-on) is exactly
+	// "no rim" and leaves every other term of the ramp bit-for-bit untouched. That keeps the
+	// three mirrors -- shade.glslh, ve::cel_shade, cel.gdshaderinc -- identical, and keeps the
+	// grazing-angle falloff the artist tuned wherever the surface really does end.
+	//
+	// Feeding the gate through ndv rather than scaling the rim directly means it lands
+	// CUBICALLY: rim becomes 0.35 * sil^3 * (1 - ndv)^3, because it rides ndv through the
+	// pow. That is the reason the band hugs the skyline as tightly as it does, and it is
+	// wanted -- a silhouette highlight should be tight -- but it is why halving the ring's
+	// scale factor would thin the rim far more than it looks like it should.
+	float sil = silhouette_gate(px, size);
+	if (pc.flags.y == 5u) {
+		imageStore(out_lit, px, vec4(sil, sil, sil, 1.0));
+		return;
+	}
+	vec3 lit = cel_shade(g0.rgb, ambient, ndl, mix(1.0, ndv, sil), ndh, shadow, ao,
+			g1.w, sun_light.rgb.xyz);
 
 	// Emission is ADDED after shading, never lit: a glowing surface is its own light source.
 	// The whole block is skipped for any material whose table strength is zero, which is

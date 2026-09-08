@@ -74,6 +74,8 @@
 #include <godot_cpp/variant/callable.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
+#include <algorithm>
+#include <vector>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/memory.hpp>
 
@@ -4568,7 +4570,8 @@ float VoxelDebugHooks::debug_sun_shadow_shading(Vector3 p, Vector3 viewer) {
 Dictionary VoxelDebugHooks::debug_deferred_probe(Vector3 pos, Vector3 fwd, int w, int h,
 		int probe_mode) {
 	Dictionary d;
-	if (w <= 0 || h <= 0 || (probe_mode != 0 && probe_mode != 1 && probe_mode != 2)) return d;
+	if (w <= 0 || h <= 0 ||
+			(probe_mode != 0 && probe_mode != 1 && probe_mode != 2 && probe_mode != 5)) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
 	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass() ||
@@ -4668,6 +4671,63 @@ Dictionary VoxelDebugHooks::debug_deferred_probe(Vector3 pos, Vector3 fwd, int w
 	std::set<uint16_t> rows;
 	for (int y = 0; y < h; y++) rows.insert(values[(y * w + w / 2) * 4 + 2]);
 	d["distinct_rows"] = static_cast<int>(rows.size());
+
+	// Bucket the frame's SURFACE pixels by view distance, then report the mean luminance of
+	// the NEAREST and FARTHEST quartile. The cel rim is driven by grazing angle, and on open
+	// ground grazing angle is a proxy for DISTANCE -- which is how a silhouette stylization
+	// came to paint a distance ramp across the far field. These two means are what lets a
+	// test assert the thing the eye actually complains about: far ground must not out-brighten
+	// near ground.
+	//
+	// Quartiles rather than fixed metre bands because the marched near field only reaches as
+	// far as the resident bricks allow, which varies with altitude and with what has streamed
+	// in; a fixed band silently empties and takes the assertion with it. The quartiles are
+	// always populated when there is geometry at all, and near_dist/far_dist are reported so a
+	// test can still pin that the frame spans a real range instead of passing on a flat wall.
+	//
+	// Sky is excluded by the depth attachment, which is reverse-Z (the passes use
+	// COMPARE_OP_GREATER_OR_EQUAL), so 0.0 is the far plane and is what a miss writes.
+	const PackedByteArray depth_data = device->texture_get_data(world_->gbuffer()->depth(), 0);
+	if (depth_data.size() >= static_cast<int64_t>(pixels) * 4) {
+		const float *depths = reinterpret_cast<const float *>(depth_data.ptr());
+		std::vector<std::pair<double, double>> surface; // (view distance, luminance)
+		surface.reserve(static_cast<size_t>(pixels));
+		for (int y = 0; y < h; y++) {
+			for (int x = 0; x < w; x++) {
+				const int i = y * w + x;
+				if (depths[i] <= 0.0f) continue;
+				// The same reconstruction deferred.comp.glsl does, from the same matrix.
+				const Vector4 clip(((x + 0.5) / w) * 2.0 - 1.0, ((y + 0.5) / h) * 2.0 - 1.0,
+						depths[i], 1.0);
+				const Vector4 hw = inv.xform(clip);
+				if (std::fabs(hw.w) < 1e-9) continue;
+				const Vector3 wp(hw.x / hw.w, hw.y / hw.w, hw.z / hw.w);
+				surface.emplace_back(static_cast<double>(wp.distance_to(pos)),
+						0.2126 * half_to_float(values[i * 4]) +
+								0.7152 * half_to_float(values[i * 4 + 1]) +
+								0.0722 * half_to_float(values[i * 4 + 2]));
+			}
+		}
+		d["surface_pixels"] = static_cast<int>(surface.size());
+		const size_t quartile = surface.size() / 4;
+		if (quartile > 0) {
+			std::sort(surface.begin(), surface.end());
+			double near_luma = 0.0, far_luma = 0.0, near_dist = 0.0, far_dist = 0.0;
+			for (size_t i = 0; i < quartile; i++) {
+				near_dist += surface[i].first;
+				near_luma += surface[i].second;
+				far_dist += surface[surface.size() - 1 - i].first;
+				far_luma += surface[surface.size() - 1 - i].second;
+			}
+			const double n = static_cast<double>(quartile);
+			d["near_pixels"] = static_cast<int>(quartile);
+			d["far_pixels"] = static_cast<int>(quartile);
+			d["near_dist"] = near_dist / n;
+			d["far_dist"] = far_dist / n;
+			d["near_luma"] = near_luma / n;
+			d["far_luma"] = far_luma / n;
+		}
+	}
 	return d;
 }
 
