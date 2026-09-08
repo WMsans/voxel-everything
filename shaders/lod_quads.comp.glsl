@@ -18,6 +18,8 @@ layout(set = 0, binding = 2, std430) readonly buffer Frac { uint v[]; } frac;
 layout(set = 0, binding = 3, std430) writeonly buffer Quads { uint v[]; } quads;
 // Two uints per job: quad count, overflow flag.
 layout(set = 0, binding = 4, std430) buffer Counts { uint v[]; } counts;
+// Four octahedral snorm8 corner normals per quad, packed two per uint.
+layout(set = 0, binding = 5, std430) writeonly buffer Normals { uint v[]; } normals;
 
 void bits_set(inout uvec3 w, int lo, int bits, uint v) {
 	uint mask = (bits >= 32) ? 0xFFFFFFFFu : ((1u << uint(bits)) - 1u);
@@ -88,5 +90,8 @@ void main() {
 		quads.v[base + 0u] = w.x;
 		quads.v[base + 1u] = w.y;
 		quads.v[base + 2u] = w.z;
+		uint normal_base = (job * uint(lpc.params.y) + t) * 2u;
+		normals.v[normal_base + 0u] = (f[order[0]] >> 16u) | (f[order[1]] & 0xFFFF0000u);
+		normals.v[normal_base + 1u] = (f[order[2]] >> 16u) | (f[order[3]] & 0xFFFF0000u);
 	}
 }

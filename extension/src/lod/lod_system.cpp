@@ -154,7 +154,7 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 				continue;
 			}
 			std::vector<int> pages;
-			if (!lod_pool_->upload(r.level, r.coord, r.quads, &pages)) {
+			if (!lod_pool_->upload(r.level, r.coord, r.quads, r.normals, &pages)) {
 				// Refused, not half-funded. If the chunk already has resident pages, keep
 				// drawing them: stale beats missing. Re-affirm Ready-with-dirty using the old
 				// page list so the node stays drawable AND is re-requested next frame; a node

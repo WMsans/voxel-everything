@@ -47,6 +47,9 @@ func check_diff(d: Dictionary, label: String) -> void:
 		"%s: %d quads exist on the GPU only" % [label, d["quads_only_gpu"]]).is_equal(0)
 	assert_int(d["corner_max_diff"]).override_failure_message(
 		"%s: a corner offset differs by %d steps" % [label, d["corner_max_diff"]]).is_equal(0)
+	assert_float(d["normal_min_dot"]).override_failure_message(
+		"%s: filtered normals disagree: %s" % [label, d]
+		).is_greater_equal(0.999)
 
 func test_level_zero_over_the_surface() -> void:
 	var w := make_world()

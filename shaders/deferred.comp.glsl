@@ -64,7 +64,9 @@ float sun_map_visibility(vec3 wpos, float ndl, float view_dist) {
 	// range, where an absolute bias contributes metres of slop and unseats the stored
 	// surface from the ground it rasterized. Per cascade, because the texels differ by ~10x.
 	float texel = sun.params[c].x / max(sun.params[c].y, 1e-6);
-	float bias = texel * (1.5 + 2.0 * slope);
+	// Four texels is the smallest measured receiver bias that removes isolated far-LoD
+	// self-shadow specks; slope scaling handles grazing cells without metre-scale bias.
+	float bias = texel * (4.0 + 4.0 * slope);
 	return (p.z + bias >= texture(sun_map, vec3(uv, float(c))).r) ? 1.0 : 0.0;
 }
 

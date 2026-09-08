@@ -3,6 +3,7 @@
 
 #include "common.glslh"
 #include "lod_common.glslh"
+#include "shade.glslh"
 
 // One thread per mesh cell. Identical arithmetic to shaders/mesh_cells.comp.glsl, but it
 // stores the vertex as a FRACTION of its own cell (5 bits per axis, packed) rather than a
@@ -18,6 +19,16 @@ const ivec3 CORNER[8] = ivec3[8](ivec3(0, 0, 0), ivec3(1, 0, 0), ivec3(0, 1, 0),
 const ivec2 EDGE[12] = ivec2[12](ivec2(0, 1), ivec2(2, 3), ivec2(4, 5), ivec2(6, 7),
 		ivec2(0, 2), ivec2(1, 3), ivec2(4, 6), ivec2(5, 7),
 		ivec2(0, 4), ivec2(1, 5), ivec2(2, 6), ivec2(3, 7));
+
+vec3 trilinear_gradient(float d[8], vec3 f) {
+	float gx0 = mix(d[1] - d[0], d[3] - d[2], f.y);
+	float gx1 = mix(d[5] - d[4], d[7] - d[6], f.y);
+	float gy0 = mix(d[2] - d[0], d[3] - d[1], f.x);
+	float gy1 = mix(d[6] - d[4], d[7] - d[5], f.x);
+	float gz0 = mix(d[4] - d[0], d[5] - d[1], f.x);
+	float gz1 = mix(d[6] - d[2], d[7] - d[3], f.x);
+	return vec3(mix(gx0, gx1, f.z), mix(gy0, gy1, f.z), mix(gz0, gz1, f.y));
+}
 
 void main() {
 	ivec3 m = ivec3(gl_GlobalInvocationID);
@@ -43,5 +54,7 @@ void main() {
 
 	vec3 f = clamp(acc / float(n), vec3(0.0), vec3(1.0));
 	uvec3 q = uvec3(floor(f * float(LOD_OFFSET_MAX) + 0.5));
-	frac.v[ci] = q.x | (q.y << 5) | (q.z << 10);
+	vec3 gradient = trilinear_gradient(d, f);
+	uint packed_normal = dot(gradient, gradient) > 1e-20 ? oct_encode_snorm8(normalize(gradient)) : 0u;
+	frac.v[ci] = q.x | (q.y << 5) | (q.z << 10) | (packed_normal << 16);
 }

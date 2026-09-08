@@ -140,6 +140,10 @@ bool LodBuildPass::initialize(RenderingDevice *rd, const LodBuildConfig &cfg) {
 			static_cast<int64_t>(cfg_.max_jobs) * ve::kLodMaxQuadsPerChunk * 12;
 	quads_ = rd->storage_buffer_create(static_cast<uint32_t>(quads_bytes),
 			zeroed(quads_bytes));
+	const int64_t normals_bytes =
+			static_cast<int64_t>(cfg_.max_jobs) * ve::kLodMaxQuadsPerChunk * sizeof(ve::LodQuadNormals);
+	normals_ = rd->storage_buffer_create(static_cast<uint32_t>(normals_bytes),
+			zeroed(normals_bytes));
 	const int64_t counts_bytes = static_cast<int64_t>(cfg_.max_jobs) * 8;
 	counts_ = rd->storage_buffer_create(static_cast<uint32_t>(counts_bytes),
 			zeroed(counts_bytes));
@@ -157,7 +161,7 @@ bool LodBuildPass::initialize(RenderingDevice *rd, const LodBuildConfig &cfg) {
 	}
 	if (!fine_sdf_.is_valid() || !fine_mat_.is_valid() || !lat_sdf_.is_valid() ||
 			!lat_mat_.is_valid() || !frac_.is_valid() || !quads_.is_valid() ||
-			!counts_.is_valid() || !ops_.is_valid() || !volumes_.is_valid() || !overrides_->is_valid()) {
+			!normals_.is_valid() || !counts_.is_valid() || !ops_.is_valid() || !volumes_.is_valid() || !overrides_->is_valid()) {
 		UtilityFunctions::printerr("LodBuildPass: buffer/texture creation failed");
 		teardown();
 		return false;
@@ -209,7 +213,7 @@ bool LodBuildPass::initialize(RenderingDevice *rd, const LodBuildConfig &cfg) {
 		return false;
 	}
 	quads_uset_ = rd->uniform_set_create(Array::make(image(0, lat_sdf_), image(1, lat_mat_),
-			storage(2, frac_), storage(3, quads_), storage(4, counts_)),
+			storage(2, frac_), storage(3, quads_), storage(4, counts_), storage(5, normals_)),
 			quads_shader_, 0);
 	if (!quads_uset_.is_valid()) {
 		UtilityFunctions::printerr("LodBuildPass: quads uniform set creation failed");
@@ -243,6 +247,7 @@ void LodBuildPass::teardown() {
 	free_if_valid(rd_, field_shader_);
 	free_if_valid(rd_, ops_);
 	free_if_valid(rd_, counts_);
+	free_if_valid(rd_, normals_);
 	free_if_valid(rd_, quads_);
 	free_if_valid(rd_, frac_);
 	free_if_valid(rd_, lat_mat_);
@@ -365,6 +370,7 @@ void LodBuildPass::read_job(int job_index, LodBuildResult *out) {
 	out->level = job.level;
 	out->coord = job.coord;
 	out->quads.clear();
+	out->normals.clear();
 	out->overflow = false;
 	out->failed = false;
 	const PackedByteArray cb = rd_->buffer_get_data(counts_,
@@ -387,8 +393,19 @@ void LodBuildPass::read_job(int job_index, LodBuildResult *out) {
 		}
 		out->quads.resize(static_cast<size_t>(qcount));
 		std::memcpy(out->quads.data(), qb.ptr(), static_cast<size_t>(qcount) * 12);
+		const PackedByteArray nb = rd_->buffer_get_data(normals_,
+				static_cast<uint32_t>(job_index) * ve::kLodMaxQuadsPerChunk * sizeof(ve::LodQuadNormals),
+				static_cast<uint32_t>(qcount) * sizeof(ve::LodQuadNormals));
+		if (nb.size() < static_cast<int64_t>(qcount) * sizeof(ve::LodQuadNormals)) {
+			out->failed = true;
+			out->quads.clear();
+			return;
+		}
+		out->normals.resize(static_cast<size_t>(qcount));
+		std::memcpy(out->normals.data(), nb.ptr(),
+				static_cast<size_t>(qcount) * sizeof(ve::LodQuadNormals));
 	}
-	ve::lod_append_skirts(&out->quads);
+	ve::lod_append_skirts(&out->quads, &out->normals);
 }
 
 int LodBuildPass::collect(std::vector<LodBuildResult> *out) {

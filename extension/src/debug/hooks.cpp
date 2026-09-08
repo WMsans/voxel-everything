@@ -2434,7 +2434,7 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 						p[0], p[1], p[2], &world_->store_->volumes(), world_->store_->overrides()).sdf;
 				const int idx = ve::lod_fine_index(x, y, z);
 				const int diff = std::abs(static_cast<int>(fine_sdf[idx]) -
-						static_cast<int>(ve::encode_sdf(s)));
+						static_cast<int>(ve::lod_encode_sdf(s, cell)));
 				fine_max_diff = std::max(fine_max_diff, diff);
 			}
 	d["fine_max_diff"] = fine_max_diff;
@@ -2460,13 +2460,18 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 	// same final records.
 	ve::LodContourResult ref;
 	ve::lod_contour(reduced_sdf.data(), reduced_mat.data(), &ref);
-	ve::lod_append_skirts(&ref.quads);
+	ve::lod_append_skirts(&ref.quads, &ref.normals);
 
-	using QuadKey = std::array<int, 7>; // u xyz, axis, sign, double_sided, material
+	using QuadKey = std::array<int, 10>; // u xyz, axis, sign, ribbon tag/face/edge/reverse, material
 	using Offsets = std::array<int, 12>;
-	std::map<QuadKey, std::vector<Offsets>> cpu_quads;
+	struct Candidate {
+		Offsets offsets{};
+		ve::LodQuadNormals normals{};
+	};
+	std::map<QuadKey, std::vector<Candidate>> cpu_quads;
 	const auto make_key = [](const ve::LodQuadFields &f) {
-		QuadKey k{f.u[0], f.u[1], f.u[2], f.axis, f.sign, f.double_sided, f.material};
+		QuadKey k{f.u[0], f.u[1], f.u[2], f.axis, f.sign, f.double_sided,
+				f.skirt_face, f.skirt_edge, f.reverse_winding, f.material};
 		return k;
 	};
 	const auto make_offsets = [](const ve::LodQuadFields &f) {
@@ -2476,17 +2481,19 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 				o[k * 3 + a] = f.offset[k][a];
 		return o;
 	};
-	for (const ve::LodQuad &q : ref.quads) {
+	for (size_t qi = 0; qi < ref.quads.size(); ++qi) {
 		ve::LodQuadFields f{};
-		ve::lod_quad_unpack(q, &f);
-		cpu_quads[make_key(f)].push_back(make_offsets(f));
+		ve::lod_quad_unpack(ref.quads[qi], &f);
+		cpu_quads[make_key(f)].push_back({make_offsets(f), ref.normals[qi]});
 	}
 	int quads_only_cpu = 0;
 	int quads_only_gpu = 0;
 	int raw_corner_max_diff = 0;
-	for (const ve::LodQuad &q : result.quads) {
+	int normal_max_diff = 0; // diagnostic only: oct encoding is discontinuous at fold edges
+	float normal_min_dot = 1.0f;
+	for (size_t qi = 0; qi < result.quads.size(); ++qi) {
 		ve::LodQuadFields f{};
-		ve::lod_quad_unpack(q, &f);
+		ve::lod_quad_unpack(result.quads[qi], &f);
 		const QuadKey key = make_key(f);
 		const Offsets offs = make_offsets(f);
 		auto it = cpu_quads.find(key);
@@ -2503,13 +2510,29 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 			int diff = 0;
 			for (int k = 0; k < 12; k++)
 				diff = std::max(diff, std::abs(static_cast<int>(offs[k]) -
-						static_cast<int>(it->second[i][k])));
+						static_cast<int>(it->second[i].offsets[k])));
 			if (diff < best_diff) {
 				best_diff = diff;
 				best = i;
 			}
 		}
 		raw_corner_max_diff = std::max(raw_corner_max_diff, best_diff);
+		if (qi < result.normals.size()) {
+			for (int k = 0; k < 4; ++k) {
+				const uint16_t a = result.normals[qi].corner[k];
+				const uint16_t b = it->second[best].normals.corner[k];
+				for (int shift : {0, 8})
+					normal_max_diff = std::max(normal_max_diff,
+							std::abs(int(int8_t(a >> shift)) - int(int8_t(b >> shift))));
+				float na[3], nb[3];
+				ve::oct_decode_snorm8(a, na);
+				ve::oct_decode_snorm8(b, nb);
+				normal_min_dot = std::min(normal_min_dot,
+						na[0] * nb[0] + na[1] * nb[1] + na[2] * nb[2]);
+			}
+		} else {
+			normal_max_diff = 255;
+		}
 		it->second[best] = it->second.back();
 		it->second.pop_back();
 	}
@@ -2521,6 +2544,8 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 	d["quads_only_cpu"] = quads_only_cpu;
 	d["quads_only_gpu"] = quads_only_gpu;
 	d["corner_max_diff"] = corner_max_diff;
+	d["normal_max_diff"] = normal_max_diff;
+	d["normal_min_dot"] = normal_min_dot;
 	d["quads_cpu"] = static_cast<int>(ref.quads.size());
 	d["quads_gpu"] = static_cast<int>(result.quads.size());
 

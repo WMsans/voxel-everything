@@ -29,6 +29,7 @@ struct LodBuildResult {
 	int level = 0;
 	ve::IVec3 coord{};
 	std::vector<ve::LodQuad> quads;
+	std::vector<ve::LodQuadNormals> normals;
 	bool overflow = false;
 	bool failed = false; // readback was short/invalid; treat as a failed build
 };
@@ -97,6 +98,7 @@ private:
 	RID lat_mat_;      // R16_UINT 3D, 34^3 material
 	RID frac_;         // uint per mesh cell, max_jobs * 33^3 (first slice is the live one)
 	RID quads_;        // 3 uint per quad, max_jobs * kLodMaxQuadsPerChunk
+	RID normals_;      // 2 uint per quad, aligned with quads_
 	RID counts_;       // 2 uint per job: quad count, overflow flag
 	RID ops_;          // max_jobs * kMaxRegionOps EditOps
 	VolumePool volumes_;

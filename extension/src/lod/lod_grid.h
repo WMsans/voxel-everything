@@ -73,6 +73,9 @@ float lod_chunk_size(int level);
 IVec3 lod_chunk_of_point(int level, float x, float y, float z);
 void lod_chunk_origin(int level, IVec3 c, float out[3]);
 void lod_chunk_aabb(int level, IVec3 c, float lo[3], float hi[3]);
+// Visibility bounds include the negative cell apron and procedural boundary ribbons.
+// Ownership, distance selection and SSE still use the nominal chunk box above.
+void lod_chunk_render_aabb(int level, IVec3 c, float lo[3], float hi[3]);
 
 // The chunk at level+1 containing c, and the lowest of the eight children at level-1.
 IVec3 lod_parent(IVec3 c);

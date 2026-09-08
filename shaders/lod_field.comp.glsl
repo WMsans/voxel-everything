@@ -29,6 +29,13 @@ void main() {
 	uint mat;
 	eval_field(lod_fine_world_pos(j), uint(lpc.job.w) * MAX_REGION_OPS, uint(lpc.params.x),
 			sdf, mat);
-	imageStore(fine_sdf, j, vec4(quantise_sdf(sdf)));
+	// Mirror ve::lod_encode_sdf: preserve L0 (0.4 m cells), but store +/-2 cells
+	// at coarser levels. Crossing endpoints plus their half-cell tent taps need
+	// at most sqrt(2.75) cells for a unit plane normal. Clipping to a fixed metre
+	// range before the tent shifts coarse surfaces with their sub-cell phase.
+	// The later passes need averages, signs and crossing ratios, not metres, so
+	// they can keep decode_sdf/quantise_sdf in this common scaled distance space.
+	float scale = lpc.grid.w <= 0.4 ? 1.0 : SDF_RANGE / (2.0 * lpc.grid.w);
+	imageStore(fine_sdf, j, vec4(quantise_sdf(sdf * scale)));
 	imageStore(fine_mat, j, uvec4(mat, 0u, 0u, 0u));
 }

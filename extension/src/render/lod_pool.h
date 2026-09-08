@@ -10,8 +10,8 @@
 
 namespace godot {
 
-// Render-device side of the LoD page arena. A page is 512 packed 12-byte quads; a chunk's
-// pages need not be contiguous. All uploads are buffer_update calls, so callers must record
+// Render-device side of the LoD page arena. A page is 512 packed 12-byte quads plus an
+// aligned 8-byte filtered-normal stream; a chunk's pages need not be contiguous. All uploads are buffer_update calls, so callers must record
 // them before opening any compute/draw list (M2 Task 12's ordering rule).
 class LodPool {
 public:
@@ -23,10 +23,10 @@ public:
 	bool initialize(RenderingDevice *rd, int max_pages, int max_chunk_records);
 	void teardown();
 
-	// All-or-nothing: either every page the quads need is allocated and uploaded, or nothing
-	// happens and `pages_out` is left untouched.
+	// All-or-nothing: either every page the aligned quad/normal streams need is allocated and
+	// uploaded, or nothing happens and `pages_out` is left untouched.
 	bool upload(int level, ve::IVec3 coord, const std::vector<ve::LodQuad> &quads,
-			std::vector<int> *pages_out);
+			const std::vector<ve::LodQuadNormals> &normals, std::vector<int> *pages_out);
 	void release(const std::vector<int> &pages);
 
 	// Uploads the indirect args for the given drawable pages. Task 15 moved this out of
@@ -35,6 +35,7 @@ public:
 	void upload_draw_args(const std::vector<LodRasterPass::PageDraw> &draw_pages);
 
 	RID quad_buffer() const { return quads_; }
+	RID normal_buffer() const { return normals_; }
 	RID index_buffer() const { return index_; }
 	RID page_chunk_buffer() const { return page_chunk_; }
 	RID chunk_buffer() const { return chunks_; }
@@ -69,6 +70,7 @@ private:
 	int max_pages_ = 0;
 	ve::LodArena arena_{0};
 	RID quads_;
+	RID normals_;
 	RID index_;
 	RID page_chunk_;
 	RID page_quads_;

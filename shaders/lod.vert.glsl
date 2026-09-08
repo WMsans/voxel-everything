@@ -3,6 +3,7 @@
 
 #include "common.glslh"
 #include "lod_quad.glslh"
+#include "shade.glslh"
 
 // No vertex buffer and no vertex attributes: geometry is PULLED. The shared index buffer
 // supplies {4q, 4q+1, 4q+2, 4q, 4q+2, 4q+3} for q in [0, 512) and each page's draw sets
@@ -13,6 +14,7 @@ layout(set = 0, binding = 0, std430) readonly buffer Quads { uint v[]; } quads;
 layout(set = 0, binding = 1, std430) readonly buffer PageChunk { uint v[]; } page_chunk;
 // Two vec4 per chunk: (origin.xyz, cell size), (level, flags, pad, pad).
 layout(set = 0, binding = 2, std430) readonly buffer Chunks { vec4 v[]; } chunks;
+layout(set = 0, binding = 5, std430) readonly buffer Normals { uint v[]; } normals;
 
 layout(push_constant, std430) uniform Push {
 	mat4 view_proj;
@@ -21,7 +23,7 @@ layout(push_constant, std430) uniform Push {
 } pc;
 
 layout(location = 0) out vec3 v_wpos;
-layout(location = 1) out flat vec3 v_normal;
+layout(location = 1) out vec3 v_normal;
 layout(location = 2) out flat uint v_material;
 
 void main() {
@@ -34,17 +36,17 @@ void main() {
 
 	uvec3 w = uvec3(quads.v[quad * 3u + 0u], quads.v[quad * 3u + 1u], quads.v[quad * 3u + 2u]);
 
-	// All four corners, because the flat normal comes from the geometry rather than storage:
-	// at a 3 px screen-space error a quad is smaller than any shading gradient, so a stored
-	// per-corner normal would cost 8 bytes a quad to change nothing (spec section 3.4).
+	// Geometry may be a procedural boundary ribbon. Its shading still comes from the
+	// original surface quad, not the steep ribbon plane (nor its reverse-wound copy).
 	vec3 p0 = lod_corner_pos(w, 0, c0.xyz, c0.w);
 	vec3 p1 = lod_corner_pos(w, 1, c0.xyz, c0.w);
 	vec3 p2 = lod_corner_pos(w, 2, c0.xyz, c0.w);
 	vec3 p3 = lod_corner_pos(w, 3, c0.xyz, c0.w);
 
 	v_wpos = corner == 0u ? p0 : (corner == 1u ? p1 : (corner == 2u ? p2 : p3));
-	// Corners are stored ALREADY WOUND, so this never branches on the sign bit.
-	v_normal = normalize(cross(p1 - p0, p2 - p0));
+	uint normal_pair = normals.v[quad * 2u + (corner >> 1u)];
+	uint packed_normal = (normal_pair >> ((corner & 1u) * 16u)) & 0xFFFFu;
+	v_normal = oct_decode_snorm8(packed_normal);
 	v_material = lod_bits_get(w, 78, 16);
 	gl_Position = pc.view_proj * vec4(v_wpos, 1.0);
 }

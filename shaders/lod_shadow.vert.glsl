@@ -21,5 +21,8 @@ void main() {
 	vec4 c0 = chunks.v[ci * 2u + 0u];
 	uvec3 w = uvec3(quads.v[quad * 3u + 0u], quads.v[quad * 3u + 1u], quads.v[quad * 3u + 2u]);
 	vec3 p = lod_corner_pos(w, int(corner), c0.xyz, c0.w);
+	// Boundary ribbons are synthetic overlap geometry. They prevent camera coverage gaps but
+	// must not become steep shadow casters; collapse each tagged quad to zero area here.
+	if (lod_bits_get(w, 94, 1) != 0u) p = c0.xyz;
 	gl_Position = pc.sun_view_proj * vec4(p, 1.0);
 }

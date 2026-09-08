@@ -1,4 +1,5 @@
 #include "lod/lod_grid.h"
+#include "lod/lod_skirt.h"
 #include <algorithm>
 #include <cmath>
 
@@ -33,6 +34,15 @@ void lod_chunk_aabb(int level, IVec3 c, float lo[3], float hi[3]) {
 	lod_chunk_origin(level, c, lo);
 	const float s = lod_chunk_size(level);
 	for (int a = 0; a < 3; a++) hi[a] = lo[a] + s;
+}
+
+void lod_chunk_render_aabb(int level, IVec3 c, float lo[3], float hi[3]) {
+	lod_chunk_aabb(level, c, lo, hi);
+	const float cell = lod_cell_size(level);
+	for (int a = 0; a < 3; a++) {
+		lo[a] -= (1 + kLodSkirtMaxExtensionCells) * cell;
+		hi[a] += kLodSkirtMaxExtensionCells * cell;
+	}
 }
 
 IVec3 lod_parent(IVec3 c) {

@@ -51,8 +51,9 @@ void main() {
 	uint page = args.v[base + 3u] / uint(LOD_QUADS_PER_PAGE * 4);
 	uint ci = page_chunk.v[page];
 	vec4 c0 = chunks.v[ci * 2u + 0u];
-	vec3 lo = c0.xyz;
-	vec3 hi = lo + vec3(c0.w * float(LOD_CHUNK_CELLS));
+	// Mirror lod_chunk_render_aabb: the apron and ribbons are visible geometry too.
+	vec3 lo = c0.xyz - vec3(c0.w * (1.0 + LOD_SKIRT_MAX_EXTENSION));
+	vec3 hi = c0.xyz + vec3(c0.w * (float(LOD_CHUNK_CELLS) + LOD_SKIRT_MAX_EXTENSION));
 
 	if (outside_frustum(lo, hi)) { args.v[base + 1u] = 0u; return; }
 

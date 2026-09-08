@@ -2,6 +2,8 @@
 #include "lod/lod_grid.h"
 #include "lod/lod_reduce.h"
 #include "world/brick.h"
+#include "shade/oct.h"
+#include <cmath>
 
 namespace ve {
 
@@ -25,6 +27,7 @@ int mesh_cell_index(int x, int y, int z) {
 
 void lod_contour(const uint8_t *lattice, const uint16_t *material, LodContourResult *out) {
 	out->quads.clear();
+	out->normals.clear();
 	out->overflow = false;
 
 	// Pass 1: the dual vertex of every crossed cell, as a fraction of its own cell. Storing
@@ -32,6 +35,7 @@ void lod_contour(const uint8_t *lattice, const uint16_t *material, LodContourRes
 	// five bits per axis.
 	const size_t cell_count = size_t(kLodChunkMeshCells) * kLodChunkMeshCells * kLodChunkMeshCells;
 	std::vector<uint8_t> frac(cell_count * 3, 0);
+	std::vector<uint16_t> normal(cell_count, 0);
 	std::vector<char> has_vertex(cell_count, 0);
 	for (int mz = 0; mz < kLodChunkMeshCells; mz++)
 		for (int my = 0; my < kLodChunkMeshCells; my++)
@@ -54,8 +58,27 @@ void lod_contour(const uint8_t *lattice, const uint16_t *material, LodContourRes
 				if (n == 0) continue;
 				const size_t ci = size_t(mesh_cell_index(mx, my, mz));
 				has_vertex[ci] = 1;
-				for (int a = 0; a < 3; a++)
-					frac[ci * 3 + a] = lod_quantise_offset(acc[a] / float(n));
+				float f[3];
+				for (int a = 0; a < 3; a++) {
+					f[a] = acc[a] / float(n);
+					frac[ci * 3 + a] = lod_quantise_offset(f[a]);
+				}
+				// Evaluate the trilinear SDF gradient at the dual vertex. This is a
+				// filtered lattice normal, not a derivative of the heavily quantised quad.
+				const float gx0 = d[1] - d[0] + f[1] * (d[3] - d[2] - d[1] + d[0]);
+				const float gx1 = d[5] - d[4] + f[1] * (d[7] - d[6] - d[5] + d[4]);
+				const float gy0 = d[2] - d[0] + f[0] * (d[3] - d[1] - d[2] + d[0]);
+				const float gy1 = d[6] - d[4] + f[0] * (d[7] - d[5] - d[6] + d[4]);
+				const float gz0 = d[4] - d[0] + f[0] * (d[5] - d[1] - d[4] + d[0]);
+				const float gz1 = d[6] - d[2] + f[0] * (d[7] - d[3] - d[6] + d[2]);
+				float gradient[3] = {gx0 + f[2] * (gx1 - gx0),
+						gy0 + f[2] * (gy1 - gy0), gz0 + f[1] * (gz1 - gz0)};
+				const float len = std::sqrt(gradient[0] * gradient[0] + gradient[1] * gradient[1] +
+						gradient[2] * gradient[2]);
+				if (len > 1e-10f) {
+					for (float &v : gradient) v /= len;
+					normal[ci] = oct_encode_snorm8(gradient);
+				}
 			}
 
 	// Pass 2: one quad per sign-changing lattice edge this chunk owns -- local edge
@@ -113,6 +136,9 @@ void lod_contour(const uint8_t *lattice, const uint16_t *material, LodContourRes
 					LodQuad q{};
 					lod_quad_pack(f, &q);
 					out->quads.push_back(q);
+					LodQuadNormals qn{};
+					for (int k = 0; k < 4; ++k) qn.corner[k] = normal[ci[order[k]]];
+					out->normals.push_back(qn);
 				}
 			}
 }

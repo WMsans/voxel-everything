@@ -12,7 +12,7 @@ const int LOD_OFFSET_MAX = 31;        // ve::kLodOffsetMax
 
 // The four cells around a lattice edge, wound counter-clockwise seen from +axis. Byte-
 // identical to ve::kLodQuadCorners and to QUAD in shaders/mesh_quads.comp.glsl.
-const ivec2 LOD_QUAD[4] = ivec2[4](ivec2(-1, -1), ivec2(0, -1), ivec2(0, 0), ivec2(-1, 0));
+const ivec2 LOD_QUAD[4] = {ivec2(-1, -1), ivec2(0, -1), ivec2(0, 0), ivec2(-1, 0)};
 
 // A field can straddle at most two of the three words (the widest is 16 bits), so two masked
 // reads always suffice. Mirror of bits_get in extension/src/lod/lod_quad.cpp.
@@ -29,24 +29,133 @@ uint lod_bits_get(uvec3 w, int lo, int bits) {
 	return v & mask;
 }
 
-// World position of corner k: origin + (m - 1 + frac) * cell -- the mesher's own formula,
-// which ve::lod_quad_corner_pos and shaders/mesh_cells.comp.glsl both use. Decoding is
-// sign-aware exactly like ve::lod_quad_corner_cell: negative-sign quads are stored
-// pre-wound (0,3,2,1), so the CELL lookup maps through order_rev while the offset stays in
-// the stored (pre-wound) slot k.
-vec3 lod_corner_pos(uvec3 w, int k, vec3 origin, float cell) {
+const float LOD_SKIRT_CELLS = 2.0; // ve::kLodSkirtCells
+const float LOD_SKIRT_MAX_EXTENSION = 4.0; // ve::kLodSkirtMaxExtensionCells
+
+// A tagged ribbon stores the two unconstrained parent coordinates, face and edge in
+// bits 0..14. All four offsets remain untouched, preserving the exact parent normal.
+ivec3 lod_parent_u(uvec3 w) {
+	ivec3 u = ivec3(int(lod_bits_get(w, 0, 5)), int(lod_bits_get(w, 5, 5)),
+			int(lod_bits_get(w, 10, 5)));
+	if (lod_bits_get(w, 94, 1) != 0u) {
+		int face = int(lod_bits_get(w, 10, 3));
+		int a = (face / 2) % 3;
+		u[a] = (face & 1) != 0 ? 31 : 0;
+		u[(a + 1) % 3] = int(lod_bits_get(w, 0, 5));
+		u[(a + 2) % 3] = int(lod_bits_get(w, 5, 5));
+	}
+	return u;
+}
+
+ivec3 lod_parent_corner_cell(uvec3 w, int k) {
 	int axis = int(lod_bits_get(w, 15, 2));
 	int b = (axis + 1) % 3;
 	int c = (axis + 2) % 3;
-	int order_rev[4] = int[4](0, 3, 2, 1);
+	int order_rev[4] = {0, 3, 2, 1};
 	int kk = k & 3;
 	int canonical = lod_bits_get(w, 17, 1) == 0u ? order_rev[kk] : kk;
-	ivec3 m = ivec3(int(lod_bits_get(w, 0, 5)), int(lod_bits_get(w, 5, 5)),
-			int(lod_bits_get(w, 10, 5))) + 1;
+	ivec3 m = lod_parent_u(w) + 1;
 	m[b] += LOD_QUAD[canonical].x;
 	m[c] += LOD_QUAD[canonical].y;
+	return m;
+}
+
+vec3 lod_parent_corner_pos(uvec3 w, int k, vec3 origin, float cell) {
+	int kk = k & 3;
+	ivec3 m = lod_parent_corner_cell(w, kk);
 	vec3 frac = vec3(lod_bits_get(w, 18 + (kk * 3 + 0) * 5, 5),
 			lod_bits_get(w, 18 + (kk * 3 + 1) * 5, 5),
 			lod_bits_get(w, 18 + (kk * 3 + 2) * 5, 5)) / float(LOD_OFFSET_MAX);
-	return origin + (vec3(m) - 1.0 + frac) * cell;
+	vec3 p = vec3(0.0);
+	for (int a = 0; a < 3; a++) {
+		float base = round(origin[a] / cell);
+		float residual = origin[a] - base * cell;
+		p[a] = (base + float(m[a] - 1) + frac[a]) * cell + residual;
+	}
+	return p;
+}
+
+vec3 lod_parent_normal(uvec3 w) {
+	vec3 p0 = lod_parent_corner_pos(w, 0, vec3(0.0), 1.0);
+	vec3 p1 = lod_parent_corner_pos(w, 1, vec3(0.0), 1.0);
+	vec3 p2 = lod_parent_corner_pos(w, 2, vec3(0.0), 1.0);
+	vec3 p3 = lod_parent_corner_pos(w, 3, vec3(0.0), 1.0);
+	// Sum both triangle area normals, not the arbitrarily selected first triangle.
+	vec3 n = cross(p1 - p3, p2 - p0);
+	float length2 = dot(n, n);
+	if (length2 > 1e-12) return n * inversesqrt(length2);
+	n = vec3(0.0);
+	n[int(lod_bits_get(w, 15, 2)) % 3] = lod_bits_get(w, 17, 1) != 0u ? 1.0 : -1.0;
+	return n;
+}
+
+vec3 lod_parent_corner_normal(uvec3 w, int k) {
+	int kk = k & 3;
+	vec3 p = lod_parent_corner_pos(w, kk, vec3(0.0), 1.0);
+	vec3 next = lod_parent_corner_pos(w, (kk + 1) & 3, vec3(0.0), 1.0);
+	vec3 prev = lod_parent_corner_pos(w, (kk + 3) & 3, vec3(0.0), 1.0);
+	vec3 n = cross(next - p, prev - p);
+	float length2 = dot(n, n);
+	return length2 > 1e-12 ? n * inversesqrt(length2) : lod_parent_normal(w);
+}
+
+// For ribbons, map each generated corner back to the attached parent endpoint so synthetic
+// overlap geometry inherits the same smooth surface normal and does not expose a curtain.
+vec3 lod_corner_normal(uvec3 w, int k) {
+	if (lod_bits_get(w, 94, 1) == 0u) return lod_parent_corner_normal(w, k);
+	int order_rev[4] = {0, 3, 2, 1};
+	int kk = lod_bits_get(w, 95, 1) != 0u ? order_rev[k & 3] : (k & 3);
+	int edge = int(lod_bits_get(w, 13, 2));
+	int endpoint = (edge + ((kk == 0 || kk == 3) ? 1 : 0)) & 3;
+	return lod_parent_corner_normal(w, endpoint);
+}
+
+// Shared by beauty and shadow: end, start, outer-start, outer-end. Winding bit 95 affects
+// geometry ONLY, not the parent sign/offsets or shading normal.
+vec3 lod_corner_pos(uvec3 w, int k, vec3 origin, float cell) {
+	if (lod_bits_get(w, 94, 1) == 0u) return lod_parent_corner_pos(w, k, origin, cell);
+	int order_rev[4] = {0, 3, 2, 1};
+	int kk = lod_bits_get(w, 95, 1) != 0u ? order_rev[k & 3] : (k & 3);
+	int edge = int(lod_bits_get(w, 13, 2));
+	int endpoint = (edge + ((kk == 0 || kk == 3) ? 1 : 0)) & 3;
+	vec3 p = lod_parent_corner_pos(w, endpoint, origin, cell);
+	if (kk < 2) return p;
+	ivec3 m = lod_parent_corner_cell(w, endpoint);
+	vec3 n = lod_parent_normal(w);
+	vec3 d = vec3(0.0);
+	bvec3 boundary = bvec3(false);
+	int axis = int(lod_bits_get(w, 15, 2));
+	int face_axis = int(lod_bits_get(w, 10, 3)) / 2;
+	for (int a = 0; a < 3; a++) {
+		boundary[a] = (a != axis || a == face_axis) && (m[a] == 0 || m[a] == 32);
+		if (boundary[a]) d[a] = LOD_SKIRT_CELLS * (m[a] == 0 ? -1.0 : 1.0);
+	}
+	float projection = dot(d, n);
+	if (projection > -LOD_SKIRT_CELLS) {
+		// Mirror the CPU bounded solve: use all free axes and redistribute the deficit
+		// after saturation, rather than rejecting feasible slopes or clamping away depth.
+		float deficit = LOD_SKIRT_CELLS + projection;
+		for (int pass = 0; pass < 3; pass++) {
+			float weight = 0.0;
+			for (int a = 0; a < 3; a++) if (!boundary[a]) weight += n[a] * n[a];
+			// Unsupported records are rejected before upload; foreign records stay finite.
+			if (weight <= 1e-10) return p;
+			float scale = deficit / weight;
+			bool saturated = false;
+			for (int a = 0; a < 3; a++) if (!boundary[a] &&
+					abs(scale * n[a]) > LOD_SKIRT_MAX_EXTENSION) {
+				d[a] = n[a] > 0.0 ? -LOD_SKIRT_MAX_EXTENSION : LOD_SKIRT_MAX_EXTENSION;
+				deficit += d[a] * n[a];
+				boundary[a] = true;
+				saturated = true;
+			}
+			if (!saturated) {
+				for (int a = 0; a < 3; a++) if (!boundary[a]) d[a] = -scale * n[a];
+				break;
+			}
+		}
+	}
+	for (int a = 0; a < 3; a++)
+		if (isnan(d[a]) || isinf(d[a]) || abs(d[a]) > LOD_SKIRT_MAX_EXTENSION) return p;
+	return p + d * cell;
 }

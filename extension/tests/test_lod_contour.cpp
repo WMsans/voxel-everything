@@ -5,6 +5,7 @@
 #include "lod/lod_reduce.h"
 #include "mesh/dual_contour.h"
 #include "world/brick.h"
+#include "shade/oct.h"
 #include <cmath>
 #include <vector>
 
@@ -39,7 +40,16 @@ TEST_CASE("a horizontal plane produces one quad per owned column") {
 	ve::LodContourResult r;
 	ve::lod_contour(l.data(), m.data(), &r);
 	CHECK(r.quads.size() == size_t(ve::kLodChunkCells) * ve::kLodChunkCells);
-	for (const ve::LodQuad &q : r.quads) {
+	REQUIRE(r.normals.size() == r.quads.size());
+	for (size_t qi = 0; qi < r.quads.size(); ++qi) {
+		const ve::LodQuad &q = r.quads[qi];
+		for (int k = 0; k < 4; ++k) {
+			float n[3];
+			ve::oct_decode_snorm8(r.normals[qi].corner[k], n);
+			CHECK(n[0] == doctest::Approx(0.0f).epsilon(0.02));
+			CHECK(n[1] == doctest::Approx(1.0f).epsilon(0.02));
+			CHECK(n[2] == doctest::Approx(0.0f).epsilon(0.02));
+		}
 		ve::LodQuadFields f{};
 		ve::lod_quad_unpack(q, &f);
 		CHECK(f.axis == 1);

@@ -351,12 +351,17 @@ void LodTree::visit(int level, IVec3 c, const LodCamera &cam, const LodOcclusion
 	Node &n = nodes_[key(level, c)];
 	n.last_marked = frame; // touched, therefore resident: this is the whole eviction rule
 
-	if (!lod_aabb_in_frustum(planes_, lo, hi)) return;
+	float render_lo[3], render_hi[3];
+	lod_chunk_render_aabb(level, c, render_lo, render_hi);
+	if (!lod_aabb_in_frustum(planes_, render_lo, render_hi)) return;
 
 	float ss_min[3], ss_max[3];
+	// SSE measures nominal cell density; overlap must not force extra refinement.
 	const float area = lod_projected_area(cam, lo, hi, ss_min, ss_max);
+	const float render_area = occ ? lod_projected_area(cam, render_lo, render_hi,
+			ss_min, ss_max) : area;
 
-	if (occ && area < 3.0e38f && occ->occluded(ss_min, ss_max)) {
+	if (occ && render_area < 3.0e38f && occ->occluded(ss_min, ss_max)) {
 		if (n.occluded_since == 0) n.occluded_since = frame;
 	} else {
 		n.occluded_since = 0;

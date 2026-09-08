@@ -79,6 +79,7 @@ void LodRasterPass::teardown() {
 	}
 	uset_shader_ = RID();
 	uset_quads_ = RID();
+	uset_normals_ = RID();
 	uset_page_chunk_ = RID();
 	uset_chunks_ = RID();
 	uset_albedo_ = RID();
@@ -194,13 +195,14 @@ bool LodRasterPass::ensure_pipeline(RenderingDevice *rd, GBuffer &gb, RID marker
 bool LodRasterPass::ensure_uniform_set(RenderingDevice *rd, LodPool &pool, MaterialAtlas &materials,
 		RID shader) {
 	const RID quads = pool.quad_buffer();
+	const RID normals = pool.normal_buffer();
 	const RID page_chunk = pool.page_chunk_buffer();
 	const RID chunks = pool.chunk_buffer();
 	const RID albedo = materials.albedo_array();
 	const RID surface = materials.surface_array();
 	const RID sampler = materials.sampler();
 	if (uset_.is_valid() && uset_shader_ == shader &&
-			quads == uset_quads_ && page_chunk == uset_page_chunk_ &&
+			quads == uset_quads_ && normals == uset_normals_ && page_chunk == uset_page_chunk_ &&
 			chunks == uset_chunks_ && albedo == uset_albedo_ && surface == uset_surface_ &&
 			sampler == uset_sampler_) {
 		return true;
@@ -234,10 +236,16 @@ bool LodRasterPass::ensure_uniform_set(RenderingDevice *rd, LodPool &pool, Mater
 	u4->set_binding(4);
 	u4->add_id(sampler);
 	u4->add_id(surface);
-	uset_ = rd->uniform_set_create(Array::make(u0, u1, u2, u3, u4), shader, 0);
+	Ref<RDUniform> u5;
+	u5.instantiate();
+	u5->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
+	u5->set_binding(5);
+	u5->add_id(normals);
+	uset_ = rd->uniform_set_create(Array::make(u0, u1, u2, u3, u4, u5), shader, 0);
 	if (uset_.is_valid()) {
 		uset_shader_ = shader;
 		uset_quads_ = quads;
+		uset_normals_ = normals;
 		uset_page_chunk_ = page_chunk;
 		uset_chunks_ = chunks;
 		uset_albedo_ = albedo;

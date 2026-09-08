@@ -6,6 +6,18 @@ namespace ve {
 
 float lod_fine_local(int j) { return (static_cast<float>(j) - 3.0f) * 0.5f; }
 
+uint8_t lod_encode_sdf(float sdf, float cell_size) {
+	// Keep L0 byte-identical. At coarser levels, +/-2 cells contains a crossing
+	// edge's endpoints AND their half-cell tent taps: for a unit plane normal n,
+	// the largest distance is cell * (abs(n[axis]) + 0.5 * sum(abs(n))), bounded
+	// by sqrt(2.75) * cell < 2 * cell. A fixed metre range clips before averaging
+	// and moves the zero set as the plane's phase changes.
+	// Mirror shaders/lod_field.comp.glsl. Reduction and contouring consume scaled
+	// distances, not metres; averaging, signs and crossing ratios retain this scale.
+	const float scale = cell_size <= kLodBaseCell ? 1.0f : kSdfRange / (2.0f * cell_size);
+	return encode_sdf(sdf * scale);
+}
+
 int lod_fine_index(int x, int y, int z) {
 	return x + y * kLodFineLattice + z * kLodFineLattice * kLodFineLattice;
 }

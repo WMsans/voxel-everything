@@ -132,6 +132,89 @@ TEST_CASE("material is a solidity-weighted majority, never a blend") {
 	CHECK(om[ve::lod_lattice_index(10, 10, 10)] == 7);
 }
 
+// Break caught: clipping physical metres before tent averaging moves a plane's zero set.
+// Use the production fine encoder and reducer, then measure the resulting edge crossings
+// against the analytic plane, independently of the storage range chosen by the encoder.
+namespace {
+void check_plane_crossings(float cell, const float normal[3], float height) {
+	const int n = ve::kLodFineLattice;
+	std::vector<uint8_t> fine(size_t(n) * n * n);
+	std::vector<uint16_t> material(fine.size());
+	for (int z = 0; z < n; z++)
+		for (int y = 0; y < n; y++)
+			for (int x = 0; x < n; x++) {
+				const float distance = cell * (normal[0] * ve::lod_fine_local(x) +
+						normal[1] * ve::lod_fine_local(y) + normal[2] * ve::lod_fine_local(z)) - height;
+				const int i = ve::lod_fine_index(x, y, z);
+				fine[i] = ve::lod_encode_sdf(distance, cell);
+				material[i] = distance <= 0.0f ? 2 : 0;
+			}
+	const int r = ve::kLodChunkLattice;
+	std::vector<uint8_t> reduced(size_t(r) * r * r);
+	std::vector<uint16_t> reduced_material(reduced.size());
+	ve::lod_reduce_lattice(fine.data(), material.data(), reduced.data(), reduced_material.data());
+	float max_plane_error = 0.0f;
+	int crossings = 0;
+	for (int z = 0; z < r - 1; z++)
+		for (int y = 0; y < r - 1; y++)
+			for (int x = 0; x < r - 1; x++) {
+				const float a = ve::decode_sdf(reduced[ve::lod_lattice_index(x, y, z)]);
+				for (int axis = 0; axis < 3; axis++) {
+					int end[3] = {x, y, z};
+					end[axis]++;
+					const float b = ve::decode_sdf(reduced[ve::lod_lattice_index(end[0], end[1], end[2])]);
+					if ((a <= 0.0f) == (b <= 0.0f)) continue;
+					const float t = a / (a - b);
+					const float distance = cell * (normal[0] * float(x - 1) +
+							normal[1] * float(y - 1) + normal[2] * float(z - 1) +
+							normal[axis] * t) - height;
+					max_plane_error = std::fmax(max_plane_error, std::fabs(distance));
+					crossings++;
+				}
+			}
+	CAPTURE(cell);
+	CAPTURE(normal[0]);
+	CAPTURE(normal[1]);
+	CAPTURE(normal[2]);
+	CAPTURE(height);
+	CAPTURE(max_plane_error);
+	CHECK(crossings > 0);
+	// 2% of a cell allows the two 8-bit quantizations, but not phase-dependent
+	// clipping drift. Measure before the separate 5-bit mesh-position quantization.
+	CHECK(max_plane_error <= 0.02f * cell);
+}
+} // namespace
+
+TEST_CASE("a physical plane at 10.123 metres survives coarse SDF storage and reduction") {
+	const float normal[3] = {0.0f, 1.0f, 0.0f};
+	check_plane_crossings(12.8f, normal, 10.123f); // L5
+	check_plane_crossings(51.2f, normal, 10.123f); // L7
+}
+
+TEST_CASE("coarse planes preserve their zero set across cell phases and orientations") {
+	const float normals[][3] = {
+		{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, -1.0f},
+		{0.6f, 0.8f, 0.0f}, {1.0f / 3.0f, 2.0f / 3.0f, -2.0f / 3.0f},
+		{0.904534f, 0.301511f, 0.301511f}
+	};
+	for (float cell : {0.8f, 3.2f, 12.8f, 51.2f})
+		for (const auto &normal : normals)
+			for (float phase : {0.017f, 0.123f, 0.37f, 0.79f, 0.983f}) {
+				// Move a point on the plane through a cell near the chunk's interior.
+				const float height = cell * (8.0f * (normal[0] + normal[1] + normal[2]) + phase);
+				check_plane_crossings(cell, normal, height);
+			}
+}
+
+TEST_CASE("level zero keeps the existing fine SDF bytes") {
+	// Break caught: changing the coarse range must not silently retune the finest LoD.
+	// Sweep both the narrow band and saturation, including byte midpoints.
+	for (int i = -512; i <= 512; i++) {
+		const float distance = float(i) * 0.0025f;
+		CHECK(ve::lod_encode_sdf(distance, ve::kLodBaseCell) == ve::encode_sdf(distance));
+	}
+}
+
 // An all-air neighbourhood has no solid taps to vote, and material 0 IS air.
 TEST_CASE("air reduces to air") {
 	const int n = ve::kLodFineLattice;

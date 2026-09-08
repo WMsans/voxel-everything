@@ -8,7 +8,7 @@ layout(set = 0, binding = 4) uniform sampler2DArray material_surface_tex;
 #include "shade.glslh"
 
 layout(location = 0) in vec3 v_wpos;
-layout(location = 1) in flat vec3 v_normal;
+layout(location = 1) in vec3 v_normal;
 layout(location = 2) in flat uint v_material;
 
 layout(location = 0) out vec4 out_albedo;  // rgb albedo, a = sun visibility
@@ -36,12 +36,13 @@ void main() {
 	// functions the raymarcher calls are, so the two fields cannot drift.
 	vec3 ddx = dFdx(v_wpos);
 	vec3 ddy = dFdy(v_wpos);
-	vec4 surf = material_surface(v_material, v_wpos, v_normal, ddx, ddy);
+	vec3 geometric_n = normalize(v_normal);
+	vec4 surf = material_surface(v_material, v_wpos, geometric_n, ddx, ddy);
 	// The far field needs the normal map more than the near field does: v_normal is flat
 	// across a whole LoD quad, so without it a distant hillside is one unbroken facet. Same
 	// call, same arguments as composite.frag.glsl, so the two fields cannot drift.
 	vec3 shading_n;
-	vec2 props = material_props_normal(v_material, v_wpos, v_normal, ddx, ddy, shading_n);
+	vec2 props = material_props_normal(v_material, v_wpos, geometric_n, ddx, ddy, shading_n);
 	// Sun visibility is 1: shadowing the far field is the ortho shadow map's job, evaluated
 	// once in the deferred pass where the near field's raymarched term is also applied.
 	out_albedo = vec4(surf.rgb * mix(1.0, props.y, 0.65), 1.0);

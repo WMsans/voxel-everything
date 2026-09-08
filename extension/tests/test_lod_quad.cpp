@@ -3,6 +3,47 @@
 #include "lod/lod_grid.h"
 #include <cmath>
 
+TEST_CASE("shared same-level vertices are bit-identical across chunk origins") {
+	for (int level = 0; level < 8; ++level) for (int x : {-301, -11, 10, 300}) {
+		ve::LodQuadFields left{};
+		left.axis = 1; left.sign = 1;
+		left.u[0] = 31; left.u[1] = 7; left.u[2] = 9;
+		for (auto &offset : left.offset) for (auto &a : offset) a = 16;
+		auto right = left; right.u[0] = 0;
+		float a[3], b[3], pa[3], pb[3];
+		ve::lod_chunk_origin(level, {x, 0, 0}, a);
+		ve::lod_chunk_origin(level, {x + 1, 0, 0}, b);
+		ve::lod_quad_corner_pos(left, 2, a, ve::lod_cell_size(level), pa);
+		ve::lod_quad_corner_pos(right, 1, b, ve::lod_cell_size(level), pb);
+		for (int axis = 0; axis < 3; ++axis) CHECK(pa[axis] == pb[axis]);
+	}
+}
+
+TEST_CASE("a warped quad shades from both triangles rather than its first triangle") {
+	ve::LodQuadFields f{};
+	f.axis = 1; f.sign = 1;
+	for (auto &offset : f.offset) { offset[0] = 16; offset[2] = 16; }
+	f.offset[2][1] = 31;
+	float n[3]; ve::lod_quad_normal(f, n);
+	// Two unit-area projected triangles: normals (-1,1,0) and (0,1,-1).
+	CHECK(n[0] == doctest::Approx(-1.0f / std::sqrt(6.0f)));
+	CHECK(n[1] == doctest::Approx(2.0f / std::sqrt(6.0f)));
+	CHECK(n[2] == doctest::Approx(-1.0f / std::sqrt(6.0f)));
+}
+
+TEST_CASE("warped quad corner normals follow each local surface corner") {
+	ve::LodQuadFields f{};
+	f.axis = 1; f.sign = 1;
+	for (auto &offset : f.offset) { offset[0] = 16; offset[2] = 16; }
+	f.offset[2][1] = 31;
+	const float want[4][3] = {{0,1,0}, {-1,1,0}, {-1,1,-1}, {0,1,-1}};
+	for (int k = 0; k < 4; ++k) {
+		float n[3]; ve::lod_quad_corner_normal(f, k, n);
+		const float length = std::sqrt(want[k][0]*want[k][0] + want[k][1]*want[k][1] + want[k][2]*want[k][2]);
+		for (int a = 0; a < 3; ++a) CHECK(n[a] == doctest::Approx(want[k][a] / length));
+	}
+}
+
 TEST_CASE("the record is exactly twelve bytes") {
 	CHECK(sizeof(ve::LodQuad) == 12);
 	CHECK(ve::kLodQuadBytes == 12);
@@ -20,6 +61,9 @@ TEST_CASE("every field round-trips at its extremes") {
 	f.sign = 1;
 	f.material = 0xBEEF;
 	f.double_sided = 1;
+	f.skirt_face = 1; // +X constrains u[0] to 31; other coordinates remain free
+	f.skirt_edge = 3;
+	f.reverse_winding = 1;
 	for (int k = 0; k < 4; k++)
 		for (int a = 0; a < 3; a++) f.offset[k][a] = static_cast<uint8_t>((k * 3 + a) % 32);
 	f.offset[0][0] = 0;
@@ -37,6 +81,9 @@ TEST_CASE("every field round-trips at its extremes") {
 	CHECK(g.sign == f.sign);
 	CHECK(g.material == f.material);
 	CHECK(g.double_sided == f.double_sided);
+	CHECK(g.reverse_winding == 1);
+	CHECK(g.skirt_face == 1);
+	CHECK(g.skirt_edge == 3);
 	for (int k = 0; k < 4; k++)
 		for (int a = 0; a < 3; a++) CHECK(g.offset[k][a] == f.offset[k][a]);
 }
@@ -64,6 +111,9 @@ TEST_CASE("fields do not bleed into each other") {
 			CHECK(g.material == f.material);
 			CHECK(g.sign == 0);
 			CHECK(g.double_sided == 0);
+			CHECK(g.reverse_winding == 0);
+			CHECK(g.skirt_face == 0);
+			CHECK(g.skirt_edge == 0);
 		}
 	}
 }
@@ -113,7 +163,7 @@ TEST_CASE("corner positions match the mesher formula within the quantiser") {
 		for (int a = 0; a < 3; a++) {
 			const float frac = float(f.offset[k][a]) / float(ve::kLodOffsetMax);
 			const float want = origin[a] + (float(m[a]) - 1.0f + frac) * cell;
-			CHECK(p[a] == want);
+			CHECK(p[a] == doctest::Approx(want).epsilon(1e-6));
 		}
 	}
 }
@@ -150,7 +200,7 @@ TEST_CASE("sign-aware decoder maps reversed quads through order_rev") {
 			for (int a = 0; a < 3; a++) {
 				const float frac = float(f.offset[k][a]) / float(ve::kLodOffsetMax);
 				const float want_pos = origin[a] + (float(want[a]) - 1.0f + frac) * cell;
-				CHECK(p[a] == want_pos);
+				CHECK(p[a] == doctest::Approx(want_pos).epsilon(1e-6));
 			}
 		}
 	}

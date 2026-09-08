@@ -25,6 +25,9 @@ bool LodPool::initialize(RenderingDevice *rd, int max_pages, int max_chunk_recor
 	const int64_t quads_bytes = static_cast<int64_t>(max_pages) * ve::kLodQuadsPerPage *
 			ve::kLodQuadBytes;
 	quads_ = rd_->storage_buffer_create(static_cast<uint32_t>(quads_bytes));
+	const int64_t normals_bytes = static_cast<int64_t>(max_pages) * ve::kLodQuadsPerPage *
+			sizeof(ve::LodQuadNormals);
+	normals_ = rd_->storage_buffer_create(static_cast<uint32_t>(normals_bytes));
 
 	PackedByteArray index_data;
 	index_data.resize(ve::kLodQuadsPerPage * 6 * 2);
@@ -56,7 +59,7 @@ bool LodPool::initialize(RenderingDevice *rd, int max_pages, int max_chunk_recor
 	args_ = rd_->storage_buffer_create(static_cast<uint32_t>(args_zero.size()), args_zero,
 			RenderingDevice::STORAGE_BUFFER_USAGE_DISPATCH_INDIRECT);
 
-	if (!quads_.is_valid() || !index_.is_valid() || !page_chunk_.is_valid() ||
+	if (!quads_.is_valid() || !normals_.is_valid() || !index_.is_valid() || !page_chunk_.is_valid() ||
 			!page_quads_.is_valid() || !chunks_.is_valid() || !args_.is_valid()) {
 		UtilityFunctions::printerr("LodPool: buffer creation failed");
 		teardown();
@@ -75,6 +78,7 @@ bool LodPool::initialize(RenderingDevice *rd, int max_pages, int max_chunk_recor
 void LodPool::teardown() {
 	if (rd_) {
 		if (quads_.is_valid()) rd_->free_rid(quads_);
+		if (normals_.is_valid()) rd_->free_rid(normals_);
 		if (index_.is_valid()) rd_->free_rid(index_);
 		if (page_chunk_.is_valid()) rd_->free_rid(page_chunk_);
 		if (page_quads_.is_valid()) rd_->free_rid(page_quads_);
@@ -82,6 +86,7 @@ void LodPool::teardown() {
 		if (args_.is_valid()) rd_->free_rid(args_);
 	}
 	quads_ = RID();
+	normals_ = RID();
 	index_ = RID();
 	page_chunk_ = RID();
 	page_quads_ = RID();
@@ -113,8 +118,9 @@ void LodPool::release_chunk_slot(int slot) {
 }
 
 bool LodPool::upload(int level, ve::IVec3 coord, const std::vector<ve::LodQuad> &quads,
-		std::vector<int> *pages_out) {
-	if (!rd_ || !quads_.is_valid() || quads.empty() || !pages_out) return false;
+		const std::vector<ve::LodQuadNormals> &normals, std::vector<int> *pages_out) {
+	if (!rd_ || !quads_.is_valid() || !normals_.is_valid() || quads.empty() || !pages_out ||
+			normals.size() != quads.size()) return false;
 	const int pages_needed = ve::lod_pages_for_quads(static_cast<int>(quads.size()));
 	if (pages_needed <= 0 || pages_needed > ve::kLodMaxPagesPerChunk) return false;
 	if (pages_needed > arena_.free_pages()) {
@@ -186,6 +192,15 @@ bool LodPool::upload(int level, ve::IVec3 coord, const std::vector<ve::LodQuad> 
 		rd_->buffer_update(quads_, static_cast<uint32_t>(page) * ve::kLodQuadsPerPage *
 						ve::kLodQuadBytes,
 				static_cast<uint32_t>(quad_bytes.size()), quad_bytes);
+
+		PackedByteArray normal_bytes;
+		normal_bytes.resize(static_cast<int64_t>(count) * sizeof(ve::LodQuadNormals));
+		if (count > 0)
+			std::memcpy(normal_bytes.ptrw(), normals.data() + first,
+					static_cast<size_t>(count) * sizeof(ve::LodQuadNormals));
+		rd_->buffer_update(normals_, static_cast<uint32_t>(page) * ve::kLodQuadsPerPage *
+					sizeof(ve::LodQuadNormals),
+				static_cast<uint32_t>(normal_bytes.size()), normal_bytes);
 
 		const uint32_t ci = static_cast<uint32_t>(chunk_slot);
 		std::memcpy(word.ptrw(), &ci, 4);

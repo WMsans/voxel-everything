@@ -77,7 +77,7 @@ private:
 	RID pipeline_cull_ccw_;
 	RID pipeline_cull_cw_;
 	RID uset_, uset_shader_;
-	RID uset_quads_, uset_page_chunk_, uset_chunks_;
+	RID uset_quads_, uset_normals_, uset_page_chunk_, uset_chunks_;
 	RID uset_albedo_, uset_surface_, uset_sampler_;
 	RID index_array_, index_array_buffer_;
 	int64_t fb_format_ = 0;
