@@ -67,7 +67,12 @@ void main() {
 		beauty_project(p, pu, pd);
 		if (!beauty_project(p + dir3 * pc.params.x, qu, qd)) continue;
 		vec2 step_px = (qu - pu) * vec2(pc.dims.xy);
-		if (dot(step_px, step_px) < 1e-9) continue;
+		// The 5 m radius projects to under a pixel past ~60 m, and the sampler is nearest:
+		// with the largest tap offset below half a texel, every tap along this direction
+		// resolves to the centre texel, so dv is ~0 and the len_sq guard below rejects all
+		// of them anyway. Reject the whole direction here instead and skip pc.dims.z
+		// texture fetches plus pc.dims.z unprojections per direction. Output-preserving.
+		if (dot(step_px, step_px) < 0.25) continue;
 
 		// Below-tangent geometry is already accounted for by the normal itself.
 		float h_max = asin(clamp(dot(n, dir3), -1.0, 1.0));
