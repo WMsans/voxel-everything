@@ -23,11 +23,9 @@ layout(set = 0, binding = 1) uniform sampler2D gb_depth;
 layout(set = 0, binding = 2, r8) writeonly uniform image2D out_ssao;
 
 layout(push_constant, std430) uniform Push {
-	ivec4 dims;  // xy = target size, z = march steps per direction, w = unused
+	ivec4 dims;  // xy = target size, z = march steps per direction, w = sweep directions
 	vec4 params; // x = world-space radius, y = strength, zw = unused
 } pc;
-
-const int DIRECTIONS = 6;
 
 void main() {
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
@@ -57,8 +55,8 @@ void main() {
 	float jitter = bayer4(px);
 	float radius_sq = pc.params.x * pc.params.x;
 	float occlusion = 0.0;
-	for (int d = 0; d < DIRECTIONS; d++) {
-		float phi = (float(d) + jitter) * kPi / float(DIRECTIONS);
+	for (int d = 0; d < pc.dims.w; d++) {
+		float phi = (float(d) + jitter) * kPi / float(pc.dims.w);
 		vec3 dir3 = t1 * cos(phi) + t2 * sin(phi);
 		// The direction's pixel-space step: project p and p + dir3 * radius once per
 		// direction, so perspective and aspect are exact rather than approximated.
@@ -104,6 +102,6 @@ void main() {
 			}
 		}
 	}
-	float ao = clamp(1.0 - occlusion * pc.params.y / float(DIRECTIONS), 0.0, 1.0);
+	float ao = clamp(1.0 - occlusion * pc.params.y / float(pc.dims.w), 0.0, 1.0);
 	imageStore(out_ssao, px, vec4(ao));
 }

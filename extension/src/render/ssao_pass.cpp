@@ -16,7 +16,6 @@ using namespace godot;
 
 // Must match the Push block in ssao.comp.glsl.
 static const float kSsaoRadius = 5.0f;
-static const int kSsaoSteps = 8;
 static const float kSsaoStrength = 1.5f;
 
 SsaoPass::~SsaoPass() {
@@ -141,8 +140,8 @@ bool SsaoPass::render(RenderingDevice *rd, GBuffer &gb, RID camera_ubo,
 	int32_t *dims = reinterpret_cast<int32_t *>(pc.ptrw());
 	dims[0] = gb.size().x;
 	dims[1] = gb.size().y;
-	dims[2] = kSsaoSteps;
-	dims[3] = 0;
+	dims[2] = s.ssao_steps;
+	dims[3] = s.ssao_directions;
 	float *f = reinterpret_cast<float *>(pc.ptrw());
 	f[4] = kSsaoRadius;
 	f[5] = kSsaoStrength;

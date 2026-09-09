@@ -24,6 +24,8 @@ BeautySettings settings_for_tier(QualityTier t) {
 			s.ssgi_taps = 0;
 			s.ssr_steps = 0;
 			s.contact_steps = 0;
+			s.ssao_steps = 0;
+			s.ssao_directions = 0;
 			break;
 		case QualityTier::kLow:
 			// Outlines and the raymarched sun shadow survive: they are what makes the image
@@ -34,12 +36,16 @@ BeautySettings settings_for_tier(QualityTier t) {
 			s.ssgi_taps = 0;
 			s.ssr_steps = 0;
 			s.contact_steps = 0;
+			s.ssao_steps = 0;
+			s.ssao_directions = 0;
 			break;
 		case QualityTier::kMedium:
 			s.glossy_sdf_rays = false;
 			s.ssgi_taps = 4;
 			s.ssr_steps = 12;
 			s.contact_steps = 8;
+			s.ssao_steps = 4;
+			s.ssao_directions = 4;
 			break;
 		case QualityTier::kHigh:
 		default:
@@ -54,12 +60,15 @@ void clamp_settings(BeautySettings *s) {
 	s->ssgi_taps = clamp_int(s->ssgi_taps, 0, 16);
 	s->ssr_steps = clamp_int(s->ssr_steps, 0, 64);
 	s->contact_steps = clamp_int(s->contact_steps, 0, 32);
+	s->ssao_steps = clamp_int(s->ssao_steps, 0, 16);
+	s->ssao_directions = clamp_int(s->ssao_directions, 0, 8);
 	s->outline_depth_threshold = clamp_float(s->outline_depth_threshold, 0.0f, 1.0f);
 	s->outline_normal_threshold = clamp_float(s->outline_normal_threshold, 0.0f, 2.0f);
 	// Zero work is off. A dispatch that produces nothing still costs a full-screen pass.
 	if (s->ssgi_taps == 0) s->ssgi = false;
 	if (s->ssr_steps == 0) s->ssr = false;
 	if (s->contact_steps == 0) s->contact_shadows = false;
+	if (s->ssao_steps == 0 || s->ssao_directions == 0) s->ssao = false;
 }
 
 uint32_t pack_beauty_flags(const BeautySettings &s) {

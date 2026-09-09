@@ -34,13 +34,13 @@ const GPU_DRAIN_FRAMES := 30
 const MIN_GPU_SAMPLES := 30
 const BUDGETS_MS := {
 	"raymarch": 6.0, "lod": 2.0, "ssgi": 1.5, "ssr": 1.5,
-	"shadows": 1.0, "outlines": 0.3, "frame": 16.0,
+	"ssao": 1.0, "shadows": 1.0, "outlines": 0.3, "frame": 16.0,
 }
 
 var _gpu_samples := {
 	"raymarch": PackedFloat32Array(), "stream": PackedFloat32Array(), "lod": PackedFloat32Array(),
 	"ssgi": PackedFloat32Array(), "ssr": PackedFloat32Array(),
-	"shadows": PackedFloat32Array(), "outlines": PackedFloat32Array(),
+	"ssao": PackedFloat32Array(), "shadows": PackedFloat32Array(), "outlines": PackedFloat32Array(),
 	"unattributed": PackedFloat32Array(),
 	"custom_frame": PackedFloat32Array(),
 }

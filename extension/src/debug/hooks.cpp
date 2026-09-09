@@ -867,6 +867,8 @@ Dictionary VoxelDebugHooks::debug_beauty_settings() {
 	d["ssgi_taps"] = beauty.ssgi_taps;
 	d["ssr_steps"] = beauty.ssr_steps;
 	d["contact_steps"] = beauty.contact_steps;
+	d["ssao_steps"] = beauty.ssao_steps;
+	d["ssao_directions"] = beauty.ssao_directions;
 	d["outline_depth_threshold"] = beauty.outline_depth_threshold;
 	d["outline_normal_threshold"] = beauty.outline_normal_threshold;
 	d["tier"] = quality_tier;
