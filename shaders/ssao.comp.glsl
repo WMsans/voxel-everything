@@ -30,6 +30,7 @@ layout(push_constant, std430) uniform Push {
 void main() {
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
 	if (any(greaterThanEqual(px, pc.dims.xy))) return;
+	if (pc.dims.w <= 0 || pc.dims.z <= 0) { imageStore(out_ssao, px, vec4(1.0)); return; }
 	vec2 uv = (vec2(px) + 0.5) * bcam.screen.zw;
 
 	// Sky has no surface behind it: pass full ambient so the horizon gradient is never
