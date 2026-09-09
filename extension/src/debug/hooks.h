@@ -474,6 +474,9 @@ public:
 	// --- M5 Task 15 LoD cull hooks ---
 	Dictionary debug_lod_cull_probe(Vector3 pos, Vector3 fwd);
 
+	// Task 7 diagnosis: the compositor's own two-phase record (plain read, no logic).
+	Dictionary debug_lod_cull_debug();
+
 	// --- Task 8 hooks ---
 	Dictionary debug_sun_shadow_stats(int cascade);
 

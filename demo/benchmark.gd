@@ -474,6 +474,10 @@ func _report() -> void:
 		_percentile(sorted_culled_ratio, 0.50), _percentile(sorted_culled_ratio, 0.99),
 		_percentile(sorted_chunks_resident, 0.50), _percentile(sorted_chunks_resident, 0.99),
 		_percentile(sorted_pages_used, 0.50), _percentile(sorted_pages_used, 0.99)])
+	var cull: Dictionary = _world.hooks().debug_lod_cull_debug()
+	print("BENCH lod_cull two_phase=%s hiz_built=%s first_pass_p50=%d" % [
+		cull.get("two_phase", false), cull.get("hiz_built", false),
+		int(cull.get("first_pass_count", 0))])
 	var keys := _perf_accum.keys()
 	keys.sort()
 	var parts := PackedStringArray()

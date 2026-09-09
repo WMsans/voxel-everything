@@ -127,6 +127,7 @@ void VoxelDebugHooks::_bind_methods() {
 			&VoxelDebugHooks::debug_hiz_occluded);
 	ClassDB::bind_method(D_METHOD("debug_lod_cull_probe", "pos", "fwd"),
 			&VoxelDebugHooks::debug_lod_cull_probe);
+	ClassDB::bind_method(D_METHOD("debug_lod_cull_debug"), &VoxelDebugHooks::debug_lod_cull_debug);
 	ClassDB::bind_method(D_METHOD("debug_sun_shadow_stats", "cascade"),
 			&VoxelDebugHooks::debug_sun_shadow_stats);
 	ClassDB::bind_method(D_METHOD("debug_sun_shadow_build", "cascade", "force"),
@@ -1902,6 +1903,10 @@ Dictionary VoxelDebugHooks::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 	d["page_frustum_culled"] = page_frustum_culled;
 	d["slot_frustum_culled"] = slot_frustum_culled;
 	return d;
+}
+
+Dictionary VoxelDebugHooks::debug_lod_cull_debug() {
+	return world_->lod_cull_debug();
 }
 
 Dictionary VoxelDebugHooks::debug_gbuffer_stats(int w, int h) {

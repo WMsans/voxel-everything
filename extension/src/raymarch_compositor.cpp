@@ -289,6 +289,8 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 		// shadow work as LoD work.
 		const bool two_phase = lod_cull && lod_cull->is_valid() && hiz && hiz->pyramid().is_valid() &&
 				hiz_built;
+		world->note_lod_cull_debug(two_phase, hiz_built,
+				two_phase ? static_cast<int>(lod_cull->last_visible_pages().size()) : 0);
 		if (!two_phase) {
 			const std::vector<LodRasterPass::PageDraw> draw_pages = lod_raster->draw_pages();
 			const bool split_for_shadow = use_sun_shadow && draw_pages.size() > 1;
