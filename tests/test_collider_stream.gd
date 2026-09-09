@@ -139,6 +139,32 @@ func test_an_empty_chunk_costs_no_body_and_is_not_retried(timeout := 60000) -> v
 	# The probe is conservative, so some resident candidates mesh to nothing; those release
 	# their slot instead of holding a body, and the cached verdict stops them coming back.
 	assert_int(st["bodies"]).is_less_equal(st["chunks_resident"])
+	# The commit path is budget-bounded (one commit always gets through, the rest defer
+	# to later frames), so a settled world can still owe deferred commits when this
+	# window starts, and a worker burst absorbed in one frame without the guard now
+	# smears over several: one quiet frame no longer means the next twenty are. Wait for
+	# real quiescence first -- the frame took no action AND the streamer owes nothing
+	# (chunks_pending == 0 and queued == 0), ten times in a row -- bounded by an explicit
+	# 30000-frame cap (~3 s at ~0.1 ms/frame) so a queue that never advances still fails
+	# instead of hanging. Then require the same consecutive zero-action run as before.
+	# Ten consecutive triple-quiet frames imply empty queues: every non-action path in
+	# run_frame (empty-bin skip, stale discard, budget break) advances or pops its item,
+	# so any remaining work surfaces as an action within a few frames, while a nonzero
+	# pending/queued covers a mesher that is merely between deliveries.
+	var drained := false
+	var quiet := 0
+	for i in range(30000):
+		var idle: bool = w.hooks().debug_physics_frame(CENTER) == 0
+		var st2: Dictionary = w.hooks().debug_physics_stats()
+		if idle and st2["chunks_pending"] == 0 and st2["queued"] == 0:
+			quiet += 1
+			if quiet >= 10:
+				drained = true
+				break
+		else:
+			quiet = 0
+	assert_bool(drained).override_failure_message(
+		"the streamer never drained its deferred commits").is_true()
 	for i in range(20):
 		assert_int(w.hooks().debug_physics_frame(CENTER)).is_equal(0)
 	w.free()
@@ -190,4 +216,45 @@ func test_a_body_bubble_streams_its_own_small_ball_not_the_players(timeout := 90
 	w.hooks().debug_set_physics_bubbles(PackedVector3Array())
 	settle(w, CENTER)
 	assert_int(w.hooks().debug_physics_stats()["chunks_resident"]).is_less_equal(alone)
+	w.free()
+
+# commit_pending sat outside the wall-clock guard that bounds the build path, so a frame
+# that committed eight octants paid unbounded main-thread time -- phys_apply maxima of
+# 27-48 ms across every benchmark leg, on the thread that also has to submit the frame.
+#
+# This suite drives physics by hand (physics_enabled = false), so the frame driver is
+# debug_physics_frame() and the settle() helper above is what makes the world real before
+# the measurement starts -- except settle()'s 6000-frame budget never settles this centre
+# on this machine (it needs ~13.5k frames), so this test polls to the same quiescence
+# condition (chunks_pending == 0 and queued == 0, four consecutive polls 250 frames
+# apart) with a 20000-frame cap instead.
+func test_apply_respects_the_build_budget_under_churn(timeout := 60000) -> void:
+	var w := make_world()
+	var centre := Vector3(30.0, 56.2, 30.0)
+	var settled := false
+	var quiet := 0
+	for i in range(20000):
+		w.hooks().debug_physics_frame(centre)
+		if i % 250 == 0:
+			var st0: Dictionary = w.hooks().debug_physics_stats()
+			quiet = quiet + 1 if st0["chunks_pending"] == 0 and st0["queued"] == 0 else 0
+			if quiet >= 4:
+				settled = true
+				break
+	assert_bool(settled).override_failure_message(
+		"the streamer never settled; a peak measured on an empty world means nothing"
+	).is_true()
+	# Dirty a wide band so many chunks finish their octants in the same frame and reach
+	# the commit branch together -- that convoy is what the unbounded path made expensive.
+	for i in range(24):
+		w.hooks().debug_apply_sphere_subtract(Vector3(22.0 + i * 1.5, 56.0, 30.0), 3.0)
+	var worst := 0.0
+	for i in range(240):
+		w.hooks().debug_physics_frame(centre)
+		worst = maxf(worst, float(w.hooks().debug_perf_stats()["phys_apply_ms"]))
+	# Generous headroom over the few-ms budget for one in-flight commit plus noise, but
+	# nothing like the 27-48 ms maxima this replaces.
+	assert_float(worst).override_failure_message(
+		"phys_apply peaked at %.2f ms; the commit path is still unbounded" % worst
+	).is_less(12.0)
 	w.free()

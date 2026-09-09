@@ -478,6 +478,7 @@ int ColliderStreamer::run_frame(float cx, float cy, float cz, const float *extra
 	// whole loop by the same wall clock the build path uses, still letting one iteration
 	// through so the queue always advances. This caps a spike the budget already meant to
 	// cap; it does not move that leg's p99, which is GPU-side.
+	int commits_this_frame = 0;
 	int step_iterations = 0;
 	while (builds_last_frame_ < max_builds_per_frame_) {
 		if (step_iterations++ > 0 && ms_since(t_apply) > build_budget_ms_) break;
@@ -497,11 +498,18 @@ int ColliderStreamer::run_frame(float cx, float cy, float cz, const float *extra
 			continue;
 		}
 		if (pending.next_octant >= ve::kColliderOctants) {
+			// commit_pending() stages eight octant shapes into the space. It was the one
+			// path in this loop outside the wall clock below, so a frame that met a run of
+			// completed chunks paid for all of them -- 27-48 ms of main-thread time on a
+			// frame that also has to submit. Let one through so the queue always advances,
+			// then stop until the next frame.
+			if (commits_this_frame > 0 && ms_since(t_apply) > build_budget_ms_) break;
 			if (!commit_pending(pending)) {
 				failures_++;
 				chunks_->note_failed(pending.result.chunk);
 				discard_pending(pending);
 			}
+			commits_this_frame++;
 			pending_.pop_front();
 			actions++;
 			continue;
