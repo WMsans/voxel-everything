@@ -664,8 +664,13 @@ Dictionary VoxelDebugHooks::debug_ssao_probe(Vector3 pos, Vector3 fwd, int w, in
 	const RID output = world_->ssao_pass()->result();
 	if (!output.is_valid()) return d;
 	const PackedByteArray data = device->texture_get_data(output, 0);
-	const int pixels = w * h;
-	if (data.size() < pixels) return d;
+	// The AO target is half the G-buffer, so it is not w*h. Read back its own size and
+	// report it, rather than assuming the probe's requested dimensions.
+	const Vector2i ao_size = world_->ssao_pass()->size();
+	const int pixels = ao_size.x * ao_size.y;
+	d["ao_width"] = ao_size.x;
+	d["ao_height"] = ao_size.y;
+	if (pixels <= 0 || data.size() < pixels) return d;
 	const uint8_t *values = reinterpret_cast<const uint8_t *>(data.ptr());
 	float min_ao = 1.0f, max_ao = 0.0f;
 	double mean_ao = 0.0;

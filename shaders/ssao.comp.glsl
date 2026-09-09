@@ -7,8 +7,10 @@
 // deferred pass's AMBIENT term only — sun, spec and rim are untouched, exactly like the
 // material-level AO baked into albedo.rgb.
 //
-// Full resolution by design: HBAO is angle-based, so it needs no noise-and-blur pass to
-// hide tap banding (a half-res + blur chain would fight the cel look for no win).
+// Half resolution, matching the SSGI and SSR chains. HBAO is angle-based, so it still needs
+// no noise-and-blur pass to hide tap banding; the deferred pass upsamples the r8 result
+// bilinearly. pc.dims.xy is the TARGET size, which is no longer bcam.screen.xy -- every uv
+// here is derived from it, not from the full-resolution screen block.
 
 #define BEAUTY_CAMERA_SET 0
 #define BEAUTY_CAMERA_BINDING 5
@@ -31,7 +33,10 @@ void main() {
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
 	if (any(greaterThanEqual(px, pc.dims.xy))) return;
 	if (pc.dims.w <= 0 || pc.dims.z <= 0) { imageStore(out_ssao, px, vec4(1.0)); return; }
-	vec2 uv = (vec2(px) + 0.5) * bcam.screen.zw;
+	// Target-relative, so the same code is correct at any target scale. The G-buffer
+	// textures are sampled by normalised uv, so they need no scaling of their own.
+	vec2 inv_target = 1.0 / vec2(pc.dims.xy);
+	vec2 uv = (vec2(px) + 0.5) * inv_target;
 
 	// Sky has no surface behind it: pass full ambient so the horizon gradient is never
 	// darkened by screen-space occlusion.
@@ -77,7 +82,7 @@ void main() {
 		float h_max = asin(clamp(dot(n, dir3), -1.0, 1.0));
 		for (int i = 1; i <= pc.dims.z; i++) {
 			vec2 suv = (vec2(px) + 0.5 + step_px * (float(i) / float(pc.dims.z))) *
-					bcam.screen.zw;
+					inv_target;
 			float sdepth = texture(gb_depth, suv).r;
 			if (sdepth <= 0.0) continue;
 			vec3 sp = beauty_world_from_depth(suv, sdepth);

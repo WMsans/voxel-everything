@@ -22,14 +22,21 @@ func make_world() -> VoxelWorld:
 			break
 	return w
 
-# HBAO runs one pixel per G-buffer pixel: no half-res target, no upsample blur step to
-# fight the cel look. If this ever changes, it is a deliberate redesign, not an accident.
-func test_the_output_is_full_resolution() -> void:
+# HBAO runs at half the G-buffer per axis and is upsampled bilinearly by the deferred
+# pass, matching the SSGI and SSR chains. This was a deliberate redesign: at 65% render
+# scale it took the ridge benchmark from 26.3 ms to 20.5 ms a frame, and the largest
+# 256 px block of disagreement with the full-res image had 0.01% of its pixels differing
+# by more than 8/255. If this ever changes back, that is a redesign too, not an accident.
+#
+# Note width/height are the probe's own request echoed back; ao_width/ao_height are the
+# AO target's real size. The full-res version of this test asserted the former and so
+# never actually checked the resolution it was named for.
+func test_the_output_is_half_resolution() -> void:
 	var w := make_world()
 	var d: Dictionary = w.hooks().debug_ssao_probe(Vector3(30.0, 70.0, 30.0),
 		Vector3(0.2, -1.0, 0.2).normalized(), 128, 128)
-	assert_int(d["width"]).is_equal(128)
-	assert_int(d["height"]).is_equal(128)
+	assert_int(d["ao_width"]).is_equal(64)
+	assert_int(d["ao_height"]).is_equal(64)
 
 func test_occlusion_is_a_bounded_fraction() -> void:
 	var w := make_world()

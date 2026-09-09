@@ -125,6 +125,10 @@ private:
 	const ve::Generator *gen_ = nullptr;
 
 	RID space_;
+	// An inactive space forces lazy backend mesh compilation during the budgeted
+	// octant build, without publishing any part of a replacement to the live world.
+	RID build_space_;
+	RID build_body_;
 	std::vector<RID> bodies_;
 	std::vector<RID> shapes_;
 	std::vector<char> in_space_;

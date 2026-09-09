@@ -2,6 +2,7 @@
 #include "mesh/mesh_chunk.h"
 #include "world/region.h"
 #include <map>
+#include <unordered_map>
 #include <vector>
 
 namespace ve {
@@ -81,10 +82,19 @@ public:
 private:
 	struct Key {
 		int x, y, z;
+		bool operator==(const Key &o) const { return x == o.x && y == o.y && z == o.z; }
 		bool operator<(const Key &o) const {
 			if (z != o.z) return z < o.z;
 			if (y != o.y) return y < o.y;
 			return x < o.x;
+		}
+	};
+	struct KeyHash {
+		size_t operator()(const Key &k) const {
+			// Unsigned arithmetic also covers the unbounded world's negative chunks.
+			return (uint64_t(uint32_t(k.x)) * 73856093u) ^
+					(uint64_t(uint32_t(k.y)) * 19349663u) ^
+					(uint64_t(uint32_t(k.z)) * 83492791u);
 		}
 	};
 	static Key key(IVec3 c) { return Key{c.x, c.y, c.z}; }
@@ -96,7 +106,9 @@ private:
 	std::vector<char> slot_used_;
 	std::vector<char> slot_state_;   // State
 	std::vector<int> free_slots_;
-	std::map<Key, char> probe_cache_; // 1 = may hold a surface, 0 = known empty
+	// Every cell in the collision bubble is looked up each frame. Cache iteration
+	// only evicts entries, so it does not need the ordering used for slot allocation.
+	std::unordered_map<Key, char, KeyHash> probe_cache_; // 1 = surface candidate, 0 = empty
 	std::map<Key, char> in_flight_;   // released while kBuilding; result still outstanding
 };
 

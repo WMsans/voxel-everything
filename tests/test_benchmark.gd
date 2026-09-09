@@ -58,3 +58,13 @@ func test_effects_off_args_accumulate_repeated_options() -> void:
 	assert_int(names.size()).is_equal(2)
 	assert_str(names[0]).is_equal("raymarched_sun_shadow")
 	assert_str(names[1]).is_equal("islands")
+
+func test_fixed_path_step_does_not_depend_on_frame_time() -> void:
+	var bench := benchmark_node()
+	bench.set("_path_fps", 60.0)
+	assert_float(float(bench.call("_movement_delta", 0.01))).is_equal_approx(1.0 / 60.0, 0.000001)
+	assert_float(float(bench.call("_movement_delta", 0.1))).is_equal_approx(1.0 / 60.0, 0.000001)
+
+func test_default_path_step_uses_actual_frame_time() -> void:
+	var bench := benchmark_node()
+	assert_float(float(bench.call("_movement_delta", 0.025))).is_equal_approx(0.025, 0.000001)

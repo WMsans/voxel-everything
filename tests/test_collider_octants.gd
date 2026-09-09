@@ -28,6 +28,9 @@ func settle(w: VoxelWorld, center: Vector3, frames := 6000) -> bool:
 		quiet = quiet + 1 if st["chunks_pending"] == 0 and st["queued"] == 0 else 0
 		if quiet >= 4:
 			return true
+		# The mesher runs asynchronously. A tight polling loop can exhaust this
+		# frame cap before a single GPU batch finishes on a fast host.
+		OS.delay_msec(1)
 	return false
 
 # The ground must still hold the player up. This is the same oracle test_collider_stream.gd

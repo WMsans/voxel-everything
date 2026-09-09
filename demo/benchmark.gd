@@ -89,6 +89,13 @@ var _settled_at := -1
 var _horizon_quiet := 0
 var _horizon_at := -1
 var _screenshot_path := ""
+# Optional fixed camera progression for A/B comparisons: faster rendering must
+# not send the camera through a different stretch of terrain. Frame timing still
+# uses the real delta; this is deliberately not Godot's --fixed-fps option.
+var _path_fps := 0.0
+
+func _movement_delta(delta: float) -> float:
+	return 1.0 / _path_fps if _path_fps > 0.0 and is_finite(_path_fps) else delta
 
 func _effects_off_from_args(args: PackedStringArray) -> PackedStringArray:
 	var effects := PackedStringArray()
@@ -119,6 +126,8 @@ func _ready() -> void:
 			_target_frames = maxi(1, int(arg.trim_prefix("--frames=")))
 		elif arg.begins_with("--warmup="):
 			_warmup = maxi(0, int(arg.trim_prefix("--warmup=")))
+		elif arg.begins_with("--path-fps="):
+			_path_fps = float(arg.trim_prefix("--path-fps="))
 	# Without this the harness measures the DISPLAY, not the engine: a compositor that hands
 	# an unfocused window one frame callback in eight reports a 133 ms frame and a 7 fps
 	# "regression" that no code change can move.
@@ -160,6 +169,8 @@ func _ready() -> void:
 				"metalfx_temporal": Viewport.SCALING_3D_MODE_METALFX_TEMPORAL,
 			}.get(m, Viewport.SCALING_3D_MODE_BILINEAR)
 	_cam = _player.get_node("Camera3D")
+	if not _screenshot_path.is_empty():
+		get_parent().get_node("HUD").hide()
 	# Drive the player from here rather than from input, so a run is reproducible.
 	_player.set_physics_process(false)
 	_player.set_process_unhandled_input(false)
@@ -229,15 +240,16 @@ func _process(delta: float) -> void:
 			get_tree().create_timer(5.0).timeout.connect(get_tree().quit)
 		return
 	_frames += 1
+	var movement_delta := _movement_delta(delta)
 
 	if _mode == "--benchmark-move":
 		# Straight line across the world at fly speed: a steady stream of new regions and
 		# collision chunks, which is the "walking forward" case.
-		_player.global_position += Vector3(0.7, 0.0, 0.7).normalized() * 25.0 * delta
+		_player.global_position += Vector3(0.7, 0.0, 0.7).normalized() * 25.0 * movement_delta
 	elif _mode == "--benchmark-ridge":
 		# Follow the valley floor along (2,1), keeping the camera ~1.5 m above the analytic
 		# terrain. The ridge stays ahead for the whole sampled leg.
-		var p: Vector3 = _player.global_position + Vector3(2.0, 0.0, 1.0).normalized() * 25.0 * delta
+		var p: Vector3 = _player.global_position + Vector3(2.0, 0.0, 1.0).normalized() * 25.0 * movement_delta
 		p.y = _terrain_height(p.x, p.z) + 1.5
 		_player.global_position = p
 	elif _mode == "--benchmark-edit" and _frames > _warmup:
@@ -443,6 +455,7 @@ func _report() -> void:
 			over += 1
 	var avg := total / _samples.size()
 	print("BENCH mode=%s frames=%d" % [_mode, _samples.size()])
+	print("BENCH path_fps=%.2f camera_position=%s" % [_path_fps, str(_player.global_position)])
 	if _settled_at >= 0:
 		print("BENCH settle frames_to_quiet=%d capped=%s" % [
 			_settled_at, str(_settled_at >= SETTLE_CAP).to_lower()])

@@ -44,10 +44,16 @@ func _probe(w: VoxelWorld, key: String) -> Dictionary:
 
 # Recorded from a clean build at spec time. Tolerances are tight on purpose: these are
 # deterministic GPU results from a deterministic analytic field, not sampled statistics.
+#
+# min_ao re-recorded 2026-09-09 for the half-res AO target (Task 6's chain, now landed).
+# Only min_ao moved: it is the single darkest texel in the frame, and at half the linear
+# resolution each texel covers four times the area, so the extreme is averaged away.
+# max_ao and lit_luma did NOT move outside tolerance — the lit image's mean luminance is
+# unchanged, which is the number that says the picture still looks the same.
 const GOLDEN := {
-	"down_close": {"min_ao": 0.647059, "max_ao": 1.000000, "lit_luma": 0.241331},
-	"oblique": {"min_ao": 0.701961, "max_ao": 1.000000, "lit_luma": 0.297197},
-	"horizon": {"min_ao": 0.572549, "max_ao": 1.000000, "lit_luma": 0.329064},
+	"down_close": {"min_ao": 0.745098, "max_ao": 1.000000, "lit_luma": 0.241331},
+	"oblique": {"min_ao": 0.792157, "max_ao": 1.000000, "lit_luma": 0.297197},
+	"horizon": {"min_ao": 0.792157, "max_ao": 1.000000, "lit_luma": 0.329064},
 }
 const TOL_AO := 0.002
 const TOL_LUMA := 0.004

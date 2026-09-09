@@ -148,10 +148,12 @@ bool DeferredPass::ensure_uniform_set(RenderingDevice *rd, GBuffer &gb,
 		u[i]->add_id(i < 3 ? sampler_nearest_ : sampler_linear_);
 		u[i]->add_id(textures[i]);
 	}
-	// SSAO lives at binding 7, after the material arrays' reserved slots.
+	// SSAO lives at binding 7, after the material arrays' reserved slots. Linear, not
+	// nearest: the pass renders at half the G-buffer size, so this sampler is what
+	// upsamples it. Nearest here would show the half-res grid as 2x2 blocks.
 	u[7]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
 	u[7]->set_binding(7);
-	u[7]->add_id(sampler_nearest_);
+	u[7]->add_id(sampler_linear_);
 	u[7]->add_id(ssao);
 	u[5]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
 	u[5]->set_binding(5);

@@ -192,8 +192,32 @@ void main() {
 	// Phase 3: build the palette, then order it by occupancy so slot 0 is the dominant
 	// material (ve::palette_occupancy_order). Two rounds: insertion is unordered, and the
 	// ordering cannot be decided until every cell has been counted.
-	for (uint i = tid; i < uint(BRICK_VOXEL_COUNT); i += 256u)
-		if (s_mat[i] != 0u) insert_material(s_mat[i]);
+	// Most terrain bricks have only one material. Inserting every cell into the
+	// same palette slot serializes thousands of shared atomics. Detect that exact
+	// case with a reduction; mixed bricks retain the original palette algorithm.
+	// The mip scratch is unused until phase 5, so this costs no extra shared memory.
+	uint material_min = 0xffffffffu, material_max = 0u;
+	for (uint i = tid; i < uint(BRICK_VOXEL_COUNT); i += 256u) {
+		uint m = s_mat[i];
+		if (m != 0u) material_min = min(material_min, m);
+		material_max = max(material_max, m);
+	}
+	s_mip8[tid] = material_min;
+	s_mip8[tid + 256u] = material_max;
+	barrier();
+	for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+		if (tid < stride) {
+			s_mip8[tid] = min(s_mip8[tid], s_mip8[tid + stride]);
+			s_mip8[tid + 256u] = max(s_mip8[tid + 256u], s_mip8[tid + 256u + stride]);
+		}
+		barrier();
+	}
+	if (s_mip8[256] == 0u || s_mip8[0] == s_mip8[256]) {
+		if (tid == 0u) s_pal[0] = s_mip8[256];
+	} else {
+		for (uint i = tid; i < uint(BRICK_VOXEL_COUNT); i += 256u)
+			if (s_mat[i] != 0u) insert_material(s_mat[i]);
+	}
 	memoryBarrierShared();
 	barrier();
 	if (tid == 0u) {

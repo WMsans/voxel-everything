@@ -20,6 +20,8 @@ public:
 	RID result() const { return output_; }
 	void clear_result() { output_ = RID(); }
 	float last_ms() const { return last_ms_; }
+	// Target resolution; half the G-buffer since the half-res chain landed.
+	Vector2i size() const { return size_; }
 
 private:
 	bool ensure_target(RenderingDevice *rd, Vector2i size);

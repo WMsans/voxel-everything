@@ -75,7 +75,11 @@ void ColliderStreamer::teardown() {
 			if (shapes_[i].is_valid()) ps->free_rid(shapes_[i]);
 		}
 		for (PendingBuild &pending : pending_) discard_pending(pending);
+		if (build_body_.is_valid()) ps->free_rid(build_body_);
+		if (build_space_.is_valid()) ps->free_rid(build_space_);
 	}
+	build_body_ = RID();
+	build_space_ = RID();
 	bodies_.clear();
 	shapes_.clear();
 	in_space_.clear();
@@ -273,6 +277,24 @@ ColliderStreamer::BuildOutcome ColliderStreamer::build_octant(PendingBuild &pend
 	const Clock::time_point t_set = Clock::now();
 	ps->shape_set_data(shape, data);
 	last_setdata_ms_ = std::max(last_setdata_ms_, ms_since(t_set));
+	// Jolt's shape_set_data only stores the triangle soup. The acceleration
+	// structure is built lazily when a body first enters a space, and cached on
+	// the shape. Paying that cost at commit used to compile all eight octants in
+	// one uninterruptible call chain. Warm each shape here, inside the existing
+	// per-octant timer and admission budget. The private space is never active.
+	if (!build_space_.is_valid()) build_space_ = ps->space_create();
+	if (!build_body_.is_valid()) {
+		build_body_ = ps->body_create();
+		if (build_body_.is_valid()) ps->body_set_mode(build_body_, PhysicsServer3D::BODY_MODE_STATIC);
+	}
+	if (!build_space_.is_valid() || !build_body_.is_valid()) {
+		ps->free_rid(shape);
+		return kFailed;
+	}
+	ps->body_add_shape(build_body_, shape);
+	ps->body_set_space(build_body_, build_space_);
+	ps->body_set_space(build_body_, RID());
+	ps->body_clear_shapes(build_body_);
 	pending.staged_shapes[static_cast<size_t>(octant)] = shape;
 	pending.geometry_octants++;
 	return kBuilt;

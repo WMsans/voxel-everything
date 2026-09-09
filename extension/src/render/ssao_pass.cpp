@@ -10,6 +10,7 @@
 #include <godot_cpp/classes/rd_uniform.hpp>
 #include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
+#include <algorithm>
 #include <chrono>
 
 using namespace godot;
@@ -130,7 +131,11 @@ bool SsaoPass::render(RenderingDevice *rd, GBuffer &gb, RID camera_ubo,
 	if (!s.ssao) return false;
 	if (!rd_ || rd != rd_ || !pipeline_.is_valid() || !gb.is_valid() ||
 			!camera_ubo.is_valid()) return false;
-	if (!ensure_target(rd, gb.size())) return false;
+	// Half-res, matching the SSGI and SSR chains. AO modulates only the ambient term and
+	// is upsampled bilinearly by the deferred pass, so the quarter-cost target costs the
+	// image far less than it costs the frame. See ssao.comp.glsl.
+	const Vector2i half(std::max(1, gb.size().x / 2), std::max(1, gb.size().y / 2));
+	if (!ensure_target(rd, half)) return false;
 	if (!ensure_uniform_set(rd, gb, camera_ubo)) return false;
 
 	const auto t0 = std::chrono::steady_clock::now();
@@ -138,8 +143,8 @@ bool SsaoPass::render(RenderingDevice *rd, GBuffer &gb, RID camera_ubo,
 	PackedByteArray pc;
 	pc.resize(32);
 	int32_t *dims = reinterpret_cast<int32_t *>(pc.ptrw());
-	dims[0] = gb.size().x;
-	dims[1] = gb.size().y;
+	dims[0] = size_.x;
+	dims[1] = size_.y;
 	dims[2] = s.ssao_steps;
 	dims[3] = s.ssao_directions;
 	float *f = reinterpret_cast<float *>(pc.ptrw());
