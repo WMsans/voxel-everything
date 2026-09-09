@@ -68,3 +68,20 @@ func test_ssao_statistics_match_the_recorded_golden() -> void:
 		assert_float(d["lit_luma"]).override_failure_message(
 			"lit_luma moved for '%s': golden %f, got %f" % [key, g["lit_luma"], d["lit_luma"]]
 		).is_equal_approx(g["lit_luma"], TOL_LUMA)
+
+# Task 4 replaces a per-tap mat4 multiply with an incremental evaluation of the same
+# affine expression. "Same expression" is the entire claim, so it gets its own assertion
+# at a camera where the sweep is long and the early-out does not fire.
+func test_incremental_unprojection_is_exact() -> void:
+	var w := make_world()
+	var d: Dictionary = _probe(w, "down_close")
+	assert_bool(d["ran"]).is_true()
+	var g: Dictionary = GOLDEN["down_close"]
+	# An order of magnitude tighter than TOL_AO: an algebraically exact rewrite may differ
+	# in the last fp bit or two, but nothing beyond that.
+	assert_float(d["min_ao"]).override_failure_message(
+		"incremental unprojection changed min_ao beyond fp noise"
+	).is_equal_approx(g["min_ao"], 0.0002)
+	assert_float(d["max_ao"]).override_failure_message(
+		"incremental unprojection changed max_ao beyond fp noise"
+	).is_equal_approx(g["max_ao"], 0.0002)

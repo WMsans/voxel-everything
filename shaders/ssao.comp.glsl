@@ -76,28 +76,30 @@ void main() {
 
 		// Below-tangent geometry is already accounted for by the normal itself.
 		float h_max = asin(clamp(dot(n, dir3), -1.0, 1.0));
+
+		// h(u,v,d) = inv_view_proj * vec4(2u-1, 2v-1, d, 1) is affine in (u,v,d), and along
+		// this direction u and v advance linearly. Evaluate the (u,v) half once and step it;
+		// only the depth column varies per tap. Same value, one mad instead of a mat4 mul.
+		vec2 duv = step_px * bcam.screen.zw / float(pc.dims.z);
+		vec2 uv0 = (vec2(px) + 0.5) * bcam.screen.zw;
+		vec4 h0 = bcam.inv_view_proj * vec4(uv0.x * 2.0 - 1.0, uv0.y * 2.0 - 1.0, 0.0, 1.0);
+		vec4 dh = bcam.inv_view_proj[0] * (2.0 * duv.x) + bcam.inv_view_proj[1] * (2.0 * duv.y);
+		vec4 col_d = bcam.inv_view_proj[2];
+
 		for (int i = 1; i <= pc.dims.z; i++) {
-			vec2 suv = (vec2(px) + 0.5 + step_px * (float(i) / float(pc.dims.z))) *
-					bcam.screen.zw;
+			vec2 suv = uv0 + duv * float(i);
 			float sdepth = texture(gb_depth, suv).r;
 			if (sdepth <= 0.0) continue;
-			vec3 sp = beauty_world_from_depth(suv, sdepth);
+			vec4 h = h0 + dh * float(i) + col_d * sdepth;
+			vec3 sp = h.xyz / (abs(h.w) < 1e-9 ? 1e-9 : h.w);
 			vec3 dv = sp - p;
 			float len_sq = dot(dv, dv);
-			// Beyond twice the radius even a wall contributes nothing: the falloff has died
-			// and a far silhouette must not raise the horizon for nearer samples.
 			if (len_sq < 1e-6 || len_sq > 4.0 * radius_sq) continue;
-			// Elevation of the sample above the tangent plane, measured inside the vertical
-			// slice along dir3: sin_h = (dv·n) / |dv projected onto the tangent plane|.
-			// (dot(normalize(dv), dir3) would be ~1 for samples on the same plane — the
-			// surface would shadow itself everywhere.)
 			float dn = dot(dv, n);
 			float tangential = length(dv - n * dn);
 			if (tangential < 1e-4) continue;
 			float sin_h = clamp(dn / tangential, -1.0, 1.0);
 			if (sin_h > h_max) {
-				// Squared distance falloff: far occluders darken less than near ones even
-				// when their horizon angle is identical.
 				float r_sq = clamp(len_sq / radius_sq, 0.0, 1.0);
 				occlusion += (sin_h - h_max) * (1.0 - r_sq);
 				h_max = sin_h;
