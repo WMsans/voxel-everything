@@ -127,6 +127,7 @@ void VoxelDebugHooks::_bind_methods() {
 			&VoxelDebugHooks::debug_hiz_occluded);
 	ClassDB::bind_method(D_METHOD("debug_lod_cull_probe", "pos", "fwd"),
 			&VoxelDebugHooks::debug_lod_cull_probe);
+	ClassDB::bind_method(D_METHOD("debug_lod_cull_debug"), &VoxelDebugHooks::debug_lod_cull_debug);
 	ClassDB::bind_method(D_METHOD("debug_sun_shadow_stats", "cascade"),
 			&VoxelDebugHooks::debug_sun_shadow_stats);
 	ClassDB::bind_method(D_METHOD("debug_sun_shadow_build", "cascade", "force"),
@@ -867,6 +868,8 @@ Dictionary VoxelDebugHooks::debug_beauty_settings() {
 	d["ssgi_taps"] = beauty.ssgi_taps;
 	d["ssr_steps"] = beauty.ssr_steps;
 	d["contact_steps"] = beauty.contact_steps;
+	d["ssao_steps"] = beauty.ssao_steps;
+	d["ssao_directions"] = beauty.ssao_directions;
 	d["outline_depth_threshold"] = beauty.outline_depth_threshold;
 	d["outline_normal_threshold"] = beauty.outline_normal_threshold;
 	d["tier"] = quality_tier;
@@ -1900,6 +1903,10 @@ Dictionary VoxelDebugHooks::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 	d["page_frustum_culled"] = page_frustum_culled;
 	d["slot_frustum_culled"] = slot_frustum_culled;
 	return d;
+}
+
+Dictionary VoxelDebugHooks::debug_lod_cull_debug() {
+	return world_->lod_cull_debug();
 }
 
 Dictionary VoxelDebugHooks::debug_gbuffer_stats(int w, int h) {

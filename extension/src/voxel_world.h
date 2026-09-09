@@ -208,6 +208,11 @@ class VoxelWorld : public Node3D, public EditSink {
 	// injected); read by the debug facade after a shutdown.
 	bool last_hiz_readback_was_pending_ = false;
 	bool last_hiz_readback_was_drained_ = true;
+	// Last frame's LoD cull two-phase record (Task 7 diagnosis). Written on the render
+	// thread by RaymarchCompositor, read on the main thread by the debug hook.
+	std::atomic<bool> lod_cull_two_phase_{false};
+	std::atomic<bool> lod_cull_hiz_built_{false};
+	std::atomic<int> lod_cull_first_pass_{0};
 
 	// Shader hot reload + beauty settings moved verbatim into RenderOrchestrator
 	// (Task 14); VoxelWorld keeps one-line delegations and the ClassDB surface.
@@ -399,6 +404,20 @@ public:
 	LodPool *lod_pool() { return context_.lod->pool(); }
 	LodRasterPass *lod_raster_pass() { return context_.render->lod_raster_pass(); }
 	LodCullPass *lod_cull_pass() { return context_.render->lod_cull_pass(); }
+	// LoD cull two-phase decision recorded by RaymarchCompositor (plain record, no
+	// logic): the hook reads the shipped path's own values instead of recomputing them.
+	void note_lod_cull_debug(bool two_phase, bool hiz_built, int first_pass_count) {
+		lod_cull_two_phase_ = two_phase;
+		lod_cull_hiz_built_ = hiz_built;
+		lod_cull_first_pass_ = first_pass_count;
+	}
+	Dictionary lod_cull_debug() const {
+		Dictionary d;
+		d["two_phase"] = lod_cull_two_phase_.load();
+		d["hiz_built"] = lod_cull_hiz_built_.load();
+		d["first_pass_count"] = lod_cull_first_pass_.load();
+		return d;
+	}
 	HizPass *hiz_pass() { return context_.render->hiz_pass(); }
 	GBuffer *gbuffer() { return context_.render->gbuffer(); }
 	CameraUbo *beauty_camera() { return context_.render->beauty_camera(); }

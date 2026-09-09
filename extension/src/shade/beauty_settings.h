@@ -21,6 +21,8 @@ struct BeautySettings {
 	int ssgi_taps = 8;      // [0, 16]
 	int ssr_steps = 24;     // [0, 64]
 	int contact_steps = 12; // [0, 32]
+	int ssao_steps = 8;      // [0, 16]  march steps per sweep direction
+	int ssao_directions = 6; // [0, 8]   sweep directions per pixel
 
 	float outline_depth_threshold = 0.04f;  // [0, 1], relative to linear depth
 	float outline_normal_threshold = 0.25f; // [0, 2], 1 - dot(n0, n1)

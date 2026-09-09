@@ -23,15 +23,14 @@ layout(set = 0, binding = 1) uniform sampler2D gb_depth;
 layout(set = 0, binding = 2, r8) writeonly uniform image2D out_ssao;
 
 layout(push_constant, std430) uniform Push {
-	ivec4 dims;  // xy = target size, z = march steps per direction, w = unused
+	ivec4 dims;  // xy = target size, z = march steps per direction, w = sweep directions
 	vec4 params; // x = world-space radius, y = strength, zw = unused
 } pc;
-
-const int DIRECTIONS = 6;
 
 void main() {
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
 	if (any(greaterThanEqual(px, pc.dims.xy))) return;
+	if (pc.dims.w <= 0 || pc.dims.z <= 0) { imageStore(out_ssao, px, vec4(1.0)); return; }
 	vec2 uv = (vec2(px) + 0.5) * bcam.screen.zw;
 
 	// Sky has no surface behind it: pass full ambient so the horizon gradient is never
@@ -57,8 +56,8 @@ void main() {
 	float jitter = bayer4(px);
 	float radius_sq = pc.params.x * pc.params.x;
 	float occlusion = 0.0;
-	for (int d = 0; d < DIRECTIONS; d++) {
-		float phi = (float(d) + jitter) * kPi / float(DIRECTIONS);
+	for (int d = 0; d < pc.dims.w; d++) {
+		float phi = (float(d) + jitter) * kPi / float(pc.dims.w);
 		vec3 dir3 = t1 * cos(phi) + t2 * sin(phi);
 		// The direction's pixel-space step: project p and p + dir3 * radius once per
 		// direction, so perspective and aspect are exact rather than approximated.
@@ -67,7 +66,12 @@ void main() {
 		beauty_project(p, pu, pd);
 		if (!beauty_project(p + dir3 * pc.params.x, qu, qd)) continue;
 		vec2 step_px = (qu - pu) * vec2(pc.dims.xy);
-		if (dot(step_px, step_px) < 1e-9) continue;
+		// The 5 m radius projects to under a pixel past ~60 m, and the sampler is nearest:
+		// with the largest tap offset below half a texel, every tap along this direction
+		// resolves to the centre texel, so dv is ~0 and the len_sq guard below rejects all
+		// of them anyway. Reject the whole direction here instead and skip pc.dims.z
+		// texture fetches plus pc.dims.z unprojections per direction. Output-preserving.
+		if (dot(step_px, step_px) < 0.25) continue;
 
 		// Below-tangent geometry is already accounted for by the normal itself.
 		float h_max = asin(clamp(dot(n, dir3), -1.0, 1.0));
@@ -99,6 +103,6 @@ void main() {
 			}
 		}
 	}
-	float ao = clamp(1.0 - occlusion * pc.params.y / float(DIRECTIONS), 0.0, 1.0);
+	float ao = clamp(1.0 - occlusion * pc.params.y / float(pc.dims.w), 0.0, 1.0);
 	imageStore(out_ssao, px, vec4(ao));
 }
