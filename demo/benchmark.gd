@@ -393,7 +393,7 @@ func _capture_gpu_sample() -> void:
 		return
 	_last_gpu_sample_id = sample_id
 	_gpu_dropped_pairs = max(_gpu_dropped_pairs, int(d.get("dropped_pairs", 0)))
-	for key in ["raymarch", "stream", "lod", "ssgi", "ssr", "outlines", "unattributed"]:
+	for key in ["raymarch", "stream", "lod", "ssgi", "ssr", "ssao", "outlines", "unattributed"]:
 		var value := float(d.get(key + "_gpu_ms", -1.0))
 		if value >= 0.0:
 			_append_gpu(key, value)
@@ -488,7 +488,7 @@ func _report() -> void:
 	for k: String in keys:
 		worstparts.append("%s=%.2f" % [k, float(_worst.get(k, 0.0))])
 	print("BENCH worst_frame(%.2fms) " % _worst_ms + " ".join(worstparts))
-	for key in ["raymarch", "stream", "lod", "ssgi", "ssr", "shadows", "outlines",
+	for key in ["raymarch", "stream", "lod", "ssgi", "ssr", "ssao", "shadows", "outlines",
 			"unattributed", "custom_frame"]:
 		var values: PackedFloat32Array = _gpu_samples[key]
 		var sorted_gpu := values.duplicate()
@@ -502,13 +502,14 @@ func _report() -> void:
 		"lod": _budget_verdict(_gpu_samples["lod"], BUDGETS_MS["lod"]),
 		"ssgi": _budget_verdict(_gpu_samples["ssgi"], BUDGETS_MS["ssgi"]),
 		"ssr": _budget_verdict(_gpu_samples["ssr"], BUDGETS_MS["ssr"]),
+		"ssao": _budget_verdict(_gpu_samples["ssao"], BUDGETS_MS["ssao"]),
 		"shadows": _budget_verdict(_gpu_samples["shadows"], BUDGETS_MS["shadows"]),
 		"outlines": _budget_verdict(_gpu_samples["outlines"], BUDGETS_MS["outlines"]),
 		"frame": "PASS" if _percentile(frame_sorted, 0.99) <= BUDGETS_MS["frame"] else "WARN",
 	}
-	print("BENCH budget_verdict raymarch=%s lod=%s ssgi=%s ssr=%s shadows=%s outlines=%s frame=%s" % [
+	print("BENCH budget_verdict raymarch=%s lod=%s ssgi=%s ssr=%s ssao=%s shadows=%s outlines=%s frame=%s" % [
 		verdict["raymarch"], verdict["lod"], verdict["ssgi"], verdict["ssr"],
-		verdict["shadows"], verdict["outlines"], verdict["frame"]])
+		verdict["ssao"], verdict["shadows"], verdict["outlines"], verdict["frame"]])
 	var custom_values: PackedFloat32Array = _gpu_samples["custom_frame"]
 	print("BENCH gpu_timing valid_samples=%d dropped_pairs=%d lod_source=timestamp lod_ms_source=cpu_record" % [
 		custom_values.size(), _gpu_dropped_pairs])

@@ -15,7 +15,7 @@ namespace {
 
 const char *const kPasses[] = {
 		"raymarch", "composite", "lod", "sun_shadow", "ssgi", "deferred", "inject",
-		"contact", "ssr", "outlines", "history", "stream"};
+		"contact", "ssao", "ssr", "outlines", "history", "stream"};
 
 struct Marker {
 	uint64_t serial = 0;
