@@ -153,6 +153,13 @@ func _ready() -> void:
 			_world.set_quality_tier(int(arg.trim_prefix("--quality=")))
 		elif arg == "--no-physics":
 			_world.physics_enabled = false
+		elif arg.begins_with("--effect-value="):
+			# name=value, repeatable. The magnitude knobs are what the emissive-crack look is
+			# tuned with, and their cost has to be measurable the same way --near-scale's is:
+			# by sweeping them from the command line across otherwise identical runs.
+			var kv := arg.trim_prefix("--effect-value=").split("=", false)
+			if kv.size() == 2:
+				_world.set_effect_value(String(kv[0]).strip_edges(), float(kv[1]))
 		elif arg.begins_with("--render-scale="):
 			get_viewport().scaling_3d_scale = float(arg.trim_prefix("--render-scale="))
 		elif arg.begins_with("--screenshot="):

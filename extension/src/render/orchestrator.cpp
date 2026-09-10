@@ -514,6 +514,19 @@ bool *beauty_field(ve::BeautySettings &s, const String &name) {
 	return nullptr;
 }
 
+// The same table, for the knobs that are a magnitude rather than a switch. Kept beside
+// beauty_field for the same reason it exists: one place decides what a knob is called.
+float *beauty_value_field(ve::BeautySettings &s, const String &name) {
+	if (name == "ssgi_radius") return &s.ssgi_radius;
+	if (name == "ssgi_temporal") return &s.ssgi_temporal;
+	if (name == "ssgi_strength") return &s.ssgi_strength;
+	if (name == "emissive_gi_radius") return &s.emissive_gi_radius;
+	if (name == "emissive_gi_strength") return &s.emissive_gi_strength;
+	if (name == "outline_depth_threshold") return &s.outline_depth_threshold;
+	if (name == "outline_normal_threshold") return &s.outline_normal_threshold;
+	return nullptr;
+}
+
 } // namespace
 
 // --- shader hot-reload machinery + beauty settings (moved VERBATIM from VoxelWorld,
@@ -610,6 +623,21 @@ bool RenderOrchestrator::get_effect_enabled(const String &name) const {
 	ve::BeautySettings copy = beauty_;
 	const bool *f = beauty_field(copy, name);
 	return f ? *f : false;
+}
+
+void RenderOrchestrator::set_effect_value(const String &name, float value) {
+	std::lock_guard<std::mutex> lock(beauty_mutex_);
+	float *f = beauty_value_field(beauty_, name);
+	if (!f) return; // fail-soft, exactly as set_effect_enabled treats an unknown name
+	*f = value;
+	ve::clamp_settings(&beauty_);
+}
+
+float RenderOrchestrator::get_effect_value(const String &name) const {
+	std::lock_guard<std::mutex> lock(beauty_mutex_);
+	ve::BeautySettings copy = beauty_;
+	const float *f = beauty_value_field(copy, name);
+	return f ? *f : 0.0f;
 }
 
 ve::BeautySettings RenderOrchestrator::beauty_settings() const {

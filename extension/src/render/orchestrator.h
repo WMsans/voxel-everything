@@ -152,6 +152,8 @@ public:
 	void set_quality_tier(int v);
 	int quality_tier() const;
 	void set_effect_enabled(const String &name, bool on);
+	void set_effect_value(const String &name, float value);
+	float get_effect_value(const String &name) const;
 	bool get_effect_enabled(const String &name) const;
 	// Returns an immutable value snapshot. Render callbacks must take this once per frame
 	// and pass the copy through their work; the mutex is never held during render work.

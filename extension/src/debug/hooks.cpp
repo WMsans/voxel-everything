@@ -877,6 +877,11 @@ Dictionary VoxelDebugHooks::debug_beauty_settings() {
 	d["ssao_directions"] = beauty.ssao_directions;
 	d["outline_depth_threshold"] = beauty.outline_depth_threshold;
 	d["outline_normal_threshold"] = beauty.outline_normal_threshold;
+	d["ssgi_radius"] = beauty.ssgi_radius;
+	d["ssgi_temporal"] = beauty.ssgi_temporal;
+	d["ssgi_strength"] = beauty.ssgi_strength;
+	d["emissive_gi_radius"] = beauty.emissive_gi_radius;
+	d["emissive_gi_strength"] = beauty.emissive_gi_strength;
 	d["tier"] = quality_tier;
 	d["flags"] = static_cast<int>(ve::pack_beauty_flags(beauty));
 	return d;

@@ -24,6 +24,20 @@ struct BeautySettings {
 	int ssao_steps = 8;      // [0, 16]  march steps per sweep direction
 	int ssao_directions = 6; // [0, 8]   sweep directions per pixel
 
+	// SSGI's gather shape. These lived as literals in SsgiPass::render, which broke this
+	// struct's own contract that no pass reads a knob that is not here -- and made the one
+	// effect that carries emissive light around the scene the only effect a tier could not
+	// move. Radii are world metres.
+	float ssgi_radius = 6.0f;    // [0.25, 64]  how far a bounce tap may reach
+	float ssgi_temporal = 0.9f;  // [0, 0.99]   history weight; higher is smoother and later
+	float ssgi_strength = 1.0f;  // [0, 8]      multiplier on the gathered bounce
+
+	// Emissive light transport, gathered on its own ring so lava can spill much further than
+	// a diffuse bounce without dragging the bounce radius (and its noise) out with it. Costs
+	// a second tap loop in shaders/ssgi.comp.glsl; ssgi_taps sizes both.
+	float emissive_gi_radius = 16.0f;  // [0.25, 512]
+	float emissive_gi_strength = 6.0f; // [0, 64]
+
 	float outline_depth_threshold = 0.04f;  // [0, 1], relative to linear depth
 	float outline_normal_threshold = 0.25f; // [0, 2], 1 - dot(n0, n1)
 };

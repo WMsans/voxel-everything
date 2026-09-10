@@ -67,3 +67,28 @@ func test_islands_toggle_is_a_real_render_effect() -> void:
 	islands.emit_signal("toggled", false)
 	assert_bool(world.get_effect_enabled("islands")).is_false()
 	assert_bool(world.hooks().debug_beauty_settings()["islands"]).is_false()
+
+# The magnitude knobs are the ones the emissive look is tuned with, so the slider has to
+# reach ve::BeautySettings the same way a checkbox does -- and it must move only its own
+# field, which is the failure a shared setter would produce.
+func test_a_value_slider_writes_only_its_named_knob() -> void:
+	var pair: Array = make_pair()
+	await get_tree().process_frame
+	var world: VoxelWorld = pair[0]
+	var menu: PanelContainer = pair[1]
+	var reach: float = world.get_effect_value("emissive_gi_radius")
+	var slider: HSlider = menu.get_node("Controls/emissive_gi_strength")
+	slider.emit_signal("value_changed", 21.0)
+	assert_float(world.get_effect_value("emissive_gi_strength")).is_equal_approx(21.0, 0.001)
+	assert_float(world.get_effect_value("emissive_gi_radius")).is_equal_approx(reach, 0.001)
+
+# Out-of-range values are clamped by ve::clamp_settings, not stored raw: a negative strength
+# would otherwise subtract light from the scene.
+func test_knob_values_are_clamped_on_the_way_in() -> void:
+	var pair: Array = make_pair()
+	await get_tree().process_frame
+	var world: VoxelWorld = pair[0]
+	world.set_effect_value("emissive_gi_strength", -5.0)
+	assert_float(world.get_effect_value("emissive_gi_strength")).is_equal_approx(0.0, 0.001)
+	world.set_effect_value("ssgi_temporal", 1.0)
+	assert_float(world.get_effect_value("ssgi_temporal")).is_less(1.0)

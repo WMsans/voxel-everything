@@ -218,6 +218,10 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::set_effect_enabled);
 	ClassDB::bind_method(D_METHOD("get_effect_enabled", "name"),
 			&VoxelWorld::get_effect_enabled);
+	ClassDB::bind_method(D_METHOD("set_effect_value", "name", "value"),
+			&VoxelWorld::set_effect_value);
+	ClassDB::bind_method(D_METHOD("get_effect_value", "name"),
+			&VoxelWorld::get_effect_value);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	// Task 10 contract smoke test: the WorldStore spine's edit sequence, and an
 	// AppendResult-free way to push one encoded op through the spine from GDScript.
@@ -276,6 +280,14 @@ void VoxelWorld::set_effect_enabled(const String &name, bool on) {
 
 bool VoxelWorld::get_effect_enabled(const String &name) const {
 	return context_.render->get_effect_enabled(name);
+}
+
+void VoxelWorld::set_effect_value(const String &name, float value) {
+	context_.render->set_effect_value(name, value);
+}
+
+float VoxelWorld::get_effect_value(const String &name) const {
+	return context_.render->get_effect_value(name);
 }
 
 ve::BeautySettings VoxelWorld::beauty_settings() const {

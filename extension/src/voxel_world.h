@@ -342,6 +342,10 @@ public:
 	int get_quality_tier() const;
 	void set_effect_enabled(const String &name, bool on);
 	bool get_effect_enabled(const String &name) const;
+	// The magnitude knobs (SSGI's gather shape, the emissive spill, the outline thresholds).
+	// Same fail-soft contract as the toggles: an unknown name is ignored, not a crash.
+	void set_effect_value(const String &name, float value);
+	float get_effect_value(const String &name) const;
 	// Spec §8 dev-build affordances: request a shader reload (latch, safe from _input) and
 	// report what the last reload did. debug_pump_shader_reload() lets tests step the render
 	// callback's reload work directly.

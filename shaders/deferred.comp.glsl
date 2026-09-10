@@ -189,12 +189,19 @@ void main() {
 	float shadow = g0.a;
 	if ((pc.flags.x & BEAUTY_SUN_MAP) != 0u && far_field_owns(px, wpos, pc.cam.xyz))
 		shadow = min(shadow, sun_map_visibility(wpos, ndl, distance(wpos, pc.cam.xyz)));
-	vec3 ambient = pc.sky.rgb;
-	if ((pc.flags.x & BEAUTY_SSGI) != 0u) ambient += texture(ssgi_tex, uv).rgb;
-	// HBAO multiplies the ambient term only: sun lighting, spec and rim keep their own
+	// HBAO multiplies the SKY term only: sun lighting, spec and rim keep their own
 	// visibility terms. The pass's sky pixels are exactly 1.0, so horizons are untouched.
 	float ao = 1.0;
 	if ((pc.flags.x & BEAUTY_SSAO) != 0u) ao = texture(ssao_tex, uv).r;
+	// AO models occlusion of a DISTANT UNIFORM ambient, which is what the sky term is. SSGI
+	// is not that: it resolved its own visibility per tap (the sample has to face the
+	// receiver and lie inside the radius), so multiplying it by AO counts the same occlusion
+	// twice. That double count is why an emissive crack used to be dimmest exactly where it
+	// should be brightest -- in the crevice beside it, where AO is deepest. The `ao` handed
+	// to cel_shade below is therefore 1.0: it has already been applied, to the only term
+	// it belongs to.
+	vec3 ambient = pc.sky.rgb * clamp(ao, 0.0, 1.0);
+	if ((pc.flags.x & BEAUTY_SSGI) != 0u) ambient += texture(ssgi_tex, uv).rgb;
 	// ndv feeds nothing in cel_shade but the rim, so handing it 1.0 (face-on) is exactly
 	// "no rim" and leaves every other term of the ramp bit-for-bit untouched. That keeps the
 	// three mirrors -- shade.glslh, ve::cel_shade, cel.gdshaderinc -- identical, and keeps the
@@ -210,7 +217,7 @@ void main() {
 		imageStore(out_lit, px, vec4(sil, sil, sil, 1.0));
 		return;
 	}
-	vec3 lit = cel_shade(g0.rgb, ambient, ndl, mix(1.0, ndv, sil), ndh, shadow, ao,
+	vec3 lit = cel_shade(g0.rgb, ambient, ndl, mix(1.0, ndv, sil), ndh, shadow, 1.0,
 			g1.w, sun_light.rgb.xyz);
 
 	// Emission is ADDED after shading, never lit: a glowing surface is its own light source.

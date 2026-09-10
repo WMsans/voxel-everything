@@ -15,12 +15,21 @@ func make_world() -> VoxelWorld:
 	add_child(w)
 	_worlds.append(w)
 	assert_bool(w.hooks().debug_init_atlas()).is_true()
+	settle(w)
+	return w
+
+# Stream until the world goes quiet, FROM THE EDIT'S OWN CENTRE. A paint marks bricks dirty
+# and they have to regenerate before anything can see the new material. debug_deferred_probe
+# streams too, but from the CAMERA -- 19 m above the surface here -- and that loop exits as
+# soon as it goes quiet, which it does before the repainted bricks near the ground are
+# rebuilt. Painting and probing without this in between measured the terrain the paint had
+# not reached yet: every assertion below then compared a surface to itself.
+func settle(w: VoxelWorld) -> void:
 	var quiet := 0
 	for i in range(400):
 		quiet = quiet + 1 if w.hooks().debug_stream_frame(Vector3(20.0, 56.2, 20.0)) == 0 else 0
 		if quiet >= 6:
 			break
-	return w
 
 func magma_id() -> int:
 	for m in _worlds[0].material_table():
@@ -44,8 +53,10 @@ func test_an_emissive_material_is_brighter_than_a_dull_one() -> void:
 	# also covered too little of the probe frame to move mean_luma. Radius 16 both reaches
 	# the surface and dominates the view, which is what these assertions actually need.
 	w.hooks().debug_apply_sphere_paint(Vector3(20.0, 56.2, 20.0), 16.0, 1) # dull
+	settle(w)
 	var dull: Dictionary = w.hooks().debug_deferred_probe(pos, down, 64, 64, 0)
 	w.hooks().debug_apply_sphere_paint(Vector3(20.0, 56.2, 20.0), 16.0, id) # emissive
+	settle(w)
 	var lit: Dictionary = w.hooks().debug_deferred_probe(pos, down, 64, 64, 0)
 
 	assert_float(lit["mean_luma"]).override_failure_message(
@@ -58,6 +69,7 @@ func test_emission_pushes_the_lit_buffer_above_one() -> void:
 	var w := make_world()
 	var id := magma_id()
 	w.hooks().debug_apply_sphere_paint(Vector3(20.0, 56.2, 20.0), 16.0, id)
+	settle(w)
 	var d: Dictionary = w.hooks().debug_deferred_probe(
 		Vector3(20.0, 75.0, 20.0), Vector3(0, -1, 0), 64, 64, 0)
 	var c: Color = d["center"]
@@ -69,6 +81,7 @@ func test_emission_pushes_the_lit_buffer_above_one() -> void:
 func test_a_non_emissive_material_is_unchanged() -> void:
 	var w := make_world()
 	w.hooks().debug_apply_sphere_paint(Vector3(20.0, 56.2, 20.0), 16.0, 1)
+	settle(w)
 	var d: Dictionary = w.hooks().debug_deferred_probe(
 		Vector3(20.0, 75.0, 20.0), Vector3(0, -1, 0), 64, 64, 0)
 	var c: Color = d["center"]

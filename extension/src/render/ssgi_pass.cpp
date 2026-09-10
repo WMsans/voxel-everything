@@ -156,9 +156,9 @@ bool SsgiPass::render(RenderingDevice *rd, GBuffer &gb, RID camera_ubo,
 	if (!ensure_uniform_set(rd, gb, camera_ubo, targets_[prev_index], targets_[out_index])) return false;
 
 	const auto t0 = std::chrono::steady_clock::now();
-	static_assert(sizeof(float) * 24 == 96, "ssgi push block");
+	static_assert(sizeof(float) * 28 == 112, "ssgi push block");
 	PackedByteArray pc;
-	pc.resize(96);
+	pc.resize(112);
 	float *f = reinterpret_cast<float *>(pc.ptrw());
 	std::memcpy(f, prev_view_proj, sizeof(float) * 16);
 	int32_t *dims = reinterpret_cast<int32_t *>(f + 16);
@@ -166,10 +166,17 @@ bool SsgiPass::render(RenderingDevice *rd, GBuffer &gb, RID camera_ubo,
 	dims[1] = std::max(1, gb.size().y / 2);
 	dims[2] = s.ssgi_taps;
 	dims[3] = have_history ? 1 : 0;
-	f[20] = 6.0f;
-	f[21] = 0.90f;
-	f[22] = 1.0f;
+	// These were literals here until the emissive work: 6 m, 0.90, 1.0. They are knobs in
+	// ve::BeautySettings now, which is where that struct always said every knob a pass reads
+	// has to live -- and which is what lets a tier move the emissive ring.
+	f[20] = s.ssgi_radius;
+	f[21] = s.ssgi_temporal;
+	f[22] = s.ssgi_strength;
 	f[23] = 0.0f;
+	f[24] = s.emissive_gi_radius;
+	f[25] = s.emissive_gi_strength;
+	f[26] = 0.0f;
+	f[27] = 0.0f;
 	const int64_t list = rd->compute_list_begin();
 	if (list < 0) return false;
 	rd->compute_list_bind_compute_pipeline(list, pipeline_);
