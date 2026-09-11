@@ -79,6 +79,22 @@ func test_closing_in_on_the_light_does_not_dim_it() -> void:
 		% [float(far["mean_luma"]), float(near["mean_luma"])]
 		).is_greater(float(far["mean_luma"]))
 
+# The reported bug: lit ground read as a lattice of dots instead of a wash. The gather rotates
+# its spiral by bayer4(px), a rotation that never changes from frame to frame, so the temporal
+# blend cannot average it out -- each pixel kept its own sampling luck, and with a few taps
+# over a 16 m ring that luck is most of the signal. lattice_ratio is the mean deviation of a
+# pixel from the box over one bayer period around it, as a fraction of the light.
+func test_the_gathered_light_is_smooth_not_a_bayer_lattice() -> void:
+	var w := make_world()
+	paint_lava(w)
+	var d: Dictionary = w.hooks().debug_ssgi_probe(EYE, FWD, 128, 128, 24)
+	assert_float(float(d["mean_luma"])).override_failure_message(
+		"the probe gathered no light; this test would pass vacuously").is_greater(0.01)
+	print("ssgi lattice_ratio=", d["lattice_ratio"], " mean_luma=", d["mean_luma"])
+	assert_float(float(d["lattice_ratio"])).override_failure_message(
+		"gathered light deviates %f from its own 4x4 box: the bayer rotation is on screen"
+		% float(d["lattice_ratio"])).is_less(0.1)
+
 # Turning the effect off must take the emissive transport with it, or the knob is a lie and
 # the cost cannot be recovered on a lower tier.
 func test_disabling_ssgi_removes_the_emissive_transport() -> void:

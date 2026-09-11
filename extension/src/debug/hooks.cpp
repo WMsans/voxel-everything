@@ -560,15 +560,33 @@ Dictionary VoxelDebugHooks::debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, in
 	const uint16_t *values = reinterpret_cast<const uint16_t *>(data.ptr());
 	float max_channel = 0.0f;
 	double mean_luma = 0.0;
+	std::vector<float> luma(static_cast<size_t>(pixels));
 	for (int i = 0; i < pixels; i++) {
 		const float r = Math::half_to_float(values[i * 4]);
 		const float g = Math::half_to_float(values[i * 4 + 1]);
 		const float b = Math::half_to_float(values[i * 4 + 2]);
 		max_channel = std::max(max_channel, std::max(r, std::max(g, b)));
-		mean_luma += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+		luma[static_cast<size_t>(i)] = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+		mean_luma += luma[static_cast<size_t>(i)];
 	}
 	d["max_channel"] = max_channel;
 	d["mean_luma"] = mean_luma / static_cast<double>(pixels);
+	// How much of the result is a 4x4 lattice. Every pixel is compared with the box over one
+	// full bayer4 period around it (offsets -1..2, the same window the contact-shadow resolve
+	// uses): a resolved gather is a gradient and barely differs from that box, while an
+	// unresolved per-pixel rotation puts each pixel's own sampling luck on screen and differs
+	// from it by a large fraction of the light itself.
+	double deviation = 0.0, level = 0.0;
+	for (int y = 1; y + 2 < half.y; y++)
+		for (int x = 1; x + 2 < half.x; x++) {
+			float box = 0.0f;
+			for (int j = -1; j <= 2; j++)
+				for (int i = -1; i <= 2; i++) box += luma[static_cast<size_t>(y + j) * half.x + x + i];
+			box *= 1.0f / 16.0f;
+			deviation += std::fabs(luma[static_cast<size_t>(y) * half.x + x] - box);
+			level += box;
+		}
+	d["lattice_ratio"] = level > 1e-6 ? deviation / level : 0.0;
 	return d;
 }
 

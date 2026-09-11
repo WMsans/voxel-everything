@@ -28,6 +28,7 @@ private:
 	RenderingDevice *rd_ = nullptr;
 	RID shader_, pipeline_, sampler_nearest_, sampler_linear_;
 	RID targets_[2], uset_;
+	RID raw_; // the gather before its resolve; see resolve() in shaders/ssgi.comp.glsl
 	RID key_albedo_, key_surface_, key_depth_, key_history_, key_prev_, key_out_, key_camera_;
 	Vector2i size_{0, 0};
 	RID output_;

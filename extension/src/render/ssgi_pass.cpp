@@ -68,7 +68,7 @@ void SsgiPass::teardown() {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
-	for (RID *r : {&targets_[0], &targets_[1], &sampler_nearest_, &sampler_linear_}) {
+	for (RID *r : {&targets_[0], &targets_[1], &raw_, &sampler_nearest_, &sampler_linear_}) {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
@@ -80,15 +80,16 @@ void SsgiPass::teardown() {
 
 bool SsgiPass::ensure_targets(RenderingDevice *rd, Vector2i size) {
 	if (size.x <= 0 || size.y <= 0) return false;
-	if (targets_[0].is_valid() && targets_[1].is_valid() && size == size_) return true;
+	if (targets_[0].is_valid() && targets_[1].is_valid() && raw_.is_valid() && size == size_)
+		return true;
 	if (uset_.is_valid()) rd->free_rid(uset_);
 	uset_ = RID();
-	for (RID *r : {&targets_[0], &targets_[1]}) {
+	for (RID *r : {&targets_[0], &targets_[1], &raw_}) {
 		if (r->is_valid()) rd->free_rid(*r);
 		*r = RID();
 	}
 	const Vector2i half(std::max(1, size.x / 2), std::max(1, size.y / 2));
-	for (RID *target : {&targets_[0], &targets_[1]}) {
+	for (RID *target : {&targets_[0], &targets_[1], &raw_}) {
 		Ref<RDTextureFormat> f;
 		f.instantiate();
 		f->set_format(RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT);
@@ -116,7 +117,7 @@ bool SsgiPass::ensure_uniform_set(RenderingDevice *rd, GBuffer &gb, RID camera_u
 			key_depth_ == gb.depth() && key_history_ == gb.history() && key_prev_ == prev_ssgi &&
 			key_out_ == out_ssgi && key_camera_ == camera_ubo) return true;
 	if (uset_.is_valid()) rd->free_rid(uset_);
-	Ref<RDUniform> u[6];
+	Ref<RDUniform> u[8];
 	for (Ref<RDUniform> &item : u) item.instantiate();
 	const RID textures[4] = {gb.surface(), gb.depth(), gb.history(), prev_ssgi};
 	for (int i = 0; i < 4; i++) {
@@ -131,7 +132,16 @@ bool SsgiPass::ensure_uniform_set(RenderingDevice *rd, GBuffer &gb, RID camera_u
 	u[5]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
 	u[5]->set_binding(5);
 	u[5]->add_id(camera_ubo);
-	uset_ = rd->uniform_set_create(Array::make(u[0], u[1], u[2], u[3], u[4], u[5]), shader_, 0);
+	u[6]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
+	u[6]->set_binding(6);
+	u[6]->add_id(raw_);
+	u[7]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
+	u[7]->set_binding(7);
+	u[7]->add_id(sampler_nearest_);
+	u[7]->add_id(raw_);
+	Array uniforms;
+	for (const Ref<RDUniform> &item : u) uniforms.push_back(item);
+	uset_ = rd->uniform_set_create(uniforms, shader_, 0);
 	if (!uset_.is_valid()) return false;
 	key_albedo_ = gb.albedo();
 	key_surface_ = gb.surface();
@@ -156,9 +166,9 @@ bool SsgiPass::render(RenderingDevice *rd, GBuffer &gb, RID camera_ubo,
 	if (!ensure_uniform_set(rd, gb, camera_ubo, targets_[prev_index], targets_[out_index])) return false;
 
 	const auto t0 = std::chrono::steady_clock::now();
-	static_assert(sizeof(float) * 28 == 112, "ssgi push block");
+	static_assert(sizeof(float) * 32 == 128, "ssgi push block");
 	PackedByteArray pc;
-	pc.resize(112);
+	pc.resize(128);
 	float *f = reinterpret_cast<float *>(pc.ptrw());
 	std::memcpy(f, prev_view_proj, sizeof(float) * 16);
 	int32_t *dims = reinterpret_cast<int32_t *>(f + 16);
@@ -177,10 +187,20 @@ bool SsgiPass::render(RenderingDevice *rd, GBuffer &gb, RID camera_ubo,
 	f[25] = s.emissive_gi_strength;
 	f[26] = 0.0f;
 	f[27] = 0.0f;
+	int32_t *stage = reinterpret_cast<int32_t *>(f + 28);
+	stage[0] = 0;
+	stage[1] = stage[2] = stage[3] = 0;
 	const int64_t list = rd->compute_list_begin();
 	if (list < 0) return false;
 	rd->compute_list_bind_compute_pipeline(list, pipeline_);
 	rd->compute_list_bind_uniform_set(list, uset_, 0);
+	rd->compute_list_set_push_constant(list, pc, pc.size());
+	rd->compute_list_dispatch(list, (dims[0] + 7) / 8, (dims[1] + 7) / 8, 1);
+	// The gather rotates its taps by a bayer4 phase that never changes, so without this second
+	// dispatch that phase reaches the screen as a lattice of dots. It averages one full 4x4
+	// period back out before the temporal blend, which cannot.
+	rd->compute_list_add_barrier(list);
+	stage[0] = 1;
 	rd->compute_list_set_push_constant(list, pc, pc.size());
 	rd->compute_list_dispatch(list, (dims[0] + 7) / 8, (dims[1] + 7) / 8, 1);
 	rd->compute_list_end();
