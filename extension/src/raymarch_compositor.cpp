@@ -378,7 +378,8 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 		for (int c = 0; c < 4; c++)
 			for (int r = 0; r < 4; r++) grass_vp[c * 4 + r] = view_proj.columns[c][r];
 		const ve::GrassLayout gl = ve::grass_layout(world->grass_settings(), grass_cam, grass_vp);
-		if (grass->run(rd, *atlas, gl, static_cast<float>(world->beauty_frame()) / 60.0f))
+		if (grass->run(rd, *atlas, gl, world->region_window(),
+				static_cast<float>(world->beauty_frame()) / 60.0f))
 			timings->end(rd, "grass");
 		else
 			timings->cancel("grass");

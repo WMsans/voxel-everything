@@ -97,3 +97,10 @@ uint material_at(vec3 p, ivec3 brick, int slot) {
 uint brick_flag_word(int slot) {
 	return brick_flags.v[slot];
 }
+
+// A brick worth placing anything on: its flag word says the surface crosses it. Mirrors
+// ve::brick_flags_from_mips (kBrickFlagHasSurface); test_brick_flags_gpu pins GPU == CPU
+// for the word itself.
+bool brick_straddles_surface(int slot) {
+	return (brick_flag_word(slot) & BRICK_FLAG_HAS_SURFACE) != 0u;
+}

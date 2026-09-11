@@ -34,6 +34,7 @@
 #include "render/sun_shadow_pass.h"
 #include "render/lod_cull_pass.h"
 #include "render/grass_scatter_pass.h"
+#include "grass/grass_layout.h"
 #include "render/hiz_pass.h"
 #include "lod/lod_contour.h"
 #include "lod/lod_grid.h"
@@ -1950,6 +1951,37 @@ Dictionary VoxelDebugHooks::debug_grass_stats() {
 	if (!w) return d;
 	GrassScatterPass *g = w->grass_scatter_pass();
 	if (!g) return d;
+	// Local-device worlds drive the SHIPPING pass on demand (the debug_ssao_probe pattern:
+	// same calls, same order as the compositor block). Test bodies run synchronously with
+	// no compositor frame, so a pure read would report stale zeros forever; running the
+	// real pass is not a parallel scatter. Demo worlds stay pure-read -- the compositor
+	// owns the frame there.
+	if (w->get_use_local_device()) {
+		w->ensure_initialized();
+		RenderingDevice *device = w->rd();
+		GpuAtlas *atlas = w->atlas();
+		if (!w->initialized_ || !device || !atlas || !atlas->is_valid()) return d;
+		// Hook camera: the last streamed centre (every grass test streams before reading),
+		// looking straight down. 90-degree FOV so the reach comparison measures the
+		// box/distance cull, not the test frustum. Time matches the compositor expression.
+		const float *c = w->store_->center_;
+		const float p[3] = {c[0], c[1], c[2]};
+		const float f[3] = {0.0f, -1.0f, 0.0f};
+		const float up[3] = {0.0f, 0.0f, 1.0f};
+		const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, 1.5707963268f, 1.0f,
+				0.1f, 4000.0f, 64, 64);
+		float vp[16];
+		for (int k = 0; k < 16; k++) vp[k] = cam.view_proj[k];
+		const ve::GrassLayout gl = ve::grass_layout(w->grass_settings(), p, vp);
+		if (!g->run(device, *atlas, gl, w->region_window(),
+				static_cast<float>(w->beauty_frame()) / 60.0f)) return d;
+		// run()'s internal readback lands before the dispatch executes; the counters are
+		// only valid after a submit+sync, which the compositor does at frame end and the
+		// hook must do itself before refreshing through the pass's re-read entry point.
+		device->submit();
+		device->sync();
+		g->read_back_counters(device);
+	}
 	d["ran"] = true;
 	d["bricks"] = g->last_brick_count();
 	d["blades"] = g->last_blade_count();
