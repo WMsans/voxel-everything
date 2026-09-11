@@ -19,6 +19,7 @@
 #include "render/ssao_pass.h"
 #include "render/ssr_pass.h"
 #include "render/outline_pass.h"
+#include "render/grass_scatter_pass.h"
 #include "render/lod_raster_pass.h"
 #include "render/sun_shadow_pass.h"
 #include "render/lod_cull_pass.h"
@@ -269,6 +270,13 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 		delete lod_cull_pass_;
 		lod_cull_pass_ = nullptr;
 	}
+	grass_scatter_pass_ = new GrassScatterPass();
+	if (!grass_scatter_pass_->initialize(device)) {
+		UtilityFunctions::printerr("VoxelWorld: grass initialization failed; continuing "
+				"without grass (safe fail-soft: the field is simply bare)");
+		delete grass_scatter_pass_;
+		grass_scatter_pass_ = nullptr;
+	}
 	hiz_pass_ = new HizPass();
 	if (!hiz_pass_->initialize(device)) {
 		UtilityFunctions::printerr("VoxelWorld: HiZ initialization failed; continuing without "
@@ -292,6 +300,7 @@ void RenderOrchestrator::teardown_render_passes() {
 	if (contact_shadow_pass_) { delete contact_shadow_pass_; contact_shadow_pass_ = nullptr; }
 	if (ssr_pass_) { delete ssr_pass_; ssr_pass_ = nullptr; }
 	if (outline_pass_) { delete outline_pass_; outline_pass_ = nullptr; }
+	if (grass_scatter_pass_) { delete grass_scatter_pass_; grass_scatter_pass_ = nullptr; }
 	if (ssgi_pass_) { delete ssgi_pass_; ssgi_pass_ = nullptr; }
 	if (ssao_pass_) { delete ssao_pass_; ssao_pass_ = nullptr; }
 	if (beauty_camera_) { beauty_camera_->teardown(); delete beauty_camera_; beauty_camera_ = nullptr; }

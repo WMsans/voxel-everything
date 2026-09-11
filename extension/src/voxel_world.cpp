@@ -222,6 +222,8 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::set_effect_value);
 	ClassDB::bind_method(D_METHOD("get_effect_value", "name"),
 			&VoxelWorld::get_effect_value);
+	ClassDB::bind_method(D_METHOD("set_grass_value", "name", "value"), &VoxelWorld::set_grass_value);
+	ClassDB::bind_method(D_METHOD("get_grass_value", "name"), &VoxelWorld::get_grass_value);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	// Task 10 contract smoke test: the WorldStore spine's edit sequence, and an
 	// AppendResult-free way to push one encoded op through the spine from GDScript.
@@ -292,6 +294,22 @@ float VoxelWorld::get_effect_value(const String &name) const {
 
 ve::BeautySettings VoxelWorld::beauty_settings() const {
 	return context_.render->beauty_settings();
+}
+
+GrassScatterPass *VoxelWorld::grass_scatter_pass() const {
+	return context_.render->grass_scatter_pass();
+}
+
+ve::GrassSettings VoxelWorld::grass_settings() const {
+	return context_.render->grass_settings();
+}
+
+bool VoxelWorld::set_grass_value(const String &name, float v) {
+	return context_.render->set_grass_value(name.utf8().get_data(), v);
+}
+
+float VoxelWorld::get_grass_value(const String &name) const {
+	return context_.render->grass_value(name.utf8().get_data());
 }
 
 

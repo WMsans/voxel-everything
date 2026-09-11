@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "lod/lod_tree.h" // ve::LodKey: teardown clears the world's LoD page maps
+#include "grass/grass_settings_store.h"
 #include "render/gpu_timings.h"
 #include "shade/beauty_settings.h"
 #include "world/region.h"
@@ -69,6 +70,7 @@ class SsgiPass;
 class SsaoPass;
 class SsrPass;
 class OutlinePass;
+class GrassScatterPass;
 class LodPool;
 class Object;
 
@@ -212,6 +214,10 @@ public:
 	SsaoPass *ssao_pass() { return ssao_pass_; }
 	SsrPass *ssr_pass() { return ssr_pass_; }
 	OutlinePass *outline_pass() { return outline_pass_; }
+	GrassScatterPass *grass_scatter_pass() { return grass_scatter_pass_; }
+	ve::GrassSettings grass_settings() const { return grass_settings_.get(); }
+	bool set_grass_value(const char *n, float v) { return grass_settings_.set_value(n, v); }
+	float grass_value(const char *n) const { return grass_settings_.value(n); }
 	GpuTimings *gpu_timings() { return &gpu_timings_; }
 
 	// --- history/beauty frame state (moved with the pass graph) ---
@@ -296,6 +302,10 @@ private:
 	SsaoPass *ssao_pass_ = nullptr;
 	SsrPass *ssr_pass_ = nullptr;
 	OutlinePass *outline_pass_ = nullptr;
+	GrassScatterPass *grass_scatter_pass_ = nullptr;
+	// Grass knobs live here (not in BeautySettings): the store mirrors the SHAPE of the
+	// beauty_mutex_/beauty_snapshot() pair without joining it (design doc section 7).
+	ve::GrassSettingsStore grass_settings_;
 	GpuTimings gpu_timings_;
 	float prev_view_proj_[16] = {};
 	bool has_history_ = false;

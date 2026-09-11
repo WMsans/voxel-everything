@@ -33,6 +33,7 @@
 #include "render/lod_raster_pass.h"
 #include "render/sun_shadow_pass.h"
 #include "render/lod_cull_pass.h"
+#include "render/grass_scatter_pass.h"
 #include "render/hiz_pass.h"
 #include "lod/lod_contour.h"
 #include "lod/lod_grid.h"
@@ -128,6 +129,7 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_lod_cull_probe", "pos", "fwd"),
 			&VoxelDebugHooks::debug_lod_cull_probe);
 	ClassDB::bind_method(D_METHOD("debug_lod_cull_debug"), &VoxelDebugHooks::debug_lod_cull_debug);
+	ClassDB::bind_method(D_METHOD("debug_grass_stats"), &VoxelDebugHooks::debug_grass_stats);
 	ClassDB::bind_method(D_METHOD("debug_sun_shadow_stats", "cascade"),
 			&VoxelDebugHooks::debug_sun_shadow_stats);
 	ClassDB::bind_method(D_METHOD("debug_sun_shadow_build", "cascade", "force"),
@@ -1935,6 +1937,25 @@ Dictionary VoxelDebugHooks::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 
 Dictionary VoxelDebugHooks::debug_lod_cull_debug() {
 	return world_->lod_cull_debug();
+}
+
+Dictionary VoxelDebugHooks::debug_grass_stats() {
+	Dictionary d;
+	d["ran"] = false;
+	d["bricks"] = 0;
+	d["blades"] = 0;
+	d["capacity"] = 0;
+	d["high_water"] = 0;
+	VoxelWorld *w = world_;
+	if (!w) return d;
+	GrassScatterPass *g = w->grass_scatter_pass();
+	if (!g) return d;
+	d["ran"] = true;
+	d["bricks"] = g->last_brick_count();
+	d["blades"] = g->last_blade_count();
+	d["capacity"] = g->capacity();
+	d["high_water"] = g->blade_high_water();
+	return d;
 }
 
 Dictionary VoxelDebugHooks::debug_gbuffer_stats(int w, int h) {

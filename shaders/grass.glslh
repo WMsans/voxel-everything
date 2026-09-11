@@ -1,0 +1,47 @@
+// Shared grass definitions: the GrassParams mirror and the per-blade hash. Mirrors
+// ve::GrassParams in extension/src/grass/grass_layout.h, which test_grass_layout pins at
+// 240 bytes with cam.xyz first.
+//
+// NOTE: never put a literal include directive inside a comment in this file -- the loader
+// matches include tokens anywhere in a line and would self-include.
+
+struct GrassBlade {
+	vec4 a; // xyz world position, w height
+	vec4 b; // x packed ground normal, y hash as float bits, z lean angle, w clump weight
+};
+
+#define GRASS_PARAMS_BLOCK \
+	vec4 cam;           \
+	vec4 planes[6];     \
+	ivec4 brick_min;    \
+	ivec4 brick_dim;    \
+	vec4 ring_end;      \
+	ivec4 ring_blades;  \
+	vec4 blade;         \
+	vec4 wind;          \
+	vec4 style;         \
+	ivec4 limits;
+
+// PCG-style integer hash. Deterministic in world space, so a blade keeps its identity as
+// the camera moves and the field does not shimmer.
+uint grass_hash(uint x) {
+	x = x * 747796405u + 2891336453u;
+	uint w = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u;
+	return (w >> 22u) ^ w;
+}
+
+uint grass_hash3(ivec3 c, uint salt) {
+	return grass_hash(uint(c.x) * 73856093u ^ uint(c.y) * 19349663u ^
+			uint(c.z) * 83492791u ^ salt);
+}
+
+float grass_unit(uint h) { return float(h & 0x00FFFFFFu) / float(0x01000000u); }
+
+// True when the brick's world-space AABB is outside any frustum plane.
+bool grass_brick_culled(vec3 lo, vec3 hi, vec4 planes[6]) {
+	for (int i = 0; i < 6; i++) {
+		vec3 p = mix(lo, hi, step(vec3(0.0), planes[i].xyz));
+		if (dot(planes[i].xyz, p) + planes[i].w < 0.0) return true;
+	}
+	return false;
+}

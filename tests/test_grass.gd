@@ -1,0 +1,48 @@
+extends GdUnitTestSuite
+
+var _worlds: Array = []
+
+func after_test() -> void:
+	for w in _worlds:
+		if is_instance_valid(w):
+			w.free()
+	_worlds.clear()
+
+# Same world construction every other GPU suite in this repo uses (see tests/test_ssao.gd):
+# a local rendering device, physics off, streamed until the chunk queue goes quiet.
+func make_world() -> VoxelWorld:
+	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	w.use_local_device = true
+	w.physics_enabled = false
+	add_child(w)
+	_worlds.append(w)
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
+	var quiet := 0
+	for i in range(400):
+		quiet = quiet + 1 if w.hooks().debug_stream_frame(Vector3(30.0, 56.2, 30.0)) == 0 else 0
+		if quiet >= 6:
+			break
+	return w
+
+func test_the_grass_pass_runs_and_reports_its_capacity() -> void:
+	var w := make_world()
+	var d: Dictionary = w.hooks().debug_grass_stats()
+	assert_bool(d["ran"]).is_true()
+	assert_int(d["capacity"]).is_greater(0)
+	# Nothing is placed yet -- Task 5 fills the cull in, Task 6 the placement.
+	assert_int(d["blades"]).is_greater_equal(0)
+
+func test_grass_settings_round_trip_through_the_store() -> void:
+	var w := make_world()
+	w.set_grass_value("reach_m", 25.0)
+	assert_float(w.get_grass_value("reach_m")).is_equal_approx(25.0, 0.001)
+	# Out-of-range values are clamped by the store, not rejected.
+	w.set_grass_value("reach_m", 1.0e9)
+	assert_float(w.get_grass_value("reach_m")).is_less_equal(256.0)
+
+func test_disabling_grass_zeroes_the_pass() -> void:
+	var w := make_world()
+	w.set_grass_value("enabled", 0.0)
+	var d: Dictionary = w.hooks().debug_grass_stats()
+	assert_int(d["bricks"]).is_equal(0)
+	assert_int(d["blades"]).is_equal(0)

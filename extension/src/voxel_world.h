@@ -26,6 +26,7 @@
 #include "core/world_store.h"
 #include "debug/hooks.h"
 #include "generator/volume_set.h"
+#include "grass/grass_settings.h"
 #include "lod/lod_system.h"
 #include "mesh/chunk_residency.h"
 #include "physics/island_body.h"
@@ -80,6 +81,7 @@ class SsgiPass;
 class SsaoPass;
 class SsrPass;
 class OutlinePass;
+class GrassScatterPass;
 class BeautyCompositor;
 class IslandAtlas;
 class IslandCullPass;
@@ -430,6 +432,10 @@ public:
 	SsaoPass *ssao_pass() { return context_.render->ssao_pass(); }
 	SsrPass *ssr_pass() { return context_.render->ssr_pass(); }
 	OutlinePass *outline_pass() { return context_.render->outline_pass(); }
+	GrassScatterPass *grass_scatter_pass() const;
+	ve::GrassSettings grass_settings() const;
+	bool set_grass_value(const String &name, float v);
+	float get_grass_value(const String &name) const;
 	// Region/gen passes have no pre-split accessor; added for the debug facade, which
 	// pokes them directly today (Task 12 moves their pointers into RenderOrchestrator).
 	RegionPass *region_pass() { return context_.render->region_pass(); }
