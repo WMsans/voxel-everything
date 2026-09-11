@@ -69,3 +69,53 @@ func test_a_shorter_reach_culls_more_bricks() -> void:
 	w.set_grass_value("reach_m", 5.0)
 	var narrow: int = w.hooks().debug_grass_stats()["bricks"]
 	assert_int(narrow).is_less(wide)
+
+func test_blades_appear_on_grass_terrain() -> void:
+	var w := make_world()
+	var d: Dictionary = w.hooks().debug_grass_stats()
+	assert_int(d["blades"]).is_greater(0)
+
+func test_blade_count_falls_as_the_camera_retreats() -> void:
+	var w := make_world()
+	w.set_grass_value("reach_m", 40.0)
+	var near_stats: Dictionary = w.hooks().debug_grass_stats()
+	var near_count: int = near_stats["blades"]
+	w.set_grass_value("reach_m", 12.0)
+	var far_stats: Dictionary = w.hooks().debug_grass_stats()
+	assert_int(far_stats["blades"]).is_less(near_count)
+
+func test_density_follows_blades_per_brick() -> void:
+	var w := make_world()
+	w.set_grass_value("blades_per_brick", 16.0)
+	var dense_stats: Dictionary = w.hooks().debug_grass_stats()
+	var dense: int = dense_stats["blades"]
+	w.set_grass_value("blades_per_brick", 4.0)
+	var sparse_stats: Dictionary = w.hooks().debug_grass_stats()
+	assert_int(sparse_stats["blades"]).is_less(dense)
+
+func test_the_blade_count_clamps_at_capacity_instead_of_overflowing() -> void:
+	var w := make_world()
+	w.set_grass_value("max_blades", 64.0)
+	var d: Dictionary = w.hooks().debug_grass_stats()
+	assert_int(d["blades"]).is_less_equal(64)
+	# The high-water mark still reports what the frame WANTED, so an overflow is visible
+	# rather than silent.
+	assert_int(d["high_water"]).is_greater_equal(d["blades"])
+
+# Grass refuses steep surfaces. Raising the threshold past vertical must leave nothing.
+func test_no_blades_survive_an_impossible_slope_threshold() -> void:
+	var w := make_world()
+	w.set_grass_value("slope_cos_min", 1.0)
+	var d: Dictionary = w.hooks().debug_grass_stats()
+	assert_int(d["blades"]).is_equal(0)
+
+# The spec's placement contract: no blade may stand on a surface steeper than the slope
+# threshold allows, and no blade may be taller than the settings permit.
+func test_every_sampled_blade_stands_on_an_up_facing_surface() -> void:
+	var w := make_world()
+	w.set_grass_value("slope_cos_min", 0.55)
+	var d: Dictionary = w.hooks().debug_grass_stats()
+	assert_int(d["sampled"]).is_greater(0)
+	assert_float(d["min_normal_y"]).is_greater_equal(0.5)  # 0.55 less oct quantisation
+	assert_float(d["max_height"]).is_less_equal(
+		w.get_grass_value("blade_height_m") * (1.0 + w.get_grass_value("height_jitter")) * 1.15 + 0.001)

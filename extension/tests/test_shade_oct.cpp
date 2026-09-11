@@ -101,6 +101,19 @@ TEST_CASE("the folded lower hemisphere round-trips too") {
 	CHECK(angle_deg(un, back) < 0.01f);
 }
 
+TEST_CASE("oct_decode_y_snorm8 agrees with the full decode on a handful of normals") {
+	const float normals[][3] = {{0, 1, 0}, {0, -1, 0}, {1, 0, 0}, {0, 0, 1},
+			{0.3f, 0.9f, 0.31622776f}, {0.3f, -0.9f, 0.31622776f}, {0.57735027f, 0.57735027f, 0.57735027f}};
+	for (const auto &n : normals) {
+		const float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+		const float un[3] = {n[0] / len, n[1] / len, n[2] / len};
+		const uint16_t packed = ve::oct_encode_snorm8(un);
+		float back[3];
+		ve::oct_decode_snorm8(packed, back);
+		CHECK(ve::oct_decode_y_snorm8(packed) == doctest::Approx(back[1]).epsilon(1e-6));
+	}
+}
+
 TEST_CASE("oct_decode normalizes values and uses the exact fallback for a degenerate input") {
 	const float encoded[2] = {0.25f, -0.5f};
 	float back[3];

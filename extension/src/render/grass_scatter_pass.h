@@ -42,6 +42,14 @@ public:
 	// before reporting. No logic change -- this is the private read, made callable.
 	void read_back_counters(RenderingDevice *rd);
 
+	// Placement-contract sample: reduces at most the first 4096 instances on the CPU to
+	// the minimum ground-normal Y and the maximum blade height, which the hook reports
+	// beside the counters. Call after submit+sync, like read_back_counters.
+	void read_back_sample(RenderingDevice *rd);
+	int sample_count() const { return sample_count_; }
+	float sample_min_normal_y() const { return sample_min_normal_y_; }
+	float sample_max_height() const { return sample_max_height_; }
+
 private:
 	bool ensure_buffers(RenderingDevice *rd, int max_blades, int max_bricks);
 	bool ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas);
@@ -59,12 +67,17 @@ private:
 	RID bricks_uset_, scatter_uset_;
 	RID key_params_, key_bricks_, key_counters_, key_dispatch_;
 	RID key_rmap_, key_rtables_, key_bflags_, key_sdf_, key_mat_, key_palette_, key_region_;
-	RID key_sparams_, key_sbricks_, key_scounters_, key_sdispatch_;
+	RID key_sparams_, key_sbricks_, key_scounters_, key_sdraw_;
+	RID key_srmap_, key_srtables_, key_sbflags_, key_spalette_, key_ssdf_, key_smat_;
+	RID key_sregion_, key_sinstances_;
 	int capacity_ = 0;
 	int brick_capacity_ = 0;
 	int last_brick_count_ = 0;
 	int last_blade_count_ = 0;
 	int blade_high_water_ = 0;
+	int sample_count_ = 0;
+	float sample_min_normal_y_ = 1.0f;
+	float sample_max_height_ = 0.0f;
 };
 
 } // namespace godot

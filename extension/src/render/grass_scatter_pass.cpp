@@ -1,6 +1,7 @@
 #include "render/grass_scatter_pass.h"
 #include "render/gpu_atlas.h"
 #include "render/shader_loader.h"
+#include "shade/oct.h"
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rd_sampler_state.hpp>
 #include <godot_cpp/classes/rd_shader_source.hpp>
@@ -118,7 +119,13 @@ void GrassScatterPass::teardown() {
 	key_params_ = key_bricks_ = key_counters_ = key_dispatch_ = RID();
 	key_rmap_ = key_rtables_ = key_bflags_ = RID();
 	key_sdf_ = key_mat_ = key_palette_ = key_region_ = RID();
-	key_sparams_ = key_sbricks_ = key_scounters_ = key_sdispatch_ = RID();
+	key_sparams_ = key_sbricks_ = key_scounters_ = key_sdraw_ = RID();
+	key_srmap_ = key_srtables_ = key_sbflags_ = RID();
+	key_spalette_ = key_ssdf_ = key_smat_ = RID();
+	key_sregion_ = key_sinstances_ = RID();
+	sample_count_ = 0;
+	sample_min_normal_y_ = 1.0f;
+	sample_max_height_ = 0.0f;
 	capacity_ = 0;
 	brick_capacity_ = 0;
 	last_brick_count_ = 0;
@@ -219,32 +226,67 @@ bool GrassScatterPass::ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas)
 		key_palette_ = atlas.palette();
 		key_region_ = region_ubo_;
 	}
-	if (!scatter_shader_.is_valid()) return true; // Task 6 owns the scatter set shape.
+	// Stage-2 set mirrors grass_scatter.comp.glsl bindings 0-11: 0 grass-params, 1
+	// brick_list, 2 counters, 3 draw_args, 4 region_map, 5 region_tables, 6 brick_flags,
+	// 7 palette_buf, 8 sdf_atlas, 9 mat_atlas, 10 region UBO, 11 instances. Binding 3 is
+	// draw_args_ here, NOT dispatch_args_ (that is stage 1's binding 3): separate sets
+	// against separate shaders, so the locals are named after the buffers.
+	if (!scatter_shader_.is_valid()) return true; // scatter stage absent: cull only.
 	if (scatter_uset_.is_valid() && key_sparams_ == params_ubo_ &&
 			key_sbricks_ == brick_list_ && key_scounters_ == counters_ &&
-			key_sdispatch_ == dispatch_args_)
+			key_sdraw_ == draw_args_ && key_srmap_ == atlas.region_map() &&
+			key_srtables_ == atlas.region_tables() && key_sbflags_ == atlas.brick_flags() &&
+			key_spalette_ == atlas.palette() && key_ssdf_ == atlas.sdf_atlas() &&
+			key_smat_ == atlas.mat_atlas() && key_sregion_ == region_ubo_ &&
+			key_sinstances_ == instances_)
 		return true;
 	if (scatter_uset_.is_valid()) rd->free_rid(scatter_uset_);
 	scatter_uset_ = RID();
-	Ref<RDUniform> u[4];
-	for (Ref<RDUniform> &item : u) item.instantiate();
-	u[0]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
-	u[0]->set_binding(0);
-	u[0]->add_id(params_ubo_);
-	for (int i = 1; i < 4; i++) {
-		u[i]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-		u[i]->set_binding(i);
+	Ref<RDUniform> su[12];
+	for (Ref<RDUniform> &item : su) item.instantiate();
+	su[0]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
+	su[0]->set_binding(0);
+	su[0]->add_id(params_ubo_);
+	const RID scatter_buffers[6] = {brick_list_, counters_, draw_args_,
+			atlas.region_map(), atlas.region_tables(), atlas.brick_flags()};
+	for (int i = 1; i <= 6; i++) {
+		su[i]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
+		su[i]->set_binding(i);
+		su[i]->add_id(scatter_buffers[i - 1]);
 	}
-	u[1]->add_id(brick_list_);
-	u[2]->add_id(counters_);
-	u[3]->add_id(dispatch_args_);
-	scatter_uset_ = rd->uniform_set_create(
-			Array::make(u[0], u[1], u[2], u[3]), scatter_shader_, 0);
+	su[7]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
+	su[7]->set_binding(7);
+	su[7]->add_id(atlas.palette());
+	su[8]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
+	su[8]->set_binding(8);
+	su[8]->add_id(sampler_linear_);
+	su[8]->add_id(atlas.sdf_atlas());
+	su[9]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
+	su[9]->set_binding(9);
+	su[9]->add_id(sampler_nearest_);
+	su[9]->add_id(atlas.mat_atlas());
+	su[10]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
+	su[10]->set_binding(10);
+	su[10]->add_id(region_ubo_);
+	su[11]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
+	su[11]->set_binding(11);
+	su[11]->add_id(instances_);
+	Array scatter_args;
+	for (int i = 0; i < 12; i++) scatter_args.push_back(su[i]);
+	scatter_uset_ = rd->uniform_set_create(scatter_args, scatter_shader_, 0);
 	if (!scatter_uset_.is_valid()) return false;
 	key_sparams_ = params_ubo_;
 	key_sbricks_ = brick_list_;
 	key_scounters_ = counters_;
-	key_sdispatch_ = dispatch_args_;
+	key_sdraw_ = draw_args_;
+	key_srmap_ = atlas.region_map();
+	key_srtables_ = atlas.region_tables();
+	key_sbflags_ = atlas.brick_flags();
+	key_spalette_ = atlas.palette();
+	key_ssdf_ = atlas.sdf_atlas();
+	key_smat_ = atlas.mat_atlas();
+	key_sregion_ = region_ubo_;
+	key_sinstances_ = instances_;
 	return true;
 }
 
@@ -296,6 +338,12 @@ bool GrassScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas,
 	zero_dispatch.resize(12);
 	zero_dispatch.fill(0);
 	rd->buffer_update(dispatch_args_, 0, 12, zero_dispatch);
+	// Same for the indirect draw args: stage 2 grows vertex_count with atomicMax, which
+	// assumes a zero base, and the raster would otherwise draw last frame's blades.
+	PackedByteArray zero_args;
+	zero_args.resize(16);
+	zero_args.fill(0);
+	rd->buffer_update(draw_args_, 0, 16, zero_args);
 
 	const int64_t list = rd->compute_list_begin();
 	if (list < 0) return false;
@@ -320,4 +368,24 @@ void GrassScatterPass::read_back_counters(RenderingDevice *rd) {
 	last_brick_count_ = static_cast<int>(c[0]);
 	last_blade_count_ = static_cast<int>(std::min<uint32_t>(c[1], static_cast<uint32_t>(capacity_)));
 	blade_high_water_ = std::max(blade_high_water_, static_cast<int>(c[1]));
+}
+
+void GrassScatterPass::read_back_sample(RenderingDevice *rd) {
+	sample_min_normal_y_ = 1.0f;
+	sample_max_height_ = 0.0f;
+	sample_count_ = std::min(last_blade_count_, 4096);
+	if (sample_count_ <= 0) return;
+	const PackedByteArray data = rd->buffer_get_data(instances_, 0,
+			static_cast<uint32_t>(sample_count_) * 32u);
+	if (data.size() < sample_count_ * 32) { sample_count_ = 0; return; }
+	const float *f = reinterpret_cast<const float *>(data.ptr());
+	for (int i = 0; i < sample_count_; i++) {
+		const float *a = f + i * 8;      // xyz position, w height
+		const uint32_t packed_n = static_cast<uint32_t>(a[4]);
+		// oct_decode_snorm8's inverse for the y component only: the pass stores the ground
+		// normal, and all this assertion needs is which way it points.
+		const float ny = ve::oct_decode_y_snorm8(packed_n);
+		sample_min_normal_y_ = std::min(sample_min_normal_y_, ny);
+		sample_max_height_ = std::max(sample_max_height_, a[3]);
+	}
 }

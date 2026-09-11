@@ -1947,6 +1947,9 @@ Dictionary VoxelDebugHooks::debug_grass_stats() {
 	d["blades"] = 0;
 	d["capacity"] = 0;
 	d["high_water"] = 0;
+	d["sampled"] = 0;
+	d["min_normal_y"] = 1.0;
+	d["max_height"] = 0.0;
 	VoxelWorld *w = world_;
 	if (!w) return d;
 	GrassScatterPass *g = w->grass_scatter_pass();
@@ -1981,12 +1984,16 @@ Dictionary VoxelDebugHooks::debug_grass_stats() {
 		device->submit();
 		device->sync();
 		g->read_back_counters(device);
+		g->read_back_sample(device);
 	}
 	d["ran"] = true;
 	d["bricks"] = g->last_brick_count();
 	d["blades"] = g->last_blade_count();
 	d["capacity"] = g->capacity();
 	d["high_water"] = g->blade_high_water();
+	d["sampled"] = g->sample_count();
+	d["min_normal_y"] = g->sample_min_normal_y();
+	d["max_height"] = g->sample_max_height();
 	return d;
 }
 
