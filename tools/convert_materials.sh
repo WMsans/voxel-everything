@@ -12,7 +12,7 @@ DST="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/assets/materials"
 # extension/src/world/material_table.h (the authoritative table). Layer i serves ve material
 # id i + 1; material 0 is air and has no layer. Agreement is enforced by the converter
 # test in extension/tests/test_material_table.cpp.
-MATERIALS=(grass_01 rock ground_01 breakstone ground_crack_01)
+MATERIALS=(grass_01 rock ground_01 breakstone ground_crack_01 ice_crack ice)
 
 # Materials whose glow mask is derived from the inverted height map: the crevices glow and
 # the raised surface stays dark. A material absent here ships no NN_glow.png, and
