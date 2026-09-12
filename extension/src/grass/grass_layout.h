@@ -21,7 +21,7 @@ struct GrassParams {
 	int32_t ring_blades[4]; // candidate blades per brick, per ring
 	float blade[4];        // width, height, height_jitter, slope_cos_min
 	float wind[4];         // strength, speed, scale, time_seconds
-	float style[4];        // flower_chance, gloss, camera_tilt, unused
+	float style[4];        // flower_chance, gloss, camera_tilt, blade_lighting
 	float shape[4];        // wind_dir_rad, lean_spread_rad, base_curve, ring_width_gain
 	int32_t limits[4];     // max_blades, max_bricks, unused, unused
 };

@@ -3,6 +3,9 @@ extends SceneTree
 # debug hooks, which re-implement it. Run with:
 # godot --path . --resolution 1280x720 -s res://tools/grass_capture.gd -- --out=/tmp/grass
 #
+# --rock=radius,distance floats a rock sphere `distance` metres up-sun of the --at spot, so
+# a frame over open rolling grass can show whether blades take the terrain's shadow.
+#
 # Places the camera low over the grass terrain the grass suites stream around, which is the
 # angle the BotW reference is shot from and the one that shows bare ground if there is any.
 
@@ -15,6 +18,7 @@ func capture() -> void:
 	var pitch := -0.30
 	var look := Vector3.ZERO
 	var at := Vector3(30.0, 56.2, 30.0)
+	var rock := Vector2.ZERO
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--out="):
 			out = arg.trim_prefix("--out=")
@@ -28,6 +32,9 @@ func capture() -> void:
 		if arg.begins_with("--at="):
 			var a := arg.trim_prefix("--at=").split(",")
 			at = Vector3(float(a[0]), float(a[1]), float(a[2]))
+		if arg.begins_with("--rock="):
+			var r := arg.trim_prefix("--rock=").split(",")
+			rock = Vector2(float(r[0]), float(r[1]))
 	DirAccess.make_dir_recursive_absolute(out)
 	var scene: Node = load("res://demo/main.tscn").instantiate()
 	root.add_child(scene)
@@ -40,6 +47,11 @@ func capture() -> void:
 		push_error("grass capture could not initialize the mesh worker")
 		quit(1)
 		return
+	if rock.x > 0.0:
+		# DirectionalLight3D emits along its local -Z, so +Z is toward the sun (ve::SunState).
+		var light: DirectionalLight3D = scene.get_node("DirectionalLight3D")
+		var sun_dir := light.global_transform.basis.z.normalized()
+		world.hooks().debug_apply_sphere_add(at + sun_dir * rock.y, rock.x, 2)
 	var camera: Camera3D = player.get_node("Camera3D")
 	# The same spot every grass suite streams around, at eye height over the ground.
 	player.global_position = at + Vector3(0.0, height, 0.0)

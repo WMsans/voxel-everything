@@ -39,6 +39,7 @@ const GRASS_VALUES := [
 	["Blade height", "blade_height_m", 0.0, 1.5, 0.05],
 	["Wind strength", "wind_strength", 0.0, 1.5, 0.05],
 	["Wind speed", "wind_speed", 0.0, 3.0, 0.1],
+	["Blade lighting", "blade_lighting", 0.0, 1.0, 0.05],
 ]
 
 var _world: VoxelWorld

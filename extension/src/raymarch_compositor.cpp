@@ -386,8 +386,9 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 		gs.reach_m = std::min(gs.reach_m, world->grass_reach_limit_m());
 		const ve::GrassLayout gl = ve::grass_layout(gs, grass_cam, grass_vp);
 		GrassRasterPass *grass_raster = world->grass_raster_pass();
-		const bool grass_ok = grass->run(rd, *atlas, gl, world->region_window(),
-				static_cast<float>(world->beauty_frame()) / 60.0f) &&
+		SunUbo *grass_sun = world->sun_ubo();
+		const bool grass_ok = grass_sun && grass->run(rd, *atlas, gl, world->region_window(),
+				static_cast<float>(world->beauty_frame()) / 60.0f, grass_sun->buffer()) &&
 				grass_raster && grass_raster->draw(rd, *grass, *gb, view_proj, cam_pos);
 		if (grass_ok) timings->end(rd, "grass");
 		else timings->cancel("grass");

@@ -159,6 +159,18 @@ TEST_CASE("the style block carries the camera tilt") {
 	CHECK(l.params.style[2] == doctest::Approx(0.4f));
 }
 
+// Blade lighting takes style[3], the block's last free float, for the same reason the tilt
+// took style[2]: no new vec4, no layout change.
+TEST_CASE("the style block carries the blade lighting blend") {
+	ve::GrassSettingsStore store;
+	REQUIRE(store.set_value("blade_lighting", 0.25f));
+	const float cam[3] = {0, 0, 0};
+	float vp[16];
+	identity(vp);
+	const ve::GrassLayout l = ve::grass_layout(store.get(), cam, vp);
+	CHECK(l.params.style[3] == doctest::Approx(0.25f));
+}
+
 TEST_CASE("the shape block carries the wind-alignment and blade-curve knobs") {
 	ve::GrassSettings s;
 	s.wind_dir_deg = 90.0f;

@@ -120,13 +120,48 @@ func test_every_sampled_blade_stands_on_an_up_facing_surface() -> void:
 	assert_float(d["max_height"]).is_less_equal(
 		w.get_grass_value("blade_height_m") * (1.0 + w.get_grass_value("height_jitter")) * 1.15 + 0.001)
 
-# Nine: a quad from the root to the split plus the tip triangle. A single triangle cannot
-# arc, and the arc is what separates a blade from a spike.
-func test_the_raster_issues_nine_vertices_per_blade() -> void:
+# Twenty-seven: four quads along the Bezier profile plus the tip triangle. Two segments
+# cannot bend; they draw a stiff card with a kink, which is what the field used to be.
+func test_the_raster_issues_twenty_seven_vertices_per_blade() -> void:
 	var w := make_world()
 	var d: Dictionary = w.hooks().debug_grass_stats()
 	assert_bool(d["drawn"]).is_true()
-	assert_int(d["vertices"]).is_equal(d["blades"] * 9)
+	assert_int(d["vertices"]).is_equal(d["blades"] * 27)
+
+# The sun tests stream from above the SURFACE grass west of the usual spot. The hook camera
+# looks straight down from the streamed centre, and at (30, 56.2, 30) its cone only reaches
+# grass-floored cave pockets ~6 m under the hill -- which the sun march correctly reports as
+# fully shadowed (measured: every blade 0.0), and which would make "sunlit" untestable.
+const OPEN_GRASS := Vector3(20.0, 60.0, 30.0)
+
+func stream_to(w: VoxelWorld, centre: Vector3) -> void:
+	for i in range(60):
+		w.hooks().debug_stream_frame(centre)
+
+# Blades on open ground carry the terrain's own sun visibility, marched once per blade by the
+# scatter. Before this every blade wrote 1.0 and nothing near the camera could shadow grass.
+func test_blades_on_open_ground_are_sunlit() -> void:
+	var w := make_world()
+	stream_to(w, OPEN_GRASS)
+	var d: Dictionary = w.hooks().debug_grass_stats()
+	assert_int(d["sampled"]).is_greater(0)
+	assert_float(d["mean_sun"]).is_greater_equal(0.95)
+
+# A rock floating up-sun of the grass must shadow the blades beneath it. Placed along
+# ve::kSunDir (cel.h) from the grass surface, with its underside well clear of the ground so
+# it cannot grow or bury blades itself -- the only thing it can change is the sun march.
+func test_an_occluder_up_sun_shadows_the_blades_beneath_it() -> void:
+	var w := make_world()
+	stream_to(w, OPEN_GRASS)
+	var before: Dictionary = w.hooks().debug_grass_stats()
+	assert_int(before["sampled"]).is_greater(0)
+	var sun_dir := Vector3(0.5746958, 0.7662610, 0.2873479)
+	w.hooks().debug_apply_sphere_add(Vector3(20.0, 53.5, 30.0) + sun_dir * 12.0, 5.0, 2)
+	stream_to(w, OPEN_GRASS)
+	var after: Dictionary = w.hooks().debug_grass_stats()
+	assert_int(after["sampled"]).is_greater(0)
+	assert_float(after["min_sun"]).is_less(0.1)
+	assert_float(after["mean_sun"]).is_less(before["mean_sun"] - 0.1)
 
 func test_no_blades_means_no_draw_but_not_a_failure() -> void:
 	var w := make_world()

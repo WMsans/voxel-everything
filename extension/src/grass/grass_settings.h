@@ -70,6 +70,12 @@ struct GrassSettings {
 	float flower_chance = 0.012f;
 
 	float gloss = 0.25f;
+
+	// How much of a blade's own rounded normal survives against the ground normal it grows
+	// from, near the camera; grass.vert.glsl fades it to zero by the reach. 0 is the flat
+	// meadow every blade of which lands in the same cel band and reads as unlit paint; 1 is
+	// fully per-blade lighting, which starts to read as noise.
+	float blade_lighting = 0.6f;
 };
 
 // Pulls every field into its documented range, NaN included. Idempotent.

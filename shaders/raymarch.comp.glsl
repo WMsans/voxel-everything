@@ -525,65 +525,7 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
 	return h;
 }
 
-// ---------------------------------------------------------------------------------------
-// Shadow layer 1 (spec section 7): the same field the primary ray marched, one ray per
-// pixel. Sphere tracing gives contact hardening for free -- the penumbra narrows as the
-// occluder approaches -- with no shadow map and therefore no acne to bias away.
-//
-// world_sdf() returns +SDF_RANGE for a known-empty brick. Residency is an explicit
-// prerequisite for a shadow result: if the ray leaves the resident/probed region field,
-// return fully lit rather than treating the accumulated darkness as known data.
-// ---------------------------------------------------------------------------------------
-const float RAY_SHADOW_DIST = 60.0;
-const int RAY_SHADOW_STEPS = 96;
-const float RAY_SHADOW_K = 12.0;
-const int RAY_SHADOW_MAX_ISLANDS = 4;
-
-// How far the penumbra term is allowed to look. The field is a NARROW BAND: every read goes
-// through decode_sdf(), which saturates at +SDF_RANGE, so a sample of 0.64 means "no surface
-// within 0.64 m" and carries no occluder distance at all.
-//
-// K*d/t only clears 1.0 when d >= t/K, so once t passes K * SDF_RANGE there is no value the
-// band can hold that reports "lit": every further step darkens by 1/t whether anything is
-// there or not. That is what turned open ground black -- a full 60 m march under an empty
-// sky ended at 12 * 0.64 / 60 = 0.128 visibility, and whether a given pixel's ray ran the
-// whole budget or took the fully-lit residency early-out below made the difference between
-// black and white on neighbouring pixels.
-//
-// Past this distance the march keeps its hard hit test and nothing else. An occluder that
-// far away is a shadow edge this band cannot soften anyway.
-const float RAY_SHADOW_PENUMBRA_DIST = RAY_SHADOW_K * SDF_RANGE; // 7.68 m
-
-float terrain_sun_visibility(vec3 ro, float max_shadow_dist) {
-	float res = 1.0;
-	float t = 0.05;
-	for (int i = 0; i < RAY_SHADOW_STEPS; i++) {
-		if (t > max_shadow_dist) break;
-		vec3 q = ro + sun_light.dir.xyz * t;
-		ivec3 brick = ivec3(floor(q / BRICK_SIZE));
-		int shadow_region = region_slot_of(brick);
-		if (shadow_region < 0) return 1.0;
-		// The light supplies a normalized direction; the caller must avoid an exactly-zero
-		// component because this far-face division has no primary-DDA-style zero guard. A
-		// normalized node basis effectively never produces one, and ray_box already tolerates
-		// the infinities. A resident but empty region cannot contain an occluder; skip its whole
-		// 25.6 m cell.
-		if (region_slot_counts.n[shadow_region] == 0) {
-			vec3 rlo = floor(q / REGION_SIZE) * REGION_SIZE;
-			vec3 rhi = rlo + vec3(REGION_SIZE);
-			vec3 far = mix(rlo, rhi, step(0.0, sun_light.dir.xyz));
-			vec3 tf = (far - q) / sun_light.dir.xyz;
-			float skip = min(tf.x, min(tf.y, tf.z));
-			t += max(skip, 0.01) + 0.001;
-			continue;
-		}
-		float d = world_sdf(q);
-		if (d < 0.004) return 0.0;
-		if (t <= RAY_SHADOW_PENUMBRA_DIST) res = min(res, RAY_SHADOW_K * d / t);
-		t += clamp(d, 0.02, 1.0);
-	}
-	return clamp(res, 0.0, 1.0);
-}
+#include "sun_march.glslh"
 
 // Spec section 5: "islands shade/shadow/reflect exactly like static terrain". The AABB
 // reject costs a few ALU for each of the (at most 32) live slots; only islands the ray

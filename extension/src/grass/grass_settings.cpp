@@ -36,6 +36,7 @@ void clamp_grass_settings(GrassSettings *s) {
 	s->ring_width_gain = clampf(s->ring_width_gain, 0.0f, 6.0f);
 	s->flower_chance = clampf(s->flower_chance, 0.0f, 1.0f);
 	s->gloss = clampf(s->gloss, 0.0f, 1.0f);
+	s->blade_lighting = clampf(s->blade_lighting, 0.0f, 1.0f);
 }
 
 } // namespace ve

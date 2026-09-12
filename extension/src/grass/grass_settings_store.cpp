@@ -23,6 +23,7 @@ const FloatField kFloatFields[] = {
 	{"ring_width_gain", &GrassSettings::ring_width_gain},
 	{"flower_chance", &GrassSettings::flower_chance},
 	{"gloss", &GrassSettings::gloss},
+	{"blade_lighting", &GrassSettings::blade_lighting},
 };
 struct IntField { const char *name; int GrassSettings::*member; };
 const IntField kIntFields[] = {
