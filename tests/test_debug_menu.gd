@@ -92,3 +92,29 @@ func test_knob_values_are_clamped_on_the_way_in() -> void:
 	assert_float(world.get_effect_value("emissive_gi_strength")).is_equal_approx(0.0, 0.001)
 	world.set_effect_value("ssgi_temporal", 1.0)
 	assert_float(world.get_effect_value("ssgi_temporal")).is_less(1.0)
+
+# The grass density slider reaches the grass store the same way a magnitude knob reaches
+# ve::BeautySettings -- and it must move only its own field.
+func test_grass_density_slider_writes_only_its_named_knob() -> void:
+	var pair: Array = make_pair()
+	await get_tree().process_frame
+	var world: VoxelWorld = pair[0]
+	var menu: PanelContainer = pair[1]
+	var reach: float = world.get_grass_value("reach_m")
+	var slider: HSlider = menu.get_node("Controls/blades_per_brick")
+	slider.emit_signal("value_changed", 21.0)
+	assert_float(world.get_grass_value("blades_per_brick")).is_equal_approx(21.0, 0.001)
+	assert_float(world.get_grass_value("reach_m")).is_equal_approx(reach, 0.001)
+
+# The grass checkbox toggles the enabled flag through set_grass_value, mirroring how an
+# effect checkbox writes its named field.
+func test_grass_checkbox_writes_the_enabled_flag() -> void:
+	var pair: Array = make_pair()
+	await get_tree().process_frame
+	var world: VoxelWorld = pair[0]
+	var menu: PanelContainer = pair[1]
+	assert_float(world.get_grass_value("enabled")).is_equal_approx(1.0, 0.001)
+	var enabled: CheckBox = menu.get_node("Controls/enabled")
+	enabled.emit_signal("toggled", false)
+	assert_float(world.get_grass_value("enabled")).is_equal_approx(0.0, 0.001)
+	assert_bool(world.get_effect_enabled("outlines")).is_true()

@@ -118,6 +118,12 @@ func _update_text() -> void:
 				stats.normal_high_water_bytes / 1048576.0,
 				stats.normal_allocation_failures,
 				stats.normal_fallback_hits])
+	var grass := ""
+	if _world and _world.is_initialized():
+		var g: Dictionary = _world.hooks().debug_grass_stats()
+		grass = "  |  grass blades %d/%d bricks %d peak %d" % [
+			g.get("blades", 0), g.get("capacity", 0),
+			g.get("bricks", 0), g.get("high_water", 0)]
 	var gpu_line := "GPU n/a"
 	var gt: Dictionary = _world.hooks().debug_gpu_timings() if _world else {}
 	if gt.get("valid", false):
@@ -130,7 +136,7 @@ func _update_text() -> void:
 	var tool_line := ""
 	if _tool:
 		tool_line = "\n%s  radius %.1f" % [str(_tool.tool_name()), float(_tool.radius)]
-	text = "%d fps  (%.1f ms)  |  %s%s%s%s%s\n%s%s" % [fps, ms, s, p, isl, lod, norm, gpu_line, tool_line]
+	text = "%d fps  (%.1f ms)  |  %s%s%s%s%s%s\n%s%s" % [fps, ms, s, p, isl, lod, norm, grass, gpu_line, tool_line]
 
 func _draw_reticle() -> void:
 	if _reticle == null or mode == Mode.HIDDEN:
