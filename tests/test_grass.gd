@@ -120,11 +120,13 @@ func test_every_sampled_blade_stands_on_an_up_facing_surface() -> void:
 	assert_float(d["max_height"]).is_less_equal(
 		w.get_grass_value("blade_height_m") * (1.0 + w.get_grass_value("height_jitter")) * 1.15 + 0.001)
 
-func test_the_raster_issues_three_vertices_per_blade() -> void:
+# Nine: a quad from the root to the split plus the tip triangle. A single triangle cannot
+# arc, and the arc is what separates a blade from a spike.
+func test_the_raster_issues_nine_vertices_per_blade() -> void:
 	var w := make_world()
 	var d: Dictionary = w.hooks().debug_grass_stats()
 	assert_bool(d["drawn"]).is_true()
-	assert_int(d["vertices"]).is_equal(d["blades"] * 3)
+	assert_int(d["vertices"]).is_equal(d["blades"] * 9)
 
 func test_no_blades_means_no_draw_but_not_a_failure() -> void:
 	var w := make_world()

@@ -36,7 +36,10 @@ TEST_CASE("the brick box covers reach horizontally and vertical_reach vertically
 	CHECK(tall < wide);
 }
 
-TEST_CASE("each ring past the first drops 3 of every 4 blades") {
+// Halving, not quartering. The old 4x-per-ring thinning took the default 16 down to
+// 16/4/1/1, so ring 2 onward was one blade per 0.8 m brick -- a hole, not a tail. The far
+// rings pay for the extra blades with width instead, via GrassParams::shape[3].
+TEST_CASE("each ring past the first drops half its blades") {
 	ve::GrassSettings s;
 	s.blades_per_brick = 16;
 	const float cam[3] = {0, 0, 0};
@@ -45,10 +48,21 @@ TEST_CASE("each ring past the first drops 3 of every 4 blades") {
 	const ve::GrassLayout l = ve::grass_layout(s, cam, vp);
 	CHECK(l.ring_count == 4);
 	CHECK(l.blades_per_brick[0] == 16);
-	CHECK(l.blades_per_brick[1] == 4);
-	CHECK(l.blades_per_brick[2] == 1);
-	// Thinning never reaches zero: a ring that draws nothing is a hole, not a saving.
-	CHECK(l.blades_per_brick[3] >= 1);
+	CHECK(l.blades_per_brick[1] == 8);
+	CHECK(l.blades_per_brick[2] == 4);
+	CHECK(l.blades_per_brick[3] == 2);
+}
+
+// Thinning never reaches zero: a ring that draws nothing is a hole, not a saving. One
+// blade per brick is the floor even when the shift would have run the count off the end.
+TEST_CASE("ring thinning floors at one blade rather than zero") {
+	ve::GrassSettings s;
+	s.blades_per_brick = 1;
+	const float cam[3] = {0, 0, 0};
+	float vp[16];
+	identity(vp);
+	const ve::GrassLayout l = ve::grass_layout(s, cam, vp);
+	for (int i = 0; i < l.ring_count; i++) CHECK(l.blades_per_brick[i] >= 1);
 }
 
 TEST_CASE("ring boundaries split the reach evenly and cover it") {
@@ -113,10 +127,10 @@ TEST_CASE("frustum planes point inward and are normalised") {
 	}
 }
 
-TEST_CASE("GrassParams is 240 bytes and its floats land where GLSL expects") {
-	// Fifteen vec4: cam, planes[6], brick_min, brick_dim, ring_end, ring_blades, blade,
-	// wind, style, limits. If this number moves, GRASS_PARAMS_BLOCK moved with it.
-	CHECK(sizeof(ve::GrassParams) == 240);
+TEST_CASE("GrassParams is 256 bytes and its floats land where GLSL expects") {
+	// Sixteen vec4: cam, planes[6], brick_min, brick_dim, ring_end, ring_blades, blade,
+	// wind, style, shape, limits. If this number moves, GRASS_PARAMS_BLOCK moved with it.
+	CHECK(sizeof(ve::GrassParams) == 256);
 	ve::GrassSettings s;
 	const float cam[3] = {1.0f, 2.0f, 3.0f};
 	float vp[16];
@@ -126,4 +140,23 @@ TEST_CASE("GrassParams is 240 bytes and its floats land where GLSL expects") {
 	CHECK(raw[0] == doctest::Approx(1.0f));
 	CHECK(raw[1] == doctest::Approx(2.0f));
 	CHECK(raw[2] == doctest::Approx(3.0f));
+}
+
+// The shape block is what turns a field of randomly-pointed spikes into a field that lies
+// one way. A zero lean spread would be a lawn of clones; a spread past pi is the old
+// uniform-random azimuth wearing a different name.
+TEST_CASE("the shape block carries the wind-alignment and blade-curve knobs") {
+	ve::GrassSettings s;
+	s.wind_dir_deg = 90.0f;
+	s.lean_spread_rad = 0.5f;
+	s.base_curve = 0.4f;
+	s.ring_width_gain = 3.0f;
+	const float cam[3] = {0, 0, 0};
+	float vp[16];
+	identity(vp);
+	const ve::GrassLayout l = ve::grass_layout(s, cam, vp);
+	CHECK(l.params.shape[0] == doctest::Approx(1.57079633f)); // 90 degrees in radians
+	CHECK(l.params.shape[1] == doctest::Approx(0.5f));
+	CHECK(l.params.shape[2] == doctest::Approx(0.4f));
+	CHECK(l.params.shape[3] == doctest::Approx(3.0f));
 }

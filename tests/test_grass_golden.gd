@@ -36,13 +36,21 @@ func make_world() -> VoxelWorld:
 			break
 	return w
 
-# Recorded from a clean build on 2026-09-12 (74 blades / 222 vertices in the hooked
-# 64x64 top-down view; min is the cleared-black background, max a sunlit blade pixel,
-# mean the sparse top-down coverage). Tolerances mirror the SSAO golden's tightness:
-# these are deterministic GPU results from a deterministic scene at a pinned wind time,
-# not sampled statistics. -1.0 on any key means the hooked drive did not measure
-# (never on local-device worlds; see debug_grass_stats).
-const GOLDEN := {"min_luma": 0.000000, "max_luma": 0.532495, "mean_luma": 0.000229}
+# Re-recorded on 2026-09-11 for the BotW-look pass, which moved these deliberately: blades
+# now inherit the ground normal instead of splaying their own, lean along the wind instead
+# of a random azimuth, arc over nine vertices instead of standing as one flat triangle, and
+# widen with distance to hold coverage as the far rings thin.
+#
+# 209 blades / 1881 vertices in the hooked 64x64 top-down view, against 74 / 222 before.
+# min is still the cleared-black background. max rose 0.532 -> 0.785 with the brighter tip
+# colour. mean rose 0.000229 -> 0.0084, a factor of 37 -- far more than the 2.8x blade count
+# alone, because width compensation and the arc are what actually close the gaps. That mean
+# IS the "can you see bare ground from above" measurement, so it is the number to watch.
+#
+# Tolerances mirror the SSAO golden's tightness: these are deterministic GPU results from a
+# deterministic scene at a pinned wind time, not sampled statistics. -1.0 on any key means
+# the hooked drive did not measure (never on local-device worlds; see debug_grass_stats).
+const GOLDEN := {"min_luma": 0.000000, "max_luma": 0.785042, "mean_luma": 0.008446}
 const TOL_EXTREME := 0.002
 const TOL_MEAN := 0.004
 

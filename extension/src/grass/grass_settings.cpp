@@ -27,6 +27,12 @@ void clamp_grass_settings(GrassSettings *s) {
 	s->wind_strength = clampf(s->wind_strength, 0.0f, 4.0f);
 	s->wind_speed = clampf(s->wind_speed, 0.0f, 8.0f);
 	s->wind_scale = clampf(s->wind_scale, 0.0f, 4.0f);
+	s->wind_dir_deg = clampf(s->wind_dir_deg, 0.0f, 360.0f);
+	// Never past pi: a half-width of pi already covers every azimuth, and anything beyond
+	// it is the uniform-random lean this field exists to replace.
+	s->lean_spread_rad = clampf(s->lean_spread_rad, 0.0f, 3.14159265f);
+	s->base_curve = clampf(s->base_curve, 0.0f, 2.0f);
+	s->ring_width_gain = clampf(s->ring_width_gain, 0.0f, 6.0f);
 	s->flower_chance = clampf(s->flower_chance, 0.0f, 1.0f);
 	s->gloss = clampf(s->gloss, 0.0f, 1.0f);
 }

@@ -29,15 +29,21 @@ const uint GRASS_MATERIAL = 1u;
 // though grass never samples them; a flat blade colour is the whole point.
 
 void main() {
-	// Vertex gradient, dark cool root to bright warm tip. This is the BotW vertex-colour
-	// trick and it does most of the work of making a triangle read as a blade.
-	const vec3 kRoot = vec3(0.10, 0.22, 0.07);
-	const vec3 kTip  = vec3(0.52, 0.78, 0.24);
+	// Vertex gradient, shaded root to bright warm tip. This is the BotW vertex-colour trick
+	// and, now that every blade shares the ground normal, it is ALL of the shape cue the
+	// blade has -- the lighting no longer varies across it.
+	//
+	// The root is a dark green rather than the near-black it used to be: at 0.10/0.22/0.07
+	// the bases read as dirt between the blades instead of canopy shadow, which is half of
+	// why the field looked bald.
+	const vec3 kRoot = vec3(0.16, 0.30, 0.10);
+	const vec3 kTip  = vec3(0.66, 0.86, 0.34);
 	vec3 albedo = mix(kRoot, kTip, v_height_t * v_height_t);
 
-	// Per-blade and per-clump variation, so the field is patchy rather than a lawn.
+	// Per-blade and per-clump variation, so the field is patchy rather than a lawn. Kept
+	// narrow: the old +-18% swing read as salt-and-pepper noise across the field.
 	float tint = grass_unit(grass_hash(v_hash ^ 0x27D4EB2Fu));
-	albedo *= mix(0.82, 1.18, tint);
+	albedo *= mix(0.92, 1.08, tint);
 	albedo = mix(albedo, albedo * vec3(1.12, 1.05, 0.72), v_clump * 0.45);
 
 	// Flowers: a small hash fraction gets a warm tip. One branch, near-free.
@@ -51,9 +57,11 @@ void main() {
 	float fade = clamp((d - pc.ring_end.z) / max(pc.ring_end.w - pc.ring_end.z, 1e-3), 0.0, 1.0);
 	if (bayer4(ivec2(gl_FragCoord.xy)) < fade) discard;
 
-	// Backfaces are not culled, so a blade seen from behind must not shade as if it faced
-	// away -- that is the classic black-grass bug.
-	vec3 n = gl_FrontFacing ? normalize(v_normal) : -normalize(v_normal);
+	// The interpolated GROUND normal, never flipped. The old code flipped it on backfaces
+	// to rescue per-blade normals that genuinely faced away from the viewer; an inherited
+	// ground normal already points out of the terrain on both sides, and flipping it would
+	// aim it into the ground -- which is the black-grass bug, not the fix for it.
+	vec3 n = normalize(v_normal);
 
 	// Sun visibility is 1: shadowing is the deferred pass's job, exactly as in lod.frag.glsl.
 	out_albedo = vec4(albedo, 1.0);

@@ -108,15 +108,23 @@ void main() {
 	float clump = grass_unit(grass_hash3(clump_cell, 0x5BD1u));
 	float jitter = (grass_unit(grass_hash(h ^ 0x85EBCA6Bu)) * 2.0 - 1.0) * grass.blade.z;
 	float height = grass.blade.y * (1.0 + jitter) * mix(0.7, 1.15, clump);
-	float lean = grass_unit(grass_hash(h ^ 0xC2B2AE35u)) * 6.2831853;
+	// Wind-aligned lean. This used to be a uniform random 0..2pi, which is what made the
+	// field read as a pincushion of spikes rather than grass lying one way. The mean
+	// direction is the wind angle, bent by a low-frequency swirl so the meadow is not a
+	// comb, and each blade scatters about that mean by at most shape.y.
+	float swirl = (grass_gust(p.xz, 0.0, 0.0, grass.wind.z * 0.35) - 0.5) * 1.2;
+	float lean = grass.shape.x + swirl +
+			grass_snorm(grass_hash(h ^ 0xC2B2AE35u)) * grass.shape.y;
 
 	GrassBlade blade;
 	blade.a = vec4(p, height);
 	blade.b = vec4(float(oct_encode_snorm8(n)), uintBitsToFloat(h), lean, clump);
 	instances.b[index] = blade;
 
-	// Three vertices per blade. atomicMax, not a store: any appending thread may be last.
-	atomicMax(draw_args.vertex_count, (index + 1u) * 3u);
+	// Nine vertices per blade: one quad (two triangles) plus the tip triangle. Must agree
+	// with the decode in grass.vert.glsl and with GrassRasterPass::draw's CPU-side mirror.
+	// atomicMax, not a store: any appending thread may be last.
+	atomicMax(draw_args.vertex_count, (index + 1u) * 9u);
 	draw_args.instance_count = 1u;
 
 	// brick_atlas.glslh declares brick_flags for the flag-word helpers this stage never

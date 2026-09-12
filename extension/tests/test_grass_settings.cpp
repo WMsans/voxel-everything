@@ -57,3 +57,46 @@ TEST_CASE("the store round-trips every named field and clamps on the way in") {
 	CHECK(store.get().enabled == false);
 	CHECK_FALSE(store.set_value("no_such_knob", 1.0f));
 }
+
+// Every new shape knob has to survive a hostile value, because these feed the vertex
+// shader's arc directly: a negative curve bends blades into the ground and a NaN spread
+// takes the whole field with it.
+TEST_CASE("the shape knobs clamp into range from hostile values") {
+	ve::GrassSettings s;
+	s.wind_dir_deg = 1e9f;
+	s.lean_spread_rad = -4.0f;
+	s.base_curve = 1e9f;
+	s.ring_width_gain = -1.0f;
+	ve::clamp_grass_settings(&s);
+	CHECK(s.wind_dir_deg >= 0.0f);
+	CHECK(s.wind_dir_deg <= 360.0f);
+	CHECK(s.lean_spread_rad >= 0.0f);
+	CHECK(s.base_curve <= 2.0f);
+	CHECK(s.ring_width_gain >= 0.0f);
+
+	ve::GrassSettings n;
+	n.lean_spread_rad = 0.0f / 0.0f;
+	n.base_curve = 0.0f / 0.0f;
+	ve::clamp_grass_settings(&n);
+	CHECK(n.lean_spread_rad >= 0.0f);
+	CHECK(n.base_curve >= 0.0f);
+}
+
+TEST_CASE("the store names the shape knobs too") {
+	ve::GrassSettingsStore store;
+	CHECK(store.set_value("wind_dir_deg", 120.0f));
+	CHECK(store.value("wind_dir_deg") == doctest::Approx(120.0f));
+	CHECK(store.set_value("lean_spread_rad", 0.4f));
+	CHECK(store.value("lean_spread_rad") == doctest::Approx(0.4f));
+	CHECK(store.set_value("base_curve", 0.6f));
+	CHECK(store.value("base_curve") == doctest::Approx(0.6f));
+	CHECK(store.set_value("ring_width_gain", 2.0f));
+	CHECK(store.value("ring_width_gain") == doctest::Approx(2.0f));
+}
+
+// The scatter shader runs one workgroup of 64 threads per brick and every thread is one
+// candidate blade, so a default above 64 would silently drop blades on the floor.
+TEST_CASE("the default blade density fits the scatter workgroup") {
+	ve::GrassSettings s;
+	CHECK(s.blades_per_brick <= 64);
+}

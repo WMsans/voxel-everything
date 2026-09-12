@@ -7,7 +7,7 @@ namespace ve {
 inline constexpr int kGrassRings = 4;
 
 // Uploaded to a uniform buffer and mirrored by `GrassParams` in shaders/grass.glslh. Laid
-// out as fifteen vec4 (240 bytes) so std140 padding cannot disagree with the C++ struct;
+// out as sixteen vec4 (256 bytes) so std140 padding cannot disagree with the C++ struct;
 // test_grass_layout pins both the size and the first three floats.
 //
 // Order matters and is asserted: cam_pos first, so a shader reading params.cam.xyz gets the
@@ -22,6 +22,7 @@ struct GrassParams {
 	float blade[4];        // width, height, height_jitter, slope_cos_min
 	float wind[4];         // strength, speed, scale, time_seconds
 	float style[4];        // flower_chance, gloss, unused, unused
+	float shape[4];        // wind_dir_rad, lean_spread_rad, base_curve, ring_width_gain
 	int32_t limits[4];     // max_blades, max_bricks, unused, unused
 };
 

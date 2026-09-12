@@ -1,6 +1,6 @@
 // Shared grass definitions: the GrassParams mirror and the per-blade hash. Mirrors
 // ve::GrassParams in extension/src/grass/grass_layout.h, which test_grass_layout pins at
-// 240 bytes with cam.xyz first.
+// 256 bytes with cam.xyz first.
 //
 // NOTE: never put a literal include directive inside a comment in this file -- the loader
 // matches include tokens anywhere in a line and would self-include.
@@ -20,6 +20,7 @@ struct GrassBlade {
 	vec4 blade;         \
 	vec4 wind;          \
 	vec4 style;         \
+	vec4 shape;         \
 	ivec4 limits;
 
 // PCG-style integer hash. Deterministic in world space, so a blade keeps its identity as
@@ -36,6 +37,18 @@ uint grass_hash3(ivec3 c, uint salt) {
 }
 
 float grass_unit(uint h) { return float(h & 0x00FFFFFFu) / float(0x01000000u); }
+
+// Signed unit in -1..1, for anything that scatters symmetrically about a centre.
+float grass_snorm(uint h) { return grass_unit(h) * 2.0 - 1.0; }
+
+// Far rings halve their blade count (grass_layout.cpp), so without this the field would
+// visibly thin with distance. Width grows exp2 in the reach fraction by the same factor the
+// count shrinks, which holds COVERAGE flat: fewer, fatter blades read as the same meadow.
+// Continuous in distance rather than stepped per ring, so no banding appears at a ring edge.
+float grass_width_scale(float distance_m, float reach_m, float gain) {
+	float f = clamp(distance_m / max(reach_m, 1e-3), 0.0, 1.0);
+	return exp2(f * gain);
+}
 
 // True when the brick's world-space AABB is outside any frustum plane.
 bool grass_brick_culled(vec3 lo, vec3 hi, vec4 planes[6]) {

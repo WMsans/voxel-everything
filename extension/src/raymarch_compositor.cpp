@@ -378,7 +378,13 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 		float grass_vp[16];
 		for (int c = 0; c < 4; c++)
 			for (int r = 0; r < 4; r++) grass_vp[c * 4 + r] = view_proj.columns[c][r];
-		const ve::GrassLayout gl = ve::grass_layout(world->grass_settings(), grass_cam, grass_vp);
+		// Grass is scattered from resident bricks, so a reach past the completely-resident
+		// radius buys nothing: those candidates are dropped in stage 2 and the field ends on
+		// a hard edge wherever residency happens to stop. Clamping here instead makes the
+		// reach -- and therefore the ring fade that ends at it -- land on ground that exists.
+		ve::GrassSettings gs = world->grass_settings();
+		gs.reach_m = std::min(gs.reach_m, world->grass_reach_limit_m());
+		const ve::GrassLayout gl = ve::grass_layout(gs, grass_cam, grass_vp);
 		GrassRasterPass *grass_raster = world->grass_raster_pass();
 		const bool grass_ok = grass->run(rd, *atlas, gl, world->region_window(),
 				static_cast<float>(world->beauty_frame()) / 60.0f) &&

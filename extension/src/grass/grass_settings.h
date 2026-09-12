@@ -16,14 +16,14 @@ struct GrassSettings {
 	// so the box is much shorter than it is wide.
 	float vertical_reach_m = 10.0f;
 
-	// Candidate blades per brick in the nearest ring. Rings past the first drop 3 of every
-	// 4 (Ghost of Tsushima's thinning), so this is the only density number to turn.
-	int blades_per_brick = 16;
+	// Candidate blades per brick in the nearest ring. Capped at 64, the scatter's workgroup
+	// width -- one thread per candidate, so a brick never needs a second group.
+	int blades_per_brick = 48;
 	// Hard cap on the instance buffer. The scatter clamps to it rather than overflowing.
-	int max_blades = 400000;
+	int max_blades = 600000;
 
-	float blade_width_m = 0.018f;
-	float blade_height_m = 0.55f;
+	float blade_width_m = 0.030f;
+	float blade_height_m = 0.95f;
 	// Per-blade height jitter as a fraction of blade_height_m.
 	float height_jitter = 0.35f;
 
@@ -34,6 +34,20 @@ struct GrassSettings {
 	float wind_strength = 0.35f; // metres of tip displacement at full gust
 	float wind_speed = 0.6f;     // gust field scroll rate
 	float wind_scale = 0.04f;    // gust field frequency, cycles per metre
+
+	// Compass direction the field lies in. Blades lean around THIS angle rather than around
+	// a uniform-random azimuth: coherent direction is what makes a meadow read as a meadow
+	// instead of a pincushion, and it was the single worst thing about the old look.
+	float wind_dir_deg = 35.0f;
+	// Half-width of the per-blade lean scatter about wind_dir_deg, in radians. 0 is a lawn
+	// of clones; pi is the old uniform-random azimuth under a new name.
+	float lean_spread_rad = 0.55f;
+	// How far the tip travels horizontally, as a fraction of blade height. This is what
+	// arcs the blade over instead of standing it up like a spike.
+	float base_curve = 0.45f;
+	// Far rings halve their blade count; they buy the coverage back with width, scaled
+	// exp2(ring_fraction * this) so the gain is continuous and rings do not band.
+	float ring_width_gain = 3.0f;
 
 	// Fraction of blades that get a flower tint at the tip.
 	float flower_chance = 0.012f;

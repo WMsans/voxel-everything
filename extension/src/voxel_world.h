@@ -399,6 +399,18 @@ public:
 	// The near-field region map's current window. Read by RaymarchCompositor for the
 	// push constants and by the debug hooks.
 	ve::RegionWindow region_window() const { return store_->residency() ? store_->residency()->window() : ve::RegionWindow{}; }
+
+	// How far grass can actually be placed, in metres. Blades are scattered from resident
+	// BRICK data, so beyond the completely-resident radius stage 2's slot_at() returns -1
+	// and every candidate is dropped -- grass would simply stop, with a hard edge. Reporting
+	// the limit lets the layout end its fade here instead. Mirrors LodSystem::fade_band's
+	// fallback: before the streamer has run, complete_radius_m() is 0, and the configured
+	// radius is the honest answer rather than "no grass at all".
+	float grass_reach_limit_m() const {
+		float reach = store_->residency() ? store_->residency()->complete_radius_m() : 0.0f;
+		if (reach <= 0.0f) reach = store_->config().residency_radius_m;
+		return reach;
+	}
 	ve::EditLog *edit_log() { return store_->edit_log(); }
 	ve::VolumeSet &volumes() { return store_->volumes(); }
 	RaymarchPass *raymarch_pass() { return context_.render->raymarch_pass(); }

@@ -62,9 +62,12 @@ GrassLayout grass_layout(const GrassSettings &settings, const float camera[3],
 	l.ring_count = kGrassRings;
 	for (int i = 0; i < kGrassRings; i++) {
 		l.ring_end_m[i] = s.reach_m * static_cast<float>(i + 1) / static_cast<float>(kGrassRings);
-		// Drop 3 of every 4 per ring (Ghost of Tsushima's thinning), with a floor of one so
-		// a far ring thins rather than disappears.
-		l.blades_per_brick[i] = std::max(1, s.blades_per_brick >> (2 * i));
+		// Halve per ring, with a floor of one so a far ring thins rather than disappears.
+		// This used to drop 3 of every 4, which took the default density to one blade per
+		// 0.8 m brick by ring 2 and made the field end abruptly instead of fading. The
+		// blades the far rings give up are paid back as width in the vertex shader, via
+		// shape[3] -- count down, size up, coverage flat.
+		l.blades_per_brick[i] = std::max(1, s.blades_per_brick >> i);
 	}
 	if (s.blades_per_brick == 0) {
 		for (int i = 0; i < kGrassRings; i++) l.blades_per_brick[i] = 0;
@@ -129,6 +132,10 @@ GrassLayout grass_layout(const GrassSettings &settings, const float camera[3],
 	p.wind[3] = 0.0f; // the compositor stamps the frame's time before upload
 	p.style[0] = s.flower_chance;
 	p.style[1] = s.gloss;
+	p.shape[0] = s.wind_dir_deg * 3.14159265358979f / 180.0f;
+	p.shape[1] = s.lean_spread_rad;
+	p.shape[2] = s.base_curve;
+	p.shape[3] = s.ring_width_gain;
 	p.limits[0] = s.max_blades;
 	p.limits[1] = l.max_bricks;
 	return l;
