@@ -19,6 +19,8 @@ layout(push_constant, std430) uniform Push {
 layout(location = 0) out vec3 v_wpos;
 layout(location = 1) out vec3 v_normal;
 layout(location = 2) out float v_height_t; // 0 at the root, 1 at the tip
+layout(location = 3) out float v_clump;
+layout(location = 4) out flat uint v_hash;
 
 void main() {
 	uint vi = uint(gl_VertexIndex);
@@ -44,7 +46,20 @@ void main() {
 	float width = pc.blade.x * mix(1.0, 2.5, view_edge);
 
 	float t = (corner == 2u) ? 1.0 : 0.0;
-	vec3 p = root + up * (height * t);
+	uint hash = floatBitsToUint(blade.b.y);
+
+	// Only the tip moves (BotW). Three layers: the gust field gives the waves crossing the
+	// meadow, a per-blade sine keeps neighbours out of phase, and a high-frequency term
+	// jitters the very tip.
+	float gust = grass_gust(root.xz, pc.wind.w, pc.wind.y, pc.wind.z);
+	float phase = grass_unit(hash) * 6.2831853;
+	float bob = sin(pc.wind.w * 2.3 + phase) * 0.25;
+	float jitter = sin(pc.wind.w * 11.0 + phase * 3.0) * 0.06;
+	float bend = pc.wind.x * (gust + bob + jitter);
+
+	// pow(t, 2) keeps the base planted while the tip travels.
+	vec3 sway = lean_dir * (bend * t * t);
+	vec3 p = root + up * (height * t) + sway;
 	if (corner != 2u) p += side * (corner == 0u ? -width : width) * 0.5;
 
 	// Roundness without geometry: base normals splay outward, the tip's leans toward the
@@ -54,5 +69,7 @@ void main() {
 	v_wpos = p;
 	v_normal = n;
 	v_height_t = t;
+	v_clump = blade.b.w;
+	v_hash = hash;
 	gl_Position = push.view_proj * vec4(p, 1.0);
 }

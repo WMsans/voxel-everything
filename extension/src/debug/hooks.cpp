@@ -1953,6 +1953,12 @@ Dictionary VoxelDebugHooks::debug_grass_stats() {
 	d["max_height"] = 0.0;
 	d["drawn"] = false;
 	d["vertices"] = 0;
+	// Shading observables, filled by the hooked drive below. -1.0 is the honest
+	// "not measured" sentinel (the ssao probe's lit_luma fallback): demo worlds stay
+	// pure-read and never reach the drive, so they report these defaults.
+	d["min_luma"] = -1.0;
+	d["max_luma"] = -1.0;
+	d["mean_luma"] = -1.0;
 	VoxelWorld *w = world_;
 	if (!w) return d;
 	GrassScatterPass *g = w->grass_scatter_pass();
@@ -2003,9 +2009,40 @@ Dictionary VoxelDebugHooks::debug_grass_stats() {
 			Projection view_proj;
 			for (int cc = 0; cc < 4; cc++)
 				for (int rr = 0; rr < 4; rr++) view_proj.columns[cc][rr] = vp[cc * 4 + rr];
+			// Fixed background: the raster's own draw_list_begin(DRAW_DEFAULT_ALL)
+			// performs no clear -- verified against LodRasterPass::draw, which opens its
+				// list the same way and relies on a separate explicit clear (production
+				// grass relies on the compositor's earlier clears and draws over the LoD
+				// frame, unchanged). So the HOOK clears the owned 64x64 targets through a
+				// render pass before drawing. Via the LoD pass's clear_targets, not a
+				// texture_clear: a colour clear is refused on the depth format (see
+				// debug_lod_render_probe). Albedo/surface go to (0,0,0,0), depth to 0.0
+				// (reverse-Z far).
+			if (w->lod_raster_pass())
+				w->lod_raster_pass()->clear_targets(device, *w->gbuffer());
 			raster->draw(device, *g, *w->gbuffer(), view_proj, p);
 			device->submit();
 			device->sync();
+			// Shading observable: min/max/mean luma of the albedo the hooked raster
+				// just drew, with the ssao probe's 0.2126/0.7152/0.0722 weights. Albedo
+				// is R8G8B8A8_UNORM, so plain bytes, not halves.
+			const PackedByteArray alb = device->texture_get_data(w->gbuffer()->albedo(), 0);
+			const int pixels = 64 * 64;
+			if (alb.size() >= pixels * 4) {
+				const uint8_t *a = reinterpret_cast<const uint8_t *>(alb.ptr());
+				float mn = 1.0f, mx = 0.0f;
+				double sum = 0.0;
+				for (int i = 0; i < pixels; i++) {
+					const float luma = (0.2126f * a[i * 4] + 0.7152f * a[i * 4 + 1] +
+							0.0722f * a[i * 4 + 2]) / 255.0f;
+					mn = std::min(mn, luma);
+					mx = std::max(mx, luma);
+					sum += luma;
+				}
+				d["min_luma"] = mn;
+				d["max_luma"] = mx;
+				d["mean_luma"] = sum / static_cast<double>(pixels);
+			}
 		}
 	}
 	// Re-read for the report: demo worlds skip the drive above (the compositor owns the
