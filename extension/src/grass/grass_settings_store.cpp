@@ -19,6 +19,7 @@ const FloatField kFloatFields[] = {
 	{"wind_dir_deg", &GrassSettings::wind_dir_deg},
 	{"lean_spread_rad", &GrassSettings::lean_spread_rad},
 	{"base_curve", &GrassSettings::base_curve},
+	{"camera_tilt", &GrassSettings::camera_tilt},
 	{"ring_width_gain", &GrassSettings::ring_width_gain},
 	{"flower_chance", &GrassSettings::flower_chance},
 	{"gloss", &GrassSettings::gloss},

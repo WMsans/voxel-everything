@@ -28,7 +28,7 @@ struct GrassSettings {
 	// peaked around 1.55x and averaged near 1.5x across the field. Holding 0.030 after the
 	// deletion measurably thinned the canopy, so the compensation is carried here -- as a
 	// tunable blade width -- rather than as an invisible constant in the shader.
-	float blade_width_m = 0.045f;
+	float blade_width_m = 0.08f;
 	float blade_height_m = 0.95f;
 	// Per-blade height jitter as a fraction of blade_height_m.
 	float height_jitter = 0.35f;
@@ -51,6 +51,17 @@ struct GrassSettings {
 	// How far the tip travels horizontally, as a fraction of blade height. This is what
 	// arcs the blade over instead of standing it up like a spike.
 	float base_curve = 0.45f;
+	// How far a blade leans away from the viewer as the camera pitches down, as a FRACTION
+	// of the camera's elevation above the blade. A blade is a card whose width axis is
+	// billboarded, so its projected area goes as cos(elevation): full at eye level, half at
+	// 60 degrees, a sub-pixel sliver straight overhead, where the gaps between blades open
+	// into bare ground. Leaning the growth axis away from the camera by the camera's own
+	// elevation turns the card's normal from horizontal up to point straight at the camera,
+	// and the projected area becomes cos((1 - tilt) * elevation) -- flat in elevation, not
+	// falling with it. 0 is the untilted blade; 1 is the exact fit, a full billboard when
+	// the camera is overhead. The default holds .95 of the level-view area at the zenith
+	// while the blade still visibly grows rather than lying flat like a lawn of leaves.
+	float camera_tilt = 0.85f;
 	// Far rings halve their blade count; they buy the coverage back with width, scaled
 	// exp2(ring_fraction * this) so the gain is continuous and rings do not band.
 	float ring_width_gain = 3.0f;

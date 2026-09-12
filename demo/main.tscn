@@ -59,7 +59,7 @@ shader_parameter/probe_ao = 1.0
 shader_parameter/probe_gloss = 0.0
 
 [sub_resource type="BoxMesh" id="4"]
-size = Vector3(2, 2, 2)
+size = Vector3(2, 2, 3.6114502)
 
 [node name="Main" type="Node3D" unique_id=152652419]
 
@@ -87,7 +87,7 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.7, 0)
 transform = Transform3D(0.60042024, -0.79664165, -0.06969713, 0, -0.08715577, 0.9961947, -0.79968464, -0.5981355, -0.052330088, 0, 20, 0)
 
 [node name="TestCube" type="MeshInstance3D" parent="." unique_id=1199010470]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 24, 57.2, 24)
+transform = Transform3D(1, 0, 0, 0, 0.92332256, -0.38402534, 0, 0.38402534, 0.92332256, 24, 57.2, 24.805725)
 material_override = SubResource("7")
 mesh = SubResource("4")
 

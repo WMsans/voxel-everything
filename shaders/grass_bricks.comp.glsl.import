@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://7dyufvcnmldl"
+path="res://.godot/imported/grass_bricks.comp.glsl-23d4e6476de37b066c618532ca1b18a3.res"
+
+[deps]
+
+source_file="res://shaders/grass_bricks.comp.glsl"
+dest_files=["res://.godot/imported/grass_bricks.comp.glsl-23d4e6476de37b066c618532ca1b18a3.res"]
+
+[params]
+

@@ -94,6 +94,25 @@ TEST_CASE("the store names the shape knobs too") {
 	CHECK(store.value("ring_width_gain") == doctest::Approx(2.0f));
 }
 
+// Camera tilt is the top-down fix: it leans every blade away from the viewer as the camera
+// pitches down, which holds the projected blade area a level view enjoys at every angle.
+// It is a FRACTION of the camera's elevation, so anything outside 0..1 is either an
+// untilted blade -- the bug this exists to fix -- or one that has leaned past flat.
+TEST_CASE("camera tilt is a clamped fraction of the camera elevation") {
+	ve::GrassSettingsStore store;
+	CHECK(store.value("camera_tilt") == doctest::Approx(0.85f));
+	CHECK(store.set_value("camera_tilt", 1.0f));
+	CHECK(store.value("camera_tilt") == doctest::Approx(1.0f));
+	CHECK(store.set_value("camera_tilt", 4.0f));
+	CHECK(store.value("camera_tilt") <= 1.0f);
+	CHECK(store.set_value("camera_tilt", -2.0f));
+	CHECK(store.value("camera_tilt") >= 0.0f);
+	// NaN falls through to the conservative end of the clamp rather than into the shader.
+	CHECK(store.set_value("camera_tilt", 0.0f / 0.0f));
+	CHECK(store.value("camera_tilt") >= 0.0f);
+	CHECK(store.value("camera_tilt") <= 1.0f);
+}
+
 // The scatter shader runs one workgroup of 64 threads per brick and every thread is one
 // candidate blade, so a default above 64 would silently drop blades on the floor.
 TEST_CASE("the default blade density fits the scatter workgroup") {

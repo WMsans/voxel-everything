@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 #include "grass/grass_layout.h"
 #include "grass/grass_settings.h"
+#include "grass/grass_settings_store.h"
 #include "world/brick.h"
 #include <cmath>
 #include <cstring>
@@ -145,6 +146,19 @@ TEST_CASE("GrassParams is 256 bytes and its floats land where GLSL expects") {
 // The shape block is what turns a field of randomly-pointed spikes into a field that lies
 // one way. A zero lean spread would be a lawn of clones; a spread past pi is the old
 // uniform-random azimuth wearing a different name.
+// The camera tilt rides in style[2], the free slot of a block that is byte-pinned at 256
+// bytes: the top-down fix costs no new vec4, no new field in the GLSL mirror and no layout
+// change. Addressed through the store so this test does not also pin a C++ member name.
+TEST_CASE("the style block carries the camera tilt") {
+	ve::GrassSettingsStore store;
+	REQUIRE(store.set_value("camera_tilt", 0.4f));
+	const float cam[3] = {0, 0, 0};
+	float vp[16];
+	identity(vp);
+	const ve::GrassLayout l = ve::grass_layout(store.get(), cam, vp);
+	CHECK(l.params.style[2] == doctest::Approx(0.4f));
+}
+
 TEST_CASE("the shape block carries the wind-alignment and blade-curve knobs") {
 	ve::GrassSettings s;
 	s.wind_dir_deg = 90.0f;

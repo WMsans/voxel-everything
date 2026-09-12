@@ -32,6 +32,7 @@ void clamp_grass_settings(GrassSettings *s) {
 	// it is the uniform-random lean this field exists to replace.
 	s->lean_spread_rad = clampf(s->lean_spread_rad, 0.0f, 3.14159265f);
 	s->base_curve = clampf(s->base_curve, 0.0f, 2.0f);
+	s->camera_tilt = clampf(s->camera_tilt, 0.0f, 1.0f);
 	s->ring_width_gain = clampf(s->ring_width_gain, 0.0f, 6.0f);
 	s->flower_chance = clampf(s->flower_chance, 0.0f, 1.0f);
 	s->gloss = clampf(s->gloss, 0.0f, 1.0f);

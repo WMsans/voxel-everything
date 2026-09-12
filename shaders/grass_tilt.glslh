@@ -1,0 +1,50 @@
+// Camera tilt: the fix for the meadow that reads full at eye level and bald from above.
+//
+// A blade is a flat card in the plane spanned by its growth axis and its width axis. The
+// width axis is billboarded perpendicular to the view (grass.vert.glsl), which settles
+// azimuth but leaves pitch alone: the card's face stays in the vertical plane through the
+// camera, so the area it presents is the cosine between its normal and the view. Full at
+// eye level, half at 60 degrees, a sub-pixel sliver straight overhead, where the gaps
+// between blades open into bare ground and the field reads as spikes rather than canopy.
+//
+// Leaning the growth axis away from the camera by the camera's own elevation rotates that
+// normal from horizontal up onto the view direction, and the projected area becomes
+// cos((1 - tilt) * elevation): flat in elevation instead of falling with it. At tilt 1 the
+// blade faces the camera exactly, at every pitch. This is the Horizon Zero Dawn treatment
+// (GDC 2018, "Between Tech and Art: The Vegetation of Horizon Zero Dawn"), the same one
+// UE4-Grass ships as "Camera Tilt" and Unity's deferred grass calls a perspective bend.
+//
+// The blade is leaned as a WHOLE PLANE, not spun about its base: the arc is projected into
+// the tilted plane rather than left where it was, which is what keeps the card flat. A rigid
+// rotation would carry a blade's arc up off the ground with it; the projection lets the arc
+// lie down alongside the blade.
+//
+// Pinned by extension/tests/test_grass_tilt_shader.cpp, which includes this file and asserts
+// the projected-area property directly. Coverage is the whole reason this exists, so it is
+// tested rather than eyeballed.
+
+// Camera elevation above the blade's up, in radians: 0 level with the blade, +pi/2 overhead.
+float grass_camera_elevation(vec3 to_cam, vec3 up) {
+	return asin(clamp(dot(normalize(to_cam), up), -1.0, 1.0));
+}
+
+// The axis the blade rises along, after the tilt. `toward` is the unit horizontal vector
+// pointing from the blade AT the camera. The tip leans AWAY from the viewer (hence the
+// minus), and tips away is what rotates the card's face up towards the viewer: rotating the
+// growth axis towards the camera instead turns the normal by +theta and the presented area
+// falls as cos(theta + elevation), which is worse than no tilt at all. At tilt 0 this
+// returns `up` unchanged, so a zero-tilt field is the field this shader drew before camera
+// tilt existed.
+vec3 grass_tilted_up(vec3 up, vec3 toward, float elevation, float tilt) {
+	float theta = tilt * elevation;
+	return normalize(cos(theta) * up - sin(theta) * toward);
+}
+
+// The direction the blade's static arc travels, kept inside the blade's own plane so the
+// card stays flat: the lean direction with its out-of-plane component removed. Falls back to
+// the width axis when the lean runs along the growth axis and the projection vanishes.
+vec3 grass_plane_arc(vec3 lean_dir, vec3 growth, vec3 side) {
+	vec3 arc = lean_dir - growth * dot(lean_dir, growth);
+	float len = length(arc);
+	return len > 1e-3 ? arc / len : side;
+}

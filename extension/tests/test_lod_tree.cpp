@@ -2,6 +2,7 @@
 #include "lod/lod_tree.h"
 #include "lod/lod_grid.h"
 #include "lod/lod_arena.h"
+#include <algorithm>
 #include <cmath>
 #include <vector>
 

@@ -4,6 +4,7 @@
 #include "common.glslh"
 #include "shade.glslh"
 #include "grass.glslh"
+#include "grass_tilt.glslh"
 
 // No vertex buffer and no vertex attributes: geometry is PULLED, exactly as lod.vert.glsl
 // does. gl_VertexIndex / 9 is the blade, % 9 the corner. This also routes around Godot
@@ -66,11 +67,28 @@ void main() {
 	// to_cam is built from root, not from the vertex, so all nine vertices agree and the
 	// quad stays planar. Degenerate only when the camera is directly overhead, where the
 	// flattened view vector vanishes and any azimuth is as good as another; take the old
-	// lean-locked axis there rather than normalizing a zero vector.
+	// lean-locked axis there rather than normalizing a zero vector. The tilt below leans
+	// along that same axis, so one fallback keeps both the width axis and the arc defined.
 	vec3 to_cam = normalize(push.cam.xyz - root);
 	vec3 view_h = to_cam - up * dot(to_cam, up);
-	vec3 side = length(view_h) > 1e-3 ? normalize(cross(up, normalize(view_h)))
-			: normalize(cross(up, lean_dir));
+	vec3 toward = length(view_h) > 1e-3 ? normalize(view_h) : lean_dir;
+	vec3 side = normalize(cross(up, toward));
+
+	// Camera tilt: the pitch half of the same problem the billboard above solves for
+	// azimuth. Billboarded, the width axis is always perpendicular to the view, but the
+	// card's face still lies in the vertical plane through the camera, so the area it
+	// presents goes as the cosine of the camera's elevation -- full at eye level, half at 60
+	// degrees, a sub-pixel sliver straight overhead, where the gaps between blades open into
+	// bare ground and the field reads as spikes instead of canopy. Leaning the growth axis
+	// away from the viewer by the camera's own elevation turns the face up onto the view
+	// direction and holds the eye-level area at every pitch. grass_tilt.glslh carries the
+	// maths and its proof; the native suite executes that file directly.
+	float elevation = grass_camera_elevation(to_cam, up);
+	vec3 growth = grass_tilted_up(up, toward, elevation, pc.style.z);
+	// The arc is projected back into the blade's own plane -- now spanned by `growth` rather
+	// than by `up` -- so the card stays flat. Left along lean_dir it would fold the quad into
+	// a bowtie the moment the blade leaned, and a folded quad has no single face normal.
+	vec3 arc_dir = grass_plane_arc(lean_dir, growth, side);
 
 	float t = kT[corner];
 	float u = kU[corner];
@@ -93,7 +111,7 @@ void main() {
 	float reach = height * curve * t * t;
 
 	// pow(t, 2) on the sway too, so the base stays planted while the tip travels.
-	vec3 p = root + up * rise + lean_dir * (reach + sway * t * t);
+	vec3 p = root + growth * rise + arc_dir * (reach + sway * t * t);
 
 	// Distance width compensation: the far rings halve their blade count, so blades widen
 	// to hold coverage flat. Without this the field visibly thins and then falls off a
