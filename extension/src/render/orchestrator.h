@@ -71,6 +71,7 @@ class SsaoPass;
 class SsrPass;
 class OutlinePass;
 class GrassScatterPass;
+class GrassRasterPass;
 class LodPool;
 class Object;
 
@@ -215,6 +216,7 @@ public:
 	SsrPass *ssr_pass() { return ssr_pass_; }
 	OutlinePass *outline_pass() { return outline_pass_; }
 	GrassScatterPass *grass_scatter_pass() { return grass_scatter_pass_; }
+	GrassRasterPass *grass_raster_pass() { return grass_raster_pass_; }
 	ve::GrassSettings grass_settings() const { return grass_settings_.get(); }
 	bool set_grass_value(const char *n, float v) { return grass_settings_.set_value(n, v); }
 	float grass_value(const char *n) const { return grass_settings_.value(n); }
@@ -303,6 +305,7 @@ private:
 	SsrPass *ssr_pass_ = nullptr;
 	OutlinePass *outline_pass_ = nullptr;
 	GrassScatterPass *grass_scatter_pass_ = nullptr;
+	GrassRasterPass *grass_raster_pass_ = nullptr;
 	// Grass knobs live here (not in BeautySettings): the store mirrors the SHAPE of the
 	// beauty_mutex_/beauty_snapshot() pair without joining it (design doc section 7).
 	ve::GrassSettingsStore grass_settings_;

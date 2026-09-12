@@ -28,6 +28,10 @@ public:
 
 	RID instance_buffer() const { return instances_; }
 	RID draw_args_buffer() const { return draw_args_; }
+	// The GrassParams UBO run() refreshes every dispatch. GrassRasterPass binds the same
+	// RID at its set-0 binding 1 so the raster reads the blade width and gloss the
+	// scatter ran with; read-only, the stage-1/2 uniform sets are untouched.
+	RID params_buffer() const { return params_ubo_; }
 
 	// Read back after run(); all three are what the SHIPPING pass wrote, which is the only
 	// thing debug_grass_stats() is allowed to report.

@@ -82,6 +82,7 @@ class SsaoPass;
 class SsrPass;
 class OutlinePass;
 class GrassScatterPass;
+class GrassRasterPass;
 class BeautyCompositor;
 class IslandAtlas;
 class IslandCullPass;
@@ -433,6 +434,7 @@ public:
 	SsrPass *ssr_pass() { return context_.render->ssr_pass(); }
 	OutlinePass *outline_pass() { return context_.render->outline_pass(); }
 	GrassScatterPass *grass_scatter_pass() const;
+	GrassRasterPass *grass_raster_pass() const;
 	ve::GrassSettings grass_settings() const;
 	bool set_grass_value(const String &name, float v);
 	float get_grass_value(const String &name) const;

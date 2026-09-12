@@ -34,6 +34,7 @@
 #include "render/sun_shadow_pass.h"
 #include "render/lod_cull_pass.h"
 #include "render/grass_scatter_pass.h"
+#include "render/grass_raster_pass.h"
 #include "grass/grass_layout.h"
 #include "render/hiz_pass.h"
 #include "lod/lod_contour.h"
@@ -1950,10 +1951,15 @@ Dictionary VoxelDebugHooks::debug_grass_stats() {
 	d["sampled"] = 0;
 	d["min_normal_y"] = 1.0;
 	d["max_height"] = 0.0;
+	d["drawn"] = false;
+	d["vertices"] = 0;
 	VoxelWorld *w = world_;
 	if (!w) return d;
 	GrassScatterPass *g = w->grass_scatter_pass();
 	if (!g) return d;
+	// Null until ensure_initialized() builds the graph inside the drive below; assigned
+	// there and re-read after for the report keys.
+	GrassRasterPass *raster = nullptr;
 	// Local-device worlds drive the SHIPPING pass on demand (the debug_ssao_probe pattern:
 	// same calls, same order as the compositor block). Test bodies run synchronously with
 	// no compositor frame, so a pure read would report stale zeros forever; running the
@@ -1985,7 +1991,26 @@ Dictionary VoxelDebugHooks::debug_grass_stats() {
 		device->sync();
 		g->read_back_counters(device);
 		g->read_back_sample(device);
+		// The raster counter is only fresh if the SHIPPING raster ran too: same drive,
+		// same hook camera, into the owned probe-size G-buffer (the debug_gbuffer_stats
+		// pattern). last_vertex_count() is CPU-side, but the recorded draw is submitted
+		// so the device never holds an unsubmitted list. Fetched here, after
+		// ensure_initialized(): the graph (and the raster with it) may not have existed
+		// on entry.
+		raster = w->grass_raster_pass();
+		if (raster && w->gbuffer() &&
+				w->gbuffer()->ensure(device, nullptr, Vector2i(64, 64))) {
+			Projection view_proj;
+			for (int cc = 0; cc < 4; cc++)
+				for (int rr = 0; rr < 4; rr++) view_proj.columns[cc][rr] = vp[cc * 4 + rr];
+			raster->draw(device, *g, *w->gbuffer(), view_proj, p);
+			device->submit();
+			device->sync();
+		}
 	}
+	// Re-read for the report: demo worlds skip the drive above (the compositor owns the
+	// frame there), so fetch the pass here for the pure-read keys.
+	raster = w->grass_raster_pass();
 	d["ran"] = true;
 	d["bricks"] = g->last_brick_count();
 	d["blades"] = g->last_blade_count();
@@ -1994,6 +2019,8 @@ Dictionary VoxelDebugHooks::debug_grass_stats() {
 	d["sampled"] = g->sample_count();
 	d["min_normal_y"] = g->sample_min_normal_y();
 	d["max_height"] = g->sample_max_height();
+	d["drawn"] = raster != nullptr;
+	d["vertices"] = raster ? raster->last_vertex_count() : 0;
 	return d;
 }
 

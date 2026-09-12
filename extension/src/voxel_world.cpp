@@ -300,6 +300,10 @@ GrassScatterPass *VoxelWorld::grass_scatter_pass() const {
 	return context_.render->grass_scatter_pass();
 }
 
+GrassRasterPass *VoxelWorld::grass_raster_pass() const {
+	return context_.render->grass_raster_pass();
+}
+
 ve::GrassSettings VoxelWorld::grass_settings() const {
 	return context_.render->grass_settings();
 }
