@@ -307,3 +307,33 @@ scatter. A behaviour that cannot be tested against shipping output does not get 
   affordable; a much larger reach needs a hierarchy rather than a bigger box.
 - **The header extraction touches the hottest shader in the engine.** Separate commit, tests
   run either side.
+
+## 12. What shipped
+
+Measured cost (Apple M1 Mac mini 8 GB, shipped defaults): grass costs **+3.79 ms wall p50**
+(+3.25 p99) on the steady leg and **+3.21 ms p50** (+1.09 p99) on ridge, by interleaved A/B/A
+runs (`tools/run_benchmarks.sh grass-off-a --grass=0`, `grass-on --grass=1`,
+`grass-off-b --grass=0`; delta is on − mean(off-a, off-b); full tables in
+`docs/PORTFOLIO.md`). The off-a/off-b bracket is tight (steady p50 identical at 25.00 ms),
+so the delta is grass, not drift. Per-pass GPU attribution was impossible — timestamps read
+back invalid on this machine — so the `grass` timing label stays a toggle for keeping legs
+comparable, not a claim.
+
+Deviations from the design:
+
+- The edit-contract test paints rather than digs. Digging the brief's crater at the camera
+  spot grows NEW blades on the fresh grass-band crater floor (74 → 409 blades measured),
+  which confounds removal with exposure; painting the whole reach to rock moves only the
+  material layer, so the measured 74 → 0 blades proves the scatter reads the live atlas.
+  Same contract (edits destroy grass, no invalidation code anywhere), sharper instrument.
+  No production change was needed — the paint variant passed on its first run.
+- The brief's `debug_apply_edit(centre, radius, material)` hook does not exist; the test
+  uses the verbatim `debug_apply_sphere_paint(centre, radius, material)` from `hooks.cpp`
+  (rock is material id 2). No new hook was added.
+- Overflow reporting logs once per pass lifetime (flag reset in `teardown()`), mirroring how
+  `lod_overflow_logged` treats page overflow: a per-frame error line would hide the next
+  real one. The high-water mark stays sticky, as designed — it is the visible record.
+
+Far-distance coverage: still deferred and still open, as designed. The blades and the
+thinning tail now exist to judge against, and the A/B/A harness (`--grass=`) gives any
+future far-field experiment its control leg for free.

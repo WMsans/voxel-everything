@@ -130,6 +130,7 @@ void GrassScatterPass::teardown() {
 	brick_capacity_ = 0;
 	last_brick_count_ = 0;
 	last_blade_count_ = 0;
+	overflow_logged_ = false;
 	rd_ = nullptr;
 }
 
@@ -368,6 +369,12 @@ void GrassScatterPass::read_back_counters(RenderingDevice *rd) {
 	last_brick_count_ = static_cast<int>(c[0]);
 	last_blade_count_ = static_cast<int>(std::min<uint32_t>(c[1], static_cast<uint32_t>(capacity_)));
 	blade_high_water_ = std::max(blade_high_water_, static_cast<int>(c[1]));
+	if (static_cast<int>(c[1]) > capacity_ && !overflow_logged_) {
+		overflow_logged_ = true;
+		UtilityFunctions::printerr("GrassScatterPass: blade buffer overflow, wanted ",
+				static_cast<int>(c[1]), " of ", capacity_,
+				"; blades were dropped. Lower blades_per_brick or raise max_blades.");
+	}
 }
 
 void GrassScatterPass::read_back_sample(RenderingDevice *rd) {

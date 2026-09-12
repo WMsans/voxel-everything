@@ -162,6 +162,10 @@ func _ready() -> void:
 				_world.set_effect_value(String(kv[0]).strip_edges(), float(kv[1]))
 		elif arg.begins_with("--render-scale="):
 			get_viewport().scaling_3d_scale = float(arg.trim_prefix("--render-scale="))
+		elif arg.begins_with("--grass="):
+			# Grass on/off for A/B cost runs: 0 disables the scatter+raster, anything
+			# else leaves the shipped default. Same override shape as --render-scale.
+			_world.set_grass_value("enabled", float(arg.trim_prefix("--grass=")))
 		elif arg.begins_with("--screenshot="):
 			# One frame of the sampled leg, written just before the run reports. Comparing
 			# two of these is how a render-scale change gets judged on more than its cost.

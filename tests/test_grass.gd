@@ -132,3 +132,21 @@ func test_no_blades_means_no_draw_but_not_a_failure() -> void:
 	var d: Dictionary = w.hooks().debug_grass_stats()
 	assert_int(d["vertices"]).is_equal(0)
 	assert_bool(d["ran"]).is_true()
+
+# The edit-awareness contract from the design doc: the scatter reads the LIVE atlas, so an
+# edit that takes grass away must take its blades on the next frame, with no invalidation
+# code anywhere. Tested rather than assumed. This paints the whole reach to rock instead
+# of digging a crater: a crater floor is fresh grass-band surface and legitimately grows
+# NEW blades (74 -> 409 measured), which confounds removal with exposure. Painting moves
+# only the material layer, so zero blades afterwards can only mean the scatter read it.
+# (Hook name/signature verbatim from extension/src/debug/hooks.cpp:
+# debug_apply_sphere_paint(centre, radius, material); rock is material id 2.)
+func test_painting_grass_to_rock_removes_its_blades() -> void:
+	var w := make_world()
+	var before: int = w.hooks().debug_grass_stats()["blades"]
+	assert_int(before).is_greater(0)
+	w.hooks().debug_apply_sphere_paint(Vector3(30.0, 50.0, 30.0), 45.0, 2)
+	for i in range(60):
+		w.hooks().debug_stream_frame(Vector3(30.0, 56.2, 30.0))
+	var after: int = w.hooks().debug_grass_stats()["blades"]
+	assert_int(after).is_equal(0)

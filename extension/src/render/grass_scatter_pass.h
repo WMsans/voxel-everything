@@ -79,6 +79,7 @@ private:
 	int last_brick_count_ = 0;
 	int last_blade_count_ = 0;
 	int blade_high_water_ = 0;
+	bool overflow_logged_ = false;
 	int sample_count_ = 0;
 	float sample_min_normal_y_ = 1.0f;
 	float sample_max_height_ = 0.0f;
