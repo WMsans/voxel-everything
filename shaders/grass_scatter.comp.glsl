@@ -49,8 +49,10 @@ void main() {
 	if (brick_index >= counters.brick_count) return;
 
 	uint packed = brick_list.v[brick_index];
-	ivec3 local = ivec3(int(packed & 0x3FFu) - 512, int((packed >> 10) & 0x3FFu) - 512,
-			int((packed >> 20) & 0x3FFu) - 512);
+	// Unpacks the 11/10/11-bit layout stage 1 writes (see grass_bricks.comp.glsl): X/Z
+	// bias 1024 in 11-bit fields, Y bias 512 in a 10-bit field.
+	ivec3 local = ivec3(int(packed & 0x7FFu) - 1024, int((packed >> 11) & 0x3FFu) - 512,
+			int((packed >> 21) & 0x7FFu) - 1024);
 	ivec3 brick = grass.brick_min.xyz + local;
 	vec3 base = vec3(brick) * BRICK_SIZE;
 

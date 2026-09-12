@@ -59,8 +59,14 @@ void main() {
 
 	uint out_index = atomicAdd(counters.brick_count, 1u);
 	if (out_index >= uint(grass.limits.y)) return; // full: drop, never scribble
-	brick_list.v[out_index] = uint(local.x + 512) | (uint(local.y + 512) << 10) |
-			(uint(local.z + 512) << 20);
+	// Brick-list packing: 11 bits for X/Z, 10 for Y (11+10+11 = 32 bits exactly). The
+	// horizontal reach advertises 256 m, which gives brick dims up to ~641, so
+	// local+512 reaches ~1152 and spills out of a 10-bit field into its neighbour.
+	// X/Z use bias 1024 (range 1024..1664, under the 2048 ceiling); Y keeps bias 512
+	// because the vertical reach caps at 64 m (dim_y ~161, local+512 stays under 1024).
+	// Three 11-bit fields would need 33 bits and NOT fit a uint -- hence the split.
+	brick_list.v[out_index] = uint(local.x + 1024) | (uint(local.y + 512) << 11) |
+			(uint(local.z + 1024) << 21);
 
 	// Stage 2 runs one workgroup of 64 threads per brick, so the dispatch width is the
 	// brick count. atomicMax rather than a store: every thread that appends may be the last.

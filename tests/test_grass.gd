@@ -29,7 +29,7 @@ func test_the_grass_pass_runs_and_reports_its_capacity() -> void:
 	var d: Dictionary = w.hooks().debug_grass_stats()
 	assert_bool(d["ran"]).is_true()
 	assert_int(d["capacity"]).is_greater(0)
-	# Nothing is placed yet -- Task 5 fills the cull in, Task 6 the placement.
+	# Nothing is placed yet.
 	assert_int(d["blades"]).is_greater_equal(0)
 
 func test_grass_settings_round_trip_through_the_store() -> void:
@@ -150,3 +150,16 @@ func test_painting_grass_to_rock_removes_its_blades() -> void:
 		w.hooks().debug_stream_frame(Vector3(30.0, 56.2, 30.0))
 	var after: int = w.hooks().debug_grass_stats()["blades"]
 	assert_int(after).is_equal(0)
+
+# Disabling grass on a world that already drew must REALLY stop the draw: the disabled
+# run() clears the GPU draw args (not just the CPU counters), so the raster issues an
+# empty indirect draw instead of re-drawing the previous frame's frozen blades. Same
+# world throughout -- a fresh world proves nothing, its buffers read back as zero anyway.
+func test_disabling_grass_after_it_drew_issues_an_empty_draw() -> void:
+	var w := make_world()
+	assert_int(w.hooks().debug_grass_stats()["blades"]).is_greater(0)
+	w.set_grass_value("enabled", 0.0)
+	var d: Dictionary = w.hooks().debug_grass_stats()
+	assert_int(d["blades"]).is_equal(0)
+	assert_int(d["vertices"]).is_equal(0)
+	assert_bool(d["drawn"]).is_true()

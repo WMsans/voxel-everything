@@ -297,8 +297,21 @@ bool GrassScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas,
 	last_brick_count_ = 0;
 	last_blade_count_ = 0;
 	if (!rd_ || rd != rd_ || !bricks_pipeline_.is_valid()) return false;
-	if (layout.max_bricks <= 0 || layout.params.limits[0] <= 0) return true; // disabled: a
-	// successful no-op, not a failure. The caller still ends its timing marker.
+	if (layout.max_bricks <= 0 || layout.params.limits[0] <= 0) {
+		// Disabled: clear the GPU counters AND the indirect draw args, not just the CPU
+		// mirrors zeroed above. debug_grass_stats() re-reads the GPU counters after its own
+		// submit+sync, so stale counters would report the previous frame's counts;
+		// stale draw args are worse -- the raster would re-draw the previous frame's
+		// frozen blades while the CPU reports zero. An indirect draw with vertex_count
+		// 0 is a no-op, so the stale params-UBO time needs no clearing.
+		// A successful no-op, not a failure. The caller still ends its timing marker.
+		PackedByteArray zero_gpu;
+		zero_gpu.resize(16);
+		zero_gpu.fill(0);
+		if (counters_.is_valid()) rd->buffer_update(counters_, 0, 16, zero_gpu);
+		if (draw_args_.is_valid()) rd->buffer_update(draw_args_, 0, 16, zero_gpu);
+		return true;
+	}
 	if (!ensure_buffers(rd, layout.params.limits[0], layout.max_bricks)) return false;
 	if (!ensure_uniform_sets(rd, atlas)) return false;
 
