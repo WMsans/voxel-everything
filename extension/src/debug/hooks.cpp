@@ -32,6 +32,7 @@
 #include "render/lod_pool.h"
 #include "render/lod_raster_pass.h"
 #include "render/sun_shadow_pass.h"
+#include "render/sun_ubo.h"
 #include "render/lod_cull_pass.h"
 #include "render/grass_scatter_pass.h"
 #include "render/grass_raster_pass.h"
@@ -1951,6 +1952,9 @@ Dictionary VoxelDebugHooks::debug_grass_stats() {
 	d["sampled"] = 0;
 	d["min_normal_y"] = 1.0;
 	d["max_height"] = 0.0;
+	d["min_sun"] = 1.0;
+	d["max_sun"] = 0.0;
+	d["mean_sun"] = 0.0;
 	d["drawn"] = false;
 	d["vertices"] = 0;
 	// Shading observables, filled by the hooked drive below. -1.0 is the honest
@@ -1988,8 +1992,11 @@ Dictionary VoxelDebugHooks::debug_grass_stats() {
 		float vp[16];
 		for (int k = 0; k < 16; k++) vp[k] = cam.view_proj[k];
 		const ve::GrassLayout gl = ve::grass_layout(w->grass_settings(), p, vp);
+		// w->rd() above already published this world's sun into the SunUbo, the same
+		// buffer the compositor hands the pass.
+		if (!w->sun_ubo() || !w->sun_ubo()->ensure(device)) return d;
 		if (!g->run(device, *atlas, gl, w->region_window(),
-				static_cast<float>(w->beauty_frame()) / 60.0f)) return d;
+				static_cast<float>(w->beauty_frame()) / 60.0f, w->sun_ubo()->buffer())) return d;
 		// run()'s internal readback lands before the dispatch executes; the counters are
 		// only valid after a submit+sync, which the compositor does at frame end and the
 		// hook must do itself before refreshing through the pass's re-read entry point.
@@ -2056,6 +2063,9 @@ Dictionary VoxelDebugHooks::debug_grass_stats() {
 	d["sampled"] = g->sample_count();
 	d["min_normal_y"] = g->sample_min_normal_y();
 	d["max_height"] = g->sample_max_height();
+	d["min_sun"] = g->sample_min_sun();
+	d["max_sun"] = g->sample_max_sun();
+	d["mean_sun"] = g->sample_mean_sun();
 	d["drawn"] = raster != nullptr;
 	d["vertices"] = raster ? raster->last_vertex_count() : 0;
 	return d;

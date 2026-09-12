@@ -198,9 +198,9 @@ bool GrassRasterPass::draw(RenderingDevice *rd, GrassScatterPass &scatter, GBuff
 	// One non-indexed indirect draw; the vertex count is whatever the scatter wrote.
 	rd->draw_list_draw_indirect(dl, false, args, 0, 1, 16);
 	rd->draw_list_end();
-	// Nine vertices per blade -- must track the atomicMax in grass_scatter.comp.glsl and the
-	// corner decode in grass.vert.glsl. This is a report of what the GPU drew, not a
+	// Twenty-seven vertices per blade -- must track the atomicMax in grass_scatter.comp.glsl
+	// and the corner decode in grass.vert.glsl. This is a report of what the GPU drew, not a
 	// command, so a disagreement here is a silent mis-count rather than corruption.
-	last_vertex_count_ = scatter.last_blade_count() * 9;
+	last_vertex_count_ = scatter.last_blade_count() * 27;
 	return true;
 }

@@ -5,9 +5,10 @@
 #include "shade.glslh"
 #include "grass.glslh"
 #include "grass_tilt.glslh"
+#include "grass_blade.glslh"
 
 // No vertex buffer and no vertex attributes: geometry is PULLED, exactly as lod.vert.glsl
-// does. gl_VertexIndex / 9 is the blade, % 9 the corner. This also routes around Godot
+// does. gl_VertexIndex / 27 is the blade, % 27 the corner. This also routes around Godot
 // exposing neither gl_DrawID nor a non-zero firstInstance.
 layout(set = 0, binding = 0, std430) readonly buffer Instances { GrassBlade b[]; } instances;
 layout(set = 0, binding = 1, std140) uniform Params { GRASS_PARAMS_BLOCK } pc;
@@ -22,30 +23,48 @@ layout(location = 1) out vec3 v_normal;
 layout(location = 2) out float v_height_t; // 0 at the root, 1 at the tip
 layout(location = 3) out float v_clump;
 layout(location = 4) out flat uint v_hash;
+layout(location = 5) out flat float v_sun; // terrain sun visibility the scatter marched
 
-// Nine vertices: a quad from the root to kSplit (two triangles) plus a tip triangle that
-// converges to a point. Three would only ever draw a straight sliver -- the whole reason
-// the old blades read as spikes is that a single triangle cannot arc.
-const float kSplit = 0.6;
-const float kT[9] = float[9](0.0, 0.0, kSplit, 0.0, kSplit, kSplit, kSplit, kSplit, 1.0);
-const float kU[9] = float[9](-1.0, 1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0, 0.0);
+// Twenty-seven vertices: four quads up the Bezier profile plus a tip triangle. The two
+// segments this used to have could only draw a card with a kink in it; a bend needs enough
+// joints to read as a curve. Rows sit closer together towards the tip, where the curvature
+// collects (grass_blade.glslh puts it there).
+const float kRow[6] = float[6](0.0, 0.32, 0.58, 0.79, 0.93, 1.0);
+// Corner k of a quad: which row (0 = lower, 1 = upper) and which edge (-1 / +1).
+const uint kQuadRow[6] = uint[6](0u, 0u, 1u, 0u, 1u, 1u);
+const float kQuadU[6] = float[6](-1.0, 1.0, -1.0, 1.0, 1.0, -1.0);
 
 void main() {
 	uint vi = uint(gl_VertexIndex);
-	uint blade_index = vi / 9u;
-	uint corner = vi % 9u;
+	uint blade_index = vi / 27u;
+	uint corner = vi % 27u;
 	GrassBlade blade = instances.b[blade_index];
 
 	vec3 root = blade.a.xyz;
 	float height = blade.a.w;
-	vec3 ground_n = oct_decode_snorm8(uint(blade.b.x));
-	float lean = blade.b.z;
+	vec3 ground_n = oct_decode_snorm8(grass_ground_oct(blade.b.x));
+	uint hash = floatBitsToUint(blade.b.y);
+
+	// Wind, sampled once per blade. The gust field is the waves crossing the meadow; it is
+	// re-centred so a lull swings a blade BACK past its rest lie instead of only ever pushing
+	// it one way, which is half of what made the old field look stiff. A per-blade bob at a
+	// per-blade rate keeps neighbours out of step, and a fast small term flutters it.
+	float gust = grass_gust(root.xz, pc.wind.w, pc.wind.y, pc.wind.z);
+	float phase = grass_unit(hash) * 6.2831853;
+	float rate = mix(1.7, 2.9, grass_unit(grass_hash(hash ^ 0x9E3779B9u)));
+	float bob = sin(pc.wind.w * rate + phase) * 0.35;
+	float flutter = sin(pc.wind.w * 9.0 + phase * 3.0) * 0.08;
+	float sway = pc.wind.x * (gust * 1.4 - 0.3 + bob + flutter);
+
+	// Gusts also swing the direction a blade lies in a little, so a wave visibly combs the
+	// field rather than only nodding it.
+	float lean = blade.b.z + (gust - 0.5) * 0.35;
 
 	// Growth axis and shading normal are DIFFERENT vectors, and conflating them is a bug.
 	// Grass grows towards the sky, not along the slope: a blade that took the ground normal
 	// as its axis lay right over on a hillside and drew a long diagonal spike, shaded dark
 	// because that normal pointed away from the sun. Biasing the axis towards world up keeps
-	// blades standing on a slope; ground_n is still what gets written to the GBuffer below.
+	// blades standing on a slope; ground_n is still what the shading normal is anchored to.
 	vec3 up = normalize(mix(ground_n, vec3(0.0, 1.0, 0.0), 0.6));
 
 	// The blade leans in its OWN direction rather than facing the camera; that
@@ -90,28 +109,26 @@ void main() {
 	// a bowtie the moment the blade leaned, and a folded quad has no single face normal.
 	vec3 arc_dir = grass_plane_arc(lean_dir, growth, side);
 
-	float t = kT[corner];
-	float u = kU[corner];
-	uint hash = floatBitsToUint(blade.b.y);
+	float t;
+	float u;
+	if (corner < 24u) {
+		uint quad = corner / 6u;
+		uint k = corner % 6u;
+		t = kRow[quad + kQuadRow[k]];
+		u = kQuadU[k];
+	} else {
+		t = corner == 26u ? 1.0 : kRow[4];
+		u = corner == 24u ? -1.0 : (corner == 25u ? 1.0 : 0.0);
+	}
 
-	// Only the tip moves (BotW). Three layers: the gust field gives the waves crossing the
-	// meadow, a per-blade sine keeps neighbours out of phase, and a high-frequency term
-	// jitters the very tip.
-	float gust = grass_gust(root.xz, pc.wind.w, pc.wind.y, pc.wind.z);
-	float phase = grass_unit(hash) * 6.2831853;
-	float bob = sin(pc.wind.w * 2.3 + phase) * 0.25;
-	float jitter = sin(pc.wind.w * 11.0 + phase * 3.0) * 0.06;
-	float sway = pc.wind.x * (gust + bob + jitter);
-
-	// The static arc. Grass LIES OVER; it does not stand up and wobble. base_curve is how
-	// far the tip travels horizontally as a fraction of height, and the matching shortening
-	// of the vertical rise is what keeps the blade a constant length instead of stretching.
+	// Grass LIES OVER; it does not stand up and wobble. The static lie (base_curve, jittered
+	// per blade) and the wind's sway are one bend angle, and the profile keeps its arc length
+	// at every bend -- so a gust bows the blade and its tip drops, instead of the tip sliding
+	// sideways on a stretching card the way it used to.
 	float curve = pc.shape.z * mix(0.75, 1.25, grass_unit(grass_hash(hash ^ 0x68E31DA4u)));
-	float rise = height * t * (1.0 - 0.30 * curve * t);
-	float reach = height * curve * t * t;
-
-	// pow(t, 2) on the sway too, so the base stays planted while the tip travels.
-	vec3 p = root + growth * rise + arc_dir * (reach + sway * t * t);
+	float bend = grass_wind_bend(curve, sway, height);
+	vec2 prof = grass_blade_point(t, height, bend);
+	vec3 p = root + growth * prof.y + arc_dir * prof.x;
 
 	// Distance width compensation: the far rings halve their blade count, so blades widen
 	// to hold coverage flat. Without this the field visibly thins and then falls off a
@@ -119,26 +136,27 @@ void main() {
 	float d = distance(root, push.cam.xyz);
 	float width = pc.blade.x * grass_width_scale(d, pc.cam.w, pc.shape.w);
 
-	// There used to be a view-space thickening term here -- mix(1.0, 2.5, 1 - |dot(side,
-	// to_cam)|) -- to rescue blades that had turned edge-on. The billboarded width axis
-	// above makes side perpendicular to to_cam by construction, so that factor is now
-	// identically 1.0. It is deleted rather than left in: a blade can no longer go edge-on,
-	// so there is nothing left for it to rescue.
-
 	// Taper to the point. The tip vertex carries u = 0, so it converges regardless; this
 	// narrows the shoulders on the way up so the silhouette is a blade, not a plank.
 	p += side * (u * width * 0.5 * (1.0 - 0.55 * t));
 
+	// Lighting. Every blade used to write the bare ground normal, which put the whole meadow
+	// in ONE cel band: no lit side, no shade side, a field that read as flat paint. The blade
+	// now writes its own Bezier face normal, rounded across the width, blended against the
+	// ground normal (grass_blade.glslh) -- by blade_lighting near the camera, fading to the
+	// pure ground normal by the reach, where per-blade shading only aliases into noise.
+	// The face is turned to the viewer: that is the side of the card being seen.
+	vec2 tan2 = grass_blade_tangent(t, bend);
+	vec3 tangent = normalize(growth * tan2.y + arc_dir * tan2.x);
+	vec3 face = normalize(cross(side, tangent));
+	if (dot(face, to_cam) < 0.0) face = -face;
+	float blend = pc.style.w * (1.0 - smoothstep(0.35 * pc.cam.w, pc.cam.w, d));
+
 	v_wpos = p;
-	// The ground normal, unmodified, for every vertex of every blade. This is the BotW
-	// trick: blades inherit the surface they grow from, so a meadow lights as ONE smooth
-	// surface. Giving each blade its own splayed normals -- which is what this shader used
-	// to do -- lights every blade independently and turns the field into visual noise.
-	// It also keeps grass honest underground: the deferred pass owns all lighting, so a
-	// blade in a cave is lit like the cave floor, with no sun term of its own.
-	v_normal = ground_n;
+	v_normal = grass_shading_normal(ground_n, face, side, u, t, blend);
 	v_height_t = t;
 	v_clump = blade.b.w;
 	v_hash = hash;
+	v_sun = grass_ground_sun(blade.b.x);
 	gl_Position = push.view_proj * vec4(p, 1.0);
 }

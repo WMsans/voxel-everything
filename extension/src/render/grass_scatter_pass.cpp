@@ -122,10 +122,13 @@ void GrassScatterPass::teardown() {
 	key_sparams_ = key_sbricks_ = key_scounters_ = key_sdraw_ = RID();
 	key_srmap_ = key_srtables_ = key_sbflags_ = RID();
 	key_spalette_ = key_ssdf_ = key_smat_ = RID();
-	key_sregion_ = key_sinstances_ = RID();
+	key_sregion_ = key_sinstances_ = key_sslot_counts_ = key_ssun_ = RID();
 	sample_count_ = 0;
 	sample_min_normal_y_ = 1.0f;
 	sample_max_height_ = 0.0f;
+	sample_min_sun_ = 1.0f;
+	sample_max_sun_ = 0.0f;
+	sample_mean_sun_ = 0.0f;
 	capacity_ = 0;
 	brick_capacity_ = 0;
 	last_brick_count_ = 0;
@@ -164,7 +167,7 @@ bool GrassScatterPass::ensure_buffers(RenderingDevice *rd, int max_blades, int m
 			region_ubo_.is_valid();
 }
 
-bool GrassScatterPass::ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas) {
+bool GrassScatterPass::ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas, RID sun_ubo) {
 	// Stage-1 set: 0 grass-params, 1 brick_list, 2 counters, 3 dispatch_args, 4 region_map,
 	// 5 region_tables, 6 brick_flags, 7 sdf_atlas, 8 mat_atlas, 9 palette_buf, 10 region UBO.
 	// Texture/sampler RIDs come from GpuAtlas through the same accessors RaymarchPass uses;
@@ -227,23 +230,26 @@ bool GrassScatterPass::ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas)
 		key_palette_ = atlas.palette();
 		key_region_ = region_ubo_;
 	}
-	// Stage-2 set mirrors grass_scatter.comp.glsl bindings 0-11: 0 grass-params, 1
+	// Stage-2 set mirrors grass_scatter.comp.glsl bindings 0-13: 0 grass-params, 1
 	// brick_list, 2 counters, 3 draw_args, 4 region_map, 5 region_tables, 6 brick_flags,
-	// 7 palette_buf, 8 sdf_atlas, 9 mat_atlas, 10 region UBO, 11 instances. Binding 3 is
+	// 7 palette_buf, 8 sdf_atlas, 9 mat_atlas, 10 region UBO, 11 instances, 12
+	// region_slot_counts, 13 the frame's SunUbo -- the last two feed the sun march. Binding 3 is
 	// draw_args_ here, NOT dispatch_args_ (that is stage 1's binding 3): separate sets
 	// against separate shaders, so the locals are named after the buffers.
 	if (!scatter_shader_.is_valid()) return true; // scatter stage absent: cull only.
+	if (!sun_ubo.is_valid() || !atlas.region_slot_counts().is_valid()) return false;
 	if (scatter_uset_.is_valid() && key_sparams_ == params_ubo_ &&
 			key_sbricks_ == brick_list_ && key_scounters_ == counters_ &&
 			key_sdraw_ == draw_args_ && key_srmap_ == atlas.region_map() &&
 			key_srtables_ == atlas.region_tables() && key_sbflags_ == atlas.brick_flags() &&
 			key_spalette_ == atlas.palette() && key_ssdf_ == atlas.sdf_atlas() &&
 			key_smat_ == atlas.mat_atlas() && key_sregion_ == region_ubo_ &&
-			key_sinstances_ == instances_)
+			key_sinstances_ == instances_ &&
+			key_sslot_counts_ == atlas.region_slot_counts() && key_ssun_ == sun_ubo)
 		return true;
 	if (scatter_uset_.is_valid()) rd->free_rid(scatter_uset_);
 	scatter_uset_ = RID();
-	Ref<RDUniform> su[12];
+	Ref<RDUniform> su[14];
 	for (Ref<RDUniform> &item : su) item.instantiate();
 	su[0]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
 	su[0]->set_binding(0);
@@ -272,8 +278,14 @@ bool GrassScatterPass::ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas)
 	su[11]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
 	su[11]->set_binding(11);
 	su[11]->add_id(instances_);
+	su[12]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
+	su[12]->set_binding(12);
+	su[12]->add_id(atlas.region_slot_counts());
+	su[13]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
+	su[13]->set_binding(13);
+	su[13]->add_id(sun_ubo);
 	Array scatter_args;
-	for (int i = 0; i < 12; i++) scatter_args.push_back(su[i]);
+	for (int i = 0; i < 14; i++) scatter_args.push_back(su[i]);
 	scatter_uset_ = rd->uniform_set_create(scatter_args, scatter_shader_, 0);
 	if (!scatter_uset_.is_valid()) return false;
 	key_sparams_ = params_ubo_;
@@ -288,12 +300,14 @@ bool GrassScatterPass::ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas)
 	key_smat_ = atlas.mat_atlas();
 	key_sregion_ = region_ubo_;
 	key_sinstances_ = instances_;
+	key_sslot_counts_ = atlas.region_slot_counts();
+	key_ssun_ = sun_ubo;
 	return true;
 }
 
 bool GrassScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas,
 		const ve::GrassLayout &layout, const ve::RegionWindow &region_win,
-		float time_seconds) {
+		float time_seconds, RID sun_ubo) {
 	last_brick_count_ = 0;
 	last_blade_count_ = 0;
 	if (!rd_ || rd != rd_ || !bricks_pipeline_.is_valid()) return false;
@@ -313,7 +327,7 @@ bool GrassScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas,
 		return true;
 	}
 	if (!ensure_buffers(rd, layout.params.limits[0], layout.max_bricks)) return false;
-	if (!ensure_uniform_sets(rd, atlas)) return false;
+	if (!ensure_uniform_sets(rd, atlas, sun_ubo)) return false;
 
 	ve::GrassParams params = layout.params;
 	params.wind[3] = time_seconds;
@@ -393,6 +407,9 @@ void GrassScatterPass::read_back_counters(RenderingDevice *rd) {
 void GrassScatterPass::read_back_sample(RenderingDevice *rd) {
 	sample_min_normal_y_ = 1.0f;
 	sample_max_height_ = 0.0f;
+	sample_min_sun_ = 1.0f;
+	sample_max_sun_ = 0.0f;
+	sample_mean_sun_ = 0.0f;
 	sample_count_ = std::min(last_blade_count_, 4096);
 	if (sample_count_ <= 0) return;
 	const PackedByteArray data = rd->buffer_get_data(instances_, 0,
@@ -401,11 +418,17 @@ void GrassScatterPass::read_back_sample(RenderingDevice *rd) {
 	const float *f = reinterpret_cast<const float *>(data.ptr());
 	for (int i = 0; i < sample_count_; i++) {
 		const float *a = f + i * 8;      // xyz position, w height
-		const uint32_t packed_n = static_cast<uint32_t>(a[4]);
+		// b.x is grass_pack_ground(): the oct normal in the low 16 bits, the terrain sun
+		// visibility byte in bits 16-23 (shaders/grass_blade.glslh).
+		const uint32_t packed = static_cast<uint32_t>(a[4]);
 		// oct_decode_snorm8's inverse for the y component only: the pass stores the ground
 		// normal, and all this assertion needs is which way it points.
-		const float ny = ve::oct_decode_y_snorm8(packed_n);
+		const float ny = ve::oct_decode_y_snorm8(static_cast<uint16_t>(packed & 0xFFFFu));
 		sample_min_normal_y_ = std::min(sample_min_normal_y_, ny);
 		sample_max_height_ = std::max(sample_max_height_, a[3]);
+		const float sun = static_cast<float>((packed >> 16) & 0xFFu) / 255.0f;
+		sample_min_sun_ = std::min(sample_min_sun_, sun);
+		sample_max_sun_ = std::max(sample_max_sun_, sun);
+		sample_mean_sun_ += sun / static_cast<float>(sample_count_);
 	}
 }

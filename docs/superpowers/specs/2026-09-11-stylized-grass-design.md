@@ -337,3 +337,46 @@ Deviations from the design:
 Far-distance coverage: still deferred and still open, as designed. The blades and the
 thinning tail now exist to judge against, and the A/B/A harness (`--grass=`) gives any
 future far-field experiment its control leg for free.
+
+## 13. Lighting revision (2026-09-12)
+
+The grass read as stiff, unshadowed and unlit. Two claims in this doc were wrong and caused
+the last two:
+
+- **Section 1, "receive sun shadow from the deferred pass".** They did not. `deferred.comp.glsl`
+  takes G-buffer albedo alpha as sun visibility and only mins in the sun map where
+  `far_field_owns(px)`. Near-field shadow comes from the raymarcher's own sun march written
+  into that channel, so blades writing `1.0` were never shadowed near the camera.
+- **Section 6, ground normal for every vertex.** It lit every blade identically, so the field
+  landed in one cel band and read as flat paint.
+
+What changed, all still inside the grass module:
+
+- **Shadow.** `terrain_sun_visibility` moved verbatim from `raymarch.comp.glsl` to
+  `shaders/sun_march.glslh` (proved byte-identical once inlined). The scatter marches it once
+  per blade and packs the result as a byte into bits 16–23 of `b.x` beside the 16-bit oct
+  normal. The record stays 32 bytes. The fragment writes it, scaled by a root-to-tip canopy
+  self-shade (`GRASS_ROOT_SUN = 0.35`), as albedo alpha.
+- **Sun response.** Each blade writes its Bezier face normal, rounded across the width,
+  blended against the ground normal by the new `blade_lighting` knob (default 0.6, carried in
+  `style[3]`), fading to the pure ground normal by the reach. Floored at 0.25 against the
+  ground normal so the black-grass bug cannot return.
+- **Wind.** Blades are 27-vertex cubic Bezier profiles (was 9). Wind changes the bend angle,
+  the profile keeps its arc length (Gravesen's estimate, measured exact to 4 digits), the gust
+  is re-centred so blades swing back past rest, bob rate varies per blade, and gusts swing the
+  lie direction a little.
+
+The blade maths lives in `shaders/grass_blade.glslh` and is executed natively by
+`extension/tests/test_grass_blade_shader.cpp`. `test_grass.gd` pins that open grass is sunlit
+and that a rock placed up-sun shadows it; both stream from (20, 60, 30), because the usual
+(30, 56.2, 30) hook view sees only cave-floor blades, which are correctly in full shadow.
+
+Blades still do not cast into the sun map or onto the ground (non-goal unchanged).
+
+Measured cost (Apple M1, 2560x1440, vsync off), interleaved main / this change / main, 300
+frames per leg: steady p50 29.63 / 30.00 / 29.63 ms (**+0.37 ms**), frame avg 29.41 / 30.05
+/ 29.46 (+0.62); ridge p50 27.78 / 28.33 / 27.78 ms (**+0.55 ms**), frame avg 28.26 / 28.26
+/ 28.22 (flat). The two main legs agree exactly on p50, so the delta is this change rather
+than drift. It covers the per-blade sun march and the tripled vertex count together; the
+split between them is not measurable here, because GPU timestamps are invalid on this
+machine.

@@ -29,8 +29,16 @@ layout(set = 0, binding = 9) uniform usampler3D mat_atlas;
 layout(set = 0, binding = 10, std140) uniform Region { ivec4 dims; ivec4 region_origin;
 		ivec4 atlas_bricks; } pc;
 layout(set = 0, binding = 11, std430) writeonly buffer Instances { GrassBlade b[]; } instances;
+// The terrain sun march's inputs, bound exactly as the raymarcher binds them so a blade is
+// shadowed by the same function as the ground it stands on (sun_march.glslh).
+layout(set = 0, binding = 12, std430) readonly buffer RegionSlotCounts { int n[]; } region_slot_counts;
+#define SUN_LIGHT_SET 0
+#define SUN_LIGHT_BINDING 13
+#include "sun_light.glslh"
 
 #include "brick_atlas.glslh"
+#include "sun_march.glslh"
+#include "grass_blade.glslh"
 
 const uint GRASS_MATERIAL = 1u; // grass_01, ve::kMaterials[0]
 
@@ -116,15 +124,24 @@ void main() {
 	float lean = grass.shape.x + swirl +
 			grass_snorm(grass_hash(h ^ 0xC2B2AE35u)) * grass.shape.y;
 
+	// Terrain sun visibility, ONE march per blade rather than per fragment, so overdraw never
+	// multiplies it. This is what the blade writes as G-buffer sun visibility: before it,
+	// every blade wrote 1.0 and the deferred pass -- which only applies the sun map where the
+	// far field owns the pixel -- shadowed nothing near the camera. Sampled from a third of
+	// the way up the blade and lifted off the surface, so the march does not start inside
+	// the ground it grew from.
+	float sun = terrain_sun_visibility(p + n * 0.05 + vec3(0.0, height * 0.35, 0.0),
+			RAY_SHADOW_DIST);
+
 	GrassBlade blade;
 	blade.a = vec4(p, height);
-	blade.b = vec4(float(oct_encode_snorm8(n)), uintBitsToFloat(h), lean, clump);
+	blade.b = vec4(grass_pack_ground(oct_encode_snorm8(n), sun), uintBitsToFloat(h), lean, clump);
 	instances.b[index] = blade;
 
-	// Nine vertices per blade: one quad (two triangles) plus the tip triangle. Must agree
-	// with the decode in grass.vert.glsl and with GrassRasterPass::draw's CPU-side mirror.
-	// atomicMax, not a store: any appending thread may be last.
-	atomicMax(draw_args.vertex_count, (index + 1u) * 9u);
+	// Twenty-seven vertices per blade: four quads along the Bezier profile plus the tip
+	// triangle. Must agree with the decode in grass.vert.glsl and with GrassRasterPass::draw's
+	// CPU-side mirror. atomicMax, not a store: any appending thread may be last.
+	atomicMax(draw_args.vertex_count, (index + 1u) * 27u);
 	draw_args.instance_count = 1u;
 
 	// brick_atlas.glslh declares brick_flags for the flag-word helpers this stage never

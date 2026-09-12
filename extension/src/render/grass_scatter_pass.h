@@ -23,8 +23,9 @@ public:
 	// region_win is the LIVE residency-backed window (VoxelWorld::region_window()),
 	// supplied caller-side: run() has no world handle and atlas.config().region_window
 	// is init-centred/stale. atlas_bricks still comes from the atlas (static grid).
+	// sun_ubo is the frame's SunUbo buffer: stage 2 marches the terrain sun ray once per blade.
 	bool run(RenderingDevice *rd, GpuAtlas &atlas, const ve::GrassLayout &layout,
-			const ve::RegionWindow &region_win, float time_seconds);
+			const ve::RegionWindow &region_win, float time_seconds, RID sun_ubo);
 
 	RID instance_buffer() const { return instances_; }
 	RID draw_args_buffer() const { return draw_args_; }
@@ -47,16 +48,20 @@ public:
 	void read_back_counters(RenderingDevice *rd);
 
 	// Placement-contract sample: reduces at most the first 4096 instances on the CPU to
-	// the minimum ground-normal Y and the maximum blade height, which the hook reports
-	// beside the counters. Call after submit+sync, like read_back_counters.
+	// the minimum ground-normal Y, the maximum blade height and the min/max/mean terrain sun
+	// visibility the scatter marched, which the hook reports beside the counters. Call after
+	// submit+sync, like read_back_counters.
 	void read_back_sample(RenderingDevice *rd);
 	int sample_count() const { return sample_count_; }
 	float sample_min_normal_y() const { return sample_min_normal_y_; }
 	float sample_max_height() const { return sample_max_height_; }
+	float sample_min_sun() const { return sample_min_sun_; }
+	float sample_max_sun() const { return sample_max_sun_; }
+	float sample_mean_sun() const { return sample_mean_sun_; }
 
 private:
 	bool ensure_buffers(RenderingDevice *rd, int max_blades, int max_bricks);
-	bool ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas);
+	bool ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas, RID sun_ubo);
 
 	RenderingDevice *rd_ = nullptr;
 	RID bricks_shader_, bricks_pipeline_;
@@ -73,7 +78,7 @@ private:
 	RID key_rmap_, key_rtables_, key_bflags_, key_sdf_, key_mat_, key_palette_, key_region_;
 	RID key_sparams_, key_sbricks_, key_scounters_, key_sdraw_;
 	RID key_srmap_, key_srtables_, key_sbflags_, key_spalette_, key_ssdf_, key_smat_;
-	RID key_sregion_, key_sinstances_;
+	RID key_sregion_, key_sinstances_, key_sslot_counts_, key_ssun_;
 	int capacity_ = 0;
 	int brick_capacity_ = 0;
 	int last_brick_count_ = 0;
@@ -83,6 +88,9 @@ private:
 	int sample_count_ = 0;
 	float sample_min_normal_y_ = 1.0f;
 	float sample_max_height_ = 0.0f;
+	float sample_min_sun_ = 1.0f;
+	float sample_max_sun_ = 0.0f;
+	float sample_mean_sun_ = 0.0f;
 };
 
 } // namespace godot

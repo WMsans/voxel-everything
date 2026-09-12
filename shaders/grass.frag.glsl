@@ -4,6 +4,7 @@
 #include "common.glslh"
 #include "shade.glslh"
 #include "grass.glslh"
+#include "grass_blade.glslh"
 
 layout(set = 0, binding = 1, std140) uniform Params { GRASS_PARAMS_BLOCK } pc;
 
@@ -17,6 +18,7 @@ layout(location = 1) in vec3 v_normal;
 layout(location = 2) in float v_height_t;
 layout(location = 3) in float v_clump;
 layout(location = 4) in flat uint v_hash;
+layout(location = 5) in flat float v_sun;
 
 layout(location = 0) out vec4 out_albedo;  // rgb albedo, a = sun visibility
 layout(location = 1) out vec4 out_surface; // xy oct normal, z material id, w gloss
@@ -29,9 +31,9 @@ const uint GRASS_MATERIAL = 1u;
 // though grass never samples them; a flat blade colour is the whole point.
 
 void main() {
-	// Vertex gradient, shaded root to bright warm tip. This is the BotW vertex-colour trick
-	// and, now that every blade shares the ground normal, it is ALL of the shape cue the
-	// blade has -- the lighting no longer varies across it.
+	// Vertex gradient, shaded root to bright warm tip. This is the BotW vertex-colour trick;
+	// the lighting now varies across the blade too (grass.vert.glsl), so this carries colour
+	// and the self-shade below carries the depth of the canopy.
 	//
 	// The root is a dark green rather than the near-black it used to be: at 0.10/0.22/0.07
 	// the bases read as dirt between the blades instead of canopy shadow, which is half of
@@ -57,13 +59,15 @@ void main() {
 	float fade = clamp((d - pc.ring_end.z) / max(pc.ring_end.w - pc.ring_end.z, 1e-3), 0.0, 1.0);
 	if (bayer4(ivec2(gl_FragCoord.xy)) < fade) discard;
 
-	// The interpolated GROUND normal, never flipped. The old code flipped it on backfaces
-	// to rescue per-blade normals that genuinely faced away from the viewer; an inherited
-	// ground normal already points out of the terrain on both sides, and flipping it would
-	// aim it into the ground -- which is the black-grass bug, not the fix for it.
+	// Never flipped on backfaces. grass.vert.glsl already turned the face to the viewer and
+	// floored it against the ground normal; flipping here would aim it into the ground, which
+	// is the black-grass bug, not the fix for it.
 	vec3 n = normalize(v_normal);
 
-	// Sun visibility is 1: shadowing is the deferred pass's job, exactly as in lod.frag.glsl.
-	out_albedo = vec4(albedo, 1.0);
+	// Sun visibility: the terrain's, marched once per blade by the scatter, dimmed towards
+	// the root by the canopy. It cannot be 1.0 as it used to be: the deferred pass applies
+	// the sun map only where the far field owns the pixel, and trusts this channel
+	// everywhere else -- so a 1.0 here meant nothing near the camera ever shadowed grass.
+	out_albedo = vec4(albedo, grass_sun_term(v_sun, v_height_t));
 	out_surface = vec4(oct_encode(n), float(GRASS_MATERIAL), pc.style.y);
 }

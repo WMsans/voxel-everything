@@ -113,6 +113,22 @@ TEST_CASE("camera tilt is a clamped fraction of the camera elevation") {
 	CHECK(store.value("camera_tilt") <= 1.0f);
 }
 
+// Blade lighting is how much of a blade's own rounded normal survives against the ground
+// normal. 0 is the flat meadow that landed in one cel band; past 1 is not a blend at all.
+TEST_CASE("blade lighting is a clamped blend between ground and blade normals") {
+	ve::GrassSettingsStore store;
+	CHECK(store.value("blade_lighting") == doctest::Approx(0.6f));
+	CHECK(store.set_value("blade_lighting", 0.3f));
+	CHECK(store.value("blade_lighting") == doctest::Approx(0.3f));
+	CHECK(store.set_value("blade_lighting", 3.0f));
+	CHECK(store.value("blade_lighting") <= 1.0f);
+	CHECK(store.set_value("blade_lighting", -1.0f));
+	CHECK(store.value("blade_lighting") >= 0.0f);
+	CHECK(store.set_value("blade_lighting", 0.0f / 0.0f));
+	CHECK(store.value("blade_lighting") >= 0.0f);
+	CHECK(store.value("blade_lighting") <= 1.0f);
+}
+
 // The scatter shader runs one workgroup of 64 threads per brick and every thread is one
 // candidate blade, so a default above 64 would silently drop blades on the floor.
 TEST_CASE("the default blade density fits the scatter workgroup") {

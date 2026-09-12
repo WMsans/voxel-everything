@@ -139,6 +139,8 @@ GrassLayout grass_layout(const GrassSettings &settings, const float camera[3],
 	// The last free float in the block. Camera tilt is the top-down fix and it needed no new
 	// vec4, so the 256-byte layout and its byte-pinned test are untouched.
 	p.style[2] = s.camera_tilt;
+	// And the last one after it: blade lighting, same argument.
+	p.style[3] = s.blade_lighting;
 	p.limits[0] = s.max_blades;
 	p.limits[1] = l.max_bricks;
 	return l;

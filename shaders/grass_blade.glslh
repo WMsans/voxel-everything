@@ -1,0 +1,100 @@
+// Blade shape, wind bend, shading normal and self-shade: everything about ONE blade that is
+// pure maths. Pinned by extension/tests/test_grass_blade_shader.cpp, which compiles this file
+// natively against a GLSL shim -- so only scalar/vector ops, no out-params, no arrays.
+//
+// NOTE: never put a literal include directive inside a comment in this file -- the loader
+// matches include tokens anywhere in a line and would self-include.
+
+// ---- instance packing ----------------------------------------------------------------
+// GrassBlade.b.x carries the oct-packed ground normal in its low 16 bits and the terrain's
+// sun visibility, quantised to a byte, in bits 16-23. A float holds every integer below 2^24
+// exactly, so the record stays 32 bytes and neither field can bleed into the other.
+float grass_pack_ground(uint oct16, float sun) {
+	uint s = uint(round(clamp(sun, 0.0, 1.0) * 255.0));
+	return float((oct16 & 0xFFFFu) | (s << 16u));
+}
+
+uint grass_ground_oct(float packed) { return uint(packed) & 0xFFFFu; }
+
+float grass_ground_sun(float packed) { return float((uint(packed) >> 16u) & 0xFFu) / 255.0; }
+
+// ---- blade profile ---------------------------------------------------------------------
+// A blade is a cubic Bezier in its own plane: x along the arc direction, y along the growth
+// axis. The control polygon is three equal segments turning by a sixth, a half and five
+// sixths of `bend` (radians off the growth axis), so the base leaves the ground nearly
+// upright and the curvature collects towards the tip -- the Ghost of Tsushima blade.
+//
+// Wind changes `bend`, never the tip position directly. The old blade slid its tip sideways,
+// which stretched the card instead of bending it and is most of why the field read as stiff.
+// Here the polygon is rescaled by Gravesen's length estimate for a cubic, (polygon + chord)
+// / 2, so the blade keeps its height as ARC LENGTH at every bend: a gust bows it over and
+// the tip drops, the way grass actually moves.
+vec2 grass_segment_dir(float bend, float k) {
+	float a = bend * k;
+	return vec2(sin(a), cos(a));
+}
+
+vec2 grass_blade_point(float t, float height, float bend) {
+	vec2 p1 = grass_segment_dir(bend, 1.0 / 6.0);
+	vec2 p2 = p1 + grass_segment_dir(bend, 0.5);
+	vec2 p3 = p2 + grass_segment_dir(bend, 5.0 / 6.0);
+	float scale = height / (0.5 * (3.0 + length(p3)));
+	float s = 1.0 - t;
+	return (p1 * (3.0 * s * s * t) + p2 * (3.0 * s * t * t) + p3 * (t * t * t)) * scale;
+}
+
+// Unit tangent of the profile. Independent of height: scaling a curve does not turn it.
+vec2 grass_blade_tangent(float t, float bend) {
+	vec2 p1 = grass_segment_dir(bend, 1.0 / 6.0);
+	vec2 p2 = p1 + grass_segment_dir(bend, 0.5);
+	vec2 p3 = p2 + grass_segment_dir(bend, 5.0 / 6.0);
+	float s = 1.0 - t;
+	return normalize(p1 * (3.0 * s * s) + (p2 - p1) * (6.0 * s * t) + (p3 - p2) * (3.0 * t * t));
+}
+
+// The bend a blade holds this frame: its static lie (base_curve, a fraction of height the
+// tip used to travel) plus the wind's sway converted from metres at the tip to radians. The
+// sway is SIGNED -- a lull lets the blade spring back past its rest lie -- and the total is
+// bounded so a storm folds a blade over without turning it inside out.
+float grass_wind_bend(float base_curve, float sway_m, float height) {
+	return clamp(base_curve * 2.0 + sway_m / max(height, 0.1), -1.2, 1.5);
+}
+
+// ---- lighting --------------------------------------------------------------------------
+// Blending the blade's own normal with the ground normal. Pure ground normal (what shipped
+// before) lights every blade identically, so a field lands in one cel band and reads as
+// unlit paint. Pure blade normals light every blade independently, which is noise. So:
+//
+// - `face_n` is the Bezier face normal, and `side * u` tilts it outward across the width,
+//   which shades a flat card as a rounded blade (Ghost of Tsushima).
+// - `blend` mixes that towards the ground normal; the caller fades it to zero with distance,
+//   where per-blade shading only aliases. It also relaxes towards the tip.
+// - The result is floored at 0.25 against the ground normal. A normal aimed into the terrain
+//   is the black-grass bug, and it must be impossible here whatever the inputs.
+const float GRASS_NORMAL_FLOOR = 0.25;
+
+vec3 grass_shading_normal(vec3 ground_n, vec3 face_n, vec3 side, float u, float t, float blend) {
+	vec3 rounded = normalize(face_n + side * (u * 0.6));
+	vec3 m = mix(ground_n, rounded, blend * (1.0 - 0.35 * t));
+	float ml = length(m);
+	vec3 n = ml > 1e-4 ? m / ml : ground_n;
+	float g = dot(n, ground_n);
+	if (g < GRASS_NORMAL_FLOOR) {
+		vec3 across = n - ground_n * g;
+		float al = length(across);
+		across = al > 1e-4 ? across / al : side;
+		n = ground_n * GRASS_NORMAL_FLOOR +
+				across * sqrt(1.0 - GRASS_NORMAL_FLOOR * GRASS_NORMAL_FLOOR);
+	}
+	return n;
+}
+
+// Canopy self-shadow. Blades in a dense field shade each other's lower halves; the deferred
+// pass multiplies this into the direct sun term (G-buffer albedo alpha), so roots fall into
+// the darker cel bands and tips catch the light. It scales the terrain's visibility and can
+// never lighten a blade the terrain shadows.
+const float GRASS_ROOT_SUN = 0.35;
+
+float grass_sun_term(float sun, float t) {
+	return sun * mix(GRASS_ROOT_SUN, 1.0, t * t);
+}

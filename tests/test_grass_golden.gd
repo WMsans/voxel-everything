@@ -50,7 +50,14 @@ func make_world() -> VoxelWorld:
 # Tolerances mirror the SSAO golden's tightness: these are deterministic GPU results from a
 # deterministic scene at a pinned wind time, not sampled statistics. -1.0 on any key means
 # the hooked drive did not measure (never on local-device worlds; see debug_grass_stats).
-const GOLDEN := {"min_luma": 0.000000, "max_luma": 0.785042, "mean_luma": 0.008446}
+#
+# Re-recorded on 2026-09-12 for the grass lighting pass: blades became 27-vertex Bezier
+# profiles that keep their length as they bend, instead of a 9-vertex card whose tip slid.
+# max rose 0.785 -> 0.800 (more pixels reach the bright tip colour along the curve), mean
+# 0.0084 -> 0.0117 (the curved profile covers more of the top-down view). Albedo alpha --
+# the sun visibility this pass also started writing -- is not in these numbers; luma reads
+# rgb only. That behaviour is pinned in test_grass.gd instead.
+const GOLDEN := {"min_luma": 0.000000, "max_luma": 0.800194, "mean_luma": 0.011694}
 const TOL_EXTREME := 0.002
 const TOL_MEAN := 0.004
 
