@@ -68,4 +68,10 @@ void oct_decode_snorm8(uint16_t packed, float normal[3]) {
 	oct_decode(e, normal);
 }
 
+float oct_decode_y_snorm8(uint16_t packed) {
+	float normal[3];
+	oct_decode_snorm8(packed, normal);
+	return normal[1];
+}
+
 } // namespace ve

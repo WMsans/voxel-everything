@@ -15,6 +15,11 @@ meshed far field out to 4 km, one deferred cel-shading stack over both.
   passes 192 ops consolidates into override bricks instead of dropping the player's edits.
 - **Islands:** severed pieces become Jolt bodies, land, sleep, and merge back into terrain;
   collider builds are split into octants so one fat chunk cannot stall the frame.
+- **Grass:** stylised blades scattered on the GPU over near-field `grass_01` voxels — a
+  brick-cull compute pass, a blade-placement pass, one indirect draw into the GBuffer,
+  and the existing cel stack shades them unmodified. Wind gusts, distance thinning, and
+  edit-awareness (take grass voxels away and their blades are gone the next frame, with
+  no invalidation code) are in the module; the measured cost is with the M1 numbers below.
 
 ## Measured (RTX 4070 Laptop, 1440p requested; Wayland actual viewport 2560×2778)
 
@@ -78,7 +83,7 @@ the roughness and the AO -- once per full-resolution pixel from the position, no
 material id the marcher exports, so lowering the scale costs silhouette precision on the
 terrain edges and no texture detail (`tests/test_near_field_scale.gd` pins the second half
 of that). Raise both towards 1.0 on a larger GPU. The benchmark
-overrides them per run: `--render-scale=`, `--near-scale=`, `--quality=`, plus
+overrides them per run: `--render-scale=`, `--near-scale=`, `--quality=`, `--grass=0|1`, plus
 `--frames=`/`--warmup=`/`--screenshot=`.
 
 `tools/run_benchmarks.sh m1-tuned`, macOS/Metal, V-Sync genuinely disabled
@@ -107,6 +112,25 @@ Two things the table does not say on its own:
   p50 follows resolution. It was the worst leg on the reference GPU too (p99 81.77 ms there).
   Bounding it means giving edit-driven brick regeneration a per-frame budget, which is a
   streamer change, not a shader one.
+
+### Grass cost (A/B/A wall-frame runs, `grass-off-a` / `grass-on` / `grass-off-b`)
+
+GPU timestamps are emulated-zero on this platform, so per-pass attribution comes from
+interleaved A/B/A wall-frame runs instead: `tools/run_benchmarks.sh grass-off-a --grass=0`,
+`grass-on --grass=1`, `grass-off-b --grass=0` (`--grass=` follows the `--render-scale=`
+pattern in `demo/benchmark.gd`; the script already forwards extra args to every leg).
+Reported delta is (on) − mean(off-a, off-b), wall ms:
+
+| Leg | off-a p50/p99 | on p50/p99 | off-b p50/p99 | delta p50/p99 |
+|---|---:|---:|---:|---:|
+| steady | 25.00 / 27.01 | 28.79 / 29.63 | 25.00 / 25.76 | **+3.79 / +3.25** |
+| ridge | 24.85 / 34.75 | 27.78 / 36.21 | 24.29 / 35.49 | **+3.21 / +1.09** |
+
+The off-a/off-b bracket is tight (steady p50 identical at 25.00 ms; ridge drifts 0.56 ms
+against a 3.21 ms effect), so the delta is grass, not drift. All three runs print
+`settle frames_to_quiet=1500 capped=true` — the steady leg never goes quiet under the cap
+(the mesher worker keeps submitting, as documented above), identically in every leg, so the
+comparison stays apples-to-apples but none of these is a settled-state number.
 
 ### Known on macOS/Metal, pre-existing
 

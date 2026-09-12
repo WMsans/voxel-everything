@@ -1,0 +1,106 @@
+// Brick-atlas addressing and sampling, shared by the raymarcher and the grass scatter so
+// the two can never disagree about where a voxel lives.
+//
+// The INCLUDER must declare these first, exactly as common.glslh requires for the material
+// arrays: `sdf_atlas` (LINEAR sampler), `mat_atlas` (NEAREST), `palette_buf`, `region_map`,
+// `region_tables`, `brick_flags`, and a `pc` push/uniform block exposing `dims.xyz`
+// (region window dimensions), `region_origin.xyz` (world origin in regions) and
+// `atlas_bricks.xyz`. Include common.glslh and brick_layout.glslh before this file.
+//
+// NOTE: never put a literal include directive inside a comment here -- the loader matches
+// include tokens anywhere in a line and would self-include.
+
+// Region-table slot for the region holding a GLOBAL brick coord; -1 outside the window or not
+// resident. `>> 5` is an arithmetic shift: floor(b / 32), correct for negatives. The window
+// test stays -- a ray marching past the window must still miss -- but the INDEX is toroidal,
+// because the map is a camera-centred window rather than a dense grid over a fixed world.
+// Two regions that alias are pc.dims regions apart and two simultaneously resident regions are
+// at most 2 * radius * margin apart, so a live collision is arithmetically impossible
+// (ve::region_window_dim).
+int region_slot_of(ivec3 brick) {
+	ivec3 r = brick >> 5;
+	ivec3 l = r - pc.region_origin.xyz;
+	if (any(lessThan(l, ivec3(0))) || any(greaterThanEqual(l, pc.dims.xyz))) return -1;
+	ivec3 w = r & (pc.dims.xyz - 1);
+	return region_map.slot[w.x + w.y * pc.dims.x + w.z * pc.dims.x * pc.dims.y];
+}
+
+// Atlas slot of a brick within a KNOWN region table; -1 when absent. `& 31` is the
+// floor-mod for negatives. The brick DDA runs inside one region for a whole segment, so it
+// resolves the region once and calls this, rather than walking region_map -> region_tables
+// as two dependent loads on every 0.8 m of ray.
+int slot_in_region(int rs, ivec3 brick) {
+	int bi = (brick.x & 31) + (brick.y & 31) * REGION_BRICKS +
+			(brick.z & 31) * REGION_BRICKS * REGION_BRICKS;
+	return region_tables.slot[rs * REGION_BRICK_COUNT + bi];
+}
+
+// Atlas slot of a global brick; -1 when absent. For callers that do not already know which
+// region they are in (the shadow march, the gradient taps).
+int slot_at(ivec3 brick) {
+	int rs = region_slot_of(brick);
+	if (rs < 0) return -1;
+	return slot_in_region(rs, brick);
+}
+
+// Trilinear inside one brick. The lattice is 17 voxels on a side -- 16 cells plus the apron
+// that repeats the neighbour's shared face -- so a filtered fetch anywhere in [0, 16] reads
+// only this brick's own block and the texture unit can do the interpolation. That is one
+// fetch where the manual mix issued eight, on the marcher's hottest read.
+//
+// The two forms agree exactly, not approximately: decode_sdf() is affine, so decoding the
+// filtered unorm equals filtering the decoded values, which is what the mix chain computed.
+// The only difference is the filter's weight precision (>= 8 fractional bits, i.e. under
+// 0.02 mm on this 5 mm-per-code encoding, against a 2 mm hit threshold).
+//
+// This is why binding 2 alone carries the LINEAR sampler (RaymarchPass::initialize); the
+// material and min-max atlases are integer textures and must stay on the NEAREST one.
+float brick_sdf(int slot, vec3 local) { // local in voxel units [0, 16]
+	vec3 p = clamp(local, vec3(0.0), vec3(BRICK_SDF_MAX));
+	vec3 base = vec3(atlas_base(slot, pc.atlas_bricks.xyz, BRICK_SDF_STRIDE));
+	vec3 dim = vec3(pc.atlas_bricks.xyz * BRICK_SDF_STRIDE);
+	return decode_sdf(textureLod(sdf_atlas, (base + p + 0.5) / dim, 0.0).r);
+}
+
+float world_sdf(vec3 p) {
+	ivec3 brick = ivec3(floor(p / BRICK_SIZE));
+	int slot = slot_at(brick);
+	if (slot < 0) return SDF_RANGE;
+	vec3 local = (p - vec3(brick) * BRICK_SIZE) / VOXEL_SIZE;
+	return brick_sdf(slot, local);
+}
+
+// Gradient taps can land in a brick with NO atlas slot; fall back to the anchor brick,
+// whose apron covers the shared face exactly (M1 fix, semantics unchanged).
+float sdf_near(vec3 p, ivec3 anchor, int anchor_slot) {
+	ivec3 brick = ivec3(floor(p / BRICK_SIZE));
+	int slot = all(equal(brick, anchor)) ? anchor_slot : slot_at(brick);
+	if (slot < 0) { brick = anchor; slot = anchor_slot; }
+	return brick_sdf(slot, (p - vec3(brick) * BRICK_SIZE) / VOXEL_SIZE);
+}
+
+// Material of the surface crossing inside `brick`, anchored so a hit point that rounds
+// into a neighbouring (possibly absent or empty-palette) brick cannot resolve magenta.
+uint material_at(vec3 p, ivec3 brick, int slot) {
+	vec3 local = clamp((p - vec3(brick) * BRICK_SIZE) / VOXEL_SIZE, vec3(0.0), vec3(15.0));
+	ivec3 base = atlas_base(slot, pc.atlas_bricks.xyz, BRICK_VOXELS);
+	uint idx = texelFetch(mat_atlas, base + ivec3(local), 0).r;
+	return palette_buf.ids[slot * 4 + idx];
+}
+
+// Whole-brick rejection reads the per-brick flag word instead of re-reducing the 2^3 level
+// on every DDA step. brick_gen writes that word from the same inclusive straddle test over
+// the same mip data (and brick_mark writes CONSERVATIVE for an allocated-but-ungenerated
+// slot), so the answer is identical -- at one buffer load instead of eight texture fetches
+// plus the palette read, on the hottest path in the marcher. This is the use
+// ve::brick_flags_from_mips was introduced for; test_brick_flags_gpu pins GPU == CPU.
+uint brick_flag_word(int slot) {
+	return brick_flags.v[slot];
+}
+
+// A brick worth placing anything on: its flag word says the surface crosses it. Mirrors
+// ve::brick_flags_from_mips (kBrickFlagHasSurface); test_brick_flags_gpu pins GPU == CPU
+// for the word itself.
+bool brick_straddles_surface(int slot) {
+	return (brick_flag_word(slot) & BRICK_FLAG_HAS_SURFACE) != 0u;
+}

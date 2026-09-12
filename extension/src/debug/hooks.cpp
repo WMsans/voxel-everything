@@ -33,6 +33,9 @@
 #include "render/lod_raster_pass.h"
 #include "render/sun_shadow_pass.h"
 #include "render/lod_cull_pass.h"
+#include "render/grass_scatter_pass.h"
+#include "render/grass_raster_pass.h"
+#include "grass/grass_layout.h"
 #include "render/hiz_pass.h"
 #include "lod/lod_contour.h"
 #include "lod/lod_grid.h"
@@ -128,6 +131,7 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_lod_cull_probe", "pos", "fwd"),
 			&VoxelDebugHooks::debug_lod_cull_probe);
 	ClassDB::bind_method(D_METHOD("debug_lod_cull_debug"), &VoxelDebugHooks::debug_lod_cull_debug);
+	ClassDB::bind_method(D_METHOD("debug_grass_stats"), &VoxelDebugHooks::debug_grass_stats);
 	ClassDB::bind_method(D_METHOD("debug_sun_shadow_stats", "cascade"),
 			&VoxelDebugHooks::debug_sun_shadow_stats);
 	ClassDB::bind_method(D_METHOD("debug_sun_shadow_build", "cascade", "force"),
@@ -1935,6 +1939,126 @@ Dictionary VoxelDebugHooks::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 
 Dictionary VoxelDebugHooks::debug_lod_cull_debug() {
 	return world_->lod_cull_debug();
+}
+
+Dictionary VoxelDebugHooks::debug_grass_stats() {
+	Dictionary d;
+	d["ran"] = false;
+	d["bricks"] = 0;
+	d["blades"] = 0;
+	d["capacity"] = 0;
+	d["high_water"] = 0;
+	d["sampled"] = 0;
+	d["min_normal_y"] = 1.0;
+	d["max_height"] = 0.0;
+	d["drawn"] = false;
+	d["vertices"] = 0;
+	// Shading observables, filled by the hooked drive below. -1.0 is the honest
+	// "not measured" sentinel (the ssao probe's lit_luma fallback): demo worlds stay
+	// pure-read and never reach the drive, so they report these defaults.
+	d["min_luma"] = -1.0;
+	d["max_luma"] = -1.0;
+	d["mean_luma"] = -1.0;
+	VoxelWorld *w = world_;
+	if (!w) return d;
+	GrassScatterPass *g = w->grass_scatter_pass();
+	if (!g) return d;
+	// Null until ensure_initialized() builds the graph inside the drive below; assigned
+	// there and re-read after for the report keys.
+	GrassRasterPass *raster = nullptr;
+	// Local-device worlds drive the SHIPPING pass on demand (the debug_ssao_probe pattern:
+	// same calls, same order as the compositor block). Test bodies run synchronously with
+	// no compositor frame, so a pure read would report stale zeros forever; running the
+	// real pass is not a parallel scatter. Demo worlds stay pure-read -- the compositor
+	// owns the frame there.
+	if (w->get_use_local_device()) {
+		w->ensure_initialized();
+		RenderingDevice *device = w->rd();
+		GpuAtlas *atlas = w->atlas();
+		if (!w->initialized_ || !device || !atlas || !atlas->is_valid()) return d;
+		// Hook camera: the last streamed centre (every grass test streams before reading),
+		// looking straight down. 90-degree FOV so the reach comparison measures the
+		// box/distance cull, not the test frustum. Time matches the compositor expression.
+		const float *c = w->store_->center_;
+		const float p[3] = {c[0], c[1], c[2]};
+		const float f[3] = {0.0f, -1.0f, 0.0f};
+		const float up[3] = {0.0f, 0.0f, 1.0f};
+		const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, 1.5707963268f, 1.0f,
+				0.1f, 4000.0f, 64, 64);
+		float vp[16];
+		for (int k = 0; k < 16; k++) vp[k] = cam.view_proj[k];
+		const ve::GrassLayout gl = ve::grass_layout(w->grass_settings(), p, vp);
+		if (!g->run(device, *atlas, gl, w->region_window(),
+				static_cast<float>(w->beauty_frame()) / 60.0f)) return d;
+		// run()'s internal readback lands before the dispatch executes; the counters are
+		// only valid after a submit+sync, which the compositor does at frame end and the
+		// hook must do itself before refreshing through the pass's re-read entry point.
+		device->submit();
+		device->sync();
+		g->read_back_counters(device);
+		g->read_back_sample(device);
+		// The raster counter is only fresh if the SHIPPING raster ran too: same drive,
+		// same hook camera, into the owned probe-size G-buffer (the debug_gbuffer_stats
+		// pattern). last_vertex_count() is CPU-side, but the recorded draw is submitted
+		// so the device never holds an unsubmitted list. Fetched here, after
+		// ensure_initialized(): the graph (and the raster with it) may not have existed
+		// on entry.
+		raster = w->grass_raster_pass();
+		if (raster && w->gbuffer() &&
+				w->gbuffer()->ensure(device, nullptr, Vector2i(64, 64))) {
+			Projection view_proj;
+			for (int cc = 0; cc < 4; cc++)
+				for (int rr = 0; rr < 4; rr++) view_proj.columns[cc][rr] = vp[cc * 4 + rr];
+			// Fixed background: the raster's own draw_list_begin(DRAW_DEFAULT_ALL)
+			// performs no clear -- verified against LodRasterPass::draw, which opens its
+				// list the same way and relies on a separate explicit clear (production
+				// grass relies on the compositor's earlier clears and draws over the LoD
+				// frame, unchanged). So the HOOK clears the owned 64x64 targets through a
+				// render pass before drawing. Via the LoD pass's clear_targets, not a
+				// texture_clear: a colour clear is refused on the depth format (see
+				// debug_lod_render_probe). Albedo/surface go to (0,0,0,0), depth to 0.0
+				// (reverse-Z far).
+			if (w->lod_raster_pass())
+				w->lod_raster_pass()->clear_targets(device, *w->gbuffer());
+			raster->draw(device, *g, *w->gbuffer(), view_proj, p);
+			device->submit();
+			device->sync();
+			// Shading observable: min/max/mean luma of the albedo the hooked raster
+				// just drew, with the ssao probe's 0.2126/0.7152/0.0722 weights. Albedo
+				// is R8G8B8A8_UNORM, so plain bytes, not halves.
+			const PackedByteArray alb = device->texture_get_data(w->gbuffer()->albedo(), 0);
+			const int pixels = 64 * 64;
+			if (alb.size() >= pixels * 4) {
+				const uint8_t *a = reinterpret_cast<const uint8_t *>(alb.ptr());
+				float mn = 1.0f, mx = 0.0f;
+				double sum = 0.0;
+				for (int i = 0; i < pixels; i++) {
+					const float luma = (0.2126f * a[i * 4] + 0.7152f * a[i * 4 + 1] +
+							0.0722f * a[i * 4 + 2]) / 255.0f;
+					mn = std::min(mn, luma);
+					mx = std::max(mx, luma);
+					sum += luma;
+				}
+				d["min_luma"] = mn;
+				d["max_luma"] = mx;
+				d["mean_luma"] = sum / static_cast<double>(pixels);
+			}
+		}
+	}
+	// Re-read for the report: demo worlds skip the drive above (the compositor owns the
+	// frame there), so fetch the pass here for the pure-read keys.
+	raster = w->grass_raster_pass();
+	d["ran"] = true;
+	d["bricks"] = g->last_brick_count();
+	d["blades"] = g->last_blade_count();
+	d["capacity"] = g->capacity();
+	d["high_water"] = g->blade_high_water();
+	d["sampled"] = g->sample_count();
+	d["min_normal_y"] = g->sample_min_normal_y();
+	d["max_height"] = g->sample_max_height();
+	d["drawn"] = raster != nullptr;
+	d["vertices"] = raster ? raster->last_vertex_count() : 0;
+	return d;
 }
 
 Dictionary VoxelDebugHooks::debug_gbuffer_stats(int w, int h) {

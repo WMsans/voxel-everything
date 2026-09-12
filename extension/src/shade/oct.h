@@ -15,4 +15,9 @@ void oct_decode(const float e[2], float out[3]);
 uint16_t oct_encode_snorm8(const float n[3]);
 void oct_decode_snorm8(uint16_t packed, float normal[3]);
 
+// The y component of oct_decode_snorm8 alone. The grass placement contract only asserts
+// which way the stored ground normal points, so the scatter readback reduces the sample
+// through this instead of a full decode.
+float oct_decode_y_snorm8(uint16_t packed);
+
 } // namespace ve

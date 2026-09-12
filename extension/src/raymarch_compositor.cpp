@@ -11,6 +11,9 @@
 #include "render/hiz_pass.h"
 #include "render/lod_pool.h"
 #include "render/lod_raster_pass.h"
+#include "render/grass_scatter_pass.h"
+#include "render/grass_raster_pass.h"
+#include "grass/grass_layout.h"
 #include "render/sun_shadow_pass.h"
 #include "render/sun_ubo.h"
 #include "render/lod_cull_pass.h"
@@ -365,6 +368,23 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 				lod_cull->set_last_visible_pages(first_pass_pages);
 			}
 		}
+	}
+
+	// Grass: one block, between the far field and the beauty stack. Blades write the same
+	// G-buffer channels the far field writes, so everything below shades them unchanged.
+	if (GrassScatterPass *grass = world->grass_scatter_pass()) {
+		timings->begin(rd, "grass");
+		float grass_cam[3] = {cam.origin.x, cam.origin.y, cam.origin.z};
+		float grass_vp[16];
+		for (int c = 0; c < 4; c++)
+			for (int r = 0; r < 4; r++) grass_vp[c * 4 + r] = view_proj.columns[c][r];
+		const ve::GrassLayout gl = ve::grass_layout(world->grass_settings(), grass_cam, grass_vp);
+		GrassRasterPass *grass_raster = world->grass_raster_pass();
+		const bool grass_ok = grass->run(rd, *atlas, gl, world->region_window(),
+				static_cast<float>(world->beauty_frame()) / 60.0f) &&
+				grass_raster && grass_raster->draw(rd, *grass, *gb, view_proj, cam_pos);
+		if (grass_ok) timings->end(rd, "grass");
+		else timings->cancel("grass");
 	}
 
 	SsgiPass *ssgi = world->ssgi_pass();

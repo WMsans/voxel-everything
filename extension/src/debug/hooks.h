@@ -477,6 +477,9 @@ public:
 	// Task 7 diagnosis: the compositor's own two-phase record (plain read, no logic).
 	Dictionary debug_lod_cull_debug();
 
+	// Grass: what the SHIPPING pass wrote during a real frame. Rebuilds nothing.
+	Dictionary debug_grass_stats();
+
 	// --- Task 8 hooks ---
 	Dictionary debug_sun_shadow_stats(int cascade);
 

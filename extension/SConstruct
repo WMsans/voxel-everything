@@ -16,7 +16,8 @@ test_env.Append(CPPPATH=["src", "third_party"])
 pure_sources = (Glob("src/world/*.cpp") + Glob("src/generator/*.cpp") +
                 Glob("src/core/*.cpp") + Glob("src/terrain/*.cpp") +
                 Glob("src/mesh/*.cpp") + Glob("src/connectivity/*.cpp") +
-                Glob("src/lod/*.cpp") + Glob("src/shade/*.cpp"))
+                Glob("src/lod/*.cpp") + Glob("src/shade/*.cpp") +
+                Glob("src/grass/*.cpp"))
 for f in ["src/render/shader_loader.cpp", "src/render/camera_params.cpp"]:
     if os.path.exists(f):
         pure_sources.append(f)
