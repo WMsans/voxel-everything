@@ -48,10 +48,29 @@ void main() {
 	vec3 up = normalize(mix(ground_n, vec3(0.0, 1.0, 0.0), 0.6));
 
 	// The blade leans in its OWN direction rather than facing the camera; that
-	// directionality is what makes a field read as a field. side is perpendicular to both.
+	// directionality is what makes a field read as a field.
 	vec3 lean_dir = normalize(vec3(cos(lean), 0.0, sin(lean)) -
 			up * dot(vec3(cos(lean), 0.0, sin(lean)), up));
-	vec3 side = normalize(cross(up, lean_dir));
+
+	// The width axis is NOT cross(up, lean_dir), and that distinction is the whole reason
+	// this field used to look good from one compass direction and bald from the rest. The
+	// scatter leans every blade within lean_spread_rad of wind_dir_deg, so a lean-locked
+	// width axis makes every quad in the meadow face the SAME way: broadside from one
+	// azimuth, a sub-pixel sliver from ninety degrees off, with bare ground between.
+	//
+	// So billboard the width axis about the blade's own up: the blade always turns its face
+	// to the viewer while the arc below still travels along lean_dir, which is where the
+	// wind coherence actually lives. This is the Ghost of Tsushima / BotW treatment -- it
+	// costs one cross product and no extra vertices.
+	//
+	// to_cam is built from root, not from the vertex, so all nine vertices agree and the
+	// quad stays planar. Degenerate only when the camera is directly overhead, where the
+	// flattened view vector vanishes and any azimuth is as good as another; take the old
+	// lean-locked axis there rather than normalizing a zero vector.
+	vec3 to_cam = normalize(push.cam.xyz - root);
+	vec3 view_h = to_cam - up * dot(to_cam, up);
+	vec3 side = length(view_h) > 1e-3 ? normalize(cross(up, normalize(view_h)))
+			: normalize(cross(up, lean_dir));
 
 	float t = kT[corner];
 	float u = kU[corner];
@@ -82,11 +101,11 @@ void main() {
 	float d = distance(root, push.cam.xyz);
 	float width = pc.blade.x * grass_width_scale(d, pc.cam.w, pc.shape.w);
 
-	// View-space thickening (Ghost of Tsushima): as the blade turns edge-on, widen it so a
-	// sub-pixel sliver does not vanish. view_edge is 0 face-on, 1 edge-on.
-	vec3 to_cam = normalize(push.cam.xyz - root);
-	float view_edge = 1.0 - abs(dot(side, to_cam));
-	width *= mix(1.0, 2.5, view_edge);
+	// There used to be a view-space thickening term here -- mix(1.0, 2.5, 1 - |dot(side,
+	// to_cam)|) -- to rescue blades that had turned edge-on. The billboarded width axis
+	// above makes side perpendicular to to_cam by construction, so that factor is now
+	// identically 1.0. It is deleted rather than left in: a blade can no longer go edge-on,
+	// so there is nothing left for it to rescue.
 
 	// Taper to the point. The tip vertex carries u = 0, so it converges regardless; this
 	// narrows the shoulders on the way up so the silhouette is a blade, not a plank.

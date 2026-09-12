@@ -22,7 +22,13 @@ struct GrassSettings {
 	// Hard cap on the instance buffer. The scatter clamps to it rather than overflowing.
 	int max_blades = 600000;
 
-	float blade_width_m = 0.030f;
+	// 0.045, not the 0.030 this used to be. grass.vert.glsl used to widen a blade by up to
+	// 2.5x as it turned edge-on; billboarding the width axis retired that term, and since
+	// projected width is width * sin(view angle), the factor it was really contributing
+	// peaked around 1.55x and averaged near 1.5x across the field. Holding 0.030 after the
+	// deletion measurably thinned the canopy, so the compensation is carried here -- as a
+	// tunable blade width -- rather than as an invisible constant in the shader.
+	float blade_width_m = 0.045f;
 	float blade_height_m = 0.95f;
 	// Per-blade height jitter as a fraction of blade_height_m.
 	float height_jitter = 0.35f;
