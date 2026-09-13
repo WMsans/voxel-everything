@@ -1,6 +1,9 @@
 #include <doctest/doctest.h>
 #include <cmath>
 #include <cstdint>
+// Range-for over a brace-enclosed list (`for (float x : {0.0f, ...})`) needs
+// initializer_list. libc++ pulls it in transitively; libstdc++ does not.
+#include <initializer_list>
 
 // Executes the ACTUAL blade GLSL (shaders/grass_blade.glslh) natively, the same way
 // test_grass_tilt_shader.cpp executes the camera tilt. The shim supplies GLSL scalar/vector

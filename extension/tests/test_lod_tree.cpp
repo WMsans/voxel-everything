@@ -70,8 +70,44 @@ void make_ready_full_level0(ve::LodTree *t, float stream_radius_m,
 	}
 }
 
-// Drives a tree to a steady state by answering every request as a ready chunk.
+// The terrain surface every test camera floats above (M2 errata 9). A chunk the ground plane
+// crosses is a surface chunk; everything else is air.
+constexpr float kGroundY = 51.2f;
+
+// Tests settle whole worlds synchronously and have no frame budget to protect, so the ones
+// that need a solid world lift the production per-walk request cap first (see settle_solid).
+constexpr int kSettleRequestCap = 1 << 20;
+
+// Drives a tree to a steady state against a SURFACE world: a requested chunk is answered
+// ready only where the ground plane crosses it, and empty everywhere else, so the walk can
+// prune air the way the real mesher does.
+//
+// Answering every request "ready" instead makes the world solid, and the near-dense rule
+// (kLodNearDenseRadiusM) then refines a whole 300 m volume to level 0 -- ~115k chunks. At the
+// production cap of 32 requests per walk that is ~3600 walks per settle, i.e. minutes of test
+// time. The surface world is both realistic and ~100x smaller.
 void settle(ve::LodTree *t, const ve::LodCamera &c, const ve::LodOcclusion *occ, int frames) {
+	ve::LodWalkResult r;
+	for (int f = 1; f <= 10000; f++) {
+		t->walk(c, occ, uint32_t(f), &r);
+		for (const ve::LodBuildRequest &q : r.requests) {
+			float lo[3], hi[3];
+			ve::lod_chunk_aabb(q.level, q.coord, lo, hi);
+			if (lo[1] < kGroundY && hi[1] > kGroundY) t->note_ready(q.level, q.coord, 1, 1);
+			else t->note_empty(q.level, q.coord);
+		}
+		if (r.requests.empty() && f >= frames) break;
+	}
+	// Fail instead of hanging if a regression leaves requests never draining.
+	REQUIRE(r.requests.empty());
+}
+
+// Drives a tree to a steady state with EVERY chunk ready: a solid world. Only tests whose
+// subject is a fully-populated tree need this (a dirtying edit can legitimately re-cut a
+// surface tree by turning neighbouring air chunks unknown, and the shadow-cut monotonicity
+// needs every level resident). Callers must raise cfg.max_requests_per_walk first, or the
+// production build budget makes this take thousands of walks.
+void settle_solid(ve::LodTree *t, const ve::LodCamera &c, const ve::LodOcclusion *occ, int frames) {
 	ve::LodWalkResult r;
 	for (int f = 1; f <= 10000; f++) {
 		t->walk(c, occ, uint32_t(f), &r);
@@ -227,10 +263,11 @@ TEST_CASE("occlusion stops requests but never removes a drawn chunk") {
 TEST_CASE("an edit re-requests a chunk without un-drawing it") {
 	ve::LodTreeConfig cfg;
 	cfg.stream_radius_m = 1638.4f;
+	cfg.max_requests_per_walk = kSettleRequestCap;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
-	settle(&t, c, &occ, 30);
+	settle_solid(&t, c, &occ, 30);
 	ve::LodWalkResult before;
 	t.walk(c, &occ, 31u, &before);
 	REQUIRE(!before.draws.empty());
@@ -343,10 +380,11 @@ TEST_CASE("dirty sweep requests do not mark off-screen nodes resident") {
 TEST_CASE("a refused rebuild with resident pages stays drawable and is retried") {
 	ve::LodTreeConfig cfg;
 	cfg.stream_radius_m = 1638.4f;
+	cfg.max_requests_per_walk = kSettleRequestCap;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
-	settle(&t, c, &occ, 30);
+	settle_solid(&t, c, &occ, 30);
 	ve::LodWalkResult before;
 	t.walk(c, &occ, 31u, &before);
 	REQUIRE(!before.draws.empty());
@@ -944,26 +982,10 @@ TEST_CASE("coarse nodes inside the stream radius keep their exemption") {
 
 namespace {
 
-// settle(), but the world is a SURFACE rather than a solid: a chunk is ready only where the
-// ground plane crosses it, and empty everywhere else, which is what lets the walk prune air
-// the way the real mesher does. Answering every request "ready" instead refines a whole
-// volume to level 0 and takes minutes.
-constexpr float kGroundY = 51.2f;
-
+// settle() already models a surface world; this alias exists for the tests whose subject is
+// the sun's cut rather than the walk, and only needs "the tree is settled".
 void settle_over_ground(ve::LodTree *t, const ve::LodCamera &c, const ve::LodOcclusion *occ) {
-	ve::LodWalkResult r;
-	for (int f = 1; f <= 4000; f++) {
-		t->walk(c, occ, uint32_t(f), &r);
-		for (const ve::LodBuildRequest &q : r.requests) {
-			float lo[3], hi[3];
-			ve::lod_chunk_aabb(q.level, q.coord, lo, hi);
-			if (lo[1] < kGroundY && hi[1] > kGroundY) t->note_ready(q.level, q.coord, 1, 1);
-			else t->note_empty(q.level, q.coord);
-		}
-		if (r.requests.empty() && f > 2) return;
-	}
-	// Fail instead of hanging if a regression leaves requests never draining.
-	REQUIRE(r.requests.empty());
+	settle(t, c, occ, 3);
 }
 
 } // namespace
@@ -1127,10 +1149,11 @@ TEST_CASE("a clamped shadow cut still never describes one piece of ground twice"
 TEST_CASE("a coarser min_level yields a smaller cut") {
 	ve::LodTreeConfig cfg;
 	cfg.stream_radius_m = 1638.4f;
+	cfg.max_requests_per_walk = kSettleRequestCap;
 	ve::LodTree t(cfg);
 	NoOcclusion occ;
 	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
-	settle(&t, c, &occ, 8);
+	settle_solid(&t, c, &occ, 8);
 
 	std::vector<ve::LodDrawItem> fine, coarse;
 	t.shadow_cut(c, 1638.4f, 0, &fine);
