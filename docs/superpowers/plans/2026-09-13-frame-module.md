@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-13-frame-module-design.md`. Domain nouns: `CONTEXT.md`.
 
+**Pathway:** sub-projects 2–6 and the deferred items are sequenced at the end of this file ([Pathway — all sub-projects](#pathway--all-sub-projects)).
+
 ## Global Constraints
 
 - Branch: `refactor/frame-module` (already checked out; spec committed).
@@ -3097,3 +3099,169 @@ git commit -m "docs: record frame module verification and deletion results"
 - [ ] Orphaned world plumbing is removed, surviving callers justify retained wrappers, and before/after sizes are reported.
 - [ ] Stage order, admission/locking, orchestrator lifetime, pass internals and shaders remain within the agreed constraints.
 - [ ] Spec, implementation status and results report agree; `FrameHost` removal remains explicitly assigned to sub-project 2.
+
+---
+
+## Pathway — all sub-projects
+
+The tasks above deliver sub-project 1. This section is the route through the rest of the architecture roadmap. Evidence for each problem (file:line, deletion tests, change-cost traces) is in spec §9–§11 and Appendix A; it is not repeated here. Every sub-project still gets its own spec → plan → implementation cycle before any code moves. What this section fixes is **order, gates, milestones and exit criteria**, so each later spec starts from an agreed shape instead of re-deriving it.
+
+### Rules that apply to every sub-project
+
+- **Characterize, then move.** The first milestone of every sub-project pins current behaviour in tests (golden or invariant) and proves the test bites by breaking the code on purpose. No production change lands before that.
+- **Baseline per sub-project.** Re-record the gdUnit failure set at the sub-project's start commit (Task 1's procedure). The set drifts; an older baseline is stale by default.
+- **Bugs are fixed in their own commits, never inside a move.** A suspected bug from spec §10 gets a failing test, then a `fix:` commit, *before* the refactor that touches its code. A refactor commit that changes a pinned value must name the cause.
+- **Delete what the deepening makes redundant, in the same sub-project.** Each exit criterion names symbols that must no longer exist (checked with `rg`). A new seam with one adapter is named debt with a deleting sub-project, like `FrameHost`.
+- **Measure the change cost.** Each sub-project re-traces its Appendix A scenario after landing and records the new file count in its results report. A sub-project that does not reduce its target count has not delivered.
+- **One sub-project in flight per file hot spot.** `voxel_world.{h,cpp}`, `render/orchestrator.{h,cpp}` and `debug/hooks.cpp` are touched by several sub-projects; two sub-projects never edit the same one of these concurrently.
+
+### Order and dependencies
+
+```mermaid
+flowchart LR
+  SP1["1 Frame module<br/>(this plan)"] --> SP2["2 Render lifetime owner"]
+  SP2 --> SP4["4 Pass anatomy +<br/>generated layouts"]
+  SP1 --> SP3["3 One settings store"]
+  SP2 --> SP5["5 World field query +<br/>edit spine"]
+  SP4 --> SP6["6 Stage authoring"]
+  SP5 -.shares MAT_* / load_pipeline.-> SP6
+```
+
+| Track | Sequence | Why this order |
+|---|---|---|
+| Render | 1 → 2 → 4 | 2 needs the frame to be the only pass consumer before pass accessors can go private; 4's pass helper migrates each pass once instead of twice |
+| Artist knobs | 1 → 3 (may run beside 2) | 3 only needs the beauty table to leave `orchestrator.cpp`; land its store in `shade/` first so 2 and 3 do not both rewrite that file |
+| World | 2 → 5 | 5 rewrites the edit fan-out tail that still sits in `VoxelWorld::append_edit_locked`; 2 empties the rest of `VoxelWorld` first, so the two do not collide |
+| Terrain authoring | 4 → 6 | 6 reuses 4(b)'s generator for `MAT_*` ids and generated stage headers |
+
+Deferred items (spec §9.6) have no slot; each has a trigger instead (below).
+
+### Sub-project 2 — Render lifetime owner
+
+**Goal.** `RenderOrchestrator` is the single owner of render-side lifetime; `VoxelWorld` is a node façade again.
+
+**Entry gate.** Sub-project 1 accepted. Reload/teardown/shutdown behaviour pinned: a contract suite that drives `request_shader_reload`, `teardown_gpu`, `shutdown_render_resources` and re-init on both device kinds, asserting no leaked RIDs (`RenderingDevice` resource counts before/after) and that island uploads queued before a teardown land after re-init.
+
+**Milestones.**
+1. Move the island handoff queue (`island_uploads_`, `pending_normal_releases_`, `island_descs_`, `island_slots_`, their mutex) from `VoxelWorld` into the orchestrator; `IslandManager` queues through it. Delete `FrameHost`; `VoxelFrame` takes the orchestrator for these.
+2. Give `WorldStreamer` and `LodSystem` a `release_gpu()` the orchestrator calls in the current teardown order; delete the `lod_pool/lod_tree/lod_pages_of/lod_page_quads/lod_overflow_logged/island_*` slots from `Collaborators`.
+3. Make pass accessors private to the orchestrator; `VoxelFrame` is a friend or receives a `FramePasses` view; hooks read a narrow `RenderDiagnostics` view. Delete `VoxelWorld`'s forwarding block (`voxel_world.h` pass accessors, effect/grass/reload delegations).
+4. Split `debug/hooks.cpp` by module (`hooks_render.cpp`, `hooks_lod.cpp`, `hooks_world.cpp`, `hooks_physics.cpp`); each module exposes a POD `stats()` the hook formats. Remove `friend class VoxelDebugHooks` from `VoxelWorld` and `LodSystem`.
+5. Replace `IslandManager::initialize(VoxelWorld*)` with the narrow collaborators it actually uses (store, orchestrator upload queue, raycast).
+
+**Exit criteria.**
+- `rg 'class FrameHost|friend class VoxelDebugHooks|\*\*lod_pool|island_mutex = ' extension/src` returns nothing.
+- `RenderOrchestrator::Collaborators` has ≤ 5 fields; `voxel_world.h` ≤ 250 lines.
+- Appendix A "new render pass" ≤ 8 files (from 12–19).
+- Reload/teardown contract suite and the shipped-frame golden pass unchanged.
+
+**Stop conditions.** Any change to teardown *order* observed by the contract suite; any lock taken in a new place. Both mean the move is not verbatim — re-plan.
+
+**Suspected bugs routed here.** S8 (SSAO timing nested in "deferred"): fix once the frame's timing labels are owned in one place; update `benchmark.gd` labels in the same commit.
+
+### Sub-project 3 — One settings store
+
+**Goal.** An artist adds or tunes a lighting/post knob in ~4 files, sees it in the inspector, and keeps it across runs and tier changes.
+
+**Entry gate.** Characterize: every current beauty and grass name round-trips through `set_effect_value/get_effect_value`, `set_effect_enabled`, `set_grass_value`; per-tier defaults pinned (`settings_for_tier` output for all tiers); the stray look constants (spec §9.2) pinned by their existing goldens. Failing tests written for S5 and S6.
+
+**Milestones.**
+1. `fix:` S5 (menu ranges) and S6 (tier discards tweaks) against their failing tests, on today's code.
+2. Generic `ve::SettingsTable<T>` in `shade/` (pure, native-tested): `{name, type (bool/int/float), member, min, max, default, per-tier}`; `set/get(name)`, `clamp`, `describe()`. `GrassSettingsStore` becomes a table instance (its tests stay green unchanged).
+3. `BeautySettingsStore` as a second instance; the `if (name == ...)` chains in `orchestrator.cpp` are deleted; int knobs become settable by name.
+4. `describe()` exposed to GDScript; `demo/debug_menu.gd` builds rows from it and its hard-coded range tables are deleted.
+5. Persistence (`ConfigFile` load/save of overrides layered on tier defaults) and a `BeautyProfile` Resource for the inspector.
+6. Move stray constants into the tables one per commit (SSAO radius/strength, outline threshold, contact-shadow constants, ambient, sky gradient), each commit showing its golden unchanged.
+
+**Exit criteria.**
+- `rg 'if \(name == "' extension/src/render/orchestrator.cpp` returns nothing.
+- Appendix A "beauty float knob" ≤ 4 files; "beauty int knob" settable by name.
+- Beauty and grass remain separate structs and stores (memory: keep new features out of the beauty stack).
+
+**Suspected bugs routed here.** S5, S6.
+
+### Sub-project 4 — Pass anatomy and generated layouts
+
+**Goal.** A simple pass is ~40 lines of intent; every C++↔GLSL contract that can be generated is generated and byte-checked.
+
+**Entry gate.** Sub-project 2 accepted (passes reachable only through the frame). Characterize each pass that will migrate with its existing probe or golden; add a golden for any migrated pass that has none. Failing tests for S4 and S7.
+
+**Milestones (a) — pass helper.**
+1. `ComputePass` helper (compile, pipeline, RID-keyed uniform-set cache, sized targets, teardown, CPU timing) with fake-`RenderingDevice` native tests for rebuild-on-RID-change and free order.
+2. Migrate compute passes one per commit, simplest first (`ssao`, `contact_shadow`, `outline`, `ssr`, `ssgi`, `hiz`, `deferred` last). Each commit: that pass's golden unchanged.
+3. `RasterPass` helper; migrate `inject`, `grass_raster`, `lod_raster`, `composite`. Delete `invalidate_uniform_set` and the cross-pass release in the frame's raymarch stage.
+
+**Milestones (b) — generated layouts** (extends the `material_table_glsl()` + byte-exact golden pattern).
+4. Push/UBO structs (SunBlock, cascade block, BeautyCam, per-pass Push) generated from C++ structs with real `offsetof` asserts; packing becomes `memcpy`; the tautological `static_assert(sizeof(float) * N == M)` lines are deleted.
+5. `BEAUTY_*` flag bits, `MATERIAL_LAYERS`, named `MAT_*` ids; delete the four `#define MATERIAL_LAYERS` copies and the literal material ids in shaders, `generator.cpp` and grass.
+6. G-buffer channel accessors (`GB_MATERIAL_ID`, `GB_IS_SURFACE`, …) and attachment count; readers and writers switch over one shader per commit.
+7. Cel constants emitted into both `shade.glslh` and `cel.gdshaderinc`.
+
+**Exit criteria.**
+- No pass `.cpp` contains its own shader-compile block (`rg 'shader_compile_spirv_from_source' extension/src/render` hits only the helper).
+- Appendix A "new material" ≤ 4 files (from 7–9); "new G-buffer channel" ≤ 5 (from 14–18).
+- Every generated header has a byte-exact golden test.
+
+**Suspected bugs routed here.** S4 (objects ignore the scene sun: `cel_object` takes sun/ambient uniforms from `SunState`), S7 (grass writes material 1: a dedicated blade material id or flag), S9 (wrong file names in asserts disappear with generated constants).
+
+### Sub-project 5 — World field query and edit spine
+
+**Goal.** One module answers "the world field here" consistently for every consumer, and one path applies an edit and tells every consumer about it.
+
+**Entry gate.** Characterization for S1–S3 as failing (or pinning) tests: collider probe after consolidation and after a volume paste; island contact probe after consolidation; a LoD chunk spanning two consolidated regions. Remove the `max_override_bricks = 1` workaround from `test_connectivity.gd` in a test that proves it is still needed today. Pin the edit fan-out: which consumer (islands, LoD, colliders, streamer, consolidation) is notified for a representative op set.
+
+**Milestones.**
+1. `fix:` commits for whichever of S1–S3 the characterization confirms, each on today's code.
+2. `WorldField::snapshot(aabb) → FieldView` (pure, native): `sample`, `gradient`, `has_surface(chunk | brick)`, `contact(cell, axis)`, `raycast(ray)`; hides pads, region wrap, overrides, volumes, sequence stamp and op truncation. Native invariant: consolidated region ≡ unconsolidated region for every query.
+3. Migrate consumers one per commit: `LogProbe` (colliders), `LogContactProbe` (islands), `extract_island_volume`, raycast, `FieldSourceSnapshot`/island extract jobs. Delete each adapter as it goes.
+4. `EditPipeline::apply(ops[], policy)` as an atomic batch plus `invalidate(aabb, reason)` fanned out to registered sinks; delete `WorldStore::append_edit`, `VoxelWorld::append_edit_locked`'s tail and consolidation's hand-repeated invalidation. `IslandManager::land_extraction` uses the batch instead of re-deriving headroom.
+5. Public `VoxelWorld.raycast`; `demo/edit_tool.gd` stops calling `hooks().debug_raycast`.
+
+**Exit criteria.**
+- `rg 'struct LogProbe|struct LogContactProbe|WorldStore::append_edit\(' extension/src` returns nothing.
+- Lock order stated in exactly one header.
+- No gameplay script calls a `debug_*` hook.
+
+**Stop conditions.** A lock acquired in a new order; a fan-out consumer notified for a different AABB than characterized.
+
+**Suspected bugs routed here.** S1, S2, S3.
+
+### Sub-project 6 — Stage authoring
+
+**Goal.** A terrain artist adds a stage (the "mesas" scenario) in ≤ 3 files with names, not positions, on both CPU and GPU, and the tools refuse an unsafe Lipschitz budget.
+
+**Entry gate.** Sub-project 4(b) accepted (`MAT_*` generator exists). `test_field_diff.gd` pipeline-parameterised and a native CPU test over `default.pipeline` pinned, both green on today's code. A test that locks today's multiplicative Lipschitz combination, marked as the behaviour to change.
+
+**Milestones.**
+1. One `load_pipeline(reader)` replacing the four-step load in `voxel_world.cpp` and the two tests.
+2. Generated per-stage C++ headers (`<Stage>Slots`, `<Stage>Params`); C++ mirrors switch from `extra[i]` / `p.at(i)` to names, one stage per commit, field goldens unchanged.
+3. Cross-stage parameter reads either declared in the manifest or rejected at resolve; `cave` stops hardcoding `hills_amp_*`.
+4. `fix:` the Lipschitz combination rule (additive stages add, multiplicative multiply) with the locked test updated in the same commit, plus the sampled violation check from the terrain spec §10.1.
+5. `allow_gpu_only` becomes a loud resolve-time warning naming the CPU consumers that will diverge.
+6. `FieldGenerator` + `View` deleted; `PipelineFieldGenerator` is a `Generator`; `AnalyticGenerator` moves to test-only as the oracle.
+
+**Exit criteria.**
+- Appendix A "new terrain stage" ≤ 3 files (from 5–7); "material with hardness placed by terrain" ≤ 4 (from ~9).
+- `rg 'extra\[[0-9]\]|p\.at\([0-9]\)' extension/src/terrain` returns nothing.
+
+### Deferred — triggers, not slots
+
+| Item (spec §9.6) | Trigger that schedules it | First milestone when triggered |
+|---|---|---|
+| Op-type registry | A new brush or op type is requested | Redesign the 32-byte `EditOp` for a second endpoint; one descriptor per op generating GLSL constants and a `debug_pack_op` for the nine GDScript packers |
+| `StreamingBudget` | The next view-distance or streaming-radius change | One validated config object; delete the duplicated region-window dim and the `LodTree` radius copy |
+| Sun consolidation | Anything sun-related left after sub-project 4(b) | Rename `DeferredPass::sun_ubo_`/`sun_light_ubo_`; one `SunFrame` value built by the frame |
+| Look-dev iteration speed | Sub-project 4 accepted | Per-pass shader reload without GPU teardown or re-streaming |
+
+### Suspected bugs — routing summary
+
+| Id | Fixed in | Before which milestone |
+|---|---|---|
+| S1, S2, S3 | Sub-project 5 | Milestone 1, before `WorldField` exists |
+| S4, S7, S9 | Sub-project 4 | Before (b) milestones 4–5 |
+| S5, S6 | Sub-project 3 | Milestone 1, on today's store |
+| S8 | Sub-project 2 | After milestone 3, with `benchmark.gd` labels |
+
+### Roadmap acceptance
+
+The roadmap is done when every Appendix A scenario has been re-traced and its new file count recorded in a results report, every S-row above is either fixed with a test or closed with evidence that it was not a bug, and no seam introduced along the way (starting with `FrameHost`) survives without a named deleting sub-project.
