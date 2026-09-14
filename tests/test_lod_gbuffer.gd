@@ -18,6 +18,7 @@ func make_world() -> VoxelWorld:
 	# the walk stalled on out-of-radius siblings and drew coarse roots instead of the far
 	# field; a complete cut for this camera needs ~19k pages.
 	w.max_lod_pages = 32768
+	w.near_field_scale = 1.0 # debug_seam_probe reads the marcher's hitpos per full-resolution pixel
 	add_child(w)
 	_worlds.append(w)
 	assert_bool(w.hooks().debug_init_atlas()).is_true()

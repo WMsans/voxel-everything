@@ -1366,17 +1366,23 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 	d["far_pixels_lost_to_raymarch"] = 0;
 	if (w <= 0 || h <= 0) return d;
 
-	// One tick refreshes the walk and the raster pass's page list for this view.
+	// One tick refreshes the walk and the raster pass's page list for this view, with the
+	// 2560x1440 viewport the LoD suites settle at; the frame below ticks with the same one.
 	debug_lod_tick(pos, fwd);
 
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass() ||
-			!world_->composite_pass() || !world_->deferred_pass() || !world_->inject_pass() || !world_->gbuffer() ||
-			!world_->context().lod->lod_pool_ || !world_->lod_raster_pass()) return d;
+	if (!world_->initialized_ || !device || !world_->frame() || !world_->gbuffer() ||
+			!world_->raymarch_pass() || !world_->composite_pass() || !world_->lod_raster_pass())
+		return d;
+	// The classification below reads the marcher's hitpos per FULL-resolution pixel.
+	if (world_->get_near_field_scale() < 1.0f) {
+		d["error"] = "debug_seam_probe needs near_field_scale = 1.0";
+		return d;
+	}
 
 	// The near field needs the streamer to have populated the SDF atlas; the LoD settle in
 	// the test only converges the far-field walk. Drive the streamer until it is quiet (the
-	// same condition the near-field tests use) before rendering the composite.
+	// same condition the near-field tests use) before rendering.
 	{
 		int quiet = 0;
 		for (int i = 0; i < 120 && quiet < 6; i++) {
@@ -1386,66 +1392,14 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 	}
 
 	const float p[3] = {pos.x, pos.y, pos.z};
-	const float f[3] = {fwd.x, fwd.y, fwd.z};
-	const float up[3] = {0.0f, 1.0f, 0.0f};
 	const float aspect = static_cast<float>(w) / static_cast<float>(h);
 	const float fov_y = 1.2217f;
 	const float tan_y = std::tan(fov_y * 0.5f);
 	const float tan_x = tan_y * aspect;
-	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, fov_y,
-			aspect, 0.1f, 8000.0f, w, h);
-	world_->composite_pass()->release_targets();
-	world_->lod_raster_pass()->release_targets();
-	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(w, h))) return d;
-	Projection vp;
-	for (int c = 0; c < 4; c++)
-		for (int r = 0; r < 4; r++)
-			vp.columns[c][r] = cam.view_proj[c * 4 + r];
+	const float kNear = 0.1f;
+	const float kFar = 8000.0f;
 
-	// Raymarch with the SAME camera as the LoD raster, so the two fields agree on the pixel
-	// grid. `looking_at` builds the same basis as lod_camera_perspective; fill in the fov.
-	ve::CameraParams cp = ve::CameraParams::looking_at(pos.x, pos.y, pos.z,
-			fwd.x, fwd.y, fwd.z, 0.0f, 1.0f, 0.0f);
-	cp.params[0] = tan_x;
-	cp.params[1] = tan_y;
-	cp.params[2] = 200.0f;
-	const ve::RegionWindow win = world_->region_window();
-	cp.dims[0] = win.dim;
-	cp.dims[1] = win.dim;
-	cp.dims[2] = win.dim;
-	cp.dims[3] = world_->island_slot_count();
-	cp.region_origin[0] = win.origin.x;
-	cp.region_origin[1] = win.origin.y;
-	cp.region_origin[2] = win.origin.z;
-	cp.atlas_bricks[0] = world_->store_->config().atlas_bricks.x;
-	cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
-	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
-	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp, w, h, kNoEdit, world_->field_context()))
-		return d;
-
-	auto make_target = [&](RID *out, RenderingDevice::DataFormat fmt, bool depth) {
-		Ref<RDTextureFormat> tf;
-		tf.instantiate();
-		tf->set_format(fmt);
-		tf->set_width(w);
-		tf->set_height(h);
-		tf->set_usage_bits(depth ?
-				RenderingDevice::TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-						RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
-						RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT |
-						RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT :
-				RenderingDevice::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT |
-						RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
-						RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT |
-						RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT);
-		Ref<RDTextureView> tv;
-		tv.instantiate();
-		*out = device->texture_create(tf, tv, {});
-	};
-	RID color, depth, marker;
-	make_target(&color, RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM, false);
-	make_target(&depth, RenderingDevice::DATA_FORMAT_D32_SFLOAT, true);
+	RID marker;
 	{
 		Ref<RDTextureFormat> tf;
 		tf.instantiate();
@@ -1465,66 +1419,32 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 		tv.instantiate();
 		marker = device->texture_create(tf, tv, upload);
 	}
-	if (!color.is_valid() || !depth.is_valid() || !marker.is_valid()) {
-		if (color.is_valid()) device->free_rid(color);
-		if (depth.is_valid()) device->free_rid(depth);
-		if (marker.is_valid()) device->free_rid(marker);
-		return d;
-	}
-	// The marker starts at 0 and is ORed to 1/2/3 by the two G-buffer producers.
+	if (!marker.is_valid()) return d;
+	// Drop the framebuffers that reference the marker before freeing it.
 	auto cleanup = [&]() {
 		world_->composite_pass()->release_targets();
-		world_->inject_pass()->release_targets();
 		world_->lod_raster_pass()->release_targets();
-		if (color.is_valid()) device->free_rid(color);
-		if (depth.is_valid()) device->free_rid(depth);
-		if (marker.is_valid()) device->free_rid(marker);
+		device->free_rid(marker);
 	};
 
-	// Pass 1: near field. Composite writes 1 into the marker where it keeps the depth.
-	// The probe must fade where the production path fades, or it measures a band neither
-	// shader is using and reports a seam that is not there.
-	float probe_fade_start = ve::kLodFadeStartM;
-	float probe_fade_end = ve::kLodFadeEndM;
-	world_->lod_fade_band(&probe_fade_start, &probe_fade_end);
-	world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
-			world_->raymarch_pass()->surface_texture(), world_->raymarch_pass()->hitpos_texture(), vp, *world_->material_atlas(), cp,
-			probe_fade_start, probe_fade_end, marker);
-	if (!world_->composite_pass()->last_draw_ok()) {
-		cleanup();
-		return d;
-	}
-
-	// Pass 2: far field. The LoD pipeline uses LOGIC_OP_OR on the marker, so kept far
-	// pixels OR 2 into the composite's 1, making double-claimed pixels read 3.
-	// `skip_lod` is a debug-only knob for the regression test: by leaving the far field
-	// out entirely it creates a real far-field gap, which the probe must count as
-	// unclaimed. Production rendering never passes it.
-	if (!skip_lod) {
-		world_->lod_raster_pass()->set_cull_enabled(true);
-		world_->context().lod->lod_pool_->upload_draw_args(world_->lod_raster_pass()->draw_pages());
-		const int draw_count = world_->lod_raster_pass()->draw_page_count();
-		world_->lod_raster_pass()->draw(device, *world_->context().lod->lod_pool_, *world_->material_atlas(), *world_->gbuffer(), vp, p,
-				draw_count, probe_fade_start, probe_fade_end, marker);
-	}
-
-	// The single deferred evaluation follows both producers, matching production ordering.
-	DeferredPass::Params dp;
-	const Projection inv = vp.inverse();
-	for (int c = 0; c < 4; c++)
-		for (int r = 0; r < 4; r++)
-			dp.inv_view_proj[c * 4 + r] = inv.columns[c][r];
-	dp.cam_pos[0] = pos.x;
-	dp.cam_pos[1] = pos.y;
-	dp.cam_pos[2] = pos.z;
-	dp.flags = ve::pack_flags(world_->beauty_settings());
-	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), RID(), dp) ||
-			!world_->inject_pass()->draw(device, color, depth, world_->gbuffer()->lit(), world_->gbuffer()->depth())) {
-		cleanup();
-		return d;
-	}
+	// The shipped frame with the marker attached: composite ORs 1 where the near field keeps
+	// a pixel, the far field ORs 2 (LOGIC_OP_OR), so double-claimed pixels read 3. skip_lod
+	// leaves the far field out entirely to create a real gap the probe must count.
+	FrameInputs in = VoxelFrame::looking_at(pos, fwd, w, h, fov_y, kNear, kFar);
+	in.debug.marker = marker;
+	in.debug.skip_far_field = skip_lod;
+	in.debug.lod_viewport = Vector2i(2560, 1440);
+	world_->frame()->render_headless(device, in);
 	device->submit();
 	device->sync();
+	const FrameRecord record = world_->frame()->last_frame();
+	if (!record.stage_ok(kStageComposite) || !record.stage_ok(kStageInject)) {
+		cleanup();
+		return d;
+	}
+	// Classify against the band the frame itself faded on this frame.
+	const float probe_fade_start = record.fade_start;
+	const float probe_fade_end = record.fade_end;
 
 	const PackedByteArray depth_data = device->texture_get_data(world_->gbuffer()->depth(), 0);
 	const PackedByteArray marker_data = device->texture_get_data(marker, 0);
@@ -1541,19 +1461,10 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 		const float *df = reinterpret_cast<const float *>(depth_data.ptr());
 		const uint8_t *mk = reinterpret_cast<const uint8_t *>(marker_data.ptr());
 		const float *hf = reinterpret_cast<const float *>(hitpos_data.ptr());
-		// Reconstruct the world hit from the reverse-Z depth and the same camera basis the
-		// two fields use, so the probe measures the same Euclidean distance the shaders fade
-		// on. The LoD-only far field has no raymarch hitpos, so the depth attachment is the
-		// primary source that covers both fields on the same pixel grid. When both fields
-		// discarded a pixel (the unclaimed case), depth is 0 (the reverse-Z far clear) but
-		// the raymarch hitpos texture still records the terrain hit; use its world-space
-		// position to recover the Euclidean distance and classify the marker.
-		float r[3] = {f[1] * up[2] - f[2] * up[1], f[2] * up[0] - f[0] * up[2],
-				f[0] * up[1] - f[1] * up[0]};
-		const float rl = std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
-		if (rl > 0.0f) { r[0] /= rl; r[1] /= rl; r[2] /= rl; }
-		const float kNear = 0.1f;
-		const float kFar = 8000.0f;
+		// Reconstruct the world hit from the reverse-Z depth and the same camera the two fields
+		// use, so the probe measures the same Euclidean distance the shaders fade on. When both
+		// fields discarded a pixel (the unclaimed case), depth is 0 but the raymarch hitpos
+		// texture still records the terrain hit; use it to recover the distance.
 		for (int i = 0; i < w * h; i++) {
 			const float depth_val = df[i];
 			const float *hp = &hf[i * 4];
@@ -1564,8 +1475,7 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 				const float v = (static_cast<float>(i / w) + 0.5f) / static_cast<float>(h);
 				const float ndc_x = u * 2.0f - 1.0f;
 				const float ndc_y = 1.0f - v * 2.0f;
-				const float z_view = kFar * kNear /
-						(kNear + depth_val * (kFar - kNear));
+				const float z_view = kFar * kNear / (kNear + depth_val * (kFar - kNear));
 				const float ax = ndc_x * tan_x;
 				const float ay = ndc_y * tan_y;
 				dist = z_view * std::sqrt(1.0f + ax * ax + ay * ay);
@@ -1575,8 +1485,7 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 				const float dz = hp[2] - p[2];
 				dist = std::sqrt(dx * dx + dy * dy + dz * dz);
 			} else {
-				// No terrain sample to classify: no field wrote depth and the raymarch
-				// did not hit, so this is sky rather than an unclaimed band pixel.
+				// No terrain sample to classify: sky, not an unclaimed band pixel.
 				continue;
 			}
 			const uint8_t m = mk[i];
@@ -1599,11 +1508,7 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 	d["both"] = band_pixels_double_claimed;
 	d["near_pixels_lost_to_lod"] = near_pixels_lost_to_lod;
 	d["far_pixels_lost_to_raymarch"] = far_pixels_lost_to_raymarch;
-	// Same as debug_lod_render_probe_culled: use the raster pass's prepared page list rather
-	// than reading lod_walk_ after lod_tick released lod_mutex_.
-	d["draw_pages"] = world_->lod_raster_pass() ? world_->lod_raster_pass()->draw_page_count() : 0;
-
-	// Drop cached framebuffers before freeing their throwaway scene-buffer/marker targets.
+	d["draw_pages"] = world_->lod_raster_pass()->draw_page_count();
 	cleanup();
 	return d;
 }
