@@ -491,6 +491,8 @@ VoxelWorld::VoxelWorld() {
 	// Sinks are never null from this point on, matching append_edit_locked's unguarded
 	// expectations.
 	store_->set_sinks(this, consolidation_.get());
+	// The frame references the orchestrator, LoD runtime and store; all three exist now.
+	frame_ = std::make_unique<VoxelFrame>(*render_, *lod_, *store_, *this);
 }
 
 VoxelWorld::~VoxelWorld() {
@@ -1091,18 +1093,16 @@ int VoxelWorld::sun_cascade_count() const {
 }
 
 ve::SunOrtho VoxelWorld::sun_ortho(int cascade) const {
-	float cam[3];
-	if (!context_.lod->last_camera(cam)) return ve::SunOrtho();
-	ve::SunCascade c[ve::kSunCascades];
-	const int n = ve::sun_cascades(get_stream_radius_m(), SunShadowPass::kSize, c);
-	if (n <= 0 || cascade < 0 || cascade >= n) return ve::SunOrtho();
-	const ve::SunState sun = sun_state();
-	// A scene light hands over a basis that rotates continuously; a bare direction has to
-	// have one derived, which is ill-conditioned near the zenith. Same choice as before.
-	return sun.has_basis()
-			? ve::sun_ortho_sphere(sun.dir, sun.right, sun.up, cam, c[cascade].radius,
-					SunShadowPass::kSize)
-			: ve::sun_ortho_sphere(sun.dir, cam, c[cascade].radius, SunShadowPass::kSize);
+	return frame_->sun_ortho(cascade);
+}
+
+FrameSettings VoxelWorld::frame_settings() const {
+	FrameSettings s;
+	s.sun = sun_state();
+	s.near_field_scale = get_near_field_scale();
+	s.near_field_enabled = get_effect_enabled("near_field");
+	s.sun_cascade_min_level = sun_cascade_min_level_;
+	return s;
 }
 
 void VoxelWorld::lod_fade_band(float *fade_start, float *fade_end) const {
