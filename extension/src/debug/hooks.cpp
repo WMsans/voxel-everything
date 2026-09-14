@@ -4728,73 +4728,21 @@ Dictionary VoxelDebugHooks::debug_deferred_probe(Vector3 pos, Vector3 fwd, int w
 			(probe_mode != 0 && probe_mode != 1 && probe_mode != 2 && probe_mode != 5)) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass() ||
-			!world_->composite_pass() || !world_->deferred_pass() || !world_->gbuffer()) return d;
-	if (world_->gbuffer()->size() != Vector2i(w, h)) {
-		world_->deferred_pass()->teardown();
-		world_->deferred_pass()->initialize(device);
-		world_->composite_pass()->release_targets();
-	}
+	if (!world_->initialized_ || !device || !world_->frame() || !world_->gbuffer()) return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++) {
 		quiet = debug_stream_frame(pos) == 0 ? quiet + 1 : 0;
 	}
-	const float p[3] = {pos.x, pos.y, pos.z};
-	const float f[3] = {fwd.x, fwd.y, fwd.z};
-	const float up[3] = {0.0f, std::fabs(fwd.y) > 0.9f ? 0.0f : 1.0f,
-			std::fabs(fwd.y) > 0.9f ? 1.0f : 0.0f};
-	const float fov_y = 1.0471975512f;
-	const float aspect = static_cast<float>(w) / static_cast<float>(h);
-	const float tan_y = std::tan(fov_y * 0.5f);
-	const float tan_x = tan_y * aspect;
-	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, fov_y, aspect,
-			0.05f, 4000.0f, w, h);
-	Projection view_proj;
-	for (int c = 0; c < 4; c++)
-		for (int r = 0; r < 4; r++)
-			view_proj.columns[c][r] = cam.view_proj[c * 4 + r];
-	ve::CameraParams cp = ve::CameraParams::looking_at(pos.x, pos.y, pos.z,
-			fwd.x, fwd.y, fwd.z, up[0], up[1], up[2]);
-	cp.params[0] = tan_x;
-	cp.params[1] = tan_y;
-	cp.params[2] = 200.0f;
-	const ve::RegionWindow win = world_->region_window();
-	cp.dims[0] = win.dim;
-	cp.dims[1] = win.dim;
-	cp.dims[2] = win.dim;
-	cp.dims[3] = world_->island_slot_count();
-	cp.region_origin[0] = win.origin.x;
-	cp.region_origin[1] = win.origin.y;
-	cp.region_origin[2] = win.origin.z;
-	cp.atlas_bricks[0] = world_->store_->config().atlas_bricks.x;
-	cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
-	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
-	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
-	std::memcpy(&cp.cam_pos[3], &flags, sizeof(float));
-	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp, w, h, kNoEdit, world_->field_context())) return d;
-	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(w, h))) return d;
-	float fade_start = ve::kLodFadeStartM;
-	float fade_end = ve::kLodFadeEndM;
-	world_->lod_fade_band(&fade_start, &fade_end);
-	world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
-			world_->raymarch_pass()->surface_texture(), world_->raymarch_pass()->hitpos_texture(), view_proj,
-			*world_->material_atlas(), cp, fade_start, fade_end);
-	if (!world_->composite_pass()->last_draw_ok()) return d;
-	DeferredPass::Params dp;
-	const Projection inv = view_proj.inverse();
-	for (int c = 0; c < 4; c++)
-		for (int r = 0; r < 4; r++)
-			dp.inv_view_proj[c * 4 + r] = inv.columns[c][r];
-	dp.cam_pos[0] = pos.x;
-	dp.cam_pos[1] = pos.y;
-	dp.cam_pos[2] = pos.z;
-	dp.flags = flags;
-	dp.probe_mode = probe_mode;
-	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), RID(), dp))
-		return d;
+	// The shipped frame, headless, with the deferred pass's debug view selected. Cascades, the
+	// fade band, SSGI and SSAO are whatever the frame gave the deferred pass.
+	FrameInputs in = VoxelFrame::looking_at(pos, fwd, w, h);
+	in.debug.deferred_view = probe_mode;
+	world_->frame()->render_headless(device, in);
 	device->submit();
 	device->sync();
+	if (!world_->frame()->last_frame().stage_ok(kStageDeferred)) return d;
+	const Projection view_proj = in.proj * Projection(in.cam.affine_inverse());
+	const Projection inv = view_proj.inverse();
 	const PackedByteArray data = device->texture_get_data(world_->gbuffer()->lit(), 0);
 	const int pixels = w * h;
 	if (data.size() < static_cast<int64_t>(pixels) * 8) return d;
