@@ -477,6 +477,12 @@ public:
 	// Task 7 diagnosis: the compositor's own two-phase record (plain read, no logic).
 	Dictionary debug_lod_cull_debug();
 
+	// One headless VoxelFrame (the object the compositors call) on the local device, looking
+	// from pos along fwd at w x h. Local-device worlds only. Keys: ok, had_history, the
+	// FrameRecord (fade_start, fade_end, two_phase, hiz_built, first_pass_count, stages_ok,
+	// stages_cancelled), mean_luma and lit_checksum of the G-buffer lit target.
+	Dictionary debug_render_frame(Vector3 pos, Vector3 fwd, int w, int h);
+
 	// Grass: what the SHIPPING pass wrote during a real frame. Rebuilds nothing.
 	Dictionary debug_grass_stats();
 

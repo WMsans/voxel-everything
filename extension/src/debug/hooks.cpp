@@ -1,6 +1,7 @@
 #include "debug/hooks.h"
 
 #include "../voxel_world.h"
+#include "render/frame.h"
 #include "terrain/field_params_pack.h"
 #include <cstring>
 #include "mesh/consolidation.h"
@@ -132,6 +133,8 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_lod_cull_probe", "pos", "fwd"),
 			&VoxelDebugHooks::debug_lod_cull_probe);
 	ClassDB::bind_method(D_METHOD("debug_lod_cull_debug"), &VoxelDebugHooks::debug_lod_cull_debug);
+	ClassDB::bind_method(D_METHOD("debug_render_frame", "pos", "fwd", "w", "h"),
+			&VoxelDebugHooks::debug_render_frame);
 	ClassDB::bind_method(D_METHOD("debug_grass_stats"), &VoxelDebugHooks::debug_grass_stats);
 	ClassDB::bind_method(D_METHOD("debug_sun_shadow_stats", "cascade"),
 			&VoxelDebugHooks::debug_sun_shadow_stats);
@@ -367,85 +370,45 @@ Dictionary VoxelDebugHooks::debug_contact_shadow_probe(Vector3 pos, Vector3 fwd,
 	if (w <= 0 || h <= 0) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass() ||
-			!world_->composite_pass() || !world_->deferred_pass() || !world_->gbuffer() || !world_->contact_shadow_pass() ||
-			!world_->beauty_camera()) return d;
+	if (!world_->initialized_ || !device || !world_->frame() || !world_->contact_shadow_pass()) return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++)
 		quiet = debug_stream_frame(pos) == 0 ? quiet + 1 : 0;
-	world_->composite_pass()->release_targets();
-	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(w, h))) return d;
-	const float p[3] = {pos.x, pos.y, pos.z};
-	const float f[3] = {fwd.x, fwd.y, fwd.z};
-	const float up[3] = {0.0f, std::fabs(fwd.y) > 0.9f ? 0.0f : 1.0f,
-			std::fabs(fwd.y) > 0.9f ? 1.0f : 0.0f};
-	const float aspect = static_cast<float>(w) / static_cast<float>(h);
-	const float fov_y = 1.0471975512f;
-	const float tan_y = std::tan(fov_y * 0.5f);
-	const float tan_x = tan_y * aspect;
-	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, fov_y, aspect,
-			0.05f, 4000.0f, w, h);
-	Projection view_proj;
-	for (int c = 0; c < 4; c++)
-		for (int r = 0; r < 4; r++) view_proj.columns[c][r] = cam.view_proj[c * 4 + r];
-	ve::CameraParams cp = ve::CameraParams::looking_at(pos.x, pos.y, pos.z,
-			fwd.x, fwd.y, fwd.z, up[0], up[1], up[2]);
-	cp.params[0] = tan_x; cp.params[1] = tan_y; cp.params[2] = 200.0f;
-	const ve::RegionWindow win = world_->region_window();
-	cp.dims[0] = win.dim; cp.dims[1] = win.dim;
-	cp.dims[2] = win.dim; cp.dims[3] = world_->island_slot_count();
-	cp.region_origin[0] = win.origin.x; cp.region_origin[1] = win.origin.y; cp.region_origin[2] = win.origin.z;
-	cp.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
-	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
-	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
-	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp, w, h, no_edit, world_->field_context())) return d;
-	float fade_start = ve::kLodFadeStartM, fade_end = ve::kLodFadeEndM;
-	world_->lod_fade_band(&fade_start, &fade_end);
-	world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
-			world_->raymarch_pass()->surface_texture(), world_->raymarch_pass()->hitpos_texture(), view_proj,
-			*world_->material_atlas(), cp, fade_start, fade_end);
-	if (!world_->composite_pass()->last_draw_ok()) return d;
-	DeferredPass::Params dp;
-	const Projection inv = view_proj.inverse();
-	for (int c = 0; c < 4; c++)
-		for (int r = 0; r < 4; r++) dp.inv_view_proj[c * 4 + r] = inv.columns[c][r];
-	dp.cam_pos[0] = pos.x; dp.cam_pos[1] = pos.y; dp.cam_pos[2] = pos.z;
-	dp.flags = ve::pack_flags(world_->beauty_settings());
-	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), RID(), dp))
-		return d;
-	auto make_scratch = [&]() -> RID {
-		Ref<RDTextureFormat> tf; tf.instantiate();
-		tf->set_format(RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT);
-		tf->set_width(w); tf->set_height(h);
-		tf->set_usage_bits(RenderingDevice::TEXTURE_USAGE_STORAGE_BIT |
-				RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
-				RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
-				RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT);
-		Ref<RDTextureView> tv; tv.instantiate();
-		return device->texture_create(tf, tv, {});
-	};
-	const RID scratch = make_scratch();
-	const RID before = make_scratch();
-	if (!scratch.is_valid() || !before.is_valid()) {
-		if (scratch.is_valid()) device->free_rid(scratch);
-		if (before.is_valid()) device->free_rid(before);
+	// Both halves of the shipped frame, split at the opaque boundary so scene colour can be
+	// captured between them: `before` is what inject left, the scene colour afterwards is what
+	// the post-opaque stages (contact shadows, then SSR and outlines) made of it.
+	VoxelFrame *frame = world_->frame();
+	const FrameInputs in = frame->prepare_headless(device, VoxelFrame::looking_at(pos, fwd, w, h));
+	if (!in.scene_color.is_valid()) return d;
+	frame->render_pre_opaque(device, in);
+	Ref<RDTextureFormat> tf;
+	tf.instantiate();
+	tf->set_format(RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT);
+	tf->set_width(w);
+	tf->set_height(h);
+	tf->set_usage_bits(RenderingDevice::TEXTURE_USAGE_STORAGE_BIT |
+			RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT);
+	Ref<RDTextureView> tv;
+	tv.instantiate();
+	const RID before = device->texture_create(tf, tv, {});
+	if (!before.is_valid()) return d;
+	device->texture_copy(in.scene_color, before, Vector3(), Vector3(), Vector3(w, h, 1), 0, 0, 0, 0);
+	frame->render_post_opaque(device, in);
+	device->submit();
+	device->sync();
+	if (!frame->last_frame().stage_ok(kStageContact)) {
+		device->free_rid(before);
 		return d;
 	}
-	device->texture_copy(world_->gbuffer()->lit(), scratch, Vector3(), Vector3(), Vector3(w, h, 1), 0, 0, 0, 0);
-	device->texture_copy(world_->gbuffer()->lit(), before, Vector3(), Vector3(), Vector3(w, h, 1), 0, 0, 0, 0);
-	world_->beauty_camera()->ensure(device);
-	const float cam_pos[3] = {pos.x, pos.y, pos.z};
-	world_->beauty_camera()->update(device, view_proj, cam_pos, Vector2i(w, h), 0.05f, 4000.0f);
-	world_->contact_shadow_pass()->render(device, scratch, world_->gbuffer()->depth(), Vector2i(w, h),
-			world_->beauty_camera()->buffer(), world_->beauty_settings());
-	device->submit(); device->sync();
 	const int mw = std::max(1, w / 2), mh = std::max(1, h / 2);
 	d["mask_width"] = mw; d["mask_height"] = mh;
 	PackedByteArray mask;
 	if (world_->contact_shadow_pass()->mask().is_valid())
 		mask = device->texture_get_data(world_->contact_shadow_pass()->mask(), 0);
 	const PackedByteArray pre = device->texture_get_data(before, 0);
-	const PackedByteArray post = device->texture_get_data(scratch, 0);
+	const PackedByteArray post = device->texture_get_data(in.scene_color, 0);
 	if (mask.size() >= mw * mh && pre.size() >= w * h * 8 && post.size() >= w * h * 8) {
 		const uint8_t *m = reinterpret_cast<const uint8_t *>(mask.ptr());
 		const uint16_t *a = reinterpret_cast<const uint16_t *>(pre.ptr());
@@ -474,11 +437,10 @@ Dictionary VoxelDebugHooks::debug_contact_shadow_probe(Vector3 pos, Vector3 fwd,
 		d["mean_darkening"] = static_cast<float>(dark / (w * h)); d["max_brightening"] = bright;
 		d["max_neighbour_step"] = step;
 	}
-	world_->contact_shadow_pass()->teardown();
-	device->free_rid(scratch); device->free_rid(before);
-	world_->contact_shadow_pass()->initialize(device);
+	device->free_rid(before);
 	return d;
 }
+
 
 Dictionary VoxelDebugHooks::debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, int h, int frames) {
 	Dictionary d;
@@ -490,69 +452,21 @@ Dictionary VoxelDebugHooks::debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, in
 	if (w <= 0 || h <= 0 || frames <= 0) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass() ||
-			!world_->composite_pass() || !world_->deferred_pass() || !world_->gbuffer() || !world_->beauty_camera() || !world_->ssgi_pass())
+	if (!world_->initialized_ || !device || !world_->frame() || !world_->gbuffer() || !world_->ssgi_pass())
 		return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++)
 		quiet = debug_stream_frame(pos) == 0 ? quiet + 1 : 0;
-	world_->composite_pass()->release_targets();
-	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(w, h)) || !world_->beauty_camera()->ensure(device)) return d;
-
-	const float p[3] = {pos.x, pos.y, pos.z};
-	const float f[3] = {fwd.x, fwd.y, fwd.z};
-	const float up[3] = {0.0f, std::fabs(fwd.y) > 0.9f ? 0.0f : 1.0f,
-			std::fabs(fwd.y) > 0.9f ? 1.0f : 0.0f};
-	const float aspect = static_cast<float>(w) / static_cast<float>(h);
-	const float fov_y = 1.0471975512f;
-	const float tan_y = std::tan(fov_y * 0.5f);
-	const float tan_x = tan_y * aspect;
-	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, fov_y, aspect,
-			0.05f, 4000.0f, w, h);
-	Projection view_proj;
-	for (int c = 0; c < 4; c++)
-		for (int r = 0; r < 4; r++) view_proj.columns[c][r] = cam.view_proj[c * 4 + r];
-	ve::CameraParams cp = ve::CameraParams::looking_at(pos.x, pos.y, pos.z,
-			fwd.x, fwd.y, fwd.z, up[0], up[1], up[2]);
-	cp.params[0] = tan_x; cp.params[1] = tan_y; cp.params[2] = 200.0f;
-	const ve::RegionWindow win = world_->region_window();
-	cp.dims[0] = win.dim; cp.dims[1] = win.dim;
-	cp.dims[2] = win.dim; cp.dims[3] = world_->island_slot_count();
-	cp.region_origin[0] = win.origin.x; cp.region_origin[1] = win.origin.y; cp.region_origin[2] = win.origin.z;
-	cp.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
-	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
-	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
-	const ve::BeautySettings settings = world_->beauty_settings();
-	world_->ssgi_pass()->clear_result();
-	float prev_view_proj[16] = {};
-	for (int c = 0; c < 4; c++)
-		for (int r = 0; r < 4; r++) prev_view_proj[c * 4 + r] = view_proj.columns[c][r];
-	const Projection inv = view_proj.inverse();
+	// `frames` consecutive shipped frames of one view. History, the previous view-projection
+	// and the temporal frame index are whatever the frame recorded at the end of the last one.
 	bool ran = false;
+	const FrameInputs in = VoxelFrame::looking_at(pos, fwd, w, h);
 	for (int i = 0; i < frames; i++) {
-		world_->beauty_camera()->update(device, view_proj, p, Vector2i(w, h), 0.05f, 4000.0f);
-		if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp, w, h, no_edit, world_->field_context())) break;
-		float fade_start = ve::kLodFadeStartM, fade_end = ve::kLodFadeEndM;
-		world_->lod_fade_band(&fade_start, &fade_end);
-		world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
-				world_->raymarch_pass()->surface_texture(), world_->raymarch_pass()->hitpos_texture(), view_proj,
-				*world_->material_atlas(), cp, fade_start, fade_end);
-		if (!world_->composite_pass()->last_draw_ok()) break;
-		const bool ssgi_ok = world_->ssgi_pass()->render(device, *world_->gbuffer(), world_->beauty_camera()->buffer(),
-				prev_view_proj, i > 0, settings, static_cast<uint32_t>(i));
-		ran = ran || ssgi_ok;
-		DeferredPass::Params dp;
-		for (int c = 0; c < 4; c++)
-			for (int r = 0; r < 4; r++) dp.inv_view_proj[c * 4 + r] = inv.columns[c][r];
-		dp.cam_pos[0] = pos.x; dp.cam_pos[1] = pos.y; dp.cam_pos[2] = pos.z;
-		dp.flags = ve::pack_flags(settings);
-		if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(),
-				(ssgi_ok ? world_->ssgi_pass()->result() : RID()),
-				RID(), RID(), dp)) break;
-		world_->downsample_history(device, world_->gbuffer()->lit(), *world_->gbuffer());
+		world_->frame()->render_headless(device, in);
+		device->submit();
+		device->sync();
+		ran = ran || world_->frame()->last_frame().stage_ok(kStageSsgi);
 	}
-	device->submit();
-	device->sync();
 	d["ran"] = ran;
 	const RID output = world_->ssgi_pass()->result();
 	const Vector2i half = world_->gbuffer()->half_size();
@@ -608,64 +522,17 @@ Dictionary VoxelDebugHooks::debug_ssao_probe(Vector3 pos, Vector3 fwd, int w, in
 	if (w <= 0 || h <= 0) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass() ||
-			!world_->composite_pass() || !world_->gbuffer() || !world_->beauty_camera() || !world_->ssao_pass())
+	if (!world_->initialized_ || !device || !world_->frame() || !world_->gbuffer() || !world_->ssao_pass())
 		return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++)
 		quiet = debug_stream_frame(pos) == 0 ? quiet + 1 : 0;
-	world_->composite_pass()->release_targets();
-	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(w, h)) || !world_->beauty_camera()->ensure(device)) return d;
-
-	const float p[3] = {pos.x, pos.y, pos.z};
-	const float f[3] = {fwd.x, fwd.y, fwd.z};
-	const float up[3] = {0.0f, std::fabs(fwd.y) > 0.9f ? 0.0f : 1.0f,
-			std::fabs(fwd.y) > 0.9f ? 1.0f : 0.0f};
-	const float aspect = static_cast<float>(w) / static_cast<float>(h);
-	const float fov_y = 1.0471975512f;
-	const float tan_y = std::tan(fov_y * 0.5f);
-	const float tan_x = tan_y * aspect;
-	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, fov_y, aspect,
-			0.05f, 4000.0f, w, h);
-	Projection view_proj;
-	for (int c = 0; c < 4; c++)
-		for (int r = 0; r < 4; r++) view_proj.columns[c][r] = cam.view_proj[c * 4 + r];
-	ve::CameraParams cp = ve::CameraParams::looking_at(pos.x, pos.y, pos.z,
-			fwd.x, fwd.y, fwd.z, up[0], up[1], up[2]);
-	cp.params[0] = tan_x; cp.params[1] = tan_y; cp.params[2] = 200.0f;
-	const ve::RegionWindow win = world_->region_window();
-	cp.dims[0] = win.dim; cp.dims[1] = win.dim;
-	cp.dims[2] = win.dim; cp.dims[3] = world_->island_slot_count();
-	cp.region_origin[0] = win.origin.x; cp.region_origin[1] = win.origin.y; cp.region_origin[2] = win.origin.z;
-	cp.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
-	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
-	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
-	const ve::BeautySettings settings = world_->beauty_settings();
-	world_->ssao_pass()->clear_result();
-	bool ran = false;
-	world_->beauty_camera()->update(device, view_proj, p, Vector2i(w, h), 0.05f, 4000.0f);
-	if (world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp, w, h, no_edit, world_->field_context())) {
-		float fade_start = ve::kLodFadeStartM, fade_end = ve::kLodFadeEndM;
-		world_->lod_fade_band(&fade_start, &fade_end);
-		world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
-				world_->raymarch_pass()->surface_texture(), world_->raymarch_pass()->hitpos_texture(), view_proj,
-				*world_->material_atlas(), cp, fade_start, fade_end);
-		if (world_->composite_pass()->last_draw_ok())
-			ran = world_->ssao_pass()->render(device, *world_->gbuffer(),
-					world_->beauty_camera()->buffer(), settings);
-		// The full deferred chain on top, so the probe can also report what the lit image
-		// looks like with this frame's AO applied.
-		DeferredPass::Params dp;
-		const Projection inv = view_proj.inverse();
-		for (int c = 0; c < 4; c++)
-			for (int r = 0; r < 4; r++) dp.inv_view_proj[c * 4 + r] = inv.columns[c][r];
-		dp.cam_pos[0] = pos.x; dp.cam_pos[1] = pos.y; dp.cam_pos[2] = pos.z;
-		dp.flags = ve::pack_flags(settings);
-		world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(),
-				RID(), ran ? world_->ssao_pass()->result() : RID(), RID(), dp);
-	}
+	// The shipped frame, headless: SSAO runs only when the beauty flags give it work, over the
+	// G-buffer the frame composited at near_field_scale, marched to the fade band.
+	world_->frame()->render_headless(device, VoxelFrame::looking_at(pos, fwd, w, h));
 	device->submit();
 	device->sync();
+	const bool ran = world_->frame()->last_frame().stage_ok(kStageSsao);
 	d["ran"] = ran;
 	{
 		const PackedByteArray lit = device->texture_get_data(world_->gbuffer()->lit(), 0);
@@ -746,100 +613,21 @@ Dictionary VoxelDebugHooks::debug_ssgi_reprojection_probe(Vector3 previous_pos, 
 	if (w <= 0 || h <= 0) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass() ||
-			!world_->composite_pass() || !world_->deferred_pass() || !world_->gbuffer() || !world_->beauty_camera() || !world_->ssgi_pass())
+	if (!world_->initialized_ || !device || !world_->frame() || !world_->gbuffer() || !world_->ssgi_pass())
 		return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++)
 		quiet = debug_stream_frame(previous_pos) == 0 ? quiet + 1 : 0;
-	world_->composite_pass()->release_targets();
-	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(w, h)) || !world_->beauty_camera()->ensure(device))
-		return d;
-
-	const float fov_y = 1.0471975512f;
-	const float aspect = static_cast<float>(w) / static_cast<float>(h);
-	const float tan_y = std::tan(fov_y * 0.5f);
-	const float tan_x = tan_y * aspect;
-	const float near_clip = 0.05f;
-	const float far_clip = 4000.0f;
-	const float p[3] = {previous_pos.x, previous_pos.y, previous_pos.z};
-	const float cp_pos[3] = {current_pos.x, current_pos.y, current_pos.z};
-	const float previous_f[3] = {previous_fwd.x, previous_fwd.y, previous_fwd.z};
-	const float current_f[3] = {current_fwd.x, current_fwd.y, current_fwd.z};
-	const float previous_up[3] = {0.0f, std::fabs(previous_fwd.y) > 0.9f ? 0.0f : 1.0f,
-			std::fabs(previous_fwd.y) > 0.9f ? 1.0f : 0.0f};
-	const float current_up[3] = {0.0f, std::fabs(current_fwd.y) > 0.9f ? 0.0f : 1.0f,
-			std::fabs(current_fwd.y) > 0.9f ? 1.0f : 0.0f};
-	const ve::LodCamera previous_cam = ve::lod_camera_perspective(p, previous_f, previous_up,
-			fov_y, aspect, near_clip, far_clip, w, h);
-	const ve::LodCamera current_cam = ve::lod_camera_perspective(cp_pos, current_f, current_up,
-			fov_y, aspect, near_clip, far_clip, w, h);
-	Projection previous_view_proj, current_view_proj;
-	for (int c = 0; c < 4; c++)
-		for (int r = 0; r < 4; r++) {
-			previous_view_proj.columns[c][r] = previous_cam.view_proj[c * 4 + r];
-			current_view_proj.columns[c][r] = current_cam.view_proj[c * 4 + r];
-		}
-	auto make_camera_params = [&](Vector3 camera_pos, Vector3 camera_fwd,
-			const float up[3]) {
-			ve::CameraParams result = ve::CameraParams::looking_at(camera_pos.x, camera_pos.y,
-					camera_pos.z, camera_fwd.x, camera_fwd.y, camera_fwd.z, up[0], up[1], up[2]);
-			result.params[0] = tan_x;
-			result.params[1] = tan_y;
-			result.params[2] = 200.0f;
-			const ve::RegionWindow win = world_->region_window();
-			result.dims[0] = win.dim;
-			result.dims[1] = win.dim;
-			result.dims[2] = win.dim;
-			result.dims[3] = world_->island_slot_count();
-			result.region_origin[0] = win.origin.x;
-			result.region_origin[1] = win.origin.y;
-			result.region_origin[2] = win.origin.z;
-			result.atlas_bricks[0] = world_->store_->config().atlas_bricks.x;
-			result.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
-			result.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
-			return result;
-		};
-	const ve::CameraParams previous_params = make_camera_params(previous_pos, previous_fwd,
-			previous_up);
-	const ve::CameraParams current_params = make_camera_params(current_pos, current_fwd, current_up);
-	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
-	const ve::BeautySettings settings = world_->beauty_settings();
-	world_->ssgi_pass()->clear_result();
-	float previous_matrix[16], current_matrix[16];
-	for (int c = 0; c < 4; c++)
-		for (int r = 0; r < 4; r++) {
-			previous_matrix[c * 4 + r] = previous_view_proj.columns[c][r];
-			current_matrix[c * 4 + r] = current_view_proj.columns[c][r];
-		}
-	const Projection previous_inv = previous_view_proj.inverse();
-	const Projection current_inv = current_view_proj.inverse();
-	auto render = [&](const ve::CameraParams &camera, const Projection &view_proj,
-			const Projection &inv, Vector3 camera_pos, const float previous_mapping[16],
-			bool have_history, uint32_t frame) {
-			const float camera_position[3] = {camera_pos.x, camera_pos.y, camera_pos.z};
-			world_->beauty_camera()->update(device, view_proj, camera_position, Vector2i(w, h), near_clip,
-					far_clip);
-			if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), camera, w, h, no_edit, world_->field_context()))
-				return false;
-			float fade_start = ve::kLodFadeStartM, fade_end = ve::kLodFadeEndM;
-			world_->lod_fade_band(&fade_start, &fade_end);
-			world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
-					world_->raymarch_pass()->surface_texture(), world_->raymarch_pass()->hitpos_texture(), view_proj,
-					*world_->material_atlas(), camera, fade_start, fade_end);
-			if (!world_->composite_pass()->last_draw_ok()) return false;
-			const bool ssgi_ok = world_->ssgi_pass()->render(device, *world_->gbuffer(), world_->beauty_camera()->buffer(),
-					previous_mapping, have_history, settings, frame);
-			if (!ssgi_ok) return false;
-			DeferredPass::Params dp;
-			for (int c = 0; c < 4; c++)
-				for (int r = 0; r < 4; r++) dp.inv_view_proj[c * 4 + r] = inv.columns[c][r];
-			dp.cam_pos[0] = camera_pos.x;
-			dp.cam_pos[1] = camera_pos.y;
-			dp.cam_pos[2] = camera_pos.z;
-			dp.flags = ve::pack_flags(settings);
-			return world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), world_->ssgi_pass()->result(), RID(), RID(),
-				dp);
+	// The frame reprojects SSGI's history through the view-projection it recorded at the end of
+	// the PREVIOUS frame. Frame 1 at the previous camera leaves that matrix and a history; frame
+	// 2 at the current camera therefore gathers through the previous mapping; frame 3 at the
+	// same current camera gathers through the current mapping. Their difference is what a
+	// broken reprojection would erase.
+	auto render = [&](Vector3 camera_pos, Vector3 camera_fwd) {
+		world_->frame()->render_headless(device, VoxelFrame::looking_at(camera_pos, camera_fwd, w, h));
+		device->submit();
+		device->sync();
+		return world_->frame()->last_frame().stage_ok(kStageSsgi);
 	};
 	auto read_luma = [&]() {
 		const Vector2i half = world_->gbuffer()->half_size();
@@ -854,20 +642,10 @@ Dictionary VoxelDebugHooks::debug_ssgi_reprojection_probe(Vector3 previous_pos, 
 					0.0722 * Math::half_to_float(values[i * 4 + 2]);
 		return luma / static_cast<double>(pixels);
 	};
-	if (!render(previous_params, previous_view_proj, previous_inv, previous_pos, previous_matrix,
-			false, 0)) return d;
-	world_->downsample_history(device, world_->gbuffer()->lit(), *world_->gbuffer());
-	device->submit();
-	device->sync();
-	if (!render(current_params, current_view_proj, current_inv, current_pos, previous_matrix,
-			true, 1)) return d;
-	device->submit();
-	device->sync();
+	if (!render(previous_pos, previous_fwd)) return d;
+	if (!render(current_pos, current_fwd)) return d;
 	const double mapping_luma = read_luma();
-	if (!render(current_params, current_view_proj, current_inv, current_pos, current_matrix,
-			true, 1)) return d;
-	device->submit();
-	device->sync();
+	if (!render(current_pos, current_fwd)) return d;
 	const double current_mapping_luma = read_luma();
 	d["mapping_luma"] = mapping_luma;
 	d["current_mapping_luma"] = current_mapping_luma;
@@ -4772,73 +4550,21 @@ Dictionary VoxelDebugHooks::debug_deferred_probe(Vector3 pos, Vector3 fwd, int w
 			(probe_mode != 0 && probe_mode != 1 && probe_mode != 2 && probe_mode != 5)) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass() ||
-			!world_->composite_pass() || !world_->deferred_pass() || !world_->gbuffer()) return d;
-	if (world_->gbuffer()->size() != Vector2i(w, h)) {
-		world_->deferred_pass()->teardown();
-		world_->deferred_pass()->initialize(device);
-		world_->composite_pass()->release_targets();
-	}
+	if (!world_->initialized_ || !device || !world_->frame() || !world_->gbuffer()) return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++) {
 		quiet = debug_stream_frame(pos) == 0 ? quiet + 1 : 0;
 	}
-	const float p[3] = {pos.x, pos.y, pos.z};
-	const float f[3] = {fwd.x, fwd.y, fwd.z};
-	const float up[3] = {0.0f, std::fabs(fwd.y) > 0.9f ? 0.0f : 1.0f,
-			std::fabs(fwd.y) > 0.9f ? 1.0f : 0.0f};
-	const float fov_y = 1.0471975512f;
-	const float aspect = static_cast<float>(w) / static_cast<float>(h);
-	const float tan_y = std::tan(fov_y * 0.5f);
-	const float tan_x = tan_y * aspect;
-	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, fov_y, aspect,
-			0.05f, 4000.0f, w, h);
-	Projection view_proj;
-	for (int c = 0; c < 4; c++)
-		for (int r = 0; r < 4; r++)
-			view_proj.columns[c][r] = cam.view_proj[c * 4 + r];
-	ve::CameraParams cp = ve::CameraParams::looking_at(pos.x, pos.y, pos.z,
-			fwd.x, fwd.y, fwd.z, up[0], up[1], up[2]);
-	cp.params[0] = tan_x;
-	cp.params[1] = tan_y;
-	cp.params[2] = 200.0f;
-	const ve::RegionWindow win = world_->region_window();
-	cp.dims[0] = win.dim;
-	cp.dims[1] = win.dim;
-	cp.dims[2] = win.dim;
-	cp.dims[3] = world_->island_slot_count();
-	cp.region_origin[0] = win.origin.x;
-	cp.region_origin[1] = win.origin.y;
-	cp.region_origin[2] = win.origin.z;
-	cp.atlas_bricks[0] = world_->store_->config().atlas_bricks.x;
-	cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
-	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
-	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
-	std::memcpy(&cp.cam_pos[3], &flags, sizeof(float));
-	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp, w, h, kNoEdit, world_->field_context())) return d;
-	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(w, h))) return d;
-	float fade_start = ve::kLodFadeStartM;
-	float fade_end = ve::kLodFadeEndM;
-	world_->lod_fade_band(&fade_start, &fade_end);
-	world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
-			world_->raymarch_pass()->surface_texture(), world_->raymarch_pass()->hitpos_texture(), view_proj,
-			*world_->material_atlas(), cp, fade_start, fade_end);
-	if (!world_->composite_pass()->last_draw_ok()) return d;
-	DeferredPass::Params dp;
-	const Projection inv = view_proj.inverse();
-	for (int c = 0; c < 4; c++)
-		for (int r = 0; r < 4; r++)
-			dp.inv_view_proj[c * 4 + r] = inv.columns[c][r];
-	dp.cam_pos[0] = pos.x;
-	dp.cam_pos[1] = pos.y;
-	dp.cam_pos[2] = pos.z;
-	dp.flags = flags;
-	dp.probe_mode = probe_mode;
-	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), RID(), dp))
-		return d;
+	// The shipped frame, headless, with the deferred pass's debug view selected. Cascades, the
+	// fade band, SSGI and SSAO are whatever the frame gave the deferred pass.
+	FrameInputs in = VoxelFrame::looking_at(pos, fwd, w, h);
+	in.debug.deferred_view = probe_mode;
+	world_->frame()->render_headless(device, in);
 	device->submit();
 	device->sync();
+	if (!world_->frame()->last_frame().stage_ok(kStageDeferred)) return d;
+	const Projection view_proj = in.proj * Projection(in.cam.affine_inverse());
+	const Projection inv = view_proj.inverse();
 	const PackedByteArray data = device->texture_get_data(world_->gbuffer()->lit(), 0);
 	const int pixels = w * h;
 	if (data.size() < static_cast<int64_t>(pixels) * 8) return d;
@@ -6192,6 +5918,60 @@ void VoxelDebugHooks::debug_set_normal_pool_budget(int bytes) {
 }
 RenderingDevice *VoxelDebugHooks::debug_local_rd() const {
 	return world_->local_rd();
+}
+
+static void write_frame_record(Dictionary &d, const FrameRecord &r) {
+	d["fade_start"] = r.fade_start;
+	d["fade_end"] = r.fade_end;
+	d["two_phase"] = r.lod_two_phase;
+	d["hiz_built"] = r.hiz_built;
+	d["first_pass_count"] = r.lod_first_pass_count;
+	PackedStringArray ok, cancelled;
+	for (uint32_t s = 0; s < kStageCount; s++) {
+		if (r.stages_ok & (1u << s)) ok.push_back(frame_stage_name(static_cast<FrameStage>(s)));
+		if (r.stages_cancelled & (1u << s))
+			cancelled.push_back(frame_stage_name(static_cast<FrameStage>(s)));
+	}
+	d["stages_ok"] = ok;
+	d["stages_cancelled"] = cancelled;
+}
+
+Dictionary VoxelDebugHooks::debug_render_frame(Vector3 pos, Vector3 fwd, int w, int h) {
+	Dictionary d;
+	d["ok"] = false;
+	d["had_history"] = false;
+	d["mean_luma"] = 0.0;
+	d["lit_checksum"] = 0;
+	if (w <= 0 || h <= 0 || !world_->get_use_local_device()) return d;
+	world_->ensure_initialized();
+	RenderingDevice *device = world_->rd();
+	if (!world_->initialized_ || !device || !world_->frame() || !world_->gbuffer()) return d;
+	d["had_history"] = false;
+	FrameInputs in = world_->frame()->prepare_headless(device, VoxelFrame::looking_at(pos, fwd, w, h));
+	if (!in.scene_color.is_valid()) return d;
+	const bool pre = world_->frame()->render_pre_opaque(device, in);
+	d["had_history"] = world_->has_history();
+	const bool post = world_->frame()->render_post_opaque(device, in);
+	const bool ok = pre && post;
+	device->submit();
+	device->sync();
+	d["ok"] = ok;
+	write_frame_record(d, world_->frame()->last_frame());
+	if (world_->gbuffer()->size() != Vector2i(w, h)) return d;
+	const PackedByteArray lit = device->texture_get_data(world_->gbuffer()->lit(), 0);
+	const int64_t pixels = static_cast<int64_t>(w) * h;
+	if (lit.size() < pixels * 8) return d;
+	const uint16_t *v = reinterpret_cast<const uint16_t *>(lit.ptr());
+	double luma = 0.0;
+	int64_t checksum = 0;
+	for (int64_t i = 0; i < pixels; i++) {
+		luma += 0.2126 * half_to_float(v[i * 4]) + 0.7152 * half_to_float(v[i * 4 + 1]) +
+				0.0722 * half_to_float(v[i * 4 + 2]);
+		checksum = checksum * 31 + v[i * 4] + 7 * v[i * 4 + 1] + 13 * v[i * 4 + 2];
+	}
+	d["mean_luma"] = luma / static_cast<double>(pixels);
+	d["lit_checksum"] = checksum;
+	return d;
 }
 
 } // namespace godot

@@ -30,7 +30,8 @@ pure_sources = (Glob("src/world/*.cpp") + Glob("src/generator/*.cpp") +
                 Glob("src/mesh/*.cpp") + Glob("src/connectivity/*.cpp") +
                 Glob("src/lod/*.cpp") + Glob("src/shade/*.cpp") +
                 Glob("src/grass/*.cpp"))
-for f in ["src/render/shader_loader.cpp", "src/render/camera_params.cpp"]:
+for f in ["src/render/shader_loader.cpp", "src/render/camera_params.cpp",
+          "src/render/frame_params.cpp"]:
     if os.path.exists(f):
         pure_sources.append(f)
 # ConsolidationCoordinator publishes GPU transactions by design (godot-cpp headers, worker

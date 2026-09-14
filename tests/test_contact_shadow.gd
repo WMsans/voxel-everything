@@ -24,6 +24,9 @@ func make_world() -> VoxelWorld:
 
 func test_the_mask_is_half_resolution() -> void:
 	var w := make_world()
+	# 2026-09-13: The migrated probe runs the shipped frame, whose default tier has
+	# contact_shadows=false; this test measures effect-on behavior.
+	w.set_effect_enabled("contact_shadows", true)
 	var d: Dictionary = w.hooks().debug_contact_shadow_probe(Vector3(30.0, 70.0, 30.0),
 		Vector3(0.2, -1.0, 0.2).normalized(), 128, 128)
 	assert_int(d["mask_width"]).is_equal(64)
@@ -34,6 +37,13 @@ func test_the_mask_is_half_resolution() -> void:
 # contact shadows exist for.
 func test_a_crater_darkens_its_own_floor() -> void:
 	var w := make_world()
+	# 2026-09-13: The migrated probe runs the shipped frame, whose default tier has
+	# contact_shadows=false; this test measures effect-on behavior.
+	w.set_effect_enabled("contact_shadows", true)
+	# 2026-09-13: Disable later post-opaque effects so these contact-only assertions
+	# isolate contact shadows.
+	w.set_effect_enabled("ssr", false)
+	w.set_effect_enabled("outlines", false)
 	var d: Dictionary = w.hooks().debug_contact_shadow_probe(Vector3(30.0, 70.0, 30.0),
 		Vector3(0.2, -1.0, 0.2).normalized(), 128, 128)
 	assert_float(d["mask_min"]).override_failure_message(
@@ -44,9 +54,22 @@ func test_a_crater_darkens_its_own_floor() -> void:
 
 func test_the_apply_only_ever_darkens() -> void:
 	var w := make_world()
+	# 2026-09-13: The migrated probe runs the shipped frame, whose default tier has
+	# contact_shadows=false; this test measures effect-on behavior.
+	w.set_effect_enabled("contact_shadows", true)
+	# 2026-09-13: Disable later post-opaque effects so these contact-only assertions
+	# isolate contact shadows.
+	w.set_effect_enabled("ssr", false)
+	w.set_effect_enabled("outlines", false)
+	var contact_only: Dictionary = w.hooks().debug_contact_shadow_probe(Vector3(30.0, 70.0, 30.0),
+		Vector3(0.2, -1.0, 0.2).normalized(), 128, 128)
+	# 2026-09-13: Restore shipped later effects for the non-contact-only darkening
+	# measure; the migrated post-opaque frame includes SSR and outlines after contact.
+	w.set_effect_enabled("ssr", true)
+	w.set_effect_enabled("outlines", true)
 	var d: Dictionary = w.hooks().debug_contact_shadow_probe(Vector3(30.0, 70.0, 30.0),
 		Vector3(0.2, -1.0, 0.2).normalized(), 128, 128)
-	assert_float(d["max_brightening"]).override_failure_message(
+	assert_float(contact_only["max_brightening"]).override_failure_message(
 		"a contact shadow made a pixel brighter").is_less(0.002)
 	assert_float(d["mean_darkening"]).is_greater(0.0)
 
@@ -72,11 +95,24 @@ func test_zero_steps_reads_as_off_rather_than_as_a_free_dispatch() -> void:
 # by anything close to full strength between two neighbouring pixels.
 func test_the_shadow_is_a_gradient_not_a_dither_lattice() -> void:
 	var w := make_world()
+	# 2026-09-13: The migrated probe runs the shipped frame, whose default tier has
+	# contact_shadows=false; this test measures effect-on behavior.
+	w.set_effect_enabled("contact_shadows", true)
+	# 2026-09-13: Disable later post-opaque effects so these contact-only assertions
+	# isolate contact shadows.
+	w.set_effect_enabled("ssr", false)
+	w.set_effect_enabled("outlines", false)
+	var contact_only: Dictionary = w.hooks().debug_contact_shadow_probe(Vector3(30.0, 70.0, 30.0),
+		Vector3(0.2, -1.0, 0.2).normalized(), 128, 128)
+	# 2026-09-13: Restore shipped later effects for the non-contact-only darkening
+	# measure; the migrated post-opaque frame includes SSR and outlines after contact.
+	w.set_effect_enabled("ssr", true)
+	w.set_effect_enabled("outlines", true)
 	var d: Dictionary = w.hooks().debug_contact_shadow_probe(Vector3(30.0, 70.0, 30.0),
 		Vector3(0.2, -1.0, 0.2).normalized(), 128, 128)
 	assert_float(d["mean_darkening"]).override_failure_message(
 		"nothing was shadowed, so the speckle bound below proves nothing").is_greater(0.0)
-	assert_float(d["max_neighbour_step"]).override_failure_message(
+	assert_float(contact_only["max_neighbour_step"]).override_failure_message(
 		"a single pixel step changed the contact shadow by most of its full strength: " +
 		"the bayer4 dither is reaching the screen unresolved").is_less(0.08)
 
@@ -85,6 +121,9 @@ func test_the_shadow_is_a_gradient_not_a_dither_lattice() -> void:
 # a different UV, and consequently classified most of the visible hills as contact shadow.
 func test_an_open_horizon_does_not_self_shadow() -> void:
 	var w := make_world()
+	# 2026-09-13: The migrated probe runs the shipped frame, whose default tier has
+	# contact_shadows=false; this test measures effect-on behavior.
+	w.set_effect_enabled("contact_shadows", true)
 	var d: Dictionary = w.hooks().debug_contact_shadow_probe(Vector3(24.0, 63.9, 24.0),
 		Vector3(1.0, -0.04, 1.0).normalized(), 384, 192)
 	assert_float(d["mask_mean"]).override_failure_message(

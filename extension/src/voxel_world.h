@@ -34,6 +34,7 @@
 #include "render/island_atlas.h"
 #include "render/gpu_timings.h"
 #include "render/orchestrator.h" // inline pass-graph delegations need the complete type
+#include "render/frame.h"
 #include "render/consolidate_pass.h"
 #include "shade/beauty_settings.h"
 #include "shade/sun_ortho.h"
@@ -88,7 +89,7 @@ class IslandAtlas;
 class IslandCullPass;
 struct IslandExtractJob;
 
-class VoxelWorld : public Node3D, public EditSink {
+class VoxelWorld : public Node3D, public EditSink, public FrameHost {
 	GDCLASS(VoxelWorld, Node3D)
 	// Strangler adapter: VoxelWorld satisfies WorldStore's notification ports and forwards
 	// to the fan-out logic. The EditSink half is permanent by ruling -- IslandManager keeps
@@ -205,6 +206,9 @@ class VoxelWorld : public Node3D, public EditSink {
 	// RenderOrchestrator, whose teardown interleaves with its pool/tree/page maps via
 	// address-of slots (handles-only collaborators).
 	std::unique_ptr<LodSystem> lod_;
+	// The frame (spec 2026-09-13): stage order + per-frame packing. Declared AFTER render_ and
+	// lod_ so it is destroyed before the collaborators it references.
+	std::unique_ptr<VoxelFrame> frame_;
 
 	bool initialized_ = false;
 	// HiZ async-readback end state captured by RenderOrchestrator's teardown (handle-
@@ -319,6 +323,10 @@ public:
 		std::lock_guard<std::mutex> lock(sun_mutex_);
 		return sun_state_;
 	}
+	// FrameHost: the per-frame values this node still owns (sun, near-field dial/toggle,
+	// cascade clamp A/B knob), sampled together.
+	FrameSettings frame_settings() const override;
+	VoxelFrame *frame() { return frame_.get(); }
 	void set_physics_radius_m(float v) { physics_radius_m_ = v; }
 	float get_physics_radius_m() const { return physics_radius_m_; }
 	void set_physics_bubble_radius_m(float v);
@@ -394,8 +402,8 @@ public:
 	// tests each remaining slot's descriptor for dim >= 2, so a dead slot below the mark
 	// costs one branch and nothing else. Non-inline: the render thread calls this and must
 	// take island_mutex_ before touching island_manager_ / island_slots_.
-	int island_slot_count() const;
-	WorldStreamer *streamer() { return streamer_; }
+	int island_slot_count() const override;
+	WorldStreamer *streamer() override { return streamer_; }
 	// The near-field region map's current window. Read by RaymarchCompositor for the
 	// push constants and by the debug hooks.
 	ve::RegionWindow region_window() const { return store_->residency() ? store_->residency()->window() : ve::RegionWindow{}; }
@@ -431,10 +439,11 @@ public:
 		lod_cull_first_pass_ = first_pass_count;
 	}
 	Dictionary lod_cull_debug() const {
+		const FrameRecord r = frame_->last_frame();
 		Dictionary d;
-		d["two_phase"] = lod_cull_two_phase_.load();
-		d["hiz_built"] = lod_cull_hiz_built_.load();
-		d["first_pass_count"] = lod_cull_first_pass_.load();
+		d["two_phase"] = r.lod_two_phase;
+		d["hiz_built"] = r.hiz_built;
+		d["first_pass_count"] = r.lod_first_pass_count;
 		return d;
 	}
 	HizPass *hiz_pass() { return context_.render->hiz_pass(); }
@@ -480,7 +489,7 @@ public:
 	// not build its own EditLog view, and this is the one field query it needs.
 	ve::RayHit analytic_raycast_down(const float xz[2]);
 	// Drained by RaymarchCompositor on the render thread; returns how many landed.
-	int drain_island_uploads(RenderingDevice *device);
+	int drain_island_uploads(RenderingDevice *device) override;
 
 	// One-line delegation into RenderOrchestrator's downsample pipeline (Task 12 move;
 	// public since Task 13 so BeautyCompositor no longer needs to be a friend).
