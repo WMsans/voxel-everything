@@ -1,6 +1,7 @@
 #include "debug/hooks.h"
 
 #include "../voxel_world.h"
+#include "render/frame.h"
 #include "terrain/field_params_pack.h"
 #include <cstring>
 #include "mesh/consolidation.h"
@@ -132,6 +133,8 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_lod_cull_probe", "pos", "fwd"),
 			&VoxelDebugHooks::debug_lod_cull_probe);
 	ClassDB::bind_method(D_METHOD("debug_lod_cull_debug"), &VoxelDebugHooks::debug_lod_cull_debug);
+	ClassDB::bind_method(D_METHOD("debug_render_frame", "pos", "fwd", "w", "h"),
+			&VoxelDebugHooks::debug_render_frame);
 	ClassDB::bind_method(D_METHOD("debug_grass_stats"), &VoxelDebugHooks::debug_grass_stats);
 	ClassDB::bind_method(D_METHOD("debug_sun_shadow_stats", "cascade"),
 			&VoxelDebugHooks::debug_sun_shadow_stats);
@@ -6192,6 +6195,60 @@ void VoxelDebugHooks::debug_set_normal_pool_budget(int bytes) {
 }
 RenderingDevice *VoxelDebugHooks::debug_local_rd() const {
 	return world_->local_rd();
+}
+
+static void write_frame_record(Dictionary &d, const FrameRecord &r) {
+	d["fade_start"] = r.fade_start;
+	d["fade_end"] = r.fade_end;
+	d["two_phase"] = r.lod_two_phase;
+	d["hiz_built"] = r.hiz_built;
+	d["first_pass_count"] = r.lod_first_pass_count;
+	PackedStringArray ok, cancelled;
+	for (uint32_t s = 0; s < kStageCount; s++) {
+		if (r.stages_ok & (1u << s)) ok.push_back(frame_stage_name(static_cast<FrameStage>(s)));
+		if (r.stages_cancelled & (1u << s))
+			cancelled.push_back(frame_stage_name(static_cast<FrameStage>(s)));
+	}
+	d["stages_ok"] = ok;
+	d["stages_cancelled"] = cancelled;
+}
+
+Dictionary VoxelDebugHooks::debug_render_frame(Vector3 pos, Vector3 fwd, int w, int h) {
+	Dictionary d;
+	d["ok"] = false;
+	d["had_history"] = false;
+	d["mean_luma"] = 0.0;
+	d["lit_checksum"] = 0;
+	if (w <= 0 || h <= 0 || !world_->get_use_local_device()) return d;
+	world_->ensure_initialized();
+	RenderingDevice *device = world_->rd();
+	if (!world_->initialized_ || !device || !world_->frame() || !world_->gbuffer()) return d;
+	d["had_history"] = false;
+	FrameInputs in = world_->frame()->prepare_headless(device, VoxelFrame::looking_at(pos, fwd, w, h));
+	if (!in.scene_color.is_valid()) return d;
+	const bool pre = world_->frame()->render_pre_opaque(device, in);
+	d["had_history"] = world_->has_history();
+	const bool post = world_->frame()->render_post_opaque(device, in);
+	const bool ok = pre && post;
+	device->submit();
+	device->sync();
+	d["ok"] = ok;
+	write_frame_record(d, world_->frame()->last_frame());
+	if (world_->gbuffer()->size() != Vector2i(w, h)) return d;
+	const PackedByteArray lit = device->texture_get_data(world_->gbuffer()->lit(), 0);
+	const int64_t pixels = static_cast<int64_t>(w) * h;
+	if (lit.size() < pixels * 8) return d;
+	const uint16_t *v = reinterpret_cast<const uint16_t *>(lit.ptr());
+	double luma = 0.0;
+	int64_t checksum = 0;
+	for (int64_t i = 0; i < pixels; i++) {
+		luma += 0.2126 * half_to_float(v[i * 4]) + 0.7152 * half_to_float(v[i * 4 + 1]) +
+				0.0722 * half_to_float(v[i * 4 + 2]);
+		checksum = checksum * 31 + v[i * 4] + 7 * v[i * 4 + 1] + 13 * v[i * 4 + 2];
+	}
+	d["mean_luma"] = luma / static_cast<double>(pixels);
+	d["lit_checksum"] = checksum;
+	return d;
 }
 
 } // namespace godot

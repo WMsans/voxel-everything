@@ -518,6 +518,7 @@ void VoxelWorld::finish_beauty_frame(const float view_proj[16]) {
 }
 
 void VoxelWorld::teardown_gpu() {
+	if (frame_) frame_->release_gpu();
 	// Whole method lives in RenderOrchestrator now (Task 13): the three teardown halves
 	// and the interleaved world-owned statements (streamer drain/delete, residency clear,
 	// island high-water mark, LoD pool/tree/page maps) run there via Collaborator
@@ -542,6 +543,8 @@ void VoxelWorld::_exit_tree() {
 	// callbacks before freeing GPU resources; this preserves the same lifetime boundary for
 	// explicit benchmark shutdown and normal SceneTree exit.
 	shutdown_render_resources();
+	// Frame-owned headless targets live on the local device, which release_devices() below drops.
+	if (frame_) frame_->release_gpu();
 	teardown_physics();
 	// CPU cores survive GPU teardown; deleted here exactly where they were
 	// before the split, in the same residency -> edit log -> overrides order.

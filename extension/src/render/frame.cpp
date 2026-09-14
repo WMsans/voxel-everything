@@ -1,4 +1,5 @@
 #include "render/frame.h"
+#include "render/frame_params.h"
 #include "core/world_store.h"
 #include "lod/lod_grid.h"
 #include "lod/lod_system.h"
@@ -105,6 +106,7 @@ ve::SunOrtho VoxelFrame::sun_ortho(int cascade) const {
 }
 
 bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
+	reset_stages();
 	const FrameSettings settings = host_.frame_settings();
 	const bool near_field_enabled = settings.near_field_enabled;
 	if (!rd) return false;
@@ -141,18 +143,9 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	// Provisional reach; the real one is the fade band's end, read below once the streamer
 	// has run. 0 = no near-field hits.
 	cp.params[2] = near_field_enabled ? 200.0f : 0.0f;
-	const ve::RegionWindow win = region_window();
-	cp.dims[0] = win.dim; cp.dims[1] = win.dim; cp.dims[2] = win.dim;
-	cp.dims[3] = host_.island_slot_count();
-	cp.region_origin[0] = win.origin.x;
-	cp.region_origin[1] = win.origin.y;
-	cp.region_origin[2] = win.origin.z;
-	cp.region_origin[3] = 0; // The island-cull stage below sets the cull grid.
-	const ve::IVec3 ab = store_.config().atlas_bricks;
-	cp.atlas_bricks[0] = ab.x; cp.atlas_bricks[1] = ab.y; cp.atlas_bricks[2] = ab.z;
 	const ve::BeautySettings beauty = render_.beauty_settings();
 	const uint32_t beauty_flags = ve::pack_flags(beauty);
-	std::memcpy(&cp.cam_pos[3], &beauty_flags, sizeof(float));
+	ve::set_near_field_flags(&cp, beauty_flags);
 
 	const Projection view(cam.affine_inverse());
 	const Projection view_proj = proj * view;
@@ -179,20 +172,16 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	host_.drain_island_uploads(rd);
 	WorldStreamer *st = host_.streamer();
 	if (st) st->run_frame(rd, cam.origin.x, cam.origin.y, cam.origin.z);
-	timings->end(rd, "stream");
+	end_stage(rd, kStageStream);
 	// run_frame() recentres the toroidal region window. Refresh the already-built camera
 	// push data for that published window; do not run streaming a second time just to obtain
 	// constants that the existing run has already made current.
-	{
-		const ve::RegionWindow streamed_win = region_window();
-		cp.dims[0] = streamed_win.dim;
-		cp.dims[1] = streamed_win.dim;
-		cp.dims[2] = streamed_win.dim;
-		cp.dims[3] = host_.island_slot_count();
-		cp.region_origin[0] = streamed_win.origin.x;
-		cp.region_origin[1] = streamed_win.origin.y;
-		cp.region_origin[2] = streamed_win.origin.z;
-	}
+	// run_frame() recentred the toroidal region window; the world half of the push block is
+	// filled from the window it published. cull tiles (region_origin.w / atlas_bricks.w)
+	// are set by the island cull below.
+	ve::set_near_field_world(&cp, region_window(), host_.island_slot_count(),
+			store_.config().atlas_bricks);
+	cp.region_origin[3] = 0;
 
 	RaymarchPass *rmp = render_.raymarch_pass();
 	GpuAtlas *atlas = render_.atlas();
@@ -265,21 +254,21 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	}
 	if (!rmp->render(rd, *atlas, render_.islands(), mask, cp, rw, rh, edit_state,
 			render_.field_context())) {
-		timings->cancel("raymarch");
+		cancel_stage(kStageRaymarch);
 		abort_frame();
 		return false;
 	}
-	timings->end(rd, "raymarch");
+	end_stage(rd, kStageRaymarch);
 
 	timings->begin(rd, "composite");
 	cmp->draw(rd, *gb, rmp->albedo_texture(), rmp->surface_texture(), rmp->hitpos_texture(),
-			view_proj, *materials, cp, fade_start, fade_end);
+			view_proj, *materials, cp, fade_start, fade_end, in.debug.marker);
 	if (!cmp->last_draw_ok()) {
-		timings->cancel("composite");
+		cancel_stage(kStageComposite);
 		abort_frame();
 		return false;
 	}
-	timings->end(rd, "composite");
+	end_stage(rd, kStageComposite);
 
 	// Build HiZ from the near field's G-buffer depth before the LoD producer runs. The
 	// deferred pass consumes both producers below, so neither field is shaded twice.
@@ -295,7 +284,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	const int cascade_count = ve::sun_cascades(store_.config().stream_radius_m,
 			SunShadowPass::kSize, cascades);
 	const bool clamp_levels = settings.sun_cascade_min_level;
-	if (lod_.pool() && lod_raster && render_.materials()) {
+	if (!in.debug.skip_far_field && lod_.pool() && lod_raster && render_.materials()) {
 		ve::LodCamera lod_cam;
 		for (int c = 0; c < 4; c++)
 			for (int r = 0; r < 4; r++)
@@ -303,8 +292,8 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		lod_cam.pos[0] = cam.origin.x;
 		lod_cam.pos[1] = cam.origin.y;
 		lod_cam.pos[2] = cam.origin.z;
-		lod_cam.viewport[0] = size.x;
-		lod_cam.viewport[1] = size.y;
+		lod_cam.viewport[0] = in.debug.lod_viewport.x > 0 ? in.debug.lod_viewport.x : size.x;
+		lod_cam.viewport[1] = in.debug.lod_viewport.y > 0 ? in.debug.lod_viewport.y : size.y;
 		lod_.tick(lod_cam, hiz ? hiz->occlusion() : nullptr);
 		const bool use_sun_shadow = sun && (beauty_flags & ve::kFlagSunMap) != 0u;
 		auto build_sun_shadow = [&]() {
@@ -320,7 +309,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 						clamp_levels ? cascades[i].min_level : 0);
 				sun->build(rd, *lod_.pool(), *lod_raster, i, ortho, false);
 			}
-			timings->end(rd, "sun_shadow");
+			end_stage(rd, kStageSunShadow);
 			lod_.prepare_raster();
 		};
 		// Device-level indirect-argument uploads precede the cull list; draw() only opens
@@ -341,18 +330,18 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 				lod_.pool()->upload_draw_args(first_draw);
 				timings->begin(rd, "lod");
 				const bool first_lod_ok = lod_raster->draw(rd, *lod_.pool(), *materials, *gb,
-						view_proj, cam_pos, static_cast<int>(first_draw.size()), fade_start, fade_end);
-				if (!first_lod_ok) { timings->cancel("lod"); timings->abort_frame(); return false; }
-				timings->end(rd, "lod");
+						view_proj, cam_pos, static_cast<int>(first_draw.size()), fade_start, fade_end, in.debug.marker);
+				if (!first_lod_ok) { cancel_stage(kStageLod); timings->abort_frame(); return false; }
+				end_stage(rd, kStageLod);
 			}
 			build_sun_shadow();
 			if (!second_draw.empty()) {
 				lod_.pool()->upload_draw_args(second_draw);
 				timings->begin(rd, "lod");
 				const bool second_lod_ok = lod_raster->draw(rd, *lod_.pool(), *materials, *gb,
-						view_proj, cam_pos, static_cast<int>(second_draw.size()), fade_start, fade_end);
-				if (!second_lod_ok) { timings->cancel("lod"); timings->abort_frame(); return false; }
-				timings->end(rd, "lod");
+						view_proj, cam_pos, static_cast<int>(second_draw.size()), fade_start, fade_end, in.debug.marker);
+				if (!second_lod_ok) { cancel_stage(kStageLod); timings->abort_frame(); return false; }
+				end_stage(rd, kStageLod);
 			}
 		} else {
 			// Draw the previous visible set, then place sun shadow between it and the culled
@@ -379,9 +368,9 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 				lod_.pool()->upload_draw_args(first_pass_draw);
 				timings->begin(rd, "lod");
 				const bool first_lod_ok = lod_raster->draw(rd, *lod_.pool(), *materials, *gb,
-						view_proj, cam_pos, first_pass_count, fade_start, fade_end);
-				if (!first_lod_ok) { timings->cancel("lod"); timings->abort_frame(); return false; }
-				timings->end(rd, "lod");
+						view_proj, cam_pos, first_pass_count, fade_start, fade_end, in.debug.marker);
+				if (!first_lod_ok) { cancel_stage(kStageLod); timings->abort_frame(); return false; }
+				end_stage(rd, kStageLod);
 				if (remaining_count > 0) hiz_built = hiz->build(rd, gb->depth(), size);
 			}
 			build_sun_shadow();
@@ -398,9 +387,9 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 				}
 				timings->begin(rd, "lod");
 				const bool remaining_lod_ok = lod_raster->draw(rd, *lod_.pool(), *materials, *gb,
-						view_proj, cam_pos, remaining_count, fade_start, fade_end);
-				if (!remaining_lod_ok) { timings->cancel("lod"); timings->abort_frame(); return false; }
-				timings->end(rd, "lod");
+						view_proj, cam_pos, remaining_count, fade_start, fade_end, in.debug.marker);
+				if (!remaining_lod_ok) { cancel_stage(kStageLod); timings->abort_frame(); return false; }
+				end_stage(rd, kStageLod);
 			} else {
 				lod_cull->set_last_visible_pages(first_pass_pages);
 			}
@@ -421,8 +410,8 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		const bool grass_ok = grass_sun && grass->run(rd, *atlas, gl, region_window(),
 				static_cast<float>(render_.beauty_frame()) / 60.0f, grass_sun->buffer()) &&
 				grass_raster && grass_raster->draw(rd, *grass, *gb, view_proj, cam_pos);
-		if (grass_ok) timings->end(rd, "grass");
-		else timings->cancel("grass");
+		if (grass_ok) end_stage(rd, kStageGrass);
+		else cancel_stage(kStageGrass);
 	}
 
 	SsgiPass *ssgi = render_.ssgi_pass();
@@ -432,8 +421,8 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		timings->begin(rd, "ssgi");
 		ssgi_ok = ssgi->render(rd, *gb, ubo->buffer(), render_.prev_view_proj(),
 				render_.has_history(), beauty, render_.beauty_frame());
-		if (ssgi_ok) timings->end(rd, "ssgi");
-		else timings->cancel("ssgi");
+		if (ssgi_ok) end_stage(rd, kStageSsgi);
+		else cancel_stage(kStageSsgi);
 	}
 
 	DeferredPass::Params dp;
@@ -461,6 +450,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	// tell the two fields apart, and they are the same pair the composite and raster got.
 	dp.fade_start = fade_start;
 	dp.fade_end = fade_end;
+	dp.probe_mode = in.debug.deferred_view;
 	timings->begin(rd, "deferred");
 	SsaoPass *ssao = render_.ssao_pass();
 	if (ssao) ssao->clear_result();
@@ -468,25 +458,25 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	if (ssao && (beauty_flags & ve::kFlagSsao) != 0u) {
 		timings->begin(rd, "ssao");
 		ssao_ok = ssao->render(rd, *gb, ubo->buffer(), beauty);
-		if (ssao_ok) timings->end(rd, "ssao");
-		else timings->cancel("ssao");
+		if (ssao_ok) end_stage(rd, kStageSsao);
+		else cancel_stage(kStageSsao);
 	}
 	const bool deferred_ok = deferred->render(rd, *gb, *materials,
 			ssgi_ok ? ssgi->result() : RID(), ssao_ok ? ssao->result() : RID(),
 			use_sun ? sun->map() : RID(), dp);
 	if (!deferred_ok) {
-		timings->cancel("deferred");
+		cancel_stage(kStageDeferred);
 		abort_frame();
 		return false;
 	}
-	timings->end(rd, "deferred");
+	end_stage(rd, kStageDeferred);
 	timings->begin(rd, "inject");
 	if (!inject->draw(rd, in.scene_color, in.scene_depth, gb->lit(), gb->depth())) {
-		timings->cancel("inject");
+		cancel_stage(kStageInject);
 		abort_frame();
 		return false;
 	}
-	timings->end(rd, "inject");
+	end_stage(rd, kStageInject);
 	float current_view_proj[16];
 	for (int c = 0; c < 4; c++)
 		for (int r = 0; r < 4; r++) current_view_proj[c * 4 + r] = view_proj.columns[c][r];
@@ -524,8 +514,8 @@ bool VoxelFrame::render_post_opaque(RenderingDevice *rd, const FrameInputs &in) 
 		timings->begin(rd, "contact");
 		const bool contact_ok = cs->render(rd, in.scene_color, in.scene_depth, size,
 				ubo->buffer(), settings);
-		if (contact_ok) timings->end(rd, "contact");
-		else timings->cancel("contact");
+		if (contact_ok) end_stage(rd, kStageContact);
+		else cancel_stage(kStageContact);
 	}
 	GBuffer *gb = render_.gbuffer();
 	if (SsrPass *ssr = render_.ssr_pass()) {
@@ -533,24 +523,110 @@ bool VoxelFrame::render_post_opaque(RenderingDevice *rd, const FrameInputs &in) 
 		const bool ssr_ok = ssr->render(rd, in.scene_color, in.scene_depth,
 				gb ? gb->surface() : RID(), gb ? gb->depth() : RID(), normal_rough,
 				normal_roughness_state == 1, ubo->buffer(), size, settings);
-		if (ssr_ok) timings->end(rd, "ssr");
-		else timings->cancel("ssr");
+		if (ssr_ok) end_stage(rd, kStageSsr);
+		else cancel_stage(kStageSsr);
 	}
 	if (OutlinePass *outline = render_.outline_pass(); outline && gb && gb->is_valid()) {
 		timings->begin(rd, "outlines");
 		const bool outline_ok = outline->render(rd, in.scene_color, in.scene_depth,
 				gb->depth(), gb->surface(), normal_rough, have_calibrated_normal_roughness,
 				ubo->buffer(), size, settings);
-		if (outline_ok) timings->end(rd, "outlines");
-		else timings->cancel("outlines");
+		if (outline_ok) end_stage(rd, kStageOutlines);
+		else cancel_stage(kStageOutlines);
 	}
 	// Non-visual copy: outline above is the last scene-colour mutation before glow/tonemap.
 	if (gb && gb->is_valid()) {
 		timings->begin(rd, "history");
 		if (render_.downsample_history(rd, in.scene_color, *gb))
-			timings->end(rd, "history");
-		else timings->cancel("history");
+			end_stage(rd, kStageHistory);
+		else cancel_stage(kStageHistory);
 	}
 	timings->end_frame(rd);
 	return true;
+}
+
+const char *godot::frame_stage_name(FrameStage stage) {
+	static const char *const kNames[kStageCount] = {"stream", "raymarch", "composite", "lod",
+			"sun_shadow", "grass", "ssgi", "deferred", "ssao", "inject", "contact", "ssr",
+			"outlines", "history"};
+	return stage < kStageCount ? kNames[stage] : "";
+}
+
+void VoxelFrame::end_stage(RenderingDevice *rd, FrameStage stage) {
+	render_.gpu_timings()->end(rd, frame_stage_name(stage));
+	std::lock_guard<std::mutex> lock(record_mutex_);
+	record_.stages_ok |= 1u << stage;
+}
+
+void VoxelFrame::cancel_stage(FrameStage stage) {
+	render_.gpu_timings()->cancel(frame_stage_name(stage));
+	std::lock_guard<std::mutex> lock(record_mutex_);
+	record_.stages_cancelled |= 1u << stage;
+}
+
+void VoxelFrame::reset_stages() {
+	std::lock_guard<std::mutex> lock(record_mutex_);
+	record_.stages_ok = 0;
+	record_.stages_cancelled = 0;
+}
+
+FrameInputs VoxelFrame::looking_at(Vector3 pos, Vector3 fwd, int w, int h, float fov_y_rad,
+		float z_near, float z_far) {
+	FrameInputs in;
+	in.size = Vector2i(w, h);
+	if (w <= 0 || h <= 0) return in;
+	const float p[3] = {pos.x, pos.y, pos.z};
+	const float f[3] = {fwd.x, fwd.y, fwd.z};
+	const ve::ProbeCamera pc = ve::probe_camera(p, f, w, h, fov_y_rad, z_near, z_far);
+	Basis basis;
+	basis.set_column(0, Vector3(pc.right[0], pc.right[1], pc.right[2]));
+	basis.set_column(1, Vector3(pc.up[0], pc.up[1], pc.up[2]));
+	basis.set_column(2, -Vector3(pc.fwd[0], pc.fwd[1], pc.fwd[2]));
+	in.cam = Transform3D(basis, pos);
+	Projection view_proj;
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++) view_proj.columns[c][r] = pc.lod.view_proj[c * 4 + r];
+	// view_proj = proj * view and view = cam^-1, so proj = view_proj * cam.
+	in.proj = view_proj * Projection(in.cam);
+	return in;
+}
+
+FrameInputs VoxelFrame::prepare_headless(RenderingDevice *rd, const FrameInputs &in) {
+	FrameInputs out = in;
+	out.rsb = nullptr;
+	out.normal_roughness = RID();
+	out.scene_color = RID();
+	out.scene_depth = RID();
+	if (!rd || rd != render_.local_rd() || in.size.x <= 0 || in.size.y <= 0) return out;
+	const GBuffer *gb = render_.gbuffer();
+	if (headless_.size() != in.size || (gb && gb->size() != in.size)) {
+		// The G-buffer and the scene targets are about to be reallocated. These passes cache a
+		// framebuffer over them and expose release_targets() for exactly this -- the same drops
+		// the probes made by hand. Uniform sets keyed by RID rebuild themselves. Never tear down
+		// DeferredPass/ContactShadowPass here: both mirror, and would free, the sun UBO.
+		if (CompositePass *composite = render_.composite_pass()) {
+			composite->release_targets();
+			composite->invalidate_uniform_set(rd);
+		}
+		if (InjectPass *inject = render_.inject_pass()) inject->release_targets();
+		if (LodRasterPass *lod_raster = render_.lod_raster_pass()) lod_raster->release_targets();
+		if (GrassRasterPass *grass_raster = render_.grass_raster_pass()) grass_raster->release_targets();
+	}
+	if (!headless_.ensure(rd, in.size) || !headless_.clear(rd)) return out;
+	out.scene_color = headless_.color();
+	out.scene_depth = headless_.depth();
+	return out;
+}
+
+bool VoxelFrame::render_headless(RenderingDevice *rd, const FrameInputs &in) {
+	const FrameInputs headless = prepare_headless(rd, in);
+	if (!headless.scene_color.is_valid()) return false;
+	// Both halves run even when the first aborts, exactly as the engine fires both callbacks.
+	const bool pre = render_pre_opaque(rd, headless);
+	const bool post = render_post_opaque(rd, headless);
+	return pre && post;
+}
+
+void VoxelFrame::release_gpu() {
+	headless_.release();
 }
