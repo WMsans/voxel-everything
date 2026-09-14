@@ -370,85 +370,45 @@ Dictionary VoxelDebugHooks::debug_contact_shadow_probe(Vector3 pos, Vector3 fwd,
 	if (w <= 0 || h <= 0) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass() ||
-			!world_->composite_pass() || !world_->deferred_pass() || !world_->gbuffer() || !world_->contact_shadow_pass() ||
-			!world_->beauty_camera()) return d;
+	if (!world_->initialized_ || !device || !world_->frame() || !world_->contact_shadow_pass()) return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++)
 		quiet = debug_stream_frame(pos) == 0 ? quiet + 1 : 0;
-	world_->composite_pass()->release_targets();
-	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(w, h))) return d;
-	const float p[3] = {pos.x, pos.y, pos.z};
-	const float f[3] = {fwd.x, fwd.y, fwd.z};
-	const float up[3] = {0.0f, std::fabs(fwd.y) > 0.9f ? 0.0f : 1.0f,
-			std::fabs(fwd.y) > 0.9f ? 1.0f : 0.0f};
-	const float aspect = static_cast<float>(w) / static_cast<float>(h);
-	const float fov_y = 1.0471975512f;
-	const float tan_y = std::tan(fov_y * 0.5f);
-	const float tan_x = tan_y * aspect;
-	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, fov_y, aspect,
-			0.05f, 4000.0f, w, h);
-	Projection view_proj;
-	for (int c = 0; c < 4; c++)
-		for (int r = 0; r < 4; r++) view_proj.columns[c][r] = cam.view_proj[c * 4 + r];
-	ve::CameraParams cp = ve::CameraParams::looking_at(pos.x, pos.y, pos.z,
-			fwd.x, fwd.y, fwd.z, up[0], up[1], up[2]);
-	cp.params[0] = tan_x; cp.params[1] = tan_y; cp.params[2] = 200.0f;
-	const ve::RegionWindow win = world_->region_window();
-	cp.dims[0] = win.dim; cp.dims[1] = win.dim;
-	cp.dims[2] = win.dim; cp.dims[3] = world_->island_slot_count();
-	cp.region_origin[0] = win.origin.x; cp.region_origin[1] = win.origin.y; cp.region_origin[2] = win.origin.z;
-	cp.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
-	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
-	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
-	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp, w, h, no_edit, world_->field_context())) return d;
-	float fade_start = ve::kLodFadeStartM, fade_end = ve::kLodFadeEndM;
-	world_->lod_fade_band(&fade_start, &fade_end);
-	world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
-			world_->raymarch_pass()->surface_texture(), world_->raymarch_pass()->hitpos_texture(), view_proj,
-			*world_->material_atlas(), cp, fade_start, fade_end);
-	if (!world_->composite_pass()->last_draw_ok()) return d;
-	DeferredPass::Params dp;
-	const Projection inv = view_proj.inverse();
-	for (int c = 0; c < 4; c++)
-		for (int r = 0; r < 4; r++) dp.inv_view_proj[c * 4 + r] = inv.columns[c][r];
-	dp.cam_pos[0] = pos.x; dp.cam_pos[1] = pos.y; dp.cam_pos[2] = pos.z;
-	dp.flags = ve::pack_flags(world_->beauty_settings());
-	if (!world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(), RID(), RID(), RID(), dp))
-		return d;
-	auto make_scratch = [&]() -> RID {
-		Ref<RDTextureFormat> tf; tf.instantiate();
-		tf->set_format(RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT);
-		tf->set_width(w); tf->set_height(h);
-		tf->set_usage_bits(RenderingDevice::TEXTURE_USAGE_STORAGE_BIT |
-				RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
-				RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
-				RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT);
-		Ref<RDTextureView> tv; tv.instantiate();
-		return device->texture_create(tf, tv, {});
-	};
-	const RID scratch = make_scratch();
-	const RID before = make_scratch();
-	if (!scratch.is_valid() || !before.is_valid()) {
-		if (scratch.is_valid()) device->free_rid(scratch);
-		if (before.is_valid()) device->free_rid(before);
+	// Both halves of the shipped frame, split at the opaque boundary so scene colour can be
+	// captured between them: `before` is what inject left, the scene colour afterwards is what
+	// the post-opaque stages (contact shadows, then SSR and outlines) made of it.
+	VoxelFrame *frame = world_->frame();
+	const FrameInputs in = frame->prepare_headless(device, VoxelFrame::looking_at(pos, fwd, w, h));
+	if (!in.scene_color.is_valid()) return d;
+	frame->render_pre_opaque(device, in);
+	Ref<RDTextureFormat> tf;
+	tf.instantiate();
+	tf->set_format(RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT);
+	tf->set_width(w);
+	tf->set_height(h);
+	tf->set_usage_bits(RenderingDevice::TEXTURE_USAGE_STORAGE_BIT |
+			RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+			RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT);
+	Ref<RDTextureView> tv;
+	tv.instantiate();
+	const RID before = device->texture_create(tf, tv, {});
+	if (!before.is_valid()) return d;
+	device->texture_copy(in.scene_color, before, Vector3(), Vector3(), Vector3(w, h, 1), 0, 0, 0, 0);
+	frame->render_post_opaque(device, in);
+	device->submit();
+	device->sync();
+	if (!frame->last_frame().stage_ok(kStageContact)) {
+		device->free_rid(before);
 		return d;
 	}
-	device->texture_copy(world_->gbuffer()->lit(), scratch, Vector3(), Vector3(), Vector3(w, h, 1), 0, 0, 0, 0);
-	device->texture_copy(world_->gbuffer()->lit(), before, Vector3(), Vector3(), Vector3(w, h, 1), 0, 0, 0, 0);
-	world_->beauty_camera()->ensure(device);
-	const float cam_pos[3] = {pos.x, pos.y, pos.z};
-	world_->beauty_camera()->update(device, view_proj, cam_pos, Vector2i(w, h), 0.05f, 4000.0f);
-	world_->contact_shadow_pass()->render(device, scratch, world_->gbuffer()->depth(), Vector2i(w, h),
-			world_->beauty_camera()->buffer(), world_->beauty_settings());
-	device->submit(); device->sync();
 	const int mw = std::max(1, w / 2), mh = std::max(1, h / 2);
 	d["mask_width"] = mw; d["mask_height"] = mh;
 	PackedByteArray mask;
 	if (world_->contact_shadow_pass()->mask().is_valid())
 		mask = device->texture_get_data(world_->contact_shadow_pass()->mask(), 0);
 	const PackedByteArray pre = device->texture_get_data(before, 0);
-	const PackedByteArray post = device->texture_get_data(scratch, 0);
+	const PackedByteArray post = device->texture_get_data(in.scene_color, 0);
 	if (mask.size() >= mw * mh && pre.size() >= w * h * 8 && post.size() >= w * h * 8) {
 		const uint8_t *m = reinterpret_cast<const uint8_t *>(mask.ptr());
 		const uint16_t *a = reinterpret_cast<const uint16_t *>(pre.ptr());
@@ -477,11 +437,10 @@ Dictionary VoxelDebugHooks::debug_contact_shadow_probe(Vector3 pos, Vector3 fwd,
 		d["mean_darkening"] = static_cast<float>(dark / (w * h)); d["max_brightening"] = bright;
 		d["max_neighbour_step"] = step;
 	}
-	world_->contact_shadow_pass()->teardown();
-	device->free_rid(scratch); device->free_rid(before);
-	world_->contact_shadow_pass()->initialize(device);
+	device->free_rid(before);
 	return d;
 }
+
 
 Dictionary VoxelDebugHooks::debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, int h, int frames) {
 	Dictionary d;
