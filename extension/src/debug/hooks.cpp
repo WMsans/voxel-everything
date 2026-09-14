@@ -611,64 +611,17 @@ Dictionary VoxelDebugHooks::debug_ssao_probe(Vector3 pos, Vector3 fwd, int w, in
 	if (w <= 0 || h <= 0) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass() ||
-			!world_->composite_pass() || !world_->gbuffer() || !world_->beauty_camera() || !world_->ssao_pass())
+	if (!world_->initialized_ || !device || !world_->frame() || !world_->gbuffer() || !world_->ssao_pass())
 		return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++)
 		quiet = debug_stream_frame(pos) == 0 ? quiet + 1 : 0;
-	world_->composite_pass()->release_targets();
-	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(w, h)) || !world_->beauty_camera()->ensure(device)) return d;
-
-	const float p[3] = {pos.x, pos.y, pos.z};
-	const float f[3] = {fwd.x, fwd.y, fwd.z};
-	const float up[3] = {0.0f, std::fabs(fwd.y) > 0.9f ? 0.0f : 1.0f,
-			std::fabs(fwd.y) > 0.9f ? 1.0f : 0.0f};
-	const float aspect = static_cast<float>(w) / static_cast<float>(h);
-	const float fov_y = 1.0471975512f;
-	const float tan_y = std::tan(fov_y * 0.5f);
-	const float tan_x = tan_y * aspect;
-	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, fov_y, aspect,
-			0.05f, 4000.0f, w, h);
-	Projection view_proj;
-	for (int c = 0; c < 4; c++)
-		for (int r = 0; r < 4; r++) view_proj.columns[c][r] = cam.view_proj[c * 4 + r];
-	ve::CameraParams cp = ve::CameraParams::looking_at(pos.x, pos.y, pos.z,
-			fwd.x, fwd.y, fwd.z, up[0], up[1], up[2]);
-	cp.params[0] = tan_x; cp.params[1] = tan_y; cp.params[2] = 200.0f;
-	const ve::RegionWindow win = world_->region_window();
-	cp.dims[0] = win.dim; cp.dims[1] = win.dim;
-	cp.dims[2] = win.dim; cp.dims[3] = world_->island_slot_count();
-	cp.region_origin[0] = win.origin.x; cp.region_origin[1] = win.origin.y; cp.region_origin[2] = win.origin.z;
-	cp.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
-	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
-	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
-	const ve::BeautySettings settings = world_->beauty_settings();
-	world_->ssao_pass()->clear_result();
-	bool ran = false;
-	world_->beauty_camera()->update(device, view_proj, p, Vector2i(w, h), 0.05f, 4000.0f);
-	if (world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cp, w, h, no_edit, world_->field_context())) {
-		float fade_start = ve::kLodFadeStartM, fade_end = ve::kLodFadeEndM;
-		world_->lod_fade_band(&fade_start, &fade_end);
-		world_->composite_pass()->draw(device, *world_->gbuffer(), world_->raymarch_pass()->albedo_texture(),
-				world_->raymarch_pass()->surface_texture(), world_->raymarch_pass()->hitpos_texture(), view_proj,
-				*world_->material_atlas(), cp, fade_start, fade_end);
-		if (world_->composite_pass()->last_draw_ok())
-			ran = world_->ssao_pass()->render(device, *world_->gbuffer(),
-					world_->beauty_camera()->buffer(), settings);
-		// The full deferred chain on top, so the probe can also report what the lit image
-		// looks like with this frame's AO applied.
-		DeferredPass::Params dp;
-		const Projection inv = view_proj.inverse();
-		for (int c = 0; c < 4; c++)
-			for (int r = 0; r < 4; r++) dp.inv_view_proj[c * 4 + r] = inv.columns[c][r];
-		dp.cam_pos[0] = pos.x; dp.cam_pos[1] = pos.y; dp.cam_pos[2] = pos.z;
-		dp.flags = ve::pack_flags(settings);
-		world_->deferred_pass()->render(device, *world_->gbuffer(), *world_->material_atlas(),
-				RID(), ran ? world_->ssao_pass()->result() : RID(), RID(), dp);
-	}
+	// The shipped frame, headless: SSAO runs only when the beauty flags give it work, over the
+	// G-buffer the frame composited at near_field_scale, marched to the fade band.
+	world_->frame()->render_headless(device, VoxelFrame::looking_at(pos, fwd, w, h));
 	device->submit();
 	device->sync();
+	const bool ran = world_->frame()->last_frame().stage_ok(kStageSsao);
 	d["ran"] = ran;
 	{
 		const PackedByteArray lit = device->texture_get_data(world_->gbuffer()->lit(), 0);

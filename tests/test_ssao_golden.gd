@@ -50,10 +50,18 @@ func _probe(w: VoxelWorld, key: String) -> Dictionary:
 # resolution each texel covers four times the area, so the extreme is averaged away.
 # max_ao and lit_luma did NOT move outside tolerance — the lit image's mean luminance is
 # unchanged, which is the number that says the picture still looks the same.
+#
+# min_ao/lit_luma re-recorded 2026-09-14: the probe now reads the SSAO the shipped
+# headless frame produced (Task 6) instead of marching a fixed 200 m itself. Isolated
+# with shipped knobs: setting near_field_scale = 1.0 restores every min_ao bit-exactly,
+# so the darker extremes are the frame's 0.66 compositing, and grass max_blades = 0 /
+# ssgi off move nothing. lit_luma rises on the two far-seeing cameras only (down_close
+# is unchanged within tolerance) because far pixels are now LoD mesh past the fade band
+# instead of field raymarched to 200 m. ran stays true and max_ao stays 1.0 throughout.
 const GOLDEN := {
-	"down_close": {"min_ao": 0.745098, "max_ao": 1.000000, "lit_luma": 0.241331},
-	"oblique": {"min_ao": 0.792157, "max_ao": 1.000000, "lit_luma": 0.297197},
-	"horizon": {"min_ao": 0.792157, "max_ao": 1.000000, "lit_luma": 0.329064},
+	"down_close": {"min_ao": 0.705882, "max_ao": 1.000000, "lit_luma": 0.241199},
+	"oblique": {"min_ao": 0.584314, "max_ao": 1.000000, "lit_luma": 0.311697},
+	"horizon": {"min_ao": 0.431373, "max_ao": 1.000000, "lit_luma": 0.346033},
 }
 const TOL_AO := 0.002
 const TOL_LUMA := 0.004
