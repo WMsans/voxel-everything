@@ -2871,7 +2871,7 @@ Complete spec §4.4 and §5. The surviving pass probes still render their isolat
 **Interfaces:**
 - Consumes: Task 3 `ve::probe_camera`, `ve::probe_up_hint`, `ve::set_near_field_world`, `ve::set_near_field_flags`; Task 4 `VoxelFrame::grass_layout`, `VoxelFrame::sun_ortho`, `VoxelFrame::last_frame`.
 - Produces: private `bool VoxelDebugHooks::render_probe_pixel(Vector3 origin, Vector3 dir)`; existing public hook signatures and Dictionary keys remain unchanged.
-- Retains: world forwarders with surviving callers, as spec §4.4 explicitly permits. `FrameHost` remains named temporary debt for sub-project 2.
+- Retains: world forwarders with surviving callers, as spec §4.4 explicitly permits. At this Task 11 stage, `FrameHost` was temporary debt; sub-project 2 deleted it in commit `6b595c1`.
 
 - [x] **Step 1: Inventory the surviving copies and callers**
 
@@ -2986,7 +2986,7 @@ Update spec §4.2, §4.4, §5 and §6 with these exact decisions:
 
 - `FrameRecord` is returned by value under a leaf mutex; no `GrassFrameStats` member. The grass hook remains a pass test.
 - `FrameDebug` also carries the marker RID and optional LoD viewport already defined in Task 5.
-- `FrameHost` also exposes `WorldStreamer *streamer()` as defined in Task 4; its deletion remains sub-project 2 debt.
+- Task 4's `FrameHost` exposed `WorldStreamer *streamer()`; sub-project 2 subsequently deleted `FrameHost` in commit `6b595c1`.
 - List the six migrated hooks and the reclassified pass probes from this plan's classification section. Perspective fixtures share `ve::probe_camera`; single-ray fixtures share `ve::probe_up_hint` and the existing pure basis primitive; terrain fixtures share world/flag packing.
 - The single-ray render helper belongs to `VoxelDebugHooks`; its pure camera inputs are shared with the frame. Record the retained world forwarders and their concrete callers from Step 5.
 - Deterministic output comparison disables temporal SSGI and wind. Grass counters stay covered by the grass suites; frame stage bits cover execution, and timing values remain unpinned.
@@ -3098,7 +3098,7 @@ git commit -m "docs: record frame module verification and deletion results"
 - [ ] Every moved golden or assertion has a measured cause; suspected shipped bugs are reported and block completion.
 - [x] Orphaned world plumbing is removed, surviving callers justify retained wrappers, and before/after sizes are reported.
 - [x] Stage order, admission/locking, orchestrator lifetime, pass internals and shaders remain within the agreed constraints.
-- [x] Spec, implementation status and results report agree; `FrameHost` removal remains explicitly assigned to sub-project 2.
+- [x] Spec, implementation status and results report agree; `FrameHost` was deleted by sub-project 2 in commit `6b595c1`.
 
 ---
 

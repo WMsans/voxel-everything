@@ -2,16 +2,24 @@
 
 Recorded 2026-09-14 19:27 PDT on macOS 26.4.1 / Apple M1. This report covers the
 implementation revision `48eb783` (`refactor: split debug hooks by module (pure move)`).
+The results/spec amendment was committed separately as `a153859` (`docs: render lifetime
+owner results and roadmap amendments`); this review-fix wave is based on that amendment.
 
 ## 1. Revision and environment
 
 | Item | Result |
 |---|---|
-| SP2 baseline | `ca9b87b` (`docs/superpowers/plans/2026-09-14-render-lifetime-owner-baseline.md`) |
+| SP2 source baseline | `ca9b87b` (`refactor: consolidate pass-probe inputs and remove orphaned frame plumbing`) |
+| Baseline evidence-log child | `5f2d897` (`docs: render lifetime owner baseline failure set`); the line-count command's `git log --grep` resolves to this child of `ca9b87b` |
 | Final implementation revision | `48eb783e100ef649fb23315e044c51945bb99f6b` |
+| Results/spec amendment revision | `a153859b45e4d4d5d999c41eafaf43e2a8418238` |
 | OS / GPU | macOS 26.4.1 / Apple M1 / Metal 4.0 |
 | Godot | 4.7.2.stable.official.ed1daf0bf |
+| Build exit status | `0` |
+| Native exit status | Unavailable in existing evidence; no shell exit capture was recorded |
+| gdUnit exit status | `1` |
 | Report | `docs/superpowers/plans/2026-09-14-render-lifetime-owner-results.md` |
+| Review-fix report | `.superpowers/sdd/2026-09-14-render-lifetime-owner/task-14-report.md` |
 | gdUnit report path | None: launcher failed before discovery; no `reports/report_*` or `results.xml` was created |
 
 Final build command and output:
@@ -41,6 +49,9 @@ $ (cd extension && scons -Q test) 2>&1 | tail -3
 [doctest] assertions: 9117142 | 9117142 passed | 0 failed |
 [doctest] Status: SUCCESS!
 ```
+
+Native exit status: unavailable in the existing evidence. The recorded command did not append
+`echo $?`, so this report does not infer an exit code from the doctest status line.
 
 Final full gdUnit command and output:
 
@@ -82,7 +93,7 @@ suite before discovery.
 | Every moved golden/assertion has a measured cause; suspected bugs block completion | OPEN | No golden file moved in source, but no measured GPU run exists; no runtime attribution can be claimed. |
 | Orphaned world plumbing is removed and sizes/callers are reported | PASS (static) | Removed symbols and callers are documented below; final line counts are measured in §7. |
 | Stage order, admission/locking, lifetime, pass internals and shaders remain constrained | PASS (static) | Task 9–13 audits show no stage reorder except S8, no new lock site, and no pass/shader changes. |
-| Spec, implementation status and results agree; `FrameHost` remains SP2 debt | OPEN until this amendment commit | This report records `FrameHost` deletion by SP2 and the status/gate amendments are made with it; runtime gates remain open. |
+| Spec, implementation status and results agree; `FrameHost` was deleted by SP2 | PASS (docs/static) | SP2 deleted `FrameHost` in commit `6b595c1`; the roadmap wording and status amendments record that deletion. Runtime gates remain open. |
 
 ## 3. Verification
 
@@ -268,6 +279,10 @@ Task 14 changes only these documentation files:
 Self-review completed before commit:
 
 - No production, pass, shader, launcher, addon, or test infrastructure file is changed.
+- Review-fix report: `.superpowers/sdd/2026-09-14-render-lifetime-owner/task-14-report.md`.
+- Implementation revision, results/spec amendment revision, source baseline, and evidence-log child are distinguished explicitly.
+- Native exit status is marked unavailable because existing evidence did not capture it.
+- `FrameHost` is described consistently as deleted by SP2 (`6b595c1`), not as remaining debt.
 - No new lock, pass, shader, API, or stage-order change is introduced.
 - Every blocked/open runtime gate is labeled unverified rather than claimed green.
 - Exact command output, evidence commits, open findings, and deferred review minors are
