@@ -180,6 +180,32 @@ leaked: 0
 none
 leaked: 0
 
+### Task 4 sites (world jobs; gate = site suites + test_frame_shipped_golden + test_frame_contract + test_render_lifetime_contract)
+
+### brick_gen
+none
+leaked: 0
+
+### region
+none
+leaked: 0
+
+### consolidate
+none
+leaked: 0
+
+### island_extract
+none
+leaked: 0
+
+### mesh
+none
+leaked: 0
+
+### lod_build
+none
+leaked: 0
+
 ## Evidence log
 Appended by later tasks.
 
@@ -208,3 +234,13 @@ Appended by later tasks.
 | raymarch | half X groups | test_raymarch_pixel.gd::test_ray_down_from_sky_hits_terrain — ray down from sky missed | yes |
 | orchestrator (downsample) | dims[0] = 1 | test_ssgi.gd::test_light_bounces_once_the_history_exists — eight frames of history produced no bounce at all: max_channel 0.000900, mean_luma 0.000023 | yes |
 | orchestrator (pre-flight) | stages all compute | test_shader_reload.gd::test_reload_keeps_the_world — Expecting: 'true' but is 'false' (last_ok false) | yes |
+
+### Task 4 bite proofs
+| Site | Break | Failing case — message | Reverted |
+|---|---|---|---|
+| brick_gen | delete dispatch_indirect | test_brick_diff.gd::test_base_terrain_bricks_match_the_cpu_reference — brick sdf differs by up to 255 encoded steps, palette differs, up to 612/612 near-surface material mismatches (34 failures) | yes |
+| region | delete phase-1 dispatch in mark | test_region_pass.gd::test_marking_allocates_exactly_the_bricks_the_cpu_calls_active — GPU marked 0 bricks, CPU 105 | yes |
+| consolidate | delete dispatch in run | test_consolidation.gd::test_bake_reproduces_the_field — Expecting: 0 but was 368475 | yes |
+| island_extract | delete dispatch in extract | test_island_extract.gd::test_a_single_cell_extracts_to_the_same_volume_on_both_sides — cell: worst sdf disagreement 255 encoded steps (5/5 cases failed) | yes |
+| mesh | delete dispatch in record_quads | test_mesh_diff.gd::test_a_surface_chunk_meshes_identically_on_both_sides — plain terrain: 16878 triangles are CPU-only | yes |
+| lod_build | delete dispatch in record_quads | test_lod_build.gd::test_a_submitted_chunk_comes_back_with_quads — a chunk straddling the surface produced no quads | yes |
