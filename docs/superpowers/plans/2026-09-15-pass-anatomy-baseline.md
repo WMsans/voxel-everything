@@ -247,3 +247,4 @@ Appended by later tasks.
 
 ### Task 5 pass gates
 - grass_raster task 5 (S7): build OK, native 553/553, gdUnit matches row, leaked 0 (row 0)
+- ssao Task 9: build OK, native 565/565, gdUnit matches row, leaked 0 (row 0)
