@@ -191,7 +191,6 @@ void IslandBody::build_render_mesh(RID scenario, const ve::VolumeData &volume) {
 			cel.instantiate();
 			cel->set_shader(shader);
 			cel->set_shader_parameter("base_color_linear", Vector3(0.45f, 0.42f, 0.40f));
-			cel->set_shader_parameter("ambient_linear", Vector3(0.16f, 0.19f, 0.26f));
 			render_material_ = cel;
 		}
 	}

@@ -1,4 +1,3 @@
-const vec3 VE_SUN_DIR = vec3(0.5746958, 0.7662610, 0.2873479);
 const float VE_HUE = 0.055;
 const float VE_SAT = 1.35;
 const float VE_SPEC_EDGE = 0.72;

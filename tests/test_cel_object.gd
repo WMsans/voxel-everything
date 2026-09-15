@@ -63,7 +63,7 @@ func test_demo_cube_uses_the_shared_shader() -> void:
 # faces +Z, toward the camera. A DirectionalLight3D emits along its local -Z, so a light
 # looking down -Z puts the sun behind the camera (N.L = 1, brightest band) and one looking
 # down +Z puts it behind the quad (N.L = -1, darkest band). Objects used to shade against a
-# fixed VE_SUN_DIR and ignore the light entirely.
+# fixed sun direction and ignore the light entirely.
 func render_once(probe: Dictionary) -> Color:
 	var vp: SubViewport = probe["viewport"]
 	vp.render_target_update_mode = SubViewport.UPDATE_ONCE

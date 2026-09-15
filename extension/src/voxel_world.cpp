@@ -408,6 +408,15 @@ void VoxelWorld::update_sun_state() {
 		s.rgb[2] = ve::srgb_to_linear(c.b) * e;
 	}
 	context_.render->set_sun_state(s);
+	// S4: cel-shaded objects (shaders/cel_object.gdshader) read the same sun through global
+	// shader uniforms declared in project.godot, set here on the main thread beside the UBO
+	// publish the terrain reads. Ambient is DeferredPass's, so both paths share one number.
+	if (RenderingServer *server = RenderingServer::get_singleton()) {
+		server->global_shader_parameter_set("ve_sun_dir", Vector3(s.dir[0], s.dir[1], s.dir[2]));
+		server->global_shader_parameter_set("ve_sun_rgb", Vector3(s.rgb[0], s.rgb[1], s.rgb[2]));
+		server->global_shader_parameter_set("ve_ambient", Vector3(DeferredPass::kAmbient[0],
+				DeferredPass::kAmbient[1], DeferredPass::kAmbient[2]));
+	}
 }
 
 VoxelWorld::VoxelWorld() {
