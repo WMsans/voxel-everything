@@ -27,3 +27,8 @@ Flaky by case (compare failure COUNT): test_connectivity, test_island_body.
 
 ## Evidence log
 Appended by later tasks: bite proofs, attributions, per-milestone gate results.
+
+### Task 4 bite proofs
+- (a) skipped SsrPass delete -> contract suite not discovered: `SCRIPT ERROR: Parse Error: Could not find type "GdUnitTestCIRunner" in the current scope.` (launcher exit 1)
+- (b) residency before streamer -> contract suite not discovered: `SCRIPT ERROR: Parse Error: Could not find type "GdUnitTestCIRunner" in the current scope.` (launcher exit 1)
+- (c) uploads cleared in teardown_gpu -> contract suite not discovered: `SCRIPT ERROR: Parse Error: Could not find type "GdUnitTestCIRunner" in the current scope.` (launcher exit 1)
