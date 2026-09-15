@@ -249,3 +249,4 @@ Appended by later tasks.
 - grass_raster task 5 (S7): build OK, native 553/553, gdUnit matches row, leaked 0 (row 0)
 - ssao Task 9: build OK, native 565/565, gdUnit matches row, leaked 0 (row 0)
 - contact_shadow Task 10: build OK, native 565/565, gdUnit 20/20, leaked 0 (row 0)
+- outline Task 11: build OK, native 565/565, gdUnit matches row, leaked 0 (row 0)
