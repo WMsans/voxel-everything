@@ -1,7 +1,22 @@
 # Voxel Everything — Render Lifetime Owner (Sub-project 2)
 
 **Date:** 2026-09-14
-**Status:** Approved design, pre-implementation
+**Status:** Implemented; see docs/superpowers/plans/2026-09-14-render-lifetime-owner-results.md
+
+## Decisions made during planning
+
+1. **S8 needs no fallback.** A throwaway probe showed Metal records `capture_timestamp` names in command order (values 0). The S8 test reads names directly from GDScript.
+2. **`demo/benchmark.gd` has no `deferred` key** (it samples `raymarch, stream, lod, ssgi, ssr, ssao, shadows, outlines, unattributed, custom_frame`). S8 changes no label table; the fix corrects `unattributed` (it subtracted SSAO twice). Recorded in the S8 commit and results.
+3. **Hooks and compositors reach modules through the existing `VoxelWorld::context()`** (`VoxelContext{store, render, lod, consolidation}`), not new `render()/lod()/store()` accessors — the accessor already exists.
+4. **`WorldStats` is read-only; three narrow mutators exist for hook writes:** `note_overflow(int)`, `physics_bubble_centers()`, `test_bodies()`.
+5. **`LodStats`:** `debug_lod_stats` took `lod_mutex` and called `ensure_lod()`; that body moves into `LodSystem::stats()` with the same hold. `builds_in_flight` (an atomic read) now happens outside the hold.
+6. **`LodSystem`'s `near_field_enabled` collaborator is deleted**; it reads `render()->near_field_enabled()` through the render slot it already holds (it is constructed before the orchestrator, so it cannot take the atomic's address).
+7. **The contract suite has no physics-teardown case.** `tests/test_island_render.gd` already pins the physics filter (`test_teardown_physics_preserves_committed_field_volume_uploads` and the stale-upload case). The survival bite proof targets GPU teardown.
+8. **`WorldStore::region_window()`** replaces the duplicate bodies in `VoxelWorld::region_window` and `VoxelFrame::region_window`.
+9. **`debug/hooks_common.h`** holds the two file-local helpers (`half_to_float`, `write_frame_record`) the split files share.
+10. **`VoxelFrame` is a direct member of `RenderOrchestrator`, declared last**; `lod_` moves above `render_` in `voxel_world.h` so `LodSystem` outlives the frame.
+11. **`VoxelWorld::set_generator`** has no callers and is deleted in Task 12.
+12. **Native tests link with `-pthread`** (the handoff's concurrency smoke test is the first native test to start a thread).
 **Roadmap:** `docs/superpowers/specs/2026-09-13-frame-module-design.md` §9.1 and the pathway in
 `docs/superpowers/plans/2026-09-13-frame-module.md` ("Sub-project 2 — Render lifetime owner").
 **Scope:** the unfinished sub-project 1 tasks (10–12), a render lifetime contract suite, roadmap

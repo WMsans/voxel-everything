@@ -1,7 +1,7 @@
 # Voxel Everything — Frame Module & Architecture Deepening Roadmap
 
 **Date:** 2026-09-13
-**Status:** Approved design, pre-implementation
+**Status:** Implemented sub-project 1 (Tasks 10–12 completed within sub-project 2); roadmap continues
 **Scope:** (1) Sub-project 1 in full: extract a `VoxelFrame` module that owns the frame, make
 the compositors and the frame-rebuilding debug probes call it, and delete the probe copies.
 (2) Every other deepening pathway found during exploration, recorded with evidence so each can
@@ -179,7 +179,7 @@ teardown order, `Collaborators` slots, every pass's internals, lock order
 
 `FrameHost` has one adapter (`VoxelWorld`), so it is a hypothetical seam, accepted only to avoid
 moving the island handoff queue and its mutex in this sub-project. Sub-project 2 moves that
-queue into the render lifetime owner and deletes `FrameHost` by name.
+queue into the render lifetime owner and deletes `FrameHost` by name. Deleted by sub-project 2 (commit 6b595c1).
 
 ## 5. Probe migration
 
@@ -292,6 +292,8 @@ the VoxelWorld forwarding block, `FrameHost`. Then split `hooks.cpp` by module: 
 exposes a POD `stats()`, the GDScript facade formats; both `friend` declarations go.
 **Tests:** a reload/teardown contract suite against the single owner.
 
+Implemented; results in docs/superpowers/plans/2026-09-14-render-lifetime-owner-results.md.
+
 ### 9.2 Sub-project 3 — One settings store (Strong; artist-facing)
 
 **Problem.** Beauty knobs are `if (name == ...)` chains in an anonymous namespace
@@ -351,6 +353,7 @@ both `shade.glslh` and `cel.gdshaderinc`), G-buffer channel accessors
 (`GB_MATERIAL_ID(g1)`, `GB_IS_SURFACE(g1)`) and attachment count.
 **Tests:** fake-RD tests for rebuild-on-RID-change and free order; golden-file tests per
 generated header.
+**Entry gate.** Sub-project 2 accepted (passes reachable only through `RenderPasses` (pass-level probes stay isolated by sub-project 1's classification)).
 **Change cost after:** new material ~4 files (from 7–9); new G-buffer channel ~5 (from 14–18).
 
 ### 9.4 Sub-project 5 — World field query and edit spine (Strong; characterization first)
