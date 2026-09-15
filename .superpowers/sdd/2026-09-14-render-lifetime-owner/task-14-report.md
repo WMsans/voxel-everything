@@ -115,3 +115,66 @@ stale FrameHost debt wording: none
 - The native suite was not rerun; its exact exit status remains unavailable in the pre-existing evidence, while the doctest output recorded `551/551` passing cases and `9,117,142/9,117,142` passing assertions.
 - gdUnit remains blocked before discovery by the pre-existing `GdUnitTestCIRunner` parse error; no runtime pass is claimed.
 - The results report continues to list open runtime gates and the literal historical orphan-comment grep finding rather than converting static documentation fixes into runtime acceptance.
+
+## Final fix wave — review findings 1–6
+
+Status: `DONE_WITH_CONCERNS`.
+
+Review base: final docs head `97b1c87` (`docs: apply Task 14 final review fixes`). This
+follow-up keeps the wave minimal and does not modify addons, launcher infrastructure, pass
+internals, shaders, APIs, locks, or frame stage order.
+
+### Findings resolved
+
+1. The results report now explicitly labels gdUnit discovery, lifetime, shipped-golden,
+   frame-contract, S8, and lifetime-bite verification as **OPEN — external verification**.
+   The pre-existing `GdUnitTestCIRunner` parse error remains an external blocker; no runtime
+   pass is claimed and no addon/infrastructure file was changed.
+2. The Fog retrace remains truthfully **OPEN** at 9 timing-aware files, one over the ≤8 target,
+   because `gpu_timings.cpp` registration is required. No workaround or sub-project 4
+   architecture change was made.
+3. The two DeferredPass teardown/initialize pairs in `hooks_render.cpp` are documented as
+   pre-existing calls from `hooks.cpp`, moved verbatim by Task 13. The global constraint
+   forbids new lifecycle calls; the pure-move evidence shows the sequence stayed 4 calls to 4,
+   and no ContactShadowPass lifecycle call was added or rerouted.
+4. `extension/src/debug/hooks_common.h` now includes `<cstring>` directly for `std::memcpy`.
+5. The stale FrameHost wording in `docs/superpowers/specs/2026-09-13-frame-module-design.md`
+   now records the resolved deletion in `6b595c1`. Former `VoxelWorld`/`region_window()` API
+   comments were corrected without behavior changes.
+6. The results report names final docs head `97b1c87` explicitly.
+
+### Changed files
+
+- `extension/src/debug/hooks_common.h`
+- `extension/src/core/world_store.h` (comment only)
+- `extension/src/render/grass_scatter_pass.cpp` (comment only)
+- `extension/src/render/grass_scatter_pass.h` (comment only)
+- `docs/superpowers/specs/2026-09-13-frame-module-design.md`
+- `docs/superpowers/plans/2026-09-14-render-lifetime-owner-results.md`
+- `.superpowers/sdd/2026-09-14-render-lifetime-owner/task-14-report.md`
+
+### Focused verification
+
+The requested broad suites were not rerun.
+
+```text
+$ python3 direct-include check
+hooks_common direct <cstring>: PASS
+
+$ DeferredPass pure-move/lifecycle check
+DeferredPass lifecycle calls: pre-existing sequence preserved (4 -> 4)
+new ContactShadowPass lifecycle calls: 0
+
+$ stale wording check
+stale wording check: PASS
+
+$ git diff --check
+ diff-check=0
+
+$ ./build.sh -j$(sysctl -n hw.ncpu 2>/dev/null || nproc); echo build=$?
+==> Build OK: 3.2M libvoxel_everything.macos.template_debug.universal.dylib
+build=0
+```
+
+Concern: gdUnit runtime verification remains open until the external
+`GdUnitTestCIRunner` launcher parse error is repaired outside this task.

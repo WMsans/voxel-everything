@@ -20,7 +20,7 @@ public:
 
 	// Returns false on any failure; the caller cancels the timing marker and skips grass.
 	// Never aborts the frame -- grass is decorative (design doc section 8).
-	// region_win is the LIVE residency-backed window (VoxelWorld::region_window()),
+	// region_win is the LIVE residency-backed window (WorldStore::region_window()),
 	// supplied caller-side: run() has no world handle and atlas.config().region_window
 	// is init-centred/stale. atlas_bricks still comes from the atlas (static grid).
 	// sun_ubo is the frame's SunUbo buffer: stage 2 marches the terrain sun ray once per blade.

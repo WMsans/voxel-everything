@@ -1,7 +1,8 @@
 # Render lifetime owner — measured results
 
 Recorded 2026-09-14 19:27 PDT on macOS 26.4.1 / Apple M1. This report covers the
-implementation revision `48eb783` (`refactor: split debug hooks by module (pure move)`).
+implementation revision `48eb783` (`refactor: split debug hooks by module (pure move)`). The
+final docs head before this fix wave is `97b1c87` (`docs: apply Task 14 final review fixes`).
 The results/spec amendment was committed separately as `a153859` (`docs: render lifetime
 owner results and roadmap amendments`); this review-fix wave is based on that amendment.
 
@@ -13,6 +14,7 @@ owner results and roadmap amendments`); this review-fix wave is based on that am
 | Baseline evidence-log child | `5f2d897` (`docs: render lifetime owner baseline failure set`); the line-count command's `git log --grep` resolves to this child of `ca9b87b` |
 | Final implementation revision | `48eb783e100ef649fb23315e044c51945bb99f6b` |
 | Results/spec amendment revision | `a153859b45e4d4d5d999c41eafaf43e2a8418238` |
+| Final docs head | `97b1c87` (`docs: apply Task 14 final review fixes`) |
 | OS / GPU | macOS 26.4.1 / Apple M1 / Metal 4.0 |
 | Godot | 4.7.2.stable.official.ed1daf0bf |
 | Build exit status | `0` |
@@ -85,17 +87,24 @@ suite before discovery.
 
 | SP1 acceptance line | Result | Evidence / limitation |
 |---|---|---|
-| Both compositors call owned `VoxelFrame`; shipped golden passes unchanged | OPEN | Source routing landed in Task 9; no golden source moved, but the shipped golden could not execute. |
-| Six frame-rebuilding probes use the shared frame and preserve signatures/keys | PASS (static) / runtime open | Task 1 migrated `debug_seam_probe`; Task 2 completed shared inputs and orphan deletion; Task 12 found `_bind_methods()` byte-identical and Task 13 preserved 183 definitions/176 bindings and 653 keys. GPU execution was blocked. |
-| Isolated probes share camera/world inputs and grass reach while keeping fixtures | PASS (static) / runtime open | Task 2 implementation and Task 12 source checks show the shared helpers and retained callers; pass suites were not discovered. |
-| Headless contracts cover successful stages, determinism, abort/recovery, HiZ-off and resize history | OPEN | `tests/test_frame_contract.gd` exists and routes through `debug_render_frame`; no case ran. |
-| Native suite passes and GPU suite has no unexplained regression/missing cases | OPEN | Native passes 551/551; full GPU suite is blocked before discovery and has no counts. |
-| Every moved golden/assertion has a measured cause; suspected bugs block completion | OPEN | No golden file moved in source, but no measured GPU run exists; no runtime attribution can be claimed. |
+| Both compositors call owned `VoxelFrame`; shipped golden is externally verified unchanged | OPEN — external runtime verification | Source routing landed in Task 9; no golden source moved, but the shipped golden could not execute. |
+| Six frame-rebuilding probes use the shared frame and preserve signatures/keys | PASS (static) / OPEN — external runtime verification | Task 1 migrated `debug_seam_probe`; Task 2 completed shared inputs and orphan deletion; Task 12 found `_bind_methods()` byte-identical and Task 13 preserved 183 definitions/176 bindings and 653 keys. GPU execution was blocked. |
+| Isolated probes share camera/world inputs and grass reach while keeping fixtures | PASS (static) / OPEN — external runtime verification | Task 2 implementation and Task 12 source checks show the shared helpers and retained callers; pass suites were not discovered. |
+| Headless contracts cover successful stages, determinism, abort/recovery, HiZ-off and resize history | OPEN — external runtime verification | `tests/test_frame_contract.gd` exists and routes through `debug_render_frame`; no case ran. |
+| Native suite passes and GPU suite has no unexplained regression/missing cases | OPEN — external GPU verification | Native output records 551/551, but full GPU discovery is blocked before any case and has no counts. |
+| Every moved golden/assertion has a measured cause; suspected bugs block completion | OPEN — external runtime verification | No golden file moved in source, but no measured GPU run exists; no runtime attribution can be claimed. |
 | Orphaned world plumbing is removed and sizes/callers are reported | PASS (static) | Removed symbols and callers are documented below; final line counts are measured in §7. |
 | Stage order, admission/locking, lifetime, pass internals and shaders remain constrained | PASS (static) | Task 9–13 audits show no stage reorder except S8, no new lock site, and no pass/shader changes. |
 | Spec, implementation status and results agree; `FrameHost` was deleted by SP2 | PASS (docs/static) | SP2 deleted `FrameHost` in commit `6b595c1`; the roadmap wording and status amendments record that deletion. Runtime gates remain open. |
 
 ## 3. Verification
+
+### External runtime verification status
+
+The following are **OPEN — external verification**, not passes: gdUnit discovery; the lifetime
+contract; the shipped golden; the frame contract; the S8 marker-order test; and all three
+lifetime bite proofs. The pre-existing `GdUnitTestCIRunner` parse error stops the launcher before
+any testcase executes, so static/source evidence does not close these runtime gates.
 
 ### Native and suite comparison
 
@@ -120,22 +129,26 @@ runtime pass and not evidence that the runtime criteria pass.
 
 ### Lifetime, golden, frame contract and S8
 
-- Lifetime contract: source suite and teardown trace exist; trace source remains
-  `passes, streamer, residency, island_graph, island_slots, atlas, lod, history, initialized`.
-  All six runtime cases are unverified because the launcher failed before discovery.
-- Shipped golden: no golden file moved, but the golden suite did not run; pass is unverified.
-- Frame contract: `test_frame_contract.gd` exercises `debug_render_frame` and its requested
-  cases are present; all are unverified for the same reason.
-- S8: failing test commit `9ce7f97` precedes fix commit `e725994`; the fix moves the deferred
-  timing begin below SSAO. The marker-name test and post-fix green result are unverified.
-  Planning evidence confirms Metal captures marker names; `demo/benchmark.gd` has no
-  `deferred` key, so no benchmark label edit was made.
+- Lifetime contract: **OPEN — external runtime verification**. Source suite and teardown trace
+  exist; trace source remains `passes, streamer, residency, island_graph, island_slots, atlas,
+  lod, history, initialized`. All six runtime cases are unverified because the launcher failed
+  before discovery.
+- Shipped golden: **OPEN — external runtime verification**. No golden file moved, but the
+  golden suite did not run; no pass is claimed.
+- Frame contract: **OPEN — external runtime verification**. `test_frame_contract.gd` exercises
+  `debug_render_frame` and its requested cases are present; all are unverified for the same
+  reason.
+- S8: **OPEN — external runtime verification**. Failing test commit `9ce7f97` precedes fix
+  commit `e725994`; the fix moves the deferred timing begin below SSAO. The marker-name test
+  and post-fix green result are unverified. Planning evidence confirms Metal captures marker
+  names; `demo/benchmark.gd` has no `deferred` key, so no benchmark label edit was made.
 
 ## 4. Bite proofs
 
 The three deliberate lifetime breaks were applied and restored in Task 4. Each rebuild
 completed, but each contract-suite invocation stopped at the pre-existing launcher parse
-error before any case ran. Therefore none of these is claimed as a runtime failing proof:
+error before any case ran. Therefore each remains **OPEN — external runtime verification**;
+none is claimed as a runtime failing proof:
 
 | Break | Intended assertion | Measured result |
 |---|---|---|
@@ -162,6 +175,14 @@ attributed until the gdUnit launcher is repaired outside this task.
 
 Task 6's lock audit found no new lock site; the only new lock is the specified relocated LoD
 snapshot hold. The handoff mutex remains confined to handoff leaf methods.
+
+### Deferred/ContactShadow lifecycle ruling
+
+The global constraint forbids new `DeferredPass::teardown()`/`initialize()` or
+`ContactShadowPass` lifecycle calls. The two `DeferredPass` teardown/initialize pairs in
+`hooks_render.cpp` are pre-existing code from `hooks.cpp` at `eb61ad7`, moved verbatim by Task
+13; the pure-move diff added none. No new `ContactShadowPass` lifecycle call was added. This
+wave does not route those existing diagnostic fixture calls through a new architecture.
 
 ## 7. Deletion and size
 
@@ -230,11 +251,12 @@ measured path from the current code:
 8. `render/gpu_timings.cpp` (`kPasses`; required for timing attribution)
 9. `tests/test_frame_contract.gd` (existing `debug_render_frame` route; add the Fog assertion)
 
-The timing-aware count is **9**, one over the ≤8 target, because `known_pass()` drops an
-unknown label: `gpu_timings.cpp` accepts `frame` or a name in `kPasses`, and the current table
-has no `fog`. The eight-file core path excluding timing registration is the target list; the
-ninth file is the documented candidate for generation from `FrameStage` in sub-project 4.
-No code was changed for this retrace.
+The timing-aware count is **9**, so the ≤8 criterion is **OPEN** (one file over target),
+because `known_pass()` drops an unknown label: `gpu_timings.cpp` accepts `frame` or a name in
+`kPasses`, and the current table has no `fog`. The eight-file core path excluding timing
+registration is documented for transparency; the ninth file remains a candidate for generation
+from `FrameStage` in sub-project 4. No workaround was invented and no sub-project 4 architecture
+was changed for this retrace.
 
 ## 9. Exit criteria
 
@@ -243,47 +265,52 @@ No code was changed for this retrace.
 | No `FrameHost`, friends, `**lod_pool`, or `island_mutex =` residual | PASS | Exact first `rg` command printed no output. |
 | No island mutex/orphan API residuals | OPEN / literal check not clean | Exact second `rg` printed only the historical comment `VoxelWorld::analytic_raycast_down` in `extension/src/core/world_store.h`; executable declarations/definitions are gone. No production comment cleanup was allowed in this docs-only task. |
 | Collaborators ≤5; `voxel_world.h` ≤250 | PASS | Five fields; header is 209 lines. |
-| New render pass retrace ≤8 files | OPEN / FAIL against timing-aware path | Nine files if Fog timing is retained; `kPasses` currently drops unknown labels. |
-| Lifetime contract, shipped golden, frame contract and S8 pass unchanged | OPEN / unverified | All GPU suites were blocked before discovery; no runtime criterion is claimed. |
-| Bound method names/signatures and Dictionary keys preserved | PASS (static) / runtime open | VoxelWorld bindings byte-identical; hooks retain 183 definitions/176 bindings; corrected all-source key comparison is empty; only `debug_teardown_trace` is added. |
+| New render pass retrace ≤8 files | OPEN — timing-aware path is 9 files | The criterion is one file over target because `gpu_timings.cpp` must register Fog in `kPasses`; no workaround or sub-project 4 architecture change was made. |
+| Lifetime contract, shipped golden, frame contract and S8 pass unchanged | OPEN — external runtime verification | All GPU suites were blocked before discovery by the external gdUnit launcher error; no runtime criterion is claimed. |
+| Bound method names/signatures and Dictionary keys preserved | PASS (static) / OPEN — external runtime verification | VoxelWorld bindings byte-identical; hooks retain 183 definitions/176 bindings; corrected all-source key comparison is empty; only `debug_teardown_trace` is added. |
 | Roadmap status/gate amendments | PASS after this docs commit | SP1/SP2 status and RenderPasses gate wording are amended below. |
 | Results report contains SP1 acceptance, verification, attribution, sizes, retrace and bite proofs | PASS | This report contains sections 2–8 and explicitly records blocked gates. |
 
 ### Open findings and deferred review minors
 
-- The pre-existing `GdUnitTestCIRunner` parse error blocks all GPU discovery, including the
-  lifetime contract, shipped golden, frame contract, S8 marker test, and bite proofs. It was
-  not repaired here.
-- The exact orphan grep is not literally empty because of one historical `WorldStore` comment;
-  the executable API is absent. Cleaning that comment was deferred because this task makes no
-  production changes.
+- **OPEN — external verification:** the pre-existing `GdUnitTestCIRunner` parse error blocks
+  all GPU discovery, including the lifetime contract, shipped golden, frame contract, S8 marker
+  test, and bite proofs. It was not repaired here; no runtime pass is claimed.
+- The exact orphan grep is now clean after comment-only cleanup of the former
+  `VoxelWorld::analytic_raycast_down` and `region_window()` wording; executable behavior was
+  unchanged.
 - The Task 14 key command omitted `hooks_common.h`; the corrected all-source check passes.
 - Task 13's planning note said 172 split units, while the exact script on the reviewed source
   reports 174; reassembly, pure-move equality and 183/176 counts pass. This is a deferred
   review-minor discrepancy, not a forced script change.
-- An unchanged pass comment still names `world_->region_window()`; pass files were out of scope.
 - The broad `set_generator` grep is overinclusive; qualified `WorldStore::set_generator` and
   `IslandManager::set_generator` calls are required, while `VoxelWorld::set_generator` is gone.
 
 ## 10. Files and self-review
 
-Task 14 changes only these documentation files:
+The initial Task 14 amendment changed these documentation files:
 
 - `docs/superpowers/plans/2026-09-14-render-lifetime-owner-results.md` (this report)
 - `docs/superpowers/specs/2026-09-14-render-lifetime-owner-design.md`
 - `docs/superpowers/specs/2026-09-13-frame-module-design.md`
 - `docs/superpowers/plans/2026-09-13-frame-module.md`
 - `docs/superpowers/plans/2026-09-14-render-lifetime-owner-baseline.md` (staged as required;
-  no content change is needed beyond the prior evidence log)
+  no content change was needed beyond the prior evidence log)
+
+This final fix wave additionally makes one direct-include fix in `hooks_common.h` and
+comment-only wording cleanups in `WorldStore` and the grass pass. No behavior changes are
+introduced.
 
 Self-review completed before commit:
 
-- No production, pass, shader, launcher, addon, or test infrastructure file is changed.
+- No pass, shader, launcher, addon, or test infrastructure behavior is changed; the only
+  source edits are the required `<cstring>` include and comments.
 - Review-fix report: `.superpowers/sdd/2026-09-14-render-lifetime-owner/task-14-report.md`.
 - Implementation revision, results/spec amendment revision, source baseline, and evidence-log child are distinguished explicitly.
 - Native exit status is marked unavailable because existing evidence did not capture it.
 - `FrameHost` is described consistently as deleted by SP2 (`6b595c1`), not as remaining debt.
-- No new lock, pass, shader, API, or stage-order change is introduced.
-- Every blocked/open runtime gate is labeled unverified rather than claimed green.
+- No new lock, pass, shader, API, or stage-order change is introduced; the DeferredPass ruling
+  above records the pre-existing pure-move lifecycle calls.
+- Every blocked/open runtime gate is labeled **OPEN — external verification**, never claimed green.
 - Exact command output, evidence commits, open findings, and deferred review minors are
   recorded; the baseline log remains part of the required staging set.

@@ -73,9 +73,9 @@ hand-copied probe rebuilds.
 
 ### 4.1 Location and ownership
 
-`extension/src/render/frame.{h,cpp}`. Owned by `VoxelWorld` next to the orchestrator,
-constructed after it. Not in the native test build (needs RenderingDevice), like the rest of
-`src/render/`.
+`extension/src/render/frame.{h,cpp}`. Owned by `RenderOrchestrator`, which constructs it after
+`LodSystem` and `WorldStore`. Not in the native test build (needs RenderingDevice), like the rest
+of `src/render/`.
 
 ### 4.2 Interface
 
@@ -98,7 +98,7 @@ struct FrameInputs {
     FrameDebug debug;
 };
 
-struct FrameSettings {            // per-frame values VoxelWorld still owns, sampled once
+struct FrameSettings {            // per-frame values RenderOrchestrator owns, sampled once
     ve::SunState sun;
     float near_field_scale;
     bool near_field_enabled;
@@ -112,20 +112,10 @@ struct FrameRecord {              // returned by value under a leaf mutex
     uint32_t stages_ok, stages_cancelled; // bit per stage label
 };
 
-class FrameHost {                 // TEMPORARY seam, deleted by sub-project 2
-public:
-    virtual int island_slot_count() const = 0;
-    virtual int drain_island_uploads(RenderingDevice *) = 0;
-    virtual WorldStreamer *streamer() = 0;
-    virtual FrameSettings frame_settings() const = 0; // sun state, near-field scale/enabled,
-                                                      // sun_cascade_min_level
-protected:
-    ~FrameHost() = default;
-};
-
+// Historical SP1 interface: FrameHost was deleted by sub-project 2 in commit 6b595c1.
 class VoxelFrame {
 public:
-    VoxelFrame(RenderOrchestrator &, LodSystem &, WorldStore &, FrameHost &);
+    VoxelFrame(RenderOrchestrator &, LodSystem &, WorldStore &);
     bool render_pre_opaque(RenderingDevice *, const FrameInputs &);
     bool render_post_opaque(RenderingDevice *, const FrameInputs &);
     bool render_headless(RenderingDevice *, const FrameInputs &); // both halves, one call
@@ -165,21 +155,21 @@ them. Headless has no engine opaque objects; that difference is documented, not 
   atomics + `lod_cull_debug()`, `finish_beauty_frame`, `set_beauty_compositor` /
   `beauty_compositor_` (written, never read), and `render_probe_pixel` (moved to
   `VoxelDebugHooks`). `downsample_history` stays for the isolated SSGI history-latch probe;
-  any accessor a surviving caller still needs stays. `FrameHost` remains named temporary debt.
+  any accessor a surviving caller still needs stays. The temporary `FrameHost` seam was deleted
+  by sub-project 2 in commit `6b595c1`.
 - **`hooks.cpp`** loses every migrated rebuild (§5). Before/after line counts are reported.
 
 ### 4.5 Unchanged
 
 Compositor admission and lifetime locks, the shader-reload pump, orchestrator construction and
-teardown order, `Collaborators` slots, every pass's internals, lock order
-(`edit_mutex → lod_mutex → island_mutex`), threading of `island_slot_count` under
-`island_mutex_`.
+teardown order, every pass's internals, lock order (`edit_mutex → lod_mutex`), and the handoff
+leaf's atomic threading of `island_slot_count`.
 
-### 4.6 Named debt
+### 4.6 Resolved named debt
 
-`FrameHost` has one adapter (`VoxelWorld`), so it is a hypothetical seam, accepted only to avoid
-moving the island handoff queue and its mutex in this sub-project. Sub-project 2 moves that
-queue into the render lifetime owner and deletes `FrameHost` by name. Deleted by sub-project 2 (commit 6b595c1).
+`FrameHost` was the one-adapter seam accepted for SP1 so the island handoff queue and its mutex
+could remain in `VoxelWorld`. Sub-project 2 moved that queue into the render lifetime owner and
+deleted `FrameHost` by name in commit `6b595c1`; it is no longer part of the implementation.
 
 ## 5. Probe migration
 
@@ -263,7 +253,7 @@ say so, re-plan.
 | Headless frame differs from engine frame (no engine opaque objects; contact shadows read injected lit) | Documented in `frame.h`; contract tests compare headless to headless only; Step 0 golden covers the engine path |
 | Timings protocol spans two callbacks; post-opaque may not fire | Moved verbatim; contract test for abort/cancel; headless runs both halves |
 | Migrated goldens move for many reasons at once | One probe per commit; every moved number attributed to a cause |
-| `FrameHost` ossifies | Named in §4.6; sub-project 2's spec deletes it as an exit criterion |
+| `FrameHost` ossifies | Resolved: sub-project 2 deleted it in commit `6b595c1` |
 | Verbatim move silently changes behaviour through object lifetimes (uniform-set cascades) | Step 0 golden on the real compositor; no stage reordering |
 
 ## 9. Pathway roadmap (all deepening candidates)
@@ -288,7 +278,8 @@ blank move debris. Hooks reach private state via `friend` (198 `store_->`, 33 `l
 island upload queue (`island_uploads_`, `pending_normal_releases_`, `island_descs_`, their mutex)
 and calls `release_gpu()` on the streamer and LoD pool in order. Delete: the 25 public pass
 accessors (only `VoxelFrame` and a narrow diagnostics view see passes), `Collaborators` slots,
-the VoxelWorld forwarding block, `FrameHost`. Then split `hooks.cpp` by module: each module
+the VoxelWorld forwarding block and the former `FrameHost` seam (deleted in commit `6b595c1`).
+Then split `hooks.cpp` by module: each module
 exposes a POD `stats()`, the GDScript facade formats; both `friend` declarations go.
 **Tests:** a reload/teardown contract suite against the single owner.
 

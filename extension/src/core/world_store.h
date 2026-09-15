@@ -168,8 +168,8 @@ public:
 	bool snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo,
 			ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const;
 	// A downward ve::raycast at (xz[0], xz[1]) from 200 m, 400 m long, on the generator plus
-	// the region ops, volumes and overrides. Takes edit_mutex(). Was
-	// VoxelWorld::analytic_raycast_down; IslandManager's one field query.
+	// the region ops, volumes and overrides. Takes edit_mutex(); this is the store-owned field
+	// query used by IslandManager.
 	ve::RayHit raycast_down(const float xz[2]);
 
 	// --- the spine (moved verbatim from VoxelWorld::append_edit/_locked) ---

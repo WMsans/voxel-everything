@@ -337,7 +337,7 @@ bool GrassScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas,
 	rd->buffer_update(params_ubo_, 0, ubo.size(), ubo);
 
 	// Refresh the pass-owned region window from the LIVE residency-backed window the
-	// caller threads through (world_->region_window(), same source debug_ssao_probe
+	// caller threads through (WorldStore::region_window(), same source debug_ssao_probe
 	// uses): atlas.config().region_window is init-centred/stale, so grass would vanish
 	// away from the origin. The UBO RID is stable, so the cached uniform set survives;
 	// only contents change.
