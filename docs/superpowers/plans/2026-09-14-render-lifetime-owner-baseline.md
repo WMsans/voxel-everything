@@ -47,3 +47,11 @@ Appended by later tasks: bite proofs, attributions, per-milestone gate results.
 - Native: `(cd extension && scons -Q test) 2>&1 | tail -3` — `551/551` test cases passed, `9,117,142/9,117,142` assertions passed, status success.
 - gdUnit: the requested eight-suite launcher exited 1 before discovery with the known pre-existing `GdUnitTestCIRunner` parse error; no launcher repair or test modification was made.
 - Result: native/build match Task 6 baseline; gdUnit remains blocked before discovery by the same known launcher error.
+
+### Task 8 gate
+- Recorded 2026-09-15T01:17:27Z at HEAD `88a0482` before commit.
+- Static ownership gates: VoxelWorld deleted-state audit had no matches; obsolete collaborator/slot audit had no matches; `Collaborators` field count was `5`; changed files were exactly the seven brief-listed sources; no pass/shader files or DeferredPass/ContactShadowPass lifecycle changes appeared in the diff.
+- Build: `./build.sh -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)` exited 0; `Build OK`, universal macOS debug dylib linked.
+- Native: `(cd extension && scons -Q test) 2>&1 | tail -3` — `551/551` test cases passed, `9,117,142/9,117,142` assertions passed, status success.
+- gdUnit: the requested eleven-suite launcher exited 1 before discovery with the known pre-existing `GdUnitTestCIRunner` parse error; no launcher repair or test modification was made.
+- Result: build/native match Task 7; teardown trace source remains `passes, streamer, residency, island_graph, island_slots, atlas, lod, history, initialized`; gdUnit remains blocked before discovery by the same known launcher error.

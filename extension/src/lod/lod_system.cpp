@@ -61,7 +61,7 @@ void LodSystem::fade_band(float *fade_start, float *fade_end) const {
 	// With the near field forced off the far field owns every distance: move the seam to
 	// zero and make the fade span essentially infinite so the LoD build gate requests the
 	// near chunks and the fragment shader keeps every far-field fragment.
-	if (!handles_.near_field_enabled->load(std::memory_order_relaxed)) {
+	if (!render()->near_field_enabled()) {
 		if (fade_start) *fade_start = 0.0f;
 		if (fade_end) *fade_end = 1.0e9f;
 		return;
@@ -332,6 +332,14 @@ void LodSystem::teardown() {
 	}
 	lod_pages_of_.clear();
 	lod_page_quads_.clear();
+}
+
+void LodSystem::release_gpu() {
+	if (lod_pool_) lod_pool_->teardown();
+	if (lod_tree_) lod_tree_->clear();
+	lod_pages_of_.clear();
+	lod_page_quads_.clear();
+	lod_overflow_logged_.clear();
 }
 
 } // namespace godot

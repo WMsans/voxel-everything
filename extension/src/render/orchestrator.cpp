@@ -27,8 +27,7 @@
 #include "render/hiz_pass.h"
 #include "render/world_streamer.h"
 #include "render/shader_loader.h"
-#include "render/lod_pool.h"
-#include "lod/lod_tree.h"
+#include "lod/lod_system.h"
 #include "core/world_store.h"
 #include <godot_cpp/classes/dir_access.hpp>
 #include <godot_cpp/classes/project_settings.hpp>
@@ -209,7 +208,7 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 	cfg.max_override_bricks = config.max_override_bricks;
 	cfg.region_window = ve::region_window_centered(0.0f, 0.0f, 0.0f,
 			ve::region_window_dim(config.residency_radius_m, ve::ResidencyConfig{}.evict_margin));
-	if (*handles_.normal_pool_bytes > 0) cfg.normal_pool_bytes = *handles_.normal_pool_bytes; // test initializer
+	if (normal_pool_bytes_ > 0) cfg.normal_pool_bytes = normal_pool_bytes_; // test initializer
 	if (!atlas_->initialize(device, cfg)) { delete atlas_; atlas_ = nullptr; return GpuInitResult::kAtlasFailed; }
 	islands_ = new IslandAtlas();
 	if (!islands_->initialize(device)) return GpuInitResult::kFailed;
@@ -248,8 +247,8 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 		return GpuInitResult::kFailed;
 	}
 	handles_.store->ensure_residency();
-	*handles_.streamer = new WorldStreamer();
-	(*handles_.streamer)->initialize(handles_.store->residency(),
+	streamer_ = new WorldStreamer();
+	streamer_->initialize(handles_.store->residency(),
 			handles_.store->edit_log(), &handles_.store->edit_mutex(),
 			handles_.store->pending_edits(), atlas_,
 			region_pass_, gen_pass_, handles_.store, handles_.store->overrides(),
@@ -347,8 +346,8 @@ void RenderOrchestrator::teardown_render_passes() {
 	if (lod_cull_pass_) { delete lod_cull_pass_; lod_cull_pass_ = nullptr; }
 	if (hiz_pass_) {
 		hiz_pass_->teardown();
-		*handles_.last_hiz_readback_was_pending = hiz_pass_->readback_was_pending_at_teardown();
-		*handles_.last_hiz_readback_was_drained = hiz_pass_->readback_was_drained_at_teardown();
+		last_hiz_readback_was_pending_ = hiz_pass_->readback_was_pending_at_teardown();
+		last_hiz_readback_was_drained_ = hiz_pass_->readback_was_drained_at_teardown();
 		delete hiz_pass_;
 		hiz_pass_ = nullptr;
 	}
@@ -427,10 +426,10 @@ void RenderOrchestrator::teardown_gpu() {
 	teardown_trace_.clear();
 	teardown_render_passes();
 	teardown_trace_.push_back("passes");
-	if (*handles_.streamer) {
-		(*handles_.streamer)->drain_readbacks(rd());
-		delete *handles_.streamer;
-		*handles_.streamer = nullptr;
+	if (streamer_) {
+		streamer_->drain_readbacks(rd());
+		delete streamer_;
+		streamer_ = nullptr;
 	}
 	teardown_trace_.push_back("streamer");
 	handles_.store->clear_residency(); // slot assignments are meaningless pre-atlas
@@ -444,15 +443,11 @@ void RenderOrchestrator::teardown_gpu() {
 	teardown_trace_.push_back("atlas");
 	// The tree holds page indices the pool is about to free, and a stale index would be
 	// handed to the next chunk. Pool first, then tree, then the page map.
-	if (*handles_.lod_pool) (*handles_.lod_pool)->teardown();
-	if (*handles_.lod_tree) (*handles_.lod_tree)->clear();
-	handles_.lod_pages_of->clear();
-	handles_.lod_page_quads->clear();
-	handles_.lod_overflow_logged->clear();
+	handles_.lod->release_gpu();
 	teardown_trace_.push_back("lod");
 	reset_history_state();
 	teardown_trace_.push_back("history");
-	*handles_.initialized = false;
+	initialized_ = false;
 	teardown_trace_.push_back("initialized");
 }
 
@@ -480,7 +475,7 @@ void RenderOrchestrator::shutdown_render_resources() {
 			render_lifetime_cv_.wait(lock, [this] { return render_callbacks_ == 0; });
 		}
 	}
-	if (!*handles_.initialized || !rd()) return;
+	if (!initialized_ || !rd()) return;
 	if (RenderingServer::get_singleton()->is_on_render_thread() || *handles_.use_local_device ||
 			!has_main_device()) {
 		teardown_gpu();
@@ -600,11 +595,11 @@ void RenderOrchestrator::pump_shader_reload() {
 		std::lock_guard<std::mutex> lock(reload_mutex_);
 		reload_count_++;
 	}
-	if (!*handles_.initialized) {
-		handles_.ensure_initialized_thunk(handles_.ensure_initialized_self);
+	if (!initialized_) {
+		handles_.ensure_initialized();
 		std::lock_guard<std::mutex> lock(reload_mutex_);
-		reload_last_ok_ = *handles_.initialized;
-		reload_last_error_ = *handles_.initialized ? String()
+		reload_last_ok_ = initialized_;
+		reload_last_error_ = initialized_ ? String()
 											   : String("shader reload re-init failed");
 		return;
 	}
@@ -623,11 +618,11 @@ void RenderOrchestrator::pump_shader_reload() {
 	// override store, LoD tree -- untouched, so ensure_initialized() re-streams the same
 	// world. This is the whole hot reload.
 	teardown_gpu();
-	handles_.ensure_initialized_thunk(handles_.ensure_initialized_self);
+	handles_.ensure_initialized();
 	{
 		std::lock_guard<std::mutex> lock(reload_mutex_);
-		reload_last_ok_ = *handles_.initialized;
-		reload_last_error_ = *handles_.initialized ? String()
+		reload_last_ok_ = initialized_;
+		reload_last_error_ = initialized_ ? String()
 											   : String("shader reload re-init failed");
 	}
 }
@@ -653,11 +648,11 @@ int RenderOrchestrator::quality_tier() const {
 
 void RenderOrchestrator::set_effect_enabled(const String &name, bool on) {
 	if (name == "islands") {
-		handles_.islands_enabled->store(on, std::memory_order_relaxed);
+		islands_enabled_.store(on, std::memory_order_relaxed);
 		return;
 	}
 	if (name == "near_field") {
-		handles_.near_field_enabled->store(on, std::memory_order_relaxed);
+		near_field_enabled_.store(on, std::memory_order_relaxed);
 		return;
 	}
 	std::lock_guard<std::mutex> lock(beauty_mutex_);
@@ -668,8 +663,8 @@ void RenderOrchestrator::set_effect_enabled(const String &name, bool on) {
 }
 
 bool RenderOrchestrator::get_effect_enabled(const String &name) const {
-	if (name == "islands") return handles_.islands_enabled->load(std::memory_order_relaxed);
-	if (name == "near_field") return handles_.near_field_enabled->load(std::memory_order_relaxed);
+	if (name == "islands") return islands_enabled_.load(std::memory_order_relaxed);
+	if (name == "near_field") return near_field_enabled_.load(std::memory_order_relaxed);
 	std::lock_guard<std::mutex> lock(beauty_mutex_);
 	ve::BeautySettings copy = beauty_;
 	const bool *f = beauty_field(copy, name);
@@ -701,6 +696,29 @@ void RenderOrchestrator::beauty_snapshot(ve::BeautySettings *out_settings, int *
 	std::lock_guard<std::mutex> lock(beauty_mutex_);
 	*out_settings = beauty_;
 	*out_tier = quality_tier_;
+}
+
+void RenderOrchestrator::set_sun_state(const ve::SunState &sun) {
+	std::lock_guard<std::mutex> lock(sun_mutex_);
+	sun_state_ = sun;
+}
+
+ve::SunState RenderOrchestrator::sun_state() const {
+	std::lock_guard<std::mutex> lock(sun_mutex_);
+	return sun_state_;
+}
+
+void RenderOrchestrator::set_near_field_scale(float v) {
+	near_field_scale_.store(v < 0.1f ? 0.1f : (v > 1.0f ? 1.0f : v), std::memory_order_relaxed);
+}
+
+FrameSettings RenderOrchestrator::frame_settings() const {
+	FrameSettings s;
+	s.sun = sun_state();
+	s.near_field_scale = near_field_scale();
+	s.near_field_enabled = near_field_enabled();
+	s.sun_cascade_min_level = sun_cascade_min_level_;
+	return s;
 }
 
 } // namespace godot

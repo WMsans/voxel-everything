@@ -97,7 +97,7 @@ class VoxelWorld : public Node3D, public EditSink, public FrameHost {
 	//
 	// Last remaining friend (Task 13 removed the compositor/admission ones): the debug
 	// facade pokes ~20 private members directly (store_, mesh_, colliders_, chunks_,
-	// island_manager_, initialized_, physics_ready_, test_bodies_, island uploads/desc
+	// island_manager_, physics_ready_, test_bodies_, island uploads/desc
 	// state, ...) plus 3 private helpers (drain_occupancy, gather_lod_ops,
 	// extract_component) -- audited at Task 16. JUSTIFICATION: every one
 	// of those accesses is live in debug/hooks.cpp; replacing the friendship would need
@@ -127,13 +127,8 @@ class VoxelWorld : public Node3D, public EditSink, public FrameHost {
 	std::unique_ptr<RenderOrchestrator> render_;
 
 	bool physics_enabled_ = true;
-	// The A/B knob for the shadow cut's minimum-level clamp (spec section 3). On by
-	// default; off restores an unclamped cut for measurement.
-	bool sun_cascade_min_level_ = true;
 	NodePath physics_center_path_;
 	NodePath sun_light_path_;
-	mutable std::mutex sun_mutex_;
-	ve::SunState sun_state_;
 	float physics_radius_m_ = 64.0f;
 	// Spec §6's "small bubbles around active bodies". Kept well under physics_radius_m_:
 	// see ColliderStreamer::set_body_bubble_radius_m for why a body-sized bubble is not a
@@ -142,7 +137,6 @@ class VoxelWorld : public Node3D, public EditSink, public FrameHost {
 	int max_collider_chunks_ = 1280;
 	int mesh_jobs_per_frame_ = 2;
 	int shape_builds_per_frame_ = 2;
-	WorldStreamer *streamer_ = nullptr;
 	int overflow_seen_ = 0;                   // sticky OR of frame overflow bits (tests)
 	int edit_rejections_ = 0; // append fan-out rejection stat; read by debug_stream_stats
 	// The golden corpora pin their own frozen pipeline through this, so demo terrain can
@@ -162,12 +156,6 @@ class VoxelWorld : public Node3D, public EditSink, public FrameHost {
 	ve::ChunkResidency *chunks_ = nullptr;
 	ColliderStreamer *colliders_ = nullptr;
 	IslandManager *island_manager_ = nullptr;
-	// Debug-settable compact-normal budget; 0 = GpuAtlasConfig's default 32 MiB. Must be
-	// set BEFORE the atlas is created; the pool never resizes after that.
-	uint32_t normal_pool_bytes_ = 0;
-	std::atomic<bool> islands_enabled_{true};
-	std::atomic<bool> near_field_enabled_{true};
-	std::atomic<float> near_field_scale_{0.66f};
 	std::vector<float> physics_bubble_centers_;
 	bool physics_ready_ = false;
 	std::vector<std::pair<ve::IVec3, ve::IVec3>> pending_dirty_; // guarded by edit_mutex_
@@ -179,18 +167,13 @@ class VoxelWorld : public Node3D, public EditSink, public FrameHost {
 	// Owns the LoD runtime (Task 15): THE lod mutex, tree/walk/page-map/pool state plus
 	// tick/fade-band/op-gathering live in LodSystem now; VoxelWorld keeps one-line
 	// delegations so the compositor and debug facade compile unchanged. Created BEFORE
-	// RenderOrchestrator, whose teardown interleaves with its pool/tree/page maps via
-	// address-of slots (handles-only collaborators).
+	// RenderOrchestrator, whose teardown calls its GPU-release step between atlas and
+	// history teardown.
 	std::unique_ptr<LodSystem> lod_;
 	// The frame (spec 2026-09-13): stage order + per-frame packing. Declared AFTER render_ and
 	// lod_ so it is destroyed before the collaborators it references.
 	std::unique_ptr<VoxelFrame> frame_;
 
-	bool initialized_ = false;
-	// HiZ async-readback end state captured by RenderOrchestrator's teardown (handle-
-	// injected); read by the debug facade after a shutdown.
-	bool last_hiz_readback_was_pending_ = false;
-	bool last_hiz_readback_was_drained_ = true;
 	// Shader hot reload + beauty settings moved verbatim into RenderOrchestrator
 	// (Task 14); VoxelWorld keeps one-line delegations and the ClassDB surface.
 
@@ -254,13 +237,11 @@ public:
 	// and the one worth reaching for first on a GPU the default does not fit.
 	// Read on the render thread, written from the main thread: atomic, like the effect
 	// toggles next to it.
-	void set_near_field_scale(float v) {
-		near_field_scale_.store(v < 0.1f ? 0.1f : (v > 1.0f ? 1.0f : v), std::memory_order_relaxed);
-	}
-	float get_near_field_scale() const { return near_field_scale_.load(std::memory_order_relaxed); }
+	void set_near_field_scale(float v) { context_.render->set_near_field_scale(v); }
+	float get_near_field_scale() const { return context_.render->near_field_scale(); }
 
 	void ensure_initialized();
-	bool is_initialized() const { return initialized_; }
+	bool is_initialized() const { return context_.render->initialized(); }
 	// Compiles assets/pipelines/default.pipeline into the GPU field override plus the
 	// store's CPU generator. First successful load wins: shader-reload re-init must not
 	// swap the generator under in-flight physics/mesh jobs (set_generator deletes the
@@ -287,15 +268,9 @@ public:
 	NodePath get_physics_center_path() const { return physics_center_path_; }
 	void set_sun_light_path(const NodePath &p) { sun_light_path_ = p; }
 	NodePath get_sun_light_path() const { return sun_light_path_; }
-	// Copied, not referenced: _process writes this from the main thread while the render
-	// callback reads it.
-	ve::SunState sun_state() const {
-		std::lock_guard<std::mutex> lock(sun_mutex_);
-		return sun_state_;
-	}
-	// FrameHost: the per-frame values this node still owns (sun, near-field dial/toggle,
-	// cascade clamp A/B knob), sampled together.
-	FrameSettings frame_settings() const override;
+	// FrameHost: RenderOrchestrator samples the sun, near-field dial/toggle, and cascade
+	// clamp A/B knob together.
+	FrameSettings frame_settings() const override { return context_.render->frame_settings(); }
 	VoxelFrame *frame() { return frame_.get(); }
 	void set_physics_radius_m(float v) { physics_radius_m_ = v; }
 	float get_physics_radius_m() const { return physics_radius_m_; }
@@ -359,8 +334,8 @@ public:
 	// containing "the matrix does not move with the camera".
 	ve::SunOrtho sun_ortho(int cascade) const;
 	int sun_cascade_count() const;
-	void set_sun_cascade_min_level(bool v) { sun_cascade_min_level_ = v; }
-	bool get_sun_cascade_min_level() const { return sun_cascade_min_level_; }
+	void set_sun_cascade_min_level(bool v) { context_.render->set_sun_cascade_min_level(v); }
+	bool get_sun_cascade_min_level() const { return context_.render->sun_cascade_min_level(); }
 	RenderingDevice *rd() const; // one-line delegation into RenderOrchestrator
 	GpuTimings *gpu_timings() { return context_.render->gpu_timings(); }
 
@@ -371,7 +346,7 @@ public:
 	// tests each remaining slot's descriptor for dim >= 2, so a dead slot below the mark
 	// costs one branch and nothing else. Forwarded to RenderOrchestrator's handoff.
 	int island_slot_count() const override;
-	WorldStreamer *streamer() override { return streamer_; }
+	WorldStreamer *streamer() override { return context_.render->streamer(); }
 	// The near-field region map's current window. Read by RaymarchCompositor for the
 	// push constants and by the debug hooks.
 	ve::RegionWindow region_window() const { return store_->residency() ? store_->residency()->window() : ve::RegionWindow{}; }

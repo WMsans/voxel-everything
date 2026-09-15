@@ -400,8 +400,7 @@ void VoxelWorld::update_sun_state() {
 		s.rgb[1] = ve::srgb_to_linear(c.g) * e;
 		s.rgb[2] = ve::srgb_to_linear(c.b) * e;
 	}
-	std::lock_guard<std::mutex> lock(sun_mutex_);
-	sun_state_ = s;
+	context_.render->set_sun_state(s);
 }
 
 VoxelWorld::VoxelWorld() {
@@ -419,43 +418,20 @@ VoxelWorld::VoxelWorld() {
 			.store = store_.get(),
 			.render = &context_.render,
 			.mesh = &mesh_,
-			.near_field_enabled = &near_field_enabled_,
 			.ensure_initialized_thunk = [](void *self) {
 				static_cast<VoxelWorld *>(self)->ensure_initialized();
 			},
 			.ensure_initialized_self = this,
 	});
 	context_.lod = lod_.get();
-	// Task 12: the GPU pass graph + device ownership move into RenderOrchestrator. Created
-	// BEFORE the consolidation coordinator, whose collaborators take addresses of the
-	// orchestrator's atlas/device slots (handles-only; re-read at every use).
+	// The GPU pass graph, device ownership and every piece of render lifetime state live in
+	// RenderOrchestrator. Created AFTER LodSystem, whose release_gpu() its teardown calls.
 	render_ = std::make_unique<RenderOrchestrator>(RenderOrchestrator::Collaborators{
 			.use_local_device = &use_local_device_,
 			.store = store_.get(),
-			.streamer = &streamer_,
-			.normal_pool_bytes = &normal_pool_bytes_,
-			.last_hiz_readback_was_pending = &last_hiz_readback_was_pending_,
-			.last_hiz_readback_was_drained = &last_hiz_readback_was_drained_,
-			// Task 13: teardown interleaving + admission/lifetime handles. callback_owner
-			// is this node as an Object, solely the Callable target for the queued
-			// render-thread teardown; render_ dies with this node, so it cannot dangle.
-			.initialized = &initialized_,
-			// Task 15: the LoD state slots live on LodSystem now.
-			.lod_pool = context_.lod->pool_slot(),
-			.lod_tree = context_.lod->tree_slot(),
-			.lod_pages_of = context_.lod->pages_of_slot(),
-			.lod_page_quads = context_.lod->page_quads_slot(),
-			.lod_overflow_logged = context_.lod->overflow_logged_slot(),
+			.lod = lod_.get(),
 			.callback_owner = this,
-			// Task 14: effect toggles stay world properties (they gate non-beauty behavior
-			// too); reload's re-init arm stays VoxelWorld::ensure_initialized() via a
-			// captureless thunk -- no VoxelWorld* is handed to the orchestrator.
-			.islands_enabled = &islands_enabled_,
-			.near_field_enabled = &near_field_enabled_,
-			.ensure_initialized_thunk = [](void *self) {
-				static_cast<VoxelWorld *>(self)->ensure_initialized();
-			},
-			.ensure_initialized_self = this,
+			.ensure_initialized = [this]() { ensure_initialized(); },
 	});
 	context_.render = render_.get();
 	// Task 11: the consolidation state machine moves off this class into the coordinator.
@@ -467,7 +443,7 @@ VoxelWorld::VoxelWorld() {
 			ConsolidationCoordinator::Collaborators{
 					.atlas = context_.render->atlas_slot(),
 					.mesh = &mesh_,
-					.streamer = &streamer_,
+					.streamer = context_.render->streamer_slot(),
 					// Task 15: tree/mutex handles now address LodSystem's state.
 					.lod_tree = context_.lod->tree_slot(),
 					.lod_mutex = context_.lod->mutex_slot(),
@@ -634,7 +610,7 @@ FieldContextSet *VoxelWorld::field_context() {
 void VoxelWorld::ensure_initialized() {
 	// Admission gate moved with the lifetime state (Task 13); same mutex-guarded check.
 	if (context_.render->shutdown_in_progress()) return;
-	if (initialized_) return;
+	if (context_.render->initialized()) return;
 	// The GPU graph compiles shaders that must already see the overridden field.glslh.
 	load_terrain_pipeline();
 	// Device acquisition + the whole GPU graph construction live in RenderOrchestrator
@@ -647,7 +623,7 @@ void VoxelWorld::ensure_initialized() {
 	}
 	switch (context_.render->ensure_gpu_graph(device)) {
 	case RenderOrchestrator::GpuInitResult::kOk:
-		initialized_ = true;
+		context_.render->mark_initialized();
 		break;
 	case RenderOrchestrator::GpuInitResult::kAtlasFailed:
 		// Only the half-built atlas existed; it deleted itself, exactly as before.
@@ -719,7 +695,7 @@ ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
 void VoxelWorld::publish_sun_state_to_local_device(RenderingDevice *device) {
 	if (!use_local_device_ || !device || !context_.render || !context_.render->sun_ubo()) return;
 	SunUbo *ubo = context_.render->sun_ubo();
-	if (ubo->ensure(device)) ubo->update(device, sun_state());
+	if (ubo->ensure(device)) ubo->update(device, context_.render->sun_state());
 }
 
 RenderingDevice *VoxelWorld::rd() const {
@@ -766,7 +742,7 @@ void VoxelWorld::ensure_physics_initialized() {
 		mesh_ = nullptr;
 		return;
 	}
-	if (streamer_) streamer_->set_mesh_service(mesh_);
+	if (WorldStreamer *s = context_.render->streamer()) s->set_mesh_service(mesh_);
 	// A fresh MeshService starts with an empty worker-side volume pool. The edit log and
 	// VolumeSet survive physics teardown, so replay every pinned volume into the new worker;
 	// the preserved render handoff only covers the render device's pool.
@@ -810,7 +786,7 @@ void VoxelWorld::ensure_physics_initialized() {
 void VoxelWorld::teardown_physics() {
 	std::unique_lock<std::mutex> edit_lock(store_->edit_mutex());
 	physics_ready_ = false;
-	if (streamer_) streamer_->set_mesh_service(nullptr);
+	if (WorldStreamer *s = context_.render->streamer()) s->set_mesh_service(nullptr);
 	for (IslandBody *b : test_bodies_) delete b;
 	test_bodies_.clear();
 	// The manager owns the real island bodies; tear it down before the mesher's worker and
@@ -951,15 +927,6 @@ int VoxelWorld::sun_cascade_count() const {
 
 ve::SunOrtho VoxelWorld::sun_ortho(int cascade) const {
 	return frame_->sun_ortho(cascade);
-}
-
-FrameSettings VoxelWorld::frame_settings() const {
-	FrameSettings s;
-	s.sun = sun_state();
-	s.near_field_scale = get_near_field_scale();
-	s.near_field_enabled = get_effect_enabled("near_field");
-	s.sun_cascade_min_level = sun_cascade_min_level_;
-	return s;
 }
 
 void VoxelWorld::lod_fade_band(float *fade_start, float *fade_end) const {

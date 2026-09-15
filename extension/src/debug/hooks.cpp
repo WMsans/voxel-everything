@@ -372,7 +372,7 @@ Dictionary VoxelDebugHooks::debug_contact_shadow_probe(Vector3 pos, Vector3 fwd,
 	if (w <= 0 || h <= 0) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->frame() || !world_->contact_shadow_pass()) return d;
+	if (!world_->is_initialized() || !device || !world_->frame() || !world_->contact_shadow_pass()) return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++)
 		quiet = debug_stream_frame(pos) == 0 ? quiet + 1 : 0;
@@ -454,7 +454,7 @@ Dictionary VoxelDebugHooks::debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, in
 	if (w <= 0 || h <= 0 || frames <= 0) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->frame() || !world_->gbuffer() || !world_->ssgi_pass())
+	if (!world_->is_initialized() || !device || !world_->frame() || !world_->gbuffer() || !world_->ssgi_pass())
 		return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++)
@@ -524,7 +524,7 @@ Dictionary VoxelDebugHooks::debug_ssao_probe(Vector3 pos, Vector3 fwd, int w, in
 	if (w <= 0 || h <= 0) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->frame() || !world_->gbuffer() || !world_->ssao_pass())
+	if (!world_->is_initialized() || !device || !world_->frame() || !world_->gbuffer() || !world_->ssao_pass())
 		return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++)
@@ -591,7 +591,7 @@ Dictionary VoxelDebugHooks::debug_ssgi_history_latch_probe(int w, int h, int w2,
 	if (w <= 0 || h <= 0 || w2 <= 0 || h2 <= 0) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->gbuffer()) return d;
+	if (!world_->is_initialized() || !device || !world_->gbuffer()) return d;
 	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(w, h))) return d;
 	// The production path writes the history at the end of every frame; do the same once so
 	// the latch is genuinely set before the reallocation.
@@ -615,7 +615,7 @@ Dictionary VoxelDebugHooks::debug_ssgi_reprojection_probe(Vector3 previous_pos, 
 	if (w <= 0 || h <= 0) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->frame() || !world_->gbuffer() || !world_->ssgi_pass())
+	if (!world_->is_initialized() || !device || !world_->frame() || !world_->gbuffer() || !world_->ssgi_pass())
 		return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++)
@@ -672,7 +672,7 @@ Dictionary VoxelDebugHooks::debug_beauty_settings() {
 	d["raymarched_sun_shadow"] = beauty.raymarched_sun_shadow;
 	d["ssao"] = beauty.ssao;
 	d["cost_view"] = beauty.cost_view;
-	d["islands"] = world_->islands_enabled_.load(std::memory_order_relaxed);
+	d["islands"] = world_->get_effect_enabled("islands");
 	d["ssgi_taps"] = beauty.ssgi_taps;
 	d["ssr_steps"] = beauty.ssr_steps;
 	d["contact_steps"] = beauty.contact_steps;
@@ -704,8 +704,8 @@ Dictionary VoxelDebugHooks::debug_perf_stats() {
 	d["phys_tris"] = world_->colliders_ ? world_->colliders_->last_tris() : 0;
 	d["phys_plan_ms"] = world_->colliders_ ? world_->colliders_->last_plan_ms() : 0.0f;
 	d["phys_submit_ms"] = world_->colliders_ ? world_->colliders_->last_submit_ms() : 0.0f;
-	d["stream_total_ms"] = world_->streamer_ ? world_->streamer_->last_total_ms() : 0.0f;
-	d["stream_readback_ms"] = world_->streamer_ ? world_->streamer_->last_readback_ms() : 0.0f;
+	d["stream_total_ms"] = world_->context().render->streamer() ? world_->context().render->streamer()->last_total_ms() : 0.0f;
+	d["stream_readback_ms"] = world_->context().render->streamer() ? world_->context().render->streamer()->last_readback_ms() : 0.0f;
 	d["island_ms"] = world_->island_manager_ ? world_->island_manager_->last_ms() : 0.0f;
 	// lod_ms is CPU command-record time for the LoD raster + cull passes, not GPU execution
 	// time. See LodRasterPass/LodCullPass::last_ms comments.
@@ -1185,7 +1185,7 @@ Dictionary VoxelDebugHooks::debug_lod_render_probe_culled(Vector3 pos, Vector3 f
 	debug_lod_tick(pos, fwd);
 
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->context().lod->lod_pool_ || !world_->lod_raster_pass() || !world_->material_atlas()) return d;
+	if (!world_->is_initialized() || !device || !world_->context().lod->lod_pool_ || !world_->lod_raster_pass() || !world_->material_atlas()) return d;
 
 	const float p[3] = {pos.x, pos.y, pos.z};
 	const float f[3] = {fwd.x, fwd.y, fwd.z};
@@ -1272,7 +1272,7 @@ Dictionary VoxelDebugHooks::debug_lod_gbuffer_probe(Vector3 pos, Vector3 fwd, in
 
 	debug_lod_tick(pos, fwd);
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->context().lod->lod_pool_ || !world_->lod_raster_pass() || !world_->material_atlas() || !world_->gbuffer())
+	if (!world_->is_initialized() || !device || !world_->context().lod->lod_pool_ || !world_->lod_raster_pass() || !world_->material_atlas() || !world_->gbuffer())
 		return d;
 	world_->lod_raster_pass()->release_targets();
 	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(w, h))) return d;
@@ -1363,7 +1363,7 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 	debug_lod_tick(pos, fwd);
 
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->frame() || !world_->gbuffer() ||
+	if (!world_->is_initialized() || !device || !world_->frame() || !world_->gbuffer() ||
 			!world_->raymarch_pass() || !world_->composite_pass() || !world_->lod_raster_pass())
 		return d;
 	// The classification below reads the marcher's hitpos per FULL-resolution pixel.
@@ -1518,7 +1518,7 @@ Dictionary VoxelDebugHooks::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 	debug_lod_tick(pos, fwd);
 
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->context().lod->lod_pool_ || !world_->lod_raster_pass() || !world_->lod_cull_pass() ||
+	if (!world_->is_initialized() || !device || !world_->context().lod->lod_pool_ || !world_->lod_raster_pass() || !world_->lod_cull_pass() ||
 			!world_->hiz_pass()) {
 		return d;
 	}
@@ -1659,7 +1659,7 @@ Dictionary VoxelDebugHooks::debug_grass_stats() {
 		w->ensure_initialized();
 		RenderingDevice *device = w->rd();
 		GpuAtlas *atlas = w->atlas();
-		if (!w->initialized_ || !device || !atlas || !atlas->is_valid()) return d;
+		if (!w->is_initialized() || !device || !atlas || !atlas->is_valid()) return d;
 		// Hook camera: the last streamed centre (every grass test streams before reading),
 		// looking straight down. 90-degree FOV so the reach comparison measures the
 		// box/distance cull, not the test frustum. Time matches the compositor expression.
@@ -1756,7 +1756,7 @@ Dictionary VoxelDebugHooks::debug_gbuffer_stats(int w, int h) {
 	d["valid"] = false;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->gbuffer()) return d;
+	if (!world_->is_initialized() || !device || !world_->gbuffer()) return d;
 	// The probe path: no RenderSceneBuffersRD exists outside a render callback, so this
 	// exercises the owned branch. Everything else about the object is identical.
 	if (!world_->gbuffer()->ensure(device, nullptr, Vector2i(w, h))) {
@@ -1815,9 +1815,9 @@ Dictionary VoxelDebugHooks::debug_hiz_shutdown_probe() {
 		d["queued"] = world_->hiz_pass()->readback_pending();
 	}
 	world_->shutdown_render_resources();
-	d["was_pending"] = world_->last_hiz_readback_was_pending_;
-	d["drained"] = world_->last_hiz_readback_was_drained_;
-	d["initialized_after"] = world_->initialized_;
+	d["was_pending"] = world_->context().render->last_hiz_readback_was_pending();
+	d["drained"] = world_->context().render->last_hiz_readback_was_drained();
+	d["initialized_after"] = world_->is_initialized();
 	return d;
 }
 
@@ -1828,7 +1828,7 @@ Dictionary VoxelDebugHooks::debug_hiz_probe_synthetic(float far_value, float nea
 	d["top_mip"] = 0.0f;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->hiz_pass()) return d;
+	if (!world_->is_initialized() || !device || !world_->hiz_pass()) return d;
 
 	// A 256^2 synthetic depth image: every texel is `far_value` except one near texel at
 	// (0,0). With the level-0 pass mapping the scene 1:1 at this size, mip 0 keeps the near
@@ -3152,7 +3152,7 @@ Array VoxelDebugHooks::debug_lod_collect() {
 bool VoxelDebugHooks::render_probe_pixel(Vector3 origin, Vector3 dir) {
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass())
+	if (!world_->is_initialized() || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass())
 		return false;
 	// The probe is a read-only diagnostic: it must not mutate the streamed world.
 	const Vector3 forward = dir.normalized();
@@ -3269,7 +3269,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_cost_probe(Vector3 origin, Vector3 di
 	out["bricks"] = 0;
 	out["regions"] = 0;
 	world_->ensure_initialized();
-	if (!world_->initialized_) return out;
+	if (!world_->is_initialized()) return out;
 	if (!render_probe_pixel(origin, dir)) return out;
 	RenderingDevice *device = world_->rd();
 	const PackedByteArray words = device->buffer_get_data(world_->raymarch_pass()->cost_buffer(), 0, 8);
@@ -3292,7 +3292,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_gbuffer(Vector3 origin, Vector3 dir) 
 	d["hit"] = false;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass()) return d;
+	if (!world_->is_initialized() || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass()) return d;
 	const Vector3 forward = dir.normalized();
 	const float f[3] = {forward.x, forward.y, forward.z};
 	float up[3];
@@ -3348,7 +3348,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_hole_probe(Vector3 origin, Vector3 di
 	if (w <= 2 || h <= 2) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass()) return d;
+	if (!world_->is_initialized() || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass()) return d;
 	const float p[3] = {origin.x, origin.y, origin.z};
 	const float basis_f[3] = {dir.x, dir.y, dir.z};
 	const ve::ProbeCamera pc = ve::probe_camera(p, basis_f, w, h,
@@ -3402,7 +3402,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_normal_probe(Vector3 origin, Vector3 
 	if (w <= 0 || h <= 0) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass()) return d;
+	if (!world_->is_initialized() || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass()) return d;
 	const float p[3] = {origin.x, origin.y, origin.z};
 	const float f[3] = {dir.x, dir.y, dir.z};
 	const ve::ProbeCamera pc = ve::probe_camera(p, f, w, h,
@@ -3535,7 +3535,7 @@ Dictionary VoxelDebugHooks::debug_island_normal_probe(int island_slot, Vector3 o
 	if (w <= 0 || h <= 0 || island_slot < 0 || island_slot >= kMaxIslands) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass()) return d;
+	if (!world_->is_initialized() || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass()) return d;
 	// The descriptor the SHADER sees is the one on the device: test-placed islands are
 	// uploaded directly, so read it back rather than trusting any cached copy.
 	const int64_t desc_bytes = static_cast<int64_t>(kMaxIslands) * 128;
@@ -3731,7 +3731,7 @@ Dictionary VoxelDebugHooks::debug_ssr_probe(int fixture, int w, int h) {
 	if (w <= 0 || h <= 0) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->material_atlas() || !world_->raymarch_pass() || !world_->composite_pass() ||
+	if (!world_->is_initialized() || !device || !world_->material_atlas() || !world_->raymarch_pass() || !world_->composite_pass() ||
 			!world_->gbuffer() || !world_->beauty_camera() || !world_->ssr_pass()) return d;
 	const ve::BeautySettings settings = world_->beauty_settings();
 	d["steps"] = settings.ssr_steps;
@@ -4003,7 +4003,7 @@ Dictionary VoxelDebugHooks::debug_outline_probe(int fixture, bool have_dynamic_n
 	if (fixture < 0) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->outline_pass() || !world_->beauty_camera()) return d;
+	if (!world_->is_initialized() || !device || !world_->outline_pass() || !world_->beauty_camera()) return d;
 	const int width = 32, height = 16, pixels = width * height;
 	if (!world_->beauty_camera()->ensure(device)) return d;
 	Projection view_proj;
@@ -4211,7 +4211,7 @@ Dictionary VoxelDebugHooks::debug_glossy_sdf_probe(Vector3 origin, Vector3 dir) 
 	d["position"] = origin;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass()) return d;
+	if (!world_->is_initialized() || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass()) return d;
 	const Vector3 forward = dir.normalized();
 	const float f[3] = {forward.x, forward.y, forward.z};
 	float up[3];
@@ -4274,7 +4274,7 @@ Dictionary VoxelDebugHooks::debug_cel_diff(Color albedo, Color ambient, float nd
 	Dictionary d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->gbuffer() || !world_->deferred_pass() || !world_->material_atlas()) return d;
+	if (!world_->is_initialized() || !device || !world_->gbuffer() || !world_->deferred_pass() || !world_->material_atlas()) return d;
 	if (world_->gbuffer()->size() != Vector2i(1, 1)) {
 		world_->deferred_pass()->teardown();
 		world_->deferred_pass()->initialize(device);
@@ -4467,7 +4467,7 @@ Dictionary VoxelDebugHooks::debug_deferred_probe(Vector3 pos, Vector3 fwd, int w
 			(probe_mode != 0 && probe_mode != 1 && probe_mode != 2 && probe_mode != 5)) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->frame() || !world_->gbuffer()) return d;
+	if (!world_->is_initialized() || !device || !world_->frame() || !world_->gbuffer()) return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++) {
 		quiet = debug_stream_frame(pos) == 0 ? quiet + 1 : 0;
@@ -4589,7 +4589,7 @@ Dictionary VoxelDebugHooks::debug_near_field_detail(Vector3 pos, Vector3 fwd, in
 	if (w <= 1 || h <= 1 || !(march_scale > 0.0f) || march_scale > 1.0f) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() ||
+	if (!world_->is_initialized() || !device || !world_->atlas() || !world_->material_atlas() ||
 			!world_->raymarch_pass() || !world_->composite_pass() || !world_->gbuffer()) return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++)
@@ -5024,7 +5024,7 @@ Dictionary VoxelDebugHooks::debug_material_alpha_stats(int layer) {
 	Dictionary d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->material_atlas() ||
+	if (!world_->is_initialized() || !device || !world_->material_atlas() ||
 			!world_->material_atlas()->is_valid()) return d;
 	if (layer < 0 || layer >= world_->material_atlas()->layer_count()) return d;
 	const PackedByteArray data =
@@ -5048,7 +5048,7 @@ Dictionary VoxelDebugHooks::debug_material_alpha_stats(int layer) {
 bool VoxelDebugHooks::debug_poke_material_normal(int layer) {
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->material_atlas()) return false;
+	if (!world_->is_initialized() || !device || !world_->material_atlas()) return false;
 	if (layer < 0 || layer >= world_->material_atlas()->layer_count()) return false;
 	PackedByteArray data = device->texture_get_data(world_->material_atlas()->surface_array(), layer);
 	if (data.size() < 4) return false;
@@ -5072,7 +5072,7 @@ bool VoxelDebugHooks::debug_poke_material_normal(int layer) {
 bool VoxelDebugHooks::debug_flatten_material_normal(int layer) {
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->material_atlas()) return false;
+	if (!world_->is_initialized() || !device || !world_->material_atlas()) return false;
 	if (layer < 0 || layer >= world_->material_atlas()->layer_count()) return false;
 	PackedByteArray data = device->texture_get_data(world_->material_atlas()->surface_array(), layer);
 	if (data.size() < 4) return false;
@@ -5089,7 +5089,7 @@ bool VoxelDebugHooks::probe_material(int mat, Vector3 p, Vector3 n, float rgb[3]
 		float *roughness, float *ao, float *shading_normal) {
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass())
+	if (!world_->is_initialized() || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass())
 		return false;
 	const Vector3 forward = n.normalized();
 	const float f[3] = {forward.x, forward.y, forward.z};
@@ -5388,7 +5388,7 @@ Dictionary VoxelDebugHooks::debug_brick_diff(Vector3i brick, int region_slot,
 
 void VoxelDebugHooks::debug_stream_region(Vector3i region) {
 	world_->ensure_initialized();
-	if (!world_->initialized_ || !world_->rd() || !world_->streamer_) return;
+	if (!world_->is_initialized() || !world_->rd() || !world_->context().render->streamer()) return;
 	const Vector3 center((region.x * ve::kRegionBricks + ve::kRegionBricks / 2) * ve::kBrickSize,
 			(region.y * ve::kRegionBricks + ve::kRegionBricks / 2) * ve::kBrickSize,
 			(region.z * ve::kRegionBricks + ve::kRegionBricks / 2) * ve::kBrickSize);
@@ -5402,7 +5402,7 @@ Dictionary VoxelDebugHooks::debug_brick_flags(Vector3i region) {
 	Dictionary d;
 	debug_stream_region(region);
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->store_->edit_log()) return d;
+	if (!world_->is_initialized() || !device || !world_->atlas() || !world_->store_->edit_log()) return d;
 	const int rslot = debug_region_map_entry(region);
 	if (rslot < 0) return d;
 
@@ -5452,7 +5452,7 @@ Dictionary VoxelDebugHooks::debug_brick_flags_after_mark(Vector3i region) {
 	Dictionary d;
 	debug_stream_region(region);
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->store_->edit_log() || !world_->region_pass()) return d;
+	if (!world_->is_initialized() || !device || !world_->atlas() || !world_->store_->edit_log() || !world_->region_pass()) return d;
 	const int rslot = debug_region_map_entry(region);
 	if (rslot < 0) return d;
 	int op_count = 0;
@@ -5557,7 +5557,7 @@ void VoxelDebugHooks::debug_pump_occupancy() {
 	// helper does not advance the streamer or issue a mark. Tests must drive frames separately
 	// when they need a fresh mark, so harvesting cannot hide which mark branch ran.
 	world_->ensure_initialized();
-	if (world_->streamer_ && world_->rd()) world_->streamer_->harvest_occupancy(world_->rd());
+	if (world_->context().render->streamer() && world_->rd()) world_->context().render->streamer()->harvest_occupancy(world_->rd());
 	world_->drain_occupancy();
 }
 
@@ -5725,13 +5725,13 @@ Dictionary VoxelDebugHooks::debug_occupancy_stats(Vector3 center) {
 int VoxelDebugHooks::debug_stream_frame(Vector3 cam) {
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->streamer_) return 0;
+	if (!world_->is_initialized() || !device || !world_->context().render->streamer()) return 0;
 	// The retention sweep in drain_occupancy() (called below and from _process) evicts
 	// around this centre. Hook-driven tests move the camera without any physics anchor,
 	// so the streamer camera is the only correct centre here; without it, observing
 	// beyond 256 m of the origin would evict the very blocks under test.
 	world_->store_->set_center(cam.x, cam.y, cam.z);
-	const int actions = world_->streamer_->run_frame(device, cam.x, cam.y, cam.z);
+	const int actions = world_->context().render->streamer()->run_frame(device, cam.x, cam.y, cam.z);
 	device->submit();
 	device->sync();
 	world_->overflow_seen_ |= static_cast<int>(world_->atlas()->read_overflow(device));
@@ -5742,15 +5742,15 @@ int VoxelDebugHooks::debug_stream_frame(Vector3 cam) {
 Dictionary VoxelDebugHooks::debug_stream_stats() {
 	Dictionary d;
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->store_->residency() || !world_->streamer_) return d;
+	if (!world_->is_initialized() || !device || !world_->atlas() || !world_->store_->residency() || !world_->context().render->streamer()) return d;
 	d["resident_regions"] = world_->store_->residency()->resident_count();
-	d["frame_edits"] = world_->streamer_->last_frame_edits();
+	d["frame_edits"] = world_->context().render->streamer()->last_frame_edits();
 	d["overflow"] = static_cast<int>(world_->atlas()->read_overflow(device));
 	// Either path may be the one running: debug_stream_frame drives the world in tests, the
 	// compositor's render callback drives it in the demo, and only the streamer sees the
 	// latter's frames. The HUD reads this, so it has to cover both.
 	d["overflow_ever"] =
-			world_->overflow_seen_ | static_cast<int>(world_->streamer_->overflow_seen());
+			world_->overflow_seen_ | static_cast<int>(world_->context().render->streamer()->overflow_seen());
 	{
 		std::lock_guard<std::mutex> lock(world_->edit_mutex());
 		d["override_bricks"] = world_->store_->overrides() ? world_->store_->overrides()->used() : 0;
@@ -5770,7 +5770,7 @@ int VoxelDebugHooks::debug_slot_of_region(Vector3i region) const {
 
 int VoxelDebugHooks::debug_region_map_entry(Vector3i region) {
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas()) return -1;
+	if (!world_->is_initialized() || !device || !world_->atlas()) return -1;
 	// Toroidal and total: every region has a cell, so there is no out-of-world -1 anymore.
 	// An unstreamed region reads the -1 the evict path (or the init fill) wrote to its cell.
 	const int idx = world_->region_window().index({region.x, region.y, region.z});
@@ -5780,7 +5780,7 @@ int VoxelDebugHooks::debug_region_map_entry(Vector3i region) {
 
 bool VoxelDebugHooks::debug_region_map_consistent() {
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->atlas() || !world_->store_->residency()) return false;
+	if (!world_->is_initialized() || !device || !world_->atlas() || !world_->store_->residency()) return false;
 	const ve::RegionWindow win = world_->region_window();
 	const PackedByteArray b = device->buffer_get_data(world_->atlas()->region_map());
 	const int32_t *map = reinterpret_cast<const int32_t *>(b.ptr());
@@ -5826,7 +5826,7 @@ void VoxelDebugHooks::debug_pump_shader_reload() {
 // Debug initializer: shrink the normal-pool budget BEFORE debug_init_atlas(). The
 // pool's size is otherwise fixed at exactly 32 MiB and never resizes.
 void VoxelDebugHooks::debug_set_normal_pool_budget(int bytes) {
-	world_->normal_pool_bytes_ = bytes > 0 ? static_cast<uint32_t>(bytes) : 0u;
+	world_->context().render->set_normal_pool_bytes(bytes > 0 ? static_cast<uint32_t>(bytes) : 0u);
 }
 RenderingDevice *VoxelDebugHooks::debug_local_rd() const {
 	return world_->local_rd();
@@ -5857,7 +5857,7 @@ Dictionary VoxelDebugHooks::debug_render_frame(Vector3 pos, Vector3 fwd, int w, 
 	if (w <= 0 || h <= 0 || !world_->get_use_local_device()) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->initialized_ || !device || !world_->frame() || !world_->gbuffer()) return d;
+	if (!world_->is_initialized() || !device || !world_->frame() || !world_->gbuffer()) return d;
 	d["had_history"] = false;
 	FrameInputs in = world_->frame()->prepare_headless(device, VoxelFrame::looking_at(pos, fwd, w, h));
 	if (!in.scene_color.is_valid()) return d;

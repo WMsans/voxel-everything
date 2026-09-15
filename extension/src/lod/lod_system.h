@@ -31,6 +31,7 @@
 namespace godot {
 
 class MeshService;
+class LodPool;
 class RenderOrchestrator;
 class RenderingDevice;
 class VoxelDebugHooks;
@@ -48,7 +49,6 @@ public:
 		RenderOrchestrator **render = nullptr;
 		// Created/destroyed across physics init/teardown cycles; re-read at every use.
 		MeshService **mesh = nullptr;
-		const std::atomic<bool> *near_field_enabled = nullptr;
 		// ensure_lod()'s lazy-init arm: VoxelWorld::ensure_initialized() via a captureless
 		// thunk -- the same pattern RenderOrchestrator uses; no VoxelWorld* is stored.
 		void (*ensure_initialized_thunk)(void *) = nullptr;
@@ -71,10 +71,6 @@ public:
 	// re-read them at every use instead of caching stranded pointers.
 	std::mutex *mutex_slot() { return &lod_mutex_; }
 	ve::LodTree **tree_slot() { return &lod_tree_; }
-	class LodPool **pool_slot() { return &lod_pool_; }
-	std::map<ve::LodKey, std::vector<int>> *pages_of_slot() { return &lod_pages_of_; }
-	std::map<int, int> *page_quads_slot() { return &lod_page_quads_; }
-	std::set<ve::LodKey> *overflow_logged_slot() { return &lod_overflow_logged_; }
 
 	// Was VoxelWorld::lod_tick; render thread (compositor callback).
 	void tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ);
@@ -106,6 +102,10 @@ public:
 	// The _exit_tree() LoD half, verbatim statement-for-statement: pool -> tree ->
 	// page maps, exactly where VoxelWorld used to run it (after CPU-core release).
 	void teardown();
+	// RenderOrchestrator::teardown_gpu()'s LoD step, verbatim: pool, then tree, then the page
+	// maps (the tree holds page indices the pool is about to free, and a stale index would be
+	// handed to the next chunk). Takes no lock, exactly like the statements it replaces.
+	void release_gpu();
 
 	LodPool *pool() const { return lod_pool_; }
 

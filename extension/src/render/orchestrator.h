@@ -25,13 +25,12 @@
 
 #include <atomic>
 #include <condition_variable>
-#include <map>
+#include <functional>
 #include <mutex>
-#include <set>
 #include <vector>
 
-#include "lod/lod_tree.h" // ve::LodKey: teardown clears the world's LoD page maps
 #include "grass/grass_settings_store.h"
+#include "render/frame.h"
 #include "render/gpu_timings.h"
 #include "render/island_handoff.h"
 #include "shade/beauty_settings.h"
@@ -48,6 +47,7 @@ inline constexpr char kShutdownRenderResourcesOnRenderThread[] =
 class RenderingDevice;
 class WorldStore;
 class WorldStreamer;
+class LodSystem;
 class GpuAtlas;
 class MaterialAtlas;
 class IslandAtlas;
@@ -73,46 +73,21 @@ class SsrPass;
 class OutlinePass;
 class GrassScatterPass;
 class GrassRasterPass;
-class LodPool;
 class Object;
 
 class RenderOrchestrator {
 public:
 	struct Collaborators {
-		// Device-selection seam: use_local_device_ stays a VoxelWorld property.
+		// Device-selection seam: use_local_device_ stays a VoxelWorld property (ClassDB).
 		const bool *use_local_device = nullptr;
 		// Config/residency spine steps sit mid-sequence in ensure_gpu_graph().
 		WorldStore *store = nullptr;
-		// Created INSIDE the verbatim init sequence; the slot is VoxelWorld's field.
-		WorldStreamer **streamer = nullptr;
-		// Debug-settable atlas budget read at GpuAtlasConfig time (0 = default).
-		const uint32_t *normal_pool_bytes = nullptr;
-		// Teardown captures HiZ's async-readback end state for the debug facade.
-		bool *last_hiz_readback_was_pending = nullptr;
-		bool *last_hiz_readback_was_drained = nullptr;
-		// --- Task 13 (lifetime/admission + teardown interleaving) ---
-		// World-owned flags/state teardown_gpu() touches BETWEEN its three halves
-		// and after them. Addresses only, re-read at every use.
-		bool *initialized = nullptr;        // cleared last by teardown_gpu(), as before
-		LodPool **lod_pool = nullptr;       // pool -> tree -> page maps, post-atlas
-		ve::LodTree **lod_tree = nullptr;
-		std::map<ve::LodKey, std::vector<int>> *lod_pages_of = nullptr;
-		std::map<int, int> *lod_page_quads = nullptr;
-		std::set<ve::LodKey> *lod_overflow_logged = nullptr;
+		// teardown_gpu() calls lod->release_gpu() where the LoD statements always sat.
+		LodSystem *lod = nullptr;
 		// Callable target for the queued render-thread teardown (see class comment).
 		Object *callback_owner = nullptr;
-		// --- Task 14 ---
-		// set_effect_enabled()/get_effect_enabled() route the two atomic toggles that
-		// stayed world properties (they gate non-beauty behavior too). Addresses only.
-		std::atomic<bool> *islands_enabled = nullptr;
-		std::atomic<bool> *near_field_enabled = nullptr;
-		// pump_shader_reload()'s re-init arm: VoxelWorld::ensure_initialized() (it owns
-		// the CPU-side init ordering around the GPU half this class moved in Task 12).
-		// Generic thunk + user-data, not a stored VoxelWorld*: the world registers a
-		// captureless static trampoline at construction, exactly like callback_owner
-		// above is registered for its single Callable purpose.
-		void (*ensure_initialized_thunk)(void *) = nullptr;
-		void *ensure_initialized_self = nullptr;
+		// pump_shader_reload()'s re-init arm: VoxelWorld::ensure_initialized().
+		std::function<void()> ensure_initialized;
 	};
 
 	explicit RenderOrchestrator(Collaborators handles);
@@ -188,10 +163,31 @@ public:
 	IslandHandoff &handoff() { return handoff_; }
 	// High-water mark for the raymarcher. Render thread; lock-free (two atomics).
 	int island_slot_count() const {
-		return handoff_.slot_count(handles_.islands_enabled->load(std::memory_order_relaxed));
+		return handoff_.slot_count(islands_enabled_.load(std::memory_order_relaxed));
 	}
 	// Render thread, before the streamer runs. Returns how many uploads landed.
 	int drain_island_uploads(RenderingDevice *device);
+
+	// --- render lifetime state and per-frame knobs (moved from VoxelWorld, spec 2026-09-14
+	// §3.1). Guards unchanged: plain fields stay plain, atomics stay atomic, the sun keeps
+	// its own mutex. ---
+	bool initialized() const { return initialized_; }
+	void mark_initialized() { initialized_ = true; }
+	WorldStreamer *streamer() const { return streamer_; }
+	WorldStreamer **streamer_slot() { return &streamer_; } // ConsolidationCoordinator wiring
+	// Debug-settable compact-normal budget; 0 = GpuAtlasConfig's default. Set before init.
+	void set_normal_pool_bytes(uint32_t bytes) { normal_pool_bytes_ = bytes; }
+	bool last_hiz_readback_was_pending() const { return last_hiz_readback_was_pending_; }
+	bool last_hiz_readback_was_drained() const { return last_hiz_readback_was_drained_; }
+	void set_sun_state(const ve::SunState &sun);
+	ve::SunState sun_state() const;
+	void set_near_field_scale(float v); // clamps to [0.1, 1]
+	float near_field_scale() const { return near_field_scale_.load(std::memory_order_relaxed); }
+	bool near_field_enabled() const { return near_field_enabled_.load(std::memory_order_relaxed); }
+	void set_sun_cascade_min_level(bool v) { sun_cascade_min_level_ = v; }
+	bool sun_cascade_min_level() const { return sun_cascade_min_level_; }
+	// Everything VoxelFrame samples once per frame.
+	FrameSettings frame_settings() const;
 
 	// Address-of slots for collaborators (ConsolidationCoordinator wiring) that
 	// re-read lazily-created objects at every use.
@@ -324,6 +320,17 @@ private:
 	ve::GrassSettingsStore grass_settings_;
 	GpuTimings gpu_timings_;
 	IslandHandoff handoff_;
+	WorldStreamer *streamer_ = nullptr; // created inside ensure_gpu_graph(), deleted in teardown_gpu()
+	bool initialized_ = false;
+	uint32_t normal_pool_bytes_ = 0;
+	bool last_hiz_readback_was_pending_ = false;
+	bool last_hiz_readback_was_drained_ = true;
+	std::atomic<bool> islands_enabled_{true};
+	std::atomic<bool> near_field_enabled_{true};
+	std::atomic<float> near_field_scale_{0.66f};
+	bool sun_cascade_min_level_ = true;
+	mutable std::mutex sun_mutex_;
+	ve::SunState sun_state_;
 	float prev_view_proj_[16] = {};
 	bool has_history_ = false;
 	// The history texture has_history_ refers to; see has_history().
