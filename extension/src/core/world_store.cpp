@@ -118,4 +118,14 @@ bool WorldStore::snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::
 	return true;
 }
 
+ve::RayHit WorldStore::raycast_down(const float xz[2]) {
+	ve::RayHit h;
+	if (!edit_log()) return h;
+	std::lock_guard<std::mutex> lock(edit_mutex());
+	const ve::Generator &gen = generator()->sampler();
+	const float o[3] = {xz[0], 200.0f, xz[1]};
+	const float dir[3] = {0.0f, -1.0f, 0.0f};
+	return ve::raycast(gen, *edit_log(), o, dir, 400.0f, &volumes(), overrides());
+}
+
 } // namespace godot

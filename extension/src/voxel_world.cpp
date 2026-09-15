@@ -51,7 +51,6 @@
 #include "world/brick_flags.h"
 #include "world/brick_mip.h"
 #include "world/material_table.h"
-#include "world/raycast.h"
 #include "shade/oct.h"
 #include "shade/cel.h"
 #include "shade/sun_cascades.h"
@@ -793,7 +792,16 @@ void VoxelWorld::ensure_physics_initialized() {
 	{
 		std::lock_guard<std::mutex> lock(store_->edit_mutex());
 		island_manager_ = new IslandManager();
-		island_manager_->initialize(this);
+		island_manager_->initialize(IslandManager::Collaborators{
+				.store = store_.get(),
+				.handoff = &context_.render->handoff(),
+				.mesh = mesh_,
+				.scene_node = this,
+				.bubble_centers = &physics_bubble_centers_,
+				.append_edit_locked = [this](const ve::EditOp &op, bool notify_islands) {
+					return append_edit_locked(op, notify_islands);
+				},
+		});
 		island_manager_->set_generator(&store_->generator()->sampler());
 	}
 	physics_ready_ = true;
@@ -866,56 +874,6 @@ void VoxelWorld::set_physics_bubble_radius_m(float v) {
 	// Applies live: a test (and the editor's inspector) can change the bubble after physics
 	// has already been initialized.
 	if (colliders_) colliders_->set_body_bubble_radius_m(v);
-}
-
-
-
-void VoxelWorld::queue_island_upload(int atlas_slot, int volume_slot, const ve::VolumeData &d) {
-	context_.render->handoff().queue_island(atlas_slot, volume_slot, d);
-}
-
-void VoxelWorld::queue_field_volume_upload(int slot, const ve::VolumeData &d) {
-	context_.render->handoff().queue_field_volume(slot, d);
-	// The worker's volume pool must see the paste before its next field job, otherwise the
-	// mesher's collision against the new rubble lags a frame (or more) behind the main copy.
-	if (mesh_) mesh_->submit_volume(slot, d);
-}
-
-void VoxelWorld::discard_field_volume_upload(int slot) {
-	context_.render->handoff().discard_field_volume(slot);
-	if (mesh_) mesh_->discard_pending_volume_upload(slot);
-}
-
-void VoxelWorld::publish_island_descriptors(const std::vector<IslandSlotDesc> &d) {
-	context_.render->handoff().publish_descriptors(d);
-}
-
-void VoxelWorld::set_physics_bubbles(const std::vector<IslandBody *> &bodies) {
-	std::vector<float> centers;
-	centers.reserve(bodies.size() * 3);
-	for (IslandBody *b : bodies) {
-		if (!b || !b->live()) continue;
-		const Vector3 o = b->transform().origin;
-		centers.push_back(o.x);
-		centers.push_back(o.y);
-		centers.push_back(o.z);
-	}
-	physics_bubble_centers_.swap(centers);
-}
-
-ve::RayHit VoxelWorld::analytic_raycast_down(const float xz[2]) {
-	ve::RayHit h;
-	if (!store_->edit_log()) return h;
-	std::lock_guard<std::mutex> lock(store_->edit_mutex());
-	// Task 10: through the FieldGenerator seam -- same analytic field, no behavior change.
-	const ve::Generator &gen = store_->generator()->sampler();
-	const float o[3] = {xz[0], 200.0f, xz[1]};
-	const float dir[3] = {0.0f, -1.0f, 0.0f};
-	return ve::raycast(gen, *store_->edit_log(), o, dir, 400.0f, &store_->volumes(), store_->overrides());
-}
-
-bool VoxelWorld::release_volume_slot(int slot) {
-	return godot::release_volume_slot(store_->volumes(), context_.render->handoff(), slot);
 }
 
 int VoxelWorld::drain_island_uploads(RenderingDevice *device) {

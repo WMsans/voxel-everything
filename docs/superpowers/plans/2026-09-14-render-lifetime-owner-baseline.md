@@ -39,3 +39,11 @@ Appended by later tasks: bite proofs, attributions, per-milestone gate results.
 - Native: 551/551 passed, 0 failed; baseline was 544/544, with the +7 cases attributed to Task 5's pure handoff/native tests. Behavior matches baseline.
 - gdUnit: same pre-existing `GdUnitTestCIRunner` parse error before discovery; launcher exit 1, no `results.xml` or suite counts. No blocker repair was made.
 - Result: matches baseline after the attributed native-count difference; teardown-trace gate remains covered but could not be discovered because of the known launcher blocker.
+
+### Task 7 gate
+- Recorded 2026-09-15T01:01:32Z at HEAD `f3a1845` before commit.
+- Static gate: `git diff --check` passed; no launcher paths changed; IslandManager lock-site counts remained 15 total / 6 `edit_mutex()` acquisitions.
+- Build: `./build.sh -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)` exited 0; `Build OK`, universal macOS debug dylib linked.
+- Native: `(cd extension && scons -Q test) 2>&1 | tail -3` — `551/551` test cases passed, `9,117,142/9,117,142` assertions passed, status success.
+- gdUnit: the requested eight-suite launcher exited 1 before discovery with the known pre-existing `GdUnitTestCIRunner` parse error; no launcher repair or test modification was made.
+- Result: native/build match Task 6 baseline; gdUnit remains blocked before discovery by the same known launcher error.

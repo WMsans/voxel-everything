@@ -3,6 +3,7 @@
 #include <godot_cpp/variant/vector3.hpp>
 #include <atomic>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <vector>
 #include "connectivity/components.h"
@@ -20,7 +21,10 @@ namespace godot {
 // expose a lower cap without duplicating the magic number.
 inline constexpr int kMaxDynamicBodies = 64;
 
-class VoxelWorld;
+class IslandHandoff;
+class MeshService;
+class Node3D;
+class WorldStore;
 
 // Spec §5, orchestrated. One pass per frame, in this order:
 //
@@ -35,9 +39,26 @@ class VoxelWorld;
 // small mutex instead of being touched from two threads unsynchronised.
 class IslandManager {
 public:
+	// What the manager needs from the world, and nothing else (spec 2026-09-14 §3.4).
+	struct Collaborators {
+		// edit_log, edit_mutex, edit_seq, occupancy, volumes, override tables, field
+		// snapshots, raycast_down.
+		WorldStore *store = nullptr;
+		// Island/field-volume bytes and descriptors for the render device; slot mark.
+		IslandHandoff *handoff = nullptr;
+		// Created before the manager and deleted after it (VoxelWorld physics lifetime).
+		MeshService *mesh = nullptr;
+		// get_world_3d() for body spaces.
+		Node3D *scene_node = nullptr;
+		// Body centres as xyz triples; VoxelWorld::physics_tick hands them to the colliders.
+		std::vector<float> *bubble_centers = nullptr;
+		// VoxelWorld::append_edit_locked. Named debt: sub-project 5's EditPipeline replaces it.
+		std::function<ve::EditLog::AppendResult(const ve::EditOp &, bool)> append_edit_locked;
+	};
+
 	~IslandManager();
 
-	void initialize(VoxelWorld *world);
+	void initialize(Collaborators handles);
 	void teardown();
 
 	int run_frame(float dt, const Vector3 &center); // actions taken
@@ -160,6 +181,12 @@ private:
 	void land_extraction(const IslandExtractResult &r);
 	void land_resample(const IslandExtractResult &r);
 	void publish_descriptors();
+	// Handoff half + mesher half of a field-volume paste (was VoxelWorld::queue_field_volume_upload).
+	void queue_field_volume(int slot, const ve::VolumeData &data);
+	// Undo of the above for a paste rejected before the uploads drain.
+	void discard_field_volume(int slot);
+	// Spec §6's "small bubbles around active bodies" (was VoxelWorld::set_physics_bubbles).
+	void publish_bubbles();
 	void start_merges();
 	void queue_retry_window(const PendingWindow &w);
 	void note_extract_failure(const PendingWindow &w);
@@ -171,8 +198,8 @@ private:
 	int free_atlas_slot() const;
 	void despawn(int index);
 
-	VoxelWorld *world_ = nullptr;
-	// Borrowed from WorldStore via VoxelWorld, exactly like edit_log_. Never owned: the
+	Collaborators handles_;
+	// Borrowed from WorldStore through the store collaborator, exactly like edit_log_. Never owned: the
 	// terrain pipeline can swap the world's generator, and a copy here would silently keep
 	// generating the old world for collision while the GPU generated the new one.
 	const ve::Generator *gen_ = nullptr;

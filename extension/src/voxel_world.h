@@ -40,7 +40,6 @@
 #include "shade/sun_ortho.h"
 #include "shade/sun_state.h"
 #include "world/edit_log.h"
-#include "world/raycast.h"
 #include "world/region.h"
 #include "world/override_store.h"
 #include "world/residency.h"
@@ -427,23 +426,6 @@ public:
 	bool downsample_history(RenderingDevice *rd, RID src, GBuffer &gb);
 	std::mutex &edit_mutex() { return store_->edit_mutex(); }
 	MeshService *mesh_service() { return mesh_; }
-	// Releases an authoritative volume slot AND queues the render-thread teardown of its
-	// compact-normal allocation. Pinned slots are refused by VolumeSet::release() and keep
-	// their normals (a pasted volume-add still names them). Returns release()'s result.
-	bool release_volume_slot(int slot);
-	void queue_island_upload(int atlas_slot, int volume_slot, const ve::VolumeData &d);
-	void queue_field_volume_upload(int slot, const ve::VolumeData &d);
-	// Removes a queued field-volume upload for `slot` (render handoff and worker pending
-	// queue). Used when a re-merge paste is fully rejected before the uploads drain: the
-	// slot is released (or restored to the body's birth volume), so its stale bytes must not
-	// land in a later reused volume.
-	void discard_field_volume_upload(int slot);
-	void publish_island_descriptors(const std::vector<IslandSlotDesc> &d);
-	void set_physics_bubbles(const std::vector<IslandBody *> &bodies);
-	// A downward ve::raycast at (xz[0], xz[1]) from above the world, on the analytic field
-	// plus its region ops and volumes -- the same call debug_raycast makes. The manager may
-	// not build its own EditLog view, and this is the one field query it needs.
-	ve::RayHit analytic_raycast_down(const float xz[2]);
 	// Drained by RaymarchCompositor on the render thread; returns how many landed.
 	int drain_island_uploads(RenderingDevice *device) override;
 

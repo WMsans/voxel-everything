@@ -789,7 +789,7 @@ void VoxelDebugHooks::debug_queue_test_island_upload(int slot, const PackedByteA
 	d.mat.assign(mat.ptr(), mat.ptr() + n);
 	for (int64_t i = 0; i < n; i++)
 		if (ve::decode_sdf(d.sdf[static_cast<size_t>(i)]) <= 0.0f) d.solid_voxels++;
-	world_->queue_island_upload(slot, slot, d); // test fixture: atlas slot == volume slot
+	world_->context().render->handoff().queue_island(slot, slot, d); // test fixture: atlas slot == volume slot
 }
 
 void VoxelDebugHooks::debug_queue_test_island_descriptors() {
@@ -831,7 +831,7 @@ void VoxelDebugHooks::debug_queue_committed_field_volume_upload(int slot,
 		if (len>1e-6f) { float n2[3]={px/len, py/len, pz/len}; d.normal_oct[static_cast<size_t>(i)]=ve::oct_encode_snorm8(n2);} else d.normal_oct[static_cast<size_t>(i)]=ve::oct_encode_snorm8(up);
 	}
 	if (!world_->store_->volumes().store(slot, d) || !world_->store_->volumes().pin(slot)) {
-		world_->release_volume_slot(slot);
+		release_volume_slot(world_->context().store->volumes(), world_->context().render->handoff(), slot);
 		UtilityFunctions::printerr(
 				"debug_queue_committed_field_volume_upload: store/pin failed for slot ", slot);
 		return;
@@ -2896,7 +2896,7 @@ Dictionary VoxelDebugHooks::debug_spawn_test_body(Vector3i lo_cell, Vector3i hi_
 	const int slot = world_->store_->volumes().allocate();
 	if (slot < 0) return d;
 	if (!world_->store_->volumes().store(slot, volume)) {
-		world_->release_volume_slot(slot);
+		release_volume_slot(world_->context().store->volumes(), world_->context().render->handoff(), slot);
 		return d;
 	}
 
@@ -2929,7 +2929,7 @@ Dictionary VoxelDebugHooks::debug_spawn_test_body(Vector3i lo_cell, Vector3i hi_
 	if (!b->spawn(w3.is_valid() ? w3->get_space() : RID(),
 				w3.is_valid() ? w3->get_scenario() : RID(), info, &volume)) {
 		delete b;
-		world_->release_volume_slot(slot);
+		release_volume_slot(world_->context().store->volumes(), world_->context().render->handoff(), slot);
 		return d;
 	}
 	world_->test_bodies_.push_back(b);
