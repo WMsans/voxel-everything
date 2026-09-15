@@ -79,3 +79,21 @@ Appended by later tasks: bite proofs, attributions, per-milestone gate results.
 - Native: `(cd extension && scons -Q test)` — `551/551` test cases passed, `9,117,142/9,117,142` assertions passed, status success.
 - gdUnit: `./gdunit_tests.sh` exited 1 before discovery with the known pre-existing `GdUnitTestCIRunner` parse error; no `results.xml` or suite counts were produced. The launcher was not repaired.
 - Result: implementation/build/native gates pass; full gdUnit remains blocked before discovery by the same baseline launcher error; no pass/shader changes or lifecycle-call changes were made.
+
+### Task 13 gate (full run)
+- Recorded 2026-09-15 at HEAD `29a3112` before commit.
+- Pre-split counts: `rg -c '^[A-Za-z].*VoxelDebugHooks::[a-zA-Z_0-9]+\\(' extension/src/debug/hooks.cpp` -> `183`; `rg -c 'ClassDB::bind_method' extension/src/debug/hooks.cpp` -> `176`.
+- Split dry-run: `python3 "$TMPDIR/split_hooks.py" --check` -> `hooks.cpp 283 lines`, `hooks_lod.cpp 790 lines`, `hooks_physics.cpp 921 lines`, `hooks_render.cpp 2509 lines`, `hooks_world.cpp 1230 lines`, `units: 174 leftover lines: 1`; reassembly assertion passed.
+- Pure-move check: exact prescribed multiset comparison -> `PURE`; post-split definition total `183`; binding total `176`.
+- API/key checks: sorted `VoxelDebugHooks::...` entries identical, `183` entries; sorted bracket-string keys identical, `653` entries. `hooks.cpp` retains `_bind_methods` and `debug_render_frame`; `hooks_common.h` contains the two inline helpers.
+- Build: `./build.sh -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)` exited 0; compiled `hooks.cpp`, `hooks_lod.cpp`, `hooks_physics.cpp`, `hooks_render.cpp`, and `hooks_world.cpp`; linked universal debug dylib; output ended `==> Build OK: 3.2M ...` and `==> Done.`
+- gdUnit: `./gdunit_tests.sh` exited 1 before discovery with the known pre-existing `GdUnitTestCIRunner` parse error; no launcher modification was made and no suite counts/results were produced. Exact errors:
+```
+SCRIPT ERROR: Parse Error: Could not find type "GdUnitTestCIRunner" in the current scope.
+          at: GDScript::reload (res://addons/gdUnit4/bin/GdUnitCmdTool.gd:5)
+SCRIPT ERROR: Parse Error: Identifier "GdUnitTestCIRunner" not declared in the current scope.
+          at: GDScript::reload (res://addons/gdUnit4/bin/GdUnitCmdTool.gd:10)
+ERROR: Failed to load script "res://addons/gdUnit4/bin/GdUnitCmdTool.gd" with error "Parse error".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+```
+- Result: pure move/build/API/key gates pass; gdUnit remains blocked before discovery by the same baseline launcher error.
