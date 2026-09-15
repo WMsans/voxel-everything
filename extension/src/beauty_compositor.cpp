@@ -36,7 +36,6 @@ void BeautyCompositor::_render_callback(int cb_type, RenderData *render_data) {
 	if (!rd || !rsb || !sd) return;
 
 	normal_roughness_state_ = rsb->has_texture("forward_clustered", "normal_roughness") ? 1 : 0;
-	world->set_beauty_compositor(this);
 	FrameInputs in;
 	in.cam = sd->get_cam_transform();
 	in.proj = sd->get_cam_projection();

@@ -84,6 +84,8 @@ constructed after it. Not in the native test build (needs RenderingDevice), like
 struct FrameDebug {
     int deferred_view = 0;        // DeferredPass::Params::probe_mode
     bool skip_far_field = false;  // debug_seam_probe(skip_lod)
+    RID marker;                   // optional seam-probe ownership marker
+    Vector2i lod_viewport;        // settled LoD viewport; zero means frame size
 };
 
 struct FrameInputs {
@@ -103,15 +105,10 @@ struct FrameSettings {            // per-frame values VoxelWorld still owns, sam
     bool sun_cascade_min_level;
 };
 
-struct GrassFrameStats {          // exactly the counters debug_grass_stats returns today
-    // fields copied from GrassScatterPass's readback during planning
-};
-
-struct FrameRecord {              // written once per frame by the frame itself
+struct FrameRecord {              // returned by value under a leaf mutex
     float fade_start, fade_end;
     bool lod_two_phase, hiz_built;
     int lod_first_pass_count;
-    GrassFrameStats grass;        // counters grass_stats reads today
     uint32_t stages_ok, stages_cancelled; // bit per stage label
 };
 
@@ -119,6 +116,7 @@ class FrameHost {                 // TEMPORARY seam, deleted by sub-project 2
 public:
     virtual int island_slot_count() const = 0;
     virtual int drain_island_uploads(RenderingDevice *) = 0;
+    virtual WorldStreamer *streamer() = 0;
     virtual FrameSettings frame_settings() const = 0; // sun state, near-field scale/enabled,
                                                       // sun_cascade_min_level
 protected:
@@ -131,7 +129,7 @@ public:
     bool render_pre_opaque(RenderingDevice *, const FrameInputs &);
     bool render_post_opaque(RenderingDevice *, const FrameInputs &);
     bool render_headless(RenderingDevice *, const FrameInputs &); // both halves, one call
-    const FrameRecord &last_frame() const;
+    FrameRecord last_frame() const;
     // The one synthetic probe camera (fov_y 60°, near 0.05, far 4000, up-vector rule).
     static FrameInputs looking_at(Vector3 pos, Vector3 fwd, int w, int h);
 };
@@ -164,10 +162,10 @@ them. Headless has no engine opaque objects; that difference is documented, not 
   call `render_pre_opaque` / `render_post_opaque`.
 - **`VoxelWorld`** loses the accessors only the frame used: `lod_tick`, `prepare_lod_raster`,
   `prepare_lod_shadow_raster`, `sun_ortho`, `lod_fade_band`, `note_lod_cull_debug` and its three
-  atomics + `lod_cull_debug()`, `finish_beauty_frame`, `downsample_history`,
-  `set_beauty_compositor` / `beauty_compositor_` (written, never read), `render_probe_pixel`
-  (moves onto the frame's camera builder). Exact list confirmed during planning; any accessor a
-  surviving caller still needs stays.
+  atomics + `lod_cull_debug()`, `finish_beauty_frame`, `set_beauty_compositor` /
+  `beauty_compositor_` (written, never read), and `render_probe_pixel` (moved to
+  `VoxelDebugHooks`). `downsample_history` stays for the isolated SSGI history-latch probe;
+  any accessor a surviving caller still needs stays. `FrameHost` remains named temporary debt.
 - **`hooks.cpp`** loses every migrated rebuild (§5). Before/after line counts are reported.
 
 ### 4.5 Unchanged
@@ -195,13 +193,22 @@ Provisional classification; the plan verifies each hook by reading it.
 | `debug_ssgi_reprojection_probe` | `debug_ssr_probe` (fixture), `debug_outline_probe` (fixture) |
 | `debug_contact_shadow_probe` | `debug_hiz_probe_synthetic`, `debug_hiz_shutdown_probe` |
 | `debug_seam_probe` (`debug.skip_far_field`) | `debug_island_tile_mask`, `debug_lod_cull_probe` |
-| `debug_near_field_detail` | `debug_sun_shadow_build`, `debug_lod_tick` |
-| `debug_grass_stats` (reads `FrameRecord.grass`) | `debug_cel_diff` (synthetic albedo/ndl fixture) |
-| `debug_lod_gbuffer_probe`, `debug_lod_render_probe(_culled)` | `sun_shadow_probe` (single-point deferred sample) |
+| | `debug_near_field_detail`, `debug_sun_shadow_build`, `debug_lod_tick` |
+| | `debug_grass_stats`, `debug_lod_gbuffer_probe`, `debug_lod_render_probe(_culled)` |
+| | `debug_cel_diff` (synthetic albedo/ndl fixture), `sun_shadow_probe` (single-point deferred sample) |
 
-Pass tests keep their isolation but build cameras through `VoxelFrame::looking_at` and the shared
-`CameraParams` packing, deleting the hand-built cameras. Probes keep their GDScript signatures
-and Dictionary keys; only the numbers may move, under the §3 golden policy.
+The six migrated hooks are `debug_ssao_probe`, `debug_deferred_probe`, `debug_ssgi_probe`,
+`debug_ssgi_reprojection_probe`, `debug_contact_shadow_probe` and `debug_seam_probe`; the
+reclassified pass probes are `debug_lod_render_probe(_culled)`, `debug_lod_gbuffer_probe`,
+`debug_grass_stats` and `debug_near_field_detail`. Pass tests keep their isolation but build
+perspective fixtures through `ve::probe_camera`, single-ray fixtures through `ve::probe_up_hint`
+and the existing pure basis primitive, and terrain fixtures through the shared world/flag
+packing. Probes keep their GDScript signatures and Dictionary keys; only numbers may move under
+§3's golden policy. The single-ray render helper belongs to `VoxelDebugHooks`; retained world
+forwarders and concrete callers are `downsample_history` (SSGI history-latch probe),
+`lod_tick` (LoD probes), `prepare_lod_raster` (LoD render/gbuffer and shadow probes),
+`prepare_lod_shadow_raster` (shadow probes), `sun_ortho` (shadow probes), and `lod_fade_band`
+(LoD, near-field, SSR and shadow probes).
 
 The settle loop (`debug_stream_frame` until quiet) stays in the hooks as world preparation; the
 frame's own `stream` stage is idempotent once quiet.
@@ -222,7 +229,7 @@ Step 0 golden unchanged; failure set ⊆ baseline.
 
 **Step 2 — frame contract tests (new, through `render_headless`).**
 - Two renders of the same inputs produce identical lit output.
-- `FrameRecord` is populated (fade band, LoD record, grass counters, stage bits).
+- `FrameRecord` is populated (fade band, LoD record and stage bits); grass counters stay covered by the grass suites.
 - A failing stage cancels its own label and aborts the frame.
 - `near_field` off ⇒ HiZ not built ⇒ every LoD page drawn.
 - SSGI history survives N consecutive calls and falls on a size change.
@@ -230,6 +237,7 @@ Step 0 golden unchanged; failure set ⊆ baseline.
 **Step 3 — migrate probes, one probe per commit.** Each commit: run the probe's suites, diff,
 attribute every moved number to a cause (e.g. "reach now clamps to fade_end"), re-record in the
 same commit with the cause in the message. A diff that looks like a shipped bug stops the task.
+Deterministic output comparisons disable temporal SSGI and wind; timing values remain unpinned.
 
 **Step 4 — delete.** Remove orphaned copies and frame-only `VoxelWorld` accessors; rebuild; full
 suite; report line counts for `hooks.cpp`, `voxel_world.h`, `voxel_world.cpp`, both compositors.

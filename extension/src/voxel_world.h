@@ -84,7 +84,6 @@ class SsrPass;
 class OutlinePass;
 class GrassScatterPass;
 class GrassRasterPass;
-class BeautyCompositor;
 class IslandAtlas;
 class IslandCullPass;
 struct IslandExtractJob;
@@ -100,8 +99,8 @@ class VoxelWorld : public Node3D, public EditSink, public FrameHost {
 	// Last remaining friend (Task 13 removed the compositor/admission ones): the debug
 	// facade pokes ~20 private members directly (store_, mesh_, colliders_, chunks_,
 	// island_manager_, initialized_, physics_ready_, test_bodies_, island uploads/desc
-	// state, ...) plus 4 private helpers (drain_occupancy, render_probe_pixel,
-	// gather_lod_ops, extract_component) -- audited at Task 16. JUSTIFICATION: every one
+	// state, ...) plus 3 private helpers (drain_occupancy, gather_lod_ops,
+	// extract_component) -- audited at Task 16. JUSTIFICATION: every one
 	// of those accesses is live in debug/hooks.cpp; replacing the friendship would need
 	// either an unbounded public accessor dump on this class or a wholesale rework of the
 	// facade's world_ back-reference. Both are behavior-surface changes outside this
@@ -157,7 +156,6 @@ class VoxelWorld : public Node3D, public EditSink, public FrameHost {
 	// EditSink port satisfied for WorldStore's spine; adapter body forwards to today's
 	// island-manager notification.
 	void on_edit_appended(const ve::EditOp &op, bool notify_islands) override;
-	bool render_probe_pixel(Vector3 origin, Vector3 dir);
 
 	// The mesher runs on its own thread and owns its local RenderingDevice there; see
 	// MeshService. Nothing on the main thread touches that device.
@@ -188,7 +186,6 @@ class VoxelWorld : public Node3D, public EditSink, public FrameHost {
 	std::atomic<bool> near_field_enabled_{true};
 	std::atomic<float> near_field_scale_{0.66f};
 	int island_slots_ = 0; // high-water mark, not a population; guarded by island_mutex_
-	BeautyCompositor *beauty_compositor_ = nullptr;
 	std::vector<IslandSlotDesc> island_descs_;
 	bool island_descs_dirty_ = false;
 	std::vector<float> physics_bubble_centers_;
@@ -215,12 +212,6 @@ class VoxelWorld : public Node3D, public EditSink, public FrameHost {
 	// injected); read by the debug facade after a shutdown.
 	bool last_hiz_readback_was_pending_ = false;
 	bool last_hiz_readback_was_drained_ = true;
-	// Last frame's LoD cull two-phase record (Task 7 diagnosis). Written on the render
-	// thread by RaymarchCompositor, read on the main thread by the debug hook.
-	std::atomic<bool> lod_cull_two_phase_{false};
-	std::atomic<bool> lod_cull_hiz_built_{false};
-	std::atomic<int> lod_cull_first_pass_{0};
-
 	// Shader hot reload + beauty settings moved verbatim into RenderOrchestrator
 	// (Task 14); VoxelWorld keeps one-line delegations and the ClassDB surface.
 
@@ -376,7 +367,6 @@ public:
 	}
 	void set_normal_roughness_state(int state) { context_.render->set_normal_roughness_state(state); }
 	int get_normal_roughness_state() const { return context_.render->normal_roughness_state(); }
-	void set_beauty_compositor(BeautyCompositor *effect) { beauty_compositor_ = effect; }
 
 	// One-line delegations into LodSystem (Task 15 move); the compositor, the debug facade
 	// and ClassDB compile unchanged.
@@ -431,21 +421,6 @@ public:
 	LodPool *lod_pool() { return context_.lod->pool(); }
 	LodRasterPass *lod_raster_pass() { return context_.render->lod_raster_pass(); }
 	LodCullPass *lod_cull_pass() { return context_.render->lod_cull_pass(); }
-	// LoD cull two-phase decision recorded by RaymarchCompositor (plain record, no
-	// logic): the hook reads the shipped path's own values instead of recomputing them.
-	void note_lod_cull_debug(bool two_phase, bool hiz_built, int first_pass_count) {
-		lod_cull_two_phase_ = two_phase;
-		lod_cull_hiz_built_ = hiz_built;
-		lod_cull_first_pass_ = first_pass_count;
-	}
-	Dictionary lod_cull_debug() const {
-		const FrameRecord r = frame_->last_frame();
-		Dictionary d;
-		d["two_phase"] = r.lod_two_phase;
-		d["hiz_built"] = r.hiz_built;
-		d["first_pass_count"] = r.lod_first_pass_count;
-		return d;
-	}
 	HizPass *hiz_pass() { return context_.render->hiz_pass(); }
 	GBuffer *gbuffer() { return context_.render->gbuffer(); }
 	CameraUbo *beauty_camera() { return context_.render->beauty_camera(); }
@@ -468,7 +443,9 @@ public:
 	const float *prev_view_proj() const { return context_.render->prev_view_proj(); }
 	bool has_history() const { return context_.render->has_history(); }
 	uint32_t beauty_frame() const { return context_.render->beauty_frame(); }
-	void finish_beauty_frame(const float view_proj[16]);
+	// One-line delegation into RenderOrchestrator's downsample pipeline; the isolated
+	// SSGI history-latch probe still uses it.
+	bool downsample_history(RenderingDevice *rd, RID src, GBuffer &gb);
 	std::mutex &edit_mutex() { return store_->edit_mutex(); }
 	MeshService *mesh_service() { return mesh_; }
 	// Releases an authoritative volume slot AND queues the render-thread teardown of its
@@ -491,9 +468,6 @@ public:
 	// Drained by RaymarchCompositor on the render thread; returns how many landed.
 	int drain_island_uploads(RenderingDevice *device) override;
 
-	// One-line delegation into RenderOrchestrator's downsample pipeline (Task 12 move;
-	// public since Task 13 so BeautyCompositor no longer needs to be a friend).
-	bool downsample_history(RenderingDevice *rd, RID src, GBuffer &gb);
 	// One-line delegation into RenderOrchestrator (Task 13); also called by the debug
 	// facade's forced-teardown probes. Every GPU object; CPU cores survive.
 	void teardown_gpu();

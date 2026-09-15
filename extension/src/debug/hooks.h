@@ -518,6 +518,8 @@ private:
 	Color resolve_near_field(int mat, Vector3 p, Vector3 n, Color overlay, float overlay_weight,
 			float *gloss_out);
 
+	bool render_probe_pixel(Vector3 origin, Vector3 dir);
+
 	VoxelWorld *world_ = nullptr;
 };
 } // namespace godot

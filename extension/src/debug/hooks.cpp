@@ -2,6 +2,7 @@
 
 #include "../voxel_world.h"
 #include "render/frame.h"
+#include "render/frame_params.h"
 #include "terrain/field_params_pack.h"
 #include <cstring>
 #include "mesh/consolidation.h"
@@ -1079,10 +1080,9 @@ void VoxelDebugHooks::debug_teardown_physics() {
 void VoxelDebugHooks::debug_lod_tick(Vector3 pos, Vector3 fwd) {
 	const float p[3] = {pos.x, pos.y, pos.z};
 	const float f[3] = {fwd.x, fwd.y, fwd.z};
-	const float up[3] = {0.0f, 1.0f, 0.0f};
-	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, 1.2217f,
-			16.0f / 9.0f, 0.1f, 8000.0f, 2560, 1440);
-	world_->lod_tick(cam, nullptr);
+	const ve::ProbeCamera pc = ve::probe_camera(p, f, 2560, 1440,
+			1.2217f, 0.1f, 8000.0f);
+	world_->lod_tick(pc.lod, nullptr);
 }
 
 Dictionary VoxelDebugHooks::debug_lod_stats() {
@@ -1195,10 +1195,9 @@ Dictionary VoxelDebugHooks::debug_lod_render_probe_culled(Vector3 pos, Vector3 f
 
 	const float p[3] = {pos.x, pos.y, pos.z};
 	const float f[3] = {fwd.x, fwd.y, fwd.z};
-	const float up[3] = {0.0f, 1.0f, 0.0f};
-	const float aspect = static_cast<float>(w) / static_cast<float>(h);
-	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, 1.2217f,
-			aspect, 0.1f, 8000.0f, w, h);
+	const ve::ProbeCamera pc = ve::probe_camera(p, f, w, h,
+			1.2217f, 0.1f, 8000.0f);
+	const ve::LodCamera &cam = pc.lod;
 	Projection vp;
 	for (int c = 0; c < 4; c++)
 		for (int r = 0; r < 4; r++)
@@ -1286,10 +1285,9 @@ Dictionary VoxelDebugHooks::debug_lod_gbuffer_probe(Vector3 pos, Vector3 fwd, in
 
 	const float p[3] = {pos.x, pos.y, pos.z};
 	const float f[3] = {fwd.x, fwd.y, fwd.z};
-	const float up[3] = {0.0f, 1.0f, 0.0f};
-	const float aspect = static_cast<float>(w) / static_cast<float>(h);
-	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, 1.2217f,
-			aspect, 0.1f, 8000.0f, w, h);
+	const ve::ProbeCamera pc = ve::probe_camera(p, f, w, h,
+			1.2217f, 0.1f, 8000.0f);
+	const ve::LodCamera &cam = pc.lod;
 	Projection vp;
 	for (int c = 0; c < 4; c++)
 		for (int r = 0; r < 4; r++)
@@ -1532,9 +1530,9 @@ Dictionary VoxelDebugHooks::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 	}
 	const float p[3] = {pos.x, pos.y, pos.z};
 	const float f[3] = {fwd.x, fwd.y, fwd.z};
-	const float up[3] = {0.0f, 1.0f, 0.0f};
-	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, 1.2217f,
-			16.0f / 9.0f, 0.1f, 8000.0f, 2560, 1440);
+	const ve::ProbeCamera pc = ve::probe_camera(p, f, 2560, 1440,
+			1.2217f, 0.1f, 8000.0f);
+	const ve::LodCamera &cam = pc.lod;
 	Projection vp;
 	for (int c = 0; c < 4; c++)
 		for (int r = 0; r < 4; r++)
@@ -1622,7 +1620,12 @@ Dictionary VoxelDebugHooks::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 }
 
 Dictionary VoxelDebugHooks::debug_lod_cull_debug() {
-	return world_->lod_cull_debug();
+	const FrameRecord r = world_->frame()->last_frame();
+	Dictionary d;
+	d["two_phase"] = r.lod_two_phase;
+	d["hiz_built"] = r.hiz_built;
+	d["first_pass_count"] = r.lod_first_pass_count;
+	return d;
 }
 
 Dictionary VoxelDebugHooks::debug_grass_stats() {
@@ -1669,12 +1672,12 @@ Dictionary VoxelDebugHooks::debug_grass_stats() {
 		const float *c = w->store_->center_;
 		const float p[3] = {c[0], c[1], c[2]};
 		const float f[3] = {0.0f, -1.0f, 0.0f};
-		const float up[3] = {0.0f, 0.0f, 1.0f};
-		const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, 1.5707963268f, 1.0f,
-				0.1f, 4000.0f, 64, 64);
+		const ve::ProbeCamera pc = ve::probe_camera(p, f, 64, 64,
+				1.5707963268f, 0.1f, 4000.0f);
+		const ve::LodCamera &cam = pc.lod;
 		float vp[16];
 		for (int k = 0; k < 16; k++) vp[k] = cam.view_proj[k];
-		const ve::GrassLayout gl = ve::grass_layout(w->grass_settings(), p, vp);
+		const ve::GrassLayout gl = w->frame()->grass_layout(p, vp);
 		// w->rd() above already published this world's sun into the SunUbo, the same
 		// buffer the compositor hands the pass.
 		if (!w->sun_ubo() || !w->sun_ubo()->ensure(device)) return d;
@@ -3155,8 +3158,31 @@ Array VoxelDebugHooks::debug_lod_collect() {
 	return out;
 }
 
+bool VoxelDebugHooks::render_probe_pixel(Vector3 origin, Vector3 dir) {
+	world_->ensure_initialized();
+	RenderingDevice *device = world_->rd();
+	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass())
+		return false;
+	// The probe is a read-only diagnostic: it must not mutate the streamed world.
+	const Vector3 forward = dir.normalized();
+	const float f[3] = {forward.x, forward.y, forward.z};
+	float up[3];
+	ve::probe_up_hint(f, up);
+	ve::CameraParams cam = ve::CameraParams::looking_at(
+			origin.x, origin.y, origin.z, f[0], f[1], f[2], up[0], up[1], up[2]);
+	ve::set_near_field_world(&cam, world_->region_window(), world_->island_slot_count(),
+			world_->store_->config().atlas_bricks);
+	ve::set_near_field_flags(&cam, ve::pack_flags(world_->beauty_settings()));
+	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
+	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(),
+			cam, 1, 1, kNoEdit, world_->field_context())) return false;
+	device->submit();
+	device->sync();
+	return true;
+}
+
 Color VoxelDebugHooks::debug_raymarch_pixel(Vector3 origin, Vector3 dir) {
-	if (!world_->render_probe_pixel(origin, dir)) return Color(1, 0, 1);
+	if (!render_probe_pixel(origin, dir)) return Color(1, 0, 1);
 	RenderingDevice *device = world_->rd();
 	const PackedByteArray data = device->texture_get_data(world_->raymarch_pass()->albedo_texture(), 0);
 	const PackedByteArray sf = device->texture_get_data(world_->raymarch_pass()->surface_texture(), 0);
@@ -3181,7 +3207,7 @@ Color VoxelDebugHooks::debug_raymarch_pixel(Vector3 origin, Vector3 dir) {
 Dictionary VoxelDebugHooks::debug_raymarch_probe(Vector3 origin, Vector3 dir) {
 	Dictionary d;
 	d["hit"] = false;
-	if (!world_->render_probe_pixel(origin, dir)) return d;
+	if (!render_probe_pixel(origin, dir)) return d;
 	RenderingDevice *device = world_->rd();
 	const PackedByteArray hp = device->texture_get_data(world_->raymarch_pass()->hitpos_texture(), 0);
 	const PackedByteArray col = device->texture_get_data(world_->raymarch_pass()->albedo_texture(), 0);
@@ -3253,7 +3279,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_cost_probe(Vector3 origin, Vector3 di
 	out["regions"] = 0;
 	world_->ensure_initialized();
 	if (!world_->initialized_) return out;
-	if (!world_->render_probe_pixel(origin, dir)) return out;
+	if (!render_probe_pixel(origin, dir)) return out;
 	RenderingDevice *device = world_->rd();
 	const PackedByteArray words = device->buffer_get_data(world_->raymarch_pass()->cost_buffer(), 0, 8);
 	if (words.size() < 8) return out;
@@ -3276,17 +3302,15 @@ Dictionary VoxelDebugHooks::debug_raymarch_gbuffer(Vector3 origin, Vector3 dir) 
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
 	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass()) return d;
+	const Vector3 forward = dir.normalized();
+	const float f[3] = {forward.x, forward.y, forward.z};
+	float up[3];
+	ve::probe_up_hint(f, up);
 	ve::CameraParams cam = ve::CameraParams::looking_at(
-			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
-	const ve::RegionWindow win = world_->region_window();
-	cam.dims[0] = win.dim; cam.dims[1] = win.dim;
-	cam.dims[2] = win.dim;
-	cam.dims[3] = world_->island_slot_count();
-	cam.region_origin[0] = win.origin.x; cam.region_origin[1] = win.origin.y; cam.region_origin[2] = win.origin.z;
-	cam.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
-	cam.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
-	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
-	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
+			origin.x, origin.y, origin.z, f[0], f[1], f[2], up[0], up[1], up[2]);
+	ve::set_near_field_world(&cam, world_->region_window(), world_->island_slot_count(),
+			world_->store_->config().atlas_bricks);
+	ve::set_near_field_flags(&cam, ve::pack_flags(world_->beauty_settings()));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, 1, 1, kNoEdit, world_->field_context())) return d;
 	device->submit();
@@ -3334,21 +3358,23 @@ Dictionary VoxelDebugHooks::debug_raymarch_hole_probe(Vector3 origin, Vector3 di
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
 	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass()) return d;
-	const float aspect = static_cast<float>(w) / static_cast<float>(h);
-	const float tan_y = std::tan(1.0471975512f * 0.5f);
-	ve::CameraParams cam = ve::CameraParams::looking_at(
-			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
-	cam.params[0] = tan_y * aspect;
-	cam.params[1] = tan_y;
+	const float p[3] = {origin.x, origin.y, origin.z};
+	const float basis_f[3] = {dir.x, dir.y, dir.z};
+	const ve::ProbeCamera pc = ve::probe_camera(p, basis_f, w, h,
+			1.0471975512f, 0.05f, 4000.0f);
+	ve::CameraParams cam{};
+	for (int axis = 0; axis < 3; ++axis) {
+		cam.cam_pos[axis] = p[axis];
+		cam.cam_right[axis] = pc.right[axis];
+		cam.cam_up[axis] = pc.up[axis];
+		cam.cam_fwd[axis] = pc.fwd[axis];
+	}
+	cam.params[0] = pc.tan_x;
+	cam.params[1] = pc.tan_y;
 	cam.params[2] = 200.0f;
-	const ve::RegionWindow win = world_->region_window();
-	cam.dims[0] = win.dim; cam.dims[1] = win.dim;
-	cam.dims[2] = win.dim; cam.dims[3] = world_->island_slot_count();
-	cam.region_origin[0] = win.origin.x; cam.region_origin[1] = win.origin.y; cam.region_origin[2] = win.origin.z;
-	cam.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
-	cam.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
-	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
-	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
+	ve::set_near_field_world(&cam, world_->region_window(), world_->island_slot_count(),
+			world_->store_->config().atlas_bricks);
+	ve::set_near_field_flags(&cam, ve::pack_flags(world_->beauty_settings()));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, w, h, kNoEdit, world_->field_context())) return d;
 	device->submit();
@@ -3386,21 +3412,23 @@ Dictionary VoxelDebugHooks::debug_raymarch_normal_probe(Vector3 origin, Vector3 
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
 	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass()) return d;
-	const float aspect = static_cast<float>(w) / static_cast<float>(h);
-	const float tan_y = std::tan(1.0471975512f * 0.5f);
-	ve::CameraParams cam = ve::CameraParams::looking_at(
-			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
-	cam.params[0] = tan_y * aspect;
-	cam.params[1] = tan_y;
+	const float p[3] = {origin.x, origin.y, origin.z};
+	const float f[3] = {dir.x, dir.y, dir.z};
+	const ve::ProbeCamera pc = ve::probe_camera(p, f, w, h,
+			1.0471975512f, 0.05f, 4000.0f);
+	ve::CameraParams cam{};
+	for (int axis = 0; axis < 3; ++axis) {
+		cam.cam_pos[axis] = p[axis];
+		cam.cam_right[axis] = pc.right[axis];
+		cam.cam_up[axis] = pc.up[axis];
+		cam.cam_fwd[axis] = pc.fwd[axis];
+	}
+	cam.params[0] = pc.tan_x;
+	cam.params[1] = pc.tan_y;
 	cam.params[2] = 200.0f;
-	const ve::RegionWindow win = world_->region_window();
-	cam.dims[0] = win.dim; cam.dims[1] = win.dim;
-	cam.dims[2] = win.dim; cam.dims[3] = world_->island_slot_count();
-	cam.region_origin[0] = win.origin.x; cam.region_origin[1] = win.origin.y; cam.region_origin[2] = win.origin.z;
-	cam.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
-	cam.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
-	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
-	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
+	ve::set_near_field_world(&cam, world_->region_window(), world_->island_slot_count(),
+			world_->store_->config().atlas_bricks);
+	ve::set_near_field_flags(&cam, ve::pack_flags(world_->beauty_settings()));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, w, h, kNoEdit, world_->field_context())) return d;
 	device->submit();
@@ -3543,21 +3571,23 @@ Dictionary VoxelDebugHooks::debug_island_normal_probe(int island_slot, Vector3 o
 	const ve::VolumeData *vol = world_->store_->volumes().get(volume_slot);
 	if (!vol || !vol->has_normals() || vol->dim != dim) return d;
 
-	const float aspect = static_cast<float>(w) / static_cast<float>(h);
-	const float tan_y = std::tan(1.0471975512f * 0.5f);
-	ve::CameraParams cam = ve::CameraParams::looking_at(
-			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
-	cam.params[0] = tan_y * aspect;
-	cam.params[1] = tan_y;
+	const float p[3] = {origin.x, origin.y, origin.z};
+	const float basis_f[3] = {dir.x, dir.y, dir.z};
+	const ve::ProbeCamera pc = ve::probe_camera(p, basis_f, w, h,
+			1.0471975512f, 0.05f, 4000.0f);
+	ve::CameraParams cam{};
+	for (int axis = 0; axis < 3; ++axis) {
+		cam.cam_pos[axis] = p[axis];
+		cam.cam_right[axis] = pc.right[axis];
+		cam.cam_up[axis] = pc.up[axis];
+		cam.cam_fwd[axis] = pc.fwd[axis];
+	}
+	cam.params[0] = pc.tan_x;
+	cam.params[1] = pc.tan_y;
 	cam.params[2] = 200.0f;
-	const ve::RegionWindow win = world_->region_window();
-	cam.dims[0] = win.dim; cam.dims[1] = win.dim;
-	cam.dims[2] = win.dim; cam.dims[3] = world_->island_slot_count();
-	cam.region_origin[0] = win.origin.x; cam.region_origin[1] = win.origin.y; cam.region_origin[2] = win.origin.z;
-	cam.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
-	cam.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
-	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
-	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
+	ve::set_near_field_world(&cam, world_->region_window(), world_->island_slot_count(),
+			world_->store_->config().atlas_bricks);
+	ve::set_near_field_flags(&cam, ve::pack_flags(world_->beauty_settings()));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, w, h, kNoEdit, world_->field_context())) return d;
 	device->submit();
@@ -3719,35 +3749,27 @@ Dictionary VoxelDebugHooks::debug_ssr_probe(int fixture, int w, int h) {
 	if (!world_->gbuffer()->ensure(device, nullptr, size) || !world_->beauty_camera()->ensure(device)) return d;
 	const float camera_pos[3] = {20.0f, 75.0f, 20.0f};
 	const float camera_fwd[3] = {0.0f, -1.0f, 0.0f};
-	const float camera_up[3] = {0.0f, 0.0f, -1.0f};
-	const float aspect = static_cast<float>(width) / static_cast<float>(height);
-	const ve::LodCamera camera = ve::lod_camera_perspective(camera_pos, camera_fwd, camera_up,
-			1.0471975512f, aspect, 0.05f, 4000.0f, width, height);
+	const ve::ProbeCamera pc = ve::probe_camera(camera_pos, camera_fwd, width, height,
+			1.0471975512f, 0.05f, 4000.0f);
 	Projection view_proj;
 	for (int c = 0; c < 4; c++)
-		for (int r = 0; r < 4; r++) view_proj.columns[c][r] = camera.view_proj[c * 4 + r];
+		for (int r = 0; r < 4; r++) view_proj.columns[c][r] = pc.lod.view_proj[c * 4 + r];
 	float normal[3] = {0.6f, 0.8f, 0.0f};
 	float oct[2];
 	ve::oct_encode(normal, oct);
-	ve::CameraParams camera_params = ve::CameraParams::looking_at(
-			camera_pos[0], camera_pos[1], camera_pos[2], camera_fwd[0], camera_fwd[1], camera_fwd[2],
-			camera_up[0], camera_up[1], camera_up[2]);
-	camera_params.params[0] = std::tan(1.0471975512f * 0.5f) * aspect;
-	camera_params.params[1] = std::tan(1.0471975512f * 0.5f);
+	ve::CameraParams camera_params{};
+	for (int axis = 0; axis < 3; ++axis) {
+		camera_params.cam_pos[axis] = camera_pos[axis];
+		camera_params.cam_right[axis] = pc.right[axis];
+		camera_params.cam_up[axis] = pc.up[axis];
+		camera_params.cam_fwd[axis] = pc.fwd[axis];
+	}
+	camera_params.params[0] = pc.tan_x;
+	camera_params.params[1] = pc.tan_y;
 	camera_params.params[2] = 200.0f;
-	const ve::RegionWindow win = world_->region_window();
-	camera_params.dims[0] = win.dim;
-	camera_params.dims[1] = win.dim;
-	camera_params.dims[2] = win.dim;
-	camera_params.dims[3] = world_->island_slot_count();
-	camera_params.region_origin[0] = win.origin.x;
-	camera_params.region_origin[1] = win.origin.y;
-	camera_params.region_origin[2] = win.origin.z;
-	camera_params.atlas_bricks[0] = world_->store_->config().atlas_bricks.x;
-	camera_params.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
-	camera_params.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
-	const uint32_t probe_flags = ve::pack_flags(settings);
-	std::memcpy(&camera_params.cam_pos[3], &probe_flags, sizeof(float));
+	ve::set_near_field_world(&camera_params, world_->region_window(), world_->island_slot_count(),
+			world_->store_->config().atlas_bricks);
+	ve::set_near_field_flags(&camera_params, ve::pack_flags(settings));
 	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), camera_params, width, height,
 			no_edit, world_->field_context())) return d;
@@ -4199,20 +4221,19 @@ Dictionary VoxelDebugHooks::debug_glossy_sdf_probe(Vector3 origin, Vector3 dir) 
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
 	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass()) return d;
+	const Vector3 forward = dir.normalized();
+	const float f[3] = {forward.x, forward.y, forward.z};
+	float up[3];
+	ve::probe_up_hint(f, up);
 	ve::CameraParams cam = ve::CameraParams::looking_at(
-			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
+			origin.x, origin.y, origin.z, f[0], f[1], f[2], up[0], up[1], up[2]);
 	cam.params[0] = 0.0f;
 	cam.params[1] = 0.0f;
 	cam.params[2] = 200.0f;
 	cam.params[3] = -1.0f;
-	const ve::RegionWindow win = world_->region_window();
-	cam.dims[0] = win.dim; cam.dims[1] = win.dim;
-	cam.dims[2] = win.dim; cam.dims[3] = world_->island_slot_count();
-	cam.region_origin[0] = win.origin.x; cam.region_origin[1] = win.origin.y; cam.region_origin[2] = win.origin.z;
-	cam.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
-	cam.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
-	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
-	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
+	ve::set_near_field_world(&cam, world_->region_window(), world_->island_slot_count(),
+			world_->store_->config().atlas_bricks);
+	ve::set_near_field_flags(&cam, ve::pack_flags(world_->beauty_settings()));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, 1, 1, kNoEdit, world_->field_context())) return d;
 	device->submit();
@@ -4585,34 +4606,24 @@ Dictionary VoxelDebugHooks::debug_near_field_detail(Vector3 pos, Vector3 fwd, in
 
 	const float p[3] = {pos.x, pos.y, pos.z};
 	const float f[3] = {fwd.x, fwd.y, fwd.z};
-	const float up[3] = {0.0f, std::fabs(fwd.y) > 0.9f ? 0.0f : 1.0f,
-			std::fabs(fwd.y) > 0.9f ? 1.0f : 0.0f};
 	const float fov_y = 1.0471975512f;
-	const float aspect = static_cast<float>(w) / static_cast<float>(h);
-	const float tan_y = std::tan(fov_y * 0.5f);
-	const float tan_x = tan_y * aspect;
-	const ve::LodCamera cam = ve::lod_camera_perspective(p, f, up, fov_y, aspect, 0.05f, 4000.0f, w, h);
+	const ve::ProbeCamera pc = ve::probe_camera(p, f, w, h, fov_y, 0.05f, 4000.0f);
 	Projection view_proj;
 	for (int c = 0; c < 4; c++)
-		for (int r = 0; r < 4; r++) view_proj.columns[c][r] = cam.view_proj[c * 4 + r];
-	ve::CameraParams cp = ve::CameraParams::looking_at(pos.x, pos.y, pos.z,
-			fwd.x, fwd.y, fwd.z, up[0], up[1], up[2]);
-	cp.params[0] = tan_x;
-	cp.params[1] = tan_y;
+		for (int r = 0; r < 4; r++) view_proj.columns[c][r] = pc.lod.view_proj[c * 4 + r];
+	ve::CameraParams cp{};
+	for (int axis = 0; axis < 3; ++axis) {
+		cp.cam_pos[axis] = p[axis];
+		cp.cam_right[axis] = pc.right[axis];
+		cp.cam_up[axis] = pc.up[axis];
+		cp.cam_fwd[axis] = pc.fwd[axis];
+	}
+	cp.params[0] = pc.tan_x;
+	cp.params[1] = pc.tan_y;
 	cp.params[2] = 200.0f;
-	const ve::RegionWindow win = world_->region_window();
-	cp.dims[0] = win.dim;
-	cp.dims[1] = win.dim;
-	cp.dims[2] = win.dim;
-	cp.dims[3] = world_->island_slot_count();
-	cp.region_origin[0] = win.origin.x;
-	cp.region_origin[1] = win.origin.y;
-	cp.region_origin[2] = win.origin.z;
-	cp.atlas_bricks[0] = world_->store_->config().atlas_bricks.x;
-	cp.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
-	cp.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
-	const uint32_t flags = ve::pack_flags(world_->beauty_settings());
-	std::memcpy(&cp.cam_pos[3], &flags, sizeof(float));
+	ve::set_near_field_world(&cp, world_->region_window(), world_->island_slot_count(),
+			world_->store_->config().atlas_bricks);
+	ve::set_near_field_flags(&cp, ve::pack_flags(world_->beauty_settings()));
 
 	const int rw = std::max(1, static_cast<int>(static_cast<float>(w) * march_scale));
 	const int rh = std::max(1, static_cast<int>(static_cast<float>(h) * march_scale));
@@ -5089,21 +5100,20 @@ bool VoxelDebugHooks::probe_material(int mat, Vector3 p, Vector3 n, float rgb[3]
 	RenderingDevice *device = world_->rd();
 	if (!world_->initialized_ || !device || !world_->atlas() || !world_->material_atlas() || !world_->raymarch_pass())
 		return false;
+	const Vector3 forward = n.normalized();
+	const float f[3] = {forward.x, forward.y, forward.z};
+	float up[3];
+	ve::probe_up_hint(f, up);
 	ve::CameraParams cam = ve::CameraParams::looking_at(
-			p.x, p.y, p.z, n.x, n.y, n.z, 0, 1, 0);
+			p.x, p.y, p.z, f[0], f[1], f[2], up[0], up[1], up[2]);
 	// pc.params.w is the debug-probe flag in raymarch.comp.glsl; cam_pos and cam_fwd carry
 	// the sample point and normal.
 	cam.params[0] = 0.0f;
 	cam.params[1] = 0.0f;
 	cam.params[2] = 0.0f;
 	cam.params[3] = static_cast<float>(mat);
-	const ve::RegionWindow win = world_->region_window();
-	cam.dims[0] = win.dim; cam.dims[1] = win.dim;
-	cam.dims[2] = win.dim;
-	cam.dims[3] = world_->island_slot_count();
-	cam.region_origin[0] = win.origin.x; cam.region_origin[1] = win.origin.y; cam.region_origin[2] = win.origin.z;
-	cam.atlas_bricks[0] = world_->store_->config().atlas_bricks.x; cam.atlas_bricks[1] = world_->store_->config().atlas_bricks.y;
-	cam.atlas_bricks[2] = world_->store_->config().atlas_bricks.z;
+	ve::set_near_field_world(&cam, world_->region_window(), world_->island_slot_count(),
+			world_->store_->config().atlas_bricks);
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, 1, 1,
 			kNoEdit, world_->field_context()))

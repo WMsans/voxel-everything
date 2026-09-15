@@ -16,7 +16,6 @@
 #include "render/ssgi_pass.h"
 #include "render/ssr_pass.h"
 #include "render/outline_pass.h"
-#include "beauty_compositor.h"
 #include "render/region_pass.h"
 #include "render/brick_gen_pass.h"
 #include "render/world_streamer.h"
@@ -506,15 +505,8 @@ VoxelWorld::~VoxelWorld() {
 	ve::clear_shader_source_overrides();
 }
 
-// Moved verbatim into RenderOrchestrator (Task 12); one-line delegations so the
-// compositor's world->downsample_history() and world->finish_beauty_frame() compile
-// unchanged.
 bool VoxelWorld::downsample_history(RenderingDevice *rd, RID src, GBuffer &gb) {
 	return context_.render->downsample_history(rd, src, gb);
-}
-
-void VoxelWorld::finish_beauty_frame(const float view_proj[16]) {
-	context_.render->finish_beauty_frame(view_proj);
 }
 
 void VoxelWorld::teardown_gpu() {
@@ -1208,32 +1200,6 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 
 
 
-
-bool VoxelWorld::render_probe_pixel(Vector3 origin, Vector3 dir) {
-	ensure_initialized();
-	RenderingDevice *device = rd();
-	if (!initialized_ || !device || !atlas() || !material_atlas() || !raymarch_pass())
-		return false;
-	// The probe is a read-only diagnostic: it must not mutate the streamed world.
-	ve::CameraParams cam = ve::CameraParams::looking_at(
-			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
-	const ve::RegionWindow win = region_window();
-	cam.dims[0] = win.dim; cam.dims[1] = win.dim;
-	cam.dims[2] = win.dim;
-	cam.dims[3] = island_slot_count();
-	cam.region_origin[0] = win.origin.x; cam.region_origin[1] = win.origin.y; cam.region_origin[2] = win.origin.z;
-	cam.atlas_bricks[0] = store_->config().atlas_bricks.x; cam.atlas_bricks[1] = store_->config().atlas_bricks.y;
-	cam.atlas_bricks[2] = store_->config().atlas_bricks.z;
-	const uint32_t flags = ve::pack_flags(beauty_settings());
-	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
-	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!raymarch_pass()->render(device, *atlas(), islands(), RID(), cam, 1, 1,
-			kNoEdit, field_context()))
-		return false;
-	device->submit();
-	device->sync();
-	return true;
-}
 
 
 
