@@ -6,7 +6,7 @@ import platform
 api_version = "4.7"
 env = SConscript("godot-cpp/SConstruct", exports="api_version")
 env.Append(CPPPATH=["src/"])
-sources = Glob("src/*.cpp") + Glob("src/*/*.cpp")
+sources = Glob("src/*.cpp") + Glob("src/*/*.cpp") + Glob("src/*/*/*.cpp")
 lib = env.SharedLibrary("bin/voxel_everything{}{}".format(env["suffix"], env["SHLIBSUFFIX"]), source=sources)
 Default(lib)
 
