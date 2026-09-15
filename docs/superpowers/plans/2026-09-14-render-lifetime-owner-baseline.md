@@ -55,3 +55,11 @@ Appended by later tasks: bite proofs, attributions, per-milestone gate results.
 - Native: `(cd extension && scons -Q test) 2>&1 | tail -3` — `551/551` test cases passed, `9,117,142/9,117,142` assertions passed, status success.
 - gdUnit: the requested eleven-suite launcher exited 1 before discovery with the known pre-existing `GdUnitTestCIRunner` parse error; no launcher repair or test modification was made.
 - Result: build/native match Task 7; teardown trace source remains `passes, streamer, residency, island_graph, island_slots, atlas, lod, history, initialized`; gdUnit remains blocked before discovery by the same known launcher error.
+
+### Task 9 gate
+- Recorded 2026-09-15 at HEAD `26e5f8f` before commit.
+- Static ownership gates: `git diff --check` passed; `FrameHost` and obsolete `VoxelWorld` frame/handoff forwarders had no executable residuals; `LodSystem` precedes `render_` in `VoxelWorld`; `VoxelFrame` is the final `RenderOrchestrator` member; no pass/shader/test files changed; no new locks or stage-order edits.
+- Build: `./build.sh -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)` exited 0; `Build OK`, universal macOS debug dylib linked.
+- Native: `(cd extension && scons -Q test) 2>&1 | tail -3` — `551/551` test cases passed, `9,117,142/9,117,142` assertions passed, status success.
+- gdUnit: the requested ten-suite launcher exited 1 before discovery with the known pre-existing `GdUnitTestCIRunner` parse error; no launcher repair or test modification was made.
+- Result: build/native match Task 8; shipped golden/test sources are unchanged; gdUnit remains blocked before discovery by the same known launcher error.

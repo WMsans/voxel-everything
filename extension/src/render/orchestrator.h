@@ -188,6 +188,9 @@ public:
 	bool sun_cascade_min_level() const { return sun_cascade_min_level_; }
 	// Everything VoxelFrame samples once per frame.
 	FrameSettings frame_settings() const;
+	// The one ordered run of every voxel render stage (render/frame.h). Compositors and the
+	// headless debug probes call it.
+	VoxelFrame &frame() { return frame_; }
 
 	// Address-of slots for collaborators (ConsolidationCoordinator wiring) that
 	// re-read lazily-created objects at every use.
@@ -363,6 +366,7 @@ private:
 	mutable std::mutex beauty_mutex_;
 	int quality_tier_ = static_cast<int>(ve::QualityTier::kHigh);
 	ve::BeautySettings beauty_ = ve::settings_for_tier(ve::QualityTier::kHigh);
+	VoxelFrame frame_;
 };
 
 // Compositor callbacks can outlive the SceneTree during SceneTree::quit(). Admission

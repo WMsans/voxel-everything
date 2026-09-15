@@ -42,12 +42,14 @@
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <cstring>
+#include <utility>
 
 using namespace godot;
 
 namespace godot {
 
-RenderOrchestrator::RenderOrchestrator(Collaborators handles) : handles_(handles) {}
+RenderOrchestrator::RenderOrchestrator(Collaborators handles) :
+		handles_(std::move(handles)), frame_(*this, *handles_.lod, *handles_.store) {}
 
 RenderingDevice *RenderOrchestrator::acquire_device() {
 	// Guard: main/render-thread use OUTSIDE a frame only. Mid-frame acquisition (e.g.

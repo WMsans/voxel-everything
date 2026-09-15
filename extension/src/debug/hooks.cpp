@@ -372,14 +372,14 @@ Dictionary VoxelDebugHooks::debug_contact_shadow_probe(Vector3 pos, Vector3 fwd,
 	if (w <= 0 || h <= 0) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->is_initialized() || !device || !world_->frame() || !world_->contact_shadow_pass()) return d;
+	if (!world_->is_initialized() || !device || !world_->contact_shadow_pass()) return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++)
 		quiet = debug_stream_frame(pos) == 0 ? quiet + 1 : 0;
 	// Both halves of the shipped frame, split at the opaque boundary so scene colour can be
 	// captured between them: `before` is what inject left, the scene colour afterwards is what
 	// the post-opaque stages (contact shadows, then SSR and outlines) made of it.
-	VoxelFrame *frame = world_->frame();
+	VoxelFrame *frame = &world_->context().render->frame();
 	const FrameInputs in = frame->prepare_headless(device, VoxelFrame::looking_at(pos, fwd, w, h));
 	if (!in.scene_color.is_valid()) return d;
 	frame->render_pre_opaque(device, in);
@@ -454,7 +454,7 @@ Dictionary VoxelDebugHooks::debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, in
 	if (w <= 0 || h <= 0 || frames <= 0) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->is_initialized() || !device || !world_->frame() || !world_->gbuffer() || !world_->ssgi_pass())
+	if (!world_->is_initialized() || !device || !world_->gbuffer() || !world_->ssgi_pass())
 		return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++)
@@ -464,10 +464,10 @@ Dictionary VoxelDebugHooks::debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, in
 	bool ran = false;
 	const FrameInputs in = VoxelFrame::looking_at(pos, fwd, w, h);
 	for (int i = 0; i < frames; i++) {
-		world_->frame()->render_headless(device, in);
+		world_->context().render->frame().render_headless(device, in);
 		device->submit();
 		device->sync();
-		ran = ran || world_->frame()->last_frame().stage_ok(kStageSsgi);
+		ran = ran || world_->context().render->frame().last_frame().stage_ok(kStageSsgi);
 	}
 	d["ran"] = ran;
 	const RID output = world_->ssgi_pass()->result();
@@ -524,17 +524,17 @@ Dictionary VoxelDebugHooks::debug_ssao_probe(Vector3 pos, Vector3 fwd, int w, in
 	if (w <= 0 || h <= 0) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->is_initialized() || !device || !world_->frame() || !world_->gbuffer() || !world_->ssao_pass())
+	if (!world_->is_initialized() || !device || !world_->gbuffer() || !world_->ssao_pass())
 		return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++)
 		quiet = debug_stream_frame(pos) == 0 ? quiet + 1 : 0;
 	// The shipped frame, headless: SSAO runs only when the beauty flags give it work, over the
 	// G-buffer the frame composited at near_field_scale, marched to the fade band.
-	world_->frame()->render_headless(device, VoxelFrame::looking_at(pos, fwd, w, h));
+	world_->context().render->frame().render_headless(device, VoxelFrame::looking_at(pos, fwd, w, h));
 	device->submit();
 	device->sync();
-	const bool ran = world_->frame()->last_frame().stage_ok(kStageSsao);
+	const bool ran = world_->context().render->frame().last_frame().stage_ok(kStageSsao);
 	d["ran"] = ran;
 	{
 		const PackedByteArray lit = device->texture_get_data(world_->gbuffer()->lit(), 0);
@@ -615,7 +615,7 @@ Dictionary VoxelDebugHooks::debug_ssgi_reprojection_probe(Vector3 previous_pos, 
 	if (w <= 0 || h <= 0) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->is_initialized() || !device || !world_->frame() || !world_->gbuffer() || !world_->ssgi_pass())
+	if (!world_->is_initialized() || !device || !world_->gbuffer() || !world_->ssgi_pass())
 		return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++)
@@ -626,10 +626,10 @@ Dictionary VoxelDebugHooks::debug_ssgi_reprojection_probe(Vector3 previous_pos, 
 	// same current camera gathers through the current mapping. Their difference is what a
 	// broken reprojection would erase.
 	auto render = [&](Vector3 camera_pos, Vector3 camera_fwd) {
-		world_->frame()->render_headless(device, VoxelFrame::looking_at(camera_pos, camera_fwd, w, h));
+		world_->context().render->frame().render_headless(device, VoxelFrame::looking_at(camera_pos, camera_fwd, w, h));
 		device->submit();
 		device->sync();
-		return world_->frame()->last_frame().stage_ok(kStageSsgi);
+		return world_->context().render->frame().last_frame().stage_ok(kStageSsgi);
 	};
 	auto read_luma = [&]() {
 		const Vector2i half = world_->gbuffer()->half_size();
@@ -953,7 +953,7 @@ int VoxelDebugHooks::debug_island_frame(float dt, Vector3 center) {
 	// half of the handoff has to happen here too.
 	RenderingDevice *device = world_->rd();
 	if (device) {
-		world_->drain_island_uploads(device);
+		world_->context().render->drain_island_uploads(device);
 		device->submit();
 		device->sync();
 	}
@@ -1363,7 +1363,7 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 	debug_lod_tick(pos, fwd);
 
 	RenderingDevice *device = world_->rd();
-	if (!world_->is_initialized() || !device || !world_->frame() || !world_->gbuffer() ||
+	if (!world_->is_initialized() || !device || !world_->gbuffer() ||
 			!world_->raymarch_pass() || !world_->composite_pass() || !world_->lod_raster_pass())
 		return d;
 	// The classification below reads the marcher's hitpos per FULL-resolution pixel.
@@ -1426,10 +1426,10 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 	in.debug.marker = marker;
 	in.debug.skip_far_field = skip_lod;
 	in.debug.lod_viewport = Vector2i(2560, 1440);
-	world_->frame()->render_headless(device, in);
+	world_->context().render->frame().render_headless(device, in);
 	device->submit();
 	device->sync();
-	const FrameRecord record = world_->frame()->last_frame();
+	const FrameRecord record = world_->context().render->frame().last_frame();
 	if (!record.stage_ok(kStageComposite) || !record.stage_ok(kStageInject)) {
 		cleanup();
 		return d;
@@ -1614,7 +1614,7 @@ Dictionary VoxelDebugHooks::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 }
 
 Dictionary VoxelDebugHooks::debug_lod_cull_debug() {
-	const FrameRecord r = world_->frame()->last_frame();
+	const FrameRecord r = world_->context().render->frame().last_frame();
 	Dictionary d;
 	d["two_phase"] = r.lod_two_phase;
 	d["hiz_built"] = r.hiz_built;
@@ -1671,11 +1671,11 @@ Dictionary VoxelDebugHooks::debug_grass_stats() {
 		const ve::LodCamera &cam = pc.lod;
 		float vp[16];
 		for (int k = 0; k < 16; k++) vp[k] = cam.view_proj[k];
-		const ve::GrassLayout gl = w->frame()->grass_layout(p, vp);
+		const ve::GrassLayout gl = w->context().render->frame().grass_layout(p, vp);
 		// w->rd() above already published this world's sun into the SunUbo, the same
 		// buffer the compositor hands the pass.
 		if (!w->sun_ubo() || !w->sun_ubo()->ensure(device)) return d;
-		if (!g->run(device, *atlas, gl, w->region_window(),
+		if (!g->run(device, *atlas, gl, w->context().store->region_window(),
 				static_cast<float>(w->beauty_frame()) / 60.0f, w->sun_ubo()->buffer())) return d;
 		// run()'s internal readback lands before the dispatch executes; the counters are
 		// only valid after a submit+sync, which the compositor does at frame end and the
@@ -2993,7 +2993,7 @@ PackedInt32Array VoxelDebugHooks::debug_island_tile_mask(Vector3 origin, Vector3
 	cam.params[0] = tan_x;
 	cam.params[1] = tan_y;
 	if (!world_->island_cull()->render(device, *world_->islands(), cam, width, height,
-				std::max(world_->island_slot_count(), 1)))
+				std::max(world_->context().render->island_slot_count(), 1)))
 		return out;
 	device->submit();
 	device->sync();
@@ -3161,7 +3161,7 @@ bool VoxelDebugHooks::render_probe_pixel(Vector3 origin, Vector3 dir) {
 	ve::probe_up_hint(f, up);
 	ve::CameraParams cam = ve::CameraParams::looking_at(
 			origin.x, origin.y, origin.z, f[0], f[1], f[2], up[0], up[1], up[2]);
-	ve::set_near_field_world(&cam, world_->region_window(), world_->island_slot_count(),
+	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
 			world_->store_->config().atlas_bricks);
 	ve::set_near_field_flags(&cam, ve::pack_flags(world_->beauty_settings()));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
@@ -3299,7 +3299,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_gbuffer(Vector3 origin, Vector3 dir) 
 	ve::probe_up_hint(f, up);
 	ve::CameraParams cam = ve::CameraParams::looking_at(
 			origin.x, origin.y, origin.z, f[0], f[1], f[2], up[0], up[1], up[2]);
-	ve::set_near_field_world(&cam, world_->region_window(), world_->island_slot_count(),
+	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
 			world_->store_->config().atlas_bricks);
 	ve::set_near_field_flags(&cam, ve::pack_flags(world_->beauty_settings()));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
@@ -3363,7 +3363,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_hole_probe(Vector3 origin, Vector3 di
 	cam.params[0] = pc.tan_x;
 	cam.params[1] = pc.tan_y;
 	cam.params[2] = 200.0f;
-	ve::set_near_field_world(&cam, world_->region_window(), world_->island_slot_count(),
+	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
 			world_->store_->config().atlas_bricks);
 	ve::set_near_field_flags(&cam, ve::pack_flags(world_->beauty_settings()));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
@@ -3417,7 +3417,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_normal_probe(Vector3 origin, Vector3 
 	cam.params[0] = pc.tan_x;
 	cam.params[1] = pc.tan_y;
 	cam.params[2] = 200.0f;
-	ve::set_near_field_world(&cam, world_->region_window(), world_->island_slot_count(),
+	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
 			world_->store_->config().atlas_bricks);
 	ve::set_near_field_flags(&cam, ve::pack_flags(world_->beauty_settings()));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
@@ -3576,7 +3576,7 @@ Dictionary VoxelDebugHooks::debug_island_normal_probe(int island_slot, Vector3 o
 	cam.params[0] = pc.tan_x;
 	cam.params[1] = pc.tan_y;
 	cam.params[2] = 200.0f;
-	ve::set_near_field_world(&cam, world_->region_window(), world_->island_slot_count(),
+	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
 			world_->store_->config().atlas_bricks);
 	ve::set_near_field_flags(&cam, ve::pack_flags(world_->beauty_settings()));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
@@ -3758,7 +3758,7 @@ Dictionary VoxelDebugHooks::debug_ssr_probe(int fixture, int w, int h) {
 	camera_params.params[0] = pc.tan_x;
 	camera_params.params[1] = pc.tan_y;
 	camera_params.params[2] = 200.0f;
-	ve::set_near_field_world(&camera_params, world_->region_window(), world_->island_slot_count(),
+	ve::set_near_field_world(&camera_params, world_->context().store->region_window(), world_->context().render->island_slot_count(),
 			world_->store_->config().atlas_bricks);
 	ve::set_near_field_flags(&camera_params, ve::pack_flags(settings));
 	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
@@ -4222,7 +4222,7 @@ Dictionary VoxelDebugHooks::debug_glossy_sdf_probe(Vector3 origin, Vector3 dir) 
 	cam.params[1] = 0.0f;
 	cam.params[2] = 200.0f;
 	cam.params[3] = -1.0f;
-	ve::set_near_field_world(&cam, world_->region_window(), world_->island_slot_count(),
+	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
 			world_->store_->config().atlas_bricks);
 	ve::set_near_field_flags(&cam, ve::pack_flags(world_->beauty_settings()));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
@@ -4467,7 +4467,7 @@ Dictionary VoxelDebugHooks::debug_deferred_probe(Vector3 pos, Vector3 fwd, int w
 			(probe_mode != 0 && probe_mode != 1 && probe_mode != 2 && probe_mode != 5)) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->is_initialized() || !device || !world_->frame() || !world_->gbuffer()) return d;
+	if (!world_->is_initialized() || !device || !world_->gbuffer()) return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++) {
 		quiet = debug_stream_frame(pos) == 0 ? quiet + 1 : 0;
@@ -4476,10 +4476,10 @@ Dictionary VoxelDebugHooks::debug_deferred_probe(Vector3 pos, Vector3 fwd, int w
 	// fade band, SSGI and SSAO are whatever the frame gave the deferred pass.
 	FrameInputs in = VoxelFrame::looking_at(pos, fwd, w, h);
 	in.debug.deferred_view = probe_mode;
-	world_->frame()->render_headless(device, in);
+	world_->context().render->frame().render_headless(device, in);
 	device->submit();
 	device->sync();
-	if (!world_->frame()->last_frame().stage_ok(kStageDeferred)) return d;
+	if (!world_->context().render->frame().last_frame().stage_ok(kStageDeferred)) return d;
 	const Projection view_proj = in.proj * Projection(in.cam.affine_inverse());
 	const Projection inv = view_proj.inverse();
 	const PackedByteArray data = device->texture_get_data(world_->gbuffer()->lit(), 0);
@@ -4612,7 +4612,7 @@ Dictionary VoxelDebugHooks::debug_near_field_detail(Vector3 pos, Vector3 fwd, in
 	cp.params[0] = pc.tan_x;
 	cp.params[1] = pc.tan_y;
 	cp.params[2] = 200.0f;
-	ve::set_near_field_world(&cp, world_->region_window(), world_->island_slot_count(),
+	ve::set_near_field_world(&cp, world_->context().store->region_window(), world_->context().render->island_slot_count(),
 			world_->store_->config().atlas_bricks);
 	ve::set_near_field_flags(&cp, ve::pack_flags(world_->beauty_settings()));
 
@@ -5103,7 +5103,7 @@ bool VoxelDebugHooks::probe_material(int mat, Vector3 p, Vector3 n, float rgb[3]
 	cam.params[1] = 0.0f;
 	cam.params[2] = 0.0f;
 	cam.params[3] = static_cast<float>(mat);
-	ve::set_near_field_world(&cam, world_->region_window(), world_->island_slot_count(),
+	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
 			world_->store_->config().atlas_bricks);
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->raymarch_pass()->render(device, *world_->atlas(), world_->islands(), RID(), cam, 1, 1,
@@ -5773,7 +5773,7 @@ int VoxelDebugHooks::debug_region_map_entry(Vector3i region) {
 	if (!world_->is_initialized() || !device || !world_->atlas()) return -1;
 	// Toroidal and total: every region has a cell, so there is no out-of-world -1 anymore.
 	// An unstreamed region reads the -1 the evict path (or the init fill) wrote to its cell.
-	const int idx = world_->region_window().index({region.x, region.y, region.z});
+	const int idx = world_->context().store->region_window().index({region.x, region.y, region.z});
 	const PackedByteArray b = device->buffer_get_data(world_->atlas()->region_map(), idx * 4, 4);
 	return b.size() >= 4 ? *reinterpret_cast<const int32_t *>(b.ptr()) : -1;
 }
@@ -5781,7 +5781,7 @@ int VoxelDebugHooks::debug_region_map_entry(Vector3i region) {
 bool VoxelDebugHooks::debug_region_map_consistent() {
 	RenderingDevice *device = world_->rd();
 	if (!world_->is_initialized() || !device || !world_->atlas() || !world_->store_->residency()) return false;
-	const ve::RegionWindow win = world_->region_window();
+	const ve::RegionWindow win = world_->context().store->region_window();
 	const PackedByteArray b = device->buffer_get_data(world_->atlas()->region_map());
 	const int32_t *map = reinterpret_cast<const int32_t *>(b.ptr());
 	// The index is toroidal and origin-independent, so the whole window is checked cell
@@ -5857,18 +5857,18 @@ Dictionary VoxelDebugHooks::debug_render_frame(Vector3 pos, Vector3 fwd, int w, 
 	if (w <= 0 || h <= 0 || !world_->get_use_local_device()) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->is_initialized() || !device || !world_->frame() || !world_->gbuffer()) return d;
+	if (!world_->is_initialized() || !device || !world_->gbuffer()) return d;
 	d["had_history"] = false;
-	FrameInputs in = world_->frame()->prepare_headless(device, VoxelFrame::looking_at(pos, fwd, w, h));
+	FrameInputs in = world_->context().render->frame().prepare_headless(device, VoxelFrame::looking_at(pos, fwd, w, h));
 	if (!in.scene_color.is_valid()) return d;
-	const bool pre = world_->frame()->render_pre_opaque(device, in);
+	const bool pre = world_->context().render->frame().render_pre_opaque(device, in);
 	d["had_history"] = world_->has_history();
-	const bool post = world_->frame()->render_post_opaque(device, in);
+	const bool post = world_->context().render->frame().render_post_opaque(device, in);
 	const bool ok = pre && post;
 	device->submit();
 	device->sync();
 	d["ok"] = ok;
-	write_frame_record(d, world_->frame()->last_frame());
+	write_frame_record(d, world_->context().render->frame().last_frame());
 	if (world_->gbuffer()->size() != Vector2i(w, h)) return d;
 	const PackedByteArray lit = device->texture_get_data(world_->gbuffer()->lit(), 0);
 	const int64_t pixels = static_cast<int64_t>(w) * h;

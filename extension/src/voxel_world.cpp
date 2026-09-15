@@ -463,8 +463,6 @@ VoxelWorld::VoxelWorld() {
 	// Sinks are never null from this point on, matching append_edit_locked's unguarded
 	// expectations.
 	store_->set_sinks(this, consolidation_.get());
-	// The frame references the orchestrator, LoD runtime and store; all three exist now.
-	frame_ = std::make_unique<VoxelFrame>(*render_, *lod_, *store_, *this);
 }
 
 VoxelWorld::~VoxelWorld() {
@@ -483,7 +481,7 @@ bool VoxelWorld::downsample_history(RenderingDevice *rd, RID src, GBuffer &gb) {
 }
 
 void VoxelWorld::teardown_gpu() {
-	if (frame_) frame_->release_gpu();
+	context_.render->frame().release_gpu();
 	// Whole method lives in RenderOrchestrator now (Task 13): the three teardown halves
 	// and the interleaved world-owned statements (streamer drain/delete, residency clear,
 	// island high-water mark, LoD pool/tree/page maps) run there via Collaborator
@@ -509,7 +507,7 @@ void VoxelWorld::_exit_tree() {
 	// explicit benchmark shutdown and normal SceneTree exit.
 	shutdown_render_resources();
 	// Frame-owned headless targets live on the local device, which release_devices() below drops.
-	if (frame_) frame_->release_gpu();
+	context_.render->frame().release_gpu();
 	teardown_physics();
 	// CPU cores survive GPU teardown; deleted here exactly where they were
 	// before the split, in the same residency -> edit log -> overrides order.
@@ -712,10 +710,6 @@ RenderingDevice *VoxelWorld::rd() const {
 	return device;
 }
 
-int VoxelWorld::island_slot_count() const {
-	return context_.render->island_slot_count();
-}
-
 void VoxelWorld::ensure_physics_initialized() {
 	if (physics_ready_) return;
 	// Physics-first worlds must see the same field the graphics init would install: the
@@ -852,10 +846,6 @@ void VoxelWorld::set_physics_bubble_radius_m(float v) {
 	if (colliders_) colliders_->set_body_bubble_radius_m(v);
 }
 
-int VoxelWorld::drain_island_uploads(RenderingDevice *device) {
-	return context_.render->drain_island_uploads(device);
-}
-
 
 
 
@@ -926,7 +916,7 @@ int VoxelWorld::sun_cascade_count() const {
 }
 
 ve::SunOrtho VoxelWorld::sun_ortho(int cascade) const {
-	return frame_->sun_ortho(cascade);
+	return context_.render->frame().sun_ortho(cascade);
 }
 
 void VoxelWorld::lod_fade_band(float *fade_start, float *fade_end) const {

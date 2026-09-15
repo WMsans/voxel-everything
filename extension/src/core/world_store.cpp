@@ -16,6 +16,10 @@ WorldStore::~WorldStore() {
 	release_cores();
 }
 
+ve::RegionWindow WorldStore::region_window() const {
+	return residency_ ? residency_->window() : ve::RegionWindow{};
+}
+
 void WorldStore::set_generator(ve::FieldGenerator *generator) {
 	if (generator == generator_) return;
 	delete generator_; // pre-init only: nothing can hold the old seam mid-evaluation

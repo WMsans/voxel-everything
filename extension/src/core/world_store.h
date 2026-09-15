@@ -137,6 +137,8 @@ public:
 	ve::OverrideStore *overrides() { return overrides_; }
 	ve::VolumeSet &volumes() { return volumes_; }
 	ve::RegionResidency *residency() { return residency_; }
+	// The near-field region map's current window; an empty window before residency exists.
+	ve::RegionWindow region_window() const;
 	const ve::WorldConfig &config() const { return config_; }
 	// --- named per-field config setters (the only write path into config_) ---
 	// Used by VoxelWorld's property setters: pre-init writes take effect at the next

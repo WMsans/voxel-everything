@@ -42,9 +42,8 @@
 
 using namespace godot;
 
-VoxelFrame::VoxelFrame(RenderOrchestrator &render, LodSystem &lod, WorldStore &store,
-		FrameHost &host) :
-		render_(render), lod_(lod), store_(store), host_(host) {}
+VoxelFrame::VoxelFrame(RenderOrchestrator &render, LodSystem &lod, WorldStore &store) :
+		render_(render), lod_(lod), store_(store) {}
 
 FrameRecord VoxelFrame::last_frame() const {
 	std::lock_guard<std::mutex> lock(record_mutex_);
@@ -62,11 +61,6 @@ void VoxelFrame::note_lod_cull(bool two_phase, bool hiz_built, int first_pass_co
 	record_.lod_two_phase = two_phase;
 	record_.hiz_built = hiz_built;
 	record_.lod_first_pass_count = first_pass_count;
-}
-
-// Was VoxelWorld::region_window().
-ve::RegionWindow VoxelFrame::region_window() const {
-	return store_.residency() ? store_.residency()->window() : ve::RegionWindow{};
 }
 
 // Was VoxelWorld::grass_reach_limit_m(); comment moved with it. Blades are scattered from
@@ -96,7 +90,7 @@ ve::SunOrtho VoxelFrame::sun_ortho(int cascade) const {
 	ve::SunCascade c[ve::kSunCascades];
 	const int n = ve::sun_cascades(store_.config().stream_radius_m, SunShadowPass::kSize, c);
 	if (n <= 0 || cascade < 0 || cascade >= n) return ve::SunOrtho();
-	const ve::SunState sun = host_.frame_settings().sun;
+	const ve::SunState sun = render_.frame_settings().sun;
 	// A scene light hands over a basis that rotates continuously; a bare direction has to
 	// have one derived, which is ill-conditioned near the zenith. Same choice as before.
 	return sun.has_basis()
@@ -107,7 +101,7 @@ ve::SunOrtho VoxelFrame::sun_ortho(int cascade) const {
 
 bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	reset_stages();
-	const FrameSettings settings = host_.frame_settings();
+	const FrameSettings settings = render_.frame_settings();
 	const bool near_field_enabled = settings.near_field_enabled;
 	if (!rd) return false;
 	const Vector2i size = in.size;
@@ -169,8 +163,8 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	// in this callback with no timing label, and in the edit leg it is the largest single
 	// contributor to a frame (M6 errata 3's 26.8 ms p99). Scope it before optimising it.
 	timings->begin(rd, "stream");
-	host_.drain_island_uploads(rd);
-	WorldStreamer *st = host_.streamer();
+	render_.drain_island_uploads(rd);
+	WorldStreamer *st = render_.streamer();
 	if (st) st->run_frame(rd, cam.origin.x, cam.origin.y, cam.origin.z);
 	end_stage(rd, kStageStream);
 	// run_frame() recentres the toroidal region window. Refresh the already-built camera
@@ -179,7 +173,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	// run_frame() recentred the toroidal region window; the world half of the push block is
 	// filled from the window it published. cull tiles (region_origin.w / atlas_bricks.w)
 	// are set by the island cull below.
-	ve::set_near_field_world(&cp, region_window(), host_.island_slot_count(),
+	ve::set_near_field_world(&cp, store_.region_window(), render_.island_slot_count(),
 			store_.config().atlas_bricks);
 	cp.region_origin[3] = 0;
 
@@ -234,7 +228,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		abort_frame();
 		return false;
 	}
-	const int islands = host_.island_slot_count();
+	const int islands = render_.island_slot_count();
 	IslandCullPass *cull = render_.island_cull();
 	RID mask;
 	timings->begin(rd, "raymarch");
@@ -407,7 +401,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		const ve::GrassLayout gl = grass_layout(grass_cam, grass_vp);
 		GrassRasterPass *grass_raster = render_.grass_raster_pass();
 		SunUbo *grass_sun = render_.sun_ubo();
-		const bool grass_ok = grass_sun && grass->run(rd, *atlas, gl, region_window(),
+		const bool grass_ok = grass_sun && grass->run(rd, *atlas, gl, store_.region_window(),
 				static_cast<float>(render_.beauty_frame()) / 60.0f, grass_sun->buffer()) &&
 				grass_raster && grass_raster->draw(rd, *grass, *gb, view_proj, cam_pos);
 		if (grass_ok) end_stage(rd, kStageGrass);

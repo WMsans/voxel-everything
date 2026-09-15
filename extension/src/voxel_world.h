@@ -87,7 +87,7 @@ class IslandAtlas;
 class IslandCullPass;
 struct IslandExtractJob;
 
-class VoxelWorld : public Node3D, public EditSink, public FrameHost {
+class VoxelWorld : public Node3D, public EditSink {
 	GDCLASS(VoxelWorld, Node3D)
 	// Strangler adapter: VoxelWorld satisfies WorldStore's notification ports and forwards
 	// to the fan-out logic. The EditSink half is permanent by ruling -- IslandManager keeps
@@ -121,6 +121,11 @@ class VoxelWorld : public Node3D, public EditSink, public FrameHost {
 	// consolidation_* members live there now; it satisfies WorldStore's ConsolidationSink
 	// port directly. Handles-only collaborators (addresses of the fields below).
 	std::unique_ptr<ConsolidationCoordinator> consolidation_;
+	// Owns the LoD runtime (Task 15): THE lod mutex, tree/walk/page-map/pool state plus tick/
+	// fade-band/op-gathering live in LodSystem now. Declared before render_: the orchestrator
+	// owns the frame, which references this LoD runtime, so the LoD runtime must be destroyed
+	// after it.
+	std::unique_ptr<LodSystem> lod_;
 	// GPU pass graph + device ownership (Task 12): every pass pointer, the downsample
 	// pipeline and main_rd_/local_rd_ live in RenderOrchestrator now; VoxelWorld keeps
 	// one-line delegations so external callers compile unchanged.
@@ -164,15 +169,6 @@ class VoxelWorld : public Node3D, public EditSink, public FrameHost {
 	std::vector<IslandBody *> test_bodies_;
 	float last_physics_tick_ms_ = 0.0f; // diagnostic; see debug_perf_stats
 
-	// Owns the LoD runtime (Task 15): THE lod mutex, tree/walk/page-map/pool state plus
-	// tick/fade-band/op-gathering live in LodSystem now; VoxelWorld keeps one-line
-	// delegations so the compositor and debug facade compile unchanged. Created BEFORE
-	// RenderOrchestrator, whose teardown calls its GPU-release step between atlas and
-	// history teardown.
-	std::unique_ptr<LodSystem> lod_;
-	// The frame (spec 2026-09-13): stage order + per-frame packing. Declared AFTER render_ and
-	// lod_ so it is destroyed before the collaborators it references.
-	std::unique_ptr<VoxelFrame> frame_;
 
 	// Shader hot reload + beauty settings moved verbatim into RenderOrchestrator
 	// (Task 14); VoxelWorld keeps one-line delegations and the ClassDB surface.
@@ -268,10 +264,6 @@ public:
 	NodePath get_physics_center_path() const { return physics_center_path_; }
 	void set_sun_light_path(const NodePath &p) { sun_light_path_ = p; }
 	NodePath get_sun_light_path() const { return sun_light_path_; }
-	// FrameHost: RenderOrchestrator samples the sun, near-field dial/toggle, and cascade
-	// clamp A/B knob together.
-	FrameSettings frame_settings() const override { return context_.render->frame_settings(); }
-	VoxelFrame *frame() { return frame_.get(); }
 	void set_physics_radius_m(float v) { physics_radius_m_ = v; }
 	float get_physics_radius_m() const { return physics_radius_m_; }
 	void set_physics_bubble_radius_m(float v);
@@ -342,14 +334,6 @@ public:
 	GpuAtlas *atlas() { return context_.render->atlas(); }
 	MaterialAtlas *material_atlas() { return context_.render->materials(); }
 	IslandAtlas *islands() { return context_.render->islands(); }
-	// High-water mark, not a population: the shader masks off bits at or above it and then
-	// tests each remaining slot's descriptor for dim >= 2, so a dead slot below the mark
-	// costs one branch and nothing else. Forwarded to RenderOrchestrator's handoff.
-	int island_slot_count() const override;
-	WorldStreamer *streamer() override { return context_.render->streamer(); }
-	// The near-field region map's current window. Read by RaymarchCompositor for the
-	// push constants and by the debug hooks.
-	ve::RegionWindow region_window() const { return store_->residency() ? store_->residency()->window() : ve::RegionWindow{}; }
 
 	// How far grass can actually be placed, in metres. Blades are scattered from resident
 	// BRICK data, so beyond the completely-resident radius stage 2's slot_at() returns -1
@@ -401,8 +385,6 @@ public:
 	bool downsample_history(RenderingDevice *rd, RID src, GBuffer &gb);
 	std::mutex &edit_mutex() { return store_->edit_mutex(); }
 	MeshService *mesh_service() { return mesh_; }
-	// Drained by RaymarchCompositor on the render thread; returns how many landed.
-	int drain_island_uploads(RenderingDevice *device) override;
 
 	// One-line delegation into RenderOrchestrator (Task 13); also called by the debug
 	// facade's forced-teardown probes. Every GPU object; CPU cores survive.
