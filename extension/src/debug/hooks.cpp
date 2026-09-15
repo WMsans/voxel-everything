@@ -3,6 +3,7 @@
 #include "../voxel_world.h"
 #include "render/frame.h"
 #include "render/frame_params.h"
+#include "render/orchestrator.h"
 #include "terrain/field_params_pack.h"
 #include <cstring>
 #include "mesh/consolidation.h"
@@ -692,21 +693,21 @@ Dictionary VoxelDebugHooks::debug_beauty_settings() {
 
 Dictionary VoxelDebugHooks::debug_perf_stats() {
 	Dictionary d;
-	d["physics_tick_ms"] = world_->last_physics_tick_ms_;
-	d["phys_collect_ms"] = world_->colliders_ ? world_->colliders_->last_collect_ms() : 0.0f;
-	d["phys_apply_ms"] = world_->colliders_ ? world_->colliders_->last_apply_ms() : 0.0f;
-	d["phys_faces_ms"] = world_->colliders_ ? world_->colliders_->last_faces_ms() : 0.0f;
-	d["phys_setdata_ms"] = world_->colliders_ ? world_->colliders_->last_setdata_ms() : 0.0f;
+	d["physics_tick_ms"] = world_->stats().last_physics_tick_ms;
+	d["phys_collect_ms"] = world_->colliders() ? world_->colliders()->last_collect_ms() : 0.0f;
+	d["phys_apply_ms"] = world_->colliders() ? world_->colliders()->last_apply_ms() : 0.0f;
+	d["phys_faces_ms"] = world_->colliders() ? world_->colliders()->last_faces_ms() : 0.0f;
+	d["phys_setdata_ms"] = world_->colliders() ? world_->colliders()->last_setdata_ms() : 0.0f;
 	// `build_ms` is the maximum one octant build call in the measured physics frame, not
 	// the sum of all octant calls. This is the value exported into BENCH max_ms.
-	d["build_ms"] = world_->colliders_ ? world_->colliders_->last_build_ms() : 0.0f;
-	d["phys_body_ms"] = world_->colliders_ ? world_->colliders_->last_body_ms() : 0.0f;
-	d["phys_tris"] = world_->colliders_ ? world_->colliders_->last_tris() : 0;
-	d["phys_plan_ms"] = world_->colliders_ ? world_->colliders_->last_plan_ms() : 0.0f;
-	d["phys_submit_ms"] = world_->colliders_ ? world_->colliders_->last_submit_ms() : 0.0f;
+	d["build_ms"] = world_->colliders() ? world_->colliders()->last_build_ms() : 0.0f;
+	d["phys_body_ms"] = world_->colliders() ? world_->colliders()->last_body_ms() : 0.0f;
+	d["phys_tris"] = world_->colliders() ? world_->colliders()->last_tris() : 0;
+	d["phys_plan_ms"] = world_->colliders() ? world_->colliders()->last_plan_ms() : 0.0f;
+	d["phys_submit_ms"] = world_->colliders() ? world_->colliders()->last_submit_ms() : 0.0f;
 	d["stream_total_ms"] = world_->context().render->streamer() ? world_->context().render->streamer()->last_total_ms() : 0.0f;
 	d["stream_readback_ms"] = world_->context().render->streamer() ? world_->context().render->streamer()->last_readback_ms() : 0.0f;
-	d["island_ms"] = world_->island_manager_ ? world_->island_manager_->last_ms() : 0.0f;
+	d["island_ms"] = world_->island_manager() ? world_->island_manager()->last_ms() : 0.0f;
 	// lod_ms is CPU command-record time for the LoD raster + cull passes, not GPU execution
 	// time. See LodRasterPass/LodCullPass::last_ms comments.
 	d["lod_ms"] = (world_->context().render->passes().lod_raster ? world_->context().render->passes().lod_raster->last_ms() : 0.0f) +
@@ -728,25 +729,25 @@ void VoxelDebugHooks::debug_set_physics_bubbles(const PackedVector3Array &center
 		flat.push_back(c.y);
 		flat.push_back(c.z);
 	}
-	world_->physics_bubble_centers_.swap(flat);
+	world_->physics_bubble_centers().swap(flat);
 }
 
 Dictionary VoxelDebugHooks::debug_physics_stats() {
 	Dictionary d;
-	d["chunks_resident"] = world_->chunks_ ? world_->chunks_->resident_count() : 0;
-	d["chunks_pending"] = world_->chunks_ ? world_->chunks_->pending_count() : 0;
-	d["probe_cache"] = world_->chunks_ ? world_->chunks_->probe_cache_size() : 0;
+	d["chunks_resident"] = world_->chunk_residency() ? world_->chunk_residency()->resident_count() : 0;
+	d["chunks_pending"] = world_->chunk_residency() ? world_->chunk_residency()->pending_count() : 0;
+	d["probe_cache"] = world_->chunk_residency() ? world_->chunk_residency()->probe_cache_size() : 0;
 	// `bodies` preserves the historical chunk count used by the physics tests and HUD.
 	// `bodies_raw` exposes the eight-way implementation detail for profiling only.
-	d["bodies"] = world_->colliders_ ? world_->colliders_->active_bodies() : 0;
-	d["bodies_raw"] = world_->colliders_ ? world_->colliders_->bodies_in_space() : 0;
-	d["max_build_tris"] = world_->colliders_ ? world_->colliders_->max_build_tris() : 0;
-	d["max_chunk_tris"] = world_->colliders_ ? world_->colliders_->max_chunk_tris() : 0;
-	d["builds"] = world_->colliders_ ? world_->colliders_->builds_last_frame() : 0;
-	d["queued"] = world_->colliders_ ? world_->colliders_->queued_results() : 0;
-	d["failures"] = world_->colliders_ ? world_->colliders_->failures() : 0;
-	d["build_ms"] = world_->colliders_ ? world_->colliders_->last_build_ms() : 0.0f;
-	d["collect_ms"] = world_->colliders_ ? world_->colliders_->last_collect_ms() : 0.0f;
+	d["bodies"] = world_->colliders() ? world_->colliders()->active_bodies() : 0;
+	d["bodies_raw"] = world_->colliders() ? world_->colliders()->bodies_in_space() : 0;
+	d["max_build_tris"] = world_->colliders() ? world_->colliders()->max_build_tris() : 0;
+	d["max_chunk_tris"] = world_->colliders() ? world_->colliders()->max_chunk_tris() : 0;
+	d["builds"] = world_->colliders() ? world_->colliders()->builds_last_frame() : 0;
+	d["queued"] = world_->colliders() ? world_->colliders()->queued_results() : 0;
+	d["failures"] = world_->colliders() ? world_->colliders()->failures() : 0;
+	d["build_ms"] = world_->colliders() ? world_->colliders()->last_build_ms() : 0.0f;
+	d["collect_ms"] = world_->colliders() ? world_->colliders()->last_collect_ms() : 0.0f;
 	return d;
 }
 
@@ -764,8 +765,8 @@ int VoxelDebugHooks::debug_island_descriptors_pending() {
 
 PackedInt32Array VoxelDebugHooks::debug_mesh_volume_slots() {
 	PackedInt32Array out;
-	if (!world_->mesh_) return out;
-	for (int slot : world_->mesh_->debug_submitted_volume_slots()) out.append(slot);
+	if (!world_->mesh_service()) return out;
+	for (int slot : world_->mesh_service()->debug_submitted_volume_slots()) out.append(slot);
 	return out;
 }
 
@@ -809,7 +810,7 @@ void VoxelDebugHooks::debug_queue_committed_field_volume_upload(int slot,
 				"debug_queue_committed_field_volume_upload: short buffers for dim ", dim);
 		return;
 	}
-	if (!world_->store_->volumes().reserve(slot)) {
+	if (!world_->context().store->volumes().reserve(slot)) {
 		UtilityFunctions::printerr(
 				"debug_queue_committed_field_volume_upload: slot ", slot, " is already in use");
 		return;
@@ -830,7 +831,7 @@ void VoxelDebugHooks::debug_queue_committed_field_volume_upload(int slot,
 		float len=std::sqrt(px*px+py*py+pz*pz);
 		if (len>1e-6f) { float n2[3]={px/len, py/len, pz/len}; d.normal_oct[static_cast<size_t>(i)]=ve::oct_encode_snorm8(n2);} else d.normal_oct[static_cast<size_t>(i)]=ve::oct_encode_snorm8(up);
 	}
-	if (!world_->store_->volumes().store(slot, d) || !world_->store_->volumes().pin(slot)) {
+	if (!world_->context().store->volumes().store(slot, d) || !world_->context().store->volumes().pin(slot)) {
 		release_volume_slot(world_->context().store->volumes(), world_->context().render->handoff(), slot);
 		UtilityFunctions::printerr(
 				"debug_queue_committed_field_volume_upload: store/pin failed for slot ", slot);
@@ -839,15 +840,15 @@ void VoxelDebugHooks::debug_queue_committed_field_volume_upload(int slot,
 	// Only model the main-thread GPU handoff queue. The worker-side mirror is exercised by
 	// ensure_physics_initialized()'s pinned-volume replay after teardown/reinit.
 	world_->context().render->handoff().queue_field_volume(slot, d);
-	if (world_->mesh_) {
-		world_->mesh_->submit_volume(slot, d);
-		world_->mesh_->run_sync([](MeshPass &){});
+	if (world_->mesh_service()) {
+		world_->mesh_service()->submit_volume(slot, d);
+		world_->mesh_service()->run_sync([](MeshPass &){});
 	}
 }
 
 void VoxelDebugHooks::debug_set_extraction_available(bool v) {
 	world_->ensure_physics_initialized();
-	if (world_->mesh_) world_->mesh_->debug_set_extraction_available(v);
+	if (world_->mesh_service()) world_->mesh_service()->debug_set_extraction_available(v);
 }
 
 Dictionary VoxelDebugHooks::debug_stored_normal_stats() {
@@ -906,49 +907,49 @@ void VoxelDebugHooks::debug_normal_release_override(int slot) {
 
 void VoxelDebugHooks::debug_set_fail_extractions(bool v) {
 	world_->ensure_physics_initialized();
-	if (world_->mesh_) world_->mesh_->debug_set_fail_extractions(v);
+	if (world_->mesh_service()) world_->mesh_service()->debug_set_fail_extractions(v);
 }
 
 void VoxelDebugHooks::debug_set_fail_extract_submit(bool v) {
 	world_->ensure_physics_initialized();
-	if (world_->mesh_) world_->mesh_->debug_set_fail_extract_submit(v);
+	if (world_->mesh_service()) world_->mesh_service()->debug_set_fail_extract_submit(v);
 }
 
 void VoxelDebugHooks::debug_set_fail_consolidations(bool v) {
 	world_->ensure_physics_initialized();
-	if (world_->mesh_) world_->mesh_->debug_set_fail_consolidations(v);
+	if (world_->mesh_service()) world_->mesh_service()->debug_set_fail_consolidations(v);
 }
 
 void VoxelDebugHooks::debug_set_fail_consolidate_uploads(bool v) {
 	world_->ensure_physics_initialized();
-	if (world_->mesh_) world_->mesh_->debug_set_fail_consolidate_uploads(v);
+	if (world_->mesh_service()) world_->mesh_service()->debug_set_fail_consolidate_uploads(v);
 }
 
 void VoxelDebugHooks::debug_set_fail_restore_overrides(bool v) {
 	world_->ensure_physics_initialized();
-	if (world_->mesh_) world_->mesh_->debug_set_fail_restore_overrides(v);
+	if (world_->mesh_service()) world_->mesh_service()->debug_set_fail_restore_overrides(v);
 }
 
 void VoxelDebugHooks::debug_set_fail_restore_overrides_always(bool v) {
 	world_->ensure_physics_initialized();
-	if (world_->mesh_) world_->mesh_->debug_set_fail_restore_overrides_always(v);
+	if (world_->mesh_service()) world_->mesh_service()->debug_set_fail_restore_overrides_always(v);
 }
 
 void VoxelDebugHooks::debug_set_pause_override_publication(bool v) {
 	world_->ensure_physics_initialized();
-	if (world_->mesh_) world_->mesh_->debug_set_pause_override_publication(v);
+	if (world_->mesh_service()) world_->mesh_service()->debug_set_pause_override_publication(v);
 }
 
 bool VoxelDebugHooks::debug_override_publication_paused() const {
-	return world_->mesh_ && world_->mesh_->debug_override_publication_paused();
+	return world_->mesh_service() && world_->mesh_service()->debug_override_publication_paused();
 }
 
 int VoxelDebugHooks::debug_island_frame(float dt, Vector3 center) {
 	world_->ensure_initialized();
 	world_->ensure_physics_initialized();
-	if (!world_->island_manager_) return 0;
+	if (!world_->island_manager()) return 0;
 	world_->context().store->drain_occupancy();
-	const int n = world_->island_manager_->run_frame(dt, center);
+	const int n = world_->island_manager()->run_frame(dt, center);
 	// The tests drive the world by hand and never enter the compositor, so the render-thread
 	// half of the handoff has to happen here too.
 	RenderingDevice *device = world_->rd();
@@ -961,12 +962,12 @@ int VoxelDebugHooks::debug_island_frame(float dt, Vector3 center) {
 }
 
 Dictionary VoxelDebugHooks::debug_island_stats() {
-	return world_->island_manager_ ? world_->island_manager_->stats() : Dictionary();
+	return world_->island_manager() ? world_->island_manager()->stats() : Dictionary();
 }
 
 void VoxelDebugHooks::debug_set_merge_sleep_seconds(float v) {
 	world_->ensure_physics_initialized();
-	if (world_->island_manager_) world_->island_manager_->set_merge_sleep_seconds(v);
+	if (world_->island_manager()) world_->island_manager()->set_merge_sleep_seconds(v);
 }
 
 #ifdef DEBUG_ENABLED
@@ -975,12 +976,12 @@ void VoxelDebugHooks::debug_set_max_dynamic_bodies(int v) {
 	// Clamp before forwarding: a test hook should be able to lower the guardrail but not
 	// silently disable it with an absurd value.
 	v = v < 1 ? 1 : (v > kMaxDynamicBodies ? kMaxDynamicBodies : v);
-	if (world_->island_manager_) world_->island_manager_->debug_set_max_dynamic_bodies(v);
+	if (world_->island_manager()) world_->island_manager()->debug_set_max_dynamic_bodies(v);
 }
 
 void VoxelDebugHooks::debug_set_atlas_slot_used(int slot, bool used) {
 	world_->ensure_physics_initialized();
-	if (world_->island_manager_) world_->island_manager_->debug_set_atlas_slot_used(slot, used);
+	if (world_->island_manager()) world_->island_manager()->debug_set_atlas_slot_used(slot, used);
 }
 #else
 void VoxelDebugHooks::debug_set_max_dynamic_bodies(int v) {
@@ -997,43 +998,43 @@ void VoxelDebugHooks::debug_set_atlas_slot_used(int slot, bool used) {
 
 void VoxelDebugHooks::debug_set_fail_next_spawn(bool fail) {
 	world_->ensure_physics_initialized();
-	if (world_->island_manager_) world_->island_manager_->debug_set_fail_next_spawn(fail);
+	if (world_->island_manager()) world_->island_manager()->debug_set_fail_next_spawn(fail);
 }
 
 void VoxelDebugHooks::debug_set_fail_next_restore(bool fail) {
 	world_->ensure_physics_initialized();
-	if (world_->island_manager_) world_->island_manager_->debug_set_fail_next_restore(fail);
+	if (world_->island_manager()) world_->island_manager()->debug_set_fail_next_restore(fail);
 }
 
 void VoxelDebugHooks::debug_set_fail_next_carve(bool fail) {
 	world_->ensure_physics_initialized();
-	if (world_->island_manager_) world_->island_manager_->debug_set_fail_next_carve(fail);
+	if (world_->island_manager()) world_->island_manager()->debug_set_fail_next_carve(fail);
 }
 
 void VoxelDebugHooks::debug_set_fail_next_resample(bool fail) {
 	world_->ensure_physics_initialized();
-	if (world_->island_manager_) world_->island_manager_->debug_set_fail_next_resample(fail);
+	if (world_->island_manager()) world_->island_manager()->debug_set_fail_next_resample(fail);
 }
 
 void VoxelDebugHooks::debug_set_empty_next_extraction(bool v) {
 	world_->ensure_physics_initialized();
-	if (world_->island_manager_) world_->island_manager_->debug_set_empty_next_extraction(v);
+	if (world_->island_manager()) world_->island_manager()->debug_set_empty_next_extraction(v);
 }
 
 void VoxelDebugHooks::debug_wake_island_body(int index) {
 	world_->ensure_physics_initialized();
-	if (world_->island_manager_) world_->island_manager_->debug_wake_body(index);
+	if (world_->island_manager()) world_->island_manager()->debug_wake_body(index);
 }
 
 void VoxelDebugHooks::debug_offset_island_body(int index, Vector3 offset) {
 	world_->ensure_physics_initialized();
-	if (world_->island_manager_) world_->island_manager_->debug_offset_body(index, offset);
+	if (world_->island_manager()) world_->island_manager()->debug_offset_body(index, offset);
 }
 
 Dictionary VoxelDebugHooks::debug_island_body_info(int index) {
 	world_->ensure_physics_initialized();
 #ifdef DEBUG_ENABLED
-	if (world_->island_manager_) return world_->island_manager_->debug_body_info(index);
+	if (world_->island_manager()) return world_->island_manager()->debug_body_info(index);
 #else
 	(void)index;
 #endif
@@ -1041,30 +1042,30 @@ Dictionary VoxelDebugHooks::debug_island_body_info(int index) {
 }
 
 RID VoxelDebugHooks::debug_body_of_chunk(Vector3i chunk) {
-	if (!world_->chunks_ || !world_->colliders_) return RID();
-	return world_->colliders_->body_of_slot(world_->chunks_->slot_of({chunk.x, chunk.y, chunk.z}));
+	if (!world_->chunk_residency() || !world_->colliders()) return RID();
+	return world_->colliders()->body_of_slot(world_->chunk_residency()->slot_of({chunk.x, chunk.y, chunk.z}));
 }
 
 Dictionary VoxelDebugHooks::debug_chunk_collider_info(Vector3i chunk) {
 	Dictionary d;
-	if (!world_->chunks_ || !world_->colliders_) return d;
+	if (!world_->chunk_residency() || !world_->colliders()) return d;
 	const ve::IVec3 c{chunk.x, chunk.y, chunk.z};
-	d["slot"] = world_->chunks_->slot_of(c);
-	d["state"] = world_->colliders_->chunk_state(c);
-	d["in_flight"] = world_->colliders_->chunk_in_flight(c);
-	d["build_count"] = world_->colliders_->build_count_of_chunk(c);
-	d["last_ops"] = world_->colliders_->last_submit_op_count(c);
+	d["slot"] = world_->chunk_residency()->slot_of(c);
+	d["state"] = world_->colliders()->chunk_state(c);
+	d["in_flight"] = world_->colliders()->chunk_in_flight(c);
+	d["build_count"] = world_->colliders()->build_count_of_chunk(c);
+	d["last_ops"] = world_->colliders()->last_submit_op_count(c);
 	return d;
 }
 
 Dictionary VoxelDebugHooks::debug_chunk_collider_octants(Vector3i chunk) {
-	if (!world_->chunks_ || !world_->colliders_) return Dictionary();
-	return world_->colliders_->debug_chunk_octants({chunk.x, chunk.y, chunk.z});
+	if (!world_->chunk_residency() || !world_->colliders()) return Dictionary();
+	return world_->colliders()->debug_chunk_octants({chunk.x, chunk.y, chunk.z});
 }
 
 bool VoxelDebugHooks::debug_init_physics() {
 	world_->ensure_physics_initialized();
-	return world_->physics_ready_;
+	return world_->physics_ready();
 }
 
 void VoxelDebugHooks::debug_teardown_physics() {
@@ -1080,81 +1081,43 @@ void VoxelDebugHooks::debug_lod_tick(Vector3 pos, Vector3 fwd) {
 }
 
 Dictionary VoxelDebugHooks::debug_lod_stats() {
-	std::lock_guard<std::mutex> lock(world_->context().lod->lod_mutex_);
-	world_->context().lod->ensure_lod();
+	const LodStats s = world_->context().lod->stats();
 	Dictionary d;
-	d["pages_total"] = world_->context().lod->lod_pool_ ? world_->context().lod->lod_pool_->page_count() : 0;
-	d["pages_free"] = world_->context().lod->lod_pool_ ? world_->context().lod->lod_pool_->free_pages() : 0;
-	d["pages_used"] = (world_->context().lod->lod_pool_ ? world_->context().lod->lod_pool_->page_count() : 0) -
-			(world_->context().lod->lod_pool_ ? world_->context().lod->lod_pool_->free_pages() : 0);
-	d["chunks_resident"] = static_cast<int>(world_->context().lod->lod_pages_of_.size());
-	LodPool *pool = world_->context().lod->lod_pool_;
-	d["chunk_records"] = pool ? pool->chunk_record_count() : 0;
-	d["chunk_records_used"] = pool ? pool->chunk_records_used() : 0;
-	d["chunk_records_high_water"] = pool ? pool->chunk_records_high_water() : 0;
-	d["pages_high_water"] = pool ? pool->pages_high_water() : 0;
-	d["budget_bound"] = pool ? String(pool->budget_bound()) : String("none");
-	int dirty_chunks = 0;
-	int dirty_levels = 0;
-	if (world_->context().lod->lod_tree_) world_->context().lod->lod_tree_->dirty_stats(&dirty_chunks, &dirty_levels);
-	d["dirty_chunks"] = dirty_chunks;
-	d["dirty_levels"] = dirty_levels;
-	int draw_pages = 0;
-	for (const ve::LodDrawItem &item : world_->context().lod->lod_walk_.draws)
-		draw_pages += item.page_count;
-	d["draw_pages"] = draw_pages;
-	// Expose the exact page identities used by the current camera cut, not just their
-	// aggregate count. A bounded pool may keep a drawable coarse cut while refinement
-	// requests remain pending; tests must prove that the actual scene page set is stable.
-	std::vector<ve::LodPageDraw> draw_page_list;
-	ve::lod_collect_page_draws(world_->context().lod->lod_walk_.draws,
-			world_->context().lod->lod_pages_of_, world_->context().lod->lod_page_quads_, &draw_page_list);
+	d["pages_total"] = s.pages_total;
+	d["pages_free"] = s.pages_free;
+	d["pages_used"] = s.pages_total - s.pages_free;
+	d["chunks_resident"] = s.chunks_resident;
+	d["chunk_records"] = s.chunk_records;
+	d["chunk_records_used"] = s.chunk_records_used;
+	d["chunk_records_high_water"] = s.chunk_records_high_water;
+	d["pages_high_water"] = s.pages_high_water;
+	d["budget_bound"] = String(s.budget_bound);
+	d["dirty_chunks"] = s.dirty_chunks;
+	d["dirty_levels"] = s.dirty_levels;
+	d["draw_pages"] = s.draw_pages;
 	PackedInt32Array draw_page_ids;
-	for (const ve::LodPageDraw &page : draw_page_list) draw_page_ids.append(page.page);
+	for (int page : s.draw_page_ids) draw_page_ids.append(page);
 	d["draw_page_ids"] = draw_page_ids;
 	PackedInt32Array resident_page_ids;
-	for (const auto &page : world_->context().lod->lod_page_quads_)
-		if (page.second > 0) resident_page_ids.append(page.first);
+	for (int page : s.resident_page_ids) resident_page_ids.append(page);
 	d["resident_page_ids"] = resident_page_ids;
-	// Requests the last walk still wants built. Zero, with nothing in flight, is what
-	// "the far field has converged for this camera" means; tests wait on it instead of
-	// guessing a frame count. The exact request identities are also exported so a bounded
-	// pool fallback can distinguish a stable backlog from a rotating one.
-	d["requests_pending"] = static_cast<int>(world_->context().lod->lod_walk_.requests.size());
+	// Zero pending requests with nothing in flight is what "the far field has converged for
+	// this camera" means; tests wait on it instead of guessing a frame count.
+	d["requests_pending"] = static_cast<int>(s.requests.size());
 	Array pending_request_ids;
-	for (const ve::LodBuildRequest &request : world_->context().lod->lod_walk_.requests) {
+	for (const ve::LodBuildRequest &request : s.requests) {
 		pending_request_ids.append(String::num_int64(request.level) + ":" +
 				String::num_int64(request.coord.x) + ":" + String::num_int64(request.coord.y) + ":" +
 				String::num_int64(request.coord.z));
 	}
 	d["pending_request_ids"] = pending_request_ids;
-	// LodArena::alloc is all-or-nothing, so this should always be zero -- but reporting a
-	// hardcoded 0 makes the test that asserts it vacuous. MEASURE the two shapes a
-	// partially funded build would actually take: a chunk holding a page the per-page quad
-	// count never learned about, and arena pages that no resident chunk owns (the leak a
-	// half-rolled-back allocation leaves behind).
-	int partial = 0;
-	size_t owned_pages = 0;
-	for (const auto &kv : world_->context().lod->lod_pages_of_) {
-		owned_pages += kv.second.size();
-		for (int p : kv.second) {
-			if (world_->context().lod->lod_page_quads_.find(p) == world_->context().lod->lod_page_quads_.end()) {
-				partial++;
-				break;
-			}
-		}
-	}
-	const int used_pages = (world_->context().lod->lod_pool_ ? world_->context().lod->lod_pool_->page_count() : 0) -
-			(world_->context().lod->lod_pool_ ? world_->context().lod->lod_pool_->free_pages() : 0);
-	const int unowned = used_pages - static_cast<int>(owned_pages);
-	d["partial_allocations"] = partial + (unowned > 0 ? unowned : 0);
-	d["builds_in_flight"] = world_->mesh_ && world_->mesh_->lod_busy() ? 1 : 0;
-	// The benchmark's horizon metric watches this key: frames until the request queue
-	// drains and stays drained. Same count as requests_pending, exported under the name
-	// the horizon tracker reads.
-	d["lod_pending"] = static_cast<int>(world_->context().lod->lod_walk_.requests.size());
+	d["partial_allocations"] = s.partial_allocations;
+	d["builds_in_flight"] = world_->mesh_service() && world_->mesh_service()->lod_busy() ? 1 : 0;
+	// The benchmark's horizon tracker reads this name; same count as requests_pending.
+	d["lod_pending"] = static_cast<int>(s.requests.size());
 	// Async cull stats readback; zero until the first readback lands (safe "nothing culled").
-	d["culled_ratio"] = world_->context().render->passes().lod_cull ? world_->context().render->passes().lod_cull->culled_ratio() : 0.0f;
+	d["culled_ratio"] = world_->context().render->passes().lod_cull
+			? world_->context().render->passes().lod_cull->culled_ratio() : 0.0f;
 	return d;
 }
 
@@ -1185,7 +1148,7 @@ Dictionary VoxelDebugHooks::debug_lod_render_probe_culled(Vector3 pos, Vector3 f
 	debug_lod_tick(pos, fwd);
 
 	RenderingDevice *device = world_->rd();
-	if (!world_->is_initialized() || !device || !world_->context().lod->lod_pool_ || !world_->context().render->passes().lod_raster || !world_->context().render->passes().materials) return d;
+	if (!world_->is_initialized() || !device || !world_->context().lod->pool() || !world_->context().render->passes().lod_raster || !world_->context().render->passes().materials) return d;
 
 	const float p[3] = {pos.x, pos.y, pos.z};
 	const float f[3] = {fwd.x, fwd.y, fwd.z};
@@ -1205,11 +1168,11 @@ Dictionary VoxelDebugHooks::debug_lod_render_probe_culled(Vector3 pos, Vector3 f
 	if (!world_->context().render->passes().lod_raster->clear_targets(device, *world_->context().render->passes().gbuffer)) return d;
 	world_->context().render->passes().lod_raster->set_cull_enabled(cull);
 	const int draw_count = world_->context().render->passes().lod_raster->draw_page_count();
-	world_->context().lod->lod_pool_->upload_draw_args(world_->context().render->passes().lod_raster->draw_pages());
+	world_->context().lod->pool()->upload_draw_args(world_->context().render->passes().lod_raster->draw_pages());
 	float probe_start = ve::kLodFadeStartM;
 	float probe_end = ve::kLodFadeEndM;
 	world_->context().lod->fade_band(&probe_start, &probe_end);
-	bool ok = world_->context().render->passes().lod_raster->draw(device, *world_->context().lod->lod_pool_, *world_->context().render->passes().materials, *world_->context().render->passes().gbuffer,
+	bool ok = world_->context().render->passes().lod_raster->draw(device, *world_->context().lod->pool(), *world_->context().render->passes().materials, *world_->context().render->passes().gbuffer,
 			vp, p, draw_count, probe_start, probe_end);
 	device->submit();
 	device->sync();
@@ -1272,7 +1235,7 @@ Dictionary VoxelDebugHooks::debug_lod_gbuffer_probe(Vector3 pos, Vector3 fwd, in
 
 	debug_lod_tick(pos, fwd);
 	RenderingDevice *device = world_->rd();
-	if (!world_->is_initialized() || !device || !world_->context().lod->lod_pool_ || !world_->context().render->passes().lod_raster || !world_->context().render->passes().materials || !world_->context().render->passes().gbuffer)
+	if (!world_->is_initialized() || !device || !world_->context().lod->pool() || !world_->context().render->passes().lod_raster || !world_->context().render->passes().materials || !world_->context().render->passes().gbuffer)
 		return d;
 	world_->context().render->passes().lod_raster->release_targets();
 	if (!world_->context().render->passes().gbuffer->ensure(device, nullptr, Vector2i(w, h))) return d;
@@ -1291,11 +1254,11 @@ Dictionary VoxelDebugHooks::debug_lod_gbuffer_probe(Vector3 pos, Vector3 fwd, in
 	// why the depth one cannot be a texture_clear.
 	if (!world_->context().render->passes().lod_raster->clear_targets(device, *world_->context().render->passes().gbuffer)) return d;
 	world_->context().render->passes().lod_raster->set_cull_enabled(true);
-	world_->context().lod->lod_pool_->upload_draw_args(world_->context().render->passes().lod_raster->draw_pages());
+	world_->context().lod->pool()->upload_draw_args(world_->context().render->passes().lod_raster->draw_pages());
 	float fade_start = ve::kLodFadeStartM;
 	float fade_end = ve::kLodFadeEndM;
 	world_->context().lod->fade_band(&fade_start, &fade_end);
-	const bool ok = world_->context().render->passes().lod_raster->draw(device, *world_->context().lod->lod_pool_, *world_->context().render->passes().materials, *world_->context().render->passes().gbuffer, vp, p,
+	const bool ok = world_->context().render->passes().lod_raster->draw(device, *world_->context().lod->pool(), *world_->context().render->passes().materials, *world_->context().render->passes().gbuffer, vp, p,
 			world_->context().render->passes().lod_raster->draw_page_count(), fade_start, fade_end);
 	device->submit();
 	device->sync();
@@ -1518,7 +1481,7 @@ Dictionary VoxelDebugHooks::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 	debug_lod_tick(pos, fwd);
 
 	RenderingDevice *device = world_->rd();
-	if (!world_->is_initialized() || !device || !world_->context().lod->lod_pool_ || !world_->context().render->passes().lod_raster || !world_->context().render->passes().lod_cull ||
+	if (!world_->is_initialized() || !device || !world_->context().lod->pool() || !world_->context().render->passes().lod_raster || !world_->context().render->passes().lod_cull ||
 			!world_->context().render->passes().hiz) {
 		return d;
 	}
@@ -1534,10 +1497,10 @@ Dictionary VoxelDebugHooks::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 
 	const int draw_count = world_->context().render->passes().lod_raster->draw_page_count();
 	if (draw_count <= 0) return d;
-	world_->context().lod->lod_pool_->upload_draw_args(world_->context().render->passes().lod_raster->draw_pages());
+	world_->context().lod->pool()->upload_draw_args(world_->context().render->passes().lod_raster->draw_pages());
 	device->submit();
 	device->sync();
-	const PackedByteArray before = device->buffer_get_data(world_->context().lod->lod_pool_->args_buffer(), 0,
+	const PackedByteArray before = device->buffer_get_data(world_->context().lod->pool()->args_buffer(), 0,
 			static_cast<uint32_t>(draw_count) * 20);
 
 	// This probe deliberately exercises frustum culling plus whatever HiZ state is present.
@@ -1545,13 +1508,13 @@ Dictionary VoxelDebugHooks::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 	// stale pyramid (the production path builds from the real scene depth before culling).
 	debug_hiz_probe_synthetic(0.0f, 1.0f);
 
-	const bool ok = world_->context().render->passes().lod_cull->run(device, *world_->context().lod->lod_pool_, world_->context().render->passes().hiz, vp, draw_count,
+	const bool ok = world_->context().render->passes().lod_cull->run(device, *world_->context().lod->pool(), world_->context().render->passes().hiz, vp, draw_count,
 			draw_count, 0);
 	device->submit();
 	device->sync();
 	if (!ok) return d;
 
-	const PackedByteArray after = device->buffer_get_data(world_->context().lod->lod_pool_->args_buffer(), 0,
+	const PackedByteArray after = device->buffer_get_data(world_->context().lod->pool()->args_buffer(), 0,
 			static_cast<uint32_t>(draw_count) * 20);
 	if (before.size() < static_cast<int64_t>(draw_count) * 20 ||
 			after.size() < static_cast<int64_t>(draw_count) * 20) {
@@ -1567,13 +1530,13 @@ Dictionary VoxelDebugHooks::debug_lod_cull_probe(Vector3 pos, Vector3 fwd) {
 	PackedInt32Array culled;
 	PackedInt32Array page_frustum_culled;
 	PackedInt32Array slot_frustum_culled;
-	const std::vector<uint32_t> &page_chunk_cpu = world_->context().lod->lod_pool_->page_chunk_cpu();
+	const std::vector<uint32_t> &page_chunk_cpu = world_->context().lod->pool()->page_chunk_cpu();
 	float planes[6][4];
 	ve::lod_frustum_planes(cam.view_proj, planes);
-	const PackedByteArray chunk_bytes = device->buffer_get_data(world_->context().lod->lod_pool_->chunk_buffer(), 0,
-			static_cast<uint32_t>(world_->context().lod->lod_pool_->chunk_record_count() * 32));
+	const PackedByteArray chunk_bytes = device->buffer_get_data(world_->context().lod->pool()->chunk_buffer(), 0,
+			static_cast<uint32_t>(world_->context().lod->pool()->chunk_record_count() * 32));
 	const float *chunk_data = reinterpret_cast<const float *>(chunk_bytes.ptr());
-	const bool have_chunks = chunk_bytes.size() >= world_->context().lod->lod_pool_->chunk_record_count() * 32;
+	const bool have_chunks = chunk_bytes.size() >= world_->context().lod->pool()->chunk_record_count() * 32;
 	auto aabb_outside = [&](uint32_t ci) -> bool {
 		if (!have_chunks || ci == 0xffffffffu) return true;
 		const float *rec = chunk_data + static_cast<size_t>(ci) * 8;
@@ -1663,7 +1626,7 @@ Dictionary VoxelDebugHooks::debug_grass_stats() {
 		// Hook camera: the last streamed centre (every grass test streams before reading),
 		// looking straight down. 90-degree FOV so the reach comparison measures the
 		// box/distance cull, not the test frustum. Time matches the compositor expression.
-		const float *c = w->store_->center_;
+		const float *c = w->context().store->center_;
 		const float p[3] = {c[0], c[1], c[2]};
 		const float f[3] = {0.0f, -1.0f, 0.0f};
 		const ve::ProbeCamera pc = ve::probe_camera(p, f, 64, 64,
@@ -1881,7 +1844,7 @@ bool VoxelDebugHooks::debug_hiz_occluded(Vector2 lo, Vector2 hi, float depth) {
 }
 
 void VoxelDebugHooks::debug_apply_sphere_subtract(Vector3 centre, float radius) {
-	if (!world_->store_->edit_log()) world_->ensure_physics_initialized();
+	if (!world_->context().store->edit_log()) world_->ensure_physics_initialized();
 	ve::EditOp op;
 	op.type = ve::kOpSphereSubtract;
 	op.material = 0;
@@ -1893,7 +1856,7 @@ void VoxelDebugHooks::debug_apply_sphere_subtract(Vector3 centre, float radius) 
 }
 
 void VoxelDebugHooks::debug_apply_sphere_add(Vector3 centre, float radius, int material) {
-	if (!world_->store_->edit_log()) world_->ensure_physics_initialized();
+	if (!world_->context().store->edit_log()) world_->ensure_physics_initialized();
 	ve::EditOp op;
 	op.type = ve::kOpSphereAdd;
 	op.material = static_cast<uint16_t>(material);
@@ -1905,7 +1868,7 @@ void VoxelDebugHooks::debug_apply_sphere_add(Vector3 centre, float radius, int m
 }
 
 void VoxelDebugHooks::debug_apply_sphere_paint(Vector3 centre, float radius, int material) {
-	if (!world_->store_->edit_log()) world_->ensure_physics_initialized();
+	if (!world_->context().store->edit_log()) world_->ensure_physics_initialized();
 	ve::EditOp op;
 	op.type = ve::kOpSpherePaint;
 	op.material = static_cast<uint16_t>(material);
@@ -1917,16 +1880,16 @@ void VoxelDebugHooks::debug_apply_sphere_paint(Vector3 centre, float radius, int
 }
 
 void VoxelDebugHooks::debug_apply_volume_add(int slot, Vector3 origin, float voxel, int dim) {
-	if (!world_->store_->edit_log()) world_->ensure_physics_initialized();
+	if (!world_->context().store->edit_log()) world_->ensure_physics_initialized();
 	float o[3] = {origin.x, origin.y, origin.z};
 	ve::EditOp op = ve::make_volume_add(slot, o, voxel, dim);
 	world_->append_edit(op);
 }
 
 int VoxelDebugHooks::debug_region_op_count(Vector3i region) {
-	if (!world_->store_->edit_log()) return 0;
+	if (!world_->context().store->edit_log()) return 0;
 	std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-	return world_->store_->edit_log()->op_count({region.x, region.y, region.z});
+	return world_->context().store->edit_log()->op_count({region.x, region.y, region.z});
 }
 
 int VoxelDebugHooks::debug_override_region_table(int region_slot) const {
@@ -1934,19 +1897,19 @@ int VoxelDebugHooks::debug_override_region_table(int region_slot) const {
 }
 
 int VoxelDebugHooks::debug_override_used() const {
-	return world_->store_->overrides() ? world_->store_->overrides()->used() : 0;
+	return world_->context().store->overrides() ? world_->context().store->overrides()->used() : 0;
 }
 
 bool VoxelDebugHooks::debug_fill_override_pool(Vector3i region_in) {
 	world_->ensure_physics_initialized();
 	std::unique_lock<std::mutex> edit_lock(world_->context().store->edit_mutex());
-	if (!world_->context().render->passes().atlas || !world_->mesh_ || !world_->store_->overrides() || world_->store_->overrides()->used() != 0) return false;
+	if (!world_->context().render->passes().atlas || !world_->mesh_service() || !world_->context().store->overrides() || world_->context().store->overrides()->used() != 0) return false;
 	// The fill publishes through the target region's tenant slot, so the region must be
 	// resident -- the caller names the region it streamed. No world box exists to provide
 	// a canonical one, and a window-derived one would defeat the offscreen-refusal test
 	// (streaming far away recentres the window onto resident ground).
 	const ve::IVec3 region{region_in.x, region_in.y, region_in.z};
-	const int region_slot = world_->store_->residency() ? world_->store_->residency()->slot_of(region) : -1;
+	const int region_slot = world_->context().store->residency() ? world_->context().store->residency()->slot_of(region) : -1;
 	// This hook is allowed to fill only the target region's actual tenant. Slot 0 is a
 	// valid visible tenant for some other region; using it as an off-screen fallback can
 	// overwrite unrelated rendered state while the test is trying to exhaust the pool.
@@ -1957,21 +1920,21 @@ bool VoxelDebugHooks::debug_fill_override_pool(Vector3i region_in) {
 	std::vector<ve::IVec3> acquired_bricks;
 	std::vector<ve::OverrideBrick> bricks;
 	std::vector<std::pair<int, int>> entries;
-	slots.reserve(world_->store_->overrides()->capacity());
-	bricks.reserve(world_->store_->overrides()->capacity());
-	entries.reserve(world_->store_->overrides()->capacity());
-	for (int i = 0; i < world_->store_->overrides()->capacity(); i++) {
+	slots.reserve(world_->context().store->overrides()->capacity());
+	bricks.reserve(world_->context().store->overrides()->capacity());
+	entries.reserve(world_->context().store->overrides()->capacity());
+	for (int i = 0; i < world_->context().store->overrides()->capacity(); i++) {
 		const ve::IVec3 brick{base.x + (i & 31), base.y + ((i >> 5) & 31),
 				base.z + ((i >> 10) & 31)};
-		const int slot = world_->store_->overrides()->acquire(brick);
+		const int slot = world_->context().store->overrides()->acquire(brick);
 		if (slot < 0) {
-			for (const ve::IVec3 acquired : acquired_bricks) world_->store_->overrides()->release(acquired);
+			for (const ve::IVec3 acquired : acquired_bricks) world_->context().store->overrides()->release(acquired);
 			return false;
 		}
-		const ve::OverrideBrick *data = world_->store_->overrides()->data(slot);
+		const ve::OverrideBrick *data = world_->context().store->overrides()->data(slot);
 		if (!data) {
-			for (const ve::IVec3 acquired : acquired_bricks) world_->store_->overrides()->release(acquired);
-			world_->store_->overrides()->release(brick);
+			for (const ve::IVec3 acquired : acquired_bricks) world_->context().store->overrides()->release(acquired);
+			world_->context().store->overrides()->release(brick);
 			return false;
 		}
 		slots.push_back(slot);
@@ -1984,7 +1947,7 @@ bool VoxelDebugHooks::debug_fill_override_pool(Vector3i region_in) {
 			world_->context().render->passes().atlas->overrides().clear_table(world_->rd(), 0);
 			world_->context().render->passes().atlas->set_override_table(world_->rd(), region_slot, -1, {});
 		}
-		for (const ve::IVec3 brick : acquired_bricks) world_->store_->overrides()->release(brick);
+		for (const ve::IVec3 brick : acquired_bricks) world_->context().store->overrides()->release(brick);
 	};
 	if (world_->context().render->passes().atlas) {
 		for (size_t i = 0; i < slots.size(); i++) {
@@ -2007,14 +1970,14 @@ bool VoxelDebugHooks::debug_fill_override_pool(Vector3i region_in) {
 		}
 		world_->context().render->passes().atlas->set_override_table(world_->rd(), region_slot, 0, entries);
 	}
-	if (!world_->mesh_->publish_overrides(slots, bricks, region, region_slot, 0, entries)) {
+	if (!world_->mesh_service()->publish_overrides(slots, bricks, region, region_slot, 0, entries)) {
 		// The worker publication is synchronous here, but it can still fail after a
 		// partial upload. Replay its empty old transaction before releasing the slots.
-		world_->mesh_->restore_overrides({}, {}, region, region_slot, 0, -1, {});
+		world_->mesh_service()->restore_overrides({}, {}, region, region_slot, 0, -1, {});
 		discard();
 		return false;
 	}
-	world_->store_->override_tables()[std::tuple<int, int, int>{region.x, region.y, region.z}] = 0;
+	world_->context().store->override_tables()[std::tuple<int, int, int>{region.x, region.y, region.z}] = 0;
 	return true;
 }
 
@@ -2027,10 +1990,10 @@ Dictionary VoxelDebugHooks::debug_override_render_state(Vector3i brick) {
 	d["sdf_match"] = false;
 	d["mat_match"] = false;
 	RenderingDevice *device = world_->rd();
-	if (!device || !world_->context().render->passes().atlas || !world_->store_->overrides()) return d;
+	if (!device || !world_->context().render->passes().atlas || !world_->context().store->overrides()) return d;
 	const ve::IVec3 b{brick.x, brick.y, brick.z};
 	const ve::IVec3 r = ve::region_of_brick(b);
-	const int region_slot = world_->store_->residency() ? world_->store_->residency()->slot_of(r) : -1;
+	const int region_slot = world_->context().store->residency() ? world_->context().store->residency()->slot_of(r) : -1;
 	if (region_slot < 0) return d;
 	const int table = world_->context().render->passes().atlas->overrides().region_table(region_slot);
 	int table_slot = -1;
@@ -2040,7 +2003,7 @@ Dictionary VoxelDebugHooks::debug_override_render_state(Vector3i brick) {
 				static_cast<uint32_t>((table * ve::kRegionBrickCount + bi) * 4), 4);
 		if (entry.size() >= 4) table_slot = *reinterpret_cast<const int32_t *>(entry.ptr());
 	}
-	const int cpu_slot = world_->store_->overrides()->slot_of(b);
+	const int cpu_slot = world_->context().store->overrides()->slot_of(b);
 	d["cpu_slot"] = cpu_slot;
 	d["table"] = table;
 	d["table_slot"] = table_slot;
@@ -2051,7 +2014,7 @@ Dictionary VoxelDebugHooks::debug_override_render_state(Vector3i brick) {
 			static_cast<uint32_t>(cpu_slot * sdf_stride), sdf_stride);
 	const PackedByteArray mat = device->buffer_get_data(world_->context().render->passes().atlas->overrides().mat_buffer(),
 			static_cast<uint32_t>(cpu_slot * mat_stride), mat_stride);
-	const ve::OverrideBrick *cpu = world_->store_->overrides()->data(cpu_slot);
+	const ve::OverrideBrick *cpu = world_->context().store->overrides()->data(cpu_slot);
 	if (!cpu || sdf.size() < sdf_stride || mat.size() < mat_stride) return d;
 	d["sdf_match"] = std::memcmp(sdf.ptr(), cpu->sdf, ve::kBrickSdfCount) == 0;
 	d["mat_match"] = std::memcmp(mat.ptr(), cpu->mat, ve::kBrickVoxelCount) == 0;
@@ -2080,9 +2043,9 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 	Dictionary d;
 	world_->ensure_physics_initialized();
 	std::unique_lock<std::mutex> edit_lock(world_->context().store->edit_mutex());
-	if (!world_->mesh_ || !world_->store_->edit_log() || !world_->store_->overrides() || !world_->store_->residency()) return d;
+	if (!world_->mesh_service() || !world_->context().store->edit_log() || !world_->context().store->overrides() || !world_->context().store->residency()) return d;
 	const ve::IVec3 r{region.x, region.y, region.z};
-	std::vector<ve::EditOp> ops = world_->store_->edit_log()->ops(r);
+	std::vector<ve::EditOp> ops = world_->context().store->edit_log()->ops(r);
 	std::vector<ve::IVec3> bricks;
 	ve::plan_consolidation(ops.data(), static_cast<int>(ops.size()), r, &bricks);
 	d["bricks"] = static_cast<int>(bricks.size());
@@ -2091,7 +2054,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 	if (bricks.empty()) return d;
 	ConsolidateJob job;
 	job.region = r;
-	job.region_slot = world_->store_->residency()->slot_of(r);
+	job.region_slot = world_->context().store->residency()->slot_of(r);
 	if (job.region_slot < 0) return d;
 	job.bricks = bricks;
 	job.ops = ops;
@@ -2099,7 +2062,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 		ve::IVec3 lo = bricks[0], hi = bricks[0];
 		for (auto &b : bricks) { lo.x = std::min(lo.x, b.x); lo.y = std::min(lo.y, b.y); lo.z = std::min(lo.z, b.z); hi.x = std::max(hi.x, b.x); hi.y = std::max(hi.y, b.y); hi.z = std::max(hi.z, b.z); }
 		if (!world_->context().store->snapshot_field_sources(ops, lo, hi, &job.source)) return d;
-		job.gen = &world_->store_->generator()->sampler();
+		job.gen = &world_->context().store->generator()->sampler();
 	}
 	const int existing_table = world_->context().store->override_table_for_region(r);
 	if (existing_table >= 0) {
@@ -2110,17 +2073,17 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 			for (int y = 0; y < ve::kRegionBricks; y++)
 				for (int x = 0; x < ve::kRegionBricks; x++) {
 					const ve::IVec3 b{base.x + x, base.y + y, base.z + z};
-					const int slot = world_->store_->overrides()->slot_of(b);
+					const int slot = world_->context().store->overrides()->slot_of(b);
 					if (slot >= 0) existing_entries.emplace_back(
 							ve::brick_index_in_region(b), slot);
 				}
-		if (!world_->mesh_->set_override_region(r, job.region_slot, existing_table, existing_entries)) return d;
+		if (!world_->mesh_service()->set_override_region(r, job.region_slot, existing_table, existing_entries)) return d;
 	}
-	if (!world_->mesh_->submit_consolidations({job})) return d;
-	world_->mesh_->run_sync([](MeshPass &) {});
+	if (!world_->mesh_service()->submit_consolidations({job})) return d;
+	world_->mesh_service()->run_sync([](MeshPass &) {});
 	std::vector<ConsolidateResult> results;
-	if (world_->mesh_->collect_consolidations(&results) != 1 || results[0].failed) return d;
-	const ve::Generator &gen = world_->store_->generator()->sampler();
+	if (world_->mesh_service()->collect_consolidations(&results) != 1 || results[0].failed) return d;
+	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	int sdf_mismatches = 0, mat_mismatches = 0;
 	Dictionary first;
 	for (size_t bi = 0; bi < bricks.size() && bi < results[0].baked.size(); bi++) {
@@ -2133,7 +2096,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 				for (int x = 0; x <= ve::kBrickVoxels; x++) {
 					const ve::Sample s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
 							bo[0] + x * ve::kVoxelSize, bo[1] + y * ve::kVoxelSize,
-							bo[2] + z * ve::kVoxelSize, &world_->store_->volumes(), world_->store_->overrides());
+							bo[2] + z * ve::kVoxelSize, &world_->context().store->volumes(), world_->context().store->overrides());
 					const uint8_t expected = ve::encode_sdf(s.sdf);
 					const uint8_t actual = b.sdf[ve::sdf_index(x, y, z)];
 					if (expected != actual) {
@@ -2146,7 +2109,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 					for (int x = 0; x < ve::kBrickVoxels; x++) {
 						const ve::Sample s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
 								bo[0] + x * ve::kVoxelSize, bo[1] + y * ve::kVoxelSize,
-								bo[2] + z * ve::kVoxelSize, &world_->store_->volumes(), world_->store_->overrides());
+								bo[2] + z * ve::kVoxelSize, &world_->context().store->volumes(), world_->context().store->overrides());
 						if (s.material != b.mat[ve::voxel_index(x, y, z)]) mat_mismatches++;
 					}
 	}
@@ -2173,7 +2136,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 			float px = bo[0] + lx * ve::kVoxelSize;
 			float py = bo[1] + ly * ve::kVoxelSize;
 			float pz = bo[2] + lz * ve::kVoxelSize;
-			ve::FieldSample fs = ve::eval_field_gradient(gen, ops.data(), static_cast<int>(ops.size()), px, py, pz, &world_->store_->volumes(), world_->store_->overrides());
+			ve::FieldSample fs = ve::eval_field_gradient(gen, ops.data(), static_cast<int>(ops.size()), px, py, pz, &world_->context().store->volumes(), world_->context().store->overrides());
 			if (!fs.exact_gradient) { norm_min_dot = -1.0f; continue; }
 			float elen = std::sqrt(fs.gradient[0]*fs.gradient[0]+fs.gradient[1]*fs.gradient[1]+fs.gradient[2]*fs.gradient[2]);
 			if (!(elen>1e-6f)) continue;
@@ -2203,7 +2166,7 @@ bool VoxelDebugHooks::debug_consolidate_region(Vector3i region) {
 Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 	Dictionary d;
 	world_->ensure_physics_initialized();
-	if (!world_->physics_ready_ || !world_->mesh_) return d;
+	if (!world_->physics_ready() || !world_->mesh_service()) return d;
 	constexpr int kFineCount = ve::kLodFineLattice * ve::kLodFineLattice * ve::kLodFineLattice;
 	constexpr int kReducedCount =
 			ve::kLodChunkLattice * ve::kLodChunkLattice * ve::kLodChunkLattice;
@@ -2219,7 +2182,7 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 	ve::lod_chunk_origin(level, c, origin);
 	const ve::IVec3 region = ve::region_of_point(origin[0], origin[1], origin[2]);
 	const int override_table = world_->context().store->override_table_for_region(region);
-	world_->mesh_->run_sync([&](MeshPass &pass) {
+	world_->mesh_service()->run_sync([&](MeshPass &pass) {
 		(void)pass;
 		// The worker thread owns this device for the duration of the diagnostic. Task 10
 		// moves LodBuildPass into MeshService itself; until then a per-call local device is
@@ -2241,24 +2204,24 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 		// no set, as elsewhere.
 		FieldContextSet lod_context;
 		if (lod_context.initialize(rd, lod.field_shader(),
-				world_->store_->terrain_pipeline())) {
+				world_->context().store->terrain_pipeline())) {
 			lod.set_field_context(&lod_context);
 		}
 		for (int slot = 0; slot < ve::kMaxVolumes; slot++) {
-			const ve::VolumeData *v = world_->store_->volumes().get(slot);
+			const ve::VolumeData *v = world_->context().store->volumes().get(slot);
 			if (v) lod.volumes().upload(rd, slot, *v);
 		}
 		std::vector<std::pair<int, int>> override_entries;
-		if (override_table >= 0 && world_->store_->overrides()) {
+		if (override_table >= 0 && world_->context().store->overrides()) {
 			const ve::IVec3 base{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
 					region.z * ve::kRegionBricks};
 			for (int z = 0; z < ve::kRegionBricks; z++)
 				for (int y = 0; y < ve::kRegionBricks; y++)
 					for (int x = 0; x < ve::kRegionBricks; x++) {
 						const ve::IVec3 b{base.x + x, base.y + y, base.z + z};
-						const int slot = world_->store_->overrides()->slot_of(b);
+						const int slot = world_->context().store->overrides()->slot_of(b);
 						if (slot < 0) continue;
-						const ve::OverrideBrick *data = world_->store_->overrides()->data(slot);
+						const ve::OverrideBrick *data = world_->context().store->overrides()->data(slot);
 						if (!data || !lod.upload_override(slot, *data)) {
 							lod.set_field_context(nullptr);
 							lod_context.teardown();
@@ -2300,7 +2263,7 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 		return d;
 
 	const float cell = ve::lod_cell_size(level);
-	const ve::Generator &gen = world_->store_->generator()->sampler();
+	const ve::Generator &gen = world_->context().store->generator()->sampler();
 
 	// 1. The fine lattice against the CPU field.
 	int fine_max_diff = 0;
@@ -2311,7 +2274,7 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 						origin[1] + (static_cast<float>(y) - 3.0f) * cell * 0.5f,
 						origin[2] + (static_cast<float>(z) - 3.0f) * cell * 0.5f};
 				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-						p[0], p[1], p[2], &world_->store_->volumes(), world_->store_->overrides()).sdf;
+						p[0], p[1], p[2], &world_->context().store->volumes(), world_->context().store->overrides()).sdf;
 				const int idx = ve::lod_fine_index(x, y, z);
 				const int diff = std::abs(static_cast<int>(fine_sdf[idx]) -
 						static_cast<int>(ve::lod_encode_sdf(s, cell)));
@@ -2443,12 +2406,12 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 Dictionary VoxelDebugHooks::debug_mesh_lattice_diff(Vector3i chunk) {
 	Dictionary d;
 	world_->ensure_physics_initialized();
-	if (!world_->physics_ready_ || !world_->mesh_) return d;
+	if (!world_->physics_ready() || !world_->mesh_service()) return d;
 	const ve::IVec3 c{chunk.x, chunk.y, chunk.z};
 	std::vector<ve::EditOp> ops;
 	{
 		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-		ops = world_->store_->edit_log()->ops(ve::region_of_chunk(c));
+		ops = world_->context().store->edit_log()->ops(ve::region_of_chunk(c));
 	}
 	MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
 	ve::chunk_world_origin(c, job.origin);
@@ -2456,10 +2419,10 @@ Dictionary VoxelDebugHooks::debug_mesh_lattice_diff(Vector3i chunk) {
 	job.lattice = ve::kChunkLattice;
 	std::vector<uint8_t> gpu;
 	bool ok = false;
-	world_->mesh_->run_sync([&](MeshPass &pass) { ok = pass.run_field_sync(job, &gpu); });
+	world_->mesh_service()->run_sync([&](MeshPass &pass) { ok = pass.run_field_sync(job, &gpu); });
 	if (!ok) return d;
 
-	const ve::Generator &gen = world_->store_->generator()->sampler();
+	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	const ve::DcGrid g = ve::chunk_dc_grid(c);
 	int max_diff = 0, over_one = 0;
 	bool pos = false, neg = false;
@@ -2470,7 +2433,7 @@ Dictionary VoxelDebugHooks::debug_mesh_lattice_diff(Vector3i chunk) {
 						g.origin[1] + (y - 1) * g.cell_size,
 						g.origin[2] + (z - 1) * g.cell_size};
 				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-						p[0], p[1], p[2], &world_->store_->volumes()).sdf;
+						p[0], p[1], p[2], &world_->context().store->volumes()).sdf;
 				if (s <= 0.0f) neg = true; else pos = true;
 				const int want = ve::encode_sdf(s);
 				const int got = gpu[ve::dc_lattice_index(g, x, y, z)];
@@ -2489,12 +2452,12 @@ Dictionary VoxelDebugHooks::debug_mesh_lattice_diff(Vector3i chunk) {
 Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	Dictionary d;
 	world_->ensure_physics_initialized();
-	if (!world_->physics_ready_ || !world_->mesh_) return d;
+	if (!world_->physics_ready() || !world_->mesh_service()) return d;
 	const ve::IVec3 c{chunk.x, chunk.y, chunk.z};
 	std::vector<ve::EditOp> ops;
 	{
 		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-		ops = world_->store_->edit_log()->ops(ve::region_of_chunk(c));
+		ops = world_->context().store->edit_log()->ops(ve::region_of_chunk(c));
 	}
 	MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
 	job.override_table = world_->context().store->override_table_for_region(ve::region_of_chunk(c));
@@ -2505,14 +2468,14 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	std::vector<uint8_t> lattice;
 	std::vector<int32_t> gpu_cells;
 	bool ok = false;
-	world_->mesh_->run_sync([&](MeshPass &pass) {
+	world_->mesh_service()->run_sync([&](MeshPass &pass) {
 		ok = pass.mesh_sync(job, &gpu, &lattice, &gpu_cells);
 	});
 	if (!ok) return d;
 	if (gpu.failed) return d; // short readback: do not present partial data as a diff
 
 	const ve::DcGrid g = ve::chunk_dc_grid(c);
-	const ve::Generator &gen = world_->store_->generator()->sampler();
+	const ve::Generator &gen = world_->context().store->generator()->sampler();
 
 	// 1. The lattice against the CPU field. One encoded step of sin() drift is invisible.
 	int lat_max = 0, lat_over = 0;
@@ -2521,7 +2484,7 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 			for (int x = 0; x < g.lattice; x++) {
 				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
 						g.origin[0] + (x - 1) * g.cell_size, g.origin[1] + (y - 1) * g.cell_size,
-						g.origin[2] + (z - 1) * g.cell_size, &world_->store_->volumes(), world_->store_->overrides()).sdf;
+						g.origin[2] + (z - 1) * g.cell_size, &world_->context().store->volumes(), world_->context().store->overrides()).sdf;
 				const int diff = std::abs(static_cast<int>(lattice[ve::dc_lattice_index(g, x, y, z)]) -
 						static_cast<int>(ve::encode_sdf(s)));
 				lat_max = std::max(lat_max, diff);
@@ -2611,7 +2574,7 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	for (int v = 0; v < gpu_verts; v++) {
 		const float s = std::fabs(ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
 				gpu.positions[v * 3], gpu.positions[v * 3 + 1], gpu.positions[v * 3 + 2],
-				&world_->store_->volumes(), world_->store_->overrides()).sdf);
+				&world_->context().store->volumes(), world_->context().store->overrides()).sdf);
 		max_sdf = std::max(max_sdf, s);
 		if (s > 0.1f) off_10cm++;
 	}
@@ -2631,9 +2594,9 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 		// step clean through a thin feature and read solid on both sides.
 		const Vector3 step = n.normalized() * 0.02f;
 		const float out_side = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-				mid.x + step.x, mid.y + step.y, mid.z + step.z, &world_->store_->volumes(), world_->store_->overrides()).sdf;
+				mid.x + step.x, mid.y + step.y, mid.z + step.z, &world_->context().store->volumes(), world_->context().store->overrides()).sdf;
 		const float in_side = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-				mid.x - step.x, mid.y - step.y, mid.z - step.z, &world_->store_->volumes(), world_->store_->overrides()).sdf;
+				mid.x - step.x, mid.y - step.y, mid.z - step.z, &world_->context().store->volumes(), world_->context().store->overrides()).sdf;
 		tri_sampled++;
 		if (out_side <= in_side) winding_bad++;
 	}
@@ -2648,7 +2611,7 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 	Dictionary d;
 	d["ok"] = false;
 	world_->ensure_physics_initialized();
-	if (!world_->mesh_ || !world_->mesh_->is_valid()) return d;
+	if (!world_->mesh_service() || !world_->mesh_service()->is_valid()) return d;
 
 	const ve::IVec3 lo{lo_cell.x, lo_cell.y, lo_cell.z};
 	const ve::IVec3 hi{hi_cell.x, hi_cell.y, hi_cell.z};
@@ -2677,21 +2640,21 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 			ve::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
 	{
 		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-		ve::collect_ops_for_aabb(*world_->store_->edit_log(), wlo, whi, &job.ops);
+		ve::collect_ops_for_aabb(*world_->context().store->edit_log(), wlo, whi, &job.ops);
 		float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
 		ve::IVec3 blo = ve::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
 		ve::IVec3 bhi = ve::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
 		if (!world_->context().store->snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) return d;
-		job.gen = &world_->store_->generator()->sampler();
+		job.gen = &world_->context().store->generator()->sampler();
 	}
 
 	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
 	std::vector<IslandExtractJob> jobs;
 	jobs.push_back(job);
-	if (!world_->mesh_->submit_extracts(std::move(jobs))) return d;
+	if (!world_->mesh_service()->submit_extracts(std::move(jobs))) return d;
 	std::vector<IslandExtractResult> results;
 	for (int i = 0; i < 2000 && results.empty(); i++) {
-		world_->mesh_->collect_extracts(&results);
+		world_->mesh_service()->collect_extracts(&results);
 		if (results.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 	}
 	if (results.empty() || results[0].failed) return d;
@@ -2700,9 +2663,9 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 	for (size_t i = 0; i < boxes.size(); i++)
 		boxes[i].world_aabb(&aabbs[i * 6], &aabbs[i * 6 + 3]);
 	ve::VolumeData cpu;
-	const ve::Generator &gen = world_->store_->generator()->sampler();
+	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	ve::extract_island_volume(gen, job.ops.data(), static_cast<int>(job.ops.size()),
-			&world_->store_->volumes(), job.origin, job.voxel, job.dim, aabbs.data(),
+			&world_->context().store->volumes(), job.origin, job.voxel, job.dim, aabbs.data(),
 			static_cast<int>(boxes.size()), &cpu);
 
 	int worst = 0, mat_mismatch = 0, mat_compared = 0;
@@ -2731,7 +2694,7 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 	// Compute normal length and alignment vs CPU masked gradient
 	float min_len = 2.0f, min_align = 2.0f;
 	if (!gpu.normal_oct.empty()) {
-		const ve::Generator &agen = world_->store_->generator()->sampler();
+		const ve::Generator &agen = world_->context().store->generator()->sampler();
 		for (size_t i = 0; i < gpu.normal_oct.size(); i++) {
 			float dec[3];
 			ve::oct_decode_snorm8(gpu.normal_oct[i], dec);
@@ -2743,7 +2706,7 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 			float px = job.origin[0] + x * job.voxel;
 			float py = job.origin[1] + y * job.voxel;
 			float pz = job.origin[2] + z * job.voxel;
-			ve::FieldSample fs = ve::eval_field_gradient(agen, job.ops.data(), static_cast<int>(job.ops.size()), px, py, pz, &world_->store_->volumes(), world_->store_->overrides());
+			ve::FieldSample fs = ve::eval_field_gradient(agen, job.ops.data(), static_cast<int>(job.ops.size()), px, py, pz, &world_->context().store->volumes(), world_->context().store->overrides());
 			float bu = 1e30f; float bu_grad[3]={0,1,0}; bool has_bu=false;
 			for (auto &b : boxes) { float lo[3], hi[3]; b.world_aabb(lo,hi); float d = ve::box_sdf(lo,hi,px,py,pz); if (!has_bu || d < bu) { bu=d; ve::box_sdf_gradient(lo,hi,px,py,pz,bu_grad); has_bu=true; } }
 			float exp_g[3]={fs.gradient[0],fs.gradient[1],fs.gradient[2]}; bool exp_exact=fs.exact_gradient;
@@ -2772,7 +2735,7 @@ Dictionary VoxelDebugHooks::debug_place_test_island_rotated(int slot, Vector3i l
 	world_->ensure_initialized();
 	world_->ensure_physics_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!device || !world_->context().render->passes().islands || !world_->mesh_ || !world_->mesh_->is_valid()) return d;
+	if (!device || !world_->context().render->passes().islands || !world_->mesh_service() || !world_->mesh_service()->is_valid()) return d;
 	if (slot < 0 || slot >= kMaxIslands) return d; // fail-soft, like the rest of the debug API
 
 	// Extract the component exactly as the real pipeline does (Task 9's hook shares this
@@ -2829,8 +2792,8 @@ Dictionary VoxelDebugHooks::debug_place_test_island_rotated(int slot, Vector3i l
 	if (!world_->context().render->passes().atlas->volumes().upload(device, vslot, volume)) return d;
 	// Task 7: keep the CPU-authoritative copy too (the same thing IslandManager does for
 	// real bodies), so debug_island_normal_probe reads the same normals the GPU holds.
-	world_->store_->volumes().reserve(vslot);
-	if (!world_->store_->volumes().store(vslot, volume)) return d;
+	world_->context().store->volumes().reserve(vslot);
+	if (!world_->context().store->volumes().store(vslot, volume)) return d;
 	// Task 6: compact normals share the pool; the test fixture's radial lattice is real
 	// render-reachable payload, not a fallback source.
 	world_->context().render->passes().atlas->stored_normals().upload_volume(device, vslot, volume);
@@ -2893,9 +2856,9 @@ Dictionary VoxelDebugHooks::debug_spawn_test_body(Vector3i lo_cell, Vector3i hi_
 	ve::VolumeData volume;
 	if (!world_->extract_component(cells, &job, &boxes, &volume)) return d;
 
-	const int slot = world_->store_->volumes().allocate();
+	const int slot = world_->context().store->volumes().allocate();
 	if (slot < 0) return d;
-	if (!world_->store_->volumes().store(slot, volume)) {
+	if (!world_->context().store->volumes().store(slot, volume)) {
 		release_volume_slot(world_->context().store->volumes(), world_->context().render->handoff(), slot);
 		return d;
 	}
@@ -2932,9 +2895,9 @@ Dictionary VoxelDebugHooks::debug_spawn_test_body(Vector3i lo_cell, Vector3i hi_
 		release_volume_slot(world_->context().store->volumes(), world_->context().render->handoff(), slot);
 		return d;
 	}
-	world_->test_bodies_.push_back(b);
+	world_->test_bodies().push_back(b);
 	d["ok"] = true;
-	d["index"] = static_cast<int>(world_->test_bodies_.size()) - 1;
+	d["index"] = static_cast<int>(world_->test_bodies().size()) - 1;
 	d["atlas_slot"] = info.atlas_slot;
 	d["mass"] = b->mass();
 	d["shapes"] = b->shape_count();
@@ -2948,9 +2911,9 @@ Dictionary VoxelDebugHooks::debug_spawn_test_body(Vector3i lo_cell, Vector3i hi_
 Dictionary VoxelDebugHooks::debug_test_body_stats(int index) {
 	Dictionary d;
 	d["live"] = false;
-	if (index < 0 || index >= static_cast<int>(world_->test_bodies_.size()) || !world_->test_bodies_[index])
+	if (index < 0 || index >= static_cast<int>(world_->test_bodies().size()) || !world_->test_bodies()[index])
 		return d;
-	IslandBody *b = world_->test_bodies_[index];
+	IslandBody *b = world_->test_bodies()[index];
 	d["live"] = b->live();
 	d["origin"] = b->transform().origin;
 	d["asleep_s"] = b->asleep_seconds();
@@ -2960,7 +2923,7 @@ Dictionary VoxelDebugHooks::debug_test_body_stats(int index) {
 }
 
 void VoxelDebugHooks::debug_tick_test_bodies(float dt) {
-	for (IslandBody *b : world_->test_bodies_)
+	for (IslandBody *b : world_->test_bodies())
 		if (b) {
 			b->tick(dt);
 			b->sync_render();
@@ -2968,9 +2931,9 @@ void VoxelDebugHooks::debug_tick_test_bodies(float dt) {
 }
 
 void VoxelDebugHooks::debug_despawn_test_body(int index) {
-	if (index < 0 || index >= static_cast<int>(world_->test_bodies_.size()) || !world_->test_bodies_[index])
+	if (index < 0 || index >= static_cast<int>(world_->test_bodies().size()) || !world_->test_bodies()[index])
 		return;
-	world_->test_bodies_[index]->despawn();
+	world_->test_bodies()[index]->despawn();
 }
 
 void VoxelDebugHooks::debug_clear_test_island(int slot) {
@@ -3008,7 +2971,7 @@ PackedInt32Array VoxelDebugHooks::debug_island_tile_mask(Vector3 origin, Vector3
 
 bool VoxelDebugHooks::debug_mesh_submit(Array chunks) {
 	world_->ensure_physics_initialized();
-	if (!world_->physics_ready_ || !world_->mesh_) return false;
+	if (!world_->physics_ready() || !world_->mesh_service()) return false;
 	std::vector<ve::IVec3> coords;
 	for (int i = 0; i < chunks.size(); i++) {
 		const Vector3i v = chunks[i];
@@ -3019,23 +2982,23 @@ bool VoxelDebugHooks::debug_mesh_submit(Array chunks) {
 	{
 		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
 		for (const ve::IVec3 &c : coords)
-			requests.push_back({c, world_->store_->edit_log()->ops(ve::region_of_chunk(c))});
+			requests.push_back({c, world_->context().store->edit_log()->ops(ve::region_of_chunk(c))});
 	}
-	return world_->mesh_->submit(std::move(requests));
+	return world_->mesh_service()->submit(std::move(requests));
 }
 
 Array VoxelDebugHooks::debug_mesh_collect() {
 	Array out;
-	if (!world_->physics_ready_ || !world_->mesh_) return out;
+	if (!world_->physics_ready() || !world_->mesh_service()) return out;
 	// The mesher runs asynchronously now, so a test that submits and immediately collects
 	// would race it. Wait for the batch to land — this is a diagnostic hook, and its old
 	// contract was "collect returns the batch you submitted".
 	std::vector<MeshResult> results;
-	while (world_->mesh_->busy() && world_->mesh_->is_valid()) {
-		if (world_->mesh_->collect(&results) > 0) break;
+	while (world_->mesh_service()->busy() && world_->mesh_service()->is_valid()) {
+		if (world_->mesh_service()->collect(&results) > 0) break;
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));
 	}
-	world_->mesh_->collect(&results);
+	world_->mesh_service()->collect(&results);
 	for (const MeshResult &r : results) {
 		Dictionary d;
 		d["chunk"] = Vector3i(r.chunk.x, r.chunk.y, r.chunk.z);
@@ -3054,7 +3017,7 @@ Array VoxelDebugHooks::debug_mesh_collect() {
 
 bool VoxelDebugHooks::debug_lod_submit(Array jobs) {
 	world_->ensure_physics_initialized();
-	if (!world_->physics_ready_ || !world_->mesh_) return false;
+	if (!world_->physics_ready() || !world_->mesh_service()) return false;
 	std::vector<LodBuildJob> lod_jobs;
 	lod_jobs.reserve(static_cast<size_t>(jobs.size()));
 	for (int i = 0; i < jobs.size(); i++) {
@@ -3069,12 +3032,12 @@ bool VoxelDebugHooks::debug_lod_submit(Array jobs) {
 		world_->context().lod->gather_ops(level, c, &job.ops);
 		lod_jobs.push_back(std::move(job));
 	}
-	return world_->mesh_->submit_lod(std::move(lod_jobs));
+	return world_->mesh_service()->submit_lod(std::move(lod_jobs));
 }
 
 bool VoxelDebugHooks::debug_extract_submit(int id, Vector3i lo_cell, Vector3i hi_cell) {
 	world_->ensure_physics_initialized();
-	if (!world_->physics_ready_ || !world_->mesh_ || !world_->store_->edit_log()) return false;
+	if (!world_->physics_ready() || !world_->mesh_service() || !world_->context().store->edit_log()) return false;
 	if (lo_cell.x > hi_cell.x || lo_cell.y > hi_cell.y || lo_cell.z > hi_cell.z ||
 			hi_cell.x - lo_cell.x > 7 || hi_cell.y - lo_cell.y > 7 ||
 			hi_cell.z - lo_cell.z > 7)
@@ -3105,23 +3068,23 @@ bool VoxelDebugHooks::debug_extract_submit(int id, Vector3i lo_cell, Vector3i hi
 			ve::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
 	{
 		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-		ve::collect_ops_for_aabb(*world_->store_->edit_log(), wlo, whi, &job.ops);
+		ve::collect_ops_for_aabb(*world_->context().store->edit_log(), wlo, whi, &job.ops);
 		float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
 		ve::IVec3 blo = ve::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
 		ve::IVec3 bhi = ve::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
 		if (!world_->context().store->snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) return false;
-		job.gen = &world_->store_->generator()->sampler();
+		job.gen = &world_->context().store->generator()->sampler();
 	}
 	std::vector<IslandExtractJob> jobs;
 	jobs.push_back(std::move(job));
-	return world_->mesh_->submit_extracts(std::move(jobs));
+	return world_->mesh_service()->submit_extracts(std::move(jobs));
 }
 
 Array VoxelDebugHooks::debug_extract_collect() {
 	Array out;
-	if (!world_->physics_ready_ || !world_->mesh_) return out;
+	if (!world_->physics_ready() || !world_->mesh_service()) return out;
 	std::vector<IslandExtractResult> results;
-	world_->mesh_->collect_extracts(&results);
+	world_->mesh_service()->collect_extracts(&results);
 	for (const IslandExtractResult &r : results) {
 		Dictionary d;
 		d["id"] = r.id;
@@ -3134,9 +3097,9 @@ Array VoxelDebugHooks::debug_extract_collect() {
 
 Array VoxelDebugHooks::debug_lod_collect() {
 	Array out;
-	if (!world_->physics_ready_ || !world_->mesh_) return out;
+	if (!world_->physics_ready() || !world_->mesh_service()) return out;
 	std::vector<LodBuildResult> results;
-	world_->mesh_->collect_lod(&results);
+	world_->mesh_service()->collect_lod(&results);
 	for (const LodBuildResult &r : results) {
 		Dictionary d;
 		d["level"] = r.level;
@@ -3162,7 +3125,7 @@ bool VoxelDebugHooks::render_probe_pixel(Vector3 origin, Vector3 dir) {
 	ve::CameraParams cam = ve::CameraParams::looking_at(
 			origin.x, origin.y, origin.z, f[0], f[1], f[2], up[0], up[1], up[2]);
 	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
-			world_->store_->config().atlas_bricks);
+			world_->context().store->config().atlas_bricks);
 	ve::set_near_field_flags(&cam, ve::pack_flags(world_->context().render->beauty_settings()));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->context().render->passes().raymarch->render(device, *world_->context().render->passes().atlas, world_->context().render->passes().islands, RID(),
@@ -3300,7 +3263,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_gbuffer(Vector3 origin, Vector3 dir) 
 	ve::CameraParams cam = ve::CameraParams::looking_at(
 			origin.x, origin.y, origin.z, f[0], f[1], f[2], up[0], up[1], up[2]);
 	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
-			world_->store_->config().atlas_bricks);
+			world_->context().store->config().atlas_bricks);
 	ve::set_near_field_flags(&cam, ve::pack_flags(world_->context().render->beauty_settings()));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->context().render->passes().raymarch->render(device, *world_->context().render->passes().atlas, world_->context().render->passes().islands, RID(), cam, 1, 1, kNoEdit, world_->context().render->passes().field_context)) return d;
@@ -3364,7 +3327,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_hole_probe(Vector3 origin, Vector3 di
 	cam.params[1] = pc.tan_y;
 	cam.params[2] = 200.0f;
 	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
-			world_->store_->config().atlas_bricks);
+			world_->context().store->config().atlas_bricks);
 	ve::set_near_field_flags(&cam, ve::pack_flags(world_->context().render->beauty_settings()));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->context().render->passes().raymarch->render(device, *world_->context().render->passes().atlas, world_->context().render->passes().islands, RID(), cam, w, h, kNoEdit, world_->context().render->passes().field_context)) return d;
@@ -3418,7 +3381,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_normal_probe(Vector3 origin, Vector3 
 	cam.params[1] = pc.tan_y;
 	cam.params[2] = 200.0f;
 	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
-			world_->store_->config().atlas_bricks);
+			world_->context().store->config().atlas_bricks);
 	ve::set_near_field_flags(&cam, ve::pack_flags(world_->context().render->beauty_settings()));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->context().render->passes().raymarch->render(device, *world_->context().render->passes().atlas, world_->context().render->passes().islands, RID(), cam, w, h, kNoEdit, world_->context().render->passes().field_context)) return d;
@@ -3444,7 +3407,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_normal_probe(Vector3 origin, Vector3 
 	// GPU's authoritative buffers mirror -- not from an inline analytic formula, so
 	// edits, stored volumes and consolidated overrides are all covered. For a pure
 	// procedural hit this reduces exactly to Task 1's analytic gradient.
-	const ve::Generator &gen = world_->store_->generator()->sampler();
+	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	std::lock_guard<std::mutex> edit_lock(world_->context().store->edit_mutex());
 	for (int y = 0; y < h; y++) {
 		for (int x = 0; x < w; x++) {
@@ -3461,9 +3424,9 @@ Dictionary VoxelDebugHooks::debug_raymarch_normal_probe(Vector3 origin, Vector3 
 			const float hitz = hp[i * 4 + 2];
 			// CPU reference gradient over this region's op span.
 			const std::vector<ve::EditOp> &ops =
-					world_->store_->edit_log()->ops(ve::region_of_point(hitx, hity, hitz));
+					world_->context().store->edit_log()->ops(ve::region_of_point(hitx, hity, hitz));
 			const ve::FieldSample fs = ve::eval_field_gradient(gen, ops.data(),
-					static_cast<int>(ops.size()), hitx, hity, hitz, &world_->store_->volumes(), world_->store_->overrides());
+					static_cast<int>(ops.size()), hitx, hity, hitz, &world_->context().store->volumes(), world_->context().store->overrides());
 			if (!fs.exact_gradient) continue;
 			const float gx = fs.gradient[0], gy = fs.gradient[1], gz = fs.gradient[2];
 			float alen = std::sqrt(gx*gx + gy*gy + gz*gz);
@@ -3559,7 +3522,7 @@ Dictionary VoxelDebugHooks::debug_island_normal_probe(int island_slot, Vector3 o
 	}
 	const float voxel = f[15];
 	if (!(voxel > 0.0f)) return d;
-	const ve::VolumeData *vol = world_->store_->volumes().get(volume_slot);
+	const ve::VolumeData *vol = world_->context().store->volumes().get(volume_slot);
 	if (!vol || !vol->has_normals() || vol->dim != dim) return d;
 
 	const float p[3] = {origin.x, origin.y, origin.z};
@@ -3577,7 +3540,7 @@ Dictionary VoxelDebugHooks::debug_island_normal_probe(int island_slot, Vector3 o
 	cam.params[1] = pc.tan_y;
 	cam.params[2] = 200.0f;
 	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
-			world_->store_->config().atlas_bricks);
+			world_->context().store->config().atlas_bricks);
 	ve::set_near_field_flags(&cam, ve::pack_flags(world_->context().render->beauty_settings()));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->context().render->passes().raymarch->render(device, *world_->context().render->passes().atlas, world_->context().render->passes().islands, RID(), cam, w, h, kNoEdit, world_->context().render->passes().field_context)) return d;
@@ -3759,7 +3722,7 @@ Dictionary VoxelDebugHooks::debug_ssr_probe(int fixture, int w, int h) {
 	camera_params.params[1] = pc.tan_y;
 	camera_params.params[2] = 200.0f;
 	ve::set_near_field_world(&camera_params, world_->context().store->region_window(), world_->context().render->island_slot_count(),
-			world_->store_->config().atlas_bricks);
+			world_->context().store->config().atlas_bricks);
 	ve::set_near_field_flags(&camera_params, ve::pack_flags(settings));
 	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->context().render->passes().raymarch->render(device, *world_->context().render->passes().atlas, world_->context().render->passes().islands, RID(), camera_params, width, height,
@@ -4223,7 +4186,7 @@ Dictionary VoxelDebugHooks::debug_glossy_sdf_probe(Vector3 origin, Vector3 dir) 
 	cam.params[2] = 200.0f;
 	cam.params[3] = -1.0f;
 	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
-			world_->store_->config().atlas_bricks);
+			world_->context().store->config().atlas_bricks);
 	ve::set_near_field_flags(&cam, ve::pack_flags(world_->context().render->beauty_settings()));
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->context().render->passes().raymarch->render(device, *world_->context().render->passes().atlas, world_->context().render->passes().islands, RID(), cam, 1, 1, kNoEdit, world_->context().render->passes().field_context)) return d;
@@ -4367,7 +4330,7 @@ Dictionary VoxelDebugHooks::debug_sun_shadow_stats(int cascade) {
 bool VoxelDebugHooks::debug_sun_shadow_build(int cascade, bool force) {
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!device || !world_->context().render->passes().sun_shadow || !world_->context().lod->lod_pool_ || !world_->context().render->passes().lod_raster) return false;
+	if (!device || !world_->context().render->passes().sun_shadow || !world_->context().lod->pool() || !world_->context().render->passes().lod_raster) return false;
 	ve::SunCascade c[ve::kSunCascades];
 	const int n = ve::sun_cascades(world_->get_stream_radius_m(), SunShadowPass::kSize, c);
 	if (cascade < 0 || cascade >= n) return false;
@@ -4386,7 +4349,7 @@ bool VoxelDebugHooks::debug_sun_shadow_build(int cascade, bool force) {
 	// compositor would produce, so the knob measures through this hook too.
 	world_->context().lod->prepare_shadow_raster(c[cascade].radius,
 			world_->get_sun_cascade_min_level() ? c[cascade].min_level : 0);
-	const bool did = world_->context().render->passes().sun_shadow->build(device, *world_->context().lod->lod_pool_, *world_->context().render->passes().lod_raster,
+	const bool did = world_->context().render->passes().sun_shadow->build(device, *world_->context().lod->pool(), *world_->context().render->passes().lod_raster,
 			cascade, ortho, force);
 	world_->context().lod->prepare_raster();
 	return did;
@@ -4613,7 +4576,7 @@ Dictionary VoxelDebugHooks::debug_near_field_detail(Vector3 pos, Vector3 fwd, in
 	cp.params[1] = pc.tan_y;
 	cp.params[2] = 200.0f;
 	ve::set_near_field_world(&cp, world_->context().store->region_window(), world_->context().render->island_slot_count(),
-			world_->store_->config().atlas_bricks);
+			world_->context().store->config().atlas_bricks);
 	ve::set_near_field_flags(&cp, ve::pack_flags(world_->context().render->beauty_settings()));
 
 	const int rw = std::max(1, static_cast<int>(static_cast<float>(w) * march_scale));
@@ -4800,7 +4763,7 @@ PackedByteArray VoxelDebugHooks::debug_field_params_bytes() {
 	// Same packing as FieldContextSet::initialize; both go through
 	// ve::pack_field_params_bytes (see terrain/field_params_pack.h for why both halves
 	// of the dense-values-in-16-stride-sized-buffer shape are load-bearing).
-	const ve::ResolvedPipeline &p = world_->store_->terrain_pipeline();
+	const ve::ResolvedPipeline &p = world_->context().store->terrain_pipeline();
 	const std::vector<uint8_t> packed = ve::pack_field_params_bytes(p);
 	PackedByteArray bytes;
 	bytes.resize(int(packed.size()));
@@ -4863,7 +4826,7 @@ Dictionary VoxelDebugHooks::debug_self_check() {
 		std::vector<ve::EditOp> ops_vec;
 		{
 			std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-			if (world_->store_->edit_log()) ops_vec = world_->store_->edit_log()->ops(region);
+			if (world_->context().store->edit_log()) ops_vec = world_->context().store->edit_log()->ops(region);
 		}
 		PackedByteArray ops;
 		const int op_count = static_cast<int>(ops_vec.size());
@@ -4948,7 +4911,7 @@ void VoxelDebugHooks::debug_store_volume(int slot, const PackedByteArray &sdf,
 		UtilityFunctions::printerr("debug_store_volume: short buffers for dim ", dim);
 		return;
 	}
-	world_->store_->volumes().reserve(slot); // no-op when the suite already claimed it
+	world_->context().store->volumes().reserve(slot); // no-op when the suite already claimed it
 	ve::VolumeData d;
 	d.dim = dim;
 	d.sdf.assign(sdf.ptr(), sdf.ptr() + n);
@@ -4969,14 +4932,14 @@ void VoxelDebugHooks::debug_store_volume(int slot, const PackedByteArray &sdf,
 		else d.normal_oct[static_cast<size_t>(i)] = ve::oct_encode_snorm8(up);
 	}
 	ve::VolumeData to_upload = d;
-	if (world_->store_->volumes().store(slot, std::move(d)) && world_->mesh_) {
-		world_->mesh_->submit_volume(slot, to_upload);
-		world_->mesh_->run_sync([](MeshPass &){});
+	if (world_->context().store->volumes().store(slot, std::move(d)) && world_->mesh_service()) {
+		world_->mesh_service()->submit_volume(slot, to_upload);
+		world_->mesh_service()->run_sync([](MeshPass &){});
 	}
 }
 
 Vector2 VoxelDebugHooks::debug_eval_field(Vector3 p, const PackedByteArray &ops, int op_count) {
-	const ve::Generator &gen = world_->store_->generator()->sampler();
+	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	const ve::EditOp *ptr = nullptr;
 	if (op_count > 0) {
 		if (ops.size() < op_count * static_cast<int64_t>(sizeof(ve::EditOp))) {
@@ -4985,12 +4948,12 @@ Vector2 VoxelDebugHooks::debug_eval_field(Vector3 p, const PackedByteArray &ops,
 		}
 		ptr = reinterpret_cast<const ve::EditOp *>(ops.ptr());
 	}
-	const ve::Sample s = ve::eval_field(gen, ptr, op_count, p.x, p.y, p.z, &world_->store_->volumes(), world_->store_->overrides());
+	const ve::Sample s = ve::eval_field(gen, ptr, op_count, p.x, p.y, p.z, &world_->context().store->volumes(), world_->context().store->overrides());
 	return Vector2(s.sdf, static_cast<float>(s.material));
 }
 
 Dictionary VoxelDebugHooks::debug_eval_field_gradient(Vector3 p, const PackedByteArray &ops, int op_count) {
-	const ve::Generator &gen = world_->store_->generator()->sampler();
+	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	const ve::EditOp *ptr = nullptr;
 	if (op_count > 0) {
 		if (ops.size() < op_count * static_cast<int64_t>(sizeof(ve::EditOp))) {
@@ -4999,7 +4962,7 @@ Dictionary VoxelDebugHooks::debug_eval_field_gradient(Vector3 p, const PackedByt
 		}
 		ptr = reinterpret_cast<const ve::EditOp *>(ops.ptr());
 	}
-	const ve::FieldSample s = ve::eval_field_gradient(gen, ptr, op_count, p.x, p.y, p.z, &world_->store_->volumes(), world_->store_->overrides());
+	const ve::FieldSample s = ve::eval_field_gradient(gen, ptr, op_count, p.x, p.y, p.z, &world_->context().store->volumes(), world_->context().store->overrides());
 	Dictionary d;
 	d["sdf"] = s.sdf;
 	d["material"] = int(s.material);
@@ -5104,7 +5067,7 @@ bool VoxelDebugHooks::probe_material(int mat, Vector3 p, Vector3 n, float rgb[3]
 	cam.params[2] = 0.0f;
 	cam.params[3] = static_cast<float>(mat);
 	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
-			world_->store_->config().atlas_bricks);
+			world_->context().store->config().atlas_bricks);
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->context().render->passes().raymarch->render(device, *world_->context().render->passes().atlas, world_->context().render->passes().islands, RID(), cam, 1, 1,
 			kNoEdit, world_->context().render->passes().field_context))
@@ -5224,7 +5187,7 @@ void VoxelDebugHooks::debug_upload_region_ops(int region_slot, const PackedByteA
 
 bool VoxelDebugHooks::debug_brick_has_surface(Vector3i brick, const PackedByteArray &ops,
 		int op_count) const {
-	const ve::Generator &gen = world_->store_->generator()->sampler();
+	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	const ve::EditOp *ptr = nullptr;
 	if (op_count > 0) {
 		if (ops.size() < op_count * static_cast<int64_t>(sizeof(ve::EditOp))) {
@@ -5233,18 +5196,18 @@ bool VoxelDebugHooks::debug_brick_has_surface(Vector3i brick, const PackedByteAr
 		}
 		ptr = reinterpret_cast<const ve::EditOp *>(ops.ptr());
 	}
-	return ve::brick_has_surface(gen, ptr, op_count, {brick.x, brick.y, brick.z}, &world_->store_->volumes());
+	return ve::brick_has_surface(gen, ptr, op_count, {brick.x, brick.y, brick.z}, &world_->context().store->volumes());
 }
 
 void VoxelDebugHooks::debug_mark_region(Vector3i region, int region_slot, Vector3i lo, Vector3i hi,
 		int op_count, bool force) {
 	RenderingDevice *device = world_->rd();
 	if (!device || !world_->context().render->passes().atlas || !world_->context().render->passes().region) return;
-	if (region_slot < 0 || region_slot >= world_->store_->config().max_region_slots) {
+	if (region_slot < 0 || region_slot >= world_->context().store->config().max_region_slots) {
 		// The mark shader indexes region_tables with rslot * kRegionBrickCount + bi, so a
 		// hostile slot is a GPU-side out-of-bounds write. Refuse before recording.
 		UtilityFunctions::printerr("debug_mark_region: region_slot ", region_slot,
-				" out of range [0, ", world_->store_->config().max_region_slots, ")");
+				" out of range [0, ", world_->context().store->config().max_region_slots, ")");
 		return;
 	}
 	const int64_t list = device->compute_list_begin();
@@ -5286,9 +5249,9 @@ Dictionary VoxelDebugHooks::debug_brick_diff(Vector3i brick, int region_slot,
 	d["slot"] = slot;
 	if (slot < 0) return d;
 
-	const ve::Generator &gen = world_->store_->generator()->sampler();
+	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	ve::BrickEval ref{};
-	ve::eval_brick(gen, ptr, op_count, b, &ref, &world_->store_->volumes(), world_->store_->overrides());
+	ve::eval_brick(gen, ptr, op_count, b, &ref, &world_->context().store->volumes(), world_->context().store->overrides());
 
 	const ve::IVec3 ab = world_->context().render->passes().atlas->config().atlas_bricks;
 	const ve::IVec3 cell{slot % ab.x, (slot / ab.x) % ab.y, slot / (ab.x * ab.y)};
@@ -5402,7 +5365,7 @@ Dictionary VoxelDebugHooks::debug_brick_flags(Vector3i region) {
 	Dictionary d;
 	debug_stream_region(region);
 	RenderingDevice *device = world_->rd();
-	if (!world_->is_initialized() || !device || !world_->context().render->passes().atlas || !world_->store_->edit_log()) return d;
+	if (!world_->is_initialized() || !device || !world_->context().render->passes().atlas || !world_->context().store->edit_log()) return d;
 	const int rslot = debug_region_map_entry(region);
 	if (rslot < 0) return d;
 
@@ -5416,9 +5379,9 @@ Dictionary VoxelDebugHooks::debug_brick_flags(Vector3i region) {
 	std::vector<ve::EditOp> ops;
 	{
 		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-		ops = world_->store_->edit_log()->ops({region.x, region.y, region.z});
+		ops = world_->context().store->edit_log()->ops({region.x, region.y, region.z});
 	}
-	const ve::Generator &gen = world_->store_->generator()->sampler();
+	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	const int32_t *slots = reinterpret_cast<const int32_t *>(table.ptr());
 	const uint32_t *gpu_flags = reinterpret_cast<const uint32_t *>(flags.ptr());
 	int compared = 0;
@@ -5433,7 +5396,7 @@ Dictionary VoxelDebugHooks::debug_brick_flags(Vector3i region) {
 		const ve::IVec3 brick{region.x * ve::kRegionBricks + x,
 				region.y * ve::kRegionBricks + y, region.z * ve::kRegionBricks + z};
 		ve::BrickEval ref{};
-		ve::eval_brick(gen, ops.data(), static_cast<int>(ops.size()), brick, &ref, &world_->store_->volumes(), world_->store_->overrides());
+		ve::eval_brick(gen, ops.data(), static_cast<int>(ops.size()), brick, &ref, &world_->context().store->volumes(), world_->context().store->overrides());
 		const uint32_t want = ve::brick_flags_from_mips(ref.mips, ref.brick.palette[0]);
 		const uint32_t got = gpu_flags[slot];
 		compared++;
@@ -5452,13 +5415,13 @@ Dictionary VoxelDebugHooks::debug_brick_flags_after_mark(Vector3i region) {
 	Dictionary d;
 	debug_stream_region(region);
 	RenderingDevice *device = world_->rd();
-	if (!world_->is_initialized() || !device || !world_->context().render->passes().atlas || !world_->store_->edit_log() || !world_->context().render->passes().region) return d;
+	if (!world_->is_initialized() || !device || !world_->context().render->passes().atlas || !world_->context().store->edit_log() || !world_->context().render->passes().region) return d;
 	const int rslot = debug_region_map_entry(region);
 	if (rslot < 0) return d;
 	int op_count = 0;
 	{
 		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-		op_count = static_cast<int>(world_->store_->edit_log()->ops({region.x, region.y, region.z}).size());
+		op_count = static_cast<int>(world_->context().store->edit_log()->ops({region.x, region.y, region.z}).size());
 	}
 	const ve::IVec3 lo{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
 			region.z * ve::kRegionBricks};
@@ -5490,11 +5453,11 @@ Dictionary VoxelDebugHooks::debug_brick_flags_after_mark(Vector3i region) {
 void VoxelDebugHooks::debug_release_region(int region_slot) {
 	RenderingDevice *device = world_->rd();
 	if (!device || !world_->context().render->passes().region) return;
-	if (region_slot < 0 || region_slot >= world_->store_->config().max_region_slots) {
+	if (region_slot < 0 || region_slot >= world_->context().store->config().max_region_slots) {
 		// Same hostile-slot hazard as debug_mark_region: the free shader indexes
 		// region_tables with rslot * kRegionBrickCount + bi.
 		UtilityFunctions::printerr("debug_release_region: region_slot ", region_slot,
-				" out of range [0, ", world_->store_->config().max_region_slots, ")");
+				" out of range [0, ", world_->context().store->config().max_region_slots, ")");
 		return;
 	}
 	const int64_t list = device->compute_list_begin();
@@ -5568,7 +5531,7 @@ Dictionary VoxelDebugHooks::debug_occupancy_fallback_diff(Vector3i region) {
 	d["mismatches"] = 0;
 	d["first_mismatch_brick"] = Vector3i(-1, -1, -1);
 	world_->ensure_initialized();
-	if (!world_->rd() || !world_->context().render->passes().atlas || !world_->store_->edit_log() || !world_->context().render->passes().region) return d;
+	if (!world_->rd() || !world_->context().render->passes().atlas || !world_->context().store->edit_log() || !world_->context().render->passes().region) return d;
 	debug_stream_region(region);
 	const int rslot = debug_region_map_entry(region);
 	if (rslot < 0) return d;
@@ -5576,7 +5539,7 @@ Dictionary VoxelDebugHooks::debug_occupancy_fallback_diff(Vector3i region) {
 	std::vector<ve::EditOp> ops;
 	{
 		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-		ops = world_->store_->edit_log()->ops({region.x, region.y, region.z});
+		ops = world_->context().store->edit_log()->ops({region.x, region.y, region.z});
 	}
 	const ve::IVec3 lo{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
 			region.z * ve::kRegionBricks};
@@ -5591,7 +5554,7 @@ Dictionary VoxelDebugHooks::debug_occupancy_fallback_diff(Vector3i region) {
 			static_cast<uint32_t>(rslot) * block_bytes, block_bytes);
 	if (gpu.size() < static_cast<int>(block_bytes)) return d;
 
-	const ve::Generator &gen = world_->store_->generator()->sampler();
+	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	int compared = 0, fallback = 0, mismatches = 0;
 	Vector3i first(-1, -1, -1);
 	for (int bi = 0; bi < ve::kRegionBrickCount; bi++) {
@@ -5600,12 +5563,12 @@ Dictionary VoxelDebugHooks::debug_occupancy_fallback_diff(Vector3i region) {
 				region.y * ve::kRegionBricks + ((bi >> 5) & (ve::kRegionBricks - 1)),
 				region.z * ve::kRegionBricks + (bi >> 10)};
 		if (ve::brick_has_surface(gen, ops.data(), static_cast<int>(ops.size()), brick,
-				&world_->store_->volumes(), world_->store_->overrides())) continue;
+				&world_->context().store->volumes(), world_->context().store->overrides())) continue;
 		fallback++;
 		const int got = ve::OccupancyGrid::read_packed(
 				reinterpret_cast<const uint8_t *>(gpu.ptr()), bi);
 		const int want = static_cast<int>(ve::cell_state_probe(gen, ops.data(),
-				static_cast<int>(ops.size()), brick, &world_->store_->volumes(), world_->store_->overrides()));
+				static_cast<int>(ops.size()), brick, &world_->context().store->volumes(), world_->context().store->overrides()));
 		compared++;
 		if (got != want) {
 			mismatches++;
@@ -5625,7 +5588,7 @@ Dictionary VoxelDebugHooks::debug_occupancy_diff(Vector3i region) {
 	d["mismatches"] = 0;
 	d["first_mismatch_brick"] = Vector3i(-1, -1, -1);
 	world_->ensure_initialized();
-	if (!world_->rd() || !world_->context().render->passes().atlas || !world_->store_->edit_log()) return d;
+	if (!world_->rd() || !world_->context().render->passes().atlas || !world_->context().store->edit_log()) return d;
 	debug_stream_region(region);
 	const int rslot = debug_region_map_entry(region);
 	if (rslot < 0) return d;
@@ -5640,10 +5603,10 @@ Dictionary VoxelDebugHooks::debug_occupancy_diff(Vector3i region) {
 	std::vector<ve::EditOp> ops;
 	{
 		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-		ops = world_->store_->edit_log()->ops({region.x, region.y, region.z});
+		ops = world_->context().store->edit_log()->ops({region.x, region.y, region.z});
 	}
 	const int32_t *slots = reinterpret_cast<const int32_t *>(table.ptr());
-	const ve::Generator &gen = world_->store_->generator()->sampler();
+	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	int compared = 0, mismatches = 0;
 	Vector3i first(-1, -1, -1);
 	for (int bi = 0; bi < ve::kRegionBrickCount; bi++) {
@@ -5655,7 +5618,7 @@ Dictionary VoxelDebugHooks::debug_occupancy_diff(Vector3i region) {
 		const int got = ve::OccupancyGrid::read_packed(
 				reinterpret_cast<const uint8_t *>(gpu.ptr()), bi);
 		const int want = static_cast<int>(ve::cell_state_field(gen, ops.data(),
-				static_cast<int>(ops.size()), brick, &world_->store_->volumes(), world_->store_->overrides()));
+				static_cast<int>(ops.size()), brick, &world_->context().store->volumes(), world_->context().store->overrides()));
 		compared++;
 		if (got != want) {
 			mismatches++;
@@ -5670,11 +5633,11 @@ Dictionary VoxelDebugHooks::debug_occupancy_diff(Vector3i region) {
 
 PackedFloat32Array VoxelDebugHooks::debug_generator_fingerprint() {
 	PackedFloat32Array out;
-	if (world_ == nullptr || world_->store_.get() == nullptr ||
-			world_->store_->generator() == nullptr) {
+	if (world_ == nullptr || world_->context().store == nullptr ||
+			world_->context().store->generator() == nullptr) {
 		return out;
 	}
-	const ve::Generator &gen = world_->store_->generator()->sampler();
+	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	// Same regimes as tests/golden/field_baseline.txt: surface, cave, deep, sky, far.
 	static const float kPts[][3] = {
 		{0.0f, 51.2f, 0.0f}, {12.3f, 55.0f, -7.8f}, {30.0f, 50.85f, 30.0f},
@@ -5691,23 +5654,23 @@ PackedFloat32Array VoxelDebugHooks::debug_generator_fingerprint() {
 }
 
 float VoxelDebugHooks::debug_field_sdf(Vector3 p) {
-	if (!world_->store_->edit_log()) return 1e30f;
-	const ve::Generator &gen = world_->store_->generator()->sampler();
+	if (!world_->context().store->edit_log()) return 1e30f;
+	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
 	const std::vector<ve::EditOp> &ops =
-			world_->store_->edit_log()->ops(ve::region_of_point(p.x, p.y, p.z));
+			world_->context().store->edit_log()->ops(ve::region_of_point(p.x, p.y, p.z));
 	return ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()), p.x, p.y, p.z,
-			&world_->store_->volumes(), world_->store_->overrides()).sdf;
+			&world_->context().store->volumes(), world_->context().store->overrides()).sdf;
 }
 
 int VoxelDebugHooks::debug_cell_state(Vector3i cell) {
-	if (!world_->store_->edit_log()) return static_cast<int>(ve::kCellUnknown);
+	if (!world_->context().store->edit_log()) return static_cast<int>(ve::kCellUnknown);
 	const ve::IVec3 c{cell.x, cell.y, cell.z};
-	const ve::Generator &gen = world_->store_->generator()->sampler();
+	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-	const std::vector<ve::EditOp> &ops = world_->store_->edit_log()->ops(ve::region_of_brick(c));
+	const std::vector<ve::EditOp> &ops = world_->context().store->edit_log()->ops(ve::region_of_brick(c));
 	return static_cast<int>(ve::cell_state_field(gen, ops.data(),
-			static_cast<int>(ops.size()), c, &world_->store_->volumes(), world_->store_->overrides()));
+			static_cast<int>(ops.size()), c, &world_->context().store->volumes(), world_->context().store->overrides()));
 }
 
 Dictionary VoxelDebugHooks::debug_occupancy_stats(Vector3 center) {
@@ -5730,11 +5693,11 @@ int VoxelDebugHooks::debug_stream_frame(Vector3 cam) {
 	// around this centre. Hook-driven tests move the camera without any physics anchor,
 	// so the streamer camera is the only correct centre here; without it, observing
 	// beyond 256 m of the origin would evict the very blocks under test.
-	world_->store_->set_center(cam.x, cam.y, cam.z);
+	world_->context().store->set_center(cam.x, cam.y, cam.z);
 	const int actions = world_->context().render->streamer()->run_frame(device, cam.x, cam.y, cam.z);
 	device->submit();
 	device->sync();
-	world_->overflow_seen_ |= static_cast<int>(world_->context().render->passes().atlas->read_overflow(device));
+	world_->note_overflow(static_cast<int>(world_->context().render->passes().atlas->read_overflow(device)));
 	world_->context().store->drain_occupancy();
 	return actions;
 }
@@ -5742,30 +5705,30 @@ int VoxelDebugHooks::debug_stream_frame(Vector3 cam) {
 Dictionary VoxelDebugHooks::debug_stream_stats() {
 	Dictionary d;
 	RenderingDevice *device = world_->rd();
-	if (!world_->is_initialized() || !device || !world_->context().render->passes().atlas || !world_->store_->residency() || !world_->context().render->streamer()) return d;
-	d["resident_regions"] = world_->store_->residency()->resident_count();
+	if (!world_->is_initialized() || !device || !world_->context().render->passes().atlas || !world_->context().store->residency() || !world_->context().render->streamer()) return d;
+	d["resident_regions"] = world_->context().store->residency()->resident_count();
 	d["frame_edits"] = world_->context().render->streamer()->last_frame_edits();
 	d["overflow"] = static_cast<int>(world_->context().render->passes().atlas->read_overflow(device));
 	// Either path may be the one running: debug_stream_frame drives the world in tests, the
 	// compositor's render callback drives it in the demo, and only the streamer sees the
 	// latter's frames. The HUD reads this, so it has to cover both.
 	d["overflow_ever"] =
-			world_->overflow_seen_ | static_cast<int>(world_->context().render->streamer()->overflow_seen());
+			world_->stats().overflow_seen | static_cast<int>(world_->context().render->streamer()->overflow_seen());
 	{
 		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-		d["override_bricks"] = world_->store_->overrides() ? world_->store_->overrides()->used() : 0;
-		d["override_capacity"] = world_->store_->overrides() ? world_->store_->overrides()->capacity() : world_->store_->config().max_override_bricks;
+		d["override_bricks"] = world_->context().store->overrides() ? world_->context().store->overrides()->used() : 0;
+		d["override_capacity"] = world_->context().store->overrides() ? world_->context().store->overrides()->capacity() : world_->context().store->config().max_override_bricks;
 		d["consolidations"] = world_->context().consolidation->consolidated_count();
 		d["consolidation_refusals"] = world_->context().consolidation->refusals();
 		d["consolidation_queue_refusals"] = world_->context().consolidation->queue_refusals();
-		d["edit_rejections"] = world_->edit_rejections_;
+		d["edit_rejections"] = world_->stats().edit_rejections;
 	}
 	return d;
 }
 
 int VoxelDebugHooks::debug_slot_of_region(Vector3i region) const {
-	if (!world_->store_->residency()) return -1;
-	return world_->store_->residency()->slot_of({region.x, region.y, region.z});
+	if (!world_->context().store->residency()) return -1;
+	return world_->context().store->residency()->slot_of({region.x, region.y, region.z});
 }
 
 int VoxelDebugHooks::debug_region_map_entry(Vector3i region) {
@@ -5780,7 +5743,7 @@ int VoxelDebugHooks::debug_region_map_entry(Vector3i region) {
 
 bool VoxelDebugHooks::debug_region_map_consistent() {
 	RenderingDevice *device = world_->rd();
-	if (!world_->is_initialized() || !device || !world_->context().render->passes().atlas || !world_->store_->residency()) return false;
+	if (!world_->is_initialized() || !device || !world_->context().render->passes().atlas || !world_->context().store->residency()) return false;
 	const ve::RegionWindow win = world_->context().store->region_window();
 	const PackedByteArray b = device->buffer_get_data(world_->context().render->passes().atlas->region_map());
 	const int32_t *map = reinterpret_cast<const int32_t *>(b.ptr());
@@ -5792,9 +5755,9 @@ bool VoxelDebugHooks::debug_region_map_consistent() {
 			for (int x = 0; x < win.dim; x++) {
 				const ve::IVec3 r{win.origin.x + x, win.origin.y + y, win.origin.z + z};
 				const int gpu_slot = map[win.index(r)];
-				const int cpu_slot = world_->store_->residency()->slot_of(r);
+				const int cpu_slot = world_->context().store->residency()->slot_of(r);
 				if (gpu_slot != cpu_slot) return false;
-				if (gpu_slot >= 0 && !(world_->store_->residency()->region_of_slot(gpu_slot) == r)) return false;
+				if (gpu_slot >= 0 && !(world_->context().store->residency()->region_of_slot(gpu_slot) == r)) return false;
 			}
 	return true;
 }
@@ -5802,12 +5765,12 @@ bool VoxelDebugHooks::debug_region_map_consistent() {
 Dictionary VoxelDebugHooks::debug_raycast(Vector3 origin, Vector3 dir) {
 	Dictionary d;
 	d["hit"] = false;
-	if (!world_->store_->edit_log()) return d;
+	if (!world_->context().store->edit_log()) return d;
 	std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-	const ve::Generator &gen = world_->store_->generator()->sampler();
+	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	const float o[3] = {origin.x, origin.y, origin.z};
 	const float f[3] = {dir.x, dir.y, dir.z};
-	const ve::RayHit h = ve::raycast(gen, *world_->store_->edit_log(), o, f, 200.0f, &world_->store_->volumes(), world_->store_->overrides());
+	const ve::RayHit h = ve::raycast(gen, *world_->context().store->edit_log(), o, f, 200.0f, &world_->context().store->volumes(), world_->context().store->overrides());
 	if (!h.hit) return d;
 	d["hit"] = true;
 	d["pos"] = Vector3(h.pos[0], h.pos[1], h.pos[2]);

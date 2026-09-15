@@ -35,6 +35,7 @@
 #include "render/lod_cull_pass.h"
 #include "render/hiz_pass.h"
 #include "lod/lod_contour.h"
+#include "lod/lod_system.h"
 #include "lod/lod_grid.h"
 #include "lod/lod_reduce.h"
 #include "lod/lod_skirt.h"
@@ -261,6 +262,35 @@ void VoxelWorld::_bind_methods() {
 			"Off,Low,Medium,High"), "set_quality_tier", "get_quality_tier");
 }
 
+void VoxelWorld::set_atlas_bricks(Vector3i v) { store_->set_atlas_bricks({v.x, v.y, v.z}); }
+Vector3i VoxelWorld::get_atlas_bricks() const {
+	const auto &b = store_->config().atlas_bricks;
+	return {b.x, b.y, b.z};
+}
+void VoxelWorld::set_max_region_slots(int v) { store_->set_max_region_slots(v); }
+int VoxelWorld::get_max_region_slots() const { return store_->config().max_region_slots; }
+void VoxelWorld::set_max_brick_jobs(int v) { store_->set_max_brick_jobs(v); }
+int VoxelWorld::get_max_brick_jobs() const { return store_->config().max_brick_jobs; }
+void VoxelWorld::set_max_override_bricks(int v) { store_->set_max_override_bricks(v); }
+int VoxelWorld::get_max_override_bricks() const { return store_->config().max_override_bricks; }
+void VoxelWorld::set_stream_radius_m(float v) { store_->set_stream_radius_m(v); }
+float VoxelWorld::get_stream_radius_m() const { return store_->config().stream_radius_m; }
+void VoxelWorld::set_occupancy_retention_m(float v) { store_->set_occupancy_retention_m(v); }
+float VoxelWorld::get_occupancy_retention_m() const { return store_->config().occupancy_retention_m; }
+void VoxelWorld::set_residency_radius_m(float v) { store_->set_residency_radius_m(v); }
+float VoxelWorld::get_residency_radius_m() const { return store_->config().residency_radius_m; }
+void VoxelWorld::set_near_field_scale(float v) { context_.render->set_near_field_scale(v); }
+float VoxelWorld::get_near_field_scale() const { return context_.render->near_field_scale(); }
+void VoxelWorld::set_sun_cascade_min_level(bool v) { context_.render->set_sun_cascade_min_level(v); }
+bool VoxelWorld::get_sun_cascade_min_level() const { return context_.render->sun_cascade_min_level(); }
+void VoxelWorld::set_max_lod_pages(int v) { lod_->set_max_lod_pages(v); }
+int VoxelWorld::get_max_lod_pages() const { return lod_->max_lod_pages(); }
+void VoxelWorld::set_max_lod_chunk_records(int v) { lod_->set_max_lod_chunk_records(v); }
+int VoxelWorld::get_max_lod_chunk_records() const { return lod_->max_lod_chunk_records(); }
+void VoxelWorld::set_lod_builds_per_frame(int v) { lod_->set_lod_builds_per_frame(v); }
+int VoxelWorld::get_lod_builds_per_frame() const { return lod_->lod_builds_per_frame(); }
+bool VoxelWorld::is_initialized() const { return context_.render->initialized(); }
+
 // Task 14: bodies moved verbatim into RenderOrchestrator (beauty_mutex_, quality_tier_,
 // beauty_ and the effect-name table went with them); these one-line delegations keep the
 // ClassDB surface and every call site compiling unchanged. Same threads as before the
@@ -486,7 +516,7 @@ void VoxelWorld::_exit_tree() {
 	// before the split, in the same residency -> edit log -> overrides order.
 	store_->release_cores();
 	store_->pending_edits()->clear();
-	overflow_seen_ = 0;
+	stats_.overflow_seen = 0;
 	// Task 15: pool -> tree -> page maps moved verbatim into LodSystem::teardown(); run at
 	// exactly the position where the statements used to sit here.
 	lod_->teardown();
@@ -640,7 +670,7 @@ ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
 		UtilityFunctions::printerr("VoxelWorld: edit op exceeds the bounded region span — spec §8 fail-soft");
 	}
 	if (!r.rejected.empty()) {
-		edit_rejections_ += static_cast<int>(r.rejected.size());
+		stats_.edit_rejections += static_cast<int>(r.rejected.size());
 		UtilityFunctions::printerr("VoxelWorld: region op list full, op rejected (",
 				r.rejected[0].x, ", ", r.rejected[0].y, ", ", r.rejected[0].z,
 				") — spec §8 fail-soft");
@@ -801,7 +831,7 @@ int VoxelWorld::physics_tick(Vector3 center) {
 	if (w.is_valid()) colliders_->set_space(w->get_space());
 	const int actions = colliders_->run_frame(center.x, center.y, center.z,
 			physics_bubble_centers_.data(), static_cast<int>(physics_bubble_centers_.size() / 3));
-	last_physics_tick_ms_ =
+	stats_.last_physics_tick_ms =
 			std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
 	return actions;
 }

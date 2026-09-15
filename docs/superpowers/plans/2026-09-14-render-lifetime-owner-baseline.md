@@ -71,3 +71,11 @@ Appended by later tasks: bite proofs, attributions, per-milestone gate results.
 - Native: `(cd extension && scons -Q test)` — `551/551` test cases passed, `9,117,142/9,117,142` assertions passed, status success.
 - gdUnit: `./gdunit_tests.sh` exited 1 before discovery with the known pre-existing `GdUnitTestCIRunner` parse error; no `results.xml` or suite counts were produced. The launcher was not repaired.
 - Result: implementation/build/native gates pass; full gdUnit remains blocked before discovery by the same baseline launcher error; teardown order is unchanged after mechanical member-name normalization.
+
+### Task 12 gate (full run)
+- Recorded 2026-09-15 at HEAD `e725994` before commit.
+- Static/API checks: `LodStats` and `WorldStats` public APIs are present; `LodSystem::stats()` holds `lod_mutex_` and calls `ensure_lod()`; both `friend class VoxelDebugHooks` declarations are absent; `voxel_world.h` is 209 lines; no `VoxelWorld::set_generator` declaration/definition remains; the `_bind_methods()` block is byte-identical; all 653 Dictionary key occurrences in `hooks.cpp` are in the same order; no pass/shader/test files changed.
+- Build: `./build.sh -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)` exited 0; `Build OK`, universal macOS debug dylib linked. The only compile-driven include fix was `#include "render/orchestrator.h"` in `extension/src/debug/hooks.cpp`.
+- Native: `(cd extension && scons -Q test)` — `551/551` test cases passed, `9,117,142/9,117,142` assertions passed, status success.
+- gdUnit: `./gdunit_tests.sh` exited 1 before discovery with the known pre-existing `GdUnitTestCIRunner` parse error; no `results.xml` or suite counts were produced. The launcher was not repaired.
+- Result: implementation/build/native gates pass; full gdUnit remains blocked before discovery by the same baseline launcher error; no pass/shader changes or lifecycle-call changes were made.

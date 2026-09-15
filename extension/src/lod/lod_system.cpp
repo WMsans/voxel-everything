@@ -20,6 +20,50 @@ namespace godot {
 
 LodSystem::LodSystem(Collaborators handles) : handles_(handles) {}
 
+LodStats LodSystem::stats() {
+	std::lock_guard<std::mutex> lock(lod_mutex_);
+	ensure_lod();
+	LodStats s;
+	if (lod_pool_) {
+		s.pages_total = lod_pool_->page_count();
+		s.pages_free = lod_pool_->free_pages();
+		s.chunk_records = lod_pool_->chunk_record_count();
+		s.chunk_records_used = lod_pool_->chunk_records_used();
+		s.chunk_records_high_water = lod_pool_->chunk_records_high_water();
+		s.pages_high_water = lod_pool_->pages_high_water();
+		s.budget_bound = lod_pool_->budget_bound();
+	}
+	s.chunks_resident = static_cast<int>(lod_pages_of_.size());
+	if (lod_tree_) lod_tree_->dirty_stats(&s.dirty_chunks, &s.dirty_levels);
+	for (const ve::LodDrawItem &item : lod_walk_.draws) s.draw_pages += item.page_count;
+	// The exact page identities of the current camera cut, not just their count: a bounded
+	// pool may keep a drawable coarse cut while refinement requests remain pending.
+	std::vector<ve::LodPageDraw> draw_page_list;
+	ve::lod_collect_page_draws(lod_walk_.draws, lod_pages_of_, lod_page_quads_, &draw_page_list);
+	for (const ve::LodPageDraw &page : draw_page_list) s.draw_page_ids.push_back(page.page);
+	for (const auto &page : lod_page_quads_)
+		if (page.second > 0) s.resident_page_ids.push_back(page.first);
+	s.requests = lod_walk_.requests;
+	// LodArena::alloc is all-or-nothing, so this should always be zero -- but a hardcoded 0
+	// would make the test that asserts it vacuous. MEASURE the two shapes a partially funded
+	// build would take: a chunk holding a page the per-page quad count never learned about,
+	// and arena pages that no resident chunk owns.
+	int partial = 0;
+	size_t owned_pages = 0;
+	for (const auto &kv : lod_pages_of_) {
+		owned_pages += kv.second.size();
+		for (int p : kv.second) {
+			if (lod_page_quads_.find(p) == lod_page_quads_.end()) {
+				partial++;
+				break;
+			}
+		}
+	}
+	const int unowned = (s.pages_total - s.pages_free) - static_cast<int>(owned_pages);
+	s.partial_allocations = partial + (unowned > 0 ? unowned : 0);
+	return s;
+}
+
 // Moved verbatim from VoxelWorld::gather_lod_ops (Task 15); the WorldStore accesses are
 // already through its public API, unchanged.
 void LodSystem::gather_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out) {

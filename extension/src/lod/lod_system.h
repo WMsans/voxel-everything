@@ -34,8 +34,27 @@ class MeshService;
 class LodPool;
 class RenderOrchestrator;
 class RenderingDevice;
-class VoxelDebugHooks;
 class WorldStore;
+
+// What the debug facade reports about the LoD runtime, copied in ONE hold of the lod mutex
+// (the hold debug_lod_stats used to take itself, through friendship). Plain data.
+struct LodStats {
+	int pages_total = 0;
+	int pages_free = 0;
+	int pages_high_water = 0;
+	int chunk_records = 0;
+	int chunk_records_used = 0;
+	int chunk_records_high_water = 0;
+	const char *budget_bound = "none";
+	int chunks_resident = 0;
+	int dirty_chunks = 0;
+	int dirty_levels = 0;
+	int draw_pages = 0;
+	std::vector<int> draw_page_ids;     // the current cut's page identities, in draw order
+	std::vector<int> resident_page_ids; // pages holding at least one quad
+	std::vector<ve::LodBuildRequest> requests; // what the last walk still wants built
+	int partial_allocations = 0;
+};
 
 class LodSystem {
 public:
@@ -109,6 +128,9 @@ public:
 
 	LodPool *pool() const { return lod_pool_; }
 
+	// Runs ensure_lod() and copies LodStats under mutex(). Tool/main thread.
+	LodStats stats();
+
 	// User-facing budgets (VoxelWorld ClassDB properties delegate to these). max_lod_pages_
 	// is read once at LodPool::initialize time; lod_builds_per_frame_ clamps each frame's
 	// submission batch.
@@ -120,15 +142,6 @@ public:
 	int max_lod_chunk_records() const { return max_lod_chunk_records_; }
 
 private:
-	// Temporary Task-15 surface: the debug facade pokes the moved members directly today,
-	// exactly as it poked VoxelWorld's before the move. Task 16 audit: still load-bearing --
-	// debug/hooks.cpp reads lod_mutex_, ensure_lod(), lod_tree_, lod_walk_, lod_pages_of_
-	// and lod_page_quads_ for its diagnostics (only pool() has a public accessor). Removing
-	// the declaration would mean widening LodSystem's public diagnostic surface, which the
-	// no-behavior-change guard (spec §8) defers to a dedicated facade rework. See
-	// task-16-report's friend table.
-	friend class VoxelDebugHooks;
-
 	// lazy: creates/initializes lod_tree_ + lod_pool_ on first use
 	void ensure_lod();
 	// Assumes lod_mutex_ is held; emits the real page list for the current lod_walk_.
