@@ -445,7 +445,6 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	dp.fade_start = fade_start;
 	dp.fade_end = fade_end;
 	dp.probe_mode = in.debug.deferred_view;
-	timings->begin(rd, "deferred");
 	SsaoPass *ssao = render_.passes().ssao;
 	if (ssao) ssao->clear_result();
 	bool ssao_ok = false;
@@ -455,6 +454,8 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		if (ssao_ok) end_stage(rd, kStageSsao);
 		else cancel_stage(kStageSsao);
 	}
+	// S8: open "deferred" only after SSAO has closed, so the label times lighting alone.
+	timings->begin(rd, "deferred");
 	const bool deferred_ok = deferred->render(rd, *gb, *materials,
 			ssgi_ok ? ssgi->result() : RID(), ssao_ok ? ssao->result() : RID(),
 			use_sun ? sun->map() : RID(), dp);
