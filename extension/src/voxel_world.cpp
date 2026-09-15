@@ -544,8 +544,8 @@ bool read_res_text(const String &path, std::string *out) {
 // world keeps today's hardcoded terrain: a bad pipeline must degrade, never kill the world.
 //
 // First successful load wins (the stages-nonempty guard): shader-reload re-init re-runs
-// ensure_initialized, and set_generator deletes the old seam, so a reload-time swap could
-// pull the field out from under in-flight physics/mesh jobs. Pipeline edits therefore take
+// ensure_initialized, and replacing the generator deletes the old seam, so a reload-time swap
+// could pull the field out from under in-flight physics/mesh jobs. Pipeline edits therefore take
 // effect on fresh init, where nothing can hold the old seam mid-evaluation.
 void VoxelWorld::load_terrain_pipeline() {
 	if (!store_->terrain_pipeline().stages.empty()) return;
