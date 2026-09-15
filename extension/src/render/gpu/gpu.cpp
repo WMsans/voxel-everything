@@ -195,7 +195,7 @@ RID texture(RenderingDevice *rd, Group &group, RenderingDevice::DataFormat forma
 bool Target::ensure(RenderingDevice *rd, Group &group, RenderingDevice::DataFormat format,
 		Vector2i size, uint32_t usage, const Color *clear) {
 	if (!rd || size.x <= 0 || size.y <= 0) return false;
-	if (rid_.is_valid() && size == size_) return true;
+	if (rid_.is_valid() && rd->texture_is_valid(rid_) && size == size_) return true;
 	if (rid_.is_valid()) {
 		RdDevice device{rd};
 		group.free(device, rid_);
@@ -228,6 +228,7 @@ void FramebufferCache::release(RenderingDevice *rd, Group &group) {
 	}
 	rid_ = RID();
 	attachments_.clear();
+	format_ = 0;
 }
 
 RID raster_pipeline(RenderingDevice *rd, Group &group, const RID &shader, int64_t fb_format,
