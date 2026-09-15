@@ -241,7 +241,7 @@ func test_a_starved_atlas_heals_instead_of_keeping_the_holes() -> void:
 	# trigger here is EDITS, which spec section 8 still lets hit the drop arm: three
 	# free-floating balls at capacity add more surface shell than the free list holds.
 	# Starve it that way, then let it settle and require the world to be whole again.
-	const SMALL_ATLAS := Vector3i(20, 10, 20)
+	const SMALL_ATLAS := Vector3i(24, 12, 24)
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.atlas_bricks = SMALL_ATLAS

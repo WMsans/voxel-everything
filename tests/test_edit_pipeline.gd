@@ -111,24 +111,32 @@ func test_sphere_add_places_material_4_in_open_sky() -> void:
 func test_paint_recolours_grass_to_rock_without_moving_the_surface() -> void:
 	var w := make_world()
 	var tool := make_tool(w)
-	# Find a GRASS spot deterministically: grass is the h in (1, 4) band.
+	# Find grass from the RENDER's own material oracle: the analytic raycast's material is taken
+	# at the exact SDF zero crossing, while the marcher reads a filtered lattice 8 mm away -- at
+	# a height band boundary that flips the material, so a debug_raycast hit can be showing rock
+	# by the time the pixel is shaded.
 	var hp := Vector3.ZERO
 	var found := false
+	var before := {}
 	for x in range(30, 50):
 		for z in range(30, 50):
 			var h: Dictionary = w.hooks().debug_raycast(Vector3(x, 80, z), Vector3(0, -1, 0))
-			if h["hit"] and h["pos"].y - 51.2 > 1.0 and h["pos"].y - 51.2 < 4.0:
+			if not h["hit"]:
+				continue
+			var p: Dictionary = w.hooks().debug_raymarch_probe(h["pos"] + Vector3(0, 1, 0), Vector3(0, -1, 0))
+			if p["hit"] and int(p["material"]) == 1 and (p["color"] as Color).g > 0.05:
 				hp = h["pos"]
+				before = p
 				found = true
 				break
 		if found:
 			break
-	assert_bool(found).is_true()
+	assert_bool(found).override_failure_message(
+		"no raymarched grass was found in the search window").is_true()
 
 	# Re-baselined for M5: textured grass/rock no longer have stable flat-albedo colour
 	# dominance, so assert the paint changes the shaded pixel and keeps the surface in place.
 	var eye := Vector3(hp.x, hp.y + 1.0, hp.z)
-	var before: Dictionary = w.hooks().debug_raymarch_probe(eye, Vector3(0, -1, 0))
 	assert_bool(before["hit"]).override_failure_message(
 		"the pre-paint ray missed the grass").is_true()
 	var before_color: Color = before["color"]
@@ -145,6 +153,8 @@ func test_paint_recolours_grass_to_rock_without_moving_the_surface() -> void:
 	var after_color: Color = after["color"]
 	assert_bool(after_color.g > 0.05).override_failure_message(
 		"the painted rock shaded error magenta").is_true()
+	assert_int(int(after["material"])).override_failure_message(
+		"the painted pixel still reports material %d, not rock" % int(after["material"])).is_equal(2)
 	var diff := absf(after_color.r - before_color.r) + absf(after_color.g - before_color.g) + absf(after_color.b - before_color.b)
 	assert_float(diff).override_failure_message(
 		"painting material 2 did not visibly change the pixel colour").is_greater(0.02)

@@ -61,7 +61,7 @@ void InjectPass::initialize(RenderingDevice *rd) {
 }
 
 void InjectPass::release_targets() {
-	if (rd_ && framebuffer_.is_valid()) rd_->free_rid(framebuffer_);
+	if (rd_ && rd_->framebuffer_is_valid(framebuffer_)) rd_->free_rid(framebuffer_);
 	framebuffer_ = RID();
 	fb_color_ = RID();
 	fb_depth_ = RID();
@@ -69,7 +69,13 @@ void InjectPass::release_targets() {
 
 void InjectPass::teardown() {
 	if (!rd_) return;
-	for (RID *r : {&uset_, &pipeline_, &shader_, &framebuffer_, &sampler_linear_, &sampler_nearest_}) {
+	if (rd_->uniform_set_is_valid(uset_)) rd_->free_rid(uset_);
+	uset_ = RID();
+	// A framebuffer dies with its attachments and RID::is_valid() does not see that, so ask
+	// the device. pipeline_/shader_/samplers are directly owned and only need the RID check.
+	if (rd_->framebuffer_is_valid(framebuffer_)) rd_->free_rid(framebuffer_);
+	framebuffer_ = RID();
+	for (RID *r : {&pipeline_, &shader_, &sampler_linear_, &sampler_nearest_}) {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
@@ -82,13 +88,13 @@ void InjectPass::teardown() {
 
 bool InjectPass::ensure_pipeline(RenderingDevice *rd, RID dst_color, RID dst_depth) {
 	if (!shader_.is_valid()) return false;
-	if (pipeline_.is_valid() && framebuffer_.is_valid() && dst_color == fb_color_ &&
+	if (pipeline_.is_valid() && rd->framebuffer_is_valid(framebuffer_) && dst_color == fb_color_ &&
 			dst_depth == fb_depth_) return true;
-	if (framebuffer_.is_valid()) rd->free_rid(framebuffer_);
+	if (rd->framebuffer_is_valid(framebuffer_)) rd->free_rid(framebuffer_);
 	framebuffer_ = rd->framebuffer_create(Array::make(dst_color, dst_depth));
 	fb_color_ = dst_color;
 	fb_depth_ = dst_depth;
-	if (!framebuffer_.is_valid()) return false;
+	if (!rd->framebuffer_is_valid(framebuffer_)) return false;
 	fb_format_ = rd->framebuffer_get_format(framebuffer_);
 	if (!pipeline_.is_valid()) {
 		Ref<RDPipelineRasterizationState> rs;
@@ -110,13 +116,13 @@ bool InjectPass::ensure_pipeline(RenderingDevice *rd, RID dst_color, RID dst_dep
 		pipeline_ = rd->render_pipeline_create(shader_, fb_format_, RenderingDevice::INVALID_ID,
 				RenderingDevice::RENDER_PRIMITIVE_TRIANGLES, rs, ms, ds, cb);
 	}
-	return pipeline_.is_valid() && framebuffer_.is_valid();
+	return pipeline_.is_valid() && rd->framebuffer_is_valid(framebuffer_);
 }
 
 bool InjectPass::draw(RenderingDevice *rd, RID dst_color, RID dst_depth, RID lit, RID gb_depth) {
 	if (!ensure_pipeline(rd, dst_color, dst_depth)) return false;
-	if (!(uset_.is_valid() && uset_lit_ == lit && uset_depth_ == gb_depth)) {
-		if (uset_.is_valid()) rd->free_rid(uset_);
+	if (!(rd_->uniform_set_is_valid(uset_) && uset_lit_ == lit && uset_depth_ == gb_depth)) {
+		if (rd_->uniform_set_is_valid(uset_)) rd->free_rid(uset_);
 		Ref<RDUniform> u0, u1;
 		u0.instantiate();
 		u0->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
@@ -132,7 +138,7 @@ bool InjectPass::draw(RenderingDevice *rd, RID dst_color, RID dst_depth, RID lit
 		uset_lit_ = lit;
 		uset_depth_ = gb_depth;
 	}
-	if (!uset_.is_valid()) return false;
+	if (!rd_->uniform_set_is_valid(uset_)) return false;
 	const int64_t dl = rd->draw_list_begin(framebuffer_, RenderingDevice::DRAW_DEFAULT_ALL);
 	if (dl < 0) return false;
 	rd->draw_list_bind_render_pipeline(dl, pipeline_);

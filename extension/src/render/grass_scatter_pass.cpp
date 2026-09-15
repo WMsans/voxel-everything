@@ -173,7 +173,7 @@ bool GrassScatterPass::ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas,
 	// Texture/sampler RIDs come from GpuAtlas through the same accessors RaymarchPass uses;
 	// the set is cached against every RID, SsaoPass-style, so it rebuilds only when a
 	// backing resource is recreated. (The owned samplers never change after initialize.)
-	if (bricks_uset_.is_valid() && key_params_ == params_ubo_ &&
+	if (rd->uniform_set_is_valid(bricks_uset_) && key_params_ == params_ubo_ &&
 			key_bricks_ == brick_list_ && key_counters_ == counters_ &&
 			key_dispatch_ == dispatch_args_ && key_rmap_ == atlas.region_map() &&
 			key_rtables_ == atlas.region_tables() && key_bflags_ == atlas.brick_flags() &&
@@ -181,7 +181,7 @@ bool GrassScatterPass::ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas,
 			key_palette_ == atlas.palette() && key_region_ == region_ubo_) {
 		// Bricks set is current; fall through to check the scatter set below.
 	} else {
-		if (bricks_uset_.is_valid()) rd->free_rid(bricks_uset_);
+		if (rd->uniform_set_is_valid(bricks_uset_)) rd->free_rid(bricks_uset_);
 		bricks_uset_ = RID();
 		Ref<RDUniform> u[11];
 		for (Ref<RDUniform> &item : u) item.instantiate();
@@ -238,7 +238,7 @@ bool GrassScatterPass::ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas,
 	// against separate shaders, so the locals are named after the buffers.
 	if (!scatter_shader_.is_valid()) return true; // scatter stage absent: cull only.
 	if (!sun_ubo.is_valid() || !atlas.region_slot_counts().is_valid()) return false;
-	if (scatter_uset_.is_valid() && key_sparams_ == params_ubo_ &&
+	if (rd->uniform_set_is_valid(scatter_uset_) && key_sparams_ == params_ubo_ &&
 			key_sbricks_ == brick_list_ && key_scounters_ == counters_ &&
 			key_sdraw_ == draw_args_ && key_srmap_ == atlas.region_map() &&
 			key_srtables_ == atlas.region_tables() && key_sbflags_ == atlas.brick_flags() &&
@@ -247,7 +247,7 @@ bool GrassScatterPass::ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas,
 			key_sinstances_ == instances_ &&
 			key_sslot_counts_ == atlas.region_slot_counts() && key_ssun_ == sun_ubo)
 		return true;
-	if (scatter_uset_.is_valid()) rd->free_rid(scatter_uset_);
+	if (rd->uniform_set_is_valid(scatter_uset_)) rd->free_rid(scatter_uset_);
 	scatter_uset_ = RID();
 	Ref<RDUniform> su[14];
 	for (Ref<RDUniform> &item : su) item.instantiate();

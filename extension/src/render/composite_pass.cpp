@@ -74,7 +74,7 @@ void CompositePass::initialize(RenderingDevice *rd) {
 }
 
 void CompositePass::release_targets() {
-	if (rd_ && framebuffer_.is_valid()) rd_->free_rid(framebuffer_);
+	if (rd_ && rd_->framebuffer_is_valid(framebuffer_)) rd_->free_rid(framebuffer_);
 	framebuffer_ = RID();
 	fb_albedo_ = RID();
 	fb_surface_ = RID();
@@ -83,7 +83,7 @@ void CompositePass::release_targets() {
 }
 
 void CompositePass::invalidate_uniform_set(RenderingDevice *rd) {
-	if (rd && uset_.is_valid()) rd->free_rid(uset_);
+	if (rd && rd->uniform_set_is_valid(uset_)) rd->free_rid(uset_);
 	uset_ = RID();
 	uset_shader_ = RID();
 	uset_src_overlay_ = RID();
@@ -96,11 +96,15 @@ void CompositePass::invalidate_uniform_set(RenderingDevice *rd) {
 
 void CompositePass::teardown() {
 	if (!rd_) return;
-	for (RID *r : {&uset_, &pipeline_, &shader_, &shader_marker_,
-			&sampler_linear_, &sampler_nearest_, &framebuffer_}) {
+	if (rd_->uniform_set_is_valid(uset_)) rd_->free_rid(uset_);
+	uset_ = RID();
+	for (RID *r : {&pipeline_, &shader_, &shader_marker_,
+			&sampler_linear_, &sampler_nearest_}) {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
+	if (rd_->framebuffer_is_valid(framebuffer_)) rd_->free_rid(framebuffer_);
+	framebuffer_ = RID();
 	uset_shader_ = RID();
 	uset_src_overlay_ = RID();
 	uset_src_surface_ = RID();
@@ -120,12 +124,12 @@ bool CompositePass::ensure_pipeline(RenderingDevice *rd, RID albedo, RID surface
 	const bool want_marker = marker.is_valid();
 	const RID shader = want_marker ? shader_marker_ : shader_;
 	if (!shader.is_valid()) return false;
-	if (pipeline_.is_valid() && framebuffer_.is_valid() &&
+	if (pipeline_.is_valid() && rd->framebuffer_is_valid(framebuffer_) &&
 			albedo == fb_albedo_ && surface == fb_surface_ && depth == fb_depth_ &&
 			marker == fb_marker_ && pipeline_marker_ == want_marker) {
 		return true;
 	}
-	if (framebuffer_.is_valid()) rd->free_rid(framebuffer_);
+	if (rd->framebuffer_is_valid(framebuffer_)) rd->free_rid(framebuffer_);
 	const Array attachments = want_marker
 			? Array::make(albedo, surface, marker, depth)
 			: Array::make(albedo, surface, depth);
@@ -134,7 +138,7 @@ bool CompositePass::ensure_pipeline(RenderingDevice *rd, RID albedo, RID surface
 	fb_surface_ = surface;
 	fb_depth_ = depth;
 	fb_marker_ = marker;
-	if (!framebuffer_.is_valid()) return false;
+	if (!rd->framebuffer_is_valid(framebuffer_)) return false;
 	fb_format_ = rd->framebuffer_get_format(framebuffer_);
 
 	if (!pipeline_.is_valid() || pipeline_marker_ != want_marker) {
@@ -169,7 +173,7 @@ bool CompositePass::ensure_pipeline(RenderingDevice *rd, RID albedo, RID surface
 		pipeline_ = rd->render_pipeline_create(shader, fb_format_, RenderingDevice::INVALID_ID,
 				RenderingDevice::RENDER_PRIMITIVE_TRIANGLES, rs, ms, ds, cb);
 	}
-	return pipeline_.is_valid() && framebuffer_.is_valid();
+	return pipeline_.is_valid() && rd->framebuffer_is_valid(framebuffer_);
 }
 
 void CompositePass::draw(RenderingDevice *rd, GBuffer &gb, RID src_overlay, RID src_surface,
@@ -207,12 +211,12 @@ void CompositePass::draw(RenderingDevice *rd, GBuffer &gb, RID src_overlay, RID 
 	u4->add_id(sampler_nearest_);
 	u4->add_id(src_surface);
 
-	if (!(uset_.is_valid() && uset_shader_ == shader && src_overlay == uset_src_overlay_ &&
+	if (!(rd->uniform_set_is_valid(uset_) && uset_shader_ == shader && src_overlay == uset_src_overlay_ &&
 			src_surface == uset_src_surface_ && src_hitpos == uset_src_hitpos_ &&
 			materials.albedo_array() == uset_material_albedo_ &&
 			materials.surface_array() == uset_material_surface_ &&
 			materials.sampler() == uset_material_sampler_)) {
-		if (uset_.is_valid()) rd->free_rid(uset_);
+		if (rd->uniform_set_is_valid(uset_)) rd->free_rid(uset_);
 		uset_ = rd->uniform_set_create(Array::make(u0, u1, u2, u3, u4), shader, 0);
 		uset_shader_ = shader;
 		uset_src_overlay_ = src_overlay;

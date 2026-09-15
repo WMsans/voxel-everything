@@ -61,7 +61,9 @@ void SsaoPass::initialize(RenderingDevice *rd) {
 
 void SsaoPass::teardown() {
 	if (!rd_) return;
-	for (RID *r : {&uset_, &pipeline_, &shader_, &target_, &sampler_nearest_}) {
+	if (rd_->uniform_set_is_valid(uset_)) rd_->free_rid(uset_);
+	uset_ = RID();
+	for (RID *r : {&pipeline_, &shader_, &target_, &sampler_nearest_}) {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
@@ -97,9 +99,9 @@ bool SsaoPass::ensure_target(RenderingDevice *rd, Vector2i size) {
 }
 
 bool SsaoPass::ensure_uniform_set(RenderingDevice *rd, GBuffer &gb, RID camera_ubo) {
-	if (uset_.is_valid() && key_surface_ == gb.surface() && key_depth_ == gb.depth() &&
+	if (rd_->uniform_set_is_valid(uset_) && key_surface_ == gb.surface() && key_depth_ == gb.depth() &&
 			key_out_ == target_ && key_camera_ == camera_ubo) return true;
-	if (uset_.is_valid()) rd->free_rid(uset_);
+	if (rd_->uniform_set_is_valid(uset_)) rd->free_rid(uset_);
 	uset_ = RID();
 	Ref<RDUniform> u[4];
 	for (Ref<RDUniform> &item : u) item.instantiate();
@@ -117,7 +119,7 @@ bool SsaoPass::ensure_uniform_set(RenderingDevice *rd, GBuffer &gb, RID camera_u
 	u[3]->set_binding(5);
 	u[3]->add_id(camera_ubo);
 	uset_ = rd->uniform_set_create(Array::make(u[0], u[1], u[2], u[3]), shader_, 0);
-	if (!uset_.is_valid()) return false;
+	if (!rd_->uniform_set_is_valid(uset_)) return false;
 	key_surface_ = gb.surface();
 	key_depth_ = gb.depth();
 	key_out_ = target_;

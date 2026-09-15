@@ -28,6 +28,9 @@ func after_test() -> void:
 	if _rd != null:
 		_rd.free()
 		_rd = null
+	if is_instance_valid(_world):
+		_world.free()
+	_world = null
 
 func _bits_to_float(u: int) -> float:
 	var b := StreamPeerBuffer.new()
@@ -56,7 +59,7 @@ func _load_golden() -> Dictionary:
 	f.close()
 	return {"pts": pts, "sdf": sdf, "mat": mat}
 
-func _make_field_set(rd: RenderingDevice, shader: RID) -> RID:
+func _make_field_set(rd: RenderingDevice, shader: RID) -> Array[RID]:
 	# Set 1, mirroring FieldContextSet: binding 0 params UBO, binding 1 sector map (one
 	# int = -1, "no sector resident"). Plan A declares no sampled resources.
 	var params: PackedByteArray = _world.hooks().debug_field_params_bytes()
@@ -78,7 +81,7 @@ func _make_field_set(rd: RenderingDevice, shader: RID) -> RID:
 	u1.binding = 1
 	u1.add_id(ssbo)
 
-	return rd.uniform_set_create([u0, u1], shader, 1)
+	return [rd.uniform_set_create([u0, u1], shader, 1), ubo, ssbo]
 
 func run_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: int) -> PackedFloat32Array:
 	var code: String = _world.hooks().debug_load_shader("res://shaders/field_probe.comp.glsl")
@@ -121,10 +124,11 @@ func run_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: int) -> Pa
 	var pipeline := _rd.compute_pipeline_create(shader)
 
 	var push := PackedInt32Array([pts.size(), op_count, 0, 0]).to_byte_array()
+	var field_rids := _make_field_set(_rd, shader)
 	var list := _rd.compute_list_begin()
 	_rd.compute_list_bind_compute_pipeline(list, pipeline)
 	_rd.compute_list_bind_uniform_set(list, uset, 0)
-	_rd.compute_list_bind_uniform_set(list, _make_field_set(_rd, shader), 1)
+	_rd.compute_list_bind_uniform_set(list, field_rids[0], 1)
 	_rd.compute_list_set_push_constant(list, push, push.size())
 	_rd.compute_list_dispatch(list, (pts.size() + 63) / 64, 1, 1)
 	_rd.compute_list_end()
@@ -132,6 +136,8 @@ func run_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: int) -> Pa
 	_rd.sync()
 
 	var out := _rd.buffer_get_data(out_buf).to_float32_array()
+	for rid in field_rids:
+		_rd.free_rid(rid)
 	_rd.free_rid(uset)
 	_rd.free_rid(pipeline)
 	_rd.free_rid(shader)

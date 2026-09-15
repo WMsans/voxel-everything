@@ -34,6 +34,14 @@ func make_world() -> VoxelWorld:
 func frame(w: VoxelWorld, width := 64, height := 64) -> Dictionary:
 	return w.hooks().debug_render_frame(CAM, FWD.normalized(), width, height)
 
+func test_resize_and_shutdown_release_gpu_resources_without_errors() -> void:
+	var w := make_world()
+	await assert_error(func():
+		assert_bool(frame(w)["ok"]).is_true()
+		assert_bool(frame(w, 96, 64)["ok"]).is_true()
+		w.free()
+	).is_success()
+
 func test_a_headless_frame_runs_the_core_stages() -> void:
 	var w := make_world()
 	var d := frame(w)

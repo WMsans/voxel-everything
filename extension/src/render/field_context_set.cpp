@@ -59,7 +59,7 @@ bool FieldContextSet::initialize(RenderingDevice *rd, RID shader, const ve::Reso
 
 void FieldContextSet::teardown() {
 	if (rd_ == nullptr) return;
-	if (uset_.is_valid()) { rd_->free_rid(uset_); uset_ = RID(); }
+	if (rd_->uniform_set_is_valid(uset_)) { rd_->free_rid(uset_); uset_ = RID(); }
 	if (sector_map_.is_valid()) { rd_->free_rid(sector_map_); sector_map_ = RID(); }
 	if (params_ubo_.is_valid()) { rd_->free_rid(params_ubo_); params_ubo_ = RID(); }
 	rd_ = nullptr;

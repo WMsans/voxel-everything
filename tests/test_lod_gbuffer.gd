@@ -43,7 +43,7 @@ func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> bool:
 # unit normal, or the deferred pass has nothing to light it with.
 func test_far_field_pixels_carry_a_material_and_a_unit_normal(timeout := 60000) -> void:
 	var w := make_world()
-	var pos := Vector3(100.0, 100.0, 100.0)
+	var pos := Vector3(100.0, 200.0, 100.0)
 	var fwd := Vector3(0.3, -0.5, 0.3).normalized()
 	assert_bool(await settle(w, pos, fwd)).is_true()
 	var d: Dictionary = w.hooks().debug_lod_gbuffer_probe(pos, fwd, 128, 128)
@@ -77,7 +77,7 @@ func test_the_two_fields_light_identically_across_the_band(timeout := 180000) ->
 
 func test_the_lod_raster_no_longer_shades(timeout := 60000) -> void:
 	var w := make_world()
-	var pos := Vector3(100.0, 100.0, 100.0)
+	var pos := Vector3(100.0, 200.0, 100.0)
 	var fwd := Vector3(0.3, -0.5, 0.3).normalized()
 	assert_bool(await settle(w, pos, fwd)).is_true()
 	var d: Dictionary = w.hooks().debug_lod_gbuffer_probe(pos, fwd, 128, 128)
@@ -92,7 +92,7 @@ func test_the_lod_raster_no_longer_shades(timeout := 60000) -> void:
 # whole quad, so without the map a distant hillside is one unbroken facet.
 func test_the_material_normal_map_shapes_the_far_field_shading_normal(timeout := 60000) -> void:
 	var w := make_world()
-	var pos := Vector3(100.0, 100.0, 100.0)
+	var pos := Vector3(100.0, 200.0, 100.0)
 	var fwd := Vector3(0.3, -0.5, 0.3).normalized()
 	assert_bool(await settle(w, pos, fwd)).is_true()
 	var before: Dictionary = w.hooks().debug_lod_gbuffer_probe(pos, fwd, 128, 128)

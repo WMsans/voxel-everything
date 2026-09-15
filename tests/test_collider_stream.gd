@@ -50,6 +50,7 @@ func settle(w: VoxelWorld, center: Vector3, frames := 6000) -> bool:
 		quiet = quiet + 1 if st["chunks_pending"] == 0 and st["queued"] == 0 else 0
 		if quiet >= 4:
 			return true
+		OS.delay_msec(1) # Let the asynchronous mesher finish within the polling budget.
 	return false
 
 func ray(from: Vector3, to: Vector3) -> Dictionary:
@@ -199,6 +200,9 @@ func test_a_body_bubble_streams_its_own_small_ball_not_the_players(timeout := 90
 
 	# A body far outside the player's own 25 m ball, so everything it adds is its bubble.
 	var body := CENTER + Vector3(80.0, 0.0, 0.0)
+	var ground: Dictionary = w.hooks().debug_raycast(Vector3(body.x, 180.0, body.z), Vector3.DOWN)
+	assert_bool(ground["hit"]).is_true()
+	body.y = ground["pos"].y + 0.5
 	w.hooks().debug_set_physics_bubbles(PackedVector3Array([body]))
 	settle(w, CENTER)
 	var withb: int = w.hooks().debug_physics_stats()["chunks_resident"]
@@ -235,6 +239,10 @@ func test_apply_respects_the_build_budget_under_churn(timeout := 60000) -> void:
 	var quiet := 0
 	for i in range(20000):
 		w.hooks().debug_physics_frame(centre)
+		# Yield wall-clock time to the async mesher, exactly as settle() does: a tight
+		# polling loop submits batches but never lets the worker thread's blocking GPU sync
+		# finish, so the streamer looks stuck while it is merely starved of real time.
+		OS.delay_msec(1)
 		if i % 250 == 0:
 			var st0: Dictionary = w.hooks().debug_physics_stats()
 			quiet = quiet + 1 if st0["chunks_pending"] == 0 and st0["queued"] == 0 else 0

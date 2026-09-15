@@ -26,6 +26,8 @@ func make_world() -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.physics_enabled = false
+	# These fixed coordinates describe the original analytic terrain.
+	w.terrain_pipeline_path = "res://assets/pipelines/golden.pipeline"
 	w.mesh_jobs_per_frame = 2
 	add_child(w)
 	_worlds.append(w)

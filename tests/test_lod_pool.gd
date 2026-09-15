@@ -67,7 +67,7 @@ func test_ticking_streams_chunks_in(timeout := 120000) -> void:
 		"the far field never converged: %s" % d).is_greater(0)
 	assert_int(d["chunks_resident"]).override_failure_message(
 		"settling produced no resident chunks: %s" % d).is_greater(0)
-	assert_int(d["pages_free"]).is_less(16384)
+	assert_int(d["pages_free"]).is_less(int(d["pages_total"]))
 	assert_int(d["draw_pages"]).override_failure_message(
 		"chunks are resident but nothing is in the draw list").is_greater(0)
 

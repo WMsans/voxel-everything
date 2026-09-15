@@ -170,7 +170,7 @@ void HizPass::teardown() {
 	// shared slices and referencing sets, so sets first, then pipeline/shader, then the
 	// texture/sampler resources.
 	for (RID &r : usets_) {
-		if (r.is_valid()) rd_->free_rid(r);
+		if (rd_->uniform_set_is_valid(r)) rd_->free_rid(r);
 		r = RID();
 	}
 	uset0_src_ = RID();
@@ -193,8 +193,8 @@ void HizPass::teardown() {
 
 bool HizPass::ensure_uniform_set(RenderingDevice *rd, RID src, int dst_mip) {
 	if (dst_mip == 0) {
-		if (usets_[0].is_valid() && src == uset0_src_) return true;
-		if (usets_[0].is_valid()) rd->free_rid(usets_[0]);
+		if (rd_->uniform_set_is_valid(usets_[0]) && src == uset0_src_) return true;
+		if (rd_->uniform_set_is_valid(usets_[0])) rd->free_rid(usets_[0]);
 		usets_[0] = RID();
 	} else if (usets_[dst_mip].is_valid()) {
 		return true;
@@ -262,7 +262,7 @@ bool HizPass::build(RenderingDevice *rd, RID scene_depth, Vector2i scene_size) {
 
 void HizPass::release_level0_set() {
 	if (!rd_) return;
-	if (usets_[0].is_valid()) rd_->free_rid(usets_[0]);
+	if (rd_->uniform_set_is_valid(usets_[0])) rd_->free_rid(usets_[0]);
 	usets_[0] = RID();
 	uset0_src_ = RID();
 }

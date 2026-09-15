@@ -64,7 +64,9 @@ void SsgiPass::initialize(RenderingDevice *rd) {
 
 void SsgiPass::teardown() {
 	if (!rd_) return;
-	for (RID *r : {&uset_, &pipeline_, &shader_}) {
+	if (rd_->uniform_set_is_valid(uset_)) rd_->free_rid(uset_);
+	uset_ = RID();
+	for (RID *r : {&pipeline_, &shader_}) {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
@@ -82,7 +84,7 @@ bool SsgiPass::ensure_targets(RenderingDevice *rd, Vector2i size) {
 	if (size.x <= 0 || size.y <= 0) return false;
 	if (targets_[0].is_valid() && targets_[1].is_valid() && raw_.is_valid() && size == size_)
 		return true;
-	if (uset_.is_valid()) rd->free_rid(uset_);
+	if (rd_->uniform_set_is_valid(uset_)) rd->free_rid(uset_);
 	uset_ = RID();
 	for (RID *r : {&targets_[0], &targets_[1], &raw_}) {
 		if (r->is_valid()) rd->free_rid(*r);
@@ -113,10 +115,10 @@ bool SsgiPass::ensure_targets(RenderingDevice *rd, Vector2i size) {
 
 bool SsgiPass::ensure_uniform_set(RenderingDevice *rd, GBuffer &gb, RID camera_ubo,
 		RID prev_ssgi, RID out_ssgi) {
-	if (uset_.is_valid() && key_albedo_ == gb.albedo() && key_surface_ == gb.surface() &&
+	if (rd_->uniform_set_is_valid(uset_) && key_albedo_ == gb.albedo() && key_surface_ == gb.surface() &&
 			key_depth_ == gb.depth() && key_history_ == gb.history() && key_prev_ == prev_ssgi &&
 			key_out_ == out_ssgi && key_camera_ == camera_ubo) return true;
-	if (uset_.is_valid()) rd->free_rid(uset_);
+	if (rd_->uniform_set_is_valid(uset_)) rd->free_rid(uset_);
 	Ref<RDUniform> u[8];
 	for (Ref<RDUniform> &item : u) item.instantiate();
 	const RID textures[4] = {gb.surface(), gb.depth(), gb.history(), prev_ssgi};
@@ -142,7 +144,7 @@ bool SsgiPass::ensure_uniform_set(RenderingDevice *rd, GBuffer &gb, RID camera_u
 	Array uniforms;
 	for (const Ref<RDUniform> &item : u) uniforms.push_back(item);
 	uset_ = rd->uniform_set_create(uniforms, shader_, 0);
-	if (!uset_.is_valid()) return false;
+	if (!rd_->uniform_set_is_valid(uset_)) return false;
 	key_albedo_ = gb.albedo();
 	key_surface_ = gb.surface();
 	key_depth_ = gb.depth();

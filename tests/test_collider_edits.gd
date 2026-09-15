@@ -47,6 +47,7 @@ func settle(w: VoxelWorld, center: Vector3, frames := 6000) -> bool:
 		quiet = quiet + 1 if st["chunks_pending"] == 0 and st["queued"] == 0 else 0
 		if quiet >= 4:
 			return true
+		OS.delay_msec(1) # Let the asynchronous mesher finish within the polling budget.
 	return false
 
 func ray(from: Vector3, to: Vector3) -> Dictionary:

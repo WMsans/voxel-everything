@@ -66,13 +66,16 @@ void GrassRasterPass::initialize(RenderingDevice *rd) {
 
 void GrassRasterPass::teardown() {
 	if (!rd_) return;
-	// Same cascade order as LodRasterPass: the uniform set references the shader, and
-	// freeing the shader tears down its pipelines, so free the set first, then
-	// pipeline/shader.
-	for (RID *r : {&uset_, &pipeline_, &shader_, &framebuffer_}) {
+	// The uniform set references the shader, and freeing the shader tears down its
+	// pipelines, so free the set first, then pipeline/shader.
+	if (rd_->uniform_set_is_valid(uset_)) rd_->free_rid(uset_);
+	uset_ = RID();
+	for (RID *r : {&pipeline_, &shader_}) {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
+	if (rd_->framebuffer_is_valid(framebuffer_)) rd_->free_rid(framebuffer_);
+	framebuffer_ = RID();
 	uset_shader_ = RID();
 	uset_instances_ = RID();
 	uset_params_ = RID();
@@ -84,7 +87,7 @@ void GrassRasterPass::teardown() {
 }
 
 void GrassRasterPass::release_targets() {
-	if (rd_ && framebuffer_.is_valid()) rd_->free_rid(framebuffer_);
+	if (rd_ && rd_->framebuffer_is_valid(framebuffer_)) rd_->free_rid(framebuffer_);
 	framebuffer_ = RID();
 	fb_albedo_ = RID();
 	fb_surface_ = RID();
@@ -96,11 +99,11 @@ bool GrassRasterPass::ensure_pipeline(RenderingDevice *rd, GBuffer &gb) {
 	const RID surface = gb.surface();
 	const RID depth = gb.depth();
 	if (!shader_.is_valid()) return false;
-	if (pipeline_.is_valid() && framebuffer_.is_valid() &&
+	if (pipeline_.is_valid() && rd->framebuffer_is_valid(framebuffer_) &&
 			albedo == fb_albedo_ && surface == fb_surface_ && depth == fb_depth_) {
 		return true;
 	}
-	if (framebuffer_.is_valid()) rd->free_rid(framebuffer_);
+	if (rd->framebuffer_is_valid(framebuffer_)) rd->free_rid(framebuffer_);
 	// No marker attachment: blades write exactly the two colour channels the far field
 	// writes, plus depth.
 	const Array attachments = Array::make(albedo, surface, depth);
@@ -108,7 +111,7 @@ bool GrassRasterPass::ensure_pipeline(RenderingDevice *rd, GBuffer &gb) {
 	fb_albedo_ = albedo;
 	fb_surface_ = surface;
 	fb_depth_ = depth;
-	if (!framebuffer_.is_valid()) return false;
+	if (!rd->framebuffer_is_valid(framebuffer_)) return false;
 	fb_format_ = rd->framebuffer_get_format(framebuffer_);
 
 	if (!pipeline_.is_valid()) {
@@ -146,11 +149,11 @@ bool GrassRasterPass::ensure_pipeline(RenderingDevice *rd, GBuffer &gb) {
 bool GrassRasterPass::ensure_uniform_set(RenderingDevice *rd, GrassScatterPass &scatter) {
 	const RID instances = scatter.instance_buffer();
 	const RID params = scatter.params_buffer();
-	if (uset_.is_valid() && uset_shader_ == shader_ &&
+	if (rd->uniform_set_is_valid(uset_) && uset_shader_ == shader_ &&
 			instances == uset_instances_ && params == uset_params_) {
 		return true;
 	}
-	if (uset_.is_valid()) rd->free_rid(uset_);
+	if (rd->uniform_set_is_valid(uset_)) rd->free_rid(uset_);
 	uset_ = RID();
 	Ref<RDUniform> u0;
 	u0.instantiate();

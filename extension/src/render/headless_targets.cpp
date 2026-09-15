@@ -8,7 +8,7 @@ using namespace godot;
 
 bool HeadlessTargets::ensure(RenderingDevice *rd, Vector2i size) {
 	if (!rd || size.x <= 0 || size.y <= 0) return false;
-	if (rd_ == rd && size_ == size && framebuffer_.is_valid()) return true;
+	if (rd_ == rd && size_ == size && rd->framebuffer_is_valid(framebuffer_)) return true;
 	release();
 	rd_ = rd;
 	size_ = size;
@@ -39,7 +39,7 @@ bool HeadlessTargets::ensure(RenderingDevice *rd, Vector2i size) {
 		return false;
 	}
 	framebuffer_ = rd->framebuffer_create(Array::make(color_, depth_));
-	if (!framebuffer_.is_valid()) {
+	if (!rd->framebuffer_is_valid(framebuffer_)) {
 		release();
 		return false;
 	}
@@ -47,7 +47,7 @@ bool HeadlessTargets::ensure(RenderingDevice *rd, Vector2i size) {
 }
 
 bool HeadlessTargets::clear(RenderingDevice *rd) {
-	if (!rd || rd != rd_ || !framebuffer_.is_valid()) return false;
+	if (!rd || rd != rd_ || !rd->framebuffer_is_valid(framebuffer_)) return false;
 	PackedColorArray clears;
 	clears.push_back(Color(0, 0, 0, 0));
 	// 0.0 is the reverse-Z far plane: inject's GREATER_OR_EQUAL test then accepts every
@@ -62,7 +62,7 @@ bool HeadlessTargets::clear(RenderingDevice *rd) {
 void HeadlessTargets::release() {
 	if (rd_) {
 		// Framebuffer first: it depends on both textures.
-		if (framebuffer_.is_valid()) rd_->free_rid(framebuffer_);
+		if (rd_->framebuffer_is_valid(framebuffer_)) rd_->free_rid(framebuffer_);
 		if (color_.is_valid()) rd_->free_rid(color_);
 		if (depth_.is_valid()) rd_->free_rid(depth_);
 	}

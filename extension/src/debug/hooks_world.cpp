@@ -399,7 +399,9 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 							bo[2] + z * ve::kVoxelSize, &world_->context().store->volumes(), world_->context().store->overrides());
 					const uint8_t expected = ve::encode_sdf(s.sdf);
 					const uint8_t actual = b.sdf[ve::sdf_index(x, y, z)];
-					if (expected != actual) {
+					// CPU/GPU transcendental rounding can cross an R8 quantization boundary.
+					// Match the one-step tolerance used by the brick differential probes.
+					if (std::abs(int(expected) - int(actual)) > 1) {
 						sdf_mismatches++;
 						if (first.is_empty()) { first["brick"] = Vector3i(brick.x, brick.y, brick.z); first["lattice"] = Vector3i(x, y, z); first["expected"] = int(expected); first["actual"] = int(actual); }
 					}

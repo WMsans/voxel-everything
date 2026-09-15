@@ -62,7 +62,7 @@ void DeferredPass::initialize(RenderingDevice *rd) {
 void DeferredPass::set_sun_ubo(RID buffer) {
 	sun_light_ubo_ = buffer;
 	// The uniform set caches this RID; drop it so the next render rebuilds.
-	if (rd_ && uset_.is_valid()) {
+	if (rd_ && rd_->uniform_set_is_valid(uset_)) {
 		rd_->free_rid(uset_);
 		uset_ = RID();
 	}
@@ -70,7 +70,9 @@ void DeferredPass::set_sun_ubo(RID buffer) {
 
 void DeferredPass::teardown() {
 	if (!rd_) return;
-	for (RID *r : {&uset_, &pipeline_, &shader_}) {
+	if (rd_->uniform_set_is_valid(uset_)) rd_->free_rid(uset_);
+	uset_ = RID();
+	for (RID *r : {&pipeline_, &shader_}) {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
@@ -132,12 +134,12 @@ bool DeferredPass::ensure_uniform_set(RenderingDevice *rd, GBuffer &gb,
 	const RID material_albedo = materials.albedo_array();
 	const RID material_surface = materials.surface_array();
 	const RID material_sampler = materials.sampler();
-	if (uset_.is_valid() && key_albedo_ == gb.albedo() && key_surface_ == gb.surface() &&
+	if (rd_->uniform_set_is_valid(uset_) && key_albedo_ == gb.albedo() && key_surface_ == gb.surface() &&
 			key_depth_ == gb.depth() && key_lit_ == gb.lit() && key_ssgi_ == ssgi &&
 			key_ssao_ == ssao && key_sun_ == sun_map && key_material_albedo_ == material_albedo &&
 			key_material_surface_ == material_surface && key_material_sampler_ == material_sampler)
 		return true;
-	if (uset_.is_valid()) rd->free_rid(uset_);
+	if (rd_->uniform_set_is_valid(uset_)) rd->free_rid(uset_);
 	uset_ = RID();
 	Ref<RDUniform> u[11];
 	for (int i = 0; i < 11; i++) u[i].instantiate();
@@ -175,7 +177,7 @@ bool DeferredPass::ensure_uniform_set(RenderingDevice *rd, GBuffer &gb,
 	uset_ = rd->uniform_set_create(
 			Array::make(u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], u[9], u[10]),
 			shader_, 0);
-	if (!uset_.is_valid()) return false;
+	if (!rd_->uniform_set_is_valid(uset_)) return false;
 	key_albedo_ = gb.albedo();
 	key_surface_ = gb.surface();
 	key_depth_ = gb.depth();

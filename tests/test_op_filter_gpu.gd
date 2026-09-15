@@ -49,7 +49,7 @@ func generate_region(w: VoxelWorld, ops: PackedByteArray, op_count: int) -> void
 	w.hooks().debug_mark_region(region, 0, region * 32, region * 32 + Vector3i(31, 31, 31), op_count, true)
 	w.hooks().debug_generate_pending()
 
-func _make_field_set(rd: RenderingDevice, shader: RID) -> RID:
+func _make_field_set(rd: RenderingDevice, shader: RID) -> Array[RID]:
 	# Set 1, mirroring FieldContextSet: binding 0 params UBO, binding 1 sector map (one
 	# int = -1, "no sector resident"). Plan A declares no sampled resources.
 	var params: PackedByteArray = _worlds[0].hooks().debug_field_params_bytes()
@@ -71,7 +71,7 @@ func _make_field_set(rd: RenderingDevice, shader: RID) -> RID:
 	u1.binding = 1
 	u1.add_id(ssbo)
 
-	return rd.uniform_set_create([u0, u1], shader, 1)
+	return [rd.uniform_set_create([u0, u1], shader, 1), ubo, ssbo]
 
 func run_filtered_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: int,
 		volume: Array) -> PackedFloat32Array:
@@ -108,16 +108,19 @@ func run_filtered_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: i
 		uniforms.append(u)
 	var uset := rd.uniform_set_create(uniforms, shader, 0)
 	var push := PackedInt32Array([pts.size(), op_count, 0, 0]).to_byte_array()
+	var field_rids := _make_field_set(rd, shader)
 	var list := rd.compute_list_begin()
 	rd.compute_list_bind_compute_pipeline(list, pipeline)
 	rd.compute_list_bind_uniform_set(list, uset, 0)
-	rd.compute_list_bind_uniform_set(list, _make_field_set(rd, shader), 1)
+	rd.compute_list_bind_uniform_set(list, field_rids[0], 1)
 	rd.compute_list_set_push_constant(list, push, push.size())
 	rd.compute_list_dispatch(list, (pts.size() + 63) / 64, 1, 1)
 	rd.compute_list_end()
 	rd.submit()
 	rd.sync()
 	var result := rd.buffer_get_data(out_buf).to_float32_array()
+	for rid in field_rids:
+		rd.free_rid(rid)
 	for rid in [uset, pipeline, shader, op_buf, point_buf, out_buf, sdf_buf, mat_buf]:
 		rd.free_rid(rid)
 	rd.free()

@@ -72,11 +72,15 @@ void LodRasterPass::teardown() {
 	if (!rd_) return;
 	// Same cascade order as CompositePass: uniform set references the shader, and freeing
 	// the shader tears down its pipelines, so free the set first, then pipelines/shader.
-	for (RID *r : {&uset_, &index_array_, &pipeline_cull_off_, &pipeline_cull_ccw_,
-				&pipeline_cull_cw_, &shader_, &shader_marker_, &framebuffer_}) {
+	if (rd_->uniform_set_is_valid(uset_)) rd_->free_rid(uset_);
+	uset_ = RID();
+	for (RID *r : {&index_array_, &pipeline_cull_off_, &pipeline_cull_ccw_,
+			&pipeline_cull_cw_, &shader_, &shader_marker_}) {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
+	if (rd_->framebuffer_is_valid(framebuffer_)) rd_->free_rid(framebuffer_);
+	framebuffer_ = RID();
 	uset_shader_ = RID();
 	uset_quads_ = RID();
 	uset_normals_ = RID();
@@ -95,7 +99,7 @@ void LodRasterPass::teardown() {
 }
 
 void LodRasterPass::release_targets() {
-	if (rd_ && framebuffer_.is_valid()) rd_->free_rid(framebuffer_);
+	if (rd_ && rd_->framebuffer_is_valid(framebuffer_)) rd_->free_rid(framebuffer_);
 	framebuffer_ = RID();
 	fb_albedo_ = RID();
 	fb_surface_ = RID();
@@ -115,12 +119,12 @@ bool LodRasterPass::ensure_pipeline(RenderingDevice *rd, GBuffer &gb, RID marker
 	const RID shader = want_marker ? shader_marker_ : shader_;
 	if (!shader.is_valid()) return false;
 	if (pipeline_cull_off_.is_valid() && pipeline_cull_ccw_.is_valid() &&
-			pipeline_cull_cw_.is_valid() && framebuffer_.is_valid() &&
+			pipeline_cull_cw_.is_valid() && rd->framebuffer_is_valid(framebuffer_) &&
 			albedo == fb_albedo_ && surface == fb_surface_ && depth == fb_depth_ &&
 			marker == fb_marker_ && pipeline_marker_ == want_marker) {
 		return true;
 	}
-	if (framebuffer_.is_valid()) rd->free_rid(framebuffer_);
+	if (rd->framebuffer_is_valid(framebuffer_)) rd->free_rid(framebuffer_);
 	const Array attachments = want_marker ?
 			Array::make(albedo, surface, marker, depth) : Array::make(albedo, surface, depth);
 	framebuffer_ = rd->framebuffer_create(attachments);
@@ -128,7 +132,7 @@ bool LodRasterPass::ensure_pipeline(RenderingDevice *rd, GBuffer &gb, RID marker
 	fb_surface_ = surface;
 	fb_depth_ = depth;
 	fb_marker_ = marker;
-	if (!framebuffer_.is_valid()) return false;
+	if (!rd->framebuffer_is_valid(framebuffer_)) return false;
 	fb_format_ = rd->framebuffer_get_format(framebuffer_);
 
 	if (!pipeline_cull_off_.is_valid() || !pipeline_cull_ccw_.is_valid() ||
@@ -201,13 +205,13 @@ bool LodRasterPass::ensure_uniform_set(RenderingDevice *rd, LodPool &pool, Mater
 	const RID albedo = materials.albedo_array();
 	const RID surface = materials.surface_array();
 	const RID sampler = materials.sampler();
-	if (uset_.is_valid() && uset_shader_ == shader &&
+	if (rd->uniform_set_is_valid(uset_) && uset_shader_ == shader &&
 			quads == uset_quads_ && normals == uset_normals_ && page_chunk == uset_page_chunk_ &&
 			chunks == uset_chunks_ && albedo == uset_albedo_ && surface == uset_surface_ &&
 			sampler == uset_sampler_) {
 		return true;
 	}
-	if (uset_.is_valid()) rd->free_rid(uset_);
+	if (rd->uniform_set_is_valid(uset_)) rd->free_rid(uset_);
 	uset_ = RID();
 	Ref<RDUniform> u0;
 	u0.instantiate();

@@ -124,7 +124,7 @@ bool SsrPass::initialize(RenderingDevice *rd) {
 void SsrPass::teardown() {
 	if (!rd_) return;
 	for (RID *r : {&trace_set_, &apply_set_}) {
-		if (r->is_valid()) rd_->free_rid(*r);
+		if (rd_->uniform_set_is_valid(*r)) rd_->free_rid(*r);
 		*r = RID();
 	}
 	for (RID *r : {&trace_pipeline_, &apply_pipeline_, &trace_shader_, &apply_shader_}) {
@@ -145,8 +145,8 @@ bool SsrPass::ensure_targets(RenderingDevice *rd, Vector2i size) {
 	if (size.x <= 0 || size.y <= 0) return false;
 	const Vector2i half(std::max(1, size.x / 2), std::max(1, size.y / 2));
 	if (reflection_.is_valid() && half == half_size_) return true;
-	if (trace_set_.is_valid()) rd->free_rid(trace_set_);
-	if (apply_set_.is_valid()) rd->free_rid(apply_set_);
+	if (rd_->uniform_set_is_valid(trace_set_)) rd->free_rid(trace_set_);
+	if (rd_->uniform_set_is_valid(apply_set_)) rd->free_rid(apply_set_);
 	trace_set_ = apply_set_ = RID();
 	if (reflection_.is_valid()) rd->free_rid(reflection_);
 	reflection_ = make_texture(rd, RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT, half,
@@ -161,11 +161,11 @@ bool SsrPass::ensure_targets(RenderingDevice *rd, Vector2i size) {
 
 bool SsrPass::ensure_uniform_sets(RenderingDevice *rd, RID scene_color, RID scene_depth,
 		RID gb_surface, RID gb_depth, RID normal_roughness, RID camera_ubo) {
-	if (trace_set_.is_valid() && apply_set_.is_valid() && key_color_ == scene_color &&
+	if (rd_->uniform_set_is_valid(trace_set_) && rd_->uniform_set_is_valid(apply_set_) && key_color_ == scene_color &&
 			key_depth_ == scene_depth && key_surface_ == gb_surface && key_gb_depth_ == gb_depth &&
 			key_normal_ == normal_roughness && key_camera_ == camera_ubo) return true;
-	if (trace_set_.is_valid()) rd->free_rid(trace_set_);
-	if (apply_set_.is_valid()) rd->free_rid(apply_set_);
+	if (rd_->uniform_set_is_valid(trace_set_)) rd->free_rid(trace_set_);
+	if (rd_->uniform_set_is_valid(apply_set_)) rd->free_rid(apply_set_);
 	trace_set_ = apply_set_ = RID();
 	const RID normal = normal_roughness.is_valid() ? normal_roughness : dummy_normal_;
 	const Array trace_uniforms = Array::make(
@@ -186,9 +186,9 @@ bool SsrPass::ensure_uniform_sets(RenderingDevice *rd, RID scene_color, RID scen
 	const Array apply_uniforms = Array::make(sampler_texture(0, linear_, reflection_),
 			image_texture(1, scene_color));
 	apply_set_ = rd->uniform_set_create(apply_uniforms, apply_shader_, 0);
-	if (!trace_set_.is_valid() || !apply_set_.is_valid()) {
-		if (trace_set_.is_valid()) rd->free_rid(trace_set_);
-		if (apply_set_.is_valid()) rd->free_rid(apply_set_);
+	if (!rd_->uniform_set_is_valid(trace_set_) || !rd_->uniform_set_is_valid(apply_set_)) {
+		if (rd_->uniform_set_is_valid(trace_set_)) rd->free_rid(trace_set_);
+		if (rd_->uniform_set_is_valid(apply_set_)) rd->free_rid(apply_set_);
 		trace_set_ = apply_set_ = RID();
 		return false;
 	}

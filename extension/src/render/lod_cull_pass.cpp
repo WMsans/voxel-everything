@@ -99,7 +99,7 @@ void LodCullPass::teardown() {
 	if (stats_readback_.is_valid()) stats_readback_->drain(rd_);
 	if (args_readback_.is_valid()) args_readback_->drain(rd_);
 	// Uniform set first: it references the shader, stats, and pool buffers.
-	if (uset_.is_valid()) rd_->free_rid(uset_);
+	if (rd_->uniform_set_is_valid(uset_)) rd_->free_rid(uset_);
 	uset_ = RID();
 	if (pipeline_.is_valid()) rd_->free_rid(pipeline_);
 	pipeline_ = RID();
@@ -133,11 +133,11 @@ bool LodCullPass::ensure_uniform_set(RenderingDevice *rd, LodPool &pool, HizPass
 	const RID page_chunk = pool.page_chunk_buffer();
 	const RID chunks = pool.chunk_buffer();
 	const RID hiz_tex = hiz->pyramid();
-	if (uset_.is_valid() && args == uset_args_ && page_chunk == uset_page_chunk_ &&
+	if (rd->uniform_set_is_valid(uset_) && args == uset_args_ && page_chunk == uset_page_chunk_ &&
 			chunks == uset_chunks_ && hiz_tex == uset_hiz_ && stats_ == uset_stats_) {
 		return true;
 	}
-	if (uset_.is_valid()) rd->free_rid(uset_);
+	if (rd->uniform_set_is_valid(uset_)) rd->free_rid(uset_);
 	uset_ = RID();
 	Ref<RDUniform> u0;
 	u0.instantiate();

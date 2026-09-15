@@ -119,7 +119,7 @@ func test_a_queued_upload_survives_gpu_teardown(timeout := 120000) -> void:
 	var w := make_local_world()
 	assert_renders(w, "drain anything already queued")
 	var before: int = w.hooks().debug_field_volume_upload_count()
-	var dim := 2
+	var dim := 64 # VolumePool slots use the production 64-cubed island lattice.
 	var bytes := PackedByteArray()
 	bytes.resize(dim * dim * dim)
 	bytes.fill(128)

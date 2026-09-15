@@ -21,6 +21,7 @@ PackedByteArray load_png(const String &path) {
 }
 
 bool decode_png(const PackedByteArray &bytes, Ref<Image> *out) {
+	if (bytes.is_empty()) return false;
 	Ref<Image> img;
 	img.instantiate();
 	if (img->load_png_from_buffer(bytes) != OK) return false;

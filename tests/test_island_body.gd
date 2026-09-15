@@ -17,7 +17,7 @@ func make_world() -> VoxelWorld:
 	w.use_local_device = true
 	w.physics_enabled = false
 	w.physics_radius_m = 25.0
-	w.max_collider_chunks = 64
+	w.max_collider_chunks = 512
 	w.mesh_jobs_per_frame = 2
 	w.shape_builds_per_frame = 4
 	add_child(w)
@@ -25,11 +25,14 @@ func make_world() -> VoxelWorld:
 	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
-func settle_colliders(w: VoxelWorld, center: Vector3, frames := 400) -> void:
-	# Run the full budget rather than stopping on a quiet streak: a quiet streak can occur
-	# while a mesh batch is in flight, before the first static body exists.
+func settle_colliders(w: VoxelWorld, center: Vector3, frames := 6000) -> void:
 	for i in range(frames):
 		w.hooks().debug_physics_frame(center)
+		var stats := w.hooks().debug_physics_stats()
+		if stats["chunks_pending"] == 0 and stats["queued"] == 0:
+			return
+		OS.delay_msec(1)
+	assert_bool(false).override_failure_message("colliders did not settle").is_true()
 
 func test_a_spawned_body_has_mass_and_falls(timeout := 90000) -> void:
 	var w := make_world()
@@ -80,8 +83,11 @@ func test_an_impulse_throws_the_body_sideways(timeout := 90000) -> void:
 	for i in range(20):
 		await get_tree().physics_frame
 	var s: Dictionary = w.hooks().debug_test_body_stats(d["index"])
+	# Impulse is momentum: displacement depends on the extracted piece's mass.
+	# Leave one tick for the first simulation step and allow for linear damping.
+	var expected_travel := 400.0 / float(d["mass"]) * 19.0 / Engine.physics_ticks_per_second
 	assert_float((s["origin"] as Vector3).x).override_failure_message(
-		"the explosion impulse did not reach the body").is_greater(start.x + 0.5)
+		"the explosion impulse did not reach the body").is_greater(start.x + expected_travel * 0.8)
 
 func test_atlas_islands_stay_raymarched_and_only_debris_gets_a_cel_mesh(timeout := 90000) -> void:
 	var w := make_world()

@@ -143,7 +143,9 @@ bool RenderOrchestrator::initialize_downsample(RenderingDevice *rd) {
 void RenderOrchestrator::teardown_downsample() {
 	RenderingDevice *device = rd();
 	if (device) {
-		for (RID *r : {&downsample_uset_, &downsample_pipeline_, &downsample_shader_,
+		if (device->uniform_set_is_valid(downsample_uset_)) device->free_rid(downsample_uset_);
+		downsample_uset_ = RID();
+		for (RID *r : {&downsample_pipeline_, &downsample_shader_,
 				&downsample_sampler_}) {
 			if (r->is_valid()) device->free_rid(*r);
 			*r = RID();
@@ -153,9 +155,9 @@ void RenderOrchestrator::teardown_downsample() {
 }
 
 bool RenderOrchestrator::ensure_downsample_set(RenderingDevice *rd, RID src, RID dst) {
-	if (downsample_uset_.is_valid() && downsample_src_ == src && downsample_dst_ == dst)
+	if (rd->uniform_set_is_valid(downsample_uset_) && downsample_src_ == src && downsample_dst_ == dst)
 		return true;
-	if (downsample_uset_.is_valid()) rd->free_rid(downsample_uset_);
+	if (rd->uniform_set_is_valid(downsample_uset_)) rd->free_rid(downsample_uset_);
 	Ref<RDUniform> u0, u1;
 	u0.instantiate(); u1.instantiate();
 	u0->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
@@ -163,7 +165,7 @@ bool RenderOrchestrator::ensure_downsample_set(RenderingDevice *rd, RID src, RID
 	u1->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
 	u1->set_binding(1); u1->add_id(dst);
 	downsample_uset_ = rd->uniform_set_create(Array::make(u0, u1), downsample_shader_, 0);
-	if (!downsample_uset_.is_valid()) return false;
+	if (!rd->uniform_set_is_valid(downsample_uset_)) return false;
 	downsample_src_ = src;
 	downsample_dst_ = dst;
 	return true;
@@ -340,11 +342,11 @@ void RenderOrchestrator::teardown_render_passes() {
 	if (passes_.grass_scatter) { delete passes_.grass_scatter; passes_.grass_scatter = nullptr; }
 	if (passes_.ssgi) { delete passes_.ssgi; passes_.ssgi = nullptr; }
 	if (passes_.ssao) { delete passes_.ssao; passes_.ssao = nullptr; }
+	if (passes_.lod_raster) { delete passes_.lod_raster; passes_.lod_raster = nullptr; }
 	if (passes_.beauty_camera) { passes_.beauty_camera->teardown(); delete passes_.beauty_camera; passes_.beauty_camera = nullptr; }
 	if (passes_.gbuffer) { delete passes_.gbuffer; passes_.gbuffer = nullptr; }
 	if (passes_.raymarch) { delete passes_.raymarch; passes_.raymarch = nullptr; }
 	if (passes_.sun_ubo) { passes_.sun_ubo->teardown(); delete passes_.sun_ubo; passes_.sun_ubo = nullptr; }
-	if (passes_.lod_raster) { delete passes_.lod_raster; passes_.lod_raster = nullptr; }
 	if (passes_.lod_cull) { delete passes_.lod_cull; passes_.lod_cull = nullptr; }
 	if (passes_.hiz) {
 		passes_.hiz->teardown();

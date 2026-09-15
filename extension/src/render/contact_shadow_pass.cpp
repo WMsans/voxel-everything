@@ -63,7 +63,7 @@ void ContactShadowPass::initialize(RenderingDevice *rd) {
 void ContactShadowPass::set_sun_ubo(RID buffer) {
 	sun_light_ubo_ = buffer;
 	// The uniform set caches this RID; drop it so the next render rebuilds.
-	if (rd_ && uset_.is_valid()) {
+	if (rd_ && rd_->uniform_set_is_valid(uset_)) {
 		rd_->free_rid(uset_);
 		uset_ = RID();
 	}
@@ -71,7 +71,9 @@ void ContactShadowPass::set_sun_ubo(RID buffer) {
 
 void ContactShadowPass::teardown() {
 	if (!rd_) return;
-	for (RID *r : {&uset_, &pipeline_, &shader_, &sampler_nearest_, &sampler_linear_, &mask_}) {
+	if (rd_->uniform_set_is_valid(uset_)) rd_->free_rid(uset_);
+	uset_ = RID();
+	for (RID *r : {&pipeline_, &shader_, &sampler_nearest_, &sampler_linear_, &mask_}) {
 		if (r->is_valid()) rd_->free_rid(*r);
 		*r = RID();
 	}
@@ -82,7 +84,7 @@ void ContactShadowPass::teardown() {
 
 bool ContactShadowPass::ensure_mask(RenderingDevice *rd, Vector2i size) {
 	if (mask_.is_valid() && size == size_) return true;
-	if (uset_.is_valid()) rd->free_rid(uset_);
+	if (rd_->uniform_set_is_valid(uset_)) rd->free_rid(uset_);
 	uset_ = RID();
 	if (mask_.is_valid()) rd->free_rid(mask_);
 	mask_ = RID();
@@ -105,9 +107,9 @@ bool ContactShadowPass::ensure_mask(RenderingDevice *rd, Vector2i size) {
 
 bool ContactShadowPass::ensure_uniform_set(RenderingDevice *rd, RID scene_color,
 		RID scene_depth, RID camera_ubo) {
-	if (uset_.is_valid() && key_color_ == scene_color && key_depth_ == scene_depth &&
+	if (rd_->uniform_set_is_valid(uset_) && key_color_ == scene_color && key_depth_ == scene_depth &&
 			key_camera_ == camera_ubo) return true;
-	if (uset_.is_valid()) rd->free_rid(uset_);
+	if (rd_->uniform_set_is_valid(uset_)) rd->free_rid(uset_);
 	Ref<RDUniform> u0, u1, u2, u3, u4, u5;
 	for (Ref<RDUniform> *u : {&u0, &u1, &u2, &u3, &u4, &u5}) u->instantiate();
 	u0->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
@@ -123,7 +125,7 @@ bool ContactShadowPass::ensure_uniform_set(RenderingDevice *rd, RID scene_color,
 	u5->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
 	u5->set_binding(5); u5->add_id(sun_light_ubo_);
 	uset_ = rd->uniform_set_create(Array::make(u0, u1, u2, u3, u4, u5), shader_, 0);
-	if (!uset_.is_valid()) return false;
+	if (!rd_->uniform_set_is_valid(uset_)) return false;
 	key_color_ = scene_color;
 	key_depth_ = scene_depth;
 	key_camera_ = camera_ubo;

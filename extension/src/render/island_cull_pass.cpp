@@ -83,7 +83,7 @@ void IslandCullPass::teardown() {
 
 void IslandCullPass::rebuild(RenderingDevice *rd, const IslandAtlas &atlas, int tx, int ty) {
 	// Uniform set first: it references the mask buffer about to be freed.
-	if (uset_.is_valid()) rd->free_rid(uset_);
+	if (rd->uniform_set_is_valid(uset_)) rd->free_rid(uset_);
 	uset_ = RID();
 	if (mask_.is_valid()) rd->free_rid(mask_);
 	PackedByteArray zero;

@@ -36,6 +36,10 @@ func make_big_world() -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.physics_enabled = false
+	# This suite's bracket samples the analytic height field below as its oracle, and
+	# default.pipeline's relief stage moves that surface by tens of metres; pin the frozen
+	# pipeline that terrain_height() mirrors so the oracle describes the world being tested.
+	w.terrain_pipeline_path = "res://assets/pipelines/golden.pipeline"
 	# Same horizon; the funded pool holds the dense ground the bracket samples to 360 m.
 	w.stream_radius_m = 1400.0
 	# 32768, the shipped default (LodSystem::max_lod_pages_): 16384 was enough only while
@@ -232,8 +236,10 @@ func _shadow_mask(w: VoxelWorld) -> Array:
 	var mask: Array = []
 	for x in range(40, 121, 20):
 		for z in range(40, 121, 20):
-			# Just under the surface band, where occlusion actually varies with sun angle.
-			mask.append(w.hooks().debug_sun_shadow_visibility(Vector3(float(x), 50.0, float(z))))
+			# Follow the terrain instead of sampling a fixed plane buried by relief.
+			var hit: Dictionary = w.hooks().debug_raycast(Vector3(x, 180.0, z), Vector3.DOWN)
+			assert_bool(hit["hit"]).is_true()
+			mask.append(w.hooks().debug_sun_shadow_visibility(hit["pos"] + Vector3.UP * 0.1))
 	return mask
 
 func test_moving_the_sun_moves_the_shadow(timeout := 60000) -> void:

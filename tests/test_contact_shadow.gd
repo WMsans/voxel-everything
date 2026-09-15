@@ -12,6 +12,8 @@ func make_world() -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.physics_enabled = false
+	# Pin the crater fixture: the demo's added relief can bury its original cave.
+	w.terrain_pipeline_path = "res://assets/pipelines/golden.pipeline"
 	add_child(w)
 	_worlds.append(w)
 	assert_bool(w.hooks().debug_init_atlas()).is_true()

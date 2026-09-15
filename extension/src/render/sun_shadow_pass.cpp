@@ -102,8 +102,8 @@ bool SunShadowPass::initialize(RenderingDevice *rd) {
 void SunShadowPass::teardown() {
 	if (rd_) {
 		for (int i = 0; i < kCascades; i++) {
-			for (RID *r : {&c_[i].framebuffer, &c_[i].slice})
-				if (r->is_valid()) rd_->free_rid(*r);
+			if (rd_->framebuffer_is_valid(c_[i].framebuffer)) rd_->free_rid(c_[i].framebuffer);
+			if (c_[i].slice.is_valid()) rd_->free_rid(c_[i].slice);
 			c_[i] = Cascade{};
 		}
 		for (RID *r : {&uset_, &pipeline_, &shader_, &map_})
@@ -129,11 +129,11 @@ void SunShadowPass::mark_dirty() {
 }
 
 bool SunShadowPass::ensure_pipeline(RenderingDevice *rd) {
-	if (c_[0].framebuffer.is_valid() && pipeline_.is_valid()) return true;
+	if (rd->framebuffer_is_valid(c_[0].framebuffer) && pipeline_.is_valid()) return true;
 	for (int i = 0; i < kCascades; i++) {
-		if (c_[i].framebuffer.is_valid()) rd->free_rid(c_[i].framebuffer);
+		if (rd->framebuffer_is_valid(c_[i].framebuffer)) rd->free_rid(c_[i].framebuffer);
 		c_[i].framebuffer = rd->framebuffer_create(Array::make(c_[i].slice));
-		if (!c_[i].framebuffer.is_valid()) return false;
+		if (!rd->framebuffer_is_valid(c_[i].framebuffer)) return false;
 	}
 	const int64_t format = rd->framebuffer_get_format(c_[0].framebuffer);
 
@@ -183,10 +183,10 @@ bool SunShadowPass::ensure_uniform_set(RenderingDevice *rd, LodPool &pool) {
 	const RID quads = pool.quad_buffer();
 	const RID page_chunk = pool.page_chunk_buffer();
 	const RID chunks = pool.chunk_buffer();
-	if (uset_.is_valid() && key_quads_ == quads && key_page_chunk_ == page_chunk &&
+	if (rd->uniform_set_is_valid(uset_) && key_quads_ == quads && key_page_chunk_ == page_chunk &&
 			key_chunks_ == chunks)
 		return true;
-	if (uset_.is_valid()) rd->free_rid(uset_);
+	if (rd->uniform_set_is_valid(uset_)) rd->free_rid(uset_);
 	uset_ = RID();
 	Ref<RDUniform> u0, u1, u2;
 	u0.instantiate();
@@ -202,7 +202,7 @@ bool SunShadowPass::ensure_uniform_set(RenderingDevice *rd, LodPool &pool) {
 	u2->set_binding(2);
 	u2->add_id(chunks);
 	uset_ = rd->uniform_set_create(Array::make(u0, u1, u2), shader_, 0);
-	if (!uset_.is_valid()) return false;
+	if (!rd->uniform_set_is_valid(uset_)) return false;
 	key_quads_ = quads;
 	key_page_chunk_ = page_chunk;
 	key_chunks_ = chunks;

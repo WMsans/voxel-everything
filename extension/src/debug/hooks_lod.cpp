@@ -689,11 +689,11 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 				std::memcpy(fine_mat.data(), fm.ptr(), static_cast<size_t>(kFineCount) * 2);
 			}
 		}
-		lod.teardown();
 		// The borrowed set must die before its device does (stack destruction runs after
 		// memdelete below and would free RIDs on a dead device).
 		lod.set_field_context(nullptr);
 		lod_context.teardown();
+		lod.teardown();
 		memdelete(rd);
 	});
 	if (!ok || result.failed || static_cast<int>(fine_sdf.size()) != kFineCount ||

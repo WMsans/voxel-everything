@@ -109,7 +109,7 @@ bool OutlinePass::initialize(RenderingDevice *rd) {
 
 void OutlinePass::teardown() {
 	if (!rd_) return;
-	if (uset_.is_valid()) rd_->free_rid(uset_);
+	if (rd_->uniform_set_is_valid(uset_)) rd_->free_rid(uset_);
 	uset_ = RID();
 	for (RID *r : {&pipeline_, &shader_, &dummy_normal_, &nearest_}) {
 		if (r->is_valid()) rd_->free_rid(*r);
@@ -122,11 +122,11 @@ void OutlinePass::teardown() {
 
 bool OutlinePass::ensure_uniform_set(RenderingDevice *rd, RID scene_color, RID scene_depth,
 		RID gb_depth, RID gb_surface, RID normal_roughness, RID camera_ubo) {
-	if (uset_.is_valid() && key_color_ == scene_color && key_depth_ == scene_depth &&
+	if (rd_->uniform_set_is_valid(uset_) && key_color_ == scene_color && key_depth_ == scene_depth &&
 			key_gb_depth_ == gb_depth && key_surface_ == gb_surface &&
 			key_normal_ == normal_roughness && key_camera_ == camera_ubo)
 		return true;
-	if (uset_.is_valid()) rd->free_rid(uset_);
+	if (rd_->uniform_set_is_valid(uset_)) rd->free_rid(uset_);
 	uset_ = RID();
 	const RID normal = normal_roughness.is_valid() ? normal_roughness : dummy_normal_;
 	uset_ = rd->uniform_set_create(Array::make(
@@ -136,7 +136,7 @@ bool OutlinePass::ensure_uniform_set(RenderingDevice *rd, RID scene_color, RID s
 			sampler_texture(3, nearest_, normal),
 			image_texture(4, scene_color),
 			uniform_buffer(6, camera_ubo)), shader_, 0);
-	if (!uset_.is_valid()) return false;
+	if (!rd_->uniform_set_is_valid(uset_)) return false;
 	key_color_ = scene_color;
 	key_depth_ = scene_depth;
 	key_gb_depth_ = gb_depth;

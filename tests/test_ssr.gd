@@ -41,7 +41,9 @@ func test_removing_the_scene_only_blocker_removes_its_hits() -> void:
 	var w := make_world()
 	var a: Dictionary = w.hooks().debug_ssr_probe(0, 128, 128)
 	var b: Dictionary = w.hooks().debug_ssr_probe(1, 128, 128)
-	assert_int(b["hit_pixels"]).is_less(int(a["hit_pixels"]))
+	# The receiver can reflect other terrain after removal; only the red blocker disappears.
+	assert_float(a["red_gain"]).is_greater(0.01)
+	assert_float(b["red_gain"]).is_equal_approx(0.0, 0.001)
 
 func test_medium_uses_twelve_steps_and_off_dispatches_nothing() -> void:
 	var w := make_world()

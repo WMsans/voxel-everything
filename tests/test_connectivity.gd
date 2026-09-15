@@ -28,6 +28,8 @@ func make_world() -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.physics_enabled = false
+	# These fixed coordinates describe the original analytic terrain.
+	w.terrain_pipeline_path = "res://assets/pipelines/golden.pipeline"
 	w.residency_radius_m = 40.0
 	w.atlas_bricks = Vector3i(48, 24, 48)
 	w.max_region_slots = 64

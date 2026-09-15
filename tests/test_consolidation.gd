@@ -12,6 +12,8 @@ func make_world() -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.physics_enabled = false
+	# The crater coordinates and height checks use the original analytic surface.
+	w.terrain_pipeline_path = "res://assets/pipelines/golden.pipeline"
 	add_child(w)
 	_worlds.append(w)
 	w.ensure_initialized()
@@ -24,7 +26,7 @@ func make_world() -> VoxelWorld:
 func test_bake_reproduces_the_field(timeout := 60000) -> void:
 	var w := make_world()
 	for i in range(12):
-		w.hooks().debug_apply_sphere_subtract(Vector3(24.0 + float(i) * 0.5, 51.5, 24.0), 1.2)
+		w.hooks().debug_apply_sphere_subtract(Vector3(24.025 + float(i) * 0.5, 51.525, 24.025), 1.2)
 	var d: Dictionary = w.hooks().debug_consolidate_diff(Vector3i(0, 2, 0))
 	assert_int(int(d["bricks"])).is_greater(0)
 	assert_int(int(d["sdf_mismatches"])).is_equal(0)

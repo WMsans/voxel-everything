@@ -134,9 +134,8 @@ func test_a_flat_normal_map_leaves_the_shading_normal_alone() -> void:
 # change that sets MATERIAL_NORMAL_STRENGTH to zero, drops the RG channels from pack_layer,
 # or ships flat normal art lands here rather than in a screenshot.
 #
-# ~10 degrees is what assets/materials actually carry (their normal maps have a per-channel
-# standard deviation around 20/255); the bound is set well under that so ordinary art
-# revisions do not trip it.
+# Most materials carry roughly 10 degrees of relief; smooth ice carries roughly one.
+# The bound admits both while still rejecting a flat normal map.
 func test_every_material_normal_map_carries_real_relief() -> void:
 	var w := make_world()
 	var up := Vector3(0, 1, 0)
@@ -156,4 +155,4 @@ func test_every_material_normal_map_carries_real_relief() -> void:
 		var mean := tilt / float(samples)
 		assert_float(mean).override_failure_message(
 			"material %s (id %d) shades perfectly flat: its normal map reaches nothing"
-			% [entry["name"], mat]).is_greater(0.002) # ~3.6 degrees
+			% [entry["name"], mat]).is_greater(0.00005) # Smooth ice has ~1 degree of relief; flat maps still fail.
