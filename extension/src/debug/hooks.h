@@ -7,6 +7,7 @@
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
+#include <godot_cpp/variant/packed_string_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <godot_cpp/variant/string.hpp>
@@ -464,6 +465,9 @@ public:
 	Dictionary debug_hiz_stats();
 
 	Dictionary debug_hiz_shutdown_probe();
+
+	// The step labels RenderOrchestrator::teardown_gpu() recorded on its last run, in order.
+	PackedStringArray debug_teardown_trace();
 
 	Dictionary debug_gbuffer_stats(int w, int h);
 

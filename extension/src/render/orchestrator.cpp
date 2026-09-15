@@ -392,21 +392,28 @@ void RenderOrchestrator::teardown_gpu() {
 	// The deletion sequence lives in the three teardown_*() halves below; the interleaved
 	// world-owned statements keep their exact positions in the deallocation order via the
 	// Collaborator addresses (Task 13 move -- placement unchanged).
+	teardown_trace_.clear();
 	teardown_render_passes();
+	teardown_trace_.push_back("passes");
 	if (*handles_.streamer) {
 		(*handles_.streamer)->drain_readbacks(rd());
 		delete *handles_.streamer;
 		*handles_.streamer = nullptr;
 	}
+	teardown_trace_.push_back("streamer");
 	handles_.store->clear_residency(); // slot assignments are meaningless pre-atlas
+	teardown_trace_.push_back("residency");
 	teardown_island_graph();
+	teardown_trace_.push_back("island_graph");
 	{
 		// island_slot_count() can still be on the render thread during teardown; keep the
 		// high-water mark's write under the same mutex.
 		std::lock_guard<std::mutex> lock(*handles_.island_mutex);
 		*handles_.island_slots = 0;
 	}
+	teardown_trace_.push_back("island_slots");
 	teardown_atlas_pool();
+	teardown_trace_.push_back("atlas");
 	// The tree holds page indices the pool is about to free, and a stale index would be
 	// handed to the next chunk. Pool first, then tree, then the page map.
 	if (*handles_.lod_pool) (*handles_.lod_pool)->teardown();
@@ -414,8 +421,11 @@ void RenderOrchestrator::teardown_gpu() {
 	handles_.lod_pages_of->clear();
 	handles_.lod_page_quads->clear();
 	handles_.lod_overflow_logged->clear();
+	teardown_trace_.push_back("lod");
 	reset_history_state();
+	teardown_trace_.push_back("history");
 	*handles_.initialized = false;
+	teardown_trace_.push_back("initialized");
 }
 
 void RenderOrchestrator::shutdown_render_resources_on_render_thread() {

@@ -262,6 +262,10 @@ public:
 	// ride along via Collaborator addresses, so the deallocation ORDER is identical to
 	// the pre-split body statement for statement.
 	void teardown_gpu();
+	// Debug-only: the label of every step teardown_gpu() ran, in order, for its most recent
+	// run. The render lifetime contract pins this sequence (spec 2026-09-14 §5.1); a change in
+	// it means the deallocation order changed.
+	const std::vector<const char *> &teardown_trace() const { return teardown_trace_; }
 	// Queued onto the render thread by shutdown_render_resources(); signals
 	// gpu_teardown_cv_ when the GPU half is gone. Also runs directly when the caller
 	// already is on the render thread or owns a local device.
@@ -279,6 +283,7 @@ private:
 	bool ensure_downsample_set(RenderingDevice *device, RID src, RID dst);
 
 	Collaborators handles_;
+	std::vector<const char *> teardown_trace_;
 
 	// Member ORDER mirrors the pre-split block in voxel_world.h.
 	GpuAtlas *atlas_ = nullptr;

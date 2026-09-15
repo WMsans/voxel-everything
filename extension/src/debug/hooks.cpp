@@ -125,6 +125,7 @@ void VoxelDebugHooks::_bind_methods() {
 			&VoxelDebugHooks::debug_seam_probe, DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("debug_hiz_stats"), &VoxelDebugHooks::debug_hiz_stats);
 	ClassDB::bind_method(D_METHOD("debug_hiz_shutdown_probe"), &VoxelDebugHooks::debug_hiz_shutdown_probe);
+	ClassDB::bind_method(D_METHOD("debug_teardown_trace"), &VoxelDebugHooks::debug_teardown_trace);
 	ClassDB::bind_method(D_METHOD("debug_gbuffer_stats", "w", "h"),
 			&VoxelDebugHooks::debug_gbuffer_stats);
 	ClassDB::bind_method(D_METHOD("debug_hiz_probe_synthetic", "far_value", "near_value"),
@@ -5184,6 +5185,12 @@ bool VoxelDebugHooks::debug_init_atlas() {
 
 void VoxelDebugHooks::debug_teardown_atlas() {
 	world_->teardown_gpu();
+}
+
+PackedStringArray VoxelDebugHooks::debug_teardown_trace() {
+	PackedStringArray out;
+	for (const char *step : world_->context().render->teardown_trace()) out.push_back(step);
+	return out;
 }
 
 Dictionary VoxelDebugHooks::debug_atlas_stats() {
