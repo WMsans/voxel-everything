@@ -32,3 +32,11 @@ TEST_CASE("the emitter covers every material") {
 	CHECK(s.find("MAT_HARDNESS") == std::string::npos);
 	CHECK(s.find("mat_hardness(") == std::string::npos);
 }
+
+TEST_CASE("the emitter names every foliage row and gives mat_glow both ranges") {
+	const std::string s = ve::material_table_glsl();
+	CHECK(s.find("const uint FOLIAGE_BASE = 200u;") != std::string::npos);
+	CHECK(s.find("const uint MAT_GRASS_BLADE = 200u;") != std::string::npos);
+	CHECK(s.find("FOLIAGE_GLOW[j]") != std::string::npos);
+	CHECK(s.find("FOLIAGE_GLOW_RGB[j]") != std::string::npos);
+}

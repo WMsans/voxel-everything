@@ -35,6 +35,27 @@ inline constexpr MaterialDef kMaterials[] = {
 
 inline constexpr int kMaterialCount = static_cast<int>(sizeof(kMaterials) / sizeof(kMaterials[0]));
 
+// Foliage draws its own albedo and grows ON terrain rather than being terrain, so it has no
+// atlas layer, no flat albedo and no hardness. Its ids start at kFoliageBase, far above every
+// terrain id: adding a terrain material never renumbers foliage, and no foliage id can reach
+// an atlas lookup (every GLSL table lookup is range-checked). A new grass or leaf type is one
+// row here plus its shader.
+struct FoliageDef {
+	const char *name;
+	float glow; // emissive strength; 0.0 = not emissive
+	float glow_rgb[3];
+};
+
+inline constexpr uint16_t kFoliageBase = 200;
+
+inline constexpr FoliageDef kFoliage[] = {
+	// name          glow  glow_rgb
+	{"grass_blade",  0.0f, {0.0f, 0.0f, 0.0f}},
+};
+
+inline constexpr int kFoliageCount = static_cast<int>(sizeof(kFoliage) / sizeof(kFoliage[0]));
+static_assert(kMaterialCount < kFoliageBase, "terrain material ids would reach the foliage range");
+
 // Hardness models RESISTANCE: it may shrink a removal's nominal dimensions, never enlarge
 // them. Softness is expressed by authoring a larger tool radius, not by a hardness below
 // one. Caught at compile time so the table cannot express the other direction by accident.
@@ -46,6 +67,7 @@ constexpr bool material_hardness_floor_holds() {
 static_assert(material_hardness_floor_holds(), "material hardness must be >= 1.0");
 
 // Fail soft for air (0) and any id with no table entry: full-size removal, no emission.
+// material_glow also answers for foliage ids (kFoliageBase + k).
 float material_hardness(uint16_t id);
 float material_glow(uint16_t id);
 

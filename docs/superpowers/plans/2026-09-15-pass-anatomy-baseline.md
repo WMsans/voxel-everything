@@ -244,3 +244,6 @@ Appended by later tasks.
 | island_extract | delete dispatch in extract | test_island_extract.gd::test_a_single_cell_extracts_to_the_same_volume_on_both_sides — cell: worst sdf disagreement 255 encoded steps (5/5 cases failed) | yes |
 | mesh | delete dispatch in record_quads | test_mesh_diff.gd::test_a_surface_chunk_meshes_identically_on_both_sides — plain terrain: 16878 triangles are CPU-only | yes |
 | lod_build | delete dispatch in record_quads | test_lod_build.gd::test_a_submitted_chunk_comes_back_with_quads — a chunk straddling the surface produced no quads | yes |
+
+### Task 5 pass gates
+- grass_raster task 5 (S7): build OK, native 553/553, gdUnit matches row, leaked 0 (row 0)

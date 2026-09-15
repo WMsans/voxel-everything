@@ -23,8 +23,6 @@ layout(location = 5) in flat float v_sun;
 layout(location = 0) out vec4 out_albedo;  // rgb albedo, a = sun visibility
 layout(location = 1) out vec4 out_surface; // xy oct normal, z material id, w gloss
 
-const uint GRASS_MATERIAL = 1u;
-
 // If common.glslh fails to compile here, it is because material_surface() needs the two
 // material sampler arrays declared BEFORE the include -- the convention lod.frag.glsl
 // follows at its lines 4-6. Declare them ahead of the include at unused binding slots even
@@ -69,5 +67,5 @@ void main() {
 	// the sun map only where the far field owns the pixel, and trusts this channel
 	// everywhere else -- so a 1.0 here meant nothing near the camera ever shadowed grass.
 	out_albedo = vec4(albedo, grass_sun_term(v_sun, v_height_t));
-	out_surface = vec4(oct_encode(n), float(GRASS_MATERIAL), pc.style.y);
+	out_surface = vec4(oct_encode(n), float(MAT_GRASS_BLADE), pc.style.y);
 }
