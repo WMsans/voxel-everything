@@ -63,3 +63,11 @@ Appended by later tasks: bite proofs, attributions, per-milestone gate results.
 - Native: `(cd extension && scons -Q test) 2>&1 | tail -3` — `551/551` test cases passed, `9,117,142/9,117,142` assertions passed, status success.
 - gdUnit: the requested ten-suite launcher exited 1 before discovery with the known pre-existing `GdUnitTestCIRunner` parse error; no launcher repair or test modification was made.
 - Result: build/native match Task 8; shipped golden/test sources are unchanged; gdUnit remains blocked before discovery by the same known launcher error.
+
+### Task 10 gate (full run)
+- Report: `.superpowers/sdd/2026-09-14-render-lifetime-owner/task-10-report.md`
+- Static/API audits: `RenderPasses` has the exact 25 requested fields; `passes()` is the sole pass-graph accessor; old pass accessors and deleted VoxelWorld forwarders have no residual declarations/calls; `_bind_methods()` is unchanged; all 384 unique Dictionary keys are unchanged; `git diff --check` passed.
+- Build: `./build.sh -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)` exited 0; `Build OK`, universal macOS debug dylib linked.
+- Native: `(cd extension && scons -Q test)` — `551/551` test cases passed, `9,117,142/9,117,142` assertions passed, status success.
+- gdUnit: `./gdunit_tests.sh` exited 1 before discovery with the known pre-existing `GdUnitTestCIRunner` parse error; no `results.xml` or suite counts were produced. The launcher was not repaired.
+- Result: implementation/build/native gates pass; full gdUnit remains blocked before discovery by the same baseline launcher error; teardown order is unchanged after mechanical member-name normalization.

@@ -75,6 +75,38 @@ class GrassScatterPass;
 class GrassRasterPass;
 class Object;
 
+// Every GPU object of the pass graph. The orchestrator creates them in ensure_gpu_graph() and
+// deletes them in teardown_gpu()'s halves, in the load-bearing orders documented there; a null
+// field means "not built" (never initialized, failed soft, or torn down). VoxelFrame, LodSystem
+// and the debug facade's pass probes read it; nobody else creates or deletes these objects.
+struct RenderPasses {
+	GpuAtlas *atlas = nullptr;
+	MaterialAtlas *materials = nullptr;
+	IslandAtlas *islands = nullptr;
+	IslandCullPass *island_cull = nullptr;
+	RegionPass *region = nullptr;
+	BrickGenPass *gen = nullptr;
+	RaymarchPass *raymarch = nullptr;
+	CompositePass *composite = nullptr;
+	DeferredPass *deferred = nullptr;
+	SunShadowPass *sun_shadow = nullptr;
+	SunUbo *sun_ubo = nullptr;
+	FieldContextSet *field_context = nullptr;
+	InjectPass *inject = nullptr;
+	LodRasterPass *lod_raster = nullptr;
+	LodCullPass *lod_cull = nullptr;
+	HizPass *hiz = nullptr;
+	GBuffer *gbuffer = nullptr;
+	CameraUbo *beauty_camera = nullptr;
+	ContactShadowPass *contact_shadow = nullptr;
+	SsgiPass *ssgi = nullptr;
+	SsaoPass *ssao = nullptr;
+	SsrPass *ssr = nullptr;
+	OutlinePass *outline = nullptr;
+	GrassScatterPass *grass_scatter = nullptr;
+	GrassRasterPass *grass_raster = nullptr;
+};
+
 class RenderOrchestrator {
 public:
 	struct Collaborators {
@@ -194,36 +226,11 @@ public:
 
 	// Address-of slots for collaborators (ConsolidationCoordinator wiring) that
 	// re-read lazily-created objects at every use.
-	GpuAtlas **atlas_slot() { return &atlas_; }
+	GpuAtlas **atlas_slot() { return &passes_.atlas; }
 	RenderingDevice **main_rd_slot() { return &main_rd_; }
 	RenderingDevice **local_rd_slot() { return &local_rd_; }
 
-	// --- accessors: one per moved pass pointer ---
-	GpuAtlas *atlas() { return atlas_; }
-	MaterialAtlas *materials() { return materials_; }
-	IslandAtlas *islands() { return islands_; }
-	IslandCullPass *island_cull() { return island_cull_; }
-	RegionPass *region_pass() { return region_pass_; }
-	BrickGenPass *gen_pass() { return gen_pass_; }
-	RaymarchPass *raymarch_pass() { return raymarch_pass_; }
-	CompositePass *composite_pass() { return composite_pass_; }
-	DeferredPass *deferred_pass() { return deferred_pass_; }
-	SunShadowPass *sun_shadow_pass() { return sun_shadow_pass_; }
-	InjectPass *inject_pass() { return inject_pass_; }
-	LodRasterPass *lod_raster_pass() { return lod_raster_pass_; }
-	LodCullPass *lod_cull_pass() { return lod_cull_pass_; }
-	HizPass *hiz_pass() { return hiz_pass_; }
-	GBuffer *gbuffer() { return gbuffer_; }
-	CameraUbo *beauty_camera() { return beauty_camera_; }
-	SunUbo *sun_ubo() { return sun_ubo_; }
-	FieldContextSet *field_context() { return field_context_; }
-	ContactShadowPass *contact_shadow_pass() { return contact_shadow_pass_; }
-	SsgiPass *ssgi_pass() { return ssgi_pass_; }
-	SsaoPass *ssao_pass() { return ssao_pass_; }
-	SsrPass *ssr_pass() { return ssr_pass_; }
-	OutlinePass *outline_pass() { return outline_pass_; }
-	GrassScatterPass *grass_scatter_pass() { return grass_scatter_pass_; }
-	GrassRasterPass *grass_raster_pass() { return grass_raster_pass_; }
+	const RenderPasses &passes() const { return passes_; }
 	ve::GrassSettings grass_settings() const { return grass_settings_.get(); }
 	bool set_grass_value(const char *n, float v) { return grass_settings_.set_value(n, v); }
 	float grass_value(const char *n) const { return grass_settings_.value(n); }
@@ -256,7 +263,7 @@ public:
 	// raymarch/lod-raster/lod-cull deletes -> Hi-Z teardown (+ readback capture)
 	// -> materials/gen-pass/region-pass deletes.
 	void teardown_render_passes();
-	// island_cull_ then islands_ (between clear_residency() and the atlas delete).
+	// island_cull then islands (between clear_residency() and the atlas delete).
 	void teardown_island_graph();
 	void teardown_atlas_pool();
 	// The history resets sat after the LoD page-map clears in teardown_gpu(); the
@@ -292,32 +299,7 @@ private:
 	Collaborators handles_;
 	std::vector<const char *> teardown_trace_;
 
-	// Member ORDER mirrors the pre-split block in voxel_world.h.
-	GpuAtlas *atlas_ = nullptr;
-	MaterialAtlas *materials_ = nullptr;
-	IslandAtlas *islands_ = nullptr;
-	IslandCullPass *island_cull_ = nullptr;
-	RegionPass *region_pass_ = nullptr;
-	BrickGenPass *gen_pass_ = nullptr;
-	RaymarchPass *raymarch_pass_ = nullptr;
-	CompositePass *composite_pass_ = nullptr;
-	DeferredPass *deferred_pass_ = nullptr;
-	SunShadowPass *sun_shadow_pass_ = nullptr;
-	SunUbo *sun_ubo_ = nullptr;
-	FieldContextSet *field_context_ = nullptr;
-	InjectPass *inject_pass_ = nullptr;
-	LodRasterPass *lod_raster_pass_ = nullptr;
-	LodCullPass *lod_cull_pass_ = nullptr;
-	HizPass *hiz_pass_ = nullptr;
-	GBuffer *gbuffer_ = nullptr;
-	CameraUbo *beauty_camera_ = nullptr;
-	ContactShadowPass *contact_shadow_pass_ = nullptr;
-	SsgiPass *ssgi_pass_ = nullptr;
-	SsaoPass *ssao_pass_ = nullptr;
-	SsrPass *ssr_pass_ = nullptr;
-	OutlinePass *outline_pass_ = nullptr;
-	GrassScatterPass *grass_scatter_pass_ = nullptr;
-	GrassRasterPass *grass_raster_pass_ = nullptr;
+	RenderPasses passes_;
 	// Grass knobs live here (not in BeautySettings): the store mirrors the SHAPE of the
 	// beauty_mutex_/beauty_snapshot() pair without joining it (design doc section 7).
 	ve::GrassSettingsStore grass_settings_;

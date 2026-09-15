@@ -34,7 +34,7 @@ void RaymarchCompositor::_render_callback(int cb_type, RenderData *render_data) 
 	// A requested shader reload is pumped before any pass pointer is read: it tears the GPU
 	// objects down and rebuilds them here, so the rest of the callback runs against the new
 	// pipelines. A failed pre-flight leaves the old pipelines untouched.
-	world->pump_shader_reload();
+	world->context().render->pump_shader_reload();
 	// ensure_initialized() is a no-op after the first frame.
 	world->ensure_initialized();
 	if (!world->is_initialized()) return;

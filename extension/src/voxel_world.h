@@ -98,8 +98,8 @@ class VoxelWorld : public Node3D, public EditSink {
 	// Last remaining friend (Task 13 removed the compositor/admission ones): the debug
 	// facade pokes ~20 private members directly (store_, mesh_, colliders_, chunks_,
 	// island_manager_, physics_ready_, test_bodies_, island uploads/desc
-	// state, ...) plus 3 private helpers (drain_occupancy, gather_lod_ops,
-	// extract_component) -- audited at Task 16. JUSTIFICATION: every one
+	// state, ...) plus 2 private helpers (render_probe_pixel, extract_component) -- audited
+	// at Task 16. JUSTIFICATION: every one
 	// of those accesses is live in debug/hooks.cpp; replacing the friendship would need
 	// either an unbounded public accessor dump on this class or a wholesale rework of the
 	// facade's world_ back-reference. Both are behavior-surface changes outside this
@@ -127,8 +127,8 @@ class VoxelWorld : public Node3D, public EditSink {
 	// after it.
 	std::unique_ptr<LodSystem> lod_;
 	// GPU pass graph + device ownership (Task 12): every pass pointer, the downsample
-	// pipeline and main_rd_/local_rd_ live in RenderOrchestrator now; VoxelWorld keeps
-	// one-line delegations so external callers compile unchanged.
+	// pipeline and main_rd_/local_rd_ live in RenderOrchestrator now; C++ callers use
+	// context() to reach the owning subsystem directly.
 	std::unique_ptr<RenderOrchestrator> render_;
 
 	bool physics_enabled_ = true;
@@ -148,7 +148,6 @@ class VoxelWorld : public Node3D, public EditSink {
 	// change without invalidating the proof that the generator did not move.
 	String terrain_pipeline_path_ = "res://assets/pipelines/default.pipeline";
 
-	void drain_occupancy() { store_->drain_occupancy(); } // one-line delegation (Task 9)
 	void update_sun_state();
 	void publish_sun_state_to_local_device(RenderingDevice *device);
 	// EditSink port satisfied for WorldStore's spine; adapter body forwards to today's
@@ -173,11 +172,6 @@ class VoxelWorld : public Node3D, public EditSink {
 	// Shader hot reload + beauty settings moved verbatim into RenderOrchestrator
 	// (Task 14); VoxelWorld keeps one-line delegations and the ClassDB surface.
 
-	// Gathers the ops that can affect a LoD chunk: its AABB padded by two cells, flattened
-	// across regions in global append order, truncated to a chronological prefix (M4 errata 1).
-	// One-line delegation into LodSystem's gather_ops (Task 15 move); called by the debug
-	// facade (friend) exactly as it called the world's own body before.
-	void gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out);
 	bool extract_component(const std::vector<ve::IVec3> &cells, IslandExtractJob *job,
 			std::vector<ve::CellBox> *boxes, ve::VolumeData *out);
 
@@ -243,8 +237,6 @@ public:
 	// swap the generator under in-flight physics/mesh jobs (set_generator deletes the
 	// old seam), so later calls are no-ops and pipeline edits take effect on fresh init.
 	void load_terrain_pipeline();
-	// The render device's set 1, for pass dispatch sites and debug hooks.
-	FieldContextSet *field_context();
 	// One-line delegations into RenderOrchestrator (Task 13), where the lifetime state
 	// lives now; kept so compositors, the debug facade and ClassDB compile unchanged.
 	void shutdown_render_resources();
@@ -294,96 +286,15 @@ public:
 	// Same fail-soft contract as the toggles: an unknown name is ignored, not a crash.
 	void set_effect_value(const String &name, float value);
 	float get_effect_value(const String &name) const;
-	// Spec §8 dev-build affordances: request a shader reload (latch, safe from _input) and
-	// report what the last reload did. debug_pump_shader_reload() lets tests step the render
-	// callback's reload work directly.
+	// Spec §8 dev-build affordance: request a shader reload (latch, safe from _input).
 	void request_shader_reload();
-	void pump_shader_reload();
-	// Returns an immutable value snapshot (RenderOrchestrator-owned mutex since Task 14).
-	// Render callbacks must take this once per frame and pass the copy through their work;
-	// the mutex is never held during render work.
-	ve::BeautySettings beauty_settings() const;
-	// Task 14 temporary hook-facing surface (deleted with the debug facade's world_ back-
-	// reference): single-mutex-hold copies matching the pre-move debug_* body shapes.
-	void reload_snapshot(int *out_count, bool *out_last_ok, String *out_last_error) const {
-		context_.render->reload_snapshot(out_count, out_last_ok, out_last_error);
-	}
-	void beauty_snapshot(ve::BeautySettings *out_settings, int *out_tier) const {
-		context_.render->beauty_snapshot(out_settings, out_tier);
-	}
-	void set_normal_roughness_state(int state) { context_.render->set_normal_roughness_state(state); }
-	int get_normal_roughness_state() const { return context_.render->normal_roughness_state(); }
 
-	// One-line delegations into LodSystem (Task 15 move); the compositor, the debug facade
-	// and ClassDB compile unchanged.
-	void lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ);
-	// Push the current walk's page list (with per-page quad counts) into the raster pass.
-	void prepare_lod_raster();
-	void prepare_lod_shadow_raster(float radius, int min_level);
-	// The SHIPPING fit for one cascade. One place it is written down, read by both the
-	// render path and the debug facade -- this hook used to centre its own box while the
-	// compositor centred on the camera, which is how a shimmering shadow map passed a suite
-	// containing "the matrix does not move with the camera".
-	ve::SunOrtho sun_ortho(int cascade) const;
 	int sun_cascade_count() const;
 	void set_sun_cascade_min_level(bool v) { context_.render->set_sun_cascade_min_level(v); }
 	bool get_sun_cascade_min_level() const { return context_.render->sun_cascade_min_level(); }
 	RenderingDevice *rd() const; // one-line delegation into RenderOrchestrator
-	GpuTimings *gpu_timings() { return context_.render->gpu_timings(); }
-
-	GpuAtlas *atlas() { return context_.render->atlas(); }
-	MaterialAtlas *material_atlas() { return context_.render->materials(); }
-	IslandAtlas *islands() { return context_.render->islands(); }
-
-	// How far grass can actually be placed, in metres. Blades are scattered from resident
-	// BRICK data, so beyond the completely-resident radius stage 2's slot_at() returns -1
-	// and every candidate is dropped -- grass would simply stop, with a hard edge. Reporting
-	// the limit lets the layout end its fade here instead. Mirrors LodSystem::fade_band's
-	// fallback: before the streamer has run, complete_radius_m() is 0, and the configured
-	// radius is the honest answer rather than "no grass at all".
-	float grass_reach_limit_m() const {
-		float reach = store_->residency() ? store_->residency()->complete_radius_m() : 0.0f;
-		if (reach <= 0.0f) reach = store_->config().residency_radius_m;
-		return reach;
-	}
-	ve::EditLog *edit_log() { return store_->edit_log(); }
-	ve::VolumeSet &volumes() { return store_->volumes(); }
-	RaymarchPass *raymarch_pass() { return context_.render->raymarch_pass(); }
-	IslandCullPass *island_cull() { return context_.render->island_cull(); }
-	CompositePass *composite_pass() { return context_.render->composite_pass(); }
-	DeferredPass *deferred_pass() { return context_.render->deferred_pass(); }
-	SunShadowPass *sun_shadow_pass() { return context_.render->sun_shadow_pass(); }
-	SunUbo *sun_ubo() { return context_.render->sun_ubo(); }
-	InjectPass *inject_pass() { return context_.render->inject_pass(); }
-	LodPool *lod_pool() { return context_.lod->pool(); }
-	LodRasterPass *lod_raster_pass() { return context_.render->lod_raster_pass(); }
-	LodCullPass *lod_cull_pass() { return context_.render->lod_cull_pass(); }
-	HizPass *hiz_pass() { return context_.render->hiz_pass(); }
-	GBuffer *gbuffer() { return context_.render->gbuffer(); }
-	CameraUbo *beauty_camera() { return context_.render->beauty_camera(); }
-	ContactShadowPass *contact_shadow_pass() { return context_.render->contact_shadow_pass(); }
-	SsgiPass *ssgi_pass() { return context_.render->ssgi_pass(); }
-	SsaoPass *ssao_pass() { return context_.render->ssao_pass(); }
-	SsrPass *ssr_pass() { return context_.render->ssr_pass(); }
-	OutlinePass *outline_pass() { return context_.render->outline_pass(); }
-	GrassScatterPass *grass_scatter_pass() const;
-	GrassRasterPass *grass_raster_pass() const;
-	ve::GrassSettings grass_settings() const;
 	bool set_grass_value(const String &name, float v);
 	float get_grass_value(const String &name) const;
-	// Region/gen passes have no pre-split accessor; added for the debug facade, which
-	// pokes them directly today (Task 12 moves their pointers into RenderOrchestrator).
-	RegionPass *region_pass() { return context_.render->region_pass(); }
-	BrickGenPass *gen_pass() { return context_.render->gen_pass(); }
-	// The debug facade's local-device probe (debug_local_rd).
-	RenderingDevice *local_rd() const { return context_.render->local_rd(); }
-	const float *prev_view_proj() const { return context_.render->prev_view_proj(); }
-	bool has_history() const { return context_.render->has_history(); }
-	uint32_t beauty_frame() const { return context_.render->beauty_frame(); }
-	// One-line delegation into RenderOrchestrator's downsample pipeline; the isolated
-	// SSGI history-latch probe still uses it.
-	bool downsample_history(RenderingDevice *rd, RID src, GBuffer &gb);
-	std::mutex &edit_mutex() { return store_->edit_mutex(); }
 	MeshService *mesh_service() { return mesh_; }
 
 	// One-line delegation into RenderOrchestrator (Task 13); also called by the debug
@@ -404,11 +315,7 @@ public:
 	// collider remesh queue) under the same single lock hold as before the split.
 	ve::EditLog::AppendResult append_edit_locked(const ve::EditOp &op,
 			bool notify_islands = true);
-	int override_table_for_region(ve::IVec3 region) const;
-
 	// --- Task 8 hooks ---
-	// One-line delegations into WorldStore so external callers compile unchanged.
-	ve::OccupancyGrid &occupancy() { return store_->occupancy(); }
 	int64_t edit_seq() const { return store_->edit_seq(); }
 
 	// Pre-init-only swap of the field-generation seam (spec §4, Task 10). One-line
@@ -416,11 +323,6 @@ public:
 	// for the ownership/no-guard rationale. Used by future worldgen features.
 	void set_generator(ve::FieldGenerator *generator) { store_->set_generator(generator); }
 
-	bool snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo, ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const;
-
-	// The near/far seam for this frame -- one-line delegation into LodSystem (Task 15),
-	// which owns the fade band now.
-	void lod_fade_band(float *fade_start, float *fade_end) const;
 
 };
 

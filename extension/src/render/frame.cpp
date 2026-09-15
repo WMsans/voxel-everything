@@ -144,7 +144,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	const Projection view(cam.affine_inverse());
 	const Projection view_proj = proj * view;
 	const float cam_pos[3] = {cam.origin.x, cam.origin.y, cam.origin.z};
-	CameraUbo *ubo = render_.beauty_camera();
+	CameraUbo *ubo = render_.passes().beauty_camera;
 	if (!ubo || !ubo->ensure(rd)) {
 		abort_frame();
 		return false;
@@ -152,7 +152,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	// Device-level operation: SSGI consumes this block before its compute list opens.
 	ubo->update(rd, view_proj, cam_pos, size, 0.05f, 4000.0f);
 	const ve::SunState sun_state = settings.sun;
-	if (SunUbo *sun_ubo = render_.sun_ubo()) {
+	if (SunUbo *sun_ubo = render_.passes().sun_ubo) {
 		if (sun_ubo->ensure(rd)) sun_ubo->update(rd, sun_state);
 	}
 
@@ -177,13 +177,13 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 			store_.config().atlas_bricks);
 	cp.region_origin[3] = 0;
 
-	RaymarchPass *rmp = render_.raymarch_pass();
-	GpuAtlas *atlas = render_.atlas();
-	CompositePass *cmp = render_.composite_pass();
-	MaterialAtlas *materials = render_.materials();
-	GBuffer *gb = render_.gbuffer();
-	DeferredPass *deferred = render_.deferred_pass();
-	InjectPass *inject = render_.inject_pass();
+	RaymarchPass *rmp = render_.passes().raymarch;
+	GpuAtlas *atlas = render_.passes().atlas;
+	CompositePass *cmp = render_.passes().composite;
+	MaterialAtlas *materials = render_.passes().materials;
+	GBuffer *gb = render_.passes().gbuffer;
+	DeferredPass *deferred = render_.passes().deferred;
+	InjectPass *inject = render_.passes().inject;
 	if (!rmp || !atlas || !cmp || !materials || !gb || !deferred || !inject) {
 		abort_frame();
 		return false;
@@ -229,16 +229,16 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		return false;
 	}
 	const int islands = render_.island_slot_count();
-	IslandCullPass *cull = render_.island_cull();
+	IslandCullPass *cull = render_.passes().island_cull;
 	RID mask;
 	timings->begin(rd, "raymarch");
-	if (cull && islands > 0 && cull->render(rd, *render_.islands(), cp, rw, rh, islands)) {
+	if (cull && islands > 0 && cull->render(rd, *render_.passes().islands, cp, rw, rh, islands)) {
 		mask = cull->mask_buffer();
 		cp.region_origin[3] = cull->tiles_x();
 		cp.atlas_bricks[3] = cull->tiles_y();
 	}
 	cp.dims[3] = islands;
-	const RID effective_mask = mask.is_valid() ? mask : render_.islands()->fallback_mask();
+	const RID effective_mask = mask.is_valid() ? mask : render_.passes().islands->fallback_mask();
 	// If the island cull mask/target size changes, RaymarchPass releases its old target
 	// textures. CompositePass owns a uniform set that references those textures, so drop that
 	// dependent set first rather than later attempting to free a cascade-invalid RID.
@@ -246,8 +246,8 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		cmp->release_targets();
 		cmp->invalidate_uniform_set(rd);
 	}
-	if (!rmp->render(rd, *atlas, render_.islands(), mask, cp, rw, rh, edit_state,
-			render_.field_context())) {
+	if (!rmp->render(rd, *atlas, render_.passes().islands, mask, cp, rw, rh, edit_state,
+			render_.passes().field_context)) {
 		cancel_stage(kStageRaymarch);
 		abort_frame();
 		return false;
@@ -268,17 +268,17 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	// deferred pass consumes both producers below, so neither field is shaded twice.
 	// With the near field off there is no pre-LoD depth yet; skipping HiZ lets the LoD draw
 	// every page instead of culling against an empty pyramid.
-	HizPass *hiz = render_.hiz_pass();
+	HizPass *hiz = render_.passes().hiz;
 	bool hiz_built = false;
 	if (near_field_enabled && hiz) hiz_built = hiz->build(rd, gb->depth(), size);
-	LodRasterPass *lod_raster = render_.lod_raster_pass();
-	LodCullPass *lod_cull = render_.lod_cull_pass();
-	SunShadowPass *sun = render_.sun_shadow_pass();
+	LodRasterPass *lod_raster = render_.passes().lod_raster;
+	LodCullPass *lod_cull = render_.passes().lod_cull;
+	SunShadowPass *sun = render_.passes().sun_shadow;
 	ve::SunCascade cascades[ve::kSunCascades];
 	const int cascade_count = ve::sun_cascades(store_.config().stream_radius_m,
 			SunShadowPass::kSize, cascades);
 	const bool clamp_levels = settings.sun_cascade_min_level;
-	if (!in.debug.skip_far_field && lod_.pool() && lod_raster && render_.materials()) {
+	if (!in.debug.skip_far_field && lod_.pool() && lod_raster && render_.passes().materials) {
 		ve::LodCamera lod_cam;
 		for (int c = 0; c < 4; c++)
 			for (int r = 0; r < 4; r++)
@@ -392,15 +392,15 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 
 	// Grass: one block, between the far field and the beauty stack. Blades write the same
 	// G-buffer channels the far field writes, so everything below shades them unchanged.
-	if (GrassScatterPass *grass = render_.grass_scatter_pass()) {
+	if (GrassScatterPass *grass = render_.passes().grass_scatter) {
 		timings->begin(rd, "grass");
 		float grass_cam[3] = {cam.origin.x, cam.origin.y, cam.origin.z};
 		float grass_vp[16];
 		for (int c = 0; c < 4; c++)
 			for (int r = 0; r < 4; r++) grass_vp[c * 4 + r] = view_proj.columns[c][r];
 		const ve::GrassLayout gl = grass_layout(grass_cam, grass_vp);
-		GrassRasterPass *grass_raster = render_.grass_raster_pass();
-		SunUbo *grass_sun = render_.sun_ubo();
+		GrassRasterPass *grass_raster = render_.passes().grass_raster;
+		SunUbo *grass_sun = render_.passes().sun_ubo;
 		const bool grass_ok = grass_sun && grass->run(rd, *atlas, gl, store_.region_window(),
 				static_cast<float>(render_.beauty_frame()) / 60.0f, grass_sun->buffer()) &&
 				grass_raster && grass_raster->draw(rd, *grass, *gb, view_proj, cam_pos);
@@ -408,7 +408,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		else cancel_stage(kStageGrass);
 	}
 
-	SsgiPass *ssgi = render_.ssgi_pass();
+	SsgiPass *ssgi = render_.passes().ssgi;
 	if (ssgi) ssgi->clear_result();
 	bool ssgi_ok = false;
 	if (ssgi && beauty.ssgi) {
@@ -446,7 +446,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	dp.fade_end = fade_end;
 	dp.probe_mode = in.debug.deferred_view;
 	timings->begin(rd, "deferred");
-	SsaoPass *ssao = render_.ssao_pass();
+	SsaoPass *ssao = render_.passes().ssao;
 	if (ssao) ssao->clear_result();
 	bool ssao_ok = false;
 	if (ssao && (beauty_flags & ve::kFlagSsao) != 0u) {
@@ -497,13 +497,13 @@ bool VoxelFrame::render_post_opaque(RenderingDevice *rd, const FrameInputs &in) 
 	const Projection view(cam.affine_inverse());
 	const Projection view_proj = proj * view;
 	const float cam_pos[3] = {cam.origin.x, cam.origin.y, cam.origin.z};
-	CameraUbo *ubo = render_.beauty_camera();
+	CameraUbo *ubo = render_.passes().beauty_camera;
 	if (!ubo || !ubo->ensure(rd)) return false;
 	// Device-level operation: this precedes the contact-shadow compute list.
 	ubo->update(rd, view_proj, cam_pos, size, 0.05f, 4000.0f);
 
 	const ve::BeautySettings settings = render_.beauty_settings();
-	ContactShadowPass *cs = render_.contact_shadow_pass();
+	ContactShadowPass *cs = render_.passes().contact_shadow;
 	if (cs) {
 		timings->begin(rd, "contact");
 		const bool contact_ok = cs->render(rd, in.scene_color, in.scene_depth, size,
@@ -511,8 +511,8 @@ bool VoxelFrame::render_post_opaque(RenderingDevice *rd, const FrameInputs &in) 
 		if (contact_ok) end_stage(rd, kStageContact);
 		else cancel_stage(kStageContact);
 	}
-	GBuffer *gb = render_.gbuffer();
-	if (SsrPass *ssr = render_.ssr_pass()) {
+	GBuffer *gb = render_.passes().gbuffer;
+	if (SsrPass *ssr = render_.passes().ssr) {
 		timings->begin(rd, "ssr");
 		const bool ssr_ok = ssr->render(rd, in.scene_color, in.scene_depth,
 				gb ? gb->surface() : RID(), gb ? gb->depth() : RID(), normal_rough,
@@ -520,7 +520,7 @@ bool VoxelFrame::render_post_opaque(RenderingDevice *rd, const FrameInputs &in) 
 		if (ssr_ok) end_stage(rd, kStageSsr);
 		else cancel_stage(kStageSsr);
 	}
-	if (OutlinePass *outline = render_.outline_pass(); outline && gb && gb->is_valid()) {
+	if (OutlinePass *outline = render_.passes().outline; outline && gb && gb->is_valid()) {
 		timings->begin(rd, "outlines");
 		const bool outline_ok = outline->render(rd, in.scene_color, in.scene_depth,
 				gb->depth(), gb->surface(), normal_rough, have_calibrated_normal_roughness,
@@ -592,19 +592,19 @@ FrameInputs VoxelFrame::prepare_headless(RenderingDevice *rd, const FrameInputs 
 	out.scene_color = RID();
 	out.scene_depth = RID();
 	if (!rd || rd != render_.local_rd() || in.size.x <= 0 || in.size.y <= 0) return out;
-	const GBuffer *gb = render_.gbuffer();
+	const GBuffer *gb = render_.passes().gbuffer;
 	if (headless_.size() != in.size || (gb && gb->size() != in.size)) {
 		// The G-buffer and the scene targets are about to be reallocated. These passes cache a
 		// framebuffer over them and expose release_targets() for exactly this -- the same drops
 		// the probes made by hand. Uniform sets keyed by RID rebuild themselves. Never tear down
 		// DeferredPass/ContactShadowPass here: both mirror, and would free, the sun UBO.
-		if (CompositePass *composite = render_.composite_pass()) {
+		if (CompositePass *composite = render_.passes().composite) {
 			composite->release_targets();
 			composite->invalidate_uniform_set(rd);
 		}
-		if (InjectPass *inject = render_.inject_pass()) inject->release_targets();
-		if (LodRasterPass *lod_raster = render_.lod_raster_pass()) lod_raster->release_targets();
-		if (GrassRasterPass *grass_raster = render_.grass_raster_pass()) grass_raster->release_targets();
+		if (InjectPass *inject = render_.passes().inject) inject->release_targets();
+		if (LodRasterPass *lod_raster = render_.passes().lod_raster) lod_raster->release_targets();
+		if (GrassRasterPass *grass_raster = render_.passes().grass_raster) grass_raster->release_targets();
 	}
 	if (!headless_.ensure(rd, in.size) || !headless_.clear(rd)) return out;
 	out.scene_color = headless_.color();

@@ -147,7 +147,7 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 				if (old_it != lod_pages_of_.end()) {
 					for (int p : old_it->second) lod_page_quads_.erase(p);
 					lod_pool_->release(old_it->second);
-					if (render()->sun_shadow_pass()) render()->sun_shadow_pass()->mark_dirty();
+					if (render()->passes().sun_shadow) render()->passes().sun_shadow->mark_dirty();
 					lod_pages_of_.erase(old_it);
 				}
 				lod_tree_->note_empty(r.level, r.coord);
@@ -176,7 +176,7 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 			// A rebuild replaces the old page list. Release the stale pages only once the
 			// new pages are allocated and uploaded, so a refused rebuild keeps the old pages
 			// drawing; after this point the tree points at the new list.
-			if (render()->sun_shadow_pass()) render()->sun_shadow_pass()->mark_dirty();
+			if (render()->passes().sun_shadow) render()->passes().sun_shadow->mark_dirty();
 			const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
 			const auto old_it = lod_pages_of_.find(key);
 			if (old_it != lod_pages_of_.end()) {
@@ -205,7 +205,7 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 		if (it == lod_pages_of_.end()) continue;
 		for (int p : it->second) lod_page_quads_.erase(p);
 		lod_pool_->release(it->second);
-		if (render()->sun_shadow_pass()) render()->sun_shadow_pass()->mark_dirty();
+		if (render()->passes().sun_shadow) render()->passes().sun_shadow->mark_dirty();
 		lod_pages_of_.erase(it);
 	}
 
@@ -281,7 +281,7 @@ void LodSystem::prepare_raster() {
 // coarse bulge keeps every texel it does not.
 void LodSystem::prepare_shadow_raster(float radius, int min_level) {
 	std::lock_guard<std::mutex> lock(lod_mutex_);
-	if (!render()->lod_raster_pass() || !lod_pool_ || !lod_tree_) return;
+	if (!render()->passes().lod_raster || !lod_pool_ || !lod_tree_) return;
 	std::vector<ve::LodDrawItem> cut;
 	lod_tree_->shadow_cut(lod_shadow_cam_, radius, min_level, &cut);
 	std::vector<ve::LodPageDraw> page_draws;
@@ -290,18 +290,18 @@ void LodSystem::prepare_shadow_raster(float radius, int min_level) {
 	pages.reserve(page_draws.size());
 	for (const ve::LodPageDraw &pd : page_draws)
 		pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});
-	render()->lod_raster_pass()->set_draw_pages(pages);
+	render()->passes().lod_raster->set_draw_pages(pages);
 }
 
 void LodSystem::prepare_raster_locked() {
-	if (!render()->lod_raster_pass() || !lod_pool_) return;
+	if (!render()->passes().lod_raster || !lod_pool_) return;
 	std::vector<ve::LodPageDraw> page_draws;
 	ve::lod_collect_page_draws(lod_walk_.draws, lod_pages_of_, lod_page_quads_, &page_draws);
 	std::vector<LodRasterPass::PageDraw> pages;
 	pages.reserve(page_draws.size());
 	for (const ve::LodPageDraw &pd : page_draws)
 		pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});
-	render()->lod_raster_pass()->set_draw_pages(pages);
+	render()->passes().lod_raster->set_draw_pages(pages);
 }
 
 // The LoD tail of VoxelWorld::append_edit_locked, moved verbatim (Task 15): caller holds

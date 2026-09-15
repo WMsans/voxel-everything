@@ -80,7 +80,7 @@ int RenderOrchestrator::drain_island_uploads(RenderingDevice *device) {
 	if (!device) return 0;
 	IslandHandoff::Batch batch = handoff_.take();
 	for (const int slot : batch.normal_releases) {
-		if (atlas_) atlas_->stored_normals().release_volume(device, slot);
+		if (passes_.atlas) passes_.atlas->stored_normals().release_volume(device, slot);
 	}
 	for (const IslandHandoff::Upload &u : batch.uploads) {
 		// SDF/material and compact normals land ONCE, in the shared authoritative pools,
@@ -88,23 +88,23 @@ int RenderOrchestrator::drain_island_uploads(RenderingDevice *device) {
 		// the atlas slot; a field-volume upload follows the identical volume/normal path
 		// without one. A missing/malformed/failed normal payload is fail-soft: the pool
 		// publishes -1 and the shader falls back to differentiating the R8 atlas.
-		if (atlas_ && u.volume_slot >= 0) {
-			if (!atlas_->volumes().upload(device, u.volume_slot, u.data))
+		if (passes_.atlas && u.volume_slot >= 0) {
+			if (!passes_.atlas->volumes().upload(device, u.volume_slot, u.data))
 				UtilityFunctions::printerr("VoxelWorld: field volume upload failed for slot ",
 						u.volume_slot);
-			atlas_->stored_normals().upload_volume(device, u.volume_slot, u.data);
-		} else if (!atlas_ && u.to_island_atlas) {
+			passes_.atlas->stored_normals().upload_volume(device, u.volume_slot, u.data);
+		} else if (!passes_.atlas && u.to_island_atlas) {
 			UtilityFunctions::printerr("VoxelWorld: no GpuAtlas for island upload of slot ",
 					u.volume_slot);
 		}
-		if (u.to_island_atlas && islands_ && u.atlas_slot >= 0 &&
-				!islands_->upload_mip(device, u.atlas_slot, u.data))
+		if (u.to_island_atlas && passes_.islands && u.atlas_slot >= 0 &&
+				!passes_.islands->upload_mip(device, u.atlas_slot, u.data))
 			UtilityFunctions::printerr("VoxelWorld: island mip upload failed for slot ",
 					u.atlas_slot);
 		if (!u.to_island_atlas) handoff_.note_field_volume_uploaded();
 	}
-	if (batch.descs_dirty && islands_)
-		islands_->upload_descriptors(device, batch.descs.data(), static_cast<int>(batch.descs.size()));
+	if (batch.descs_dirty && passes_.islands)
+		passes_.islands->upload_descriptors(device, batch.descs.data(), static_cast<int>(batch.descs.size()));
 	return static_cast<int>(batch.uploads.size());
 }
 
@@ -170,8 +170,8 @@ bool RenderOrchestrator::ensure_downsample_set(RenderingDevice *rd, RID src, RID
 }
 
 bool RenderOrchestrator::has_history() const {
-	return has_history_ && history_texture_.is_valid() && gbuffer_ &&
-			gbuffer_->history() == history_texture_;
+	return has_history_ && history_texture_.is_valid() && passes_.gbuffer &&
+			passes_.gbuffer->history() == history_texture_;
 }
 
 void RenderOrchestrator::finish_beauty_frame(const float view_proj[16]) {
@@ -201,7 +201,7 @@ bool RenderOrchestrator::downsample_history(RenderingDevice *rd, RID src, GBuffe
 
 RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 		RenderingDevice *device) {
-	atlas_ = new GpuAtlas();
+	passes_.atlas = new GpuAtlas();
 	GpuAtlasConfig cfg;
 	const ve::WorldConfig &config = handles_.store->config();
 	cfg.atlas_bricks = {config.atlas_bricks.x, config.atlas_bricks.y, config.atlas_bricks.z};
@@ -211,16 +211,16 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 	cfg.region_window = ve::region_window_centered(0.0f, 0.0f, 0.0f,
 			ve::region_window_dim(config.residency_radius_m, ve::ResidencyConfig{}.evict_margin));
 	if (normal_pool_bytes_ > 0) cfg.normal_pool_bytes = normal_pool_bytes_; // test initializer
-	if (!atlas_->initialize(device, cfg)) { delete atlas_; atlas_ = nullptr; return GpuInitResult::kAtlasFailed; }
-	islands_ = new IslandAtlas();
-	if (!islands_->initialize(device)) return GpuInitResult::kFailed;
-	island_cull_ = new IslandCullPass();
-	if (!island_cull_->initialize(device)) return GpuInitResult::kFailed;
-	region_pass_ = new RegionPass();
-	if (!region_pass_->initialize(device, *atlas_)) return GpuInitResult::kFailed;
-	gen_pass_ = new BrickGenPass();
-	if (!gen_pass_->initialize(device, *atlas_)) return GpuInitResult::kFailed;
-	field_context_ = new FieldContextSet();
+	if (!passes_.atlas->initialize(device, cfg)) { delete passes_.atlas; passes_.atlas = nullptr; return GpuInitResult::kAtlasFailed; }
+	passes_.islands = new IslandAtlas();
+	if (!passes_.islands->initialize(device)) return GpuInitResult::kFailed;
+	passes_.island_cull = new IslandCullPass();
+	if (!passes_.island_cull->initialize(device)) return GpuInitResult::kFailed;
+	passes_.region = new RegionPass();
+	if (!passes_.region->initialize(device, *passes_.atlas)) return GpuInitResult::kFailed;
+	passes_.gen = new BrickGenPass();
+	if (!passes_.gen->initialize(device, *passes_.atlas)) return GpuInitResult::kFailed;
+	passes_.field_context = new FieldContextSet();
 	{
 		// The set-1 contents come from the stored terrain pipeline
 		// (VoxelWorld::load_terrain_pipeline ran before this graph build). An empty
@@ -229,21 +229,21 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 		// bind-everywhere invariant holds in both worlds. Fail-soft like the other
 		// optional passes: a failed set build leaves the pointer null and the passes
 		// skip their set-1 bind.
-		if (!field_context_->initialize(device, gen_pass_->shader(),
+		if (!passes_.field_context->initialize(device, passes_.gen->shader(),
 				handles_.store->terrain_pipeline())) {
 			UtilityFunctions::printerr(
 					"RenderOrchestrator: field context set creation failed; continuing without set 1");
-			delete field_context_;
-			field_context_ = nullptr;
+			delete passes_.field_context;
+			passes_.field_context = nullptr;
 		}
 	}
-	materials_ = new MaterialAtlas();
-	if (!materials_->initialize(device)) return GpuInitResult::kFailed;
+	passes_.materials = new MaterialAtlas();
+	if (!passes_.materials->initialize(device)) return GpuInitResult::kFailed;
 	// The four blocks below are the verbatim construction sequence moved into
 	// WorldStore; their call positions relative to the GPU setup are load-bearing.
 	handles_.store->ensure_edit_log();
-	handles_.store->ensure_overrides(atlas_->overrides().capacity());
-	if (!atlas_->replay_overrides(device, *handles_.store->overrides(),
+	handles_.store->ensure_overrides(passes_.atlas->overrides().capacity());
+	if (!passes_.atlas->replay_overrides(device, *handles_.store->overrides(),
 			handles_.store->override_tables())) {
 		UtilityFunctions::printerr("VoxelWorld: override replay into render pool failed");
 		return GpuInitResult::kFailed;
@@ -252,73 +252,73 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 	streamer_ = new WorldStreamer();
 	streamer_->initialize(handles_.store->residency(),
 			handles_.store->edit_log(), &handles_.store->edit_mutex(),
-			handles_.store->pending_edits(), atlas_,
-			region_pass_, gen_pass_, handles_.store, handles_.store->overrides(),
-			&handles_.store->override_tables(), field_context_);
-	raymarch_pass_ = new RaymarchPass();
-	raymarch_pass_->initialize(device);
-	raymarch_pass_->set_materials(*materials_);
-	composite_pass_ = new CompositePass();
-	composite_pass_->initialize(device);
-	deferred_pass_ = new DeferredPass();
-	deferred_pass_->initialize(device);
-	inject_pass_ = new InjectPass();
-	inject_pass_->initialize(device);
-	gbuffer_ = new GBuffer();
-	beauty_camera_ = new CameraUbo();
-	contact_shadow_pass_ = new ContactShadowPass();
-	contact_shadow_pass_->initialize(device);
-	sun_ubo_ = new SunUbo();
-	if (!sun_ubo_->ensure(device)) {
+			handles_.store->pending_edits(), passes_.atlas,
+			passes_.region, passes_.gen, handles_.store, handles_.store->overrides(),
+			&handles_.store->override_tables(), passes_.field_context);
+	passes_.raymarch = new RaymarchPass();
+	passes_.raymarch->initialize(device);
+	passes_.raymarch->set_materials(*passes_.materials);
+	passes_.composite = new CompositePass();
+	passes_.composite->initialize(device);
+	passes_.deferred = new DeferredPass();
+	passes_.deferred->initialize(device);
+	passes_.inject = new InjectPass();
+	passes_.inject->initialize(device);
+	passes_.gbuffer = new GBuffer();
+	passes_.beauty_camera = new CameraUbo();
+	passes_.contact_shadow = new ContactShadowPass();
+	passes_.contact_shadow->initialize(device);
+	passes_.sun_ubo = new SunUbo();
+	if (!passes_.sun_ubo->ensure(device)) {
 		UtilityFunctions::printerr("RenderOrchestrator: sun UBO creation failed");
-		delete sun_ubo_;
-		sun_ubo_ = nullptr;
+		delete passes_.sun_ubo;
+		passes_.sun_ubo = nullptr;
 	} else {
-		sun_ubo_->update(device, ve::SunState());
-		if (raymarch_pass_) raymarch_pass_->set_sun_ubo(sun_ubo_->buffer());
-		if (deferred_pass_) deferred_pass_->set_sun_ubo(sun_ubo_->buffer());
-		if (contact_shadow_pass_) contact_shadow_pass_->set_sun_ubo(sun_ubo_->buffer());
+		passes_.sun_ubo->update(device, ve::SunState());
+		if (passes_.raymarch) passes_.raymarch->set_sun_ubo(passes_.sun_ubo->buffer());
+		if (passes_.deferred) passes_.deferred->set_sun_ubo(passes_.sun_ubo->buffer());
+		if (passes_.contact_shadow) passes_.contact_shadow->set_sun_ubo(passes_.sun_ubo->buffer());
 	}
-	ssgi_pass_ = new SsgiPass();
-	ssgi_pass_->initialize(device);
-	ssao_pass_ = new SsaoPass();
-	ssao_pass_->initialize(device);
-	ssr_pass_ = new SsrPass();
-	ssr_pass_->initialize(device);
-	outline_pass_ = new OutlinePass();
-	outline_pass_->initialize(device);
+	passes_.ssgi = new SsgiPass();
+	passes_.ssgi->initialize(device);
+	passes_.ssao = new SsaoPass();
+	passes_.ssao->initialize(device);
+	passes_.ssr = new SsrPass();
+	passes_.ssr->initialize(device);
+	passes_.outline = new OutlinePass();
+	passes_.outline->initialize(device);
 	initialize_downsample(device);
-	lod_raster_pass_ = new LodRasterPass();
-	lod_raster_pass_->initialize(device);
-	sun_shadow_pass_ = new SunShadowPass();
-	if (!sun_shadow_pass_->initialize(device)) {
+	passes_.lod_raster = new LodRasterPass();
+	passes_.lod_raster->initialize(device);
+	passes_.sun_shadow = new SunShadowPass();
+	if (!passes_.sun_shadow->initialize(device)) {
 		UtilityFunctions::printerr("VoxelWorld: sun shadow initialization failed; continuing without "
 				"the world shadow map");
-		delete sun_shadow_pass_;
-		sun_shadow_pass_ = nullptr;
+		delete passes_.sun_shadow;
+		passes_.sun_shadow = nullptr;
 	}
-	lod_cull_pass_ = new LodCullPass();
-	if (!lod_cull_pass_->initialize(device)) {
+	passes_.lod_cull = new LodCullPass();
+	if (!passes_.lod_cull->initialize(device)) {
 		UtilityFunctions::printerr("VoxelWorld: LoD cull initialization failed; continuing "
 				"without GPU culling (safe fail-soft: draw every candidate page)");
-		delete lod_cull_pass_;
-		lod_cull_pass_ = nullptr;
+		delete passes_.lod_cull;
+		passes_.lod_cull = nullptr;
 	}
-	grass_scatter_pass_ = new GrassScatterPass();
-	if (!grass_scatter_pass_->initialize(device)) {
+	passes_.grass_scatter = new GrassScatterPass();
+	if (!passes_.grass_scatter->initialize(device)) {
 		UtilityFunctions::printerr("VoxelWorld: grass initialization failed; continuing "
 				"without grass (safe fail-soft: the field is simply bare)");
-		delete grass_scatter_pass_;
-		grass_scatter_pass_ = nullptr;
+		delete passes_.grass_scatter;
+		passes_.grass_scatter = nullptr;
 	}
-	grass_raster_pass_ = new GrassRasterPass();
-	grass_raster_pass_->initialize(device);
-	hiz_pass_ = new HizPass();
-	if (!hiz_pass_->initialize(device)) {
+	passes_.grass_raster = new GrassRasterPass();
+	passes_.grass_raster->initialize(device);
+	passes_.hiz = new HizPass();
+	if (!passes_.hiz->initialize(device)) {
 		UtilityFunctions::printerr("VoxelWorld: HiZ initialization failed; continuing without "
 				"occlusion (safe fail-soft: always visible)");
-		delete hiz_pass_;
-		hiz_pass_ = nullptr;
+		delete passes_.hiz;
+		passes_.hiz = nullptr;
 	}
 	return GpuInitResult::kOk;
 }
@@ -327,45 +327,45 @@ void RenderOrchestrator::teardown_render_passes() {
 	// Passes before the atlas: their uniform sets reference atlas RIDs, and freeing a
 	// texture cascades to referencing sets (M1's documented order). Islands sit between
 	// passes and the atlas pool: RaymarchPass's uniform set references island buffers too.
-	if (composite_pass_) { delete composite_pass_; composite_pass_ = nullptr; }
-	if (inject_pass_) { delete inject_pass_; inject_pass_ = nullptr; }
-	if (deferred_pass_) { delete deferred_pass_; deferred_pass_ = nullptr; }
-	if (sun_shadow_pass_) { delete sun_shadow_pass_; sun_shadow_pass_ = nullptr; }
-	if (hiz_pass_ && gbuffer_) hiz_pass_->release_level0_set();
+	if (passes_.composite) { delete passes_.composite; passes_.composite = nullptr; }
+	if (passes_.inject) { delete passes_.inject; passes_.inject = nullptr; }
+	if (passes_.deferred) { delete passes_.deferred; passes_.deferred = nullptr; }
+	if (passes_.sun_shadow) { delete passes_.sun_shadow; passes_.sun_shadow = nullptr; }
+	if (passes_.hiz && passes_.gbuffer) passes_.hiz->release_level0_set();
 	teardown_downsample();
-	if (contact_shadow_pass_) { delete contact_shadow_pass_; contact_shadow_pass_ = nullptr; }
-	if (ssr_pass_) { delete ssr_pass_; ssr_pass_ = nullptr; }
-	if (outline_pass_) { delete outline_pass_; outline_pass_ = nullptr; }
-	if (grass_raster_pass_) { delete grass_raster_pass_; grass_raster_pass_ = nullptr; }
-	if (grass_scatter_pass_) { delete grass_scatter_pass_; grass_scatter_pass_ = nullptr; }
-	if (ssgi_pass_) { delete ssgi_pass_; ssgi_pass_ = nullptr; }
-	if (ssao_pass_) { delete ssao_pass_; ssao_pass_ = nullptr; }
-	if (beauty_camera_) { beauty_camera_->teardown(); delete beauty_camera_; beauty_camera_ = nullptr; }
-	if (gbuffer_) { delete gbuffer_; gbuffer_ = nullptr; }
-	if (raymarch_pass_) { delete raymarch_pass_; raymarch_pass_ = nullptr; }
-	if (sun_ubo_) { sun_ubo_->teardown(); delete sun_ubo_; sun_ubo_ = nullptr; }
-	if (lod_raster_pass_) { delete lod_raster_pass_; lod_raster_pass_ = nullptr; }
-	if (lod_cull_pass_) { delete lod_cull_pass_; lod_cull_pass_ = nullptr; }
-	if (hiz_pass_) {
-		hiz_pass_->teardown();
-		last_hiz_readback_was_pending_ = hiz_pass_->readback_was_pending_at_teardown();
-		last_hiz_readback_was_drained_ = hiz_pass_->readback_was_drained_at_teardown();
-		delete hiz_pass_;
-		hiz_pass_ = nullptr;
+	if (passes_.contact_shadow) { delete passes_.contact_shadow; passes_.contact_shadow = nullptr; }
+	if (passes_.ssr) { delete passes_.ssr; passes_.ssr = nullptr; }
+	if (passes_.outline) { delete passes_.outline; passes_.outline = nullptr; }
+	if (passes_.grass_raster) { delete passes_.grass_raster; passes_.grass_raster = nullptr; }
+	if (passes_.grass_scatter) { delete passes_.grass_scatter; passes_.grass_scatter = nullptr; }
+	if (passes_.ssgi) { delete passes_.ssgi; passes_.ssgi = nullptr; }
+	if (passes_.ssao) { delete passes_.ssao; passes_.ssao = nullptr; }
+	if (passes_.beauty_camera) { passes_.beauty_camera->teardown(); delete passes_.beauty_camera; passes_.beauty_camera = nullptr; }
+	if (passes_.gbuffer) { delete passes_.gbuffer; passes_.gbuffer = nullptr; }
+	if (passes_.raymarch) { delete passes_.raymarch; passes_.raymarch = nullptr; }
+	if (passes_.sun_ubo) { passes_.sun_ubo->teardown(); delete passes_.sun_ubo; passes_.sun_ubo = nullptr; }
+	if (passes_.lod_raster) { delete passes_.lod_raster; passes_.lod_raster = nullptr; }
+	if (passes_.lod_cull) { delete passes_.lod_cull; passes_.lod_cull = nullptr; }
+	if (passes_.hiz) {
+		passes_.hiz->teardown();
+		last_hiz_readback_was_pending_ = passes_.hiz->readback_was_pending_at_teardown();
+		last_hiz_readback_was_drained_ = passes_.hiz->readback_was_drained_at_teardown();
+		delete passes_.hiz;
+		passes_.hiz = nullptr;
 	}
-	if (materials_) { delete materials_; materials_ = nullptr; }
-	if (field_context_) { delete field_context_; field_context_ = nullptr; }
-	if (gen_pass_) { delete gen_pass_; gen_pass_ = nullptr; }
-	if (region_pass_) { delete region_pass_; region_pass_ = nullptr; }
+	if (passes_.materials) { delete passes_.materials; passes_.materials = nullptr; }
+	if (passes_.field_context) { delete passes_.field_context; passes_.field_context = nullptr; }
+	if (passes_.gen) { delete passes_.gen; passes_.gen = nullptr; }
+	if (passes_.region) { delete passes_.region; passes_.region = nullptr; }
 }
 
 void RenderOrchestrator::teardown_island_graph() {
-	if (island_cull_) { delete island_cull_; island_cull_ = nullptr; }
-	if (islands_) { delete islands_; islands_ = nullptr; }
+	if (passes_.island_cull) { delete passes_.island_cull; passes_.island_cull = nullptr; }
+	if (passes_.islands) { delete passes_.islands; passes_.islands = nullptr; }
 }
 
 void RenderOrchestrator::teardown_atlas_pool() {
-	if (atlas_) { delete atlas_; atlas_ = nullptr; }
+	if (passes_.atlas) { delete passes_.atlas; passes_.atlas = nullptr; }
 }
 
 void RenderOrchestrator::reset_history_state() {

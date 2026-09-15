@@ -290,22 +290,6 @@ float VoxelWorld::get_effect_value(const String &name) const {
 	return context_.render->get_effect_value(name);
 }
 
-ve::BeautySettings VoxelWorld::beauty_settings() const {
-	return context_.render->beauty_settings();
-}
-
-GrassScatterPass *VoxelWorld::grass_scatter_pass() const {
-	return context_.render->grass_scatter_pass();
-}
-
-GrassRasterPass *VoxelWorld::grass_raster_pass() const {
-	return context_.render->grass_raster_pass();
-}
-
-ve::GrassSettings VoxelWorld::grass_settings() const {
-	return context_.render->grass_settings();
-}
-
 bool VoxelWorld::set_grass_value(const String &name, float v) {
 	return context_.render->set_grass_value(name.utf8().get_data(), v);
 }
@@ -313,13 +297,6 @@ bool VoxelWorld::set_grass_value(const String &name, float v) {
 float VoxelWorld::get_grass_value(const String &name) const {
 	return context_.render->grass_value(name.utf8().get_data());
 }
-
-
-
-
-
-
-
 
 void VoxelWorld::_ready() {
 	// Debug/test facade lives as long as the world; tests reach it through hooks().
@@ -366,7 +343,7 @@ void VoxelWorld::_process(double delta) {
 		const Vector3 p = c->get_global_position();
 		store_->set_center(p.x, p.y, p.z);
 	}
-	drain_occupancy();
+	store_->drain_occupancy();
 	consolidation_->pump_async();
 	update_sun_state();
 	if (!physics_enabled_ || physics_center_path_.is_empty()) return;
@@ -474,10 +451,6 @@ VoxelWorld::~VoxelWorld() {
 	// clear them when a world goes away so a broken override from one suite cannot leak into
 	// the next world created in the same process.
 	ve::clear_shader_source_overrides();
-}
-
-bool VoxelWorld::downsample_history(RenderingDevice *rd, RID src, GBuffer &gb) {
-	return context_.render->downsample_history(rd, src, gb);
 }
 
 void VoxelWorld::teardown_gpu() {
@@ -601,10 +574,6 @@ void VoxelWorld::load_terrain_pipeline() {
 	store_->set_generator(gen); // WorldStore takes ownership, as it does today
 }
 
-FieldContextSet *VoxelWorld::field_context() {
-	return context_.render ? context_.render->field_context() : nullptr;
-}
-
 void VoxelWorld::ensure_initialized() {
 	// Admission gate moved with the lifetime state (Task 13); same mutex-guarded check.
 	if (context_.render->shutdown_in_progress()) return;
@@ -691,8 +660,8 @@ ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
 }
 
 void VoxelWorld::publish_sun_state_to_local_device(RenderingDevice *device) {
-	if (!use_local_device_ || !device || !context_.render || !context_.render->sun_ubo()) return;
-	SunUbo *ubo = context_.render->sun_ubo();
+	if (!use_local_device_ || !device || !context_.render || !context_.render->passes().sun_ubo) return;
+	SunUbo *ubo = context_.render->passes().sun_ubo;
 	if (ubo->ensure(device)) ubo->update(device, context_.render->sun_state());
 }
 
@@ -837,8 +806,6 @@ int VoxelWorld::physics_tick(Vector3 center) {
 	return actions;
 }
 
-
-
 void VoxelWorld::set_physics_bubble_radius_m(float v) {
 	physics_bubble_radius_m_ = v;
 	// Applies live: a test (and the editor's inspector) can change the bubble after physics
@@ -846,85 +813,9 @@ void VoxelWorld::set_physics_bubble_radius_m(float v) {
 	if (colliders_) colliders_->set_body_bubble_radius_m(v);
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// Task 15: gather_lod_ops/ensure_lod/lod_fade_band/lod_tick/prepare_lod_raster[_locked]/
-// prepare_lod_shadow_raster moved verbatim into LodSystem; these one-line delegations keep
-// the compositor, the debug facade and ClassDB compiling unchanged.
-void VoxelWorld::gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out) {
-	context_.lod->gather_ops(level, coord, out);
-}
-
-// Moved verbatim into WorldStore (Task 11); one-line delegation so hooks and
-// IslandManager compile unchanged.
-bool VoxelWorld::snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo, ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const {
-	return store_->snapshot_field_sources(ops, brick_lo, brick_hi, out);
-}
-
-// Task 15 one-line delegations into LodSystem, where tick/fade-band/raster-prep moved
-// verbatim; the compositor, the debug facade and ClassDB compile unchanged.
-void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
-	context_.lod->tick(cam, occ);
-}
-
-void VoxelWorld::prepare_lod_raster() {
-	context_.lod->prepare_raster();
-}
-
-void VoxelWorld::prepare_lod_shadow_raster(float radius, int min_level) {
-	context_.lod->prepare_shadow_raster(radius, min_level);
-}
-
 int VoxelWorld::sun_cascade_count() const {
 	ve::SunCascade c[ve::kSunCascades];
 	return ve::sun_cascades(get_stream_radius_m(), SunShadowPass::kSize, c);
-}
-
-ve::SunOrtho VoxelWorld::sun_ortho(int cascade) const {
-	return context_.render->frame().sun_ortho(cascade);
-}
-
-void VoxelWorld::lod_fade_band(float *fade_start, float *fade_end) const {
-	context_.lod->fade_band(fade_start, fade_end);
-}
-
-int VoxelWorld::override_table_for_region(ve::IVec3 region) const {
-	return store_->override_table_for_region(region);
 }
 
 void VoxelWorld::on_edit_appended(const ve::EditOp &op, bool notify_islands) {
@@ -936,19 +827,6 @@ void VoxelWorld::on_edit_appended(const ve::EditOp &op, bool notify_islands) {
 	if (notify_islands && island_manager_)
 		island_manager_->note_edit(op, store_->edit_seq());
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandExtractJob *job,
 		std::vector<ve::CellBox> *boxes, ve::VolumeData *out) {
@@ -967,7 +845,7 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 	job->boxes = *boxes;
 	if (!ve::plan_island_lattice(wlo, whi, ve::kIslandDim, &job->voxel, job->origin)) return false;
 	job->dim = ve::kIslandDim;
-	job->override_table = override_table_for_region(
+	job->override_table = store_->override_table_for_region(
 			ve::region_of_point(job->origin[0], job->origin[1], job->origin[2]));
 	{
 		std::lock_guard<std::mutex> lock(store_->edit_mutex());
@@ -976,7 +854,7 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 		float lattice_hi[3] = {job->origin[0] + (job->dim - 1) * job->voxel, job->origin[1] + (job->dim - 1) * job->voxel, job->origin[2] + (job->dim - 1) * job->voxel};
 		ve::IVec3 blo = ve::brick_of_point(job->origin[0], job->origin[1], job->origin[2]);
 		ve::IVec3 bhi = ve::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
-		if (!snapshot_field_sources(job->ops, blo, bhi, &job->snapshot)) return false;
+		if (!store_->snapshot_field_sources(job->ops, blo, bhi, &job->snapshot)) return false;
 		job->gen = &store_->generator()->sampler();
 	}
 
@@ -1004,86 +882,10 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 	return true;
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // Preflight_shaders moved verbatim into RenderOrchestrator (Task 13); the reload latch,
 // pump machinery and bookkeeping moved verbatim into RenderOrchestrator (Task 14).
 
 void VoxelWorld::request_shader_reload() {
 	context_.render->request_shader_reload();
 }
-
-void VoxelWorld::pump_shader_reload() {
-	context_.render->pump_shader_reload();
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
