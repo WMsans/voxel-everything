@@ -138,6 +138,48 @@ leaked: 0
 none
 leaked: 0
 
+### Task 3 sites (raster and frame compute; gate = site suites + test_frame_shipped_golden + test_frame_contract + test_render_lifetime_contract)
+
+### inject
+none
+leaked: 0
+
+### grass_raster
+none
+leaked: 0
+
+### lod_raster
+none
+leaked: 0
+
+### sun_shadow
+none
+leaked: 0
+
+### composite
+none
+leaked: 0
+
+### island_cull
+none
+leaked: 0
+
+### lod_cull
+none
+leaked: 0
+
+### grass_scatter
+none
+leaked: 0
+
+### raymarch
+none
+leaked: 0
+
+### orchestrator
+none
+leaked: 0
+
 ## Evidence log
 Appended by later tasks.
 
@@ -151,3 +193,18 @@ Appended by later tasks.
 | ssgi | f[22] = 0 | test_ssgi.gd::test_light_bounces_once_the_history_exists — eight frames of history produced no bounce at all: max_channel 0.0, mean_luma 0.0 | yes |
 | hiz | p[4] = 0 | test_hiz.gd::test_the_reduction_is_a_min_in_reverse_z — Expecting: 0.100000 in range between 0.899000 <> 0.901000 | yes |
 | deferred | u[24] = 0 | test_deferred_golden.gd::test_lit_frame_matches_the_recorded_golden — mean_luma moved: golden 0.033779, got 0.044053 (named suite passed clean; golden added per missing-test rule, commit a80029e) | yes |
+
+### Task 3 bite proofs
+| Site | Break | Failing case — message | Reverted |
+|---|---|---|---|
+| inject | delete draw_list_draw | test_frame_shipped_golden.gd::test_the_shipped_frame_matches_the_recorded_golden — oblique: tile 6 moved by 0.016639, horizon: tile 15 moved by 0.052532 (tolerance 0.004000; test_gbuffer.gd passed clean 5/5, allocation-only) | yes |
+| grass_raster | f[16] = 0 | test_grass_golden.gd::test_grass_shading_matches_the_recorded_golden — max_luma moved: golden 0.800194, got 0.811078 | yes |
+| lod_raster | f[20] = fade_start | test_lod_raster_golden.gd::test_lod_fade_matches_the_recorded_golden — coverage moved: golden 0.097114, got 0.102458; depth_sum moved: golden 4.693420, got 5.418561 (named suites passed clean; golden added per missing-test rule, commit cc3ec9d) | yes |
+| sun_shadow | f[i] = 0 | test_sun_shadow.gd::test_something_actually_gets_drawn_into_it — Expecting: 1.000000 in range between -0.010000 <> 0.010000 | yes |
+| composite | binding 0 src_overlay → src_surface | test_composite_golden.gd::test_sky_through_the_composite_matches_the_recorded_golden — sky red moved: golden 0.251000, got 0.000000 (green/blue likewise; ground control unchanged; named suite passed clean; golden added per missing-test rule, commit d82558a) | yes |
+| island_cull | dims[3] = 0 | test_island_render.gd::test_the_tile_mask_marks_the_tiles_the_island_covers — Expecting to be greater than: 0 but was 0 | yes |
+| lod_cull | ip[0] = 0 | test_lod_cull_golden.gd::test_production_cull_ratio_matches_the_recorded_golden — culled_ratio moved: golden 0.000000, got 0.333475 (inverted bite: the break raises the ratio; named suite passed clean; golden added per missing-test rule, commit 8e06c54) | yes |
+| grass_scatter | if (false) | test_grass.gd::test_blades_appear_on_grass_terrain — Expecting to be greater than: 0 but was 0 | yes |
+| raymarch | half X groups | test_raymarch_pixel.gd::test_ray_down_from_sky_hits_terrain — ray down from sky missed | yes |
+| orchestrator (downsample) | dims[0] = 1 | test_ssgi.gd::test_light_bounces_once_the_history_exists — eight frames of history produced no bounce at all: max_channel 0.000900, mean_luma 0.000023 | yes |
+| orchestrator (pre-flight) | stages all compute | test_shader_reload.gd::test_reload_keeps_the_world — Expecting: 'true' but is 'false' (last_ok false) | yes |
