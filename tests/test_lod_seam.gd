@@ -20,6 +20,7 @@ func make_world(residency_radius := 96.0) -> VoxelWorld:
 	# it -- it just measures the seam on a world that never converged.
 	w.max_lod_pages = 32768
 	w.residency_radius_m = residency_radius
+	w.near_field_scale = 1.0 # debug_seam_probe reads the marcher's hitpos per full-resolution pixel
 	add_child(w)
 	_worlds.append(w)
 	assert_bool(w.hooks().debug_init_atlas()).is_true()

@@ -3,6 +3,7 @@
 #include <godot_cpp/variant/vector3.hpp>
 #include <atomic>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <vector>
 #include "connectivity/components.h"
@@ -20,7 +21,10 @@ namespace godot {
 // expose a lower cap without duplicating the magic number.
 inline constexpr int kMaxDynamicBodies = 64;
 
-class VoxelWorld;
+class IslandHandoff;
+class MeshService;
+class Node3D;
+class WorldStore;
 
 // Spec §5, orchestrated. One pass per frame, in this order:
 //
@@ -35,9 +39,26 @@ class VoxelWorld;
 // small mutex instead of being touched from two threads unsynchronised.
 class IslandManager {
 public:
+	// What the manager needs from the world, and nothing else (spec 2026-09-14 §3.4).
+	struct Collaborators {
+		// edit_log, edit_mutex, edit_seq, occupancy, volumes, override tables, field
+		// snapshots, raycast_down.
+		WorldStore *store = nullptr;
+		// Island/field-volume bytes and descriptors for the render device; slot mark.
+		IslandHandoff *handoff = nullptr;
+		// Created before the manager and deleted after it (VoxelWorld physics lifetime).
+		MeshService *mesh = nullptr;
+		// get_world_3d() for body spaces.
+		Node3D *scene_node = nullptr;
+		// Body centres as xyz triples; VoxelWorld::physics_tick hands them to the colliders.
+		std::vector<float> *bubble_centers = nullptr;
+		// VoxelWorld::append_edit_locked. Named debt: sub-project 5's EditPipeline replaces it.
+		std::function<ve::EditLog::AppendResult(const ve::EditOp &, bool)> append_edit_locked;
+	};
+
 	~IslandManager();
 
-	void initialize(VoxelWorld *world);
+	void initialize(Collaborators handles);
 	void teardown();
 
 	int run_frame(float dt, const Vector3 &center); // actions taken
@@ -46,9 +67,7 @@ public:
 	// the behaviour spec §5 describes, not a bug.
 	void note_edit(const ve::EditOp &op, int64_t seq);
 
-	int slot_high_water() const {
-		return slot_high_water_.load(std::memory_order_relaxed);
-	}
+	int slot_high_water() const;
 	float last_ms() const { return last_ms_; }
 	void set_merge_sleep_seconds(float v) { merge_sleep_s_ = v; }
 	// Borrowed, not owned; see the member comment.
@@ -59,16 +78,7 @@ public:
 		// that pass an absurd value from silently disabling the body cap.
 		max_dynamic_bodies_ = v < 1 ? 1 : (v > kMaxDynamicBodies ? kMaxDynamicBodies : v);
 	}
-	void debug_set_atlas_slot_used(int slot, bool used) {
-		// Test hook for the 32-island atlas ceiling. Out-of-range slots are ignored; used
-		// may only be set for slots the manager can actually hand out.
-		if (slot < 0 || slot >= kMaxIslands) return;
-		atlas_used_[static_cast<size_t>(slot)] = used ? 1 : 0;
-		if (used) {
-			const int high = std::max(slot_high_water_.load(std::memory_order_relaxed), slot + 1);
-			slot_high_water_.store(high, std::memory_order_relaxed);
-		}
-	}
+	void debug_set_atlas_slot_used(int slot, bool used);
 #else
 	// Cap/atlas test hooks are debug-only: release builds must not be able to lower the
 	// 64-body guardrail or mark atlas slots used.
@@ -171,6 +181,12 @@ private:
 	void land_extraction(const IslandExtractResult &r);
 	void land_resample(const IslandExtractResult &r);
 	void publish_descriptors();
+	// Handoff half + mesher half of a field-volume paste (was VoxelWorld::queue_field_volume_upload).
+	void queue_field_volume(int slot, const ve::VolumeData &data);
+	// Undo of the above for a paste rejected before the uploads drain.
+	void discard_field_volume(int slot);
+	// Spec §6's "small bubbles around active bodies" (was VoxelWorld::set_physics_bubbles).
+	void publish_bubbles();
 	void start_merges();
 	void queue_retry_window(const PendingWindow &w);
 	void note_extract_failure(const PendingWindow &w);
@@ -182,8 +198,8 @@ private:
 	int free_atlas_slot() const;
 	void despawn(int index);
 
-	VoxelWorld *world_ = nullptr;
-	// Borrowed from WorldStore via VoxelWorld, exactly like edit_log_. Never owned: the
+	Collaborators handles_;
+	// Borrowed from WorldStore through the store collaborator, exactly like edit_log_. Never owned: the
 	// terrain pipeline can swap the world's generator, and a copy here would silently keep
 	// generating the old world for collision while the GPU generated the new one.
 	const ve::Generator *gen_ = nullptr;
@@ -201,8 +217,6 @@ private:
 	ve::ContactRefineConfig refine_cfg_;
 	int next_id_ = 1;
 	int64_t next_window_id_ = 1;
-	// Read by the render thread through VoxelWorld::island_slot_count(), so it is atomic.
-	std::atomic<int> slot_high_water_{0};
 	int max_dynamic_bodies_ = kMaxDynamicBodies;
 	float merge_sleep_s_ = 2.0f; // spec §5: "Body sleeps ~2s -> re-merge"
 	// Counters the HUD, the benchmark and tests/test_connectivity.gd read.

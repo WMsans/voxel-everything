@@ -31,10 +31,30 @@
 namespace godot {
 
 class MeshService;
+class LodPool;
 class RenderOrchestrator;
 class RenderingDevice;
-class VoxelDebugHooks;
 class WorldStore;
+
+// What the debug facade reports about the LoD runtime, copied in ONE hold of the lod mutex
+// (the hold debug_lod_stats used to take itself, through friendship). Plain data.
+struct LodStats {
+	int pages_total = 0;
+	int pages_free = 0;
+	int pages_high_water = 0;
+	int chunk_records = 0;
+	int chunk_records_used = 0;
+	int chunk_records_high_water = 0;
+	const char *budget_bound = "none";
+	int chunks_resident = 0;
+	int dirty_chunks = 0;
+	int dirty_levels = 0;
+	int draw_pages = 0;
+	std::vector<int> draw_page_ids;     // the current cut's page identities, in draw order
+	std::vector<int> resident_page_ids; // pages holding at least one quad
+	std::vector<ve::LodBuildRequest> requests; // what the last walk still wants built
+	int partial_allocations = 0;
+};
 
 class LodSystem {
 public:
@@ -48,7 +68,6 @@ public:
 		RenderOrchestrator **render = nullptr;
 		// Created/destroyed across physics init/teardown cycles; re-read at every use.
 		MeshService **mesh = nullptr;
-		const std::atomic<bool> *near_field_enabled = nullptr;
 		// ensure_lod()'s lazy-init arm: VoxelWorld::ensure_initialized() via a captureless
 		// thunk -- the same pattern RenderOrchestrator uses; no VoxelWorld* is stored.
 		void (*ensure_initialized_thunk)(void *) = nullptr;
@@ -71,10 +90,6 @@ public:
 	// re-read them at every use instead of caching stranded pointers.
 	std::mutex *mutex_slot() { return &lod_mutex_; }
 	ve::LodTree **tree_slot() { return &lod_tree_; }
-	class LodPool **pool_slot() { return &lod_pool_; }
-	std::map<ve::LodKey, std::vector<int>> *pages_of_slot() { return &lod_pages_of_; }
-	std::map<int, int> *page_quads_slot() { return &lod_page_quads_; }
-	std::set<ve::LodKey> *overflow_logged_slot() { return &lod_overflow_logged_; }
 
 	// Was VoxelWorld::lod_tick; render thread (compositor callback).
 	void tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ);
@@ -106,8 +121,15 @@ public:
 	// The _exit_tree() LoD half, verbatim statement-for-statement: pool -> tree ->
 	// page maps, exactly where VoxelWorld used to run it (after CPU-core release).
 	void teardown();
+	// RenderOrchestrator::teardown_gpu()'s LoD step, verbatim: pool, then tree, then the page
+	// maps (the tree holds page indices the pool is about to free, and a stale index would be
+	// handed to the next chunk). Takes no lock, exactly like the statements it replaces.
+	void release_gpu();
 
 	LodPool *pool() const { return lod_pool_; }
+
+	// Runs ensure_lod() and copies LodStats under mutex(). Tool/main thread.
+	LodStats stats();
 
 	// User-facing budgets (VoxelWorld ClassDB properties delegate to these). max_lod_pages_
 	// is read once at LodPool::initialize time; lod_builds_per_frame_ clamps each frame's
@@ -120,15 +142,6 @@ public:
 	int max_lod_chunk_records() const { return max_lod_chunk_records_; }
 
 private:
-	// Temporary Task-15 surface: the debug facade pokes the moved members directly today,
-	// exactly as it poked VoxelWorld's before the move. Task 16 audit: still load-bearing --
-	// debug/hooks.cpp reads lod_mutex_, ensure_lod(), lod_tree_, lod_walk_, lod_pages_of_
-	// and lod_page_quads_ for its diagnostics (only pool() has a public accessor). Removing
-	// the declaration would mean widening LodSystem's public diagnostic surface, which the
-	// no-behavior-change guard (spec §8) defers to a dedicated facade rework. See
-	// task-16-report's friend table.
-	friend class VoxelDebugHooks;
-
 	// lazy: creates/initializes lod_tree_ + lod_pool_ on first use
 	void ensure_lod();
 	// Assumes lod_mutex_ is held; emits the real page list for the current lod_walk_.

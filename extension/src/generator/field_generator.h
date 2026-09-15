@@ -1,7 +1,7 @@
 #pragma once
 // FieldGenerator -- the world-generation seam (spec §4). Procedural G() is the first
 // implementation; future worldgen features implement this interface and are swapped in
-// pre-init via VoxelWorld::set_generator(). WorldStore holds the instance and owns its
+// pre-init via WorldStore::set_generator(). WorldStore holds the instance and owns its
 // lifetime.
 //
 // Pure port (Task 10): nothing about generation changes. The concrete class delegates to

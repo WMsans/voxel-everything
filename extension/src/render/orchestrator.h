@@ -25,14 +25,14 @@
 
 #include <atomic>
 #include <condition_variable>
-#include <map>
+#include <functional>
 #include <mutex>
-#include <set>
 #include <vector>
 
-#include "lod/lod_tree.h" // ve::LodKey: teardown clears the world's LoD page maps
 #include "grass/grass_settings_store.h"
+#include "render/frame.h"
 #include "render/gpu_timings.h"
+#include "render/island_handoff.h"
 #include "shade/beauty_settings.h"
 #include "world/region.h"
 
@@ -47,6 +47,7 @@ inline constexpr char kShutdownRenderResourcesOnRenderThread[] =
 class RenderingDevice;
 class WorldStore;
 class WorldStreamer;
+class LodSystem;
 class GpuAtlas;
 class MaterialAtlas;
 class IslandAtlas;
@@ -72,48 +73,53 @@ class SsrPass;
 class OutlinePass;
 class GrassScatterPass;
 class GrassRasterPass;
-class LodPool;
 class Object;
+
+// Every GPU object of the pass graph. The orchestrator creates them in ensure_gpu_graph() and
+// deletes them in teardown_gpu()'s halves, in the load-bearing orders documented there; a null
+// field means "not built" (never initialized, failed soft, or torn down). VoxelFrame, LodSystem
+// and the debug facade's pass probes read it; nobody else creates or deletes these objects.
+struct RenderPasses {
+	GpuAtlas *atlas = nullptr;
+	MaterialAtlas *materials = nullptr;
+	IslandAtlas *islands = nullptr;
+	IslandCullPass *island_cull = nullptr;
+	RegionPass *region = nullptr;
+	BrickGenPass *gen = nullptr;
+	RaymarchPass *raymarch = nullptr;
+	CompositePass *composite = nullptr;
+	DeferredPass *deferred = nullptr;
+	SunShadowPass *sun_shadow = nullptr;
+	SunUbo *sun_ubo = nullptr;
+	FieldContextSet *field_context = nullptr;
+	InjectPass *inject = nullptr;
+	LodRasterPass *lod_raster = nullptr;
+	LodCullPass *lod_cull = nullptr;
+	HizPass *hiz = nullptr;
+	GBuffer *gbuffer = nullptr;
+	CameraUbo *beauty_camera = nullptr;
+	ContactShadowPass *contact_shadow = nullptr;
+	SsgiPass *ssgi = nullptr;
+	SsaoPass *ssao = nullptr;
+	SsrPass *ssr = nullptr;
+	OutlinePass *outline = nullptr;
+	GrassScatterPass *grass_scatter = nullptr;
+	GrassRasterPass *grass_raster = nullptr;
+};
 
 class RenderOrchestrator {
 public:
 	struct Collaborators {
-		// Device-selection seam: use_local_device_ stays a VoxelWorld property.
+		// Device-selection seam: use_local_device_ stays a VoxelWorld property (ClassDB).
 		const bool *use_local_device = nullptr;
 		// Config/residency spine steps sit mid-sequence in ensure_gpu_graph().
 		WorldStore *store = nullptr;
-		// Created INSIDE the verbatim init sequence; the slot is VoxelWorld's field.
-		WorldStreamer **streamer = nullptr;
-		// Debug-settable atlas budget read at GpuAtlasConfig time (0 = default).
-		const uint32_t *normal_pool_bytes = nullptr;
-		// Teardown captures HiZ's async-readback end state for the debug facade.
-		bool *last_hiz_readback_was_pending = nullptr;
-		bool *last_hiz_readback_was_drained = nullptr;
-		// --- Task 13 (lifetime/admission + teardown interleaving) ---
-		// World-owned flags/state teardown_gpu() touches BETWEEN its three halves
-		// and after them. Addresses only, re-read at every use.
-		bool *initialized = nullptr;        // cleared last by teardown_gpu(), as before
-		std::mutex *island_mutex = nullptr; // guards *island_slots during teardown
-		int *island_slots = nullptr;        // high-water mark reset under *island_mutex
-		LodPool **lod_pool = nullptr;       // pool -> tree -> page maps, post-atlas
-		ve::LodTree **lod_tree = nullptr;
-		std::map<ve::LodKey, std::vector<int>> *lod_pages_of = nullptr;
-		std::map<int, int> *lod_page_quads = nullptr;
-		std::set<ve::LodKey> *lod_overflow_logged = nullptr;
+		// teardown_gpu() calls lod->release_gpu() where the LoD statements always sat.
+		LodSystem *lod = nullptr;
 		// Callable target for the queued render-thread teardown (see class comment).
 		Object *callback_owner = nullptr;
-		// --- Task 14 ---
-		// set_effect_enabled()/get_effect_enabled() route the two atomic toggles that
-		// stayed world properties (they gate non-beauty behavior too). Addresses only.
-		std::atomic<bool> *islands_enabled = nullptr;
-		std::atomic<bool> *near_field_enabled = nullptr;
-		// pump_shader_reload()'s re-init arm: VoxelWorld::ensure_initialized() (it owns
-		// the CPU-side init ordering around the GPU half this class moved in Task 12).
-		// Generic thunk + user-data, not a stored VoxelWorld*: the world registers a
-		// captureless static trampoline at construction, exactly like callback_owner
-		// above is registered for its single Callable purpose.
-		void (*ensure_initialized_thunk)(void *) = nullptr;
-		void *ensure_initialized_self = nullptr;
+		// pump_shader_reload()'s re-init arm: VoxelWorld::ensure_initialized().
+		std::function<void()> ensure_initialized;
 	};
 
 	explicit RenderOrchestrator(Collaborators handles);
@@ -185,38 +191,46 @@ public:
 	// the borrowed main pointer merely forgotten.
 	void release_devices();
 
+	// --- island handoff (spec 2026-09-14 §3.2; moved from VoxelWorld) ---
+	IslandHandoff &handoff() { return handoff_; }
+	// High-water mark for the raymarcher. Render thread; lock-free (two atomics).
+	int island_slot_count() const {
+		return handoff_.slot_count(islands_enabled_.load(std::memory_order_relaxed));
+	}
+	// Render thread, before the streamer runs. Returns how many uploads landed.
+	int drain_island_uploads(RenderingDevice *device);
+
+	// --- render lifetime state and per-frame knobs (moved from VoxelWorld, spec 2026-09-14
+	// §3.1). Guards unchanged: plain fields stay plain, atomics stay atomic, the sun keeps
+	// its own mutex. ---
+	bool initialized() const { return initialized_; }
+	void mark_initialized() { initialized_ = true; }
+	WorldStreamer *streamer() const { return streamer_; }
+	WorldStreamer **streamer_slot() { return &streamer_; } // ConsolidationCoordinator wiring
+	// Debug-settable compact-normal budget; 0 = GpuAtlasConfig's default. Set before init.
+	void set_normal_pool_bytes(uint32_t bytes) { normal_pool_bytes_ = bytes; }
+	bool last_hiz_readback_was_pending() const { return last_hiz_readback_was_pending_; }
+	bool last_hiz_readback_was_drained() const { return last_hiz_readback_was_drained_; }
+	void set_sun_state(const ve::SunState &sun);
+	ve::SunState sun_state() const;
+	void set_near_field_scale(float v); // clamps to [0.1, 1]
+	float near_field_scale() const { return near_field_scale_.load(std::memory_order_relaxed); }
+	bool near_field_enabled() const { return near_field_enabled_.load(std::memory_order_relaxed); }
+	void set_sun_cascade_min_level(bool v) { sun_cascade_min_level_ = v; }
+	bool sun_cascade_min_level() const { return sun_cascade_min_level_; }
+	// Everything VoxelFrame samples once per frame.
+	FrameSettings frame_settings() const;
+	// The one ordered run of every voxel render stage (render/frame.h). Compositors and the
+	// headless debug probes call it.
+	VoxelFrame &frame() { return frame_; }
+
 	// Address-of slots for collaborators (ConsolidationCoordinator wiring) that
 	// re-read lazily-created objects at every use.
-	GpuAtlas **atlas_slot() { return &atlas_; }
+	GpuAtlas **atlas_slot() { return &passes_.atlas; }
 	RenderingDevice **main_rd_slot() { return &main_rd_; }
 	RenderingDevice **local_rd_slot() { return &local_rd_; }
 
-	// --- accessors: one per moved pass pointer ---
-	GpuAtlas *atlas() { return atlas_; }
-	MaterialAtlas *materials() { return materials_; }
-	IslandAtlas *islands() { return islands_; }
-	IslandCullPass *island_cull() { return island_cull_; }
-	RegionPass *region_pass() { return region_pass_; }
-	BrickGenPass *gen_pass() { return gen_pass_; }
-	RaymarchPass *raymarch_pass() { return raymarch_pass_; }
-	CompositePass *composite_pass() { return composite_pass_; }
-	DeferredPass *deferred_pass() { return deferred_pass_; }
-	SunShadowPass *sun_shadow_pass() { return sun_shadow_pass_; }
-	InjectPass *inject_pass() { return inject_pass_; }
-	LodRasterPass *lod_raster_pass() { return lod_raster_pass_; }
-	LodCullPass *lod_cull_pass() { return lod_cull_pass_; }
-	HizPass *hiz_pass() { return hiz_pass_; }
-	GBuffer *gbuffer() { return gbuffer_; }
-	CameraUbo *beauty_camera() { return beauty_camera_; }
-	SunUbo *sun_ubo() { return sun_ubo_; }
-	FieldContextSet *field_context() { return field_context_; }
-	ContactShadowPass *contact_shadow_pass() { return contact_shadow_pass_; }
-	SsgiPass *ssgi_pass() { return ssgi_pass_; }
-	SsaoPass *ssao_pass() { return ssao_pass_; }
-	SsrPass *ssr_pass() { return ssr_pass_; }
-	OutlinePass *outline_pass() { return outline_pass_; }
-	GrassScatterPass *grass_scatter_pass() { return grass_scatter_pass_; }
-	GrassRasterPass *grass_raster_pass() { return grass_raster_pass_; }
+	const RenderPasses &passes() const { return passes_; }
 	ve::GrassSettings grass_settings() const { return grass_settings_.get(); }
 	bool set_grass_value(const char *n, float v) { return grass_settings_.set_value(n, v); }
 	float grass_value(const char *n) const { return grass_settings_.value(n); }
@@ -249,7 +263,7 @@ public:
 	// raymarch/lod-raster/lod-cull deletes -> Hi-Z teardown (+ readback capture)
 	// -> materials/gen-pass/region-pass deletes.
 	void teardown_render_passes();
-	// island_cull_ then islands_ (between clear_residency() and the atlas delete).
+	// island_cull then islands (between clear_residency() and the atlas delete).
 	void teardown_island_graph();
 	void teardown_atlas_pool();
 	// The history resets sat after the LoD page-map clears in teardown_gpu(); the
@@ -262,6 +276,10 @@ public:
 	// ride along via Collaborator addresses, so the deallocation ORDER is identical to
 	// the pre-split body statement for statement.
 	void teardown_gpu();
+	// Debug-only: the label of every step teardown_gpu() ran, in order, for its most recent
+	// run. The render lifetime contract pins this sequence (spec 2026-09-14 §5.1); a change in
+	// it means the deallocation order changed.
+	const std::vector<const char *> &teardown_trace() const { return teardown_trace_; }
 	// Queued onto the render thread by shutdown_render_resources(); signals
 	// gpu_teardown_cv_ when the GPU half is gone. Also runs directly when the caller
 	// already is on the render thread or owns a local device.
@@ -279,37 +297,25 @@ private:
 	bool ensure_downsample_set(RenderingDevice *device, RID src, RID dst);
 
 	Collaborators handles_;
+	std::vector<const char *> teardown_trace_;
 
-	// Member ORDER mirrors the pre-split block in voxel_world.h.
-	GpuAtlas *atlas_ = nullptr;
-	MaterialAtlas *materials_ = nullptr;
-	IslandAtlas *islands_ = nullptr;
-	IslandCullPass *island_cull_ = nullptr;
-	RegionPass *region_pass_ = nullptr;
-	BrickGenPass *gen_pass_ = nullptr;
-	RaymarchPass *raymarch_pass_ = nullptr;
-	CompositePass *composite_pass_ = nullptr;
-	DeferredPass *deferred_pass_ = nullptr;
-	SunShadowPass *sun_shadow_pass_ = nullptr;
-	SunUbo *sun_ubo_ = nullptr;
-	FieldContextSet *field_context_ = nullptr;
-	InjectPass *inject_pass_ = nullptr;
-	LodRasterPass *lod_raster_pass_ = nullptr;
-	LodCullPass *lod_cull_pass_ = nullptr;
-	HizPass *hiz_pass_ = nullptr;
-	GBuffer *gbuffer_ = nullptr;
-	CameraUbo *beauty_camera_ = nullptr;
-	ContactShadowPass *contact_shadow_pass_ = nullptr;
-	SsgiPass *ssgi_pass_ = nullptr;
-	SsaoPass *ssao_pass_ = nullptr;
-	SsrPass *ssr_pass_ = nullptr;
-	OutlinePass *outline_pass_ = nullptr;
-	GrassScatterPass *grass_scatter_pass_ = nullptr;
-	GrassRasterPass *grass_raster_pass_ = nullptr;
+	RenderPasses passes_;
 	// Grass knobs live here (not in BeautySettings): the store mirrors the SHAPE of the
 	// beauty_mutex_/beauty_snapshot() pair without joining it (design doc section 7).
 	ve::GrassSettingsStore grass_settings_;
 	GpuTimings gpu_timings_;
+	IslandHandoff handoff_;
+	WorldStreamer *streamer_ = nullptr; // created inside ensure_gpu_graph(), deleted in teardown_gpu()
+	bool initialized_ = false;
+	uint32_t normal_pool_bytes_ = 0;
+	bool last_hiz_readback_was_pending_ = false;
+	bool last_hiz_readback_was_drained_ = true;
+	std::atomic<bool> islands_enabled_{true};
+	std::atomic<bool> near_field_enabled_{true};
+	std::atomic<float> near_field_scale_{0.66f};
+	bool sun_cascade_min_level_ = true;
+	mutable std::mutex sun_mutex_;
+	ve::SunState sun_state_;
 	float prev_view_proj_[16] = {};
 	bool has_history_ = false;
 	// The history texture has_history_ refers to; see has_history().
@@ -342,6 +348,7 @@ private:
 	mutable std::mutex beauty_mutex_;
 	int quality_tier_ = static_cast<int>(ve::QualityTier::kHigh);
 	ve::BeautySettings beauty_ = ve::settings_for_tier(ve::QualityTier::kHigh);
+	VoxelFrame frame_;
 };
 
 // Compositor callbacks can outlive the SceneTree during SceneTree::quit(). Admission

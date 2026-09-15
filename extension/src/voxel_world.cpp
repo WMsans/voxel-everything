@@ -16,7 +16,6 @@
 #include "render/ssgi_pass.h"
 #include "render/ssr_pass.h"
 #include "render/outline_pass.h"
-#include "beauty_compositor.h"
 #include "render/region_pass.h"
 #include "render/brick_gen_pass.h"
 #include "render/world_streamer.h"
@@ -36,6 +35,7 @@
 #include "render/lod_cull_pass.h"
 #include "render/hiz_pass.h"
 #include "lod/lod_contour.h"
+#include "lod/lod_system.h"
 #include "lod/lod_grid.h"
 #include "lod/lod_reduce.h"
 #include "lod/lod_skirt.h"
@@ -52,7 +52,6 @@
 #include "world/brick_flags.h"
 #include "world/brick_mip.h"
 #include "world/material_table.h"
-#include "world/raycast.h"
 #include "shade/oct.h"
 #include "shade/cel.h"
 #include "shade/sun_cascades.h"
@@ -263,6 +262,35 @@ void VoxelWorld::_bind_methods() {
 			"Off,Low,Medium,High"), "set_quality_tier", "get_quality_tier");
 }
 
+void VoxelWorld::set_atlas_bricks(Vector3i v) { store_->set_atlas_bricks({v.x, v.y, v.z}); }
+Vector3i VoxelWorld::get_atlas_bricks() const {
+	const auto &b = store_->config().atlas_bricks;
+	return {b.x, b.y, b.z};
+}
+void VoxelWorld::set_max_region_slots(int v) { store_->set_max_region_slots(v); }
+int VoxelWorld::get_max_region_slots() const { return store_->config().max_region_slots; }
+void VoxelWorld::set_max_brick_jobs(int v) { store_->set_max_brick_jobs(v); }
+int VoxelWorld::get_max_brick_jobs() const { return store_->config().max_brick_jobs; }
+void VoxelWorld::set_max_override_bricks(int v) { store_->set_max_override_bricks(v); }
+int VoxelWorld::get_max_override_bricks() const { return store_->config().max_override_bricks; }
+void VoxelWorld::set_stream_radius_m(float v) { store_->set_stream_radius_m(v); }
+float VoxelWorld::get_stream_radius_m() const { return store_->config().stream_radius_m; }
+void VoxelWorld::set_occupancy_retention_m(float v) { store_->set_occupancy_retention_m(v); }
+float VoxelWorld::get_occupancy_retention_m() const { return store_->config().occupancy_retention_m; }
+void VoxelWorld::set_residency_radius_m(float v) { store_->set_residency_radius_m(v); }
+float VoxelWorld::get_residency_radius_m() const { return store_->config().residency_radius_m; }
+void VoxelWorld::set_near_field_scale(float v) { context_.render->set_near_field_scale(v); }
+float VoxelWorld::get_near_field_scale() const { return context_.render->near_field_scale(); }
+void VoxelWorld::set_sun_cascade_min_level(bool v) { context_.render->set_sun_cascade_min_level(v); }
+bool VoxelWorld::get_sun_cascade_min_level() const { return context_.render->sun_cascade_min_level(); }
+void VoxelWorld::set_max_lod_pages(int v) { lod_->set_max_lod_pages(v); }
+int VoxelWorld::get_max_lod_pages() const { return lod_->max_lod_pages(); }
+void VoxelWorld::set_max_lod_chunk_records(int v) { lod_->set_max_lod_chunk_records(v); }
+int VoxelWorld::get_max_lod_chunk_records() const { return lod_->max_lod_chunk_records(); }
+void VoxelWorld::set_lod_builds_per_frame(int v) { lod_->set_lod_builds_per_frame(v); }
+int VoxelWorld::get_lod_builds_per_frame() const { return lod_->lod_builds_per_frame(); }
+bool VoxelWorld::is_initialized() const { return context_.render->initialized(); }
+
 // Task 14: bodies moved verbatim into RenderOrchestrator (beauty_mutex_, quality_tier_,
 // beauty_ and the effect-name table went with them); these one-line delegations keep the
 // ClassDB surface and every call site compiling unchanged. Same threads as before the
@@ -292,22 +320,6 @@ float VoxelWorld::get_effect_value(const String &name) const {
 	return context_.render->get_effect_value(name);
 }
 
-ve::BeautySettings VoxelWorld::beauty_settings() const {
-	return context_.render->beauty_settings();
-}
-
-GrassScatterPass *VoxelWorld::grass_scatter_pass() const {
-	return context_.render->grass_scatter_pass();
-}
-
-GrassRasterPass *VoxelWorld::grass_raster_pass() const {
-	return context_.render->grass_raster_pass();
-}
-
-ve::GrassSettings VoxelWorld::grass_settings() const {
-	return context_.render->grass_settings();
-}
-
 bool VoxelWorld::set_grass_value(const String &name, float v) {
 	return context_.render->set_grass_value(name.utf8().get_data(), v);
 }
@@ -315,13 +327,6 @@ bool VoxelWorld::set_grass_value(const String &name, float v) {
 float VoxelWorld::get_grass_value(const String &name) const {
 	return context_.render->grass_value(name.utf8().get_data());
 }
-
-
-
-
-
-
-
 
 void VoxelWorld::_ready() {
 	// Debug/test facade lives as long as the world; tests reach it through hooks().
@@ -368,7 +373,7 @@ void VoxelWorld::_process(double delta) {
 		const Vector3 p = c->get_global_position();
 		store_->set_center(p.x, p.y, p.z);
 	}
-	drain_occupancy();
+	store_->drain_occupancy();
 	consolidation_->pump_async();
 	update_sun_state();
 	if (!physics_enabled_ || physics_center_path_.is_empty()) return;
@@ -402,8 +407,7 @@ void VoxelWorld::update_sun_state() {
 		s.rgb[1] = ve::srgb_to_linear(c.g) * e;
 		s.rgb[2] = ve::srgb_to_linear(c.b) * e;
 	}
-	std::lock_guard<std::mutex> lock(sun_mutex_);
-	sun_state_ = s;
+	context_.render->set_sun_state(s);
 }
 
 VoxelWorld::VoxelWorld() {
@@ -421,45 +425,20 @@ VoxelWorld::VoxelWorld() {
 			.store = store_.get(),
 			.render = &context_.render,
 			.mesh = &mesh_,
-			.near_field_enabled = &near_field_enabled_,
 			.ensure_initialized_thunk = [](void *self) {
 				static_cast<VoxelWorld *>(self)->ensure_initialized();
 			},
 			.ensure_initialized_self = this,
 	});
 	context_.lod = lod_.get();
-	// Task 12: the GPU pass graph + device ownership move into RenderOrchestrator. Created
-	// BEFORE the consolidation coordinator, whose collaborators take addresses of the
-	// orchestrator's atlas/device slots (handles-only; re-read at every use).
+	// The GPU pass graph, device ownership and every piece of render lifetime state live in
+	// RenderOrchestrator. Created AFTER LodSystem, whose release_gpu() its teardown calls.
 	render_ = std::make_unique<RenderOrchestrator>(RenderOrchestrator::Collaborators{
 			.use_local_device = &use_local_device_,
 			.store = store_.get(),
-			.streamer = &streamer_,
-			.normal_pool_bytes = &normal_pool_bytes_,
-			.last_hiz_readback_was_pending = &last_hiz_readback_was_pending_,
-			.last_hiz_readback_was_drained = &last_hiz_readback_was_drained_,
-			// Task 13: teardown interleaving + admission/lifetime handles. callback_owner
-			// is this node as an Object, solely the Callable target for the queued
-			// render-thread teardown; render_ dies with this node, so it cannot dangle.
-			.initialized = &initialized_,
-			.island_mutex = &island_mutex_,
-			.island_slots = &island_slots_,
-			// Task 15: the LoD state slots live on LodSystem now.
-			.lod_pool = context_.lod->pool_slot(),
-			.lod_tree = context_.lod->tree_slot(),
-			.lod_pages_of = context_.lod->pages_of_slot(),
-			.lod_page_quads = context_.lod->page_quads_slot(),
-			.lod_overflow_logged = context_.lod->overflow_logged_slot(),
+			.lod = lod_.get(),
 			.callback_owner = this,
-			// Task 14: effect toggles stay world properties (they gate non-beauty behavior
-			// too); reload's re-init arm stays VoxelWorld::ensure_initialized() via a
-			// captureless thunk -- no VoxelWorld* is handed to the orchestrator.
-			.islands_enabled = &islands_enabled_,
-			.near_field_enabled = &near_field_enabled_,
-			.ensure_initialized_thunk = [](void *self) {
-				static_cast<VoxelWorld *>(self)->ensure_initialized();
-			},
-			.ensure_initialized_self = this,
+			.ensure_initialized = [this]() { ensure_initialized(); },
 	});
 	context_.render = render_.get();
 	// Task 11: the consolidation state machine moves off this class into the coordinator.
@@ -471,7 +450,7 @@ VoxelWorld::VoxelWorld() {
 			ConsolidationCoordinator::Collaborators{
 					.atlas = context_.render->atlas_slot(),
 					.mesh = &mesh_,
-					.streamer = &streamer_,
+					.streamer = context_.render->streamer_slot(),
 					// Task 15: tree/mutex handles now address LodSystem's state.
 					.lod_tree = context_.lod->tree_slot(),
 					.lod_mutex = context_.lod->mutex_slot(),
@@ -491,8 +470,6 @@ VoxelWorld::VoxelWorld() {
 	// Sinks are never null from this point on, matching append_edit_locked's unguarded
 	// expectations.
 	store_->set_sinks(this, consolidation_.get());
-	// The frame references the orchestrator, LoD runtime and store; all three exist now.
-	frame_ = std::make_unique<VoxelFrame>(*render_, *lod_, *store_, *this);
 }
 
 VoxelWorld::~VoxelWorld() {
@@ -506,19 +483,8 @@ VoxelWorld::~VoxelWorld() {
 	ve::clear_shader_source_overrides();
 }
 
-// Moved verbatim into RenderOrchestrator (Task 12); one-line delegations so the
-// compositor's world->downsample_history() and world->finish_beauty_frame() compile
-// unchanged.
-bool VoxelWorld::downsample_history(RenderingDevice *rd, RID src, GBuffer &gb) {
-	return context_.render->downsample_history(rd, src, gb);
-}
-
-void VoxelWorld::finish_beauty_frame(const float view_proj[16]) {
-	context_.render->finish_beauty_frame(view_proj);
-}
-
 void VoxelWorld::teardown_gpu() {
-	if (frame_) frame_->release_gpu();
+	context_.render->frame().release_gpu();
 	// Whole method lives in RenderOrchestrator now (Task 13): the three teardown halves
 	// and the interleaved world-owned statements (streamer drain/delete, residency clear,
 	// island high-water mark, LoD pool/tree/page maps) run there via Collaborator
@@ -544,13 +510,13 @@ void VoxelWorld::_exit_tree() {
 	// explicit benchmark shutdown and normal SceneTree exit.
 	shutdown_render_resources();
 	// Frame-owned headless targets live on the local device, which release_devices() below drops.
-	if (frame_) frame_->release_gpu();
+	context_.render->frame().release_gpu();
 	teardown_physics();
 	// CPU cores survive GPU teardown; deleted here exactly where they were
 	// before the split, in the same residency -> edit log -> overrides order.
 	store_->release_cores();
 	store_->pending_edits()->clear();
-	overflow_seen_ = 0;
+	stats_.overflow_seen = 0;
 	// Task 15: pool -> tree -> page maps moved verbatim into LodSystem::teardown(); run at
 	// exactly the position where the statements used to sit here.
 	lod_->teardown();
@@ -578,8 +544,8 @@ bool read_res_text(const String &path, std::string *out) {
 // world keeps today's hardcoded terrain: a bad pipeline must degrade, never kill the world.
 //
 // First successful load wins (the stages-nonempty guard): shader-reload re-init re-runs
-// ensure_initialized, and set_generator deletes the old seam, so a reload-time swap could
-// pull the field out from under in-flight physics/mesh jobs. Pipeline edits therefore take
+// ensure_initialized, and replacing the generator deletes the old seam, so a reload-time swap
+// could pull the field out from under in-flight physics/mesh jobs. Pipeline edits therefore take
 // effect on fresh init, where nothing can hold the old seam mid-evaluation.
 void VoxelWorld::load_terrain_pipeline() {
 	if (!store_->terrain_pipeline().stages.empty()) return;
@@ -638,14 +604,10 @@ void VoxelWorld::load_terrain_pipeline() {
 	store_->set_generator(gen); // WorldStore takes ownership, as it does today
 }
 
-FieldContextSet *VoxelWorld::field_context() {
-	return context_.render ? context_.render->field_context() : nullptr;
-}
-
 void VoxelWorld::ensure_initialized() {
 	// Admission gate moved with the lifetime state (Task 13); same mutex-guarded check.
 	if (context_.render->shutdown_in_progress()) return;
-	if (initialized_) return;
+	if (context_.render->initialized()) return;
 	// The GPU graph compiles shaders that must already see the overridden field.glslh.
 	load_terrain_pipeline();
 	// Device acquisition + the whole GPU graph construction live in RenderOrchestrator
@@ -658,7 +620,7 @@ void VoxelWorld::ensure_initialized() {
 	}
 	switch (context_.render->ensure_gpu_graph(device)) {
 	case RenderOrchestrator::GpuInitResult::kOk:
-		initialized_ = true;
+		context_.render->mark_initialized();
 		break;
 	case RenderOrchestrator::GpuInitResult::kAtlasFailed:
 		// Only the half-built atlas existed; it deleted itself, exactly as before.
@@ -708,7 +670,7 @@ ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
 		UtilityFunctions::printerr("VoxelWorld: edit op exceeds the bounded region span — spec §8 fail-soft");
 	}
 	if (!r.rejected.empty()) {
-		edit_rejections_ += static_cast<int>(r.rejected.size());
+		stats_.edit_rejections += static_cast<int>(r.rejected.size());
 		UtilityFunctions::printerr("VoxelWorld: region op list full, op rejected (",
 				r.rejected[0].x, ", ", r.rejected[0].y, ", ", r.rejected[0].z,
 				") — spec §8 fail-soft");
@@ -728,9 +690,9 @@ ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
 }
 
 void VoxelWorld::publish_sun_state_to_local_device(RenderingDevice *device) {
-	if (!use_local_device_ || !device || !context_.render || !context_.render->sun_ubo()) return;
-	SunUbo *ubo = context_.render->sun_ubo();
-	if (ubo->ensure(device)) ubo->update(device, sun_state());
+	if (!use_local_device_ || !device || !context_.render || !context_.render->passes().sun_ubo) return;
+	SunUbo *ubo = context_.render->passes().sun_ubo;
+	if (ubo->ensure(device)) ubo->update(device, context_.render->sun_state());
 }
 
 RenderingDevice *VoxelWorld::rd() const {
@@ -745,17 +707,6 @@ RenderingDevice *VoxelWorld::rd() const {
 		self->publish_sun_state_to_local_device(device);
 	}
 	return device;
-}
-
-int VoxelWorld::island_slot_count() const {
-	// The render thread calls this from RaymarchCompositor::_render_callback. The manager
-	// pointer and island_slots_ are written on the main thread, so reads must hold
-	// island_mutex_. The manager's own slot_high_water_ is atomic as well, since it is also
-	// updated outside this mutex.
-	std::lock_guard<std::mutex> lock(island_mutex_);
-	if (!islands_enabled_.load(std::memory_order_relaxed)) return 0;
-	const int manager_slots = island_manager_ ? island_manager_->slot_high_water() : 0;
-	return island_slots_ > manager_slots ? island_slots_ : manager_slots;
 }
 
 void VoxelWorld::ensure_physics_initialized() {
@@ -784,10 +735,10 @@ void VoxelWorld::ensure_physics_initialized() {
 		mesh_ = nullptr;
 		return;
 	}
-	if (streamer_) streamer_->set_mesh_service(mesh_);
+	if (WorldStreamer *s = context_.render->streamer()) s->set_mesh_service(mesh_);
 	// A fresh MeshService starts with an empty worker-side volume pool. The edit log and
 	// VolumeSet survive physics teardown, so replay every pinned volume into the new worker;
-	// the preserved island_uploads_ only covers the render device's pool.
+	// the preserved render handoff only covers the render device's pool.
 	for (int slot = 0; slot < ve::kMaxVolumes; slot++) {
 		if (!store_->volumes().pinned(slot)) continue;
 		const ve::VolumeData *d = store_->volumes().get(slot);
@@ -805,14 +756,21 @@ void VoxelWorld::ensure_physics_initialized() {
 	colliders_->set_body_bubble_radius_m(physics_bubble_radius_m_);
 	// Publish the manager under edit_mutex_: append_edit_locked() can be called from a tool
 	// thread and reads island_manager_ while holding that lock, so creation must not expose a
-	// half-initialized pointer to it. Also take island_mutex_ (edit_mutex_ -> island_mutex_
-	// order, matching teardown) so the render thread's island_slot_count() sees a stable
-	// pointer.
+	// half-initialized pointer to it. The render thread never reads the pointer: it reads the
+	// handoff's slot marks.
 	{
 		std::lock_guard<std::mutex> lock(store_->edit_mutex());
-		std::lock_guard<std::mutex> island_lock(island_mutex_);
 		island_manager_ = new IslandManager();
-		island_manager_->initialize(this);
+		island_manager_->initialize(IslandManager::Collaborators{
+				.store = store_.get(),
+				.handoff = &context_.render->handoff(),
+				.mesh = mesh_,
+				.scene_node = this,
+				.bubble_centers = &physics_bubble_centers_,
+				.append_edit_locked = [this](const ve::EditOp &op, bool notify_islands) {
+					return append_edit_locked(op, notify_islands);
+				},
+		});
 		island_manager_->set_generator(&store_->generator()->sampler());
 	}
 	physics_ready_ = true;
@@ -821,49 +779,26 @@ void VoxelWorld::ensure_physics_initialized() {
 void VoxelWorld::teardown_physics() {
 	std::unique_lock<std::mutex> edit_lock(store_->edit_mutex());
 	physics_ready_ = false;
-	if (streamer_) streamer_->set_mesh_service(nullptr);
+	if (WorldStreamer *s = context_.render->streamer()) s->set_mesh_service(nullptr);
 	for (IslandBody *b : test_bodies_) delete b;
 	test_bodies_.clear();
 	// The manager owns the real island bodies; tear it down before the mesher's worker and
 	// the colliders so its volume-slot bookkeeping still has a live VolumeSet to ask. Hold
-	// edit_mutex_ while deleting/null it: a tool thread may already be inside
-	// append_edit_locked() reading island_manager_ to call note_edit(). Also take
-	// island_mutex_ so the render thread's island_slot_count() cannot dereference a manager
-	// that is being destroyed (lock order: edit_mutex_ -> island_mutex_).
-	//
-	// Detach under the lock, then tear down outside it: teardown() releases every body's,
-	// in-flight extraction's and merge's volume slot through release_volume_slot(), which
-	// takes island_mutex_ to queue the GPU-side normal release. Running it under the lock
-	// re-entered a non-recursive std::mutex and hung the process. The render thread is
-	// still safe -- it sees a null manager the instant the lock is dropped -- and the tool
-	// thread cannot observe the detached pointer because edit_mutex_ is held throughout.
-	IslandManager *manager = nullptr;
-	{
-		std::lock_guard<std::mutex> island_lock(island_mutex_);
-		manager = island_manager_;
-		island_manager_ = nullptr;
-	}
+	// edit_mutex_ while detaching: a tool thread may already be inside append_edit_locked()
+	// reading island_manager_ to call note_edit(). The render thread never reads the pointer;
+	// its slot mark drops to 0 at the detach, which is what it saw from a null manager before.
+	IslandManager *manager = island_manager_;
+	island_manager_ = nullptr;
+	context_.render->handoff().manager_slots.store(0, std::memory_order_relaxed);
 	if (manager) {
 		manager->teardown();
 		delete manager;
 	}
 	physics_bubble_centers_.clear();
-	// Drop any uploads/descriptors the previous manager queued before the GPU pools are torn
-	// down. If physics is re-initialized, stale queue entries must not be drained into the
-	// new pools. The one exception is a field-volume upload for a slot the edit log already
-	// references: those bytes are part of the surviving CPU volume set and MUST be mirrored
-	// into any new GPU pool before an op that names the slot is evaluated.
-	{
-		std::lock_guard<std::mutex> lock(island_mutex_);
-		std::vector<IslandUpload> keep;
-		keep.reserve(island_uploads_.size());
-		for (IslandUpload &u : island_uploads_)
-			if (!u.to_island_atlas && store_->volumes().pinned(u.volume_slot))
-				keep.push_back(std::move(u));
-		island_uploads_.swap(keep);
-		island_descs_.clear();
-		island_descs_dirty_ = false;
-	}
+	// Drop uploads/descriptors the previous manager queued before the GPU pools are torn
+	// down; keep a field-volume upload whose slot the edit log already pins -- those bytes
+	// are part of the surviving CPU volume set and MUST reach any new GPU pool.
+	context_.render->handoff().drop_for_physics_teardown(store_->volumes());
 	// The worker is going away, but the render atlas and CPU store survive physics teardown.
 	// An in-flight transaction may already have acquired slots and staged new bytes there;
 	// restore the old consumer state before releasing those speculative slots. Never leave a
@@ -896,12 +831,10 @@ int VoxelWorld::physics_tick(Vector3 center) {
 	if (w.is_valid()) colliders_->set_space(w->get_space());
 	const int actions = colliders_->run_frame(center.x, center.y, center.z,
 			physics_bubble_centers_.data(), static_cast<int>(physics_bubble_centers_.size() / 3));
-	last_physics_tick_ms_ =
+	stats_.last_physics_tick_ms =
 			std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
 	return actions;
 }
-
-
 
 void VoxelWorld::set_physics_bubble_radius_m(float v) {
 	physics_bubble_radius_m_ = v;
@@ -910,210 +843,9 @@ void VoxelWorld::set_physics_bubble_radius_m(float v) {
 	if (colliders_) colliders_->set_body_bubble_radius_m(v);
 }
 
-
-
-void VoxelWorld::queue_island_upload(int atlas_slot, int volume_slot,
-		const ve::VolumeData &d) {
-	std::lock_guard<std::mutex> lock(island_mutex_);
-	island_uploads_.push_back(IslandUpload{atlas_slot, volume_slot, true, d});
-}
-
-void VoxelWorld::queue_field_volume_upload(int slot, const ve::VolumeData &d) {
-	{
-		std::lock_guard<std::mutex> lock(island_mutex_);
-		island_uploads_.push_back(IslandUpload{-1, slot, false, d});
-	}
-	// The worker's volume pool must see the paste before its next field job, otherwise the
-	// mesher's collision against the new rubble lags a frame (or more) behind the main copy.
-	if (mesh_) mesh_->submit_volume(slot, d);
-}
-
-void VoxelWorld::discard_field_volume_upload(int slot) {
-	{
-		std::lock_guard<std::mutex> lock(island_mutex_);
-		island_uploads_.erase(
-				std::remove_if(island_uploads_.begin(), island_uploads_.end(),
-						[slot](const IslandUpload &u) {
-							return !u.to_island_atlas && u.volume_slot == slot;
-						}),
-				island_uploads_.end());
-	}
-	if (mesh_) mesh_->discard_pending_volume_upload(slot);
-}
-
-void VoxelWorld::publish_island_descriptors(const std::vector<IslandSlotDesc> &d) {
-	std::lock_guard<std::mutex> lock(island_mutex_);
-	island_descs_ = d;
-	island_descs_dirty_ = true;
-}
-
-void VoxelWorld::set_physics_bubbles(const std::vector<IslandBody *> &bodies) {
-	std::vector<float> centers;
-	centers.reserve(bodies.size() * 3);
-	for (IslandBody *b : bodies) {
-		if (!b || !b->live()) continue;
-		const Vector3 o = b->transform().origin;
-		centers.push_back(o.x);
-		centers.push_back(o.y);
-		centers.push_back(o.z);
-	}
-	physics_bubble_centers_.swap(centers);
-}
-
-ve::RayHit VoxelWorld::analytic_raycast_down(const float xz[2]) {
-	ve::RayHit h;
-	if (!store_->edit_log()) return h;
-	std::lock_guard<std::mutex> lock(store_->edit_mutex());
-	// Task 10: through the FieldGenerator seam -- same analytic field, no behavior change.
-	const ve::Generator &gen = store_->generator()->sampler();
-	const float o[3] = {xz[0], 200.0f, xz[1]};
-	const float dir[3] = {0.0f, -1.0f, 0.0f};
-	return ve::raycast(gen, *store_->edit_log(), o, dir, 400.0f, &store_->volumes(), store_->overrides());
-}
-
-bool VoxelWorld::release_volume_slot(int slot) {
-	// The authoritative copy goes first; only a successful release (never a pinned slot --
-	// a pasted volume-add still names it) queues the GPU-side normal teardown.
-	const bool freed = store_->volumes().release(slot);
-	if (freed) {
-		std::lock_guard<std::mutex> lock(island_mutex_);
-		pending_normal_releases_.push_back(slot);
-	}
-	return freed;
-}
-
-int VoxelWorld::drain_island_uploads(RenderingDevice *device) {
-	if (!device) return 0;
-	std::vector<IslandUpload> uploads;
-	std::vector<int> normal_releases;
-	std::vector<IslandSlotDesc> descs;
-	bool dirty = false;
-	{
-		std::lock_guard<std::mutex> lock(island_mutex_);
-		uploads.swap(island_uploads_);
-		normal_releases.swap(pending_normal_releases_);
-		descs = island_descs_;
-		dirty = island_descs_dirty_;
-		island_descs_dirty_ = false;
-	}
-	for (const int slot : normal_releases) {
-		if (atlas()) atlas()->stored_normals().release_volume(device, slot);
-	}
-	for (const IslandUpload &u : uploads) {
-		// SDF/material and compact normals land ONCE, in the shared authoritative pools,
-		// indexed by the volume slot. An island upload additionally refreshes its mip at
-		// the atlas slot; a field-volume upload follows the identical volume/normal path
-		// without one. A missing/malformed/failed normal payload is fail-soft: the pool
-		// publishes -1 and the shader falls back to differentiating the R8 atlas.
-		if (atlas() && u.volume_slot >= 0) {
-			if (!atlas()->volumes().upload(device, u.volume_slot, u.data))
-				UtilityFunctions::printerr("VoxelWorld: field volume upload failed for slot ",
-						u.volume_slot);
-			atlas()->stored_normals().upload_volume(device, u.volume_slot, u.data);
-		} else if (!atlas() && u.to_island_atlas) {
-			UtilityFunctions::printerr("VoxelWorld: no GpuAtlas for island upload of slot ",
-					u.volume_slot);
-		}
-		if (u.to_island_atlas && islands() && u.atlas_slot >= 0 &&
-				!islands()->upload_mip(device, u.atlas_slot, u.data))
-			UtilityFunctions::printerr("VoxelWorld: island mip upload failed for slot ",
-					u.atlas_slot);
-		if (!u.to_island_atlas)
-			debug_field_volume_upload_count_.fetch_add(1, std::memory_order_relaxed);
-	}
-	if (dirty && islands())
-		islands()->upload_descriptors(device, descs.data(), static_cast<int>(descs.size()));
-	return static_cast<int>(uploads.size());
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// Task 15: gather_lod_ops/ensure_lod/lod_fade_band/lod_tick/prepare_lod_raster[_locked]/
-// prepare_lod_shadow_raster moved verbatim into LodSystem; these one-line delegations keep
-// the compositor, the debug facade and ClassDB compiling unchanged.
-void VoxelWorld::gather_lod_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out) {
-	context_.lod->gather_ops(level, coord, out);
-}
-
-// Moved verbatim into WorldStore (Task 11); one-line delegation so hooks and
-// IslandManager compile unchanged.
-bool VoxelWorld::snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo, ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const {
-	return store_->snapshot_field_sources(ops, brick_lo, brick_hi, out);
-}
-
-// Task 15 one-line delegations into LodSystem, where tick/fade-band/raster-prep moved
-// verbatim; the compositor, the debug facade and ClassDB compile unchanged.
-void VoxelWorld::lod_tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
-	context_.lod->tick(cam, occ);
-}
-
-void VoxelWorld::prepare_lod_raster() {
-	context_.lod->prepare_raster();
-}
-
-void VoxelWorld::prepare_lod_shadow_raster(float radius, int min_level) {
-	context_.lod->prepare_shadow_raster(radius, min_level);
-}
-
 int VoxelWorld::sun_cascade_count() const {
 	ve::SunCascade c[ve::kSunCascades];
 	return ve::sun_cascades(get_stream_radius_m(), SunShadowPass::kSize, c);
-}
-
-ve::SunOrtho VoxelWorld::sun_ortho(int cascade) const {
-	return frame_->sun_ortho(cascade);
-}
-
-FrameSettings VoxelWorld::frame_settings() const {
-	FrameSettings s;
-	s.sun = sun_state();
-	s.near_field_scale = get_near_field_scale();
-	s.near_field_enabled = get_effect_enabled("near_field");
-	s.sun_cascade_min_level = sun_cascade_min_level_;
-	return s;
-}
-
-void VoxelWorld::lod_fade_band(float *fade_start, float *fade_end) const {
-	context_.lod->fade_band(fade_start, fade_end);
-}
-
-int VoxelWorld::override_table_for_region(ve::IVec3 region) const {
-	return store_->override_table_for_region(region);
 }
 
 void VoxelWorld::on_edit_appended(const ve::EditOp &op, bool notify_islands) {
@@ -1125,19 +857,6 @@ void VoxelWorld::on_edit_appended(const ve::EditOp &op, bool notify_islands) {
 	if (notify_islands && island_manager_)
 		island_manager_->note_edit(op, store_->edit_seq());
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandExtractJob *job,
 		std::vector<ve::CellBox> *boxes, ve::VolumeData *out) {
@@ -1156,7 +875,7 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 	job->boxes = *boxes;
 	if (!ve::plan_island_lattice(wlo, whi, ve::kIslandDim, &job->voxel, job->origin)) return false;
 	job->dim = ve::kIslandDim;
-	job->override_table = override_table_for_region(
+	job->override_table = store_->override_table_for_region(
 			ve::region_of_point(job->origin[0], job->origin[1], job->origin[2]));
 	{
 		std::lock_guard<std::mutex> lock(store_->edit_mutex());
@@ -1165,7 +884,7 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 		float lattice_hi[3] = {job->origin[0] + (job->dim - 1) * job->voxel, job->origin[1] + (job->dim - 1) * job->voxel, job->origin[2] + (job->dim - 1) * job->voxel};
 		ve::IVec3 blo = ve::brick_of_point(job->origin[0], job->origin[1], job->origin[2]);
 		ve::IVec3 bhi = ve::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
-		if (!snapshot_field_sources(job->ops, blo, bhi, &job->snapshot)) return false;
+		if (!store_->snapshot_field_sources(job->ops, blo, bhi, &job->snapshot)) return false;
 		job->gen = &store_->generator()->sampler();
 	}
 
@@ -1193,112 +912,10 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 	return true;
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-bool VoxelWorld::render_probe_pixel(Vector3 origin, Vector3 dir) {
-	ensure_initialized();
-	RenderingDevice *device = rd();
-	if (!initialized_ || !device || !atlas() || !material_atlas() || !raymarch_pass())
-		return false;
-	// The probe is a read-only diagnostic: it must not mutate the streamed world.
-	ve::CameraParams cam = ve::CameraParams::looking_at(
-			origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 0, 1, 0);
-	const ve::RegionWindow win = region_window();
-	cam.dims[0] = win.dim; cam.dims[1] = win.dim;
-	cam.dims[2] = win.dim;
-	cam.dims[3] = island_slot_count();
-	cam.region_origin[0] = win.origin.x; cam.region_origin[1] = win.origin.y; cam.region_origin[2] = win.origin.z;
-	cam.atlas_bricks[0] = store_->config().atlas_bricks.x; cam.atlas_bricks[1] = store_->config().atlas_bricks.y;
-	cam.atlas_bricks[2] = store_->config().atlas_bricks.z;
-	const uint32_t flags = ve::pack_flags(beauty_settings());
-	std::memcpy(&cam.cam_pos[3], &flags, sizeof(float));
-	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
-	if (!raymarch_pass()->render(device, *atlas(), islands(), RID(), cam, 1, 1,
-			kNoEdit, field_context()))
-		return false;
-	device->submit();
-	device->sync();
-	return true;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // Preflight_shaders moved verbatim into RenderOrchestrator (Task 13); the reload latch,
 // pump machinery and bookkeeping moved verbatim into RenderOrchestrator (Task 14).
 
 void VoxelWorld::request_shader_reload() {
 	context_.render->request_shader_reload();
 }
-
-void VoxelWorld::pump_shader_reload() {
-	context_.render->pump_shader_reload();
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 

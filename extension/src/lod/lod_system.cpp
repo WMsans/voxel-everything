@@ -20,6 +20,50 @@ namespace godot {
 
 LodSystem::LodSystem(Collaborators handles) : handles_(handles) {}
 
+LodStats LodSystem::stats() {
+	std::lock_guard<std::mutex> lock(lod_mutex_);
+	ensure_lod();
+	LodStats s;
+	if (lod_pool_) {
+		s.pages_total = lod_pool_->page_count();
+		s.pages_free = lod_pool_->free_pages();
+		s.chunk_records = lod_pool_->chunk_record_count();
+		s.chunk_records_used = lod_pool_->chunk_records_used();
+		s.chunk_records_high_water = lod_pool_->chunk_records_high_water();
+		s.pages_high_water = lod_pool_->pages_high_water();
+		s.budget_bound = lod_pool_->budget_bound();
+	}
+	s.chunks_resident = static_cast<int>(lod_pages_of_.size());
+	if (lod_tree_) lod_tree_->dirty_stats(&s.dirty_chunks, &s.dirty_levels);
+	for (const ve::LodDrawItem &item : lod_walk_.draws) s.draw_pages += item.page_count;
+	// The exact page identities of the current camera cut, not just their count: a bounded
+	// pool may keep a drawable coarse cut while refinement requests remain pending.
+	std::vector<ve::LodPageDraw> draw_page_list;
+	ve::lod_collect_page_draws(lod_walk_.draws, lod_pages_of_, lod_page_quads_, &draw_page_list);
+	for (const ve::LodPageDraw &page : draw_page_list) s.draw_page_ids.push_back(page.page);
+	for (const auto &page : lod_page_quads_)
+		if (page.second > 0) s.resident_page_ids.push_back(page.first);
+	s.requests = lod_walk_.requests;
+	// LodArena::alloc is all-or-nothing, so this should always be zero -- but a hardcoded 0
+	// would make the test that asserts it vacuous. MEASURE the two shapes a partially funded
+	// build would take: a chunk holding a page the per-page quad count never learned about,
+	// and arena pages that no resident chunk owns.
+	int partial = 0;
+	size_t owned_pages = 0;
+	for (const auto &kv : lod_pages_of_) {
+		owned_pages += kv.second.size();
+		for (int p : kv.second) {
+			if (lod_page_quads_.find(p) == lod_page_quads_.end()) {
+				partial++;
+				break;
+			}
+		}
+	}
+	const int unowned = (s.pages_total - s.pages_free) - static_cast<int>(owned_pages);
+	s.partial_allocations = partial + (unowned > 0 ? unowned : 0);
+	return s;
+}
+
 // Moved verbatim from VoxelWorld::gather_lod_ops (Task 15); the WorldStore accesses are
 // already through its public API, unchanged.
 void LodSystem::gather_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out) {
@@ -61,7 +105,7 @@ void LodSystem::fade_band(float *fade_start, float *fade_end) const {
 	// With the near field forced off the far field owns every distance: move the seam to
 	// zero and make the fade span essentially infinite so the LoD build gate requests the
 	// near chunks and the fragment shader keeps every far-field fragment.
-	if (!handles_.near_field_enabled->load(std::memory_order_relaxed)) {
+	if (!render()->near_field_enabled()) {
 		if (fade_start) *fade_start = 0.0f;
 		if (fade_end) *fade_end = 1.0e9f;
 		return;
@@ -147,7 +191,7 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 				if (old_it != lod_pages_of_.end()) {
 					for (int p : old_it->second) lod_page_quads_.erase(p);
 					lod_pool_->release(old_it->second);
-					if (render()->sun_shadow_pass()) render()->sun_shadow_pass()->mark_dirty();
+					if (render()->passes().sun_shadow) render()->passes().sun_shadow->mark_dirty();
 					lod_pages_of_.erase(old_it);
 				}
 				lod_tree_->note_empty(r.level, r.coord);
@@ -176,7 +220,7 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 			// A rebuild replaces the old page list. Release the stale pages only once the
 			// new pages are allocated and uploaded, so a refused rebuild keeps the old pages
 			// drawing; after this point the tree points at the new list.
-			if (render()->sun_shadow_pass()) render()->sun_shadow_pass()->mark_dirty();
+			if (render()->passes().sun_shadow) render()->passes().sun_shadow->mark_dirty();
 			const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
 			const auto old_it = lod_pages_of_.find(key);
 			if (old_it != lod_pages_of_.end()) {
@@ -205,7 +249,7 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 		if (it == lod_pages_of_.end()) continue;
 		for (int p : it->second) lod_page_quads_.erase(p);
 		lod_pool_->release(it->second);
-		if (render()->sun_shadow_pass()) render()->sun_shadow_pass()->mark_dirty();
+		if (render()->passes().sun_shadow) render()->passes().sun_shadow->mark_dirty();
 		lod_pages_of_.erase(it);
 	}
 
@@ -281,7 +325,7 @@ void LodSystem::prepare_raster() {
 // coarse bulge keeps every texel it does not.
 void LodSystem::prepare_shadow_raster(float radius, int min_level) {
 	std::lock_guard<std::mutex> lock(lod_mutex_);
-	if (!render()->lod_raster_pass() || !lod_pool_ || !lod_tree_) return;
+	if (!render()->passes().lod_raster || !lod_pool_ || !lod_tree_) return;
 	std::vector<ve::LodDrawItem> cut;
 	lod_tree_->shadow_cut(lod_shadow_cam_, radius, min_level, &cut);
 	std::vector<ve::LodPageDraw> page_draws;
@@ -290,18 +334,18 @@ void LodSystem::prepare_shadow_raster(float radius, int min_level) {
 	pages.reserve(page_draws.size());
 	for (const ve::LodPageDraw &pd : page_draws)
 		pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});
-	render()->lod_raster_pass()->set_draw_pages(pages);
+	render()->passes().lod_raster->set_draw_pages(pages);
 }
 
 void LodSystem::prepare_raster_locked() {
-	if (!render()->lod_raster_pass() || !lod_pool_) return;
+	if (!render()->passes().lod_raster || !lod_pool_) return;
 	std::vector<ve::LodPageDraw> page_draws;
 	ve::lod_collect_page_draws(lod_walk_.draws, lod_pages_of_, lod_page_quads_, &page_draws);
 	std::vector<LodRasterPass::PageDraw> pages;
 	pages.reserve(page_draws.size());
 	for (const ve::LodPageDraw &pd : page_draws)
 		pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});
-	render()->lod_raster_pass()->set_draw_pages(pages);
+	render()->passes().lod_raster->set_draw_pages(pages);
 }
 
 // The LoD tail of VoxelWorld::append_edit_locked, moved verbatim (Task 15): caller holds
@@ -332,6 +376,14 @@ void LodSystem::teardown() {
 	}
 	lod_pages_of_.clear();
 	lod_page_quads_.clear();
+}
+
+void LodSystem::release_gpu() {
+	if (lod_pool_) lod_pool_->teardown();
+	if (lod_tree_) lod_tree_->clear();
+	lod_pages_of_.clear();
+	lod_page_quads_.clear();
+	lod_overflow_logged_.clear();
 }
 
 } // namespace godot

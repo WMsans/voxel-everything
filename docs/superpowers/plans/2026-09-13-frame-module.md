@@ -2661,7 +2661,7 @@ The most frame-shaped probe: near field, far field, one deferred evaluation and 
 
 Baseline note: `test_lod_gbuffer::test_far_field_pixels_carry_a_material_and_a_unit_normal` is a standing failure, and a failing case aborts the rest of its suite — read the case count.
 
-- [ ] **Step 2: Replace the probe entirely**
+- [x] **Step 2: Replace the probe entirely**
 
 ```cpp
 Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, int h, bool skip_lod) {
@@ -2821,7 +2821,7 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 }
 ```
 
-- [ ] **Step 3: Set the march scale in the two suites**
+- [x] **Step 3: Set the march scale in the two suites**
 
 In `tests/test_lod_seam.gd` and `tests/test_lod_gbuffer.gd`, wherever the `VoxelWorld` is instantiated (before `add_child`), add:
 
@@ -2871,9 +2871,9 @@ Complete spec §4.4 and §5. The surviving pass probes still render their isolat
 **Interfaces:**
 - Consumes: Task 3 `ve::probe_camera`, `ve::probe_up_hint`, `ve::set_near_field_world`, `ve::set_near_field_flags`; Task 4 `VoxelFrame::grass_layout`, `VoxelFrame::sun_ortho`, `VoxelFrame::last_frame`.
 - Produces: private `bool VoxelDebugHooks::render_probe_pixel(Vector3 origin, Vector3 dir)`; existing public hook signatures and Dictionary keys remain unchanged.
-- Retains: world forwarders with surviving callers, as spec §4.4 explicitly permits. `FrameHost` remains named temporary debt for sub-project 2.
+- Retains: world forwarders with surviving callers, as spec §4.4 explicitly permits. At this Task 11 stage, `FrameHost` was temporary debt; sub-project 2 deleted it in commit `6b595c1`.
 
-- [ ] **Step 1: Inventory the surviving copies and callers**
+- [x] **Step 1: Inventory the surviving copies and callers**
 
 ```bash
 rg -n 'CameraParams::looking_at|lod_camera_perspective|cam_right\[|region_origin\[|atlas_bricks\[|ve::grass_layout' extension/src/debug/hooks.cpp extension/src/voxel_world.cpp
@@ -2882,7 +2882,7 @@ rg -n 'render_probe_pixel|note_lod_cull_debug|lod_cull_debug|lod_cull_two_phase_
 
 For each remaining camera block, record its enclosing hook, viewport, FOV, clip planes, maximum march distance and any deliberately synthetic world fields. Preserve those fixture parameters. In particular, LoD probes currently use 70° (`1.2217f`), grass uses 90° (`1.5707963268f`) with near plane `0.1f`, and single-ray probes use zero tangent FOV and maximum distance 200 m. Do not silently turn these fixtures into the frame's 60° camera or clamp isolated march distances to the frame fade band.
 
-- [ ] **Step 2: Replace perspective basis construction with the shared camera**
+- [x] **Step 2: Replace perspective basis construction with the shared camera**
 
 Add `#include "render/frame_params.h"` to `hooks.cpp`. For LoD-only blocks with the existing `p`, `f`, `w`, `h`, `fov_y`, `kNear`, `kFar` locals, the replacement is:
 
@@ -2921,7 +2921,7 @@ ve::CameraParams cam = ve::CameraParams::looking_at(
 
 These calls to the pure basis primitive are intentional; the duplicated up-vector decision is removed. Attribute any vertical-view golden movement to the shared up rule, using the global golden policy.
 
-- [ ] **Step 3: Replace repeated world and flag packing**
+- [x] **Step 3: Replace repeated world and flag packing**
 
 In every surviving terrain marcher fixture, replace the repeated assignments to `dims`, the first three `region_origin` elements, the first three `atlas_bricks` elements and flag `memcpy` with the following (use `&cp` or `&camera_params` where that is the local name):
 
@@ -2933,7 +2933,7 @@ ve::set_near_field_flags(&cam, ve::pack_flags(world_->beauty_settings()));
 
 Keep synthetic fixture overrides after this call when the fixture intentionally changes the world inputs. Keep cull-grid `.w` assignments: the helper deliberately does not own them. Do not change `debug_cel_diff` or its GPU/CPU synthetic shading fixture (spec §11).
 
-- [ ] **Step 4: Share grass layout and relocate the single-ray helper**
+- [x] **Step 4: Share grass layout and relocate the single-ray helper**
 
 In `debug_grass_stats`, replace its perspective camera and layout construction with:
 
@@ -2961,7 +2961,7 @@ return true;
 
 Keep the original initialization and resource guards before the camera construction. This helper does no streaming, full-frame rendering or additional readback, preserving the read-only single-pass contract. Its camera uses the shared pure builder; no new frame entry point is needed.
 
-- [ ] **Step 5: Remove only orphaned world plumbing**
+- [x] **Step 5: Remove only orphaned world plumbing**
 
 Replace `VoxelDebugHooks::debug_lod_cull_debug` with:
 
@@ -2980,13 +2980,13 @@ Delete `VoxelWorld::note_lod_cull_debug`, `VoxelWorld::lod_cull_debug` and the t
 
 Run Step 1's caller search again before deleting `finish_beauty_frame`, `downsample_history`, `lod_tick`, `prepare_lod_raster`, `prepare_lod_shadow_raster`, `sun_ortho` or `lod_fade_band`. Delete declarations and definitions only for methods with no surviving callers. In particular, the isolated SSGI history-latch probe still uses `downsample_history`; LoD and shadow probes still use LoD preparation, fade and sun methods. Keep those forwarders and the Task 4 `sun_ortho` delegation. Do not remove orchestrator methods with the same names.
 
-- [ ] **Step 6: Align the spec with the plan's final interfaces**
+- [x] **Step 6: Align the spec with the plan's final interfaces**
 
 Update spec §4.2, §4.4, §5 and §6 with these exact decisions:
 
 - `FrameRecord` is returned by value under a leaf mutex; no `GrassFrameStats` member. The grass hook remains a pass test.
 - `FrameDebug` also carries the marker RID and optional LoD viewport already defined in Task 5.
-- `FrameHost` also exposes `WorldStreamer *streamer()` as defined in Task 4; its deletion remains sub-project 2 debt.
+- Task 4's `FrameHost` exposed `WorldStreamer *streamer()`; sub-project 2 subsequently deleted `FrameHost` in commit `6b595c1`.
 - List the six migrated hooks and the reclassified pass probes from this plan's classification section. Perspective fixtures share `ve::probe_camera`; single-ray fixtures share `ve::probe_up_hint` and the existing pure basis primitive; terrain fixtures share world/flag packing.
 - The single-ray render helper belongs to `VoxelDebugHooks`; its pure camera inputs are shared with the frame. Record the retained world forwarders and their concrete callers from Step 5.
 - Deterministic output comparison disables temporal SSGI and wind. Grass counters stay covered by the grass suites; frame stage bits cover execution, and timing values remain unpinned.
@@ -3040,7 +3040,7 @@ When goldens moved, add their measured causes to this commit message before exec
 
 Record exit codes, the native summary and the exact `reports/report_N/results.xml` path printed by this run. Use Task 1 Step 3 to extract suite counts and failing case names/messages. Compare every original suite against the baseline, allowing increased counts for added tests. New frame suites must pass. Existing case counts may not shrink; new failures or changed failure messages require investigation. Apply Task 1's documented flaky-suite comparison rule only to the suites named there, and record the actual observed cases even when the failure counts match.
 
-- [ ] **Step 2: Audit scope and deletion**
+- [x] **Step 2: Audit scope and deletion**
 
 ```bash
 git diff 72eae3c --name-only
@@ -3054,7 +3054,7 @@ git diff --check
 
 Expected: no removed-symbol matches; the six migrated hooks call the frame; remaining camera/deferred construction belongs to explicitly classified isolated fixtures. Review the surrounding function for every match, not just the number of matches. No shader or pass implementation changes; orchestrator construction/teardown and collaborators are unchanged. Compositors contain admission/lifetime handling, input adaptation and the frame call. Compare frame stage order against the baseline compositor bodies, including nested SSAO timing, two-phase LoD/sun ordering and the post-opaque history/timing tail.
 
-- [ ] **Step 3: Measure the before/after sizes**
+- [x] **Step 3: Measure the before/after sizes**
 
 ```bash
 for file in extension/src/debug/hooks.cpp extension/src/voxel_world.h extension/src/voxel_world.cpp extension/src/raymarch_compositor.cpp extension/src/beauty_compositor.cpp; do
@@ -3091,14 +3091,14 @@ git commit -m "docs: record frame module verification and deletion results"
 ## Acceptance checklist
 
 - [ ] Both compositors call the owned `VoxelFrame`; the pre-refactor shipped golden passes unchanged.
-- [ ] Six frame-rebuilding probes use the shared frame and preserve public signatures/Dictionary keys.
-- [ ] Isolated probes share camera/world inputs and the shipped grass reach clamp, preserving fixture-specific parameters.
+- [x] Six frame-rebuilding probes use the shared frame and preserve public signatures/Dictionary keys.
+- [x] Isolated probes share camera/world inputs and the shipped grass reach clamp, preserving fixture-specific parameters.
 - [ ] Headless contracts cover successful stages, deterministic output with temporal effects held still, abort/recovery, near-field-off culling and history invalidation on resize.
 - [ ] Native suite passes; full GPU suite has no unexplained regression or missing cases against the recorded baseline.
 - [ ] Every moved golden or assertion has a measured cause; suspected shipped bugs are reported and block completion.
-- [ ] Orphaned world plumbing is removed, surviving callers justify retained wrappers, and before/after sizes are reported.
-- [ ] Stage order, admission/locking, orchestrator lifetime, pass internals and shaders remain within the agreed constraints.
-- [ ] Spec, implementation status and results report agree; `FrameHost` removal remains explicitly assigned to sub-project 2.
+- [x] Orphaned world plumbing is removed, surviving callers justify retained wrappers, and before/after sizes are reported.
+- [x] Stage order, admission/locking, orchestrator lifetime, pass internals and shaders remain within the agreed constraints.
+- [x] Spec, implementation status and results report agree; `FrameHost` was deleted by sub-project 2 in commit `6b595c1`.
 
 ---
 
@@ -3184,7 +3184,7 @@ Deferred items (spec §9.6) have no slot; each has a trigger instead (below).
 
 **Goal.** A simple pass is ~40 lines of intent; every C++↔GLSL contract that can be generated is generated and byte-checked.
 
-**Entry gate.** Sub-project 2 accepted (passes reachable only through the frame). Characterize each pass that will migrate with its existing probe or golden; add a golden for any migrated pass that has none. Failing tests for S4 and S7.
+**Entry gate.** Sub-project 2 accepted (passes reachable only through `RenderPasses` (pass-level probes stay isolated by sub-project 1's classification)). Characterize each pass that will migrate with its existing probe or golden; add a golden for any migrated pass that has none. Failing tests for S4 and S7.
 
 **Milestones (a) — pass helper.**
 1. `ComputePass` helper (compile, pipeline, RID-keyed uniform-set cache, sized targets, teardown, CPU timing) with fake-`RenderingDevice` native tests for rebuild-on-RID-change and free order.

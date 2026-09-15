@@ -30,6 +30,7 @@
 #include "world/override_store.h"
 #include "world/region_window.h"
 #include "world/residency.h"
+#include "world/raycast.h"
 
 namespace ve {
 
@@ -136,6 +137,8 @@ public:
 	ve::OverrideStore *overrides() { return overrides_; }
 	ve::VolumeSet &volumes() { return volumes_; }
 	ve::RegionResidency *residency() { return residency_; }
+	// The near-field region map's current window; an empty window before residency exists.
+	ve::RegionWindow region_window() const;
 	const ve::WorldConfig &config() const { return config_; }
 	// --- named per-field config setters (the only write path into config_) ---
 	// Used by VoxelWorld's property setters: pre-init writes take effect at the next
@@ -164,6 +167,10 @@ public:
 	// VoxelWorld in Task 11 so the consolidation coordinator needs no VoxelWorld*.
 	bool snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo,
 			ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const;
+	// A downward ve::raycast at (xz[0], xz[1]) from 200 m, 400 m long, on the generator plus
+	// the region ops, volumes and overrides. Takes edit_mutex(); this is the store-owned field
+	// query used by IslandManager.
+	ve::RayHit raycast_down(const float xz[2]);
 
 	// --- the spine (moved verbatim from VoxelWorld::append_edit/_locked) ---
 	// Tool entry point. Main thread; takes edit_mutex().

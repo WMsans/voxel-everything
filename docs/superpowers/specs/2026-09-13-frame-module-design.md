@@ -1,7 +1,7 @@
 # Voxel Everything — Frame Module & Architecture Deepening Roadmap
 
 **Date:** 2026-09-13
-**Status:** Approved design, pre-implementation
+**Status:** Implemented sub-project 1 (Tasks 10–12 completed within sub-project 2); roadmap continues
 **Scope:** (1) Sub-project 1 in full: extract a `VoxelFrame` module that owns the frame, make
 the compositors and the frame-rebuilding debug probes call it, and delete the probe copies.
 (2) Every other deepening pathway found during exploration, recorded with evidence so each can
@@ -73,9 +73,9 @@ hand-copied probe rebuilds.
 
 ### 4.1 Location and ownership
 
-`extension/src/render/frame.{h,cpp}`. Owned by `VoxelWorld` next to the orchestrator,
-constructed after it. Not in the native test build (needs RenderingDevice), like the rest of
-`src/render/`.
+`extension/src/render/frame.{h,cpp}`. Owned by `RenderOrchestrator`, which constructs it after
+`LodSystem` and `WorldStore`. Not in the native test build (needs RenderingDevice), like the rest
+of `src/render/`.
 
 ### 4.2 Interface
 
@@ -84,6 +84,8 @@ constructed after it. Not in the native test build (needs RenderingDevice), like
 struct FrameDebug {
     int deferred_view = 0;        // DeferredPass::Params::probe_mode
     bool skip_far_field = false;  // debug_seam_probe(skip_lod)
+    RID marker;                   // optional seam-probe ownership marker
+    Vector2i lod_viewport;        // settled LoD viewport; zero means frame size
 };
 
 struct FrameInputs {
@@ -96,42 +98,28 @@ struct FrameInputs {
     FrameDebug debug;
 };
 
-struct FrameSettings {            // per-frame values VoxelWorld still owns, sampled once
+struct FrameSettings {            // per-frame values RenderOrchestrator owns, sampled once
     ve::SunState sun;
     float near_field_scale;
     bool near_field_enabled;
     bool sun_cascade_min_level;
 };
 
-struct GrassFrameStats {          // exactly the counters debug_grass_stats returns today
-    // fields copied from GrassScatterPass's readback during planning
-};
-
-struct FrameRecord {              // written once per frame by the frame itself
+struct FrameRecord {              // returned by value under a leaf mutex
     float fade_start, fade_end;
     bool lod_two_phase, hiz_built;
     int lod_first_pass_count;
-    GrassFrameStats grass;        // counters grass_stats reads today
     uint32_t stages_ok, stages_cancelled; // bit per stage label
 };
 
-class FrameHost {                 // TEMPORARY seam, deleted by sub-project 2
-public:
-    virtual int island_slot_count() const = 0;
-    virtual int drain_island_uploads(RenderingDevice *) = 0;
-    virtual FrameSettings frame_settings() const = 0; // sun state, near-field scale/enabled,
-                                                      // sun_cascade_min_level
-protected:
-    ~FrameHost() = default;
-};
-
+// Historical SP1 interface: FrameHost was deleted by sub-project 2 in commit 6b595c1.
 class VoxelFrame {
 public:
-    VoxelFrame(RenderOrchestrator &, LodSystem &, WorldStore &, FrameHost &);
+    VoxelFrame(RenderOrchestrator &, LodSystem &, WorldStore &);
     bool render_pre_opaque(RenderingDevice *, const FrameInputs &);
     bool render_post_opaque(RenderingDevice *, const FrameInputs &);
     bool render_headless(RenderingDevice *, const FrameInputs &); // both halves, one call
-    const FrameRecord &last_frame() const;
+    FrameRecord last_frame() const;
     // The one synthetic probe camera (fov_y 60°, near 0.05, far 4000, up-vector rule).
     static FrameInputs looking_at(Vector3 pos, Vector3 fwd, int w, int h);
 };
@@ -164,24 +152,24 @@ them. Headless has no engine opaque objects; that difference is documented, not 
   call `render_pre_opaque` / `render_post_opaque`.
 - **`VoxelWorld`** loses the accessors only the frame used: `lod_tick`, `prepare_lod_raster`,
   `prepare_lod_shadow_raster`, `sun_ortho`, `lod_fade_band`, `note_lod_cull_debug` and its three
-  atomics + `lod_cull_debug()`, `finish_beauty_frame`, `downsample_history`,
-  `set_beauty_compositor` / `beauty_compositor_` (written, never read), `render_probe_pixel`
-  (moves onto the frame's camera builder). Exact list confirmed during planning; any accessor a
-  surviving caller still needs stays.
+  atomics + `lod_cull_debug()`, `finish_beauty_frame`, `set_beauty_compositor` /
+  `beauty_compositor_` (written, never read), and `render_probe_pixel` (moved to
+  `VoxelDebugHooks`). `downsample_history` stays for the isolated SSGI history-latch probe;
+  any accessor a surviving caller still needs stays. The temporary `FrameHost` seam was deleted
+  by sub-project 2 in commit `6b595c1`.
 - **`hooks.cpp`** loses every migrated rebuild (§5). Before/after line counts are reported.
 
 ### 4.5 Unchanged
 
 Compositor admission and lifetime locks, the shader-reload pump, orchestrator construction and
-teardown order, `Collaborators` slots, every pass's internals, lock order
-(`edit_mutex → lod_mutex → island_mutex`), threading of `island_slot_count` under
-`island_mutex_`.
+teardown order, every pass's internals, lock order (`edit_mutex → lod_mutex`), and the handoff
+leaf's atomic threading of `island_slot_count`.
 
-### 4.6 Named debt
+### 4.6 Resolved named debt
 
-`FrameHost` has one adapter (`VoxelWorld`), so it is a hypothetical seam, accepted only to avoid
-moving the island handoff queue and its mutex in this sub-project. Sub-project 2 moves that
-queue into the render lifetime owner and deletes `FrameHost` by name.
+`FrameHost` was the one-adapter seam accepted for SP1 so the island handoff queue and its mutex
+could remain in `VoxelWorld`. Sub-project 2 moved that queue into the render lifetime owner and
+deleted `FrameHost` by name in commit `6b595c1`; it is no longer part of the implementation.
 
 ## 5. Probe migration
 
@@ -195,13 +183,22 @@ Provisional classification; the plan verifies each hook by reading it.
 | `debug_ssgi_reprojection_probe` | `debug_ssr_probe` (fixture), `debug_outline_probe` (fixture) |
 | `debug_contact_shadow_probe` | `debug_hiz_probe_synthetic`, `debug_hiz_shutdown_probe` |
 | `debug_seam_probe` (`debug.skip_far_field`) | `debug_island_tile_mask`, `debug_lod_cull_probe` |
-| `debug_near_field_detail` | `debug_sun_shadow_build`, `debug_lod_tick` |
-| `debug_grass_stats` (reads `FrameRecord.grass`) | `debug_cel_diff` (synthetic albedo/ndl fixture) |
-| `debug_lod_gbuffer_probe`, `debug_lod_render_probe(_culled)` | `sun_shadow_probe` (single-point deferred sample) |
+| | `debug_near_field_detail`, `debug_sun_shadow_build`, `debug_lod_tick` |
+| | `debug_grass_stats`, `debug_lod_gbuffer_probe`, `debug_lod_render_probe(_culled)` |
+| | `debug_cel_diff` (synthetic albedo/ndl fixture), `sun_shadow_probe` (single-point deferred sample) |
 
-Pass tests keep their isolation but build cameras through `VoxelFrame::looking_at` and the shared
-`CameraParams` packing, deleting the hand-built cameras. Probes keep their GDScript signatures
-and Dictionary keys; only the numbers may move, under the §3 golden policy.
+The six migrated hooks are `debug_ssao_probe`, `debug_deferred_probe`, `debug_ssgi_probe`,
+`debug_ssgi_reprojection_probe`, `debug_contact_shadow_probe` and `debug_seam_probe`; the
+reclassified pass probes are `debug_lod_render_probe(_culled)`, `debug_lod_gbuffer_probe`,
+`debug_grass_stats` and `debug_near_field_detail`. Pass tests keep their isolation but build
+perspective fixtures through `ve::probe_camera`, single-ray fixtures through `ve::probe_up_hint`
+and the existing pure basis primitive, and terrain fixtures through the shared world/flag
+packing. Probes keep their GDScript signatures and Dictionary keys; only numbers may move under
+§3's golden policy. The single-ray render helper belongs to `VoxelDebugHooks`; retained world
+forwarders and concrete callers are `downsample_history` (SSGI history-latch probe),
+`lod_tick` (LoD probes), `prepare_lod_raster` (LoD render/gbuffer and shadow probes),
+`prepare_lod_shadow_raster` (shadow probes), `sun_ortho` (shadow probes), and `lod_fade_band`
+(LoD, near-field, SSR and shadow probes).
 
 The settle loop (`debug_stream_frame` until quiet) stays in the hooks as world preparation; the
 frame's own `stream` stage is idempotent once quiet.
@@ -222,7 +219,7 @@ Step 0 golden unchanged; failure set ⊆ baseline.
 
 **Step 2 — frame contract tests (new, through `render_headless`).**
 - Two renders of the same inputs produce identical lit output.
-- `FrameRecord` is populated (fade band, LoD record, grass counters, stage bits).
+- `FrameRecord` is populated (fade band, LoD record and stage bits); grass counters stay covered by the grass suites.
 - A failing stage cancels its own label and aborts the frame.
 - `near_field` off ⇒ HiZ not built ⇒ every LoD page drawn.
 - SSGI history survives N consecutive calls and falls on a size change.
@@ -230,6 +227,7 @@ Step 0 golden unchanged; failure set ⊆ baseline.
 **Step 3 — migrate probes, one probe per commit.** Each commit: run the probe's suites, diff,
 attribute every moved number to a cause (e.g. "reach now clamps to fade_end"), re-record in the
 same commit with the cause in the message. A diff that looks like a shipped bug stops the task.
+Deterministic output comparisons disable temporal SSGI and wind; timing values remain unpinned.
 
 **Step 4 — delete.** Remove orphaned copies and frame-only `VoxelWorld` accessors; rebuild; full
 suite; report line counts for `hooks.cpp`, `voxel_world.h`, `voxel_world.cpp`, both compositors.
@@ -255,7 +253,7 @@ say so, re-plan.
 | Headless frame differs from engine frame (no engine opaque objects; contact shadows read injected lit) | Documented in `frame.h`; contract tests compare headless to headless only; Step 0 golden covers the engine path |
 | Timings protocol spans two callbacks; post-opaque may not fire | Moved verbatim; contract test for abort/cancel; headless runs both halves |
 | Migrated goldens move for many reasons at once | One probe per commit; every moved number attributed to a cause |
-| `FrameHost` ossifies | Named in §4.6; sub-project 2's spec deletes it as an exit criterion |
+| `FrameHost` ossifies | Resolved: sub-project 2 deleted it in commit `6b595c1` |
 | Verbatim move silently changes behaviour through object lifetimes (uniform-set cascades) | Step 0 golden on the real compositor; no stage reordering |
 
 ## 9. Pathway roadmap (all deepening candidates)
@@ -280,9 +278,12 @@ blank move debris. Hooks reach private state via `friend` (198 `store_->`, 33 `l
 island upload queue (`island_uploads_`, `pending_normal_releases_`, `island_descs_`, their mutex)
 and calls `release_gpu()` on the streamer and LoD pool in order. Delete: the 25 public pass
 accessors (only `VoxelFrame` and a narrow diagnostics view see passes), `Collaborators` slots,
-the VoxelWorld forwarding block, `FrameHost`. Then split `hooks.cpp` by module: each module
+the VoxelWorld forwarding block and the former `FrameHost` seam (deleted in commit `6b595c1`).
+Then split `hooks.cpp` by module: each module
 exposes a POD `stats()`, the GDScript facade formats; both `friend` declarations go.
 **Tests:** a reload/teardown contract suite against the single owner.
+
+Implemented; results in docs/superpowers/plans/2026-09-14-render-lifetime-owner-results.md.
 
 ### 9.2 Sub-project 3 — One settings store (Strong; artist-facing)
 
@@ -343,6 +344,7 @@ both `shade.glslh` and `cel.gdshaderinc`), G-buffer channel accessors
 (`GB_MATERIAL_ID(g1)`, `GB_IS_SURFACE(g1)`) and attachment count.
 **Tests:** fake-RD tests for rebuild-on-RID-change and free order; golden-file tests per
 generated header.
+**Entry gate.** Sub-project 2 accepted (passes reachable only through `RenderPasses` (pass-level probes stay isolated by sub-project 1's classification)).
 **Change cost after:** new material ~4 files (from 7–9); new G-buffer channel ~5 (from 14–18).
 
 ### 9.4 Sub-project 5 — World field query and edit spine (Strong; characterization first)

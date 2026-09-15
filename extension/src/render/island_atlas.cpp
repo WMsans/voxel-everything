@@ -19,26 +19,6 @@ constexpr int kMipPerSlot = kMipCells * kMipCells * kMipCells;               // 
 constexpr int64_t kDescBytes = 128;                                          // 8 vec4
 } // namespace
 
-void IslandSlotDesc::recompute_world_aabb() {
-	const float span = static_cast<float>(dim - 1) * voxel;
-	for (int a = 0; a < 3; a++) {
-		aabb_lo[a] = 1e30f;
-		aabb_hi[a] = -1e30f;
-	}
-	for (int c = 0; c < 8; c++) {
-		const float q[3] = {lattice_origin[0] + ((c & 1) ? span : 0.0f),
-				lattice_origin[1] + ((c & 2) ? span : 0.0f),
-				lattice_origin[2] + ((c & 4) ? span : 0.0f)};
-		for (int a = 0; a < 3; a++) {
-			// basis is COLUMN major: world_a = sum_k basis[k * 3 + a] * q[k].
-			const float w = basis[0 * 3 + a] * q[0] + basis[1 * 3 + a] * q[1] +
-					basis[2 * 3 + a] * q[2] + origin[a];
-			aabb_lo[a] = std::min(aabb_lo[a], w);
-			aabb_hi[a] = std::max(aabb_hi[a], w);
-		}
-	}
-}
-
 IslandAtlas::~IslandAtlas() {
 	teardown();
 }

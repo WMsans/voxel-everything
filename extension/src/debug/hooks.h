@@ -7,6 +7,7 @@
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
+#include <godot_cpp/variant/packed_string_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <godot_cpp/variant/string.hpp>
@@ -465,6 +466,9 @@ public:
 
 	Dictionary debug_hiz_shutdown_probe();
 
+	// The step labels RenderOrchestrator::teardown_gpu() recorded on its last run, in order.
+	PackedStringArray debug_teardown_trace();
+
 	Dictionary debug_gbuffer_stats(int w, int h);
 
 	Dictionary debug_hiz_probe_synthetic(float far_value, float near_value);
@@ -517,6 +521,8 @@ private:
 	// no longer be reporting a colour anything downstream ever sees. `gloss_out` may be null.
 	Color resolve_near_field(int mat, Vector3 p, Vector3 n, Color overlay, float overlay_weight,
 			float *gloss_out);
+
+	bool render_probe_pixel(Vector3 origin, Vector3 dir);
 
 	VoxelWorld *world_ = nullptr;
 };

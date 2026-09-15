@@ -1,5 +1,7 @@
 #include "physics/island_manager.h"
-#include "voxel_world.h"
+#include "core/world_store.h"
+#include "render/island_handoff.h"
+#include <godot_cpp/classes/node3d.hpp>
 #include "mesh/box_merge.h"
 #include "render/mesh_service.h"
 #include <godot_cpp/classes/world3d.hpp>
@@ -12,6 +14,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <utility>
 
 using namespace godot;
 
@@ -100,13 +103,13 @@ IslandManager::~IslandManager() {
 	teardown();
 }
 
-void IslandManager::initialize(VoxelWorld *world) {
+void IslandManager::initialize(Collaborators handles) {
 	teardown();
-	world_ = world;
+	handles_ = std::move(handles);
 	atlas_used_.assign(kMaxIslands, 0);
 	next_id_ = 1;
 	next_window_id_ = 1;
-	slot_high_water_ = 0;
+	handles_.handoff->manager_slots.store(0, std::memory_order_relaxed);
 	connectivity_runs_ = 0;
 	islands_spawned_ = 0;
 	debris_spawned_ = 0;
@@ -115,18 +118,36 @@ void IslandManager::initialize(VoxelWorld *world) {
 	last_ms_ = 0.0f;
 }
 
+int IslandManager::slot_high_water() const {
+	return handles_.handoff ? handles_.handoff->manager_slots.load(std::memory_order_relaxed) : 0;
+}
+
+#ifdef DEBUG_ENABLED
+void IslandManager::debug_set_atlas_slot_used(int slot, bool used) {
+	// Test hook for the 32-island atlas ceiling. Out-of-range slots are ignored; used
+	// may only be set for slots the manager can actually hand out.
+	if (slot < 0 || slot >= kMaxIslands) return;
+	atlas_used_[static_cast<size_t>(slot)] = used ? 1 : 0;
+	if (used && handles_.handoff) {
+		std::atomic<int> &mark = handles_.handoff->manager_slots;
+		mark.store(std::max(mark.load(std::memory_order_relaxed), slot + 1),
+				std::memory_order_relaxed);
+	}
+}
+#endif
+
 void IslandManager::teardown() {
 	for (IslandBody *b : bodies_) {
 		if (!b) continue;
-		if (world_) world_->release_volume_slot(b->info().volume_slot);
+		if (handles_.store) release_volume_slot(handles_.store->volumes(), *handles_.handoff, b->info().volume_slot);
 		delete b;
 	}
 	bodies_.clear();
 	for (const InFlight &f : in_flight_)
-		if (world_) world_->release_volume_slot(f.volume_slot);
+		if (handles_.store) release_volume_slot(handles_.store->volumes(), *handles_.handoff, f.volume_slot);
 	in_flight_.clear();
 	for (const Merging &m : merging_)
-		if (world_) world_->release_volume_slot(m.out_slot);
+		if (handles_.store) release_volume_slot(handles_.store->volumes(), *handles_.handoff, m.out_slot);
 	merging_.clear();
 	merge_retries_.clear();
 	{
@@ -134,7 +155,7 @@ void IslandManager::teardown() {
 		windows_.clear();
 	}
 	atlas_used_.clear();
-	world_ = nullptr;
+	handles_ = Collaborators{};
 }
 
 void IslandManager::note_edit(const ve::EditOp &op, int64_t seq) {
@@ -211,7 +232,7 @@ bool IslandManager::window_is_fresh(const PendingWindow &w) const {
 	// Every region the window touches must have been re-probed since the edit. A region with
 	// no block at all is "unknown", which the flood treats as anchored ground -- it cannot
 	// hide an island, so it does not hold the window up either.
-	const ve::OccupancyGrid &grid = world_->occupancy();
+	const ve::OccupancyGrid &grid = handles_.store->occupancy();
 	const ve::IVec3 rlo = ve::region_of_brick(w.lo);
 	const ve::IVec3 rhi = ve::region_of_brick(w.hi);
 	for (int z = rlo.z; z <= rhi.z; z++)
@@ -231,16 +252,16 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 	ve::FloodResult r;
 	LogContactProbe probe;
 	probe.gen = gen_;
-	probe.log = world_->edit_log();
-	probe.mu = &world_->edit_mutex();
-	probe.volumes = &world_->volumes();
+	probe.log = handles_.store->edit_log();
+	probe.mu = &handles_.store->edit_mutex();
+	probe.volumes = &handles_.store->volumes();
 	probe.face_samples = refine_cfg_.face_samples;
 
 	for (int expand = 0;; expand++) {
-		ve::flood_anchored(world_->occupancy(), w, &cuts, &r);
+		ve::flood_anchored(handles_.store->occupancy(), w, &cuts, &r);
 		// Spec §5's marginal-contact refinement, before labelling: a piece held by one thin
 		// neck must be cut loose BEFORE the labeller decides it is anchored.
-		ve::refine_anchoring(world_->occupancy(), probe, refine_cfg_, &cuts, &r);
+		ve::refine_anchoring(handles_.store->occupancy(), probe, refine_cfg_, &cuts, &r);
 		if (!r.frontier_reached || expand >= ve::kMaxWindowExpansions) break;
 		// Spec §5: "expanding if the frontier is reached".
 		w = ve::FloodWindow::around(pw.lo, pw.hi, w.dim * 2);
@@ -254,7 +275,7 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 	ve::label_islands(r, comp_cfg_, &comps);
 	components_labelled_ += static_cast<int>(comps.size());
 
-	if (!world_->mesh_service()->extraction_available()) {
+	if (!handles_.mesh->extraction_available()) {
 		// Permanent for this physics lifetime: every field extraction would fail because the
 		// worker has no IslandExtractPass. Do not allocate volume slots, submit jobs, or
 		// re-queue a remainder that can only fail forever. The components stay attached in
@@ -298,23 +319,23 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 			continue;
 		}
 		{
-			std::lock_guard<std::mutex> lock(world_->edit_mutex());
-			if (!world_->edit_log()) {
+			std::lock_guard<std::mutex> lock(handles_.store->edit_mutex());
+			if (!handles_.store->edit_log()) {
 				refused_++;
 				continue;
 			}
-			ve::collect_ops_for_aabb(*world_->edit_log(), wlo, whi, &job.ops);
+			ve::collect_ops_for_aabb(*handles_.store->edit_log(), wlo, whi, &job.ops);
 			float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
 			ve::IVec3 blo = ve::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
 			ve::IVec3 bhi = ve::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
-			if (!world_->snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) {
+			if (!handles_.store->snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) {
 				refused_++;
 				refused_op_cap_++;
 				continue;
 			}
 		}
 		job.gen = gen_;
-		job.override_table = world_->override_table_for_region(
+		job.override_table = handles_.store->override_table_for_region(
 				ve::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
 		// Refuse before allocating a volume slot or submitting: the extraction pass cannot
 		// evaluate more than kMaxRegionOps ops, so this component can never be carved by the
@@ -324,7 +345,7 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 			refused_op_cap_++;
 			continue;
 		}
-		const int slot = world_->volumes().allocate();
+		const int slot = handles_.store->volumes().allocate();
 		if (slot < 0) {
 			refused_++;
 			refused_pool_full_++;
@@ -381,14 +402,14 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 	}
 	// Permanent failures (unmergeable shape, unplannable lattice, etc.) are deliberately
 	// dropped: no amount of retrying will make them progress.
-	if (!jobs.empty() && !world_->mesh_service()->submit_extracts(std::move(jobs))) {
+	if (!jobs.empty() && !handles_.mesh->submit_extracts(std::move(jobs))) {
 		// A rejected submit must not strand the InFlight entries we just pushed: no result
 		// will ever arrive for them, so they would leak volume slots and the run_frame gate
 		// would disable connectivity forever. Mirror start_merges() by rolling the entries
 		// back and keeping the originating window alive for a later retry.
 		for (int i = 0; i < submitted; i++) {
 			const InFlight &f = in_flight_.back();
-			world_->release_volume_slot(f.volume_slot);
+			release_volume_slot(handles_.store->volumes(), *handles_.handoff, f.volume_slot);
 			in_flight_.pop_back();
 		}
 		queue_retry_window(pw);
@@ -484,7 +505,7 @@ void IslandManager::block_merge_permanently(int body_index) {
 bool IslandManager::merge_retry_blocked(int body_index) {
 	// op_count() reads EditLog's region lists, which append_edit/note_edit mutate under
 	// edit_mutex_; a tool-thread edit can land while start_merges() is checking retries.
-	std::lock_guard<std::mutex> lock(world_->edit_mutex());
+	std::lock_guard<std::mutex> lock(handles_.store->edit_mutex());
 	for (auto it = merge_retries_.begin(); it != merge_retries_.end();) {
 		if (it->body_index != body_index) {
 			++it;
@@ -493,7 +514,7 @@ bool IslandManager::merge_retry_blocked(int body_index) {
 		if (it->cooldown > 0 || it->permanent) return true;
 		bool still_full = false;
 		for (const ve::IVec3 &region : it->blocked_regions) {
-			if (world_->edit_log()->op_count(region) >= ve::kMaxRegionOps) {
+			if (handles_.store->edit_log()->op_count(region) >= ve::kMaxRegionOps) {
 				still_full = true;
 				break;
 			}
@@ -517,10 +538,10 @@ bool IslandManager::merge_retry_blocked(int body_index) {
 // solid rock), or a region has no op headroom for the boxes.
 bool IslandManager::crumble_component(const InFlight &f) {
 	if (f.boxes.empty()) return false;
-	std::lock_guard<std::mutex> lock(world_->edit_mutex());
-	if (!world_->edit_log()) return false;
+	std::lock_guard<std::mutex> lock(handles_.store->edit_mutex());
+	if (!handles_.store->edit_log()) return false;
 
-	const ve::OccupancyGrid &grid = world_->occupancy();
+	const ve::OccupancyGrid &grid = handles_.store->occupancy();
 	bool any_solid = false;
 	for (const ve::CellBox &box : f.boxes)
 		for (int z = box.lo.z; z <= box.hi.z; z++)
@@ -553,14 +574,14 @@ bool IslandManager::crumble_component(const InFlight &f) {
 				}
 	}
 	for (size_t i = 0; i < regions.size(); i++)
-		if (world_->edit_log()->op_count(regions[i]) + ops_here[i] > ve::kMaxRegionOps)
+		if (handles_.store->edit_log()->op_count(regions[i]) + ops_here[i] > ve::kMaxRegionOps)
 			return false;
 
 	// notify_islands = false: this matter was already labelled unanchored, so removing it
 	// cannot loosen anything that was not loose already, and a window per crumble would put
 	// the connectivity pass back into the loop this function exists to break.
 	for (const ve::CellBox &box : f.boxes)
-		world_->append_edit_locked(
+		handles_.append_edit_locked(
 				ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM), false);
 	// Tell the occupancy grid straight away, exactly as the spawning carve does: the GPU
 	// readback that would say the same thing is several frames out, and until it lands the
@@ -569,7 +590,7 @@ bool IslandManager::crumble_component(const InFlight &f) {
 		for (int z = box.lo.z; z <= box.hi.z; z++)
 			for (int y = box.lo.y; y <= box.hi.y; y++)
 				for (int x = box.lo.x; x <= box.hi.x; x++)
-					world_->occupancy().set_cell({x, y, z}, ve::kCellAir, world_->edit_seq());
+					handles_.store->occupancy().set_cell({x, y, z}, ve::kCellAir, handles_.store->edit_seq());
 	crumbled_++;
 	return true;
 }
@@ -586,7 +607,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		empty = true;
 	}
 	if (r.failed || empty) {
-		world_->release_volume_slot(f.volume_slot);
+		release_volume_slot(handles_.store->volumes(), *handles_.handoff, f.volume_slot);
 		if (r.failed) {
 			note_extract_failure(f.window);
 			return;
@@ -633,18 +654,19 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 			// the time we learn the atlas is full, so re-queue it or the edit is lost when a
 			// slot later frees.
 			refused_++; DBG_LAND(atlas_full);
-			world_->release_volume_slot(f.volume_slot);
+			release_volume_slot(handles_.store->volumes(), *handles_.handoff, f.volume_slot);
 			queue_retry_window(f.window);
 			return;
 		}
 		atlas_used_[static_cast<size_t>(atlas_slot)] = 1;
-		const int high = std::max(slot_high_water_.load(std::memory_order_relaxed), atlas_slot + 1);
-		slot_high_water_.store(high, std::memory_order_relaxed);
+		std::atomic<int> &mark = handles_.handoff->manager_slots;
+		mark.store(std::max(mark.load(std::memory_order_relaxed), atlas_slot + 1),
+				std::memory_order_relaxed);
 	}
 
-	if (!world_->volumes().store(f.volume_slot, r.data)) {
+	if (!handles_.store->volumes().store(f.volume_slot, r.data)) {
 		if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
-		world_->release_volume_slot(f.volume_slot);
+		release_volume_slot(handles_.store->volumes(), *handles_.handoff, f.volume_slot);
 		refused_++; DBG_LAND(store_failed);
 		return; // nothing carved yet: the piece stays attached in the field
 	}
@@ -696,7 +718,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 						region.z >= brlo.z && region.z <= brhi.z)
 					carve_ops_here++;
 			}
-			if (world_->edit_log()->op_count(region) + carve_ops_here + 1 >
+			if (handles_.store->edit_log()->op_count(region) + carve_ops_here + 1 >
 					ve::kMaxRegionOps)
 				return false;
 		}
@@ -704,18 +726,18 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 	};
 
 	IslandBody *b = nullptr;
-	const Ref<World3D> w3 = world_->get_world_3d();
+	const Ref<World3D> w3 = handles_.scene_node->get_world_3d();
 	{
-		std::lock_guard<std::mutex> lock(world_->edit_mutex());
-		if (!world_->edit_log()) {
+		std::lock_guard<std::mutex> lock(handles_.store->edit_mutex());
+		if (!handles_.store->edit_log()) {
 			if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
-			world_->release_volume_slot(f.volume_slot);
+			release_volume_slot(handles_.store->volumes(), *handles_.handoff, f.volume_slot);
 			refused_++; DBG_LAND(no_edit_log);
 			return;
 		}
 		if (!has_restore_headroom()) {
 			if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
-			world_->release_volume_slot(f.volume_slot);
+			release_volume_slot(handles_.store->volumes(), *handles_.handoff, f.volume_slot);
 			refused_++; DBG_LAND(preflight);
 			return; // preflight refused: no carve, no hole, the component stays attached
 		}
@@ -759,7 +781,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 				return false;
 			};
 			std::vector<ve::EditOp> current_ops;
-			ve::collect_ops_for_aabb(*world_->edit_log(), f.aabb_lo, f.aabb_hi, &current_ops);
+			ve::collect_ops_for_aabb(*handles_.store->edit_log(), f.aabb_lo, f.aabb_hi, &current_ops);
 			std::vector<ve::EditOp> now, then;
 			for (const ve::EditOp &op : current_ops)
 				if (reaches_the_boxes(op)) now.push_back(op);
@@ -772,7 +794,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 							});
 			if (stale) {
 				if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
-				world_->release_volume_slot(f.volume_slot);
+				release_volume_slot(handles_.store->volumes(), *handles_.handoff, f.volume_slot);
 				queue_retry_window(f.window);
 				refused_++; DBG_LAND(stale);
 				return; // stale extraction: no carve, the component stays attached
@@ -782,9 +804,9 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		// Pin the birth volume before the first carve. The slot is already stored; pinning
 		// here means every later restore path can reference it, and a pin failure happens
 		// before any hole exists, so the stored slot can still be released.
-		if (!world_->volumes().pin(f.volume_slot)) {
+		if (!handles_.store->volumes().pin(f.volume_slot)) {
 			if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
-			world_->release_volume_slot(f.volume_slot);
+			release_volume_slot(handles_.store->volumes(), *handles_.handoff, f.volume_slot);
 			refused_++; DBG_LAND(pin_failed);
 			return; // no carve happened: the component stays attached
 		}
@@ -802,8 +824,8 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 
 		bool restore_referenced_slot = false;
 		const auto release_unreferenced_birth_slot = [&]() {
-			world_->volumes().unpin(f.volume_slot);
-			world_->release_volume_slot(f.volume_slot);
+			handles_.store->volumes().unpin(f.volume_slot);
+			release_volume_slot(handles_.store->volumes(), *handles_.handoff, f.volume_slot);
 		};
 
 		// 1. Spawn (spec §5 step 3, reordered). A live body must exist before any carve is
@@ -831,8 +853,8 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		bool carve_rejected = false;
 		std::vector<ve::IVec3> carved_regions;
 		for (const ve::CellBox &box : f.boxes) {
-			const ve::EditLog::AppendResult carve = world_->append_edit_locked(
-					ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM));
+			const ve::EditLog::AppendResult carve = handles_.append_edit_locked(
+					ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM), true);
 			for (const ve::IVec3 &region : carve.touched) carved_regions.push_back(region);
 			if (debug_fail_next_carve_) {
 				debug_fail_next_carve_ = false;
@@ -855,14 +877,14 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 				for (int z = box.lo.z; z <= box.hi.z; z++)
 					for (int y = box.lo.y; y <= box.hi.y; y++)
 						for (int x = box.lo.x; x <= box.hi.x; x++)
-							world_->occupancy().set_cell(
-									{x, y, z}, ve::kCellAir, world_->edit_seq());
+							handles_.store->occupancy().set_cell(
+									{x, y, z}, ve::kCellAir, handles_.store->edit_seq());
 #ifdef DEBUG_ENABLED
 			for (const ve::CellBox &box : f.boxes) debug_carved_boxes_.push_back(box);
 #endif
 			// A live body's birth volume is normally unpinned. If a carve-rejection restore
 			// already appended a volume-add naming this slot, it must stay pinned forever.
-			if (!restore_referenced_slot) world_->volumes().unpin(f.volume_slot);
+			if (!restore_referenced_slot) handles_.store->volumes().unpin(f.volume_slot);
 			b = body;
 		} else {
 			// With the preflight and the carve under the same lock this is unreachable under
@@ -883,10 +905,10 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 			// The slot was pinned before the first carve, so the restore volume-add can always
 			// name it. The slot is intentionally NOT released when the restore is accepted: the
 			// edit log now references it.
-			world_->queue_field_volume_upload(f.volume_slot, r.data);
+			queue_field_volume(f.volume_slot, r.data);
 			const ve::EditLog::AppendResult restore =
-					world_->append_edit_locked(ve::make_volume_add(f.volume_slot, f.origin,
-							f.voxel, f.dim));
+					handles_.append_edit_locked(ve::make_volume_add(f.volume_slot, f.origin,
+							f.voxel, f.dim), true);
 			if (!restore.touched.empty()) restore_referenced_slot = true;
 			const bool forced_restore_failure = debug_fail_next_restore_;
 			debug_fail_next_restore_ = false;
@@ -904,8 +926,8 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 					for (int z = box.lo.z; z <= box.hi.z; z++)
 						for (int y = box.lo.y; y <= box.hi.y; y++)
 							for (int x = box.lo.x; x <= box.hi.x; x++)
-								world_->occupancy().set_cell(
-										{x, y, z}, ve::kCellSolid, world_->edit_seq());
+								handles_.store->occupancy().set_cell(
+										{x, y, z}, ve::kCellSolid, handles_.store->edit_seq());
 				delete body;
 				if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
 				refused_++; DBG_LAND(carve_restored);
@@ -926,10 +948,10 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 									ve::region_of_brick({x, y, z});
 							if (std::find(carved_regions.begin(), carved_regions.end(), region) !=
 									carved_regions.end())
-								world_->occupancy().set_cell(
-										{x, y, z}, ve::kCellAir, world_->edit_seq());
+								handles_.store->occupancy().set_cell(
+										{x, y, z}, ve::kCellAir, handles_.store->edit_seq());
 						}
-			if (!restore_referenced_slot) world_->volumes().unpin(f.volume_slot);
+			if (!restore_referenced_slot) handles_.store->volumes().unpin(f.volume_slot);
 			b = body;
 		}
 	}
@@ -950,7 +972,7 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 	// 4. The raymarcher needs the bytes (spec §3's dense per-island texture). The upload
 	//    carries BOTH slots: atlas slot for descriptor/mip entries, volume slot for the
 	//    shared SDF/material/normal buffers (Task 6).
-	if (atlas_slot >= 0) world_->queue_island_upload(atlas_slot, f.volume_slot, r.data);
+	if (atlas_slot >= 0) handles_.handoff->queue_island(atlas_slot, f.volume_slot, r.data);
 }
 
 void IslandManager::start_merges() {
@@ -958,7 +980,7 @@ void IslandManager::start_merges() {
 	// frame may already have submitted field extractions, or an earlier resample may still be
 	// in flight; do not allocate an out-slot and push a Merging entry that can never receive a
 	// result.
-	if (world_->mesh_service()->extracts_busy()) return;
+	if (handles_.mesh->extracts_busy()) return;
 	std::vector<IslandExtractJob> jobs;
 	for (size_t i = 0; i < bodies_.size(); i++) {
 		IslandBody *b = bodies_[i];
@@ -1000,7 +1022,7 @@ void IslandManager::start_merges() {
 		float best_ground = -1e30f;
 		bool any_ground = false;
 		for (const float(&p)[2] : probes) {
-			const ve::RayHit g = world_->analytic_raycast_down(p);
+			const ve::RayHit g = handles_.store->raycast_down(p);
 			if (g.hit) {
 				any_ground = true;
 				best_ground = std::max(best_ground, g.pos[1]);
@@ -1008,9 +1030,9 @@ void IslandManager::start_merges() {
 		}
 		if (!any_ground || bottom > best_ground + kMergeGroundClearanceM)
 			continue; // still in the air: do not paste floating terrain
-		const ve::VolumeData *src = world_->volumes().get(b->info().volume_slot);
+		const ve::VolumeData *src = handles_.store->volumes().get(b->info().volume_slot);
 		if (!src) continue;
-		int out = world_->volumes().allocate();
+		int out = handles_.store->volumes().allocate();
 		// At the 64-body cap every volume slot belongs to a live body, so there is no second
 		// slot to resample into. Reuse the body's own birth slot instead: the worker already
 		// receives a copy of `source`, and land_resample() keeps a second copy so a failed
@@ -1019,7 +1041,7 @@ void IslandManager::start_merges() {
 		// a partially accepted paste can never corrupt the birth slot. This is a deliberate
 		// improvement over the brief's allocate-a-second-slot approach (documented in the task
 		// report).
-		if (out < 0 && !world_->volumes().pinned(b->info().volume_slot))
+		if (out < 0 && !handles_.store->volumes().pinned(b->info().volume_slot))
 			out = b->info().volume_slot;
 		if (out < 0) {
 			// Fail-soft (see the plan's Deliberate Deferrals): the body stays a body. It is
@@ -1058,7 +1080,7 @@ void IslandManager::start_merges() {
 		break; // one re-merge in flight at a time: the paste changes the field under the rest
 	}
 	if (jobs.empty()) return;
-	if (!world_->mesh_service()->submit_extracts(std::move(jobs))) {
+	if (!handles_.mesh->submit_extracts(std::move(jobs))) {
 		// Defensive: even with the busy pre-check, a rejected submit must not leave a Merging
 		// entry waiting for a result that will never arrive. Roll back the entry and free any
 		// separately allocated out-slot. When the body's own birth slot was reused, no store or
@@ -1067,7 +1089,7 @@ void IslandManager::start_merges() {
 		const bool reuses_birth_slot = m.body_index >= 0 &&
 				m.body_index < static_cast<int>(bodies_.size()) && bodies_[m.body_index] &&
 				m.out_slot == bodies_[m.body_index]->info().volume_slot;
-		if (!reuses_birth_slot) world_->release_volume_slot(m.out_slot);
+		if (!reuses_birth_slot) release_volume_slot(handles_.store->volumes(), *handles_.handoff, m.out_slot);
 		merging_.pop_back();
 	}
 }
@@ -1085,7 +1107,7 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 		// A failed resample never stored into the out-slot. When that slot is the live
 		// body's birth slot it must stay allocated; only a separately allocated out-slot is
 		// released.
-		if (!reuses_birth_slot) world_->release_volume_slot(m.out_slot);
+		if (!reuses_birth_slot) release_volume_slot(handles_.store->volumes(), *handles_.handoff, m.out_slot);
 		if (!invalid_body) {
 			// A failed resample is not a paste rejection, but it must still back off: without
 			// a merge-retry entry the same body would be resubmitted every frame.
@@ -1101,7 +1123,7 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 	// where it was. Keep the body alive and back off instead.
 	if (bodies_[m.body_index]->asleep_seconds() <= 0.0f ||
 			!same_rest_pose(bodies_[m.body_index]->transform(), m.submitted_transform)) {
-		if (!reuses_birth_slot) world_->release_volume_slot(m.out_slot);
+		if (!reuses_birth_slot) release_volume_slot(handles_.store->volumes(), *handles_.handoff, m.out_slot);
 		note_merge_rejected(m.body_index, ve::EditLog::AppendResult{});
 		refused_++;
 		return; // stale rest pose: no paste, no despawn, the body stays a body
@@ -1134,16 +1156,16 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 	// which is what makes reusing the body's own birth slot safe. If we cannot guarantee
 	// that, we leave the birth slot untouched and back off.
 	{
-		std::lock_guard<std::mutex> lock(world_->edit_mutex());
+		std::lock_guard<std::mutex> lock(handles_.store->edit_mutex());
 		ve::EditLog::AppendResult preflight;
 		for (const ve::IVec3 &region : paste_regions)
-			if (world_->edit_log()->op_count(region) >= ve::kMaxRegionOps)
+			if (handles_.store->edit_log()->op_count(region) >= ve::kMaxRegionOps)
 				preflight.rejected.push_back(region);
 		if (!preflight.rejected.empty()) {
 			// No store or pin happened, so a reused birth slot still holds the body's
 			// original volume. A separately allocated out-slot is unreferenced and can be
 			// released.
-			if (!reuses_birth_slot) world_->release_volume_slot(m.out_slot);
+			if (!reuses_birth_slot) release_volume_slot(handles_.store->volumes(), *handles_.handoff, m.out_slot);
 			note_merge_rejected(m.body_index, preflight);
 			refused_++;
 			return;
@@ -1155,23 +1177,23 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 		// the out-slot is not referenced by any edit and can be released; when the out-slot is
 		// the body's own birth slot, restore the original source bytes instead so the live body
 		// keeps its volume.
-		const bool stored = world_->volumes().store(m.out_slot, r.data);
-		if (!stored || !world_->volumes().pin(m.out_slot)) {
+		const bool stored = handles_.store->volumes().store(m.out_slot, r.data);
+		if (!stored || !handles_.store->volumes().pin(m.out_slot)) {
 			if (reuses_birth_slot) {
-				if (stored) world_->volumes().store(m.out_slot, m.source);
+				if (stored) handles_.store->volumes().store(m.out_slot, m.source);
 			} else {
-				world_->release_volume_slot(m.out_slot);
+				release_volume_slot(handles_.store->volumes(), *handles_.handoff, m.out_slot);
 			}
 			refused_++;
 			return;
 		}
-		world_->queue_field_volume_upload(m.out_slot, r.data);
+		queue_field_volume(m.out_slot, r.data);
 
 		// Spec §5 step 4: "stamped back as a CSG paste-op ... Rubble permanently accumulates".
 		// A rejected paste means the field did NOT take the rock back. The body must remain a
 		// body so the carved hole still has something in it. Never despawn unless the accepted
 		// paste actually covers every region of the rest volume.
-		const ve::EditLog::AppendResult paste = world_->append_edit_locked(r.op);
+		const ve::EditLog::AppendResult paste = handles_.append_edit_locked(r.op, true);
 		const bool paste_covers = paste.rejected.empty() && !paste_regions.empty() &&
 				!paste.touched.empty() &&
 				std::all_of(paste_regions.begin(), paste_regions.end(),
@@ -1188,12 +1210,12 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 			// so keep the body alive and permanently stop re-merging it rather than resample
 			// from a world-aligned slot using the original birth lattice.
 			if (paste.touched.empty()) {
-				world_->discard_field_volume_upload(m.out_slot);
-				world_->volumes().unpin(m.out_slot);
+				discard_field_volume(m.out_slot);
+				handles_.store->volumes().unpin(m.out_slot);
 				if (reuses_birth_slot) {
-					world_->volumes().store(m.out_slot, m.source);
+					handles_.store->volumes().store(m.out_slot, m.source);
 				} else {
-					world_->release_volume_slot(m.out_slot);
+					release_volume_slot(handles_.store->volumes(), *handles_.handoff, m.out_slot);
 				}
 			} else if (reuses_birth_slot) {
 				block_merge_permanently(m.body_index);
@@ -1208,6 +1230,31 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 		despawn(m.body_index);
 		islands_merged_++;
 	}
+}
+
+void IslandManager::queue_field_volume(int slot, const ve::VolumeData &data) {
+	handles_.handoff->queue_field_volume(slot, data);
+	// The worker's volume pool must see the paste before its next field job, otherwise the
+	// mesher's collision against the new rubble lags a frame (or more) behind the main copy.
+	if (handles_.mesh) handles_.mesh->submit_volume(slot, data);
+}
+
+void IslandManager::discard_field_volume(int slot) {
+	handles_.handoff->discard_field_volume(slot);
+	if (handles_.mesh) handles_.mesh->discard_pending_volume_upload(slot);
+}
+
+void IslandManager::publish_bubbles() {
+	std::vector<float> centers;
+	centers.reserve(bodies_.size() * 3);
+	for (IslandBody *b : bodies_) {
+		if (!b || !b->live()) continue;
+		const Vector3 o = b->transform().origin;
+		centers.push_back(o.x);
+		centers.push_back(o.y);
+		centers.push_back(o.z);
+	}
+	handles_.bubble_centers->swap(centers);
 }
 
 void IslandManager::publish_descriptors() {
@@ -1236,11 +1283,11 @@ void IslandManager::publish_descriptors() {
 		for (int a = 0; a < 3; a++) d.lattice_origin[a] = b->local_lattice_origin()[a];
 		d.recompute_world_aabb();
 	}
-	world_->publish_island_descriptors(descs);
+	handles_.handoff->publish_descriptors(descs);
 }
 
 int IslandManager::run_frame(float dt, const Vector3 &center) {
-	if (!world_ || !world_->mesh_service()) return 0;
+	if (!handles_.store || !handles_.mesh) return 0;
 	const Clock::time_point t0 = Clock::now();
 	int actions = 0;
 
@@ -1256,7 +1303,7 @@ int IslandManager::run_frame(float dt, const Vector3 &center) {
 
 	// 2. Results.
 	std::vector<IslandExtractResult> results;
-	world_->mesh_service()->collect_extracts(&results);
+	handles_.mesh->collect_extracts(&results);
 	for (const IslandExtractResult &r : results) {
 		actions++;
 		if (r.kind == kResampleVolume) land_resample(r);
@@ -1271,7 +1318,7 @@ int IslandManager::run_frame(float dt, const Vector3 &center) {
 	{
 		std::lock_guard<std::mutex> lock(windows_mutex_);
 		if (!windows_.empty() && in_flight_.empty() &&
-				!world_->mesh_service()->extracts_busy()) {
+				!handles_.mesh->extracts_busy()) {
 			w = windows_.front();
 			if (w.retry_cooldown > 0) {
 				// Backoff after a transient full-pool refusal; let the cooldown tick down
@@ -1279,7 +1326,7 @@ int IslandManager::run_frame(float dt, const Vector3 &center) {
 				windows_.front().retry_cooldown--;
 			} else if (live_body_count() + static_cast<int>(in_flight_.size()) >=
 							max_dynamic_bodies_ ||
-					world_->volumes().live_count() >= ve::kMaxVolumes) {
+					handles_.store->volumes().live_count() >= ve::kMaxVolumes) {
 				// No body or volume capacity: keep the window queued instead of popping it
 				// and losing the edit. Retrying is harmless here because the gate above is a
 				// cheap counter check, not a connectivity relabel.
@@ -1301,7 +1348,7 @@ int IslandManager::run_frame(float dt, const Vector3 &center) {
 
 	// Spec §6's "small bubbles around active bodies": the collider streamer already accepts
 	// N centres, and the bodies are the other N - 1.
-	world_->set_physics_bubbles(bodies_);
+	publish_bubbles();
 
 	last_ms_ = std::chrono::duration<float, std::milli>(Clock::now() - t0).count();
 	(void)center;
@@ -1334,8 +1381,8 @@ void IslandManager::despawn(int index) {
 	// releasing it is safe. When re-merge reused the birth slot as the rested volume, the
 	// paste op now pins it and it must stay for ever; release() would refuse it anyway, but
 	// do not even try to free a slot the field owns.
-	if (!world_->volumes().pinned(b->info().volume_slot))
-		world_->release_volume_slot(b->info().volume_slot);
+	if (!handles_.store->volumes().pinned(b->info().volume_slot))
+		release_volume_slot(handles_.store->volumes(), *handles_.handoff, b->info().volume_slot);
 	delete b;
 	bodies_[index] = nullptr; // a hole, not an erase: Merging::body_index must stay valid
 	merge_retries_.erase(std::remove_if(merge_retries_.begin(), merge_retries_.end(),
@@ -1496,19 +1543,19 @@ Dictionary IslandManager::stats() {
 	}
 	d["in_flight"] = static_cast<int>(in_flight_.size());
 	d["merging"] = static_cast<int>(merging_.size());
-	d["volume_live"] = world_ ? world_->volumes().live_count() : 0;
+	d["volume_live"] = handles_.store ? handles_.store->volumes().live_count() : 0;
 	int volume_pinned = 0;
-	if (world_)
+	if (handles_.store)
 		for (int i = 0; i < ve::kMaxVolumes; i++)
-			if (world_->volumes().pinned(i)) volume_pinned++;
+			if (handles_.store->volumes().pinned(i)) volume_pinned++;
 	d["volume_pinned"] = volume_pinned;
 	d["manager_ms"] = last_ms_;
 	// Where the ground is under the last body to fall, so a test can say "the rubble is
 	// standing on it" without knowing the terrain's shape. ve::raycast reads the same field
 	// the paste went into, which is the point of asking it rather than the physics.
 	float ground = 0.0f;
-	if (world_) {
-		const ve::RayHit h = world_->analytic_raycast_down(last_merge_xz_);
+	if (handles_.store) {
+		const ve::RayHit h = handles_.store->raycast_down(last_merge_xz_);
 		if (h.hit) ground = h.pos[1];
 	}
 	d["ground_y"] = ground;

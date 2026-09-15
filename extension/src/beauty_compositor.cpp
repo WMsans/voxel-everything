@@ -1,6 +1,7 @@
 #include "beauty_compositor.h"
 #include "voxel_world.h"
 #include "render/frame.h"
+#include "render/orchestrator.h"
 #include <godot_cpp/classes/render_scene_buffers_rd.hpp>
 #include <godot_cpp/classes/render_scene_data.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
@@ -36,7 +37,6 @@ void BeautyCompositor::_render_callback(int cb_type, RenderData *render_data) {
 	if (!rd || !rsb || !sd) return;
 
 	normal_roughness_state_ = rsb->has_texture("forward_clustered", "normal_roughness") ? 1 : 0;
-	world->set_beauty_compositor(this);
 	FrameInputs in;
 	in.cam = sd->get_cam_transform();
 	in.proj = sd->get_cam_projection();
@@ -46,5 +46,5 @@ void BeautyCompositor::_render_callback(int cb_type, RenderData *render_data) {
 	in.normal_roughness = normal_roughness_state_ == 1
 			? rsb->get_texture("forward_clustered", "normal_roughness") : RID();
 	in.rsb = rsb;
-	world->frame()->render_post_opaque(rd, in);
+	world->context().render->frame().render_post_opaque(rd, in);
 }
