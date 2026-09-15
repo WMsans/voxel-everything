@@ -108,5 +108,46 @@ Flaky by case (compare failure COUNT): test_connectivity, test_island_body.
 ## Site rows
 Filled by Tasks 2–4: per site, the failing cases and leak count of its Pass gate suite set on this commit.
 
+### Task 2 sites (frame post passes; gate = site suites + test_frame_shipped_golden + test_frame_contract + test_render_lifetime_contract)
+
+### ssao
+none
+leaked: 0
+
+### contact_shadow
+none
+leaked: 0
+
+### outline
+none
+leaked: 0
+
+### ssr
+none
+leaked: 0
+
+### ssgi
+none
+leaked: 0
+
+### hiz
+none
+leaked: 0
+
+### deferred
+none
+leaked: 0
+
 ## Evidence log
 Appended by later tasks.
+
+### Task 2 bite proofs
+| Site | Break | Failing case — message | Reverted |
+|---|---|---|---|
+| ssao | f[5] = 0 | test_ssao_golden.gd::test_ssao_statistics_match_the_recorded_golden — min_ao moved for 'down_close': golden 0.705882, got 1.000000 | yes |
+| contact_shadow | params[1] = 0 | test_contact_shadow_golden.gd::test_contact_apply_matches_the_recorded_golden — mean_darkening moved: golden 0.006335, got 0.000000 (named suite passed clean; golden added per missing-test rule, commit fdd6b80) | yes |
+| outline | f[6] = 0 | test_outline.gd::test_depth_line_is_one_pixel_and_darkens_by_the_fixed_amount — Expecting: 0.000000 in range between 0.340000 <> 0.360000 | yes |
+| ssr | bindings 2/3 swapped (gb_surface ↔ gb_depth) | test_ssr.gd::test_a_post_opaque_only_blocker_is_reflected — Expecting to be greater than: 0 but was 0 | yes |
+| ssgi | f[22] = 0 | test_ssgi.gd::test_light_bounces_once_the_history_exists — eight frames of history produced no bounce at all: max_channel 0.0, mean_luma 0.0 | yes |
+| hiz | p[4] = 0 | test_hiz.gd::test_the_reduction_is_a_min_in_reverse_z — Expecting: 0.100000 in range between 0.899000 <> 0.901000 | yes |
+| deferred | u[24] = 0 | test_deferred_golden.gd::test_lit_frame_matches_the_recorded_golden — mean_luma moved: golden 0.033779, got 0.044053 (named suite passed clean; golden added per missing-test rule, commit a80029e) | yes |
