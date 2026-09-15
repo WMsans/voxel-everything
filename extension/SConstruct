@@ -23,7 +23,8 @@ if platform.machine() in ("x86_64", "AMD64"):
 
 # --- native test runner: pure C++ cores only, zero godot-cpp ---
 test_env = Environment(CXX=os.environ.get("CXX", "g++"))
-test_env.Append(CXXFLAGS=["-std=c++20", "-O1", "-g", "-Wall", "-Wextra"] + _fp_contract_flags)
+test_env.Append(CXXFLAGS=["-std=c++20", "-O1", "-g", "-Wall", "-Wextra", "-pthread"] + _fp_contract_flags)
+test_env.Append(LINKFLAGS=["-pthread"])
 test_env.Append(CPPPATH=["src", "third_party"])
 pure_sources = (Glob("src/world/*.cpp") + Glob("src/generator/*.cpp") +
                 Glob("src/core/*.cpp") + Glob("src/terrain/*.cpp") +
@@ -31,7 +32,7 @@ pure_sources = (Glob("src/world/*.cpp") + Glob("src/generator/*.cpp") +
                 Glob("src/lod/*.cpp") + Glob("src/shade/*.cpp") +
                 Glob("src/grass/*.cpp"))
 for f in ["src/render/shader_loader.cpp", "src/render/camera_params.cpp",
-          "src/render/frame_params.cpp"]:
+          "src/render/frame_params.cpp", "src/render/island_handoff.cpp"]:
     if os.path.exists(f):
         pure_sources.append(f)
 # ConsolidationCoordinator publishes GPU transactions by design (godot-cpp headers, worker
