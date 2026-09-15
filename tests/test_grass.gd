@@ -200,3 +200,20 @@ func test_disabling_grass_after_it_drew_issues_an_empty_draw() -> void:
 	assert_int(d["blades"]).is_equal(0)
 	assert_int(d["vertices"]).is_equal(0)
 	assert_bool(d["drawn"]).is_true()
+
+# S7 (docs/superpowers/specs/2026-09-15-pass-anatomy-generated-layouts-design.md §3.5). Blades
+# used to write material 1 -- grass_01, the ground they grow on -- so an emissive grass_01
+# would light every blade. They write their own foliage id instead. 200 is ve::kFoliageBase
+# (extension/src/world/material_table.h) and grass_blade is its first row.
+const MAT_GRASS_BLADE := 200
+
+func test_blades_write_the_grass_blade_material_not_the_terrain_they_grow_on() -> void:
+	var w := make_world()
+	stream_to(w, OPEN_GRASS)
+	var d: Dictionary = w.hooks().debug_grass_stats()
+	assert_bool(d["drawn"]).is_true()
+	var ids: PackedInt32Array = d["blade_materials"]
+	assert_int(ids.size()).override_failure_message(
+		"the hooked raster covered no pixels").is_greater(0)
+	assert_array(Array(ids)).override_failure_message(
+		"blade material ids: %s" % [ids]).is_equal([MAT_GRASS_BLADE])

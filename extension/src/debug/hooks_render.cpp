@@ -82,9 +82,11 @@
 #include <godot_cpp/variant/utility_functions.hpp>
 
 #include <algorithm>
+#include <set>
 #include <vector>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/memory.hpp>
+#include <godot_cpp/variant/packed_int32_array.hpp>
 
 #include "debug/hooks_common.h"
 
@@ -511,6 +513,10 @@ Dictionary VoxelDebugHooks::debug_grass_stats() {
 	d["min_luma"] = -1.0;
 	d["max_luma"] = -1.0;
 	d["mean_luma"] = -1.0;
+	// The material ids the hooked blade raster wrote into surface.z, ascending. Material 0 is
+	// the cleared background, so only covered pixels report. S7 pins this: a blade must write
+	// its own foliage id, never the terrain material it grows on.
+	d["blade_materials"] = PackedInt32Array();
 	VoxelWorld *w = world_;
 	if (!w) return d;
 	GrassScatterPass *g = w->context().render->passes().grass_scatter;
@@ -597,6 +603,19 @@ Dictionary VoxelDebugHooks::debug_grass_stats() {
 				d["min_luma"] = mn;
 				d["max_luma"] = mx;
 				d["mean_luma"] = sum / static_cast<double>(pixels);
+			}
+			const PackedByteArray surf = device->texture_get_data(
+					w->context().render->passes().gbuffer->surface(), 0);
+			if (surf.size() >= pixels * 8) {
+				const uint16_t *s = reinterpret_cast<const uint16_t *>(surf.ptr());
+				std::set<int> seen;
+				for (int i = 0; i < pixels; i++) {
+					const float z = half_to_float(s[i * 4 + 2]);
+					if (z >= 0.5f) seen.insert(static_cast<int>(z + 0.5f));
+				}
+				PackedInt32Array ids;
+				for (int id : seen) ids.push_back(id);
+				d["blade_materials"] = ids;
 			}
 		}
 	}
