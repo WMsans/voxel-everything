@@ -441,8 +441,6 @@ VoxelWorld::VoxelWorld() {
 			// is this node as an Object, solely the Callable target for the queued
 			// render-thread teardown; render_ dies with this node, so it cannot dangle.
 			.initialized = &initialized_,
-			.island_mutex = &island_mutex_,
-			.island_slots = &island_slots_,
 			// Task 15: the LoD state slots live on LodSystem now.
 			.lod_pool = context_.lod->pool_slot(),
 			.lod_tree = context_.lod->tree_slot(),
@@ -740,14 +738,7 @@ RenderingDevice *VoxelWorld::rd() const {
 }
 
 int VoxelWorld::island_slot_count() const {
-	// The render thread calls this from RaymarchCompositor::_render_callback. The manager
-	// pointer and island_slots_ are written on the main thread, so reads must hold
-	// island_mutex_. The manager's own slot_high_water_ is atomic as well, since it is also
-	// updated outside this mutex.
-	std::lock_guard<std::mutex> lock(island_mutex_);
-	if (!islands_enabled_.load(std::memory_order_relaxed)) return 0;
-	const int manager_slots = island_manager_ ? island_manager_->slot_high_water() : 0;
-	return island_slots_ > manager_slots ? island_slots_ : manager_slots;
+	return context_.render->island_slot_count();
 }
 
 void VoxelWorld::ensure_physics_initialized() {
@@ -779,7 +770,7 @@ void VoxelWorld::ensure_physics_initialized() {
 	if (streamer_) streamer_->set_mesh_service(mesh_);
 	// A fresh MeshService starts with an empty worker-side volume pool. The edit log and
 	// VolumeSet survive physics teardown, so replay every pinned volume into the new worker;
-	// the preserved island_uploads_ only covers the render device's pool.
+	// the preserved render handoff only covers the render device's pool.
 	for (int slot = 0; slot < ve::kMaxVolumes; slot++) {
 		if (!store_->volumes().pinned(slot)) continue;
 		const ve::VolumeData *d = store_->volumes().get(slot);
@@ -797,12 +788,10 @@ void VoxelWorld::ensure_physics_initialized() {
 	colliders_->set_body_bubble_radius_m(physics_bubble_radius_m_);
 	// Publish the manager under edit_mutex_: append_edit_locked() can be called from a tool
 	// thread and reads island_manager_ while holding that lock, so creation must not expose a
-	// half-initialized pointer to it. Also take island_mutex_ (edit_mutex_ -> island_mutex_
-	// order, matching teardown) so the render thread's island_slot_count() sees a stable
-	// pointer.
+	// half-initialized pointer to it. The render thread never reads the pointer: it reads the
+	// handoff's slot marks.
 	{
 		std::lock_guard<std::mutex> lock(store_->edit_mutex());
-		std::lock_guard<std::mutex> island_lock(island_mutex_);
 		island_manager_ = new IslandManager();
 		island_manager_->initialize(this);
 		island_manager_->set_generator(&store_->generator()->sampler());
@@ -818,44 +807,21 @@ void VoxelWorld::teardown_physics() {
 	test_bodies_.clear();
 	// The manager owns the real island bodies; tear it down before the mesher's worker and
 	// the colliders so its volume-slot bookkeeping still has a live VolumeSet to ask. Hold
-	// edit_mutex_ while deleting/null it: a tool thread may already be inside
-	// append_edit_locked() reading island_manager_ to call note_edit(). Also take
-	// island_mutex_ so the render thread's island_slot_count() cannot dereference a manager
-	// that is being destroyed (lock order: edit_mutex_ -> island_mutex_).
-	//
-	// Detach under the lock, then tear down outside it: teardown() releases every body's,
-	// in-flight extraction's and merge's volume slot through release_volume_slot(), which
-	// takes island_mutex_ to queue the GPU-side normal release. Running it under the lock
-	// re-entered a non-recursive std::mutex and hung the process. The render thread is
-	// still safe -- it sees a null manager the instant the lock is dropped -- and the tool
-	// thread cannot observe the detached pointer because edit_mutex_ is held throughout.
-	IslandManager *manager = nullptr;
-	{
-		std::lock_guard<std::mutex> island_lock(island_mutex_);
-		manager = island_manager_;
-		island_manager_ = nullptr;
-	}
+	// edit_mutex_ while detaching: a tool thread may already be inside append_edit_locked()
+	// reading island_manager_ to call note_edit(). The render thread never reads the pointer;
+	// its slot mark drops to 0 at the detach, which is what it saw from a null manager before.
+	IslandManager *manager = island_manager_;
+	island_manager_ = nullptr;
+	context_.render->handoff().manager_slots.store(0, std::memory_order_relaxed);
 	if (manager) {
 		manager->teardown();
 		delete manager;
 	}
 	physics_bubble_centers_.clear();
-	// Drop any uploads/descriptors the previous manager queued before the GPU pools are torn
-	// down. If physics is re-initialized, stale queue entries must not be drained into the
-	// new pools. The one exception is a field-volume upload for a slot the edit log already
-	// references: those bytes are part of the surviving CPU volume set and MUST be mirrored
-	// into any new GPU pool before an op that names the slot is evaluated.
-	{
-		std::lock_guard<std::mutex> lock(island_mutex_);
-		std::vector<IslandUpload> keep;
-		keep.reserve(island_uploads_.size());
-		for (IslandUpload &u : island_uploads_)
-			if (!u.to_island_atlas && store_->volumes().pinned(u.volume_slot))
-				keep.push_back(std::move(u));
-		island_uploads_.swap(keep);
-		island_descs_.clear();
-		island_descs_dirty_ = false;
-	}
+	// Drop uploads/descriptors the previous manager queued before the GPU pools are torn
+	// down; keep a field-volume upload whose slot the edit log already pins -- those bytes
+	// are part of the surviving CPU volume set and MUST reach any new GPU pool.
+	context_.render->handoff().drop_for_physics_teardown(store_->volumes());
 	// The worker is going away, but the render atlas and CPU store survive physics teardown.
 	// An in-flight transaction may already have acquired slots and staged new bytes there;
 	// restore the old consumer state before releasing those speculative slots. Never leave a
@@ -904,39 +870,24 @@ void VoxelWorld::set_physics_bubble_radius_m(float v) {
 
 
 
-void VoxelWorld::queue_island_upload(int atlas_slot, int volume_slot,
-		const ve::VolumeData &d) {
-	std::lock_guard<std::mutex> lock(island_mutex_);
-	island_uploads_.push_back(IslandUpload{atlas_slot, volume_slot, true, d});
+void VoxelWorld::queue_island_upload(int atlas_slot, int volume_slot, const ve::VolumeData &d) {
+	context_.render->handoff().queue_island(atlas_slot, volume_slot, d);
 }
 
 void VoxelWorld::queue_field_volume_upload(int slot, const ve::VolumeData &d) {
-	{
-		std::lock_guard<std::mutex> lock(island_mutex_);
-		island_uploads_.push_back(IslandUpload{-1, slot, false, d});
-	}
+	context_.render->handoff().queue_field_volume(slot, d);
 	// The worker's volume pool must see the paste before its next field job, otherwise the
 	// mesher's collision against the new rubble lags a frame (or more) behind the main copy.
 	if (mesh_) mesh_->submit_volume(slot, d);
 }
 
 void VoxelWorld::discard_field_volume_upload(int slot) {
-	{
-		std::lock_guard<std::mutex> lock(island_mutex_);
-		island_uploads_.erase(
-				std::remove_if(island_uploads_.begin(), island_uploads_.end(),
-						[slot](const IslandUpload &u) {
-							return !u.to_island_atlas && u.volume_slot == slot;
-						}),
-				island_uploads_.end());
-	}
+	context_.render->handoff().discard_field_volume(slot);
 	if (mesh_) mesh_->discard_pending_volume_upload(slot);
 }
 
 void VoxelWorld::publish_island_descriptors(const std::vector<IslandSlotDesc> &d) {
-	std::lock_guard<std::mutex> lock(island_mutex_);
-	island_descs_ = d;
-	island_descs_dirty_ = true;
+	context_.render->handoff().publish_descriptors(d);
 }
 
 void VoxelWorld::set_physics_bubbles(const std::vector<IslandBody *> &bodies) {
@@ -964,58 +915,11 @@ ve::RayHit VoxelWorld::analytic_raycast_down(const float xz[2]) {
 }
 
 bool VoxelWorld::release_volume_slot(int slot) {
-	// The authoritative copy goes first; only a successful release (never a pinned slot --
-	// a pasted volume-add still names it) queues the GPU-side normal teardown.
-	const bool freed = store_->volumes().release(slot);
-	if (freed) {
-		std::lock_guard<std::mutex> lock(island_mutex_);
-		pending_normal_releases_.push_back(slot);
-	}
-	return freed;
+	return godot::release_volume_slot(store_->volumes(), context_.render->handoff(), slot);
 }
 
 int VoxelWorld::drain_island_uploads(RenderingDevice *device) {
-	if (!device) return 0;
-	std::vector<IslandUpload> uploads;
-	std::vector<int> normal_releases;
-	std::vector<IslandSlotDesc> descs;
-	bool dirty = false;
-	{
-		std::lock_guard<std::mutex> lock(island_mutex_);
-		uploads.swap(island_uploads_);
-		normal_releases.swap(pending_normal_releases_);
-		descs = island_descs_;
-		dirty = island_descs_dirty_;
-		island_descs_dirty_ = false;
-	}
-	for (const int slot : normal_releases) {
-		if (atlas()) atlas()->stored_normals().release_volume(device, slot);
-	}
-	for (const IslandUpload &u : uploads) {
-		// SDF/material and compact normals land ONCE, in the shared authoritative pools,
-		// indexed by the volume slot. An island upload additionally refreshes its mip at
-		// the atlas slot; a field-volume upload follows the identical volume/normal path
-		// without one. A missing/malformed/failed normal payload is fail-soft: the pool
-		// publishes -1 and the shader falls back to differentiating the R8 atlas.
-		if (atlas() && u.volume_slot >= 0) {
-			if (!atlas()->volumes().upload(device, u.volume_slot, u.data))
-				UtilityFunctions::printerr("VoxelWorld: field volume upload failed for slot ",
-						u.volume_slot);
-			atlas()->stored_normals().upload_volume(device, u.volume_slot, u.data);
-		} else if (!atlas() && u.to_island_atlas) {
-			UtilityFunctions::printerr("VoxelWorld: no GpuAtlas for island upload of slot ",
-					u.volume_slot);
-		}
-		if (u.to_island_atlas && islands() && u.atlas_slot >= 0 &&
-				!islands()->upload_mip(device, u.atlas_slot, u.data))
-			UtilityFunctions::printerr("VoxelWorld: island mip upload failed for slot ",
-					u.atlas_slot);
-		if (!u.to_island_atlas)
-			debug_field_volume_upload_count_.fetch_add(1, std::memory_order_relaxed);
-	}
-	if (dirty && islands())
-		islands()->upload_descriptors(device, descs.data(), static_cast<int>(descs.size()));
-	return static_cast<int>(uploads.size());
+	return context_.render->drain_island_uploads(device);
 }
 
 

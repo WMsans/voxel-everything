@@ -1,5 +1,6 @@
 #include "physics/island_manager.h"
 #include "voxel_world.h"
+#include "render/orchestrator.h"
 #include "mesh/box_merge.h"
 #include "render/mesh_service.h"
 #include <godot_cpp/classes/world3d.hpp>
@@ -106,7 +107,7 @@ void IslandManager::initialize(VoxelWorld *world) {
 	atlas_used_.assign(kMaxIslands, 0);
 	next_id_ = 1;
 	next_window_id_ = 1;
-	slot_high_water_ = 0;
+	world_->context().render->handoff().manager_slots.store(0, std::memory_order_relaxed);
 	connectivity_runs_ = 0;
 	islands_spawned_ = 0;
 	debris_spawned_ = 0;
@@ -114,6 +115,25 @@ void IslandManager::initialize(VoxelWorld *world) {
 	refused_ = 0;
 	last_ms_ = 0.0f;
 }
+
+int IslandManager::slot_high_water() const {
+	return world_ ? world_->context().render->handoff().manager_slots.load(std::memory_order_relaxed)
+				  : 0;
+}
+
+#ifdef DEBUG_ENABLED
+void IslandManager::debug_set_atlas_slot_used(int slot, bool used) {
+	// Test hook for the 32-island atlas ceiling. Out-of-range slots are ignored; used
+	// may only be set for slots the manager can actually hand out.
+	if (slot < 0 || slot >= kMaxIslands) return;
+	atlas_used_[static_cast<size_t>(slot)] = used ? 1 : 0;
+	if (used && world_) {
+		std::atomic<int> &mark = world_->context().render->handoff().manager_slots;
+		mark.store(std::max(mark.load(std::memory_order_relaxed), slot + 1),
+				std::memory_order_relaxed);
+	}
+}
+#endif
 
 void IslandManager::teardown() {
 	for (IslandBody *b : bodies_) {
@@ -638,8 +658,9 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 			return;
 		}
 		atlas_used_[static_cast<size_t>(atlas_slot)] = 1;
-		const int high = std::max(slot_high_water_.load(std::memory_order_relaxed), atlas_slot + 1);
-		slot_high_water_.store(high, std::memory_order_relaxed);
+		std::atomic<int> &mark = world_->context().render->handoff().manager_slots;
+		mark.store(std::max(mark.load(std::memory_order_relaxed), atlas_slot + 1),
+				std::memory_order_relaxed);
 	}
 
 	if (!world_->volumes().store(f.volume_slot, r.data)) {

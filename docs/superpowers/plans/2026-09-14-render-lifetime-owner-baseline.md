@@ -32,3 +32,10 @@ Appended by later tasks: bite proofs, attributions, per-milestone gate results.
 - (a) skipped SsrPass delete -> contract suite not discovered: `SCRIPT ERROR: Parse Error: Could not find type "GdUnitTestCIRunner" in the current scope.` (launcher exit 1)
 - (b) residency before streamer -> contract suite not discovered: `SCRIPT ERROR: Parse Error: Could not find type "GdUnitTestCIRunner" in the current scope.` (launcher exit 1)
 - (c) uploads cleared in teardown_gpu -> contract suite not discovered: `SCRIPT ERROR: Parse Error: Could not find type "GdUnitTestCIRunner" in the current scope.` (launcher exit 1)
+
+### Task 6 gate
+- Report: `.superpowers/sdd/2026-09-14-render-lifetime-owner/task-6-report.md`
+- Build: OK.
+- Native: 551/551 passed, 0 failed; baseline was 544/544, with the +7 cases attributed to Task 5's pure handoff/native tests. Behavior matches baseline.
+- gdUnit: same pre-existing `GdUnitTestCIRunner` parse error before discovery; launcher exit 1, no `results.xml` or suite counts. No blocker repair was made.
+- Result: matches baseline after the attributed native-count difference; teardown-trace gate remains covered but could not be discovered because of the known launcher blocker.

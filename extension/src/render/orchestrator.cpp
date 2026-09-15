@@ -75,6 +75,38 @@ void RenderOrchestrator::release_devices() {
 	main_rd_ = nullptr;
 }
 
+int RenderOrchestrator::drain_island_uploads(RenderingDevice *device) {
+	if (!device) return 0;
+	IslandHandoff::Batch batch = handoff_.take();
+	for (const int slot : batch.normal_releases) {
+		if (atlas_) atlas_->stored_normals().release_volume(device, slot);
+	}
+	for (const IslandHandoff::Upload &u : batch.uploads) {
+		// SDF/material and compact normals land ONCE, in the shared authoritative pools,
+		// indexed by the volume slot. An island upload additionally refreshes its mip at
+		// the atlas slot; a field-volume upload follows the identical volume/normal path
+		// without one. A missing/malformed/failed normal payload is fail-soft: the pool
+		// publishes -1 and the shader falls back to differentiating the R8 atlas.
+		if (atlas_ && u.volume_slot >= 0) {
+			if (!atlas_->volumes().upload(device, u.volume_slot, u.data))
+				UtilityFunctions::printerr("VoxelWorld: field volume upload failed for slot ",
+						u.volume_slot);
+			atlas_->stored_normals().upload_volume(device, u.volume_slot, u.data);
+		} else if (!atlas_ && u.to_island_atlas) {
+			UtilityFunctions::printerr("VoxelWorld: no GpuAtlas for island upload of slot ",
+					u.volume_slot);
+		}
+		if (u.to_island_atlas && islands_ && u.atlas_slot >= 0 &&
+				!islands_->upload_mip(device, u.atlas_slot, u.data))
+			UtilityFunctions::printerr("VoxelWorld: island mip upload failed for slot ",
+					u.atlas_slot);
+		if (!u.to_island_atlas) handoff_.note_field_volume_uploaded();
+	}
+	if (batch.descs_dirty && islands_)
+		islands_->upload_descriptors(device, batch.descs.data(), static_cast<int>(batch.descs.size()));
+	return static_cast<int>(batch.uploads.size());
+}
+
 bool RenderOrchestrator::initialize_downsample(RenderingDevice *rd) {
 	teardown_downsample();
 	if (!rd) return false;
@@ -405,12 +437,8 @@ void RenderOrchestrator::teardown_gpu() {
 	teardown_trace_.push_back("residency");
 	teardown_island_graph();
 	teardown_trace_.push_back("island_graph");
-	{
-		// island_slot_count() can still be on the render thread during teardown; keep the
-		// high-water mark's write under the same mutex.
-		std::lock_guard<std::mutex> lock(*handles_.island_mutex);
-		*handles_.island_slots = 0;
-	}
+	// island_slot_count() can still be on the render thread during teardown; the mark is atomic.
+	handoff_.reset_debug_slots();
 	teardown_trace_.push_back("island_slots");
 	teardown_atlas_pool();
 	teardown_trace_.push_back("atlas");

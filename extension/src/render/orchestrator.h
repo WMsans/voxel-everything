@@ -33,6 +33,7 @@
 #include "lod/lod_tree.h" // ve::LodKey: teardown clears the world's LoD page maps
 #include "grass/grass_settings_store.h"
 #include "render/gpu_timings.h"
+#include "render/island_handoff.h"
 #include "shade/beauty_settings.h"
 #include "world/region.h"
 
@@ -93,8 +94,6 @@ public:
 		// World-owned flags/state teardown_gpu() touches BETWEEN its three halves
 		// and after them. Addresses only, re-read at every use.
 		bool *initialized = nullptr;        // cleared last by teardown_gpu(), as before
-		std::mutex *island_mutex = nullptr; // guards *island_slots during teardown
-		int *island_slots = nullptr;        // high-water mark reset under *island_mutex
 		LodPool **lod_pool = nullptr;       // pool -> tree -> page maps, post-atlas
 		ve::LodTree **lod_tree = nullptr;
 		std::map<ve::LodKey, std::vector<int>> *lod_pages_of = nullptr;
@@ -184,6 +183,15 @@ public:
 	// _exit_tree()'s device drop, verbatim: the owned local device is deleted,
 	// the borrowed main pointer merely forgotten.
 	void release_devices();
+
+	// --- island handoff (spec 2026-09-14 §3.2; moved from VoxelWorld) ---
+	IslandHandoff &handoff() { return handoff_; }
+	// High-water mark for the raymarcher. Render thread; lock-free (two atomics).
+	int island_slot_count() const {
+		return handoff_.slot_count(handles_.islands_enabled->load(std::memory_order_relaxed));
+	}
+	// Render thread, before the streamer runs. Returns how many uploads landed.
+	int drain_island_uploads(RenderingDevice *device);
 
 	// Address-of slots for collaborators (ConsolidationCoordinator wiring) that
 	// re-read lazily-created objects at every use.
@@ -315,6 +323,7 @@ private:
 	// beauty_mutex_/beauty_snapshot() pair without joining it (design doc section 7).
 	ve::GrassSettingsStore grass_settings_;
 	GpuTimings gpu_timings_;
+	IslandHandoff handoff_;
 	float prev_view_proj_[16] = {};
 	bool has_history_ = false;
 	// The history texture has_history_ refers to; see has_history().

@@ -751,17 +751,15 @@ Dictionary VoxelDebugHooks::debug_physics_stats() {
 }
 
 int VoxelDebugHooks::debug_island_pending_uploads() {
-	std::lock_guard<std::mutex> lock(world_->island_mutex_);
-	return static_cast<int>(world_->island_uploads_.size());
+	return world_->context().render->handoff().pending_uploads();
 }
 
 int VoxelDebugHooks::debug_field_volume_upload_count() const {
-	return world_->debug_field_volume_upload_count_.load(std::memory_order_relaxed);
+	return world_->context().render->handoff().field_volume_uploads();
 }
 
 int VoxelDebugHooks::debug_island_descriptors_pending() {
-	std::lock_guard<std::mutex> lock(world_->island_mutex_);
-	return world_->island_descs_dirty_ ? 1 : 0;
+	return world_->context().render->handoff().descs_dirty() ? 1 : 0;
 }
 
 PackedInt32Array VoxelDebugHooks::debug_mesh_volume_slots() {
@@ -795,9 +793,7 @@ void VoxelDebugHooks::debug_queue_test_island_upload(int slot, const PackedByteA
 }
 
 void VoxelDebugHooks::debug_queue_test_island_descriptors() {
-	std::lock_guard<std::mutex> lock(world_->island_mutex_);
-	world_->island_descs_.assign(1, IslandSlotDesc{});
-	world_->island_descs_dirty_ = true;
+	world_->context().render->handoff().publish_descriptors(std::vector<IslandSlotDesc>(1));
 }
 
 void VoxelDebugHooks::debug_queue_committed_field_volume_upload(int slot,
@@ -842,10 +838,7 @@ void VoxelDebugHooks::debug_queue_committed_field_volume_upload(int slot,
 	}
 	// Only model the main-thread GPU handoff queue. The worker-side mirror is exercised by
 	// ensure_physics_initialized()'s pinned-volume replay after teardown/reinit.
-	{
-		std::lock_guard<std::mutex> lock(world_->island_mutex_);
-		world_->island_uploads_.push_back(VoxelWorld::IslandUpload{-1, slot, false, d});
-	}
+	world_->context().render->handoff().queue_field_volume(slot, d);
 	if (world_->mesh_) {
 		world_->mesh_->submit_volume(slot, d);
 		world_->mesh_->run_sync([](MeshPass &){});
@@ -2869,10 +2862,7 @@ Dictionary VoxelDebugHooks::debug_place_test_island_rotated(int slot, Vector3i l
 
 	all[slot] = desc;
 	world_->islands()->upload_descriptors(device, all, kMaxIslands);
-	{
-		std::lock_guard<std::mutex> lock(world_->island_mutex_);
-		world_->island_slots_ = std::max(world_->island_slots_, slot + 1);
-	}
+	world_->context().render->handoff().note_debug_slot(slot);
 	device->submit();
 	device->sync();
 

@@ -163,33 +163,13 @@ class VoxelWorld : public Node3D, public EditSink, public FrameHost {
 	ve::ChunkResidency *chunks_ = nullptr;
 	ColliderStreamer *colliders_ = nullptr;
 	IslandManager *island_manager_ = nullptr;
-	mutable std::mutex island_mutex_; // also guards island_manager_ and island_slots_
-	// Bytes on their way to a GPU pool. Filled on the main thread, drained on the render
-	// thread by the compositor before it runs the streamer -- an op that names a volume must
-	// never be evaluated before the volume is there. Since Task 6 the SDF/material/normal
-	// bytes land ONCE in GpuAtlas's shared pools, indexed by the authoritative VOLUME slot;
-	// an island upload additionally carries the atlas slot for its descriptor/mip entries.
-	struct IslandUpload {
-		int atlas_slot = -1;    // island mip/descriptor entry; -1 = field-volume only
-		int volume_slot = -1;   // authoritative ve::VolumeSet slot (SDF/mat/normals stride)
-		bool to_island_atlas = false; // true = also upload the island min-max mip
-		ve::VolumeData data;
-	};
-	std::vector<IslandUpload> island_uploads_;
-	// Volume slots whose compact-normal allocation must be freed on the render thread
-	// (queued by release_volume_slot() when the authoritative copy is released).
-	std::vector<int> pending_normal_releases_;
 	// Debug-settable compact-normal budget; 0 = GpuAtlasConfig's default 32 MiB. Must be
 	// set BEFORE the atlas is created; the pool never resizes after that.
 	uint32_t normal_pool_bytes_ = 0;
 	std::atomic<bool> islands_enabled_{true};
 	std::atomic<bool> near_field_enabled_{true};
 	std::atomic<float> near_field_scale_{0.66f};
-	int island_slots_ = 0; // high-water mark, not a population; guarded by island_mutex_
-	std::vector<IslandSlotDesc> island_descs_;
-	bool island_descs_dirty_ = false;
 	std::vector<float> physics_bubble_centers_;
-	std::atomic<int> debug_field_volume_upload_count_{0};
 	bool physics_ready_ = false;
 	std::vector<std::pair<ve::IVec3, ve::IVec3>> pending_dirty_; // guarded by edit_mutex_
 	// A hand-driven body pool for tests. Task 13's IslandManager owns the real one and
@@ -390,8 +370,7 @@ public:
 	IslandAtlas *islands() { return context_.render->islands(); }
 	// High-water mark, not a population: the shader masks off bits at or above it and then
 	// tests each remaining slot's descriptor for dim >= 2, so a dead slot below the mark
-	// costs one branch and nothing else. Non-inline: the render thread calls this and must
-	// take island_mutex_ before touching island_manager_ / island_slots_.
+	// costs one branch and nothing else. Forwarded to RenderOrchestrator's handoff.
 	int island_slot_count() const override;
 	WorldStreamer *streamer() override { return streamer_; }
 	// The near-field region map's current window. Read by RaymarchCompositor for the

@@ -46,9 +46,7 @@ public:
 	// the behaviour spec §5 describes, not a bug.
 	void note_edit(const ve::EditOp &op, int64_t seq);
 
-	int slot_high_water() const {
-		return slot_high_water_.load(std::memory_order_relaxed);
-	}
+	int slot_high_water() const;
 	float last_ms() const { return last_ms_; }
 	void set_merge_sleep_seconds(float v) { merge_sleep_s_ = v; }
 	// Borrowed, not owned; see the member comment.
@@ -59,16 +57,7 @@ public:
 		// that pass an absurd value from silently disabling the body cap.
 		max_dynamic_bodies_ = v < 1 ? 1 : (v > kMaxDynamicBodies ? kMaxDynamicBodies : v);
 	}
-	void debug_set_atlas_slot_used(int slot, bool used) {
-		// Test hook for the 32-island atlas ceiling. Out-of-range slots are ignored; used
-		// may only be set for slots the manager can actually hand out.
-		if (slot < 0 || slot >= kMaxIslands) return;
-		atlas_used_[static_cast<size_t>(slot)] = used ? 1 : 0;
-		if (used) {
-			const int high = std::max(slot_high_water_.load(std::memory_order_relaxed), slot + 1);
-			slot_high_water_.store(high, std::memory_order_relaxed);
-		}
-	}
+	void debug_set_atlas_slot_used(int slot, bool used);
 #else
 	// Cap/atlas test hooks are debug-only: release builds must not be able to lower the
 	// 64-body guardrail or mark atlas slots used.
@@ -201,8 +190,6 @@ private:
 	ve::ContactRefineConfig refine_cfg_;
 	int next_id_ = 1;
 	int64_t next_window_id_ = 1;
-	// Read by the render thread through VoxelWorld::island_slot_count(), so it is atomic.
-	std::atomic<int> slot_high_water_{0};
 	int max_dynamic_bodies_ = kMaxDynamicBodies;
 	float merge_sleep_s_ = 2.0f; // spec §5: "Body sleeps ~2s -> re-merge"
 	// Counters the HUD, the benchmark and tests/test_connectivity.gd read.
