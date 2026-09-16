@@ -1,5 +1,6 @@
 #[fragment]
 #version 460
+#include "generated/blocks.glslh"
 #define MATERIAL_LAYERS 16
 layout(set = 0, binding = 2) uniform sampler2DArray material_albedo;
 layout(set = 0, binding = 3) uniform sampler2DArray material_surface_tex;
@@ -35,13 +36,7 @@ layout(location = 2) out uint marker;
 layout(set = 0, binding = 0) uniform sampler2D src_overlay; // rgb overlay, a sun visibility
 layout(set = 0, binding = 1) uniform sampler2D src_hitpos;  // xyz world hit, w hit flag
 layout(set = 0, binding = 4) uniform sampler2D src_surface; // xy oct normal, z material, w overlay weight
-layout(push_constant, std430) uniform Push {
-	mat4 view_proj;
-	vec4 cam;        // xyz = camera position, w = fade start
-	vec4 fade;       // x = fade end, yzw = camera forward
-	vec4 right_tanx; // xyz = camera right, w = tan(fov_x / 2)
-	vec4 up_tany;    // xyz = camera up,    w = tan(fov_y / 2)
-} pc;
+layout(push_constant, std430) uniform Push { COMPOSITE_PUSH_FIELDS } pc;
 
 void main() {
 	vec4 hp = texture(src_hitpos, uv_in);

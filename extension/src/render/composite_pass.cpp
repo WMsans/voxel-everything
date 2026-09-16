@@ -1,6 +1,7 @@
 #include "render/composite_pass.h"
 #include "render/gbuffer.h"
 #include "render/material_atlas.h"
+#include "gpu_layout/blocks.h"
 #include <godot_cpp/variant/packed_color_array.hpp>
 #include <cstring>
 
@@ -71,34 +72,29 @@ void CompositePass::draw(RenderingDevice *rd, GBuffer &gb, RID src_overlay, RID 
 			gpu::sampled(4, sampler_nearest_, src_surface)});
 	if (!set.is_valid()) return;
 
-	// Exactly 128 bytes: Vulkan's guaranteed minimum push-constant size, so still portable.
-	// Both stages declare the same five vec4s (Godot rejects differing reflections between
-	// stages of one pipeline), and the vertex stage ignores everything but the block's shape.
-	PackedByteArray pc;
-	pc.resize(128);
-	{
-		float *f = reinterpret_cast<float *>(pc.ptrw());
-		for (int c = 0; c < 4; c++)
-			for (int r = 0; r < 4; r++)
-				f[c * 4 + r] = view_proj.columns[c][r];
-		f[16] = cam.cam_pos[0];
-		f[17] = cam.cam_pos[1];
-		f[18] = cam.cam_pos[2];
-		// NOT cam.cam_pos[3]: the marcher's block hides the packed beauty flags in that slot.
-		f[19] = fade_start;
-		f[20] = fade_end;
-		f[21] = cam.cam_fwd[0];
-		f[22] = cam.cam_fwd[1];
-		f[23] = cam.cam_fwd[2];
-		f[24] = cam.cam_right[0];
-		f[25] = cam.cam_right[1];
-		f[26] = cam.cam_right[2];
-		f[27] = cam.params[0]; // tan(fov_x / 2)
-		f[28] = cam.cam_up[0];
-		f[29] = cam.cam_up[1];
-		f[30] = cam.cam_up[2];
-		f[31] = cam.params[1]; // tan(fov_y / 2)
-	}
+	// Both stages declare the same block (Godot rejects differing reflections between stages
+	// of one pipeline); the vertex stage ignores everything but its shape.
+	ve::CompositePush push{};
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++)
+			push.view_proj[c * 4 + r] = view_proj.columns[c][r];
+	push.cam[0] = cam.cam_pos[0];
+	push.cam[1] = cam.cam_pos[1];
+	push.cam[2] = cam.cam_pos[2];
+	// NOT cam.cam_pos[3]: the marcher's block hides the packed beauty flags in that slot.
+	push.cam[3] = fade_start;
+	push.fade[0] = fade_end;
+	push.fade[1] = cam.cam_fwd[0];
+	push.fade[2] = cam.cam_fwd[1];
+	push.fade[3] = cam.cam_fwd[2];
+	push.right_tanx[0] = cam.cam_right[0];
+	push.right_tanx[1] = cam.cam_right[1];
+	push.right_tanx[2] = cam.cam_right[2];
+	push.right_tanx[3] = cam.params[0]; // tan(fov_x / 2)
+	push.up_tany[0] = cam.cam_up[0];
+	push.up_tany[1] = cam.cam_up[1];
+	push.up_tany[2] = cam.cam_up[2];
+	push.up_tany[3] = cam.params[1]; // tan(fov_y / 2)
 
 	PackedColorArray clears;
 	clears.push_back(Color(0, 0, 0, 0));
@@ -110,7 +106,7 @@ void CompositePass::draw(RenderingDevice *rd, GBuffer &gb, RID src_overlay, RID 
 	if (dl < 0) return;
 	rd->draw_list_bind_render_pipeline(dl, pipeline_);
 	rd->draw_list_bind_uniform_set(dl, set, 0);
-	rd->draw_list_set_push_constant(dl, pc, pc.size());
+	rd->draw_list_set_push_constant(dl, gpu::push_bytes(push), sizeof(push));
 	rd->draw_list_draw(dl, false, 1, 3);
 	rd->draw_list_end();
 	last_draw_ok_ = true;
