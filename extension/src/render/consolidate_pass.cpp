@@ -1,4 +1,5 @@
 #include "render/consolidate_pass.h"
+#include "gpu_layout/blocks.h"
 #include "render/field_context_set.h"
 #include "render/volume_pool.h"
 #include "generator/generator.h"
@@ -111,18 +112,12 @@ bool ConsolidatePass::run(const ConsolidateJob &job, ConsolidateResult *out) {
 		std::memcpy(ob.ptrw(), job.ops.data(), static_cast<size_t>(ob.size()));
 		rd_->buffer_update(ops_, 0, static_cast<uint32_t>(ob.size()), ob);
 	}
-	PackedByteArray pc;
-	pc.resize(16);
-	int32_t *p = reinterpret_cast<int32_t *>(pc.ptrw());
-	p[0] = n;
-	p[1] = job.region_slot;
-	p[2] = static_cast<int>(job.ops.size());
-	p[3] = pool_->region_table(job.region_slot);
+	const ve::ConsolidatePush push{{n, job.region_slot, static_cast<int>(job.ops.size()), pool_->region_table(job.region_slot)}};
 	const int64_t list = rd_->compute_list_begin();
 	rd_->compute_list_bind_compute_pipeline(list, program_.pipeline);
 	rd_->compute_list_bind_uniform_set(list, set_, 0);
 	if (field_context_ != nullptr) field_context_->bind(rd_, list);
-	rd_->compute_list_set_push_constant(list, pc, pc.size());
+	rd_->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
 	rd_->compute_list_dispatch(list, static_cast<uint32_t>(n), 1, 1);
 	rd_->compute_list_end();
 	rd_->submit();

@@ -1,5 +1,6 @@
 #[compute]
 #version 460
+#include "generated/blocks.glslh"
 
 #define FIELD_OP_POOL_BINDING 8
 #define FIELD_OVERRIDE_SDF_BINDING 0
@@ -9,9 +10,7 @@
 #define FIELD_VOLUME_SDF_BINDING 9
 #define FIELD_VOLUME_MAT_BINDING 10
 #include "common.glslh"
-layout(push_constant, std430) uniform Push {
-	ivec4 params;
-} pc;
+layout(push_constant, std430) uniform Push { CONSOLIDATE_PUSH_FIELDS } pc;
 #define FIELD_OVERRIDE_TABLE(base) (pc.params.w)
 #include "field.glslh"
 
