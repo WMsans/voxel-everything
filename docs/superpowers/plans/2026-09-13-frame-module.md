@@ -3163,6 +3163,8 @@ Deferred items (spec §9.6) have no slot; each has a trigger instead (below).
 
 **Goal.** An artist adds or tunes a lighting/post knob in ~4 files, sees it in the inspector, and keeps it across runs and tier changes.
 
+**Status.** Implemented; see `docs/superpowers/plans/2026-09-16-settings-store-results.md`. S1 and S2 were pulled forward from sub-project 5 and fixed here.
+
 **Entry gate.** Characterize: every current beauty and grass name round-trips through `set_effect_value/get_effect_value`, `set_effect_enabled`, `set_grass_value`; per-tier defaults pinned (`settings_for_tier` output for all tiers); the stray look constants (spec §9.2) pinned by their existing goldens. Failing tests written for S5 and S6.
 
 **Milestones.**
@@ -3259,9 +3261,10 @@ Deferred items (spec §9.6) have no slot; each has a trigger instead (below).
 
 | Id | Fixed in | Before which milestone |
 |---|---|---|
-| S1, S2, S3 | Sub-project 5 | Milestone 1, before `WorldField` exists |
+| S1, S2 | Sub-project 3 (pulled forward from sub-project 5) | Fixed; before `WorldField` exists |
+| S3 | Sub-project 5 | Milestone 1, before `WorldField` exists |
 | S4, S7, S9 | Sub-project 4 | Before (b) milestones 4–5 |
-| S5, S6 | Sub-project 3 | Milestone 1, on today's store |
+| S5, S6 | Sub-project 3 | Fixed; Milestone 1, on today's store |
 | S8 | Sub-project 2 | After milestone 3, with `benchmark.gd` labels |
 
 ### Roadmap acceptance

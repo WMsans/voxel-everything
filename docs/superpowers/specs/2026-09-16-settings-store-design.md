@@ -1,7 +1,7 @@
 # Voxel Everything — One Settings Store and Settings Panel (Sub-project 3) + S1/S2
 
 **Date:** 2026-09-16
-**Status:** Approved design; not yet implemented
+**Status:** Implemented; see docs/superpowers/plans/2026-09-16-settings-store-results.md
 **Roadmap:** `docs/superpowers/specs/2026-09-13-frame-module-design.md` §9.2 and the pathway in
 `docs/superpowers/plans/2026-09-13-frame-module.md` ("Sub-project 3 — One settings store").
 **Scope:** roadmap milestones 1–6, suspected bugs S5 and S6, plus S1 and S2 (routed to
@@ -412,3 +412,16 @@ its ported replacement in the commit message.
 - `WorldField`, `EditPipeline`, S3 and removing `max_override_bricks = 1` (sub-project 5).
 - S8 timing labels (sub-project 2, unchanged).
 - A `BeautyProfile` Resource or per-scene profiles.
+
+## 9. Amendments from planning
+
+1. **S1 test uses a chunk that is not resident when consolidation lands.** `ChunkResidency::update` never re-probes a resident chunk (`chunk_residency.cpp:181`), so a filled chunk that already has a collider keeps it. The bug shows when the chunk is first probed *after* the bake.
+2. **S2 anchoring half is tested at the probe the refinement calls**, not end-to-end. `IslandManager` gains `contact_samples(cell, axis)`; `LogContactProbe` forwards to it and a new hook `debug_contact_samples` calls the same member. An end-to-end detach test would depend on flood windows and extraction timing that are not what S2 is about.
+3. **The S6 failing test is written in Task 9, immediately before its fix**, rather than committed red in an earlier task (gdUnit has no expected-failure marker, and a red case would pollute every comparison in between).
+4. **`ve_ambient` needs no listener.** `VoxelWorld::update_sun_state()` already runs every `_process` on the main thread and publishes `ve_ambient`; it reads `beauty_settings().ambient` instead of `DeferredPass::kAmbient`. Only the `render` store has a listener.
+5. **`debug_beauty_settings` is built from the rows in Task 8**, together with the beauty store, using a shared `setting_to_variant` helper (`extension/src/settings/godot/setting_variant.{h,cpp}`).
+6. **`VoxelSettings` uses stand-in stores instead of a pending buffer.** Before `_ready` resolves the world (and always in the editor) `render`/`beauty`/`grass` resolve to node-owned stand-in stores; `_ready` copies their overrides into the world's stores.
+7. **The guard is testable:** `apply_config(args: PackedStringArray) -> bool` is bound and `_ready` calls it with `OS.get_cmdline_user_args()`. `save()` refuses after a measured `apply_config`.
+8. **The panel addresses controls through `control(group, name)`**, not node paths.
+9. **Picking a resolution while fullscreen changes nothing until fullscreen is off** (today's F7 left fullscreen first). `# ponytail:` comment in `apply_display`.
+10. **Resolution table ordering and label checks are native** (`test_display_settings.cpp`); the panel test keeps "offers the project default" and "off-table size shown".
