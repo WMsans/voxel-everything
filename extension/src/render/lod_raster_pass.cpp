@@ -4,6 +4,7 @@
 #include "render/material_atlas.h"
 #include "lod/lod_contour.h"
 #include "gpu_layout/blocks.h"
+#include "gpu_layout/gbuffer_layout.h"
 #include <godot_cpp/variant/packed_color_array.hpp>
 #include <chrono>
 #include <cstring>
@@ -65,7 +66,7 @@ bool LodRasterPass::ensure_pipeline(RenderingDevice *rd, GBuffer &gb, RID marker
 	// Reverse-Z (M1 errata 2): near = 1, far = 0. GREATER_OR_EQUAL both writes our depth
 	// where it is nearer than the current buffer and leaves nearer geometry untouched.
 	state.compare = RenderingDevice::COMPARE_OP_GREATER_OR_EQUAL;
-	state.color_attachments = want_marker ? 3 : 2;
+	state.color_attachments = ve::layout::kGbColorAttachments + (want_marker ? 1 : 0);
 	// Debug seam probe: the LoD marker (2) must OR into the composite marker (1) so
 	// double-claimed band pixels read 3. Production pipelines have no marker attachment.
 	state.logic_or = want_marker;
@@ -117,8 +118,8 @@ bool LodRasterPass::clear_targets(RenderingDevice *rd, GBuffer &gb, RID marker) 
 	if (!gb.is_valid()) return false;
 	if (!ensure_pipeline(rd, gb, marker)) return false;
 	PackedColorArray clears;
-	clears.push_back(Color(0, 0, 0, 0)); // albedo
-	clears.push_back(Color(0, 0, 0, 0)); // surface
+	for (int i = 0; i < ve::layout::kGbColorAttachments; i++)
+		clears.push_back(Color(0, 0, 0, 0));
 	if (marker.is_valid()) clears.push_back(Color(0, 0, 0, 0));
 	// 0.0 is the reverse-Z far plane, the same value CompositePass clears depth to.
 	const int64_t dl = rd->draw_list_begin(framebuffer_.rid(),

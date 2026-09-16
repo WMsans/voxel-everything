@@ -2,6 +2,7 @@
 #include "render/gbuffer.h"
 #include "render/grass_scatter_pass.h"
 #include "gpu_layout/blocks.h"
+#include "gpu_layout/gbuffer_layout.h"
 
 using namespace godot;
 
@@ -46,7 +47,7 @@ bool GrassRasterPass::ensure_pipeline(RenderingDevice *rd, GBuffer &gb) {
 		// depth where it is nearer than the current buffer and leaves nearer geometry
 		// untouched -- the same compare the far field uses, so blades occlude correctly.
 		state.compare = RenderingDevice::COMPARE_OP_GREATER_OR_EQUAL;
-		state.color_attachments = 2;
+		state.color_attachments = ve::layout::kGbColorAttachments;
 		pipeline_ = gpu::raster_pipeline(rd, group_, shader_, framebuffer_.format(), state);
 	}
 	return pipeline_.is_valid();

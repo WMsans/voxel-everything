@@ -2,6 +2,7 @@
 #include "render/gbuffer.h"
 #include "render/material_atlas.h"
 #include "gpu_layout/blocks.h"
+#include "gpu_layout/gbuffer_layout.h"
 #include <godot_cpp/variant/packed_color_array.hpp>
 #include <cstring>
 
@@ -48,7 +49,7 @@ bool CompositePass::ensure_pipeline(RenderingDevice *rd, RID albedo, RID surface
 		gpu::RdDevice device{rd};
 		group_.free(device, pipeline_);
 		gpu::RasterState state;
-		state.color_attachments = want_marker ? 3 : 2;
+		state.color_attachments = ve::layout::kGbColorAttachments + (want_marker ? 1 : 0);
 		pipeline_marker_ = want_marker;
 		pipeline_ = gpu::raster_pipeline(rd, group_, shader, framebuffer_.format(), state);
 	}
@@ -97,8 +98,8 @@ void CompositePass::draw(RenderingDevice *rd, GBuffer &gb, RID src_overlay, RID 
 	push.up_tany[3] = cam.params[1]; // tan(fov_y / 2)
 
 	PackedColorArray clears;
-	clears.push_back(Color(0, 0, 0, 0));
-	clears.push_back(Color(0, 0, 0, 0));
+	for (int i = 0; i < ve::layout::kGbColorAttachments; i++)
+		clears.push_back(Color(0, 0, 0, 0));
 	if (marker.is_valid()) clears.push_back(Color(0, 0, 0, 0));
 	const int64_t dl = rd->draw_list_begin(framebuffer_.rid(),
 			RenderingDevice::DRAW_CLEAR_COLOR_ALL | RenderingDevice::DRAW_CLEAR_DEPTH,
