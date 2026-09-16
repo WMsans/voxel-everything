@@ -3182,6 +3182,8 @@ Deferred items (spec §9.6) have no slot; each has a trigger instead (below).
 
 ### Sub-project 4 — Pass anatomy and generated layouts
 
+**Status.** Implemented; see `docs/superpowers/plans/2026-09-15-pass-anatomy-results.md`. OPEN exit findings: the exact no-hand-cache regex still matches the externally owned `uset_mask_` tracker in `render/raymarch_pass.cpp`; the moss retrace is 6 logical locations, the full G-buffer-channel retrace is 12 files, and the FogPass retrace is 9 files because `gpu_timings.cpp` must register the label. S4 island rock albedo remains open because `IslandBody` has no material data.
+
 **Goal.** A simple pass is ~40 lines of intent; every C++↔GLSL contract that can be generated is generated and byte-checked.
 
 **Entry gate.** Sub-project 2 accepted (passes reachable only through `RenderPasses` (pass-level probes stay isolated by sub-project 1's classification)). Characterize each pass that will migrate with its existing probe or golden; add a golden for any migrated pass that has none. Failing tests for S4 and S7.

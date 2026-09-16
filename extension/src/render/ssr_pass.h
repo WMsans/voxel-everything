@@ -2,6 +2,7 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <godot_cpp/variant/vector2i.hpp>
+#include "render/gpu/gpu.h"
 #include "shade/beauty_settings.h"
 
 namespace godot {
@@ -18,20 +19,17 @@ public:
 	bool render(RenderingDevice *, RID scene_color, RID scene_depth, RID gb_surface,
 			RID gb_depth, RID normal_roughness, bool have_normal_roughness, RID camera_ubo,
 			Vector2i size, const ve::BeautySettings &);
-	RID reflection() const { return reflection_; }
-	Vector2i half_size() const { return half_size_; }
+	RID reflection() const { return reflection_.rid(); }
+	Vector2i half_size() const { return reflection_.size(); }
 	float last_ms() const { return last_ms_; }
 
 private:
-	bool ensure_targets(RenderingDevice *, Vector2i);
-	bool ensure_uniform_sets(RenderingDevice *, RID scene_color, RID scene_depth, RID gb_surface,
-			RID gb_depth, RID normal_roughness, RID camera_ubo);
-
 	RenderingDevice *rd_ = nullptr;
-	RID trace_shader_, apply_shader_, trace_pipeline_, apply_pipeline_;
-	RID nearest_, linear_, reflection_, dummy_normal_, trace_set_, apply_set_;
-	RID key_color_, key_depth_, key_surface_, key_gb_depth_, key_normal_, key_camera_;
-	Vector2i half_size_{0, 0};
+	gpu::Group group_;
+	gpu::Program trace_, apply_;
+	RID nearest_, linear_, dummy_normal_;
+	gpu::Target reflection_;
+	gpu::SetCache trace_set_, apply_set_;
 	float last_ms_ = 0.0f;
 };
 

@@ -2,6 +2,7 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include "grass/grass_layout.h"
+#include "render/gpu/gpu.h"
 #include "world/region_window.h"
 
 namespace godot {
@@ -64,8 +65,9 @@ private:
 	bool ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas, RID sun_ubo);
 
 	RenderingDevice *rd_ = nullptr;
-	RID bricks_shader_, bricks_pipeline_;
-	RID scatter_shader_, scatter_pipeline_;
+	gpu::Group group_;
+	gpu::Program bricks_;
+	gpu::Program scatter_; // invalid when grass_scatter.comp.glsl failed: cull-only
 	RID params_ubo_, brick_list_, counters_, dispatch_args_, instances_, draw_args_;
 	// Pass-owned region-window block (binding 10): created in ensure_buffers, refreshed
 	// from the caller-supplied live window on every run(), Task 6 reuses it for stage 2's set.
@@ -73,12 +75,7 @@ private:
 	// Owned samplers for the atlas textures stage 1 declares but never samples (bindings
 	// 7-8); mirrors RaymarchPass's sampler pair, linear for the SDF, nearest for ints.
 	RID sampler_linear_, sampler_nearest_;
-	RID bricks_uset_, scatter_uset_;
-	RID key_params_, key_bricks_, key_counters_, key_dispatch_;
-	RID key_rmap_, key_rtables_, key_bflags_, key_sdf_, key_mat_, key_palette_, key_region_;
-	RID key_sparams_, key_sbricks_, key_scounters_, key_sdraw_;
-	RID key_srmap_, key_srtables_, key_sbflags_, key_spalette_, key_ssdf_, key_smat_;
-	RID key_sregion_, key_sinstances_, key_sslot_counts_, key_ssun_;
+	gpu::SetCache bricks_set_, scatter_set_;
 	int capacity_ = 0;
 	int brick_capacity_ = 0;
 	int last_brick_count_ = 0;

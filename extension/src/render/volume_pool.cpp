@@ -5,13 +5,6 @@
 
 using namespace godot;
 
-// shaders/field.glslh hard-codes VOLUME_VOXELS (GLSL cannot include the header), and a
-// mismatch would not fail anywhere -- it would silently read a neighbouring slot's bytes.
-// Pin it here so changing the C++ constant breaks the BUILD, with the file that must follow
-// named. (Same guard MeshPass uses for the chunk lattice.)
-static_assert(ve::kIslandVoxelCount == 262144, "update VOLUME_VOXELS in shaders/field.glslh");
-static_assert(ve::kIslandDim == 64, "update VOLUME_VOXELS in shaders/field.glslh");
-
 VolumePool::~VolumePool() {
 	teardown();
 }

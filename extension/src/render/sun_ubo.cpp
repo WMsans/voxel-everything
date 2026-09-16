@@ -1,5 +1,6 @@
 #include "render/sun_ubo.h"
-#include <godot_cpp/variant/packed_byte_array.hpp>
+#include "render/gpu/gpu.h"
+#include "gpu_layout/blocks.h"
 
 using namespace godot;
 
@@ -9,26 +10,17 @@ bool SunUbo::ensure(RenderingDevice *rd) {
 	teardown();
 	rd_ = rd;
 	PackedByteArray zero;
-	zero.resize(32);
+	zero.resize(sizeof(ve::SunLightBlock));
 	zero.fill(0);
-	buffer_ = rd->uniform_buffer_create(32, zero);
+	buffer_ = rd->uniform_buffer_create(sizeof(ve::SunLightBlock), zero);
 	return buffer_.is_valid();
 }
 
 void SunUbo::update(RenderingDevice *rd, const ve::SunState &s) {
 	if (!rd || !buffer_.is_valid()) return;
-	PackedByteArray b;
-	b.resize(32);
-	float *f = reinterpret_cast<float *>(b.ptrw());
-	f[0] = s.dir[0];
-	f[1] = s.dir[1];
-	f[2] = s.dir[2];
-	f[3] = 0.0f;
-	f[4] = s.rgb[0];
-	f[5] = s.rgb[1];
-	f[6] = s.rgb[2];
-	f[7] = 0.0f;
-	rd->buffer_update(buffer_, 0, 32, b);
+	const ve::SunLightBlock block{{s.dir[0], s.dir[1], s.dir[2], 0.0f},
+			{s.rgb[0], s.rgb[1], s.rgb[2], 0.0f}};
+	rd->buffer_update(buffer_, 0, sizeof(block), gpu::push_bytes(block));
 }
 
 void SunUbo::teardown() {

@@ -1,6 +1,7 @@
 #pragma once
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
+#include "world/material_table.h"
 
 namespace godot {
 
@@ -9,7 +10,7 @@ namespace godot {
 // out-of-range material id is a cheap branch instead of undefined behaviour. MaterialAtlas
 // always allocates this many layers and fills unused ones with flat error magenta, so the
 // constant and the texture can never disagree.
-constexpr int kMaterialLayers = 16;
+constexpr int kMaterialLayers = ve::kMaterialLayers;
 constexpr int kMaterialTextureSize = 512;
 constexpr int kMaterialMipmaps = 10; // floor(log2(512)) + 1
 

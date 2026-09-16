@@ -1,4 +1,5 @@
 #pragma once
+#include "render/gpu/gpu.h"
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include "shade/sun_cascades.h"
@@ -80,13 +81,11 @@ private:
 	bool ensure_uniform_set(RenderingDevice *rd, LodPool &pool);
 
 	RenderingDevice *rd_ = nullptr;
+	gpu::Group group_;
 	RID map_;
 	RID shader_;
 	RID pipeline_;
-	RID uset_;
-	RID key_quads_;
-	RID key_page_chunk_;
-	RID key_chunks_;
+	gpu::SetCache set_;
 	Cascade c_[kCascades];
 };
 

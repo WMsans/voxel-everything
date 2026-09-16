@@ -1,5 +1,6 @@
 #[compute]
 #version 460
+#include "generated/blocks.glslh"
 
 #define FIELD_OP_POOL_BINDING 4
 #define FIELD_VOLUME_SDF_BINDING 7
@@ -56,12 +57,7 @@ void write_occupancy(int rslot, int bi, uint state) {
 	atomicOr(occupancy.w[word], (state & 3u) << shift);
 }
 
-layout(push_constant, std430) uniform Push {
-	ivec4 region; // xyz = global region coord (may be negative), w = region slot
-	ivec4 lo;     // inclusive global brick coord of the range to scan
-	ivec4 hi;     // inclusive
-	ivec4 cfg;    // x = op count, y = phase (0 release, 1 allocate), z = max jobs, w = force
-} pc;
+layout(push_constant, std430) uniform Push { BRICK_MARK_PUSH_FIELDS } pc;
 
 // ve::kActivationPad. The probe samples every 8 voxels, so the field can dip across zero
 // between samples; a brick counts as empty only when all 27 probes clear zero by this much.

@@ -1,5 +1,7 @@
 #[compute]
 #version 460
+#include "generated/gbuffer.glslh"
+#include "generated/blocks.glslh"
 
 #define BEAUTY_CAMERA_SET 0
 #define BEAUTY_CAMERA_BINDING 5
@@ -21,13 +23,7 @@ layout(set = 0, binding = 4, rgba16f) writeonly uniform image2D out_ssgi;
 layout(set = 0, binding = 6, rgba16f) writeonly uniform image2D out_raw;
 layout(set = 0, binding = 7) uniform sampler2D raw_tex;
 
-layout(push_constant, std430) uniform Push {
-	mat4 prev_view_proj;
-	ivec4 dims;    // xy = target size, z = taps, w = have history
-	vec4 params;   // x = bounce radius (m), y = temporal history weight, z = bounce strength
-	vec4 emissive; // x = emissive radius (m), y = emissive strength, zw unused
-	ivec4 stage;   // x = 0 gather into out_raw, 1 resolve out_raw into out_ssgi
-} pc;
+layout(push_constant, std430) uniform Push { SSGI_PUSH_FIELDS } pc;
 
 vec2 spiral_tap(int i, int n, float rot) {
 	float t = (float(i) + 0.5) / float(n);
@@ -94,7 +90,7 @@ vec3 gather(ivec2 px, vec2 uv, vec3 p, vec3 n) {
 		dir /= dist;
 		float cosine = dot(n, dir);
 		if (cosine <= 0.0) continue;
-		vec3 sn = oct_decode(texture(gb_surface, suv).xy);
+		vec3 sn = GB_NORMAL(texture(gb_surface, suv));
 		if (dot(sn, -dir) <= 0.0) continue;
 		vec2 history_uv;
 		if (!previous_uv(sp, history_uv)) continue;
@@ -130,8 +126,8 @@ vec3 gather(ivec2 px, vec2 uv, vec3 p, vec3 n) {
 			float sdepth = texture(gb_depth, suv).r;
 			if (sdepth <= 0.0) continue;
 			vec4 sg = texture(gb_surface, suv);
-			if (sg.z < 0.5) continue;
-			uint smat = uint(sg.z + 0.5);
+			if (!GB_IS_SURFACE(sg)) continue;
+			uint smat = GB_MATERIAL_ID(sg);
 			float sglow = mat_glow(smat);
 			if (sglow <= 0.0) continue;
 			vec3 sp = beauty_world_from_depth(suv, sdepth);
@@ -143,7 +139,7 @@ vec3 gather(ivec2 px, vec2 uv, vec3 p, vec3 n) {
 			if (cosine <= 0.0) continue;
 			// The emitter has to face us back, exactly as the bounce requires. Without it a
 			// crack lights the rock it is carved into from behind.
-			if (dot(oct_decode(sg.xy), -dir) <= 0.0) continue;
+			if (dot(GB_NORMAL(sg), -dir) <= 0.0) continue;
 			// 1/(1+d) rather than the bounce's 1/(1+d*d): a crack is a LINE of emitters, not
 			// a point, and a line source falls off with the first power of distance. Inverse
 			// square here made the spill die within a couple of metres, which is the whole
@@ -176,8 +172,8 @@ vec3 resolve(ivec2 px, vec3 p, vec3 n) {
 			vec2 nuv = (vec2(npx) + 0.5) / vec2(pc.dims.xy);
 			float ndepth = texture(gb_depth, nuv).r;
 			vec4 ng = texture(gb_surface, nuv);
-			if (ndepth <= 0.0 || ng.z < 0.5) continue;
-			float facing = dot(n, oct_decode(ng.xy));
+			if (ndepth <= 0.0 || !GB_IS_SURFACE(ng)) continue;
+			float facing = dot(n, GB_NORMAL(ng));
 			if (facing < 0.9) continue;
 			float plane = abs(dot(n, beauty_world_from_depth(nuv, ndepth) - p));
 			float w = facing * clamp(1.0 - plane / tolerance, 0.0, 1.0);
@@ -195,13 +191,13 @@ void main() {
 
 	float depth = texture(gb_depth, uv).r;
 	vec4 g1 = texture(gb_surface, uv);
-	if (pc.dims.w == 0 || depth <= 0.0 || g1.z < 0.5) {
+	if (pc.dims.w == 0 || depth <= 0.0 || !GB_IS_SURFACE(g1)) {
 		if (gathering) imageStore(out_raw, px, vec4(0.0));
 		else imageStore(out_ssgi, px, vec4(0.0));
 		return;
 	}
 	vec3 p = beauty_world_from_depth(uv, depth);
-	vec3 n = oct_decode(g1.xy);
+	vec3 n = GB_NORMAL(g1);
 
 	if (gathering) {
 		imageStore(out_raw, px, vec4(gather(px, uv, p, n), 1.0));

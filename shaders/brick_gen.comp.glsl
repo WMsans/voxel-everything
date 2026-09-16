@@ -1,5 +1,6 @@
 #[compute]
 #version 460
+#include "generated/blocks.glslh"
 
 #define FIELD_OP_POOL_BINDING 7
 #define FIELD_VOLUME_SDF_BINDING 8
@@ -40,9 +41,7 @@ const uint CELL_AIR = 1u;
 const uint CELL_SOLID = 2u;
 const uint CELL_FULL = 3u;
 
-layout(push_constant, std430) uniform Push {
-	ivec4 atlas_bricks;
-} pc;
+layout(push_constant, std430) uniform Push { BRICK_GEN_PUSH_FIELDS } pc;
 
 shared uint s_mat[BRICK_VOXEL_COUNT]; // global material id per cell, 0 = none
 shared uint s_pal[4];                 // palette in insertion order

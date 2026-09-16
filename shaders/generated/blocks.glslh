@@ -1,0 +1,150 @@
+// GENERATED from extension/src/gpu_layout/blocks.h by ve::layout::blocks_glsl().
+// Do not edit by hand: extension/tests/test_generated_glsl.cpp asserts this file byte
+// for byte. Regenerate: cd extension && VE_REGEN_GOLDEN=1 ./build/tests/ve_tests
+//
+// Each macro is the field list of one push-constant or uniform block. The shader keeps
+// layout(), set, binding and instance name around it; the C++ struct carries the
+// comments on what each field holds.
+
+#define SSAO_PUSH_FIELDS \
+	ivec4 dims; \
+	vec4 params;
+
+#define CONTACT_SHADOW_PUSH_FIELDS \
+	ivec4 dims; \
+	vec4 params;
+
+#define OUTLINE_PUSH_FIELDS \
+	ivec4 dims; \
+	vec4 params;
+
+#define SSR_TRACE_PUSH_FIELDS \
+	ivec4 dims; \
+	vec4 params;
+
+#define SSR_APPLY_PUSH_FIELDS \
+	ivec4 dims;
+
+#define SSGI_PUSH_FIELDS \
+	mat4 prev_view_proj; \
+	ivec4 dims; \
+	vec4 params; \
+	vec4 emissive; \
+	ivec4 stage;
+
+#define HIZ_PUSH_FIELDS \
+	ivec4 dims; \
+	ivec4 flags;
+
+#define DEFERRED_PUSH_FIELDS \
+	mat4 inv_view_proj; \
+	vec4 cam; \
+	vec4 sky; \
+	uvec4 flags;
+
+#define SUN_CASCADE_BLOCK_FIELDS \
+	mat4 view_proj[3]; \
+	vec4 params[3]; \
+	vec4 splits;
+
+#define BEAUTY_CAM_FIELDS \
+	mat4 view_proj; \
+	mat4 inv_view_proj; \
+	vec4 cam; \
+	vec4 screen;
+
+#define SUN_LIGHT_FIELDS \
+	vec4 dir; \
+	vec4 rgb;
+
+#define LOD_RASTER_PUSH_FIELDS \
+	mat4 view_proj; \
+	vec4 cam; \
+	vec4 fade;
+
+#define COMPOSITE_PUSH_FIELDS \
+	mat4 view_proj; \
+	vec4 cam; \
+	vec4 fade; \
+	vec4 right_tanx; \
+	vec4 up_tany;
+
+#define GRASS_RASTER_PUSH_FIELDS \
+	mat4 view_proj; \
+	vec4 cam;
+
+#define SUN_SHADOW_PUSH_FIELDS \
+	mat4 sun_view_proj;
+
+#define CAMERA_PARAMS_FIELDS \
+	vec4 cam_pos; \
+	vec4 cam_right; \
+	vec4 cam_up; \
+	vec4 cam_fwd; \
+	vec4 params; \
+	ivec4 dims; \
+	ivec4 region_origin; \
+	ivec4 atlas_bricks;
+
+#define EDITS_BLOCK_FIELDS \
+	vec4 center; \
+	vec4 params;
+
+#define LOD_CULL_PUSH_FIELDS \
+	mat4 view_proj; \
+	ivec4 params;
+
+#define GRASS_PARAMS_FIELDS \
+	vec4 cam; \
+	vec4 planes[6]; \
+	ivec4 brick_min; \
+	ivec4 brick_dim; \
+	vec4 ring_end; \
+	ivec4 ring_blades; \
+	vec4 blade; \
+	vec4 wind; \
+	vec4 style; \
+	vec4 shape; \
+	ivec4 limits;
+
+#define GRASS_REGION_FIELDS \
+	ivec4 dims; \
+	ivec4 region_origin; \
+	ivec4 atlas_bricks;
+
+#define DOWNSAMPLE_PUSH_FIELDS \
+	ivec4 dims;
+
+#define BRICK_GEN_PUSH_FIELDS \
+	ivec4 atlas_bricks;
+
+#define CONSOLIDATE_PUSH_FIELDS \
+	ivec4 params;
+
+#define BRICK_MARK_PUSH_FIELDS \
+	ivec4 region; \
+	ivec4 lo; \
+	ivec4 hi; \
+	ivec4 cfg;
+
+#define REGION_FREE_PUSH_FIELDS \
+	ivec4 cfg;
+
+#define DISPATCH_ARGS_PUSH_FIELDS \
+	ivec4 pad;
+
+#define ISLAND_EXTRACT_PUSH_FIELDS \
+	vec4 origin_voxel; \
+	ivec4 params;
+
+#define MESH_PUSH_FIELDS \
+	ivec4 chunk; \
+	ivec4 params; \
+	vec4 grid; \
+	ivec4 override_data;
+
+#define LOD_BUILD_PUSH_FIELDS \
+	ivec4 job; \
+	ivec4 params; \
+	vec4 grid; \
+	ivec4 override_data;

@@ -29,6 +29,7 @@
 #include <mutex>
 #include <vector>
 
+#include "render/gpu/gpu.h"
 #include "grass/grass_settings_store.h"
 #include "render/frame.h"
 #include "render/gpu_timings.h"
@@ -294,8 +295,6 @@ public:
 	bool preflight_shaders(RenderingDevice *rd, String *out_error);
 
 private:
-	bool ensure_downsample_set(RenderingDevice *device, RID src, RID dst);
-
 	Collaborators handles_;
 	std::vector<const char *> teardown_trace_;
 
@@ -322,8 +321,10 @@ private:
 	RID history_texture_;
 	uint32_t beauty_frame_ = 0;
 	int normal_roughness_state_ = -1;
-	RID downsample_shader_, downsample_pipeline_, downsample_sampler_, downsample_uset_;
-	RID downsample_src_, downsample_dst_;
+	gpu::Group downsample_group_;
+	gpu::Program downsample_;
+	RID downsample_sampler_;
+	gpu::SetCache downsample_set_;
 	// --- compositor admission/lifetime state (Task 13, member-for-member from
 	// VoxelWorld; the cv wait/signal sites live in try/end_render_callback and
 	// shutdown_render_resources[_on_render_thread] above) ---

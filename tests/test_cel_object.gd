@@ -58,3 +58,33 @@ func test_demo_cube_uses_the_shared_shader() -> void:
 	var mat := (scene.get_node("TestCube") as MeshInstance3D).material_override as ShaderMaterial
 	assert_object(mat).is_not_null()
 	assert_str(mat.shader.resource_path).is_equal("res://shaders/cel_object.gdshader")
+
+# S4 (docs/superpowers/specs/2026-09-15-pass-anatomy-generated-layouts-design.md §3.7). The quad
+# faces +Z, toward the camera. A DirectionalLight3D emits along its local -Z, so a light
+# looking down -Z puts the sun behind the camera (N.L = 1, brightest band) and one looking
+# down +Z puts it behind the quad (N.L = -1, darkest band). Objects used to shade against a
+# fixed sun direction and ignore the light entirely.
+func render_once(probe: Dictionary) -> Color:
+	var vp: SubViewport = probe["viewport"]
+	vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	await RenderingServer.frame_post_draw
+	return vp.get_texture().get_image().get_pixel(8, 8)
+
+func test_object_lighting_follows_the_scene_sun() -> void:
+	var w := make_world()
+	var probe := make_probe()
+	var m: ShaderMaterial = probe["material"]
+	m.set_shader_parameter("probe_mode", false)
+	var light := DirectionalLight3D.new()
+	add_child(light); _nodes.append(light)
+	w.sun_light_path = w.get_path_to(light)
+	light.look_at_from_position(Vector3.ZERO, Vector3(0, 0, -1), Vector3.UP)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var toward: Color = await render_once(probe)
+	light.look_at_from_position(Vector3.ZERO, Vector3(0, 0, 1), Vector3.UP)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var away: Color = await render_once(probe)
+	assert_float(toward.g - away.g).override_failure_message(
+		"sun toward the camera %s, behind the quad %s" % [toward, away]).is_greater(0.2)

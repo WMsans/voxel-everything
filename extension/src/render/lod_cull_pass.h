@@ -3,6 +3,7 @@
 #include <godot_cpp/variant/projection.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <vector>
+#include "render/gpu/gpu.h"
 #include "render/async_readback.h"
 
 namespace godot {
@@ -24,7 +25,7 @@ public:
 
 	bool initialize(RenderingDevice *rd);
 	void teardown();
-	bool is_valid() const { return pipeline_.is_valid(); }
+	bool is_valid() const { return program_.pipeline.is_valid(); }
 
 	// Records the pages drawn in this frame's temporal first pass. They are combined with
 	// the stale remaining-pages readback when it arrives, forming last_visible_pages().
@@ -60,8 +61,10 @@ private:
 	void consume_args_readback();
 
 	RenderingDevice *rd_ = nullptr;
-	RID shader_, pipeline_, sampler_, stats_, uset_;
-	RID uset_args_, uset_page_chunk_, uset_chunks_, uset_hiz_, uset_stats_;
+	gpu::Group group_;
+	gpu::Program program_;
+	RID sampler_, stats_;
+	gpu::SetCache set_;
 	Ref<AsyncBufferRead> stats_readback_;
 	Ref<AsyncBufferRead> args_readback_;
 	std::vector<int> first_pass_pages_;

@@ -1,5 +1,7 @@
 #[compute]
 #version 460
+#include "generated/gbuffer.glslh"
+#include "generated/blocks.glslh"
 #define BEAUTY_CAMERA_SET 0
 #define BEAUTY_CAMERA_BINDING 6
 #include "shade.glslh"
@@ -10,10 +12,7 @@ layout(set = 0, binding = 1) uniform sampler2D gb_depth;
 layout(set = 0, binding = 2) uniform sampler2D gb_surface;
 layout(set = 0, binding = 3) uniform sampler2D normal_roughness;
 layout(set = 0, binding = 4, rgba16f) uniform image2D scene_color;
-layout(push_constant, std430) uniform Push {
-	ivec4 dims;  // xy full size, z have normal-roughness
-	vec4 params; // relative depth threshold, normal threshold, darken, unused
-} pc;
+layout(push_constant, std430) uniform Push { OUTLINE_PUSH_FIELDS } pc;
 // The steepest incidence the depth threshold is widened for. cos(87.1 deg): past that the
 // tolerance stops growing, so a true silhouette seen almost edge-on is still an edge.
 const float OUTLINE_MIN_NDV = 0.05;
@@ -27,7 +26,7 @@ SurfaceSample read_surface(ivec2 px) {
 	// whether a pixel has a surface. The near/far dither seam leaves pixels whose depth was
 	// dropped by BOTH fields while their g-buffer surface survives; those are holes in the
 	// seam, not background, and must not be read as silhouettes.
-	s.solid = g.z >= 0.5;
+	s.solid = GB_IS_SURFACE(g);
 	if (s.depth <= 0.0) return s;
 	vec2 uv = (vec2(px) + 0.5) / vec2(pc.dims.xy);
 	vec3 wpos = beauty_world_from_depth(uv, s.depth);
@@ -36,7 +35,7 @@ SurfaceSample read_surface(ivec2 px) {
 			: vec3(0.0, 0.0, 1.0);
 	float gd = texelFetch(gb_depth, px, 0).r;
 	if (s.solid && abs(gd - s.depth) <= 1e-5) {
-		s.n = oct_decode(g.xy); s.kind = 1;
+		s.n = GB_NORMAL(g); s.kind = 1;
 	} else if (pc.dims.z != 0) {
 		s.n = normalize(texelFetch(normal_roughness, px, 0).rgb * 2.0 - 1.0);
 		if (!isnan(s.n.x) && !isnan(s.n.y) && !isnan(s.n.z) &&

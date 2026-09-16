@@ -1,7 +1,9 @@
 #[fragment]
 #version 460
+#include "generated/gbuffer.glslh"
 
-#define MATERIAL_LAYERS 16
+#include "generated/blocks.glslh"
+#define VE_MATERIAL_ARRAYS
 layout(set = 0, binding = 3) uniform sampler2DArray material_albedo;
 layout(set = 0, binding = 4) uniform sampler2DArray material_surface_tex;
 #include "common.glslh"
@@ -17,11 +19,7 @@ layout(location = 1) out vec4 out_surface; // xy oct normal, z material id, w gl
 layout(location = 2) out uint marker; // debug seam probe: 2 = far field kept the pixel
 #endif
 
-layout(push_constant, std430) uniform Push {
-	mat4 view_proj;
-	vec4 cam;  // xyz = camera position, w = fade start
-	vec4 fade; // x = fade end, yzw unused
-} pc;
+layout(push_constant, std430) uniform Push { LOD_RASTER_PUSH_FIELDS } pc;
 
 void main() {
 	// Fade before the material sample, so a discarded fragment costs no texture work.
@@ -45,6 +43,6 @@ void main() {
 	vec2 props = material_props_normal(v_material, v_wpos, geometric_n, ddx, ddy, shading_n);
 	// Sun visibility is 1: shadowing the far field is the ortho shadow map's job, evaluated
 	// once in the deferred pass where the near field's raymarched term is also applied.
-	out_albedo = vec4(surf.rgb * mix(1.0, props.y, 0.65), 1.0);
-	out_surface = vec4(oct_encode(shading_n), float(v_material), 1.0 - props.x);
+	out_albedo = GB_PACK_ALBEDO(surf.rgb * mix(1.0, props.y, 0.65), 1.0);
+	out_surface = GB_PACK_SURFACE(shading_n, v_material, 1.0 - props.x);
 }

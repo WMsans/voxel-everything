@@ -1,5 +1,6 @@
 #[compute]
 #version 460
+#include "generated/blocks.glslh"
 
 #include "common.glslh"
 
@@ -15,9 +16,7 @@ layout(set = 0, binding = 2, std430) buffer Counters {
 layout(set = 0, binding = 3, std430) buffer RegionSlotCounts { int n[]; } region_counts;
 layout(set = 0, binding = 4, std430) buffer RegionOccupancy { uint w[]; } occupancy;
 
-layout(push_constant, std430) uniform Push {
-	ivec4 cfg; // x = region slot
-} pc;
+layout(push_constant, std430) uniform Push { REGION_FREE_PUSH_FIELDS } pc;
 
 // Eviction only ever frees, so it needs no phase split.
 void main() {

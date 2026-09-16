@@ -7,6 +7,13 @@
 // loader matches include tokens anywhere in a line and would self-include.
 
 const int MATERIAL_COUNT = 7;
+const uint MAT_GRASS_01 = 1u;
+const uint MAT_ROCK = 2u;
+const uint MAT_GROUND_01 = 3u;
+const uint MAT_BREAKSTONE = 4u;
+const uint MAT_GROUND_CRACK_01 = 5u;
+const uint MAT_ICE_CRACK = 6u;
+const uint MAT_ICE = 7u;
 
 const float MAT_GLOW[MATERIAL_COUNT] = float[MATERIAL_COUNT](
 	0.000000, // grass_01
@@ -38,16 +45,34 @@ const vec3 MAT_FLAT_ALBEDO[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](
 	vec3(0.610000, 0.650000, 0.680000) // ice
 );
 
+// Foliage (ve::kFoliage): ids FOLIAGE_BASE + k. No atlas layer and no flat albedo -- a
+// foliage raster writes its own colour -- so only the emission tables exist.
+const uint FOLIAGE_BASE = 200u;
+const int FOLIAGE_COUNT = 1;
+const uint MAT_GRASS_BLADE = 200u;
+
+const float FOLIAGE_GLOW[FOLIAGE_COUNT] = float[FOLIAGE_COUNT](
+	0.000000 // grass_blade
+);
+
+const vec3 FOLIAGE_GLOW_RGB[FOLIAGE_COUNT] = vec3[FOLIAGE_COUNT](
+	vec3(0.000000, 0.000000, 0.000000) // grass_blade
+);
+
 // Mirror of ve::material_glow, including its fail-soft rule: air and any id with
 // no table entry emit nothing. There is deliberately no hardness here -- a removal's
 // size is resolved once on the CPU by ve::removal_radius before the op is uploaded,
 // so every field sample sees one shape and no shader ever looks hardness up.
 float mat_glow(uint id) {
 	int i = int(id) - 1;
-	return (i < 0 || i >= MATERIAL_COUNT) ? 0.0 : MAT_GLOW[i];
+	if (i >= 0 && i < MATERIAL_COUNT) return MAT_GLOW[i];
+	int j = int(id) - int(FOLIAGE_BASE);
+	return (j >= 0 && j < FOLIAGE_COUNT) ? FOLIAGE_GLOW[j] : 0.0;
 }
 
 vec3 mat_glow_rgb(uint id) {
 	int i = int(id) - 1;
-	return (i < 0 || i >= MATERIAL_COUNT) ? vec3(0.0) : MAT_GLOW_RGB[i];
+	if (i >= 0 && i < MATERIAL_COUNT) return MAT_GLOW_RGB[i];
+	int j = int(id) - int(FOLIAGE_BASE);
+	return (j >= 0 && j < FOLIAGE_COUNT) ? FOLIAGE_GLOW_RGB[j] : vec3(0.0);
 }

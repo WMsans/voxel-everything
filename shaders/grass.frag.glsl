@@ -1,17 +1,16 @@
 #[fragment]
 #version 460
+#include "generated/gbuffer.glslh"
+#include "generated/blocks.glslh"
 
 #include "common.glslh"
 #include "shade.glslh"
 #include "grass.glslh"
 #include "grass_blade.glslh"
 
-layout(set = 0, binding = 1, std140) uniform Params { GRASS_PARAMS_BLOCK } pc;
+layout(set = 0, binding = 1, std140) uniform Params { GRASS_PARAMS_FIELDS } pc;
 
-layout(push_constant, std430) uniform Push {
-	mat4 view_proj;
-	vec4 cam; // xyz camera position, w unused
-} push;
+layout(push_constant, std430) uniform Push { GRASS_RASTER_PUSH_FIELDS } push;
 
 layout(location = 0) in vec3 v_wpos;
 layout(location = 1) in vec3 v_normal;
@@ -22,8 +21,6 @@ layout(location = 5) in flat float v_sun;
 
 layout(location = 0) out vec4 out_albedo;  // rgb albedo, a = sun visibility
 layout(location = 1) out vec4 out_surface; // xy oct normal, z material id, w gloss
-
-const uint GRASS_MATERIAL = 1u;
 
 // If common.glslh fails to compile here, it is because material_surface() needs the two
 // material sampler arrays declared BEFORE the include -- the convention lod.frag.glsl
@@ -68,6 +65,6 @@ void main() {
 	// the root by the canopy. It cannot be 1.0 as it used to be: the deferred pass applies
 	// the sun map only where the far field owns the pixel, and trusts this channel
 	// everywhere else -- so a 1.0 here meant nothing near the camera ever shadowed grass.
-	out_albedo = vec4(albedo, grass_sun_term(v_sun, v_height_t));
-	out_surface = vec4(oct_encode(n), float(GRASS_MATERIAL), pc.style.y);
+	out_albedo = GB_PACK_ALBEDO(albedo, grass_sun_term(v_sun, v_height_t));
+	out_surface = GB_PACK_SURFACE(n, MAT_GRASS_BLADE, pc.style.y);
 }

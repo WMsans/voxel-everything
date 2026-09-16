@@ -1,5 +1,7 @@
 #[compute]
 #version 460
+#include "generated/gbuffer.glslh"
+#include "generated/blocks.glslh"
 #include "common.glslh"
 #include "shade.glslh"
 layout(local_size_x = 8, local_size_y = 8) in;
@@ -14,18 +16,15 @@ layout(set = 0, binding = 2) uniform sampler2D gb_surface;
 layout(set = 0, binding = 3) uniform sampler2D gb_depth;
 layout(set = 0, binding = 4) uniform sampler2D normal_roughness;
 layout(set = 0, binding = 5, rgba16f) writeonly uniform image2D out_reflection;
-layout(push_constant, std430) uniform Push {
-	ivec4 dims;
-	vec4 params;
-} pc;
+layout(push_constant, std430) uniform Push { SSR_TRACE_PUSH_FIELDS } pc;
 
 bool receiver(vec2 uv, float depth, out vec3 p, out vec3 n, out float gloss) {
 	p = beauty_world_from_depth(uv, depth);
 	vec4 g = texture(gb_surface, uv);
 	float gd = texture(gb_depth, uv).r;
-	if (g.z >= 0.5 && abs(gd - depth) <= 1e-5) {
-		n = oct_decode(g.xy);
-		gloss = clamp(g.w, 0.0, 1.0);
+	if (GB_IS_SURFACE(g) && abs(gd - depth) <= 1e-5) {
+		n = GB_NORMAL(g);
+		gloss = clamp(GB_GLOSS(g), 0.0, 1.0);
 		return true;
 	}
 	// Dynamic objects are valid scene colour/depth reflection targets, but their receiver
@@ -69,7 +68,7 @@ void main() {
 #else
 layout(set = 0, binding = 0) uniform sampler2D reflection_tex;
 layout(set = 0, binding = 1, rgba16f) uniform image2D scene_color;
-layout(push_constant, std430) uniform Push { ivec4 dims; } pc;
+layout(push_constant, std430) uniform Push { SSR_APPLY_PUSH_FIELDS } pc;
 void main() {
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
 	if (any(greaterThanEqual(px, pc.dims.xy))) return;

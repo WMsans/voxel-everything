@@ -90,3 +90,12 @@ TEST_CASE("include-once does not mask a real cycle") {
 	CHECK(out.empty());
 	CHECK(err.find("cycle") != std::string::npos);
 }
+
+TEST_CASE("insert_after_version places text on the line after #version") {
+	CHECK(ve::insert_after_version("#version 450\nvoid main() {}\n", "#define A 1\n") ==
+			"#version 450\n#define A 1\nvoid main() {}\n");
+	CHECK(ve::insert_after_version("// lead\n#version 450\nx\n", "#define A 1\n") ==
+			"// lead\n#version 450\n#define A 1\nx\n");
+	CHECK(ve::insert_after_version("no version line\n", "#define A 1\n") == "no version line\n");
+	CHECK(ve::insert_after_version("#version 450", "#define A 1\n") == "#version 450");
+}

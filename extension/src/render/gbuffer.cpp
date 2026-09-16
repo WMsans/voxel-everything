@@ -1,10 +1,14 @@
 #include "render/gbuffer.h"
+#include "gpu_layout/gbuffer_layout.h"
 #include <godot_cpp/classes/rd_texture_format.hpp>
 #include <godot_cpp/classes/rd_texture_view.hpp>
 #include <godot_cpp/variant/typed_array.hpp>
 #include <algorithm>
 
 using namespace godot;
+
+static_assert(ve::layout::kGbColorAttachments == 2,
+		"GBuffer allocates albedo and surface: update ensure_owned/ensure_managed with the layout");
 
 const char *GBuffer::kContext = "voxel_gbuf";
 

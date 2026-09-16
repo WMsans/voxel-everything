@@ -1,6 +1,7 @@
 #[vertex]
 #version 460
 
+#include "generated/blocks.glslh"
 #include "common.glslh"
 #include "shade.glslh"
 #include "grass.glslh"
@@ -11,12 +12,9 @@
 // does. gl_VertexIndex / 27 is the blade, % 27 the corner. This also routes around Godot
 // exposing neither gl_DrawID nor a non-zero firstInstance.
 layout(set = 0, binding = 0, std430) readonly buffer Instances { GrassBlade b[]; } instances;
-layout(set = 0, binding = 1, std140) uniform Params { GRASS_PARAMS_BLOCK } pc;
+layout(set = 0, binding = 1, std140) uniform Params { GRASS_PARAMS_FIELDS } pc;
 
-layout(push_constant, std430) uniform Push {
-	mat4 view_proj;
-	vec4 cam; // xyz camera position, w unused
-} push;
+layout(push_constant, std430) uniform Push { GRASS_RASTER_PUSH_FIELDS } push;
 
 layout(location = 0) out vec3 v_wpos;
 layout(location = 1) out vec3 v_normal;

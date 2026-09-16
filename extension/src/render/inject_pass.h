@@ -1,6 +1,7 @@
 #pragma once
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
+#include "render/gpu/gpu.h"
 
 namespace godot {
 
@@ -16,10 +17,10 @@ private:
 	bool ensure_pipeline(RenderingDevice *rd, RID dst_color, RID dst_depth);
 
 	RenderingDevice *rd_ = nullptr;
+	gpu::Group group_;
 	RID shader_, pipeline_, sampler_linear_, sampler_nearest_;
-	RID framebuffer_, fb_color_, fb_depth_;
-	RID uset_, uset_lit_, uset_depth_;
-	int64_t fb_format_ = 0;
+	gpu::FramebufferCache framebuffer_;
+	gpu::SetCache set_;
 };
 
 } // namespace godot

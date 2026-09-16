@@ -1,4 +1,5 @@
 #include "render/orchestrator.h"
+#include "gpu_layout/blocks.h"
 
 #include "render/gpu_atlas.h"
 #include "render/material_atlas.h"
@@ -26,17 +27,10 @@
 #include "render/lod_cull_pass.h"
 #include "render/hiz_pass.h"
 #include "render/world_streamer.h"
-#include "render/shader_loader.h"
 #include "lod/lod_system.h"
 #include "core/world_store.h"
 #include <godot_cpp/classes/dir_access.hpp>
-#include <godot_cpp/classes/project_settings.hpp>
-#include <godot_cpp/classes/rd_sampler_state.hpp>
-#include <godot_cpp/classes/rd_shader_source.hpp>
-#include <godot_cpp/classes/rd_shader_spirv.hpp>
-#include <godot_cpp/classes/rd_uniform.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
-#include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/callable.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/string.hpp>
@@ -111,29 +105,9 @@ int RenderOrchestrator::drain_island_uploads(RenderingDevice *device) {
 bool RenderOrchestrator::initialize_downsample(RenderingDevice *rd) {
 	teardown_downsample();
 	if (!rd) return false;
-	const String path = ProjectSettings::get_singleton()->globalize_path(
-			"res://shaders/downsample.comp.glsl");
-	const String inc = ProjectSettings::get_singleton()->globalize_path("res://shaders");
-	std::string err;
-	const std::string code = ve::strip_shader_annotations(
-			ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err));
-	if (code.empty()) return false;
-	Ref<RDShaderSource> source;
-	source.instantiate();
-	source->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
-	source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, String(code.c_str()));
-	Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(source);
-	if (!spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE).is_empty())
-		return false;
-	downsample_shader_ = rd->shader_create_from_spirv(spirv);
-	downsample_pipeline_ = rd->compute_pipeline_create(downsample_shader_);
-	Ref<RDSamplerState> sampler;
-	sampler.instantiate();
-	sampler->set_min_filter(RenderingDevice::SAMPLER_FILTER_LINEAR);
-	sampler->set_mag_filter(RenderingDevice::SAMPLER_FILTER_LINEAR);
-	downsample_sampler_ = rd->sampler_create(sampler);
-	if (!downsample_shader_.is_valid() || !downsample_pipeline_.is_valid() ||
-			!downsample_sampler_.is_valid()) {
+	downsample_ = gpu::compile_compute(rd, downsample_group_, "RenderOrchestrator", "downsample.comp.glsl");
+	downsample_sampler_ = gpu::sampler(rd, downsample_group_, RenderingDevice::SAMPLER_FILTER_LINEAR);
+	if (!downsample_.valid() || !downsample_sampler_.is_valid()) {
 		teardown_downsample();
 		return false;
 	}
@@ -141,34 +115,16 @@ bool RenderOrchestrator::initialize_downsample(RenderingDevice *rd) {
 }
 
 void RenderOrchestrator::teardown_downsample() {
-	RenderingDevice *device = rd();
-	if (device) {
-		if (device->uniform_set_is_valid(downsample_uset_)) device->free_rid(downsample_uset_);
-		downsample_uset_ = RID();
-		for (RID *r : {&downsample_pipeline_, &downsample_shader_,
-				&downsample_sampler_}) {
-			if (r->is_valid()) device->free_rid(*r);
-			*r = RID();
-		}
+	if (RenderingDevice *device = rd()) {
+		gpu::RdDevice d{device};
+		downsample_group_.release(d);
+	} else {
+		// No device to free on: its RIDs died with it.
+		downsample_group_ = gpu::Group();
 	}
-	downsample_src_ = downsample_dst_ = RID();
-}
-
-bool RenderOrchestrator::ensure_downsample_set(RenderingDevice *rd, RID src, RID dst) {
-	if (rd->uniform_set_is_valid(downsample_uset_) && downsample_src_ == src && downsample_dst_ == dst)
-		return true;
-	if (rd->uniform_set_is_valid(downsample_uset_)) rd->free_rid(downsample_uset_);
-	Ref<RDUniform> u0, u1;
-	u0.instantiate(); u1.instantiate();
-	u0->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-	u0->set_binding(0); u0->add_id(downsample_sampler_); u0->add_id(src);
-	u1->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
-	u1->set_binding(1); u1->add_id(dst);
-	downsample_uset_ = rd->uniform_set_create(Array::make(u0, u1), downsample_shader_, 0);
-	if (!rd->uniform_set_is_valid(downsample_uset_)) return false;
-	downsample_src_ = src;
-	downsample_dst_ = dst;
-	return true;
+	downsample_ = gpu::Program();
+	downsample_sampler_ = RID();
+	downsample_set_ = gpu::SetCache();
 }
 
 bool RenderOrchestrator::has_history() const {
@@ -182,20 +138,16 @@ void RenderOrchestrator::finish_beauty_frame(const float view_proj[16]) {
 }
 
 bool RenderOrchestrator::downsample_history(RenderingDevice *rd, RID src, GBuffer &gb) {
-	if (!rd || !downsample_pipeline_.is_valid() || !gb.history().is_valid()) return false;
+	if (!rd || !downsample_.valid() || !gb.history().is_valid()) return false;
 	const Vector2i half = gb.half_size();
-	if (!ensure_downsample_set(rd, src, gb.history())) return false;
-	PackedByteArray pc;
-	pc.resize(16);
-	int32_t *dims = reinterpret_cast<int32_t *>(pc.ptrw());
-	dims[0] = half.x; dims[1] = half.y; dims[2] = dims[3] = 0;
-	const int64_t list = rd->compute_list_begin();
-	if (list < 0) return false;
-	rd->compute_list_bind_compute_pipeline(list, downsample_pipeline_);
-	rd->compute_list_bind_uniform_set(list, downsample_uset_, 0);
-	rd->compute_list_set_push_constant(list, pc, pc.size());
-	rd->compute_list_dispatch(list, (half.x + 7) / 8, (half.y + 7) / 8, 1);
-	rd->compute_list_end();
+	gpu::RdDevice device{rd};
+	const RID set = downsample_set_.get(device, downsample_group_, downsample_.shader, 0,
+			{gpu::sampled(0, downsample_sampler_, src), gpu::image(1, gb.history())});
+	if (!set.is_valid()) return false;
+	const ve::DownsamplePush push{{half.x, half.y, 0, 0}};
+	if (!gpu::dispatch(rd, downsample_.pipeline, {{set, 0}}, gpu::push_bytes(push), gpu::groups(half.x, 8),
+			gpu::groups(half.y, 8)))
+		return false;
 	has_history_ = true;
 	history_texture_ = gb.history();
 	return true;
@@ -504,8 +456,6 @@ bool RenderOrchestrator::preflight_shaders(RenderingDevice *rd, String *out_erro
 		if (out_error) *out_error = "shader reload pre-flight: no RenderingDevice";
 		return false;
 	}
-	ProjectSettings *ps = ProjectSettings::get_singleton();
-	const String inc = ps->globalize_path("res://shaders");
 	Ref<DirAccess> dir = DirAccess::open("res://shaders");
 	if (dir.is_null()) {
 		if (out_error) *out_error = "shader reload pre-flight: cannot open res://shaders";
@@ -517,26 +467,10 @@ bool RenderOrchestrator::preflight_shaders(RenderingDevice *rd, String *out_erro
 	while (!file.is_empty()) {
 		if (!dir->current_is_dir() && file.ends_with(".glsl")) {
 			const String res = "res://shaders/" + file;
-			const String path = ps->globalize_path(res);
-			std::string err;
-			const std::string code = ve::strip_shader_annotations(
-					ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err));
-			if (code.empty()) {
-				if (out_error) *out_error = res + String(": ") + String(err.c_str());
-				ok = false;
-				break;
-			}
-			Ref<RDShaderSource> src;
-			src.instantiate();
-			src->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
 			RenderingDevice::ShaderStage stage = RenderingDevice::SHADER_STAGE_COMPUTE;
 			if (file.ends_with(".vert.glsl")) stage = RenderingDevice::SHADER_STAGE_VERTEX;
 			else if (file.ends_with(".frag.glsl")) stage = RenderingDevice::SHADER_STAGE_FRAGMENT;
-			src->set_stage_source(stage, String(code.c_str()));
-			Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(src);
-			const String compile_err = spirv->get_stage_compile_error(stage);
-			if (!compile_err.is_empty()) {
-				if (out_error) *out_error = res + String(": ") + compile_err;
+			if (!gpu::compile_check(rd, res, stage, out_error)) {
 				ok = false;
 				break;
 			}

@@ -117,4 +117,14 @@ void clear_shader_source_overrides() {
 	g_shader_overrides.clear();
 }
 
+std::string insert_after_version(const std::string &src, const std::string &text) {
+	const size_t version = src.find("#version");
+	if (version == std::string::npos) return src;
+	const size_t eol = src.find('\n', version);
+	if (eol == std::string::npos) return src;
+	std::string out = src;
+	out.insert(eol + 1, text);
+	return out;
+}
+
 } // namespace ve

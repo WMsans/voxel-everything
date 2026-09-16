@@ -33,3 +33,18 @@ enabled=PackedStringArray("res://addons/gdUnit4/plugin.cfg")
 
 rendering_device/driver.windows="d3d12"
 scaling_3d/scale=0.65
+
+[shader_globals]
+
+ve_sun_dir={
+"type": "vec3",
+"value": Vector3(0.574696, 0.766261, 0.287348)
+}
+ve_sun_rgb={
+"type": "vec3",
+"value": Vector3(1, 1, 1)
+}
+ve_ambient={
+"type": "vec3",
+"value": Vector3(0.16, 0.19, 0.26)
+}

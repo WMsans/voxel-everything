@@ -2,6 +2,7 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <cstdint>
+#include "render/gpu/gpu.h"
 #include "shade/sun_cascades.h"
 
 namespace godot {
@@ -41,23 +42,20 @@ public:
 	void set_sun_ubo(RID buffer);
 	void initialize(RenderingDevice *rd);
 	void teardown();
-	bool is_valid() const { return shader_.is_valid() && pipeline_.is_valid(); }
+	bool is_valid() const { return program_.valid(); }
 	bool render(RenderingDevice *rd, GBuffer &gb, const MaterialAtlas &materials,
 			RID ssgi, RID ssao, RID sun_map, const Params &p);
 	float last_ms() const { return last_ms_; }
 
 private:
 	bool ensure_dummies(RenderingDevice *rd);
-	bool ensure_uniform_set(RenderingDevice *rd, GBuffer &gb, const MaterialAtlas &materials,
-			RID ssgi, RID ssao, RID sun_map);
-
 	RenderingDevice *rd_ = nullptr;
-	RID shader_, pipeline_, sampler_linear_, sampler_nearest_;
+	gpu::Group group_;
+	gpu::Program program_;
+	RID sampler_linear_, sampler_nearest_;
 	RID dummy_black_, dummy_far_, dummy_white_, sun_ubo_;
 	RID sun_light_ubo_; // NOT owned: RenderOrchestrator frees it
-	RID uset_;
-	RID key_albedo_, key_surface_, key_depth_, key_lit_, key_ssgi_, key_ssao_, key_sun_;
-	RID key_material_albedo_, key_material_surface_, key_material_sampler_;
+	gpu::SetCache set_;
 	float last_ms_ = 0.0f;
 };
 

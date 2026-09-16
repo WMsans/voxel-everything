@@ -21,4 +21,9 @@ void set_shader_source_override(const std::string &key, const std::string &sourc
 void clear_shader_source_override(const std::string &key);
 void clear_shader_source_overrides();
 
+// Returns `src` with `text` inserted at the start of the line after the first `#version`
+// line; unchanged when there is no such line or it has no newline. The one way a pass
+// compiles a variant of a shared source (SSR's apply stage, the seam-marker rasters).
+std::string insert_after_version(const std::string &src, const std::string &text);
+
 } // namespace ve

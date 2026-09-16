@@ -1,6 +1,7 @@
 #[compute]
 #version 460
 
+#include "generated/blocks.glslh"
 #include "common.glslh"
 #include "lod_quad.glslh"
 
@@ -21,10 +22,7 @@ layout(set = 0, binding = 4, std430) buffer Stats { uint v[]; } stats; // [0] = 
 // view_proj and six precomputed planes, so the planes are derived here from view_proj. Each
 // plane is the clip-space inequality expressed as a row of the combined view-projection:
 // inside is dot(plane.xyz, p) + plane.w >= 0.
-layout(push_constant, std430) uniform Push {
-	mat4 view_proj;
-	ivec4 params; // x = page count, y = hiz size, z = hiz mips, w = unused
-} pc;
+layout(push_constant, std430) uniform Push { LOD_CULL_PUSH_FIELDS } pc;
 
 bool outside_frustum(vec3 lo, vec3 hi) {
 	vec4 r0 = vec4(pc.view_proj[0].x, pc.view_proj[1].x, pc.view_proj[2].x, pc.view_proj[3].x);

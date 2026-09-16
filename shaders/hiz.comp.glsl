@@ -1,5 +1,6 @@
 #[compute]
 #version 460
+#include "generated/blocks.glslh"
 
 // Two entry paths behind one shader: level 0 reduces the scene depth into a fixed 256^2
 // pyramid (so the CPU readback is resolution-independent), and every level after that
@@ -13,10 +14,7 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0) uniform sampler2D src;
 layout(set = 0, binding = 1, r32f) writeonly uniform image2D dst;
 
-layout(push_constant, std430) uniform Push {
-	ivec4 dims;  // xy = destination size, zw = source size
-	ivec4 flags; // x = 1 when the source is the scene depth (level 0), else 0
-} pc;
+layout(push_constant, std430) uniform Push { HIZ_PUSH_FIELDS } pc;
 
 void main() {
 	ivec2 p = ivec2(gl_GlobalInvocationID.xy);

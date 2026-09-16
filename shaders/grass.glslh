@@ -1,28 +1,17 @@
-// Shared grass definitions: the GrassParams mirror and the per-blade hash. Mirrors
-// ve::GrassParams in extension/src/grass/grass_layout.h, which test_grass_layout pins at
-// 256 bytes with cam.xyz first.
+// Shared grass definitions: the GrassParams layout and the per-blade hash.
+// The GrassParams field list is GRASS_PARAMS_FIELDS in shaders/generated/blocks.glslh,
+// generated from ve::GrassParams.
 //
 // NOTE: never put a literal include directive inside a comment in this file -- the loader
 // matches include tokens anywhere in a line and would self-include.
+
+#include "generated/blocks.glslh"
 
 struct GrassBlade {
 	vec4 a; // xyz world position, w height
 	vec4 b; // x ground normal (low 16 bits) + sun visibility byte, y hash as float bits,
 	        // z lean angle, w clump weight -- see grass_pack_ground()
 };
-
-#define GRASS_PARAMS_BLOCK \
-	vec4 cam;           \
-	vec4 planes[6];     \
-	ivec4 brick_min;    \
-	ivec4 brick_dim;    \
-	vec4 ring_end;      \
-	ivec4 ring_blades;  \
-	vec4 blade;         \
-	vec4 wind;          \
-	vec4 style;         \
-	vec4 shape;         \
-	ivec4 limits;
 
 // PCG-style integer hash. Deterministic in world space, so a blade keeps its identity as
 // the camera moves and the field does not shimmer.

@@ -2,6 +2,7 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/projection.hpp>
 #include <godot_cpp/variant/rid.hpp>
+#include "render/gpu/gpu.h"
 
 namespace godot {
 
@@ -41,12 +42,11 @@ private:
 	bool ensure_uniform_set(RenderingDevice *rd, GrassScatterPass &scatter);
 
 	RenderingDevice *rd_ = nullptr;
+	gpu::Group group_;
 	RID shader_;
 	RID pipeline_;
-	RID uset_, uset_shader_;
-	RID uset_instances_, uset_params_;
-	int64_t fb_format_ = 0;
-	RID framebuffer_, fb_albedo_, fb_surface_, fb_depth_;
+	gpu::FramebufferCache framebuffer_;
+	gpu::SetCache set_;
 	int last_vertex_count_ = 0;
 };
 

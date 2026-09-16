@@ -1,15 +1,11 @@
 #include "render/lod_build_pass.h"
+#include "gpu_layout/blocks.h"
 #include "render/field_context_set.h"
 #include "lod/lod_contour.h"
 #include "lod/lod_skirt.h"
-#include "render/shader_loader.h"
 #include "world/edit_log.h"
-#include <godot_cpp/classes/project_settings.hpp>
-#include <godot_cpp/classes/rd_shader_source.hpp>
-#include <godot_cpp/classes/rd_shader_spirv.hpp>
 #include <godot_cpp/classes/rd_texture_format.hpp>
 #include <godot_cpp/classes/rd_texture_view.hpp>
-#include <godot_cpp/classes/rd_uniform.hpp>
 #include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <algorithm>
@@ -18,29 +14,6 @@
 using namespace godot;
 
 namespace {
-
-Ref<RDUniform> storage(int binding, RID rid) {
-	Ref<RDUniform> u;
-	u.instantiate();
-	u->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	u->set_binding(binding);
-	u->add_id(rid);
-	return u;
-}
-
-Ref<RDUniform> image(int binding, RID rid) {
-	Ref<RDUniform> u;
-	u.instantiate();
-	u->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
-	u->set_binding(binding);
-	u->add_id(rid);
-	return u;
-}
-
-void free_if_valid(RenderingDevice *rd, RID &rid) {
-	if (rd && rid.is_valid()) rd->free_rid(rid);
-	rid = RID();
-}
 
 PackedByteArray zeroed(int64_t bytes) {
 	PackedByteArray b;
@@ -73,35 +46,6 @@ LodBuildPass::~LodBuildPass() {
 	teardown();
 }
 
-bool LodBuildPass::build(RenderingDevice *rd, const char *res_path, RID *shader,
-		RID *pipeline) {
-	ProjectSettings *ps = ProjectSettings::get_singleton();
-	const String path = ps->globalize_path(String(res_path));
-	const String inc = ps->globalize_path("res://shaders");
-	std::string err;
-	const std::string code = ve::strip_shader_annotations(
-			ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err));
-	if (code.empty()) {
-		UtilityFunctions::printerr("LodBuildPass: ", res_path, " load failed: ", err.c_str());
-		return false;
-	}
-	Ref<RDShaderSource> src;
-	src.instantiate();
-	src->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
-	src->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, String(code.c_str()));
-	Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(src);
-	const String compile_err =
-			spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
-	if (!compile_err.is_empty()) {
-		UtilityFunctions::printerr("LodBuildPass: ", res_path, ": ", compile_err);
-		return false;
-	}
-	*shader = rd->shader_create_from_spirv(spirv);
-	if (!shader->is_valid()) return false;
-	*pipeline = rd->compute_pipeline_create(*shader);
-	return pipeline->is_valid();
-}
-
 bool LodBuildPass::initialize(RenderingDevice *rd, const LodBuildConfig &cfg) {
 	teardown();
 	rd_ = rd;
@@ -124,7 +68,8 @@ bool LodBuildPass::initialize(RenderingDevice *rd, const LodBuildConfig &cfg) {
 				RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT);
 		Ref<RDTextureView> v;
 		v.instantiate();
-		*rid = rd->texture_create(f, v, TypedArray<PackedByteArray>());
+		*rid = group_.add(gpu::Kind::Texture,
+				rd->texture_create(f, v, TypedArray<PackedByteArray>()));
 	};
 	make_3d(&fine_sdf_, RenderingDevice::DATA_FORMAT_R8_UNORM, ve::kLodFineLattice);
 	make_3d(&fine_mat_, RenderingDevice::DATA_FORMAT_R16_UINT, ve::kLodFineLattice);
@@ -134,23 +79,23 @@ bool LodBuildPass::initialize(RenderingDevice *rd, const LodBuildConfig &cfg) {
 	const int64_t frac_count =
 			static_cast<int64_t>(cfg_.max_jobs) * ve::kLodChunkMeshCells *
 			ve::kLodChunkMeshCells * ve::kLodChunkMeshCells;
-	frac_ = rd->storage_buffer_create(static_cast<uint32_t>(frac_count * 4),
-			filled(frac_count * 4, 0xFF));
+	frac_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(static_cast<uint32_t>(frac_count * 4),
+			filled(frac_count * 4, 0xFF)));
 	const int64_t quads_bytes =
 			static_cast<int64_t>(cfg_.max_jobs) * ve::kLodMaxQuadsPerChunk * 12;
-	quads_ = rd->storage_buffer_create(static_cast<uint32_t>(quads_bytes),
-			zeroed(quads_bytes));
+	quads_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(static_cast<uint32_t>(quads_bytes),
+			zeroed(quads_bytes)));
 	const int64_t normals_bytes =
 			static_cast<int64_t>(cfg_.max_jobs) * ve::kLodMaxQuadsPerChunk * sizeof(ve::LodQuadNormals);
-	normals_ = rd->storage_buffer_create(static_cast<uint32_t>(normals_bytes),
-			zeroed(normals_bytes));
+	normals_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(static_cast<uint32_t>(normals_bytes),
+			zeroed(normals_bytes)));
 	const int64_t counts_bytes = static_cast<int64_t>(cfg_.max_jobs) * 8;
-	counts_ = rd->storage_buffer_create(static_cast<uint32_t>(counts_bytes),
-			zeroed(counts_bytes));
+	counts_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(static_cast<uint32_t>(counts_bytes),
+			zeroed(counts_bytes)));
 	const int64_t ops_bytes =
 			static_cast<int64_t>(cfg_.max_jobs) * ve::kMaxRegionOps * 32;
-	ops_ = rd->storage_buffer_create(static_cast<uint32_t>(ops_bytes),
-			zeroed(ops_bytes));
+	ops_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(static_cast<uint32_t>(ops_bytes),
+			zeroed(ops_bytes)));
 
 	if (!overrides_) overrides_ = &owned_overrides_;
 	if (!volumes_.initialize(rd, ve::kMaxVolumes, ve::kIslandDim) ||
@@ -167,55 +112,58 @@ bool LodBuildPass::initialize(RenderingDevice *rd, const LodBuildConfig &cfg) {
 		return false;
 	}
 
-	if (!build(rd, "res://shaders/lod_field.comp.glsl", &field_shader_, &field_pipeline_)) {
+	field_program_ = gpu::compile_compute(rd, group_, "LodBuildPass", "lod_field.comp.glsl");
+	if (!field_program_.valid()) {
 		teardown();
 		return false;
 	}
-	field_uset_ = rd->uniform_set_create(Array::make(image(0, fine_sdf_), image(1, fine_mat_),
-			storage(2, ops_), storage(3, volumes_.sdf_buffer()),
-			storage(4, volumes_.mat_buffer()), storage(5, overrides_->sdf_buffer()),
-			storage(6, overrides_->mat_buffer()), storage(7, overrides_->tables()),
-			storage(8, overrides_->region_table_map())),
-			field_shader_, 0);
-	if (!field_uset_.is_valid()) {
+	field_set_ = gpu::uniform_set(rd, group_, field_program_.shader, 0, {
+			gpu::image(0, fine_sdf_), gpu::image(1, fine_mat_), gpu::storage(2, ops_),
+			gpu::storage(3, volumes_.sdf_buffer()), gpu::storage(4, volumes_.mat_buffer()),
+			gpu::storage(5, overrides_->sdf_buffer()), gpu::storage(6, overrides_->mat_buffer()),
+			gpu::storage(7, overrides_->tables()), gpu::storage(8, overrides_->region_table_map())});
+	if (!field_set_.is_valid()) {
 		UtilityFunctions::printerr("LodBuildPass: field uniform set creation failed");
 		teardown();
 		return false;
 	}
 
-	if (!build(rd, "res://shaders/lod_reduce.comp.glsl", &reduce_shader_, &reduce_pipeline_)) {
+	reduce_program_ = gpu::compile_compute(rd, group_, "LodBuildPass", "lod_reduce.comp.glsl");
+	if (!reduce_program_.valid()) {
 		teardown();
 		return false;
 	}
-	reduce_uset_ = rd->uniform_set_create(Array::make(image(0, fine_sdf_), image(1, fine_mat_),
-			image(2, lat_sdf_), image(3, lat_mat_)),
-			reduce_shader_, 0);
-	if (!reduce_uset_.is_valid()) {
+	reduce_set_ = gpu::uniform_set(rd, group_, reduce_program_.shader, 0, {
+			gpu::image(0, fine_sdf_), gpu::image(1, fine_mat_), gpu::image(2, lat_sdf_),
+			gpu::image(3, lat_mat_)});
+	if (!reduce_set_.is_valid()) {
 		UtilityFunctions::printerr("LodBuildPass: reduce uniform set creation failed");
 		teardown();
 		return false;
 	}
 
-	if (!build(rd, "res://shaders/lod_frac.comp.glsl", &frac_shader_, &frac_pipeline_)) {
+	frac_program_ = gpu::compile_compute(rd, group_, "LodBuildPass", "lod_frac.comp.glsl");
+	if (!frac_program_.valid()) {
 		teardown();
 		return false;
 	}
-	frac_uset_ = rd->uniform_set_create(Array::make(image(0, lat_sdf_), storage(1, frac_)),
-			frac_shader_, 0);
-	if (!frac_uset_.is_valid()) {
+	frac_set_ = gpu::uniform_set(rd, group_, frac_program_.shader, 0,
+			{gpu::image(0, lat_sdf_), gpu::storage(1, frac_)});
+	if (!frac_set_.is_valid()) {
 		UtilityFunctions::printerr("LodBuildPass: frac uniform set creation failed");
 		teardown();
 		return false;
 	}
 
-	if (!build(rd, "res://shaders/lod_quads.comp.glsl", &quads_shader_, &quads_pipeline_)) {
+	quads_program_ = gpu::compile_compute(rd, group_, "LodBuildPass", "lod_quads.comp.glsl");
+	if (!quads_program_.valid()) {
 		teardown();
 		return false;
 	}
-	quads_uset_ = rd->uniform_set_create(Array::make(image(0, lat_sdf_), image(1, lat_mat_),
-			storage(2, frac_), storage(3, quads_), storage(4, counts_), storage(5, normals_)),
-			quads_shader_, 0);
-	if (!quads_uset_.is_valid()) {
+	quads_set_ = gpu::uniform_set(rd, group_, quads_program_.shader, 0, {
+			gpu::image(0, lat_sdf_), gpu::image(1, lat_mat_), gpu::storage(2, frac_),
+			gpu::storage(3, quads_), gpu::storage(4, counts_), gpu::storage(5, normals_)});
+	if (!quads_set_.is_valid()) {
 		UtilityFunctions::printerr("LodBuildPass: quads uniform set creation failed");
 		teardown();
 		return false;
@@ -230,30 +178,17 @@ void LodBuildPass::teardown() {
 		in_flight_ = false;
 		batch_.clear();
 	}
-	free_if_valid(rd_, quads_uset_);
-	free_if_valid(rd_, quads_pipeline_);
-	free_if_valid(rd_, quads_shader_);
-	free_if_valid(rd_, frac_uset_);
-	free_if_valid(rd_, frac_pipeline_);
-	free_if_valid(rd_, frac_shader_);
-	free_if_valid(rd_, reduce_uset_);
-	free_if_valid(rd_, reduce_pipeline_);
-	free_if_valid(rd_, reduce_shader_);
-	free_if_valid(rd_, field_uset_);
+	// Sets, pipelines and shaders first, then this pass's lattices and buffers. The pools'
+	// buffers were bound only by field_set_, which is gone by the time they are.
+	gpu::RdDevice device{rd_};
+	group_.release(device);
 	volumes_.teardown();
 	if (overrides_ == &owned_overrides_) owned_overrides_.teardown();
 	overrides_ = nullptr;
-	free_if_valid(rd_, field_pipeline_);
-	free_if_valid(rd_, field_shader_);
-	free_if_valid(rd_, ops_);
-	free_if_valid(rd_, counts_);
-	free_if_valid(rd_, normals_);
-	free_if_valid(rd_, quads_);
-	free_if_valid(rd_, frac_);
-	free_if_valid(rd_, lat_mat_);
-	free_if_valid(rd_, lat_sdf_);
-	free_if_valid(rd_, fine_mat_);
-	free_if_valid(rd_, fine_sdf_);
+	field_program_ = reduce_program_ = frac_program_ = quads_program_ = gpu::Program();
+	field_set_ = reduce_set_ = frac_set_ = quads_set_ = RID();
+	fine_sdf_ = fine_mat_ = lat_sdf_ = lat_mat_ = RID();
+	frac_ = quads_ = normals_ = counts_ = ops_ = RID();
 	rd_ = nullptr;
 }
 
@@ -275,33 +210,16 @@ void LodBuildPass::upload_ops(const LodBuildJob &job, int job_index) {
 void LodBuildPass::push(int64_t list, const LodBuildJob &job, int job_index) {
 	float origin[3];
 	ve::lod_chunk_origin(job.level, job.coord, origin);
-	const float cell = ve::lod_cell_size(job.level);
-	PackedByteArray pc;
-	pc.resize(64);
-	int32_t *p = reinterpret_cast<int32_t *>(pc.ptrw());
-	p[0] = job.coord.x;
-	p[1] = job.coord.y;
-	p[2] = job.coord.z;
-	p[3] = job_index;
-	p[4] = sanitized_op_count(job);
-	p[5] = ve::kLodMaxQuadsPerChunk;
-	p[6] = job.level;
-	p[7] = 0;
-	float *f = reinterpret_cast<float *>(pc.ptrw());
-	f[8] = origin[0];
-	f[9] = origin[1];
-	f[10] = origin[2];
-	f[11] = cell;
-	p[12] = job.override_table;
-	p[13] = -1;
-	p[14] = 0;
-	p[15] = 0;
-	rd_->compute_list_set_push_constant(list, pc, pc.size());
+	const ve::LodBuildPush push{{job.coord.x, job.coord.y, job.coord.z, job_index},
+			{sanitized_op_count(job), ve::kLodMaxQuadsPerChunk, job.level, 0},
+			{origin[0], origin[1], origin[2], ve::lod_cell_size(job.level)},
+			{job.override_table, -1, 0, 0}};
+	rd_->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
 }
 
 void LodBuildPass::record_field(int64_t list, const LodBuildJob &job, int job_index) {
-	rd_->compute_list_bind_compute_pipeline(list, field_pipeline_);
-	rd_->compute_list_bind_uniform_set(list, field_uset_, 0);
+	rd_->compute_list_bind_compute_pipeline(list, field_program_.pipeline);
+	rd_->compute_list_bind_uniform_set(list, field_set_, 0);
 	if (field_context_ != nullptr) field_context_->bind(rd_, list);
 	push(list, job, job_index);
 	const int g = groups(ve::kLodFineLattice);
@@ -309,24 +227,24 @@ void LodBuildPass::record_field(int64_t list, const LodBuildJob &job, int job_in
 }
 
 void LodBuildPass::record_reduce(int64_t list, const LodBuildJob &job, int job_index) {
-	rd_->compute_list_bind_compute_pipeline(list, reduce_pipeline_);
-	rd_->compute_list_bind_uniform_set(list, reduce_uset_, 0);
+	rd_->compute_list_bind_compute_pipeline(list, reduce_program_.pipeline);
+	rd_->compute_list_bind_uniform_set(list, reduce_set_, 0);
 	push(list, job, job_index);
 	const int g = groups(ve::kLodChunkLattice);
 	rd_->compute_list_dispatch(list, g, g, g);
 }
 
 void LodBuildPass::record_frac(int64_t list, const LodBuildJob &job, int job_index) {
-	rd_->compute_list_bind_compute_pipeline(list, frac_pipeline_);
-	rd_->compute_list_bind_uniform_set(list, frac_uset_, 0);
+	rd_->compute_list_bind_compute_pipeline(list, frac_program_.pipeline);
+	rd_->compute_list_bind_uniform_set(list, frac_set_, 0);
 	push(list, job, job_index);
 	const int g = groups(ve::kLodChunkMeshCells);
 	rd_->compute_list_dispatch(list, g, g, g);
 }
 
 void LodBuildPass::record_quads(int64_t list, const LodBuildJob &job, int job_index) {
-	rd_->compute_list_bind_compute_pipeline(list, quads_pipeline_);
-	rd_->compute_list_bind_uniform_set(list, quads_uset_, 0);
+	rd_->compute_list_bind_compute_pipeline(list, quads_program_.pipeline);
+	rd_->compute_list_bind_uniform_set(list, quads_set_, 0);
 	push(list, job, job_index);
 	const int g = groups(ve::kLodChunkCells);
 	rd_->compute_list_dispatch(list, g, g, g);

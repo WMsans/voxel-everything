@@ -20,6 +20,11 @@ inline constexpr float kSdfRange = 0.64f; // uint8 maps to [-0.64, +0.64] meters
 inline constexpr int kBrickSdfStride = kBrickVoxels + 1; // 17
 inline constexpr int kBrickSdfCount = kBrickSdfStride * kBrickSdfStride * kBrickSdfStride; // 4913
 
+// One override brick's bytes in the GPU override pool: the SDF lattice and the material cells,
+// each rounded up to whole uint32 words (render/override_pool.cpp packs them this way).
+inline constexpr int kOverrideSdfStrideBytes = (kBrickSdfCount + 3) / 4 * 4;   // 4916
+inline constexpr int kOverrideMatStrideBytes = (kBrickVoxelCount + 3) / 4 * 4; // 4096
+
 // Conservative pad for the 3^3 activation probe: the probe samples every 8 voxels, so the
 // field can dip across zero between samples. A brick is treated as empty only when all 27
 // probes agree AND clear zero by this margin. shaders/brick_mark.comp.glsl mirrors it as

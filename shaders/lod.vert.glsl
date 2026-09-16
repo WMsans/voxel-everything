@@ -1,6 +1,7 @@
 #[vertex]
 #version 460
 
+#include "generated/blocks.glslh"
 #include "common.glslh"
 #include "lod_quad.glslh"
 #include "shade.glslh"
@@ -16,11 +17,7 @@ layout(set = 0, binding = 1, std430) readonly buffer PageChunk { uint v[]; } pag
 layout(set = 0, binding = 2, std430) readonly buffer Chunks { vec4 v[]; } chunks;
 layout(set = 0, binding = 5, std430) readonly buffer Normals { uint v[]; } normals;
 
-layout(push_constant, std430) uniform Push {
-	mat4 view_proj;
-	vec4 cam;  // xyz = camera position, w = fade start
-	vec4 fade; // x = fade end, yzw unused
-} pc;
+layout(push_constant, std430) uniform Push { LOD_RASTER_PUSH_FIELDS } pc;
 
 layout(location = 0) out vec3 v_wpos;
 layout(location = 1) out vec3 v_normal;

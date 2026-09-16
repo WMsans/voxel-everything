@@ -9,6 +9,7 @@
 #include "lod/lod_quad.h"
 #include "render/volume_pool.h"
 #include "render/override_pool.h"
+#include "render/gpu/gpu.h"
 
 namespace godot {
 
@@ -42,11 +43,11 @@ public:
 
 	bool initialize(RenderingDevice *rd, const LodBuildConfig &cfg);
 	void teardown();
-	bool is_valid() const { return field_pipeline_.is_valid(); }
+	bool is_valid() const { return field_program_.pipeline.is_valid(); }
 	const LodBuildConfig &config() const { return cfg_; }
 	// The pass's field shader, for building a set 1 against it on diagnostics' own
 	// devices (debug_lod_diff runs its own LodBuildPass on a per-call device).
-	RID field_shader() const { return field_shader_; }
+	RID field_shader() const { return field_program_.shader; }
 	// The worker device's set 1, owned by MeshService and valid for the worker's whole
 	// run. Borrowed, never freed here; bound beside the field pass's set 0.
 	void set_field_context(const FieldContextSet *fc) { field_context_ = fc; }
@@ -78,7 +79,6 @@ public:
 	int collect(std::vector<LodBuildResult> *out);
 
 private:
-	bool build(RenderingDevice *rd, const char *res_path, RID *shader, RID *pipeline);
 	void reset_counts();
 	void upload_ops(const LodBuildJob &job, int job_index);
 	void push(int64_t list, const LodBuildJob &job, int job_index);
@@ -104,10 +104,9 @@ private:
 	VolumePool volumes_;
 	OverridePool owned_overrides_;
 	OverridePool *overrides_ = nullptr;
-	RID field_shader_, field_pipeline_, field_uset_;
-	RID reduce_shader_, reduce_pipeline_, reduce_uset_;
-	RID frac_shader_, frac_pipeline_, frac_uset_;
-	RID quads_shader_, quads_pipeline_, quads_uset_;
+	gpu::Group group_;
+	gpu::Program field_program_, reduce_program_, frac_program_, quads_program_;
+	RID field_set_, reduce_set_, frac_set_, quads_set_;
 
 	bool in_flight_ = false;
 	std::vector<LodBuildJob> batch_; // the jobs in flight, in job order

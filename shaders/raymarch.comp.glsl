@@ -1,7 +1,9 @@
 #[compute]
 #version 460
 
-#define MATERIAL_LAYERS 16
+#include "generated/blocks.glslh"
+
+#define VE_MATERIAL_ARRAYS
 // Set 0's established bindings 24-30 belong to the compact-normal/override interface.
 // Keep that interface unchanged; SunLight uses binding 24 in its dedicated set 2. Set 1
 // belongs to the terrain pipeline's field context (FieldContextSet): the generated
@@ -73,18 +75,9 @@ layout(set = 0, binding = 21, std430) readonly buffer BrickFlags { uint v[]; } b
 layout(set = 0, binding = 22, std430) readonly buffer RegionSlotCounts { int n[]; } region_slot_counts;
 // The pending-edit visualizer: tint the atlas content an edit WILL change, so the player
 // gets one frame of feedback before the regenerated bricks land (spec §5 latency).
-layout(set = 0, binding = 12) uniform Edits { vec4 center; vec4 params; } edits;
+layout(set = 0, binding = 12) uniform Edits { EDITS_BLOCK_FIELDS } edits;
 
-layout(push_constant, std430) uniform Push {
-	vec4 cam_pos;
-	vec4 cam_right;
-	vec4 cam_up;
-	vec4 cam_fwd;
-	vec4 params;          // tan_half_fov_x, tan_half_fov_y, max_dist, unused
-	ivec4 dims;           // world size in REGIONS
-	ivec4 region_origin;  // world origin in REGIONS
-	ivec4 atlas_bricks;   // atlas grid
-} pc;
+layout(push_constant, std430) uniform Push { CAMERA_PARAMS_FIELDS } pc;
 
 // Diagnostic counters. They are plain globals rather than an inout parameter chain because
 // every function that could touch them already takes `steps_left`, and a second inout on
@@ -677,7 +670,7 @@ void main() {
 			length(best.p - edits.center.xyz) < edits.params.x) {
 		uint et = uint(edits.params.y);
 		vec3 tint = et == 0u ? vec3(1.0, 0.55, 0.1)
-		          : et == 1u ? flat_material_albedo(4u)
+		          : et == 1u ? flat_material_albedo(MAT_BREAKSTONE)
 		          : flat_material_albedo(uint(edits.params.z));
 		overlay_mix(overlay, overlay_w, tint, 0.45);
 	}

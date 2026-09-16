@@ -1,11 +1,7 @@
 // Shared camera reconstruction block for post-opaque beauty passes. The includer must define
 // BEAUTY_CAMERA_SET and BEAUTY_CAMERA_BINDING first.
-layout(set = BEAUTY_CAMERA_SET, binding = BEAUTY_CAMERA_BINDING, std140) uniform BeautyCam {
-	mat4 view_proj;
-	mat4 inv_view_proj;
-	vec4 cam;    // xyz = camera position, w = unused
-	vec4 screen; // xy = full-resolution size, zw = 1 / size
-} bcam;
+#include "generated/blocks.glslh"
+layout(set = BEAUTY_CAMERA_SET, binding = BEAUTY_CAMERA_BINDING, std140) uniform BeautyCam { BEAUTY_CAM_FIELDS } bcam;
 
 // Godot's scene projection carries the framebuffer y-flip, matching the deferred pass.
 vec3 beauty_world_from_depth(vec2 uv, float depth) {

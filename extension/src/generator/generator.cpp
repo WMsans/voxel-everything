@@ -1,5 +1,13 @@
 #include "generator/generator.h"
+#include "world/material_table.h"
 #include <cmath>
+
+namespace {
+// The analytic generator's height bands, by name: rock above 4 m, grass above 1 m, ground below.
+constexpr uint16_t kBandRock = ve::material_id("rock");
+constexpr uint16_t kBandGrass = ve::material_id("grass_01");
+constexpr uint16_t kBandGround = ve::material_id("ground_01");
+} // namespace
 
 namespace ve {
 
@@ -38,7 +46,7 @@ Sample AnalyticGenerator::sample(float x, float y, float z) const {
 
 	uint16_t mat = 0;
 	if (sdf <= 0.0f) {
-		mat = h > 4.0f ? 2 : (h > 1.0f ? 1 : 3);
+		mat = h > 4.0f ? kBandRock : (h > 1.0f ? kBandGrass : kBandGround);
 	}
 	return {sdf, mat};
 }
@@ -54,7 +62,7 @@ FieldSample AnalyticGenerator::sample_gradient(float x, float y, float z) const 
 	float sdf = fmaxf(terrain_sdf, -sphere);
 	uint16_t mat = 0;
 	if (sdf <= 0.0f) {
-		mat = h > 4.0f ? 2 : (h > 1.0f ? 1 : 3);
+		mat = h > 4.0f ? kBandRock : (h > 1.0f ? kBandGrass : kBandGround);
 	}
 	const float dhdx = 0.66f * cosf(x * 0.11f) * cosf(z * 0.13f)
 	        + 0.093f * cosf(x * 0.031f + 1.7f) * sinf(z * 0.043f)

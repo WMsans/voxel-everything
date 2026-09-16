@@ -42,7 +42,7 @@ struct BeautySettings {
 	float outline_normal_threshold = 0.25f; // [0, 2], 1 - dot(n0, n1)
 };
 
-// Bit layout, mirrored by BEAUTY_* in the shaders. A bit is only set when the effect is
+// Bit layout; kBeautyFlags below generates BEAUTY_* for the shaders. A bit is only set when the effect is
 // enabled AND has work to do, so a shader never has to check both.
 inline constexpr uint32_t kFlagSsgi = 1u;
 inline constexpr uint32_t kFlagSsr = 2u;
@@ -55,6 +55,25 @@ inline constexpr uint32_t kFlagSsao = 256u;
 // A debug view, not an effect: it replaces the albedo channel with marching cost so the
 // budget conversation can be about pixels instead of averages. It is never set by a tier.
 inline constexpr uint32_t kFlagCostView = 128u;
+
+// Every flag bit a shader tests, by GLSL name (BEAUTY_<name>). shaders/generated/constants.glslh
+// is emitted from this table, so a new flag is one constant above and one row here.
+struct BeautyFlag {
+	const char *name;
+	uint32_t bit;
+};
+
+inline constexpr BeautyFlag kBeautyFlags[] = {
+	{"SSGI", kFlagSsgi},
+	{"SSR", kFlagSsr},
+	{"CONTACT", kFlagContact},
+	{"OUTLINES", kFlagOutlines},
+	{"SUN_MAP", kFlagSunMap},
+	{"GLOSSY_RAYS", kFlagGlossyRays},
+	{"RAY_SUN_SHADOW", kFlagRaySunShadow},
+	{"SSAO", kFlagSsao},
+	{"COST_VIEW", kFlagCostView},
+};
 
 BeautySettings settings_for_tier(QualityTier t);
 void clamp_settings(BeautySettings *s);

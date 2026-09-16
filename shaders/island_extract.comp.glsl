@@ -1,5 +1,6 @@
 #[compute]
 #version 460
+#include "generated/blocks.glslh"
 
 #define FIELD_OP_POOL_BINDING 1
 #define FIELD_VOLUME_SDF_BINDING 2
@@ -10,10 +11,7 @@
 #define FIELD_OVERRIDE_REGION_BINDING 9
 #include "common.glslh"
 #include "shade.glslh"
-layout(push_constant, std430) uniform Push {
-	vec4 origin_voxel;
-	ivec4 params;
-} pc;
+layout(push_constant, std430) uniform Push { ISLAND_EXTRACT_PUSH_FIELDS } pc;
 #define FIELD_OVERRIDE_TABLE(base) (pc.params.w)
 #include "field.glslh"
 

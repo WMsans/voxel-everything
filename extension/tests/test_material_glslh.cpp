@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include "world/material_table.h"
+#include <cctype>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -31,4 +32,24 @@ TEST_CASE("the emitter covers every material") {
 	// scaling per sample again and the seam artifact comes back with it.
 	CHECK(s.find("MAT_HARDNESS") == std::string::npos);
 	CHECK(s.find("mat_hardness(") == std::string::npos);
+}
+
+TEST_CASE("the emitter names every terrain material and no name collides with a table") {
+	const std::string s = ve::material_table_glsl();
+	for (int i = 0; i < ve::kMaterialCount; i++) {
+		std::string upper = ve::kMaterials[i].name;
+		for (char &c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+		CHECK(s.find("const uint MAT_" + upper + " = " + std::to_string(i + 1) + "u;") != std::string::npos);
+		CHECK(upper != "GLOW");
+		CHECK(upper != "GLOW_RGB");
+		CHECK(upper != "FLAT_ALBEDO");
+	}
+}
+
+TEST_CASE("the emitter names every foliage row and gives mat_glow both ranges") {
+	const std::string s = ve::material_table_glsl();
+	CHECK(s.find("const uint FOLIAGE_BASE = 200u;") != std::string::npos);
+	CHECK(s.find("const uint MAT_GRASS_BLADE = 200u;") != std::string::npos);
+	CHECK(s.find("FOLIAGE_GLOW[j]") != std::string::npos);
+	CHECK(s.find("FOLIAGE_GLOW_RGB[j]") != std::string::npos);
 }

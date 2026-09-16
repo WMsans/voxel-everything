@@ -1,6 +1,7 @@
 #pragma once
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
+#include "render/gpu/gpu.h"
 #include "render/gpu_atlas.h"
 #include "world/region.h"
 
@@ -16,7 +17,7 @@ public:
 
 	bool initialize(RenderingDevice *rd, const GpuAtlas &atlas);
 	void teardown();
-	bool is_valid() const { return mark_pipeline_.is_valid(); }
+	bool is_valid() const { return mark_.pipeline.is_valid(); }
 
 	// Records into an OPEN compute list. lo/hi are inclusive GLOBAL brick coordinates and
 	// must lie inside `region`; force_regen re-enqueues bricks that are already resident.
@@ -30,13 +31,11 @@ public:
 	void write_dispatch_args(RenderingDevice *rd, int64_t list);
 
 private:
-	bool build(RenderingDevice *rd, const char *res_path, RID *shader, RID *pipeline);
-
 	RenderingDevice *rd_ = nullptr;
 	int max_brick_jobs_ = 0;
-	RID mark_shader_, mark_pipeline_, mark_uset_;
-	RID free_shader_, free_pipeline_, free_uset_;
-	RID args_shader_, args_pipeline_, args_uset_;
+	gpu::Group group_;
+	gpu::Program mark_, free_, args_;
+	RID mark_set_, free_set_, args_set_;
 };
 
 } // namespace godot

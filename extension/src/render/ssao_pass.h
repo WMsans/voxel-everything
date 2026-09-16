@@ -2,6 +2,7 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <godot_cpp/variant/vector2i.hpp>
+#include "render/gpu/gpu.h"
 #include "shade/beauty_settings.h"
 
 namespace godot {
@@ -21,17 +22,15 @@ public:
 	void clear_result() { output_ = RID(); }
 	float last_ms() const { return last_ms_; }
 	// Target resolution; half the G-buffer since the half-res chain landed.
-	Vector2i size() const { return size_; }
+	Vector2i size() const { return target_.size(); }
 
 private:
-	bool ensure_target(RenderingDevice *rd, Vector2i size);
-	bool ensure_uniform_set(RenderingDevice *rd, GBuffer &gb, RID camera_ubo);
-
 	RenderingDevice *rd_ = nullptr;
-	RID shader_, pipeline_, sampler_nearest_;
-	RID target_, uset_;
-	RID key_surface_, key_depth_, key_out_, key_camera_;
-	Vector2i size_{0, 0};
+	gpu::Group group_;
+	gpu::Program program_;
+	RID sampler_nearest_;
+	gpu::Target target_;
+	gpu::SetCache set_;
 	RID output_;
 	float last_ms_ = 0.0f;
 };

@@ -130,7 +130,7 @@ TEST_CASE("frustum planes point inward and are normalised") {
 
 TEST_CASE("GrassParams is 256 bytes and its floats land where GLSL expects") {
 	// Sixteen vec4: cam, planes[6], brick_min, brick_dim, ring_end, ring_blades, blade,
-	// wind, style, shape, limits. If this number moves, GRASS_PARAMS_BLOCK moved with it.
+	// wind, style, shape, limits. If this number moves, the grass parameter block moved with it.
 	CHECK(sizeof(ve::GrassParams) == 256);
 	ve::GrassSettings s;
 	const float cam[3] = {1.0f, 2.0f, 3.0f};

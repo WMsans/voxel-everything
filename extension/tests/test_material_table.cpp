@@ -82,3 +82,22 @@ TEST_CASE("the table fits inside the atlas layer bound") {
 	// godot-cpp into the pure native test binary.
 	CHECK(ve::kMaterialCount <= 16);
 }
+
+TEST_CASE("material_id names every material and is usable at compile time") {
+	static_assert(ve::material_id("grass_01") == 1);
+	static_assert(ve::material_id("rock") == 2);
+	for (int i = 0; i < ve::kMaterialCount; i++)
+		CHECK(ve::material_id(ve::kMaterials[i].name) == i + 1);
+	CHECK(ve::material_id("no_such_material") == 0);
+}
+
+TEST_CASE("foliage ids sit above every terrain id and look up their own glow") {
+	CHECK(ve::kFoliageBase == 200);
+	CHECK(ve::kMaterialCount < ve::kFoliageBase);
+	REQUIRE(ve::kFoliageCount >= 1);
+	CHECK(std::string(ve::kFoliage[0].name) == "grass_blade");
+	CHECK(ve::material_glow(ve::kFoliageBase) == doctest::Approx(ve::kFoliage[0].glow));
+	CHECK(ve::material_glow(static_cast<uint16_t>(ve::kFoliageBase + ve::kFoliageCount)) ==
+			doctest::Approx(0.0f));
+	CHECK(ve::material_glow(static_cast<uint16_t>(ve::kFoliageBase - 1)) == doctest::Approx(0.0f));
+}

@@ -7,14 +7,8 @@
 using namespace godot;
 
 namespace {
-constexpr int kSdfWords = (ve::kBrickSdfCount + 3) / 4;
-constexpr int kSdfStrideBytes = kSdfWords * 4;
-constexpr int kMatWords = (ve::kBrickVoxelCount + 3) / 4;
-constexpr int kMatStrideBytes = kMatWords * 4;
-static_assert(ve::kBrickSdfCount == 4913, "update BRICK_SDF_COUNT in shaders/brick_layout.glslh");
-static_assert(ve::kBrickVoxelCount == 4096, "update BRICK_VOXEL_COUNT in shaders/brick_layout.glslh");
-static_assert(kSdfStrideBytes == 4916, "update override SDF byte stride in field.glslh");
-static_assert(kMatStrideBytes == 4096, "update override material byte stride in field.glslh");
+constexpr int kSdfStrideBytes = ve::kOverrideSdfStrideBytes;
+constexpr int kMatStrideBytes = ve::kOverrideMatStrideBytes;
 
 PackedByteArray filled_i32(int count, int value) {
 	PackedByteArray b;
