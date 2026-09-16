@@ -1,4 +1,5 @@
 #include "render/island_extract_pass.h"
+#include "gpu_layout/blocks.h"
 #include "render/field_context_set.h"
 #include "render/volume_pool.h"
 #include "render/override_pool.h"
@@ -117,24 +118,14 @@ bool IslandExtractPass::extract(const IslandExtractJob &job, IslandExtractResult
 		rd_->buffer_update(boxes_, 0, static_cast<uint32_t>(b.size()), b);
 	}
 
-	PackedByteArray pc;
-	pc.resize(32);
-	float *pf = reinterpret_cast<float *>(pc.ptrw());
-	int32_t *pi = reinterpret_cast<int32_t *>(pc.ptrw());
-	pf[0] = job.origin[0];
-	pf[1] = job.origin[1];
-	pf[2] = job.origin[2];
-	pf[3] = job.voxel;
-	pi[4] = job.dim;
-	pi[5] = op_count;
-	pi[6] = box_count;
-	pi[7] = job.override_table;
+	const ve::IslandExtractPush push{{job.origin[0], job.origin[1], job.origin[2], job.voxel},
+			{job.dim, op_count, box_count, job.override_table}};
 
 	const int64_t list = rd_->compute_list_begin();
 	rd_->compute_list_bind_compute_pipeline(list, program_.pipeline);
 	rd_->compute_list_bind_uniform_set(list, set_, 0);
 	if (field_context_ != nullptr) field_context_->bind(rd_, list);
-	rd_->compute_list_set_push_constant(list, pc, pc.size());
+	rd_->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
 	const int g = (job.dim + 3) / 4;
 	rd_->compute_list_dispatch(list, g, g, g);
 	rd_->compute_list_end();
