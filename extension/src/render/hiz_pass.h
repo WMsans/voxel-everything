@@ -6,6 +6,7 @@
 #include <godot_cpp/variant/vector2i.hpp>
 #include "lod/lod_tree.h"
 #include "render/async_readback.h"
+#include "render/gpu/gpu.h"
 #include <array>
 
 namespace godot {
@@ -62,14 +63,14 @@ private:
 		float grid_[kGrid * kGrid] = {};
 	};
 
-	bool ensure_uniform_set(RenderingDevice *rd, RID src, int dst_mip);
-
 	RenderingDevice *rd_ = nullptr;
-	RID shader_, pipeline_, sampler_;
+	gpu::Group group_;
+	gpu::Program program_;
+	RID sampler_;
 	RID pyramid_, readback_tex_;
 	std::array<RID, kMipCount> slices_{};
-	std::array<RID, kMipCount> usets_{};
-	RID uset0_src_;
+	std::array<RID, kMipCount> usets_{}; // [0] mirrors level0_; [1..] are built once
+	gpu::SetCache level0_;
 	HizOcclusion occlusion_;
 	Ref<AsyncTextureRead> readback_;
 	bool readback_was_pending_at_teardown_ = false;
