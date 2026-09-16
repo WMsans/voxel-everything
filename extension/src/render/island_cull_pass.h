@@ -1,6 +1,7 @@
 #pragma once
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
+#include "render/gpu/gpu.h"
 #include "render/camera_params.h"
 
 namespace godot {
@@ -19,7 +20,7 @@ public:
 
 	bool initialize(RenderingDevice *rd);
 	void teardown();
-	bool is_valid() const { return pipeline_.is_valid(); }
+	bool is_valid() const { return program_.pipeline.is_valid(); }
 
 	// Sizes the mask to the raymarch target, records its own compute list and dispatches.
 	// Returns false when nothing was recorded (in which case the caller passes RID() to the
@@ -32,10 +33,13 @@ public:
 	int tiles_y() const { return tiles_y_; }
 
 private:
-	void rebuild(RenderingDevice *rd, const IslandAtlas &atlas, int tx, int ty);
+	void rebuild_mask(RenderingDevice *rd, int tx, int ty);
 
 	RenderingDevice *rd_ = nullptr;
-	RID shader_, pipeline_, uset_, mask_;
+	gpu::Group group_;
+	gpu::Program program_;
+	RID mask_;
+	gpu::SetCache set_;
 	int tiles_x_ = 0, tiles_y_ = 0;
 };
 
