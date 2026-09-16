@@ -1,5 +1,6 @@
 #[compute]
 #version 460
+#include "generated/gbuffer.glslh"
 #include "generated/blocks.glslh"
 
 // HBAO: horizon-based ambient occlusion over the raymarched G-buffer. For each pixel the
@@ -40,13 +41,13 @@ void main() {
 	// darkened by screen-space occlusion.
 	float depth = texture(gb_depth, uv).r;
 	vec4 g1 = texture(gb_surface, uv);
-	if (depth <= 0.0 || g1.z < 0.5) {
+	if (depth <= 0.0 || !GB_IS_SURFACE(g1)) {
 		imageStore(out_ssao, px, vec4(1.0));
 		return;
 	}
 
 	vec3 p = beauty_world_from_depth(uv, depth);
-	vec3 n = oct_decode(g1.xy);
+	vec3 n = GB_NORMAL(g1);
 
 	// Tangent-plane frame around the surface normal: every sweep direction lies in it.
 	vec3 up = abs(n.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
