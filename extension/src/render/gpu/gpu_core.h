@@ -38,7 +38,11 @@ struct Uniform {
 	uint32_t binding = 0;
 	Id ids[2] = {};
 	uint8_t count = 0;
-	bool operator==(const Uniform &) const = default;
+	// Explicit rather than `= default`: the main build inherits godot-cpp's -std=c++17, and a
+	// defaulted comparison operator is C++20 (gcc rejects it, clang merely warns).
+	bool operator==(const Uniform &o) const {
+		return type == o.type && binding == o.binding && count == o.count && ids[0] == o.ids[0] && ids[1] == o.ids[1];
+	}
 };
 
 template <class Id>
