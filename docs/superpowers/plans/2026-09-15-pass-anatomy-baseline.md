@@ -261,3 +261,4 @@ Appended by later tasks.
 - island_cull Task 21: build OK, native 565/565, gdUnit matches row, leaked 0 (row 0)
 - lod_cull Task 22: build OK, native 565/565, gdUnit 18/18 including lod_cull golden (pins 0.0/readback default), leaked 0 (row 0)
 - grass_scatter Task 23: build OK, native 565/565, gdUnit 33/33 including grass golden, frame goldens/contracts and lifetime contract, leaked 0 (row 0)
+- raymarch Task 24: build OK, native 565/565, gdUnit 52/52 gate and 467/467 full, leaked 0 (row 0)

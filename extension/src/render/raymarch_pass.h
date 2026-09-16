@@ -2,6 +2,8 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include "render/camera_params.h"
+#include "render/gpu/gpu.h"
+#include <vector>
 
 namespace godot {
 
@@ -49,12 +51,13 @@ public:
 	RID cost_buffer() const { return cost_buf_; }
 
 private:
-	RID make_target(RenderingDevice *rd, RenderingDevice::DataFormat fmt, int w, int h);
-	void rebuild_targets(RenderingDevice *rd, const GpuAtlas &atlas, const IslandAtlas *islands,
-			RID tile_mask, int w, int h);
+	void rebuild_targets(RenderingDevice *rd, int w, int h);
+	std::vector<gpu::Uniform> uniforms(const GpuAtlas &atlas, const IslandAtlas &islands,
+			RID mask) const;
 
 	RenderingDevice *rd_ = nullptr;
-	RID shader_, pipeline_;
+	gpu::Group group_;
+	gpu::Program program_;
 	RID sampler_;     // shared NEAREST sampler, created once
 	// The SDF atlas is the one target sampled with hardware trilinear (binding 2): its
 	// 17-voxel apron keeps a filtered fetch inside the brick's own block, so one fetch
@@ -63,9 +66,10 @@ private:
 	RID sampler_linear_;
 	RID edits_ubo_;   // 32-byte uniform buffer, updated every render
 	RID sun_ubo_; // NOT owned: RenderOrchestrator frees it
-	RID sun_uset_; // set 2 uniform set; NOT owned: RenderOrchestrator frees the buffer
 	RID material_albedo_, material_surface_, material_sampler_;
-	RID albedo_, surface_, hitpos_, cost_buf_, uset_, uset_mask_;
+	RID albedo_, surface_, hitpos_, cost_buf_;
+	gpu::SetCache set_, sun_set_; // set 0; set 2 (SunLight)
+	RID uset_mask_;
 	int width_ = 0, height_ = 0;
 };
 
