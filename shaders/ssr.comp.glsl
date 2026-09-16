@@ -1,5 +1,6 @@
 #[compute]
 #version 460
+#include "generated/gbuffer.glslh"
 #include "generated/blocks.glslh"
 #include "common.glslh"
 #include "shade.glslh"
@@ -21,9 +22,9 @@ bool receiver(vec2 uv, float depth, out vec3 p, out vec3 n, out float gloss) {
 	p = beauty_world_from_depth(uv, depth);
 	vec4 g = texture(gb_surface, uv);
 	float gd = texture(gb_depth, uv).r;
-	if (g.z >= 0.5 && abs(gd - depth) <= 1e-5) {
-		n = oct_decode(g.xy);
-		gloss = clamp(g.w, 0.0, 1.0);
+	if (GB_IS_SURFACE(g) && abs(gd - depth) <= 1e-5) {
+		n = GB_NORMAL(g);
+		gloss = clamp(GB_GLOSS(g), 0.0, 1.0);
 		return true;
 	}
 	// Dynamic objects are valid scene colour/depth reflection targets, but their receiver
