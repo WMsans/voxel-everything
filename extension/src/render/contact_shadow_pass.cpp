@@ -1,4 +1,5 @@
 #include "render/contact_shadow_pass.h"
+#include "gpu_layout/blocks.h"
 #include <algorithm>
 
 using namespace godot;
@@ -61,27 +62,17 @@ bool ContactShadowPass::render(RenderingDevice *rd, RID scene_color, RID scene_d
 	if (list < 0) return false;
 	rd->compute_list_bind_compute_pipeline(list, program_.pipeline);
 	rd->compute_list_bind_uniform_set(list, set, 0);
-	PackedByteArray pc;
-	pc.resize(32);
-	int32_t *dims = reinterpret_cast<int32_t *>(pc.ptrw());
-	dims[0] = half.x;
-	dims[1] = half.y;
-	dims[2] = 0;
-	dims[3] = s.contact_steps;
-	float *params = reinterpret_cast<float *>(pc.ptrw()) + 4;
-	params[0] = 0.6f;
-	params[1] = 0.85f;
-	// One voxel: large enough to leave the receiver, but too small to bridge terrain gaps.
-	params[2] = 0.05f;
-	params[3] = 0.0f;
-	rd->compute_list_set_push_constant(list, pc, pc.size());
-	rd->compute_list_dispatch(list, (dims[0] + 7) / 8, (dims[1] + 7) / 8, 1);
+	// One voxel of surface bias: large enough to leave the receiver, but too small to bridge
+	// terrain gaps.
+	ve::ContactShadowPush push{{half.x, half.y, 0, s.contact_steps}, {0.6f, 0.85f, 0.05f, 0.0f}};
+	rd->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
+	rd->compute_list_dispatch(list, gpu::groups(half.x, 8), gpu::groups(half.y, 8), 1);
 	rd->compute_list_add_barrier(list);
-	dims[0] = size.x;
-	dims[1] = size.y;
-	dims[2] = 1;
-	rd->compute_list_set_push_constant(list, pc, pc.size());
-	rd->compute_list_dispatch(list, (dims[0] + 7) / 8, (dims[1] + 7) / 8, 1);
+	push.dims[0] = size.x;
+	push.dims[1] = size.y;
+	push.dims[2] = 1;
+	rd->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
+	rd->compute_list_dispatch(list, gpu::groups(size.x, 8), gpu::groups(size.y, 8), 1);
 	rd->compute_list_end();
 	return true;
 }

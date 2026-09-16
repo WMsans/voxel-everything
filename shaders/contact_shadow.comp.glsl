@@ -1,5 +1,6 @@
 #[compute]
 #version 460
+#include "generated/blocks.glslh"
 
 #define BEAUTY_CAMERA_SET 0
 #define BEAUTY_CAMERA_BINDING 4
@@ -17,10 +18,7 @@ layout(set = 0, binding = 1, r8) writeonly uniform image2D out_mask;
 layout(set = 0, binding = 2) uniform sampler2D mask_tex;
 layout(set = 0, binding = 3, rgba16f) uniform image2D scene_color;
 
-layout(push_constant, std430) uniform Push {
-	ivec4 dims;  // xy = target size, z = mode (0 march, 1 apply), w = steps
-	vec4 params; // x = reach, y = strength, z = surface bias/hit thickness (metres)
-} pc;
+layout(push_constant, std430) uniform Push { CONTACT_SHADOW_PUSH_FIELDS } pc;
 
 ivec2 depth_texel(vec2 uv) {
 	return clamp(ivec2(uv * bcam.screen.xy), ivec2(0), ivec2(bcam.screen.xy) - 1);
