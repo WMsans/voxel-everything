@@ -101,7 +101,7 @@ int IslandManager::contact_samples(ve::IVec3 cell, int axis) const {
 	std::lock_guard<std::mutex> lock(handles_.store->edit_mutex());
 	const std::vector<ve::EditOp> &ops = handles_.store->edit_log()->ops(ve::region_of_brick(cell));
 	return ve::contact_samples_field(*gen_, ops.data(), static_cast<int>(ops.size()), cell, axis,
-			refine_cfg_.face_samples, &handles_.store->volumes());
+			refine_cfg_.face_samples, &handles_.store->volumes(), handles_.store->overrides());
 }
 
 void IslandManager::initialize(Collaborators handles) {

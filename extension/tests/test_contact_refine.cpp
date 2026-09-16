@@ -1,4 +1,5 @@
 #include "connectivity/contact_refine.h"
+#include "world/override_store.h"
 #include <doctest/doctest.h>
 #include <map>
 
@@ -185,4 +186,19 @@ TEST_CASE("contact_samples_field counts solid samples on the shared face") {
 	const int n = contact_samples_field(gen, &add, 1, {10, 79, 10}, 1, 9);
 	CHECK(n > 0);
 	CHECK(n < 81);
+}
+
+// S2: a baked override replaces the generator base on the contact face too. The face of cell
+// (10,79,10) along +y is the plane y = 64.0 m in open sky; bricks on both sides of it are
+// baked solid, so every sample is solid.
+TEST_CASE("contact_samples_field reads baked overrides as the base field") {
+	AnalyticGenerator gen;
+	CHECK(contact_samples_field(gen, nullptr, 0, {10, 79, 10}, 1, 9) == 0);
+	OverrideStore overrides(2);
+	for (int y = 79; y <= 80; y++) {
+		OverrideBrick *b = overrides.data(overrides.acquire({10, y, 10}));
+		REQUIRE(b != nullptr);
+		for (uint8_t &s : b->sdf) s = encode_sdf(-1.0f);
+	}
+	CHECK(contact_samples_field(gen, nullptr, 0, {10, 79, 10}, 1, 9, nullptr, &overrides) == 81);
 }

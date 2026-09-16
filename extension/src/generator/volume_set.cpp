@@ -368,7 +368,7 @@ bool plan_island_lattice(const float lo[3], const float hi[3], int dim, float *v
 }
 
 void extract_island_volume(const Generator &gen, const EditOp *ops, int op_count,
-		const VolumeStore *volumes, const float origin[3], float voxel, int dim,
+		const VolumeStore *volumes, const OverrideSource *overrides, const float origin[3], float voxel, int dim,
 		const float *box_aabbs, int box_count, VolumeData *out) {
 	out->dim = dim;
 	out->sdf.assign(static_cast<size_t>(dim) * dim * dim, 0);
@@ -379,7 +379,7 @@ void extract_island_volume(const Generator &gen, const EditOp *ops, int op_count
 	// The island IS the solid field intersected with the union of its cells, so the mask is
 	// a CSG intersection: max(field, min over boxes).
 	const auto masked = [&](const float p[3], uint16_t *material) {
-		const Sample s = eval_field(gen, ops, op_count, p[0], p[1], p[2], volumes);
+		const Sample s = eval_field(gen, ops, op_count, p[0], p[1], p[2], volumes, overrides);
 		float bu = 1e30f;
 		for (int b = 0; b < box_count; b++)
 			bu = std::min(bu, box_sdf(&box_aabbs[static_cast<size_t>(b) * 6 + 0],
@@ -423,12 +423,12 @@ void extract_island_volume(const Generator &gen, const EditOp *ops, int op_count
 							over += 1.0f) {
 						const float t = d + over * voxel;
 						material = eval_field(gen, ops, op_count, p[0] - g[0] / len * t,
-								p[1] - g[1] / len * t, p[2] - g[2] / len * t, volumes)
+								p[1] - g[1] / len * t, p[2] - g[2] / len * t, volumes, overrides)
 										   .material;
 					}
 				}
 				// winning gradient of masked field at p before quantization
-				FieldSample gs = eval_field_gradient(gen, ops, op_count, p[0], p[1], p[2], volumes, nullptr);
+				FieldSample gs = eval_field_gradient(gen, ops, op_count, p[0], p[1], p[2], volumes, overrides);
 				float bu = 1e30f;
 				int bu_idx = -1;
 				for (int b = 0; b < box_count; b++) {

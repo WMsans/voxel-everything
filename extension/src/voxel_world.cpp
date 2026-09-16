@@ -915,7 +915,7 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 	// Task 10: through the FieldGenerator seam -- same analytic field, no behavior change.
 	const ve::Generator &gen = store_->generator()->sampler();
 	ve::extract_island_volume(gen, job->ops.data(), static_cast<int>(job->ops.size()),
-			&store_->volumes(), job->origin, job->voxel, job->dim, aabbs.data(),
+			&store_->volumes(), store_->overrides(), job->origin, job->voxel, job->dim, aabbs.data(),
 			static_cast<int>(boxes->size()), &cpu);
 	*out = std::move(cpu);
 	return true;

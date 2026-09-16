@@ -634,8 +634,8 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 	ve::VolumeData cpu;
 	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	ve::extract_island_volume(gen, job.ops.data(), static_cast<int>(job.ops.size()),
-			&world_->context().store->volumes(), job.origin, job.voxel, job.dim, aabbs.data(),
-			static_cast<int>(boxes.size()), &cpu);
+			&world_->context().store->volumes(), world_->context().store->overrides(), job.origin,
+			job.voxel, job.dim, aabbs.data(), static_cast<int>(boxes.size()), &cpu);
 
 	int worst = 0, mat_mismatch = 0, mat_compared = 0;
 	const ve::VolumeData &gpu = results[0].data;
