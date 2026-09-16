@@ -19,8 +19,8 @@ PackedByteArray zeroed(int64_t n) {
 	b.fill(0);
 	return b;
 }
-constexpr int kSdfStride = 4916;
-constexpr int kMatStride = 4096;
+constexpr int kSdfStride = ve::kOverrideSdfStrideBytes;
+constexpr int kMatStride = ve::kOverrideMatStrideBytes;
 }
 
 ConsolidatePass::~ConsolidatePass() { teardown(); }
