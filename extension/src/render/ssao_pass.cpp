@@ -1,5 +1,7 @@
 #include "render/ssao_pass.h"
 #include "render/gbuffer.h"
+#include "gpu_layout/blocks.h"
+#include "render/gpu/gpu.h"
 #include <algorithm>
 
 using namespace godot;
@@ -61,20 +63,10 @@ bool SsaoPass::render(RenderingDevice *rd, GBuffer &gb, RID camera_ubo,
 	if (!set.is_valid()) return false;
 
 	gpu::CpuTimer timer(last_ms_);
-	static_assert(sizeof(float) * 8 == 32, "ssao push block");
-	PackedByteArray pc;
-	pc.resize(32);
-	int32_t *dims = reinterpret_cast<int32_t *>(pc.ptrw());
-	dims[0] = half.x;
-	dims[1] = half.y;
-	dims[2] = s.ssao_steps;
-	dims[3] = s.ssao_directions;
-	float *f = reinterpret_cast<float *>(pc.ptrw());
-	f[4] = kSsaoRadius;
-	f[5] = kSsaoStrength;
-	f[6] = f[7] = 0.0f;
-	if (!gpu::dispatch(rd, program_.pipeline, {{set, 0}}, pc, gpu::groups(half.x, 8),
-				gpu::groups(half.y, 8)))
+	const ve::SsaoPush push{{half.x, half.y, s.ssao_steps, s.ssao_directions},
+			{kSsaoRadius, kSsaoStrength, 0.0f, 0.0f}};
+	if (!gpu::dispatch(rd, program_.pipeline, {{set, 0}}, gpu::push_bytes(push),
+				gpu::groups(half.x, 8), gpu::groups(half.y, 8)))
 		return false;
 	output_ = target_.rid();
 	return true;

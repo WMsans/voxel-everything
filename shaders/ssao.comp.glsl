@@ -1,5 +1,6 @@
 #[compute]
 #version 460
+#include "generated/blocks.glslh"
 
 // HBAO: horizon-based ambient occlusion over the raymarched G-buffer. For each pixel the
 // horizon elevation is swept along a handful of tangent-plane directions; geometry that
@@ -24,10 +25,7 @@ layout(set = 0, binding = 0) uniform sampler2D gb_surface;
 layout(set = 0, binding = 1) uniform sampler2D gb_depth;
 layout(set = 0, binding = 2, r8) writeonly uniform image2D out_ssao;
 
-layout(push_constant, std430) uniform Push {
-	ivec4 dims;  // xy = target size, z = march steps per direction, w = sweep directions
-	vec4 params; // x = world-space radius, y = strength, zw = unused
-} pc;
+layout(push_constant, std430) uniform Push { SSAO_PUSH_FIELDS } pc;
 
 void main() {
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
