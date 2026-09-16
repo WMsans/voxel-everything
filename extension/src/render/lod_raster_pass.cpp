@@ -2,20 +2,9 @@
 #include "render/gbuffer.h"
 #include "render/lod_pool.h"
 #include "render/material_atlas.h"
-#include "render/shader_loader.h"
 #include "lod/lod_contour.h"
-#include <godot_cpp/classes/project_settings.hpp>
-#include <godot_cpp/classes/rd_pipeline_color_blend_state.hpp>
-#include <godot_cpp/classes/rd_pipeline_color_blend_state_attachment.hpp>
-#include <godot_cpp/classes/rd_pipeline_depth_stencil_state.hpp>
-#include <godot_cpp/classes/rd_pipeline_multisample_state.hpp>
-#include <godot_cpp/classes/rd_pipeline_rasterization_state.hpp>
-#include <godot_cpp/classes/rd_shader_source.hpp>
-#include <godot_cpp/classes/rd_shader_spirv.hpp>
-#include <godot_cpp/classes/rd_uniform.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_color_array.hpp>
-#include <godot_cpp/variant/utility_functions.hpp>
 #include <chrono>
 #include <cstring>
 
@@ -27,84 +16,29 @@ LodRasterPass::~LodRasterPass() {
 
 void LodRasterPass::initialize(RenderingDevice *rd) {
 	rd_ = rd;
-	auto load_stage = [&](const char *file, RenderingDevice::ShaderStage stage,
-			Ref<RDShaderSource> &src, bool marker) -> bool {
-		std::string err;
-		const String path = ProjectSettings::get_singleton()->globalize_path(String("res://shaders/") + file);
-		const String inc = ProjectSettings::get_singleton()->globalize_path("res://shaders");
-		std::string code = ve::strip_shader_annotations(
-				ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err));
-		if (code.empty()) {
-			UtilityFunctions::printerr("LodRasterPass: ", err.c_str());
-			return false;
-		}
-		if (marker) {
-			// Same production/debug split as CompositePass: the marker output is compiled
-			// only for the seam-probe shader variant, so production pipelines keep exactly
-			// one fragment output and match the scene framebuffer's color mask.
-			const size_t version_end = code.find('\n', code.find("#version"));
-			if (version_end != std::string::npos)
-				code.insert(version_end + 1, "#define SEAM_MARKER 1\n");
-		}
-		src->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
-		src->set_stage_source(stage, String(code.c_str()));
-		return true;
-	};
-	auto make_shader = [&](bool marker) -> RID {
-		Ref<RDShaderSource> src;
-		src.instantiate();
-		if (!load_stage("lod.vert.glsl", RenderingDevice::SHADER_STAGE_VERTEX, src, marker)) return RID();
-		if (!load_stage("lod.frag.glsl", RenderingDevice::SHADER_STAGE_FRAGMENT, src, marker)) return RID();
-		Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(src);
-		const String compile_err = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_VERTEX) +
-				spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_FRAGMENT);
-		if (!compile_err.is_empty()) {
-			UtilityFunctions::printerr("LodRasterPass: ", compile_err);
-			return RID();
-		}
-		return rd->shader_create_from_spirv(spirv);
-	};
-	shader_ = make_shader(false);
-	shader_marker_ = make_shader(true);
+	shader_ = gpu::compile_raster(rd, group_, "LodRasterPass", "lod.vert.glsl", "lod.frag.glsl");
+	// Same production/debug split as CompositePass: the marker output is compiled only for
+	// the seam-probe shader variant, so production pipelines keep exactly one fragment output
+	// and match the scene framebuffer's color mask.
+	shader_marker_ = gpu::compile_raster(rd, group_, "LodRasterPass", "lod.vert.glsl",
+			"lod.frag.glsl", "#define SEAM_MARKER 1\n");
 }
 
 void LodRasterPass::teardown() {
 	if (!rd_) return;
-	// Same cascade order as CompositePass: uniform set references the shader, and freeing
-	// the shader tears down its pipelines, so free the set first, then pipelines/shader.
-	if (rd_->uniform_set_is_valid(uset_)) rd_->free_rid(uset_);
-	uset_ = RID();
-	for (RID *r : {&index_array_, &pipeline_cull_off_, &pipeline_cull_ccw_,
-			&pipeline_cull_cw_, &shader_, &shader_marker_}) {
-		if (r->is_valid()) rd_->free_rid(*r);
-		*r = RID();
-	}
-	if (rd_->framebuffer_is_valid(framebuffer_)) rd_->free_rid(framebuffer_);
-	framebuffer_ = RID();
-	uset_shader_ = RID();
-	uset_quads_ = RID();
-	uset_normals_ = RID();
-	uset_page_chunk_ = RID();
-	uset_chunks_ = RID();
-	uset_albedo_ = RID();
-	uset_surface_ = RID();
-	uset_sampler_ = RID();
-	index_array_buffer_ = RID();
-	fb_albedo_ = RID();
-	fb_surface_ = RID();
-	fb_depth_ = RID();
-	fb_marker_ = RID();
+	gpu::RdDevice device{rd_};
+	group_.release(device);
+	shader_ = shader_marker_ = RID();
+	pipeline_cull_off_ = pipeline_cull_ccw_ = pipeline_cull_cw_ = RID();
+	index_array_ = index_array_buffer_ = RID();
+	set_ = gpu::SetCache();
+	framebuffer_ = gpu::FramebufferCache();
 	draw_pages_.clear();
 	rd_ = nullptr;
 }
 
 void LodRasterPass::release_targets() {
-	if (rd_ && rd_->framebuffer_is_valid(framebuffer_)) rd_->free_rid(framebuffer_);
-	framebuffer_ = RID();
-	fb_albedo_ = RID();
-	fb_surface_ = RID();
-	fb_depth_ = RID();
-	fb_marker_ = RID();
+	if (rd_) framebuffer_.release(rd_, group_);
 }
 
 void LodRasterPass::set_draw_pages(const std::vector<PageDraw> &pages) {
@@ -112,151 +46,51 @@ void LodRasterPass::set_draw_pages(const std::vector<PageDraw> &pages) {
 }
 
 bool LodRasterPass::ensure_pipeline(RenderingDevice *rd, GBuffer &gb, RID marker) {
-	const RID albedo = gb.albedo();
-	const RID surface = gb.surface();
-	const RID depth = gb.depth();
 	const bool want_marker = marker.is_valid();
 	const RID shader = want_marker ? shader_marker_ : shader_;
 	if (!shader.is_valid()) return false;
+	const std::vector<RID> attachments = want_marker
+			? std::vector<RID>{gb.albedo(), gb.surface(), marker, gb.depth()}
+			: std::vector<RID>{gb.albedo(), gb.surface(), gb.depth()};
+	if (!framebuffer_.get(rd, group_, attachments).is_valid()) return false;
 	if (pipeline_cull_off_.is_valid() && pipeline_cull_ccw_.is_valid() &&
-			pipeline_cull_cw_.is_valid() && rd->framebuffer_is_valid(framebuffer_) &&
-			albedo == fb_albedo_ && surface == fb_surface_ && depth == fb_depth_ &&
-			marker == fb_marker_ && pipeline_marker_ == want_marker) {
+			pipeline_cull_cw_.is_valid() && pipeline_marker_ == want_marker)
 		return true;
+	gpu::RdDevice device{rd};
+	for (RID *p : {&pipeline_cull_off_, &pipeline_cull_ccw_, &pipeline_cull_cw_}) {
+		group_.free(device, *p);
+		*p = RID();
 	}
-	if (rd->framebuffer_is_valid(framebuffer_)) rd->free_rid(framebuffer_);
-	const Array attachments = want_marker ?
-			Array::make(albedo, surface, marker, depth) : Array::make(albedo, surface, depth);
-	framebuffer_ = rd->framebuffer_create(attachments);
-	fb_albedo_ = albedo;
-	fb_surface_ = surface;
-	fb_depth_ = depth;
-	fb_marker_ = marker;
-	if (!rd->framebuffer_is_valid(framebuffer_)) return false;
-	fb_format_ = rd->framebuffer_get_format(framebuffer_);
-
-	if (!pipeline_cull_off_.is_valid() || !pipeline_cull_ccw_.is_valid() ||
-			!pipeline_cull_cw_.is_valid() || pipeline_marker_ != want_marker) {
-		if (pipeline_cull_off_.is_valid()) rd->free_rid(pipeline_cull_off_);
-		if (pipeline_cull_ccw_.is_valid()) rd->free_rid(pipeline_cull_ccw_);
-		if (pipeline_cull_cw_.is_valid()) rd->free_rid(pipeline_cull_cw_);
-		pipeline_cull_off_ = RID();
-		pipeline_cull_ccw_ = RID();
-		pipeline_cull_cw_ = RID();
-		auto make_pipeline = [&](RenderingDevice::PolygonCullMode cull,
-				RenderingDevice::PolygonFrontFace front) -> RID {
-			Ref<RDPipelineRasterizationState> rs;
-			rs.instantiate();
-			rs->set_cull_mode(cull);
-			rs->set_front_face(front);
-			Ref<RDPipelineMultisampleState> ms;
-			ms.instantiate();
-			Ref<RDPipelineDepthStencilState> ds;
-			ds.instantiate();
-			ds->set_enable_depth_test(true);
-			ds->set_enable_depth_write(true);
-			// Reverse-Z (M1 errata 2): near = 1, far = 0. GREATER_OR_EQUAL both writes our
-			// depth where it is nearer than the current buffer and leaves nearer geometry
-			// untouched.
-			ds->set_depth_compare_operator(RenderingDevice::COMPARE_OP_GREATER_OR_EQUAL);
-			Ref<RDPipelineColorBlendStateAttachment> att_albedo, att_surface;
-			att_albedo.instantiate();
-			att_surface.instantiate();
-			att_albedo->set_enable_blend(false);
-			att_surface->set_enable_blend(false);
-			Ref<RDPipelineColorBlendState> cb;
-			cb.instantiate();
-			if (want_marker) {
-				Ref<RDPipelineColorBlendStateAttachment> att_marker;
-				att_marker.instantiate();
-				att_marker->set_enable_blend(false);
-				cb->set_attachments(Array::make(att_albedo, att_surface, att_marker));
-				// Debug seam probe: the LoD marker (2) must OR into the composite marker
-				// (1) so double-claimed band pixels read 3. This is debug-only; production
-				// pipelines have no marker attachment and keep blending disabled.
-				cb->set_enable_logic_op(true);
-				cb->set_logic_op(RenderingDevice::LOGIC_OP_OR);
-			} else {
-				cb->set_attachments(Array::make(att_albedo, att_surface));
-			}
-			// Pull-only pipeline: no vertex array, so the vertex format must be INVALID_ID
-			// (an empty vertex format is valid but expects vertices and ERR_FAILs).
-			return rd->render_pipeline_create(shader, fb_format_, RenderingDevice::INVALID_ID,
-					RenderingDevice::RENDER_PRIMITIVE_TRIANGLES, rs, ms, ds, cb);
-		};
-		pipeline_cull_off_ = make_pipeline(RenderingDevice::POLYGON_CULL_DISABLED,
-				RenderingDevice::POLYGON_FRONT_FACE_COUNTER_CLOCKWISE);
-		pipeline_cull_ccw_ = make_pipeline(RenderingDevice::POLYGON_CULL_BACK,
-				RenderingDevice::POLYGON_FRONT_FACE_COUNTER_CLOCKWISE);
-		pipeline_cull_cw_ = make_pipeline(RenderingDevice::POLYGON_CULL_BACK,
-				RenderingDevice::POLYGON_FRONT_FACE_CLOCKWISE);
-		pipeline_marker_ = want_marker;
-	}
+	gpu::RasterState state;
+	// Reverse-Z (M1 errata 2): near = 1, far = 0. GREATER_OR_EQUAL both writes our depth
+	// where it is nearer than the current buffer and leaves nearer geometry untouched.
+	state.compare = RenderingDevice::COMPARE_OP_GREATER_OR_EQUAL;
+	state.color_attachments = want_marker ? 3 : 2;
+	// Debug seam probe: the LoD marker (2) must OR into the composite marker (1) so
+	// double-claimed band pixels read 3. Production pipelines have no marker attachment.
+	state.logic_or = want_marker;
+	state.cull = RenderingDevice::POLYGON_CULL_DISABLED;
+	state.front = RenderingDevice::POLYGON_FRONT_FACE_COUNTER_CLOCKWISE;
+	pipeline_cull_off_ = gpu::raster_pipeline(rd, group_, shader, framebuffer_.format(), state);
+	state.cull = RenderingDevice::POLYGON_CULL_BACK;
+	pipeline_cull_ccw_ = gpu::raster_pipeline(rd, group_, shader, framebuffer_.format(), state);
+	state.front = RenderingDevice::POLYGON_FRONT_FACE_CLOCKWISE;
+	pipeline_cull_cw_ = gpu::raster_pipeline(rd, group_, shader, framebuffer_.format(), state);
+	pipeline_marker_ = want_marker;
 	return pipeline_cull_off_.is_valid() && pipeline_cull_ccw_.is_valid() &&
 			pipeline_cull_cw_.is_valid();
 }
 
 bool LodRasterPass::ensure_uniform_set(RenderingDevice *rd, LodPool &pool, MaterialAtlas &materials,
 		RID shader) {
-	const RID quads = pool.quad_buffer();
-	const RID normals = pool.normal_buffer();
-	const RID page_chunk = pool.page_chunk_buffer();
-	const RID chunks = pool.chunk_buffer();
-	const RID albedo = materials.albedo_array();
-	const RID surface = materials.surface_array();
-	const RID sampler = materials.sampler();
-	if (rd->uniform_set_is_valid(uset_) && uset_shader_ == shader &&
-			quads == uset_quads_ && normals == uset_normals_ && page_chunk == uset_page_chunk_ &&
-			chunks == uset_chunks_ && albedo == uset_albedo_ && surface == uset_surface_ &&
-			sampler == uset_sampler_) {
-		return true;
-	}
-	if (rd->uniform_set_is_valid(uset_)) rd->free_rid(uset_);
-	uset_ = RID();
-	Ref<RDUniform> u0;
-	u0.instantiate();
-	u0->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	u0->set_binding(0);
-	u0->add_id(quads);
-	Ref<RDUniform> u1;
-	u1.instantiate();
-	u1->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	u1->set_binding(1);
-	u1->add_id(page_chunk);
-	Ref<RDUniform> u2;
-	u2.instantiate();
-	u2->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	u2->set_binding(2);
-	u2->add_id(chunks);
-	Ref<RDUniform> u3;
-	u3.instantiate();
-	u3->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-	u3->set_binding(3);
-	u3->add_id(sampler);
-	u3->add_id(albedo);
-	Ref<RDUniform> u4;
-	u4.instantiate();
-	u4->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-	u4->set_binding(4);
-	u4->add_id(sampler);
-	u4->add_id(surface);
-	Ref<RDUniform> u5;
-	u5.instantiate();
-	u5->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	u5->set_binding(5);
-	u5->add_id(normals);
-	uset_ = rd->uniform_set_create(Array::make(u0, u1, u2, u3, u4, u5), shader, 0);
-	if (uset_.is_valid()) {
-		uset_shader_ = shader;
-		uset_quads_ = quads;
-		uset_normals_ = normals;
-		uset_page_chunk_ = page_chunk;
-		uset_chunks_ = chunks;
-		uset_albedo_ = albedo;
-		uset_surface_ = surface;
-		uset_sampler_ = sampler;
-	}
-	return uset_.is_valid();
+	gpu::RdDevice device{rd};
+	return set_.get(device, group_, shader, 0, {
+			gpu::storage(0, pool.quad_buffer()),
+			gpu::storage(1, pool.page_chunk_buffer()),
+			gpu::storage(2, pool.chunk_buffer()),
+			gpu::sampled(3, materials.sampler(), materials.albedo_array()),
+			gpu::sampled(4, materials.sampler(), materials.surface_array()),
+			gpu::storage(5, pool.normal_buffer())}).is_valid();
 }
 
 RID LodRasterPass::active_pipeline() const {
@@ -267,9 +101,10 @@ RID LodRasterPass::active_pipeline() const {
 bool LodRasterPass::ensure_index_array(RenderingDevice *rd, LodPool &pool) {
 	const RID index_buffer = pool.index_buffer();
 	if (index_array_.is_valid() && index_buffer == index_array_buffer_) return true;
-	if (index_array_.is_valid()) rd->free_rid(index_array_);
-	index_array_ = RID();
-	index_array_ = rd->index_array_create(index_buffer, 0, ve::kLodQuadsPerPage * 6);
+	gpu::RdDevice device{rd};
+	group_.free(device, index_array_);
+	index_array_ = group_.add(gpu::Kind::IndexArray,
+			rd->index_array_create(index_buffer, 0, ve::kLodQuadsPerPage * 6));
 	index_array_buffer_ = index_buffer;
 	return index_array_.is_valid();
 }
@@ -286,7 +121,7 @@ bool LodRasterPass::clear_targets(RenderingDevice *rd, GBuffer &gb, RID marker) 
 	clears.push_back(Color(0, 0, 0, 0)); // surface
 	if (marker.is_valid()) clears.push_back(Color(0, 0, 0, 0));
 	// 0.0 is the reverse-Z far plane, the same value CompositePass clears depth to.
-	const int64_t dl = rd->draw_list_begin(framebuffer_,
+	const int64_t dl = rd->draw_list_begin(framebuffer_.rid(),
 			RenderingDevice::DRAW_CLEAR_COLOR_ALL | RenderingDevice::DRAW_CLEAR_DEPTH,
 			clears, 0.0f);
 	if (dl < 0) return false;
@@ -307,13 +142,13 @@ bool LodRasterPass::draw(RenderingDevice *rd, LodPool &pool, MaterialAtlas &mate
 
 	// The indirect args were uploaded by LodPool::upload_draw_args before the cull pass ran;
 	// draw() only opens the draw list and issues the indirect draw.
-	const int64_t dl = rd->draw_list_begin(framebuffer_, RenderingDevice::DRAW_DEFAULT_ALL);
+	const int64_t dl = rd->draw_list_begin(framebuffer_.rid(), RenderingDevice::DRAW_DEFAULT_ALL);
 	// RenderingDevice returns an invalid list when the framebuffer or device is no longer
 	// recordable. Do not issue bindings against it: the compositor treats false as a
 	// fail-soft skipped LoD pass and leaves the existing G-buffer intact.
 	if (dl < 0) return false;
 	rd->draw_list_bind_render_pipeline(dl, active_pipeline());
-	rd->draw_list_bind_uniform_set(dl, uset_, 0);
+	rd->draw_list_bind_uniform_set(dl, set_.id(), 0);
 	rd->draw_list_bind_index_array(dl, index_array_);
 	PackedByteArray pc;
 	pc.resize(96);

@@ -1,4 +1,5 @@
 #pragma once
+#include "render/gpu/gpu.h"
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/projection.hpp>
 #include <godot_cpp/variant/rid.hpp>
@@ -72,17 +73,15 @@ private:
 	RID active_pipeline() const;
 
 	RenderingDevice *rd_ = nullptr;
+	gpu::Group group_;
 	RID shader_, shader_marker_;
 	RID pipeline_cull_off_;
 	RID pipeline_cull_ccw_;
 	RID pipeline_cull_cw_;
-	RID uset_, uset_shader_;
-	RID uset_quads_, uset_normals_, uset_page_chunk_, uset_chunks_;
-	RID uset_albedo_, uset_surface_, uset_sampler_;
+	gpu::SetCache set_;
 	RID index_array_, index_array_buffer_;
-	int64_t fb_format_ = 0;
 	bool pipeline_marker_ = false;
-	RID framebuffer_, fb_albedo_, fb_surface_, fb_depth_, fb_marker_;
+	gpu::FramebufferCache framebuffer_;
 	std::vector<PageDraw> draw_pages_;
 	float last_ms_ = 0.0f;
 	bool cull_enabled_ = true;
