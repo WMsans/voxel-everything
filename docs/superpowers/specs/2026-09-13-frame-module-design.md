@@ -417,12 +417,12 @@ with 9.3(b). Move `AnalyticGenerator` to test-only as the equivalence oracle.
 | S1 | Collider residency probe ignores volumes and overrides; after consolidation clears a region's ops, a filled/pasted chunk can probe as surface-free and get no collider | `collider_streamer.cpp:32-43` (verified: generator + ops only); `consolidation.cpp:157` `clear_region_through`; `test_connectivity.gd:34-38` sets `max_override_bricks = 1` |
 | S2 | Island contact probe omits overrides; CPU `extract_island_volume` has no override input while its GPU counterpart uses them | `island_manager.cpp:82-95`; `volume_set.cpp:382,425,431` |
 | S3 | LoD chunks spanning several regions use one region's override table; `& 31` brick wrap may alias edits every 25.6 m; `gather_ops` truncates at 256 | `mesh_service.cpp:826-833`; `field_ops.glslh:249,294`; `lod_system.cpp:41` |
-| S4 | Physics objects ignore the scene sun (fixed `VE_SUN_DIR`, no colour); island rock albedo hard-coded | `cel_object.gdshader:28`; `island_body.cpp:193` |
+| S4 | Physics objects ignore the scene sun (fixed `VE_SUN_DIR`, no colour); island rock albedo hard-coded | `cel_object.gdshader:28`; `island_body.cpp:193` — **Sub-project 4 result:** sun direction, colour and ambient FIXED (`5b130dc`, passing `test_object_lighting_follows_the_scene_sun`); island rock albedo OPEN because `IslandBody` has no material data. |
 | S5 | Menu ranges contradict C++ clamps | `debug_menu.gd:22,38` vs `grass_settings.h:31` and the emissive clamp |
 | S6 | `set_quality_tier` discards per-knob tweaks | `orchestrator.cpp:605-609` |
-| S7 | Grass writes material 1, so making `grass_01` emissive makes blades glow | `grass.frag.glsl:26` |
+| S7 | Grass writes material 1, so making `grass_01` emissive makes blades glow | `grass.frag.glsl:26` — **Sub-project 4 result:** FIXED (`06a8187` failing test, `ed62b44` fix); `test_blades_write_the_grass_blade_material_not_the_terrain_they_grow_on` passes. |
 | S8 | `ssao` timing scope nested inside `deferred`, so "deferred" includes SSAO time | `raymarch_compositor.cpp:433-451` |
-| S9 | `static_assert` messages name the wrong files | `volume_pool.cpp:12`, `override_pool.cpp:14` |
+| S9 | `static_assert` messages name the wrong files | `volume_pool.cpp:12`, `override_pool.cpp:14` — **Sub-project 4 result:** CLOSED; the asserts were deleted and the values are generated (`61c62a6`), with the forbidden-pattern check empty. |
 
 ## 11. Leave alone
 
