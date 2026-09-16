@@ -556,7 +556,8 @@ void RenderOrchestrator::reload_snapshot(int *out_count, bool *out_last_ok,
 void RenderOrchestrator::set_quality_tier(int v) {
 	const int tier = v < 0 ? 0 : (v > 3 ? 3 : v);
 	quality_tier_.store(tier, std::memory_order_relaxed);
-	beauty_.set(ve::settings_for_tier(static_cast<ve::QualityTier>(tier)));
+	// Rebase: the tier is the base, per-knob overrides layer on top and survive (S6).
+	beauty_.rebase(ve::settings_for_tier(static_cast<ve::QualityTier>(tier)));
 }
 
 int RenderOrchestrator::quality_tier() const {
