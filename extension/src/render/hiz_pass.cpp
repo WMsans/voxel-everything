@@ -1,4 +1,5 @@
 #include "render/hiz_pass.h"
+#include "gpu_layout/blocks.h"
 #include <godot_cpp/classes/rd_texture_format.hpp>
 #include <godot_cpp/classes/rd_texture_view.hpp>
 #include <godot_cpp/variant/array.hpp>
@@ -155,16 +156,8 @@ bool HizPass::build(RenderingDevice *rd, RID scene_depth, Vector2i scene_size) {
 
 		rd->compute_list_bind_compute_pipeline(list, program_.pipeline);
 		rd->compute_list_bind_uniform_set(list, usets_[m], 0);
-		PackedByteArray pc;
-		pc.resize(32);
-		int32_t *p = reinterpret_cast<int32_t *>(pc.ptrw());
-		p[0] = dw;
-		p[1] = dh;
-		p[2] = sw;
-		p[3] = sh;
-		p[4] = m == 0 ? 1 : 0;
-		p[5] = p[6] = p[7] = 0;
-		rd->compute_list_set_push_constant(list, pc, pc.size());
+		const ve::HizPush push{{dw, dh, sw, sh}, {m == 0 ? 1 : 0, 0, 0, 0}};
+		rd->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
 		rd->compute_list_dispatch(list, (static_cast<uint32_t>(dw) + 7) / 8,
 				(static_cast<uint32_t>(dh) + 7) / 8, 1);
 		if (m + 1 < kMipCount) rd->compute_list_add_barrier(list);
