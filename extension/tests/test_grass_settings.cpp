@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 #include "grass/grass_settings.h"
 #include "grass/grass_settings_store.h"
+#include "settings_row_checks.h"
 
 TEST_CASE("grass defaults are inside their own clamp") {
 	ve::GrassSettings s;
@@ -157,4 +158,8 @@ TEST_CASE("every grass knob name round-trips through the store") {
 		CHECK(store.set_value(k.name, k.v));
 		CHECK(store.value(k.name) == doctest::Approx(k.v));
 	}
+}
+
+TEST_CASE("the grass rows satisfy the table invariants") {
+	check_rows(ve::grass_rows(), {ve::GrassSettings{}});
 }

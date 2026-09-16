@@ -5,6 +5,8 @@ import platform
 # godot-cpp master requires an explicit api_version to generate bindings (engine is 4.7.x).
 api_version = "4.7"
 env = SConscript("godot-cpp/SConstruct", exports="api_version")
+# Task 6 settings use std::span; override godot-cpp's C++17 default for the extension.
+env.Append(CXXFLAGS=["-std=c++20"])
 env.Append(CPPPATH=["src/"])
 sources = Glob("src/*.cpp") + Glob("src/*/*.cpp") + Glob("src/*/*/*.cpp")
 lib = env.SharedLibrary("bin/voxel_everything{}{}".format(env["suffix"], env["SHLIBSUFFIX"]), source=sources)

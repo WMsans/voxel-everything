@@ -1,4 +1,6 @@
 #pragma once
+#include "settings/settings_table.h"
+#include <span>
 
 namespace ve {
 
@@ -77,6 +79,10 @@ struct GrassSettings {
 	// fully per-blade lighting, which starts to read as noise.
 	float blade_lighting = 0.6f;
 };
+
+// One row per knob: name, clamp and slider range. The store, the settings panel, the config file
+// and clamp_grass_settings all read these rows.
+std::span<const SettingRow<GrassSettings>> grass_rows();
 
 // Pulls every field into its documented range, NaN included. Idempotent.
 void clamp_grass_settings(GrassSettings *s);
