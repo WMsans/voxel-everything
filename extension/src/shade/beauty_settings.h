@@ -23,6 +23,13 @@ struct BeautySettings {
 	int ssgi_taps = 8;      // [0, 16]
 	int ssr_steps = 24;     // [0, 64]
 	int contact_steps = 12; // [0, 32]
+
+	// The contact-shadow march (ContactShadowPush.params.xyz). Were literals in
+	// contact_shadow_pass.cpp. Metres where named so.
+	float contact_reach_m = 0.6f;   // [0.05, 4]  how far the screen-space march reaches
+	float contact_strength = 0.85f; // [0, 1]     how dark a fully occluded pixel gets
+	float contact_bias_m = 0.05f;   // [0, 0.5]   surface bias and hit thickness
+
 	int ssao_steps = 8;      // [0, 16]  march steps per sweep direction
 	int ssao_directions = 6; // [0, 8]   sweep directions per pixel
 

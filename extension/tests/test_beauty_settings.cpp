@@ -152,6 +152,9 @@ void check_same(const ve::BeautySettings &got, const ve::BeautySettings &want) {
 	CHECK(got.outline_depth_threshold == doctest::Approx(want.outline_depth_threshold));
 	CHECK(got.outline_normal_threshold == doctest::Approx(want.outline_normal_threshold));
 	CHECK(got.outline_darken == doctest::Approx(want.outline_darken));
+	CHECK(got.contact_reach_m == doctest::Approx(want.contact_reach_m));
+	CHECK(got.contact_strength == doctest::Approx(want.contact_strength));
+	CHECK(got.contact_bias_m == doctest::Approx(want.contact_bias_m));
 }
 
 } // namespace
@@ -208,4 +211,11 @@ TEST_CASE("the SSAO gather shape defaults to the literals it replaced") {
 
 TEST_CASE("outline darkening defaults to the literal it replaced") {
 	CHECK(ve::BeautySettings{}.outline_darken == 0.35f);
+}
+
+TEST_CASE("contact shadow shape defaults to the literals it replaced") {
+	const ve::BeautySettings s;
+	CHECK(s.contact_reach_m == 0.6f);
+	CHECK(s.contact_strength == 0.85f);
+	CHECK(s.contact_bias_m == 0.05f);
 }

@@ -18,6 +18,14 @@ const SettingRow<BeautySettings> kBeautyRows[] = {
 	int_row("ssgi_taps", "SSGI taps", &BeautySettings::ssgi_taps, 0, 16, 0, 16),
 	int_row("ssr_steps", "SSR steps", &BeautySettings::ssr_steps, 0, 64, 0, 64),
 	int_row("contact_steps", "Contact shadow steps", &BeautySettings::contact_steps, 0, 32, 0, 32),
+	float_row("contact_reach_m", "Contact shadow reach (m)", &BeautySettings::contact_reach_m, 0.05f,
+			4.0f, 0.05f, 2.0f, 0.05f),
+	float_row("contact_strength", "Contact shadow strength", &BeautySettings::contact_strength, 0.0f,
+			1.0f, 0.0f, 1.0f, 0.01f),
+	// One voxel of surface bias by default: large enough to leave the receiver, too small to
+	// bridge terrain gaps.
+	float_row("contact_bias_m", "Contact shadow bias (m)", &BeautySettings::contact_bias_m, 0.0f,
+			0.5f, 0.0f, 0.2f, 0.005f),
 	int_row("ssao_steps", "SSAO steps", &BeautySettings::ssao_steps, 0, 16, 0, 16),
 	int_row("ssao_directions", "SSAO directions", &BeautySettings::ssao_directions, 0, 8, 0, 8),
 	float_row("ssao_radius", "SSAO radius (m)", &BeautySettings::ssao_radius, 0.25f, 32.0f, 0.25f,

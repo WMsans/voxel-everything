@@ -62,9 +62,8 @@ bool ContactShadowPass::render(RenderingDevice *rd, RID scene_color, RID scene_d
 	if (list < 0) return false;
 	rd->compute_list_bind_compute_pipeline(list, program_.pipeline);
 	rd->compute_list_bind_uniform_set(list, set, 0);
-	// One voxel of surface bias: large enough to leave the receiver, but too small to bridge
-	// terrain gaps.
-	ve::ContactShadowPush push{{half.x, half.y, 0, s.contact_steps}, {0.6f, 0.85f, 0.05f, 0.0f}};
+	ve::ContactShadowPush push{{half.x, half.y, 0, s.contact_steps},
+			{s.contact_reach_m, s.contact_strength, s.contact_bias_m, 0.0f}};
 	rd->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
 	rd->compute_list_dispatch(list, gpu::groups(half.x, 8), gpu::groups(half.y, 8), 1);
 	rd->compute_list_add_barrier(list);
