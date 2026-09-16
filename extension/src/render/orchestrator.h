@@ -36,6 +36,7 @@
 #include "render/island_handoff.h"
 #include "shade/beauty_settings.h"
 #include "shade/beauty_settings_store.h"
+#include "settings/render_settings.h"
 #include "world/region.h"
 
 namespace godot {
@@ -171,6 +172,9 @@ public:
 	ve::BeautySettings beauty_settings() const;
 	// Settings + tier together, for debug_beauty_settings.
 	void beauty_snapshot(ve::BeautySettings *out_settings, int *out_tier) const;
+	// The three stores by group name ("render", "beauty", "grass"); nullptr otherwise.
+	// VoxelSettings addresses them through this. Main thread.
+	ve::SettingsGroup *settings_group(const char *name);
 
 	// Outcome of the GPU-half of ensure_initialized():
 	//   kOk          -- graph complete; caller sets its initialized_ flag.
@@ -346,6 +350,12 @@ private:
 	// Setters run on the main thread; render callbacks take value snapshots through
 	// beauty_settings(). The store's mutex is never held during render work.
 	std::atomic<int> quality_tier_{static_cast<int>(ve::QualityTier::kHigh)};
+	// Source of truth for the budget dials. Its listener mirrors near_field_scale, near_field and
+	// islands into the orchestrator's atomics (the render thread's lock-free reads) and rebases
+	// beauty_ when the tier moves. The listener is attached in the constructor body, after every
+	// member it touches exists.
+	ve::RenderSettingsStore render_settings_;
+	static void on_render_resolved(const ve::RenderSettings &s, void *ctx);
 	ve::BeautySettingsStore beauty_;
 	VoxelFrame frame_;
 };

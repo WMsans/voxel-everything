@@ -43,9 +43,11 @@ using namespace godot;
 namespace godot {
 
 RenderOrchestrator::RenderOrchestrator(Collaborators handles) :
-		handles_(std::move(handles)),
-		beauty_(),
-		frame_(*this, *handles_.lod, *handles_.store) {}
+		handles_(std::move(handles)), frame_(*this, *handles_.lod, *handles_.store) {
+	// The atomics and beauty_ already hold RenderSettings{}'s values, so nothing is mirrored
+	// until the first write.
+	render_settings_.set_listener(&RenderOrchestrator::on_render_resolved, this);
+}
 
 RenderingDevice *RenderOrchestrator::acquire_device() {
 	// Guard: main/render-thread use OUTSIDE a frame only. Mid-frame acquisition (e.g.
@@ -553,11 +555,26 @@ void RenderOrchestrator::reload_snapshot(int *out_count, bool *out_last_ok,
 	*out_last_error = reload_last_error_;
 }
 
-void RenderOrchestrator::set_quality_tier(int v) {
-	const int tier = v < 0 ? 0 : (v > 3 ? 3 : v);
-	quality_tier_.store(tier, std::memory_order_relaxed);
+void RenderOrchestrator::on_render_resolved(const ve::RenderSettings &s, void *ctx) {
+	auto *self = static_cast<RenderOrchestrator *>(ctx);
+	self->islands_enabled_.store(s.islands, std::memory_order_relaxed);
+	self->near_field_enabled_.store(s.near_field, std::memory_order_relaxed);
+	self->near_field_scale_.store(s.near_field_scale, std::memory_order_relaxed);
 	// Rebase: the tier is the base, per-knob overrides layer on top and survive (S6).
-	beauty_.rebase(ve::settings_for_tier(static_cast<ve::QualityTier>(tier)));
+	if (self->quality_tier_.exchange(s.quality_tier, std::memory_order_relaxed) != s.quality_tier)
+		self->beauty_.rebase(ve::settings_for_tier(static_cast<ve::QualityTier>(s.quality_tier)));
+}
+
+ve::SettingsGroup *RenderOrchestrator::settings_group(const char *name) {
+	if (!name) return nullptr;
+	if (std::strcmp(name, "render") == 0) return &render_settings_;
+	if (std::strcmp(name, "beauty") == 0) return &beauty_;
+	if (std::strcmp(name, "grass") == 0) return &grass_settings_;
+	return nullptr;
+}
+
+void RenderOrchestrator::set_quality_tier(int v) {
+	render_settings_.set_value("quality_tier", static_cast<float>(v));
 }
 
 int RenderOrchestrator::quality_tier() const {
@@ -565,24 +582,17 @@ int RenderOrchestrator::quality_tier() const {
 }
 
 void RenderOrchestrator::set_effect_enabled(const String &name, bool on) {
-	if (name == "islands") {
-		islands_enabled_.store(on, std::memory_order_relaxed);
-		return;
-	}
-	if (name == "near_field") {
-		near_field_enabled_.store(on, std::memory_order_relaxed);
-		return;
-	}
 	const CharString n = name.utf8();
-	beauty_.set(n.get_data(), ve::SettingValue::of_bool(on)); // fail-soft: unknown name or not a switch
+	const ve::SettingValue v = ve::SettingValue::of_bool(on);
+	// Render switches (islands, near_field), then beauty switches; fail-soft for anything else.
+	if (!render_settings_.set(n.get_data(), v)) beauty_.set(n.get_data(), v);
 }
 
 bool RenderOrchestrator::get_effect_enabled(const String &name) const {
-	if (name == "islands") return islands_enabled_.load(std::memory_order_relaxed);
-	if (name == "near_field") return near_field_enabled_.load(std::memory_order_relaxed);
 	const CharString n = name.utf8();
 	ve::SettingValue v;
-	return beauty_.get(n.get_data(), &v) && v.kind == ve::SettingKind::kBool && v.v[0] != 0.0f;
+	if (!render_settings_.get(n.get_data(), &v) && !beauty_.get(n.get_data(), &v)) return false;
+	return v.kind == ve::SettingKind::kBool && v.v[0] != 0.0f;
 }
 
 void RenderOrchestrator::set_effect_value(const String &name, float value) {
@@ -619,7 +629,7 @@ ve::SunState RenderOrchestrator::sun_state() const {
 }
 
 void RenderOrchestrator::set_near_field_scale(float v) {
-	near_field_scale_.store(v < 0.1f ? 0.1f : (v > 1.0f ? 1.0f : v), std::memory_order_relaxed);
+	render_settings_.set_value("near_field_scale", v); // the row clamps to [0.1, 1]
 }
 
 FrameSettings RenderOrchestrator::frame_settings() const {
