@@ -62,3 +62,18 @@ func test_every_grass_knob_round_trips_by_name() -> void:
 		assert_bool(w.set_grass_value(entry[0], entry[1])).override_failure_message(entry[0]).is_true()
 		assert_float(w.get_grass_value(entry[0])).override_failure_message(entry[0]) \
 			.is_equal_approx(entry[1], 0.0001)
+
+# Settings-store plan Task 8: the counts became settable by name.
+const BEAUTY_COUNTS := [["ssgi_taps", 4], ["ssr_steps", 12], ["contact_steps", 8],
+	["ssao_steps", 4], ["ssao_directions", 4]]
+
+func test_every_beauty_count_is_settable_by_name() -> void:
+	var w := make_world()
+	for entry in BEAUTY_COUNTS:
+		w.set_effect_value(entry[0], entry[1])
+		assert_float(w.get_effect_value(entry[0])).override_failure_message(entry[0]) \
+			.is_equal_approx(float(entry[1]), 0.0001)
+		assert_int(int(w.hooks().debug_beauty_settings()[entry[0]])).is_equal(entry[1])
+	# A switch is not a magnitude: set_effect_value leaves it alone.
+	w.set_effect_value("ssgi", 0.0)
+	assert_bool(w.get_effect_enabled("ssgi")).is_true()

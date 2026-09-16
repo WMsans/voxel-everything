@@ -1,6 +1,8 @@
 #include <doctest/doctest.h>
 #include <initializer_list>
+#include "settings_row_checks.h"
 #include "shade/beauty_settings.h"
+#include "shade/beauty_settings_store.h"
 
 TEST_CASE("the Off tier turns every effect off and leaves no work in any counter") {
 	const ve::BeautySettings s = ve::settings_for_tier(ve::QualityTier::kOff);
@@ -176,4 +178,21 @@ TEST_CASE("every tier preset is pinned field by field") {
 	ve::BeautySettings off = low;
 	off.outlines = off.sun_shadow_map = off.raymarched_sun_shadow = false;
 	check_same(ve::settings_for_tier(ve::QualityTier::kOff), off);
+}
+
+TEST_CASE("the beauty rows satisfy the table invariants for every tier") {
+	check_rows(ve::beauty_rows(),
+			{ve::BeautySettings{}, ve::settings_for_tier(ve::QualityTier::kOff),
+					ve::settings_for_tier(ve::QualityTier::kLow),
+					ve::settings_for_tier(ve::QualityTier::kMedium),
+					ve::settings_for_tier(ve::QualityTier::kHigh)});
+}
+
+TEST_CASE("the beauty store starts at High and sets counts by name") {
+	ve::BeautySettingsStore store;
+	check_same(store.get(), ve::settings_for_tier(ve::QualityTier::kHigh));
+	CHECK(store.set_value("ssgi_taps", 4.0f));
+	CHECK(store.get().ssgi_taps == 4);
+	CHECK(store.set_value("ssgi_taps", 0.0f));
+	CHECK_FALSE(store.get().ssgi); // normalize: zero work is off
 }

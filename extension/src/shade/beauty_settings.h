@@ -1,5 +1,7 @@
 #pragma once
 #include <cstdint>
+#include "settings/settings_table.h"
+#include <span>
 
 namespace ve {
 
@@ -76,6 +78,11 @@ inline constexpr BeautyFlag kBeautyFlags[] = {
 };
 
 BeautySettings settings_for_tier(QualityTier t);
+// One row per knob (spec 2026-09-16 §3.3). The store, the settings panel, the config file, the
+// inspector and debug_beauty_settings read these rows; clamp_settings clamps through them.
+std::span<const SettingRow<BeautySettings>> beauty_rows();
+// The rules that span fields: zero work is off. Runs after every clamp and every store resolve.
+void normalize_beauty(BeautySettings *s);
 void clamp_settings(BeautySettings *s);
 uint32_t pack_beauty_flags(const BeautySettings &s);
 inline uint32_t pack_flags(const BeautySettings &s) {

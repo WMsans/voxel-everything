@@ -4,6 +4,7 @@
 #include "render/frame.h"
 #include "render/frame_params.h"
 #include "render/orchestrator.h"
+#include "settings/godot/setting_variant.h"
 #include "terrain/field_params_pack.h"
 #include <cstring>
 #include "mesh/consolidation.h"
@@ -406,33 +407,13 @@ Dictionary VoxelDebugHooks::debug_ssgi_reprojection_probe(Vector3 previous_pos, 
 Dictionary VoxelDebugHooks::debug_beauty_settings() {
 	ve::BeautySettings beauty;
 	int quality_tier;
-	// Task 14: beauty_mutex_/beauty_/quality_tier_ moved into RenderOrchestrator; this
-	// snapshot keeps the single-mutex-hold shape of the pre-move body.
 	world_->context().render->beauty_snapshot(&beauty, &quality_tier);
 
+	// Every row by name, so a new beauty knob appears here without another line.
 	Dictionary d;
-	d["ssgi"] = beauty.ssgi;
-	d["ssr"] = beauty.ssr;
-	d["contact_shadows"] = beauty.contact_shadows;
-	d["outlines"] = beauty.outlines;
-	d["sun_shadow_map"] = beauty.sun_shadow_map;
-	d["glossy_sdf_rays"] = beauty.glossy_sdf_rays;
-	d["raymarched_sun_shadow"] = beauty.raymarched_sun_shadow;
-	d["ssao"] = beauty.ssao;
-	d["cost_view"] = beauty.cost_view;
+	for (const ve::SettingRow<ve::BeautySettings> &row : ve::beauty_rows())
+		d[row.name] = setting_to_variant(ve::read(row, beauty));
 	d["islands"] = world_->get_effect_enabled("islands");
-	d["ssgi_taps"] = beauty.ssgi_taps;
-	d["ssr_steps"] = beauty.ssr_steps;
-	d["contact_steps"] = beauty.contact_steps;
-	d["ssao_steps"] = beauty.ssao_steps;
-	d["ssao_directions"] = beauty.ssao_directions;
-	d["outline_depth_threshold"] = beauty.outline_depth_threshold;
-	d["outline_normal_threshold"] = beauty.outline_normal_threshold;
-	d["ssgi_radius"] = beauty.ssgi_radius;
-	d["ssgi_temporal"] = beauty.ssgi_temporal;
-	d["ssgi_strength"] = beauty.ssgi_strength;
-	d["emissive_gi_radius"] = beauty.emissive_gi_radius;
-	d["emissive_gi_strength"] = beauty.emissive_gi_strength;
 	d["tier"] = quality_tier;
 	d["flags"] = static_cast<int>(ve::pack_beauty_flags(beauty));
 	return d;

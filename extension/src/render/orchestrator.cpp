@@ -43,7 +43,9 @@ using namespace godot;
 namespace godot {
 
 RenderOrchestrator::RenderOrchestrator(Collaborators handles) :
-		handles_(std::move(handles)), frame_(*this, *handles_.lod, *handles_.store) {}
+		handles_(std::move(handles)),
+		beauty_(),
+		frame_(*this, *handles_.lod, *handles_.store) {}
 
 RenderingDevice *RenderOrchestrator::acquire_device() {
 	// Guard: main/render-thread use OUTSIDE a frame only. Mid-frame acquisition (e.g.
@@ -483,32 +485,10 @@ bool RenderOrchestrator::preflight_shaders(RenderingDevice *rd, String *out_erro
 
 namespace {
 
-// One table, so the setter, the getter and the debug dictionary cannot disagree about what
-// an effect is called. (Moved verbatim from voxel_world.cpp, Task 14.)
-bool *beauty_field(ve::BeautySettings &s, const String &name) {
-	if (name == "ssgi") return &s.ssgi;
-	if (name == "ssr") return &s.ssr;
-	if (name == "contact_shadows") return &s.contact_shadows;
-	if (name == "outlines") return &s.outlines;
-	if (name == "sun_shadow_map") return &s.sun_shadow_map;
-	if (name == "glossy_sdf_rays") return &s.glossy_sdf_rays;
-	if (name == "raymarched_sun_shadow") return &s.raymarched_sun_shadow;
-	if (name == "ssao") return &s.ssao;
-	if (name == "cost_view") return &s.cost_view;
-	return nullptr;
-}
-
-// The same table, for the knobs that are a magnitude rather than a switch. Kept beside
-// beauty_field for the same reason it exists: one place decides what a knob is called.
-float *beauty_value_field(ve::BeautySettings &s, const String &name) {
-	if (name == "ssgi_radius") return &s.ssgi_radius;
-	if (name == "ssgi_temporal") return &s.ssgi_temporal;
-	if (name == "ssgi_strength") return &s.ssgi_strength;
-	if (name == "emissive_gi_radius") return &s.emissive_gi_radius;
-	if (name == "emissive_gi_strength") return &s.emissive_gi_strength;
-	if (name == "outline_depth_threshold") return &s.outline_depth_threshold;
-	if (name == "outline_normal_threshold") return &s.outline_normal_threshold;
-	return nullptr;
+// set/get_effect_value address the knobs that are a magnitude; switches go through
+// set/get_effect_enabled.
+bool is_magnitude(ve::SettingKind kind) {
+	return kind == ve::SettingKind::kInt || kind == ve::SettingKind::kFloat;
 }
 
 } // namespace
@@ -574,14 +554,13 @@ void RenderOrchestrator::reload_snapshot(int *out_count, bool *out_last_ok,
 }
 
 void RenderOrchestrator::set_quality_tier(int v) {
-	std::lock_guard<std::mutex> lock(beauty_mutex_);
-	quality_tier_ = v < 0 ? 0 : (v > 3 ? 3 : v);
-	beauty_ = ve::settings_for_tier(static_cast<ve::QualityTier>(quality_tier_));
+	const int tier = v < 0 ? 0 : (v > 3 ? 3 : v);
+	quality_tier_.store(tier, std::memory_order_relaxed);
+	beauty_.set(ve::settings_for_tier(static_cast<ve::QualityTier>(tier)));
 }
 
 int RenderOrchestrator::quality_tier() const {
-	std::lock_guard<std::mutex> lock(beauty_mutex_);
-	return quality_tier_;
+	return quality_tier_.load(std::memory_order_relaxed);
 }
 
 void RenderOrchestrator::set_effect_enabled(const String &name, bool on) {
@@ -593,47 +572,39 @@ void RenderOrchestrator::set_effect_enabled(const String &name, bool on) {
 		near_field_enabled_.store(on, std::memory_order_relaxed);
 		return;
 	}
-	std::lock_guard<std::mutex> lock(beauty_mutex_);
-	bool *f = beauty_field(beauty_, name);
-	if (!f) return; // fail-soft: an unknown name in a debug menu is not a crash
-	*f = on;
-	ve::clamp_settings(&beauty_);
+	const CharString n = name.utf8();
+	beauty_.set(n.get_data(), ve::SettingValue::of_bool(on)); // fail-soft: unknown name or not a switch
 }
 
 bool RenderOrchestrator::get_effect_enabled(const String &name) const {
 	if (name == "islands") return islands_enabled_.load(std::memory_order_relaxed);
 	if (name == "near_field") return near_field_enabled_.load(std::memory_order_relaxed);
-	std::lock_guard<std::mutex> lock(beauty_mutex_);
-	ve::BeautySettings copy = beauty_;
-	const bool *f = beauty_field(copy, name);
-	return f ? *f : false;
+	const CharString n = name.utf8();
+	ve::SettingValue v;
+	return beauty_.get(n.get_data(), &v) && v.kind == ve::SettingKind::kBool && v.v[0] != 0.0f;
 }
 
 void RenderOrchestrator::set_effect_value(const String &name, float value) {
-	std::lock_guard<std::mutex> lock(beauty_mutex_);
-	float *f = beauty_value_field(beauty_, name);
-	if (!f) return; // fail-soft, exactly as set_effect_enabled treats an unknown name
-	*f = value;
-	ve::clamp_settings(&beauty_);
+	const CharString n = name.utf8();
+	ve::SettingValue current;
+	if (!beauty_.get(n.get_data(), &current) || !is_magnitude(current.kind)) return; // fail-soft
+	beauty_.set_value(n.get_data(), value);
 }
 
 float RenderOrchestrator::get_effect_value(const String &name) const {
-	std::lock_guard<std::mutex> lock(beauty_mutex_);
-	ve::BeautySettings copy = beauty_;
-	const float *f = beauty_value_field(copy, name);
-	return f ? *f : 0.0f;
+	const CharString n = name.utf8();
+	ve::SettingValue v;
+	if (!beauty_.get(n.get_data(), &v) || !is_magnitude(v.kind)) return 0.0f;
+	return v.v[0];
 }
 
 ve::BeautySettings RenderOrchestrator::beauty_settings() const {
-	std::lock_guard<std::mutex> lock(beauty_mutex_);
-	return beauty_;
+	return beauty_.get();
 }
 
 void RenderOrchestrator::beauty_snapshot(ve::BeautySettings *out_settings, int *out_tier) const {
-	// One hold, matching the pre-move debug_beauty_settings body's shape.
-	std::lock_guard<std::mutex> lock(beauty_mutex_);
-	*out_settings = beauty_;
-	*out_tier = quality_tier_;
+	*out_settings = beauty_.get();
+	*out_tier = quality_tier();
 }
 
 void RenderOrchestrator::set_sun_state(const ve::SunState &sun) {
