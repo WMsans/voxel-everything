@@ -1,0 +1,21 @@
+// GENERATED from extension/src/gpu_layout/gbuffer_layout.h by ve::layout::gbuffer_glsl().
+// Do not edit by hand: extension/tests/test_generated_glsl.cpp asserts this file byte
+// for byte. Regenerate: cd extension && VE_REGEN_GOLDEN=1 ./build/tests/ve_tests
+//
+// G-buffer colour attachments in framebuffer order; depth follows them.
+//   0 albedo R8G8B8A8_UNORM: rgb = albedo, a = sun visibility
+//   1 surface R16G16B16A16_SFLOAT: xy = oct normal, z = material id, w = gloss
+// Macros only. GB_NORMAL and GB_PACK_SURFACE need common.glslh's oct_decode and
+// oct_encode in scope where they are used.
+
+#define GB_ATTACHMENTS 2
+
+#define GB_ALBEDO(g0) ((g0).rgb)
+#define GB_SUN_VIS(g0) ((g0).a)
+#define GB_NORMAL(g1) oct_decode((g1).xy)
+#define GB_MATERIAL_ID(g1) uint((g1).z + 0.5)
+#define GB_IS_SURFACE(g1) ((g1).z >= 0.5)
+#define GB_GLOSS(g1) ((g1).w)
+#define GB_PACK_ALBEDO(rgb, sun_vis) vec4((rgb), (sun_vis))
+#define GB_PACK_SURFACE_OCT(oct, mat, gloss) vec4((oct), float(mat), (gloss))
+#define GB_PACK_SURFACE(n, mat, gloss) GB_PACK_SURFACE_OCT(oct_encode(n), (mat), (gloss))

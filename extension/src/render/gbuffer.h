@@ -10,8 +10,7 @@ namespace godot {
 // engine owns, plus the deferred stack's output and the half-resolution copy of last
 // frame's finished image that SSGI bounces light from.
 //
-//   albedo   R8G8B8A8_UNORM        rgb = albedo, a = sun visibility (shadow layer 1 and 2)
-//   surface  R16G16B16A16_SFLOAT   xy = oct normal, z = material id, w = gloss
+//   albedo, surface  channel layout in gpu_layout/gbuffer_layout.h (generates shaders/generated/gbuffer.glslh)
 //   depth    D32_SFLOAT            reverse-Z, the SAME NDC as Godot's scene depth, so the
 //                                  injection is a copy rather than a reprojection
 //   lit      R16G16B16A16_SFLOAT   what the deferred pass produced this frame

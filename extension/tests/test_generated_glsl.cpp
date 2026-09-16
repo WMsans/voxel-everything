@@ -4,6 +4,7 @@
 #include <doctest/doctest.h>
 #include "gpu_layout/blocks.h"
 #include "gpu_layout/constants.h"
+#include "gpu_layout/gbuffer_layout.h"
 #include "render/shader_loader.h"
 #include <cstdlib>
 #include <fstream>
@@ -44,4 +45,9 @@ TEST_CASE("generated: shaders/generated/blocks.glslh") {
 
 TEST_CASE("generated: shaders/generated/constants.glslh") {
 	check_generated("shaders/generated/constants.glslh", ve::layout::constants_glsl());
+}
+
+TEST_CASE("generated: shaders/generated/gbuffer.glslh") {
+	check_generated("shaders/generated/gbuffer.glslh", ve::layout::gbuffer_glsl());
+	CHECK(ve::layout::kGbColorAttachments == 2);
 }
