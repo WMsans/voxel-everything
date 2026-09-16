@@ -8,7 +8,6 @@ extends Control
 # live in VoxelSettings; closing the panel asks it to save.
 
 @export var settings_path: NodePath
-@export var toggle_key := KEY_F1
 
 var _settings: VoxelSettings
 var _controls := {}      # "group/name" -> the control for that row
@@ -32,7 +31,7 @@ func _ready() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return
-	if event.keycode == toggle_key:
+	if event.keycode == KEY_F1:
 		set_open(not visible)
 		get_viewport().set_input_as_handled()
 	elif visible and event.keycode == KEY_ESCAPE:

@@ -116,7 +116,7 @@ int refine_anchoring(const OccupancyGrid &grid, const ContactProbe &probe,
 
 int contact_samples_field(const Generator &gen, const EditOp *ops, int op_count, IVec3 cell,
 		int axis, int face_samples, const VolumeStore *volumes, const OverrideSource *overrides) {
-	if (face_samples < 1) return 0;
+	if (axis < 0 || axis > 2 || face_samples < 1) return 0;
 	// The face is the plane at the far side of `cell` along `axis`; the other two axes span
 	// the cell's own extent. Samples are inset half a step so none lands on a corner shared
 	// with three other faces, where a hairline of rock would read as contact on all of them.

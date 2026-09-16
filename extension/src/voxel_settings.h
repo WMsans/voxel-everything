@@ -75,6 +75,7 @@ private:
 	void capture_display_base();
 	void apply_display(const ve::DisplaySettings &s);
 	static void on_display_resolved(const ve::DisplaySettings &s, void *ctx);
+	static void on_render_stand_in_resolved(const ve::RenderSettings &s, void *ctx);
 
 	NodePath world_path_;
 	NodePath viewport_path_;

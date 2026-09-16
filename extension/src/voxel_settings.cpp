@@ -79,6 +79,7 @@ void VoxelSettings::_bind_methods() {
 
 VoxelSettings::VoxelSettings() {
 	display_.set_listener(&VoxelSettings::on_display_resolved, this);
+	render_stand_in_.set_listener(&VoxelSettings::on_render_stand_in_resolved, this);
 }
 
 ve::SettingsGroup *VoxelSettings::group(const String &name) const {
@@ -87,8 +88,6 @@ ve::SettingsGroup *VoxelSettings::group(const String &name) const {
 		const CharString n = name.utf8();
 		return world->context().render->settings_group(n.get_data());
 	}
-	// ponytail: the beauty stand-in is not rebased when the render stand-in's tier changes, so the
-	// editor reverts beauty knobs to High's values. Wire a listener if a scene ever ships a tier.
 	if (name == "render") return &render_stand_in_;
 	if (name == "beauty") return &beauty_stand_in_;
 	if (name == "grass") return &grass_stand_in_;
@@ -140,6 +139,11 @@ void VoxelSettings::capture_display_base() {
 void VoxelSettings::on_display_resolved(const ve::DisplaySettings &s, void *ctx) {
 	auto *self = static_cast<VoxelSettings *>(ctx);
 	if (self->ready_) self->apply_display(s);
+}
+
+void VoxelSettings::on_render_stand_in_resolved(const ve::RenderSettings &s, void *ctx) {
+	auto *self = static_cast<VoxelSettings *>(ctx);
+	self->beauty_stand_in_.rebase(ve::settings_for_tier(static_cast<ve::QualityTier>(s.quality_tier)));
 }
 
 void VoxelSettings::apply_display(const ve::DisplaySettings &s) {

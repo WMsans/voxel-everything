@@ -76,6 +76,12 @@ func test_f1_toggles_the_panel_and_escape_dismisses_it() -> void:
 	menu._unhandled_input(key_event(KEY_F7))
 	assert_bool(menu.visible).is_false()
 
+func test_the_panel_has_no_configurable_toggle_key() -> void:
+	var menu = make_menu()[3]
+	await get_tree().process_frame
+	for property in menu.get_property_list():
+		assert_str(String(property["name"])).is_not_equal("toggle_key")
+
 func test_every_group_has_a_tab_with_a_control_per_row() -> void:
 	var parts := make_menu()
 	await get_tree().process_frame

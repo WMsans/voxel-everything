@@ -164,6 +164,12 @@ TEST_CASE("a bridge separating more than max_piece_cells is not a candidate") {
 	CHECK(cap_found);
 }
 
+TEST_CASE("contact_samples_field rejects invalid axes safely") {
+	AnalyticGenerator gen;
+	CHECK(contact_samples_field(gen, nullptr, 0, {10, 20, 10}, -1, 9) == 0);
+	CHECK(contact_samples_field(gen, nullptr, 0, {10, 20, 10}, 3, 9) == 0);
+}
+
 TEST_CASE("contact_samples_field counts solid samples on the shared face") {
 	AnalyticGenerator gen;
 	// The face between cells (10,79,10) and (10,80,10) is the plane y = 80 * 0.8 = 64.0 m,

@@ -69,6 +69,15 @@ func test_render_beauty_and_grass_dials_set_before_ready_reach_world() -> void:
 	assert_float(world.get_effect_value("ssgi_taps")).is_equal_approx(4.0, 0.001)
 	assert_float(world.get_grass_value("reach_m")).is_equal_approx(30.0, 0.001)
 
+func test_stand_in_tier_rebases_unoverridden_beauty_and_keeps_override() -> void:
+	var settings: VoxelSettings = ClassDB.instantiate("VoxelSettings")
+	_roots.append(settings)
+	settings.set_setting("beauty", "ssgi_strength", 2.0)
+	assert_int(int(settings.get_setting("beauty", "ssgi_taps"))).is_equal(8)
+	assert_bool(settings.set_setting("render", "quality_tier", 1)).is_true()
+	assert_int(int(settings.get_setting("beauty", "ssgi_taps"))).is_equal(0)
+	assert_float(float(settings.get_setting("beauty", "ssgi_strength"))).is_equal_approx(2.0, 0.001)
+
 func test_groups_are_listed_in_panel_order() -> void:
 	var settings: VoxelSettings = make_settings()[2]
 	assert_array(Array(settings.groups())).is_equal(["display", "render", "beauty", "grass"])
