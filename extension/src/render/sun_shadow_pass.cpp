@@ -1,9 +1,9 @@
 #include "render/sun_shadow_pass.h"
 #include "render/lod_pool.h"
 #include "render/lod_raster_pass.h"
+#include "gpu_layout/blocks.h"
 #include <godot_cpp/classes/rd_texture_format.hpp>
 #include <godot_cpp/classes/rd_texture_view.hpp>
-#include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <cstring>
 
@@ -179,11 +179,9 @@ bool SunShadowPass::build(RenderingDevice *rd, LodPool &pool, LodRasterPass &ras
 	rd->draw_list_bind_render_pipeline(dl, pipeline_);
 	rd->draw_list_bind_uniform_set(dl, set_.id(), 0);
 	rd->draw_list_bind_index_array(dl, raster.index_array());
-	PackedByteArray pc;
-	pc.resize(64);
-	float *f = reinterpret_cast<float *>(pc.ptrw());
-	for (int i = 0; i < 16; i++) f[i] = ortho.view_proj[i];
-	rd->draw_list_set_push_constant(dl, pc, pc.size());
+	ve::SunShadowPush push{};
+	std::memcpy(push.sun_view_proj, ortho.view_proj, sizeof(push.sun_view_proj));
+	rd->draw_list_set_push_constant(dl, gpu::push_bytes(push), sizeof(push));
 	rd->draw_list_draw_indirect(dl, true, pool.args_buffer(), 0, static_cast<int>(pages.size()), 20);
 	rd->draw_list_end();
 	std::memcpy(c.view_proj, ortho.view_proj, sizeof(c.view_proj));

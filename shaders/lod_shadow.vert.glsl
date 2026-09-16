@@ -1,6 +1,7 @@
 #[vertex]
 #version 460
 
+#include "generated/blocks.glslh"
 #include "common.glslh"
 #include "lod_quad.glslh"
 
@@ -8,9 +9,7 @@ layout(set = 0, binding = 0, std430) readonly buffer Quads { uint v[]; } quads;
 layout(set = 0, binding = 1, std430) readonly buffer PageChunk { uint v[]; } page_chunk;
 layout(set = 0, binding = 2, std430) readonly buffer Chunks { vec4 v[]; } chunks;
 
-layout(push_constant, std430) uniform Push {
-	mat4 sun_view_proj;
-} pc;
+layout(push_constant, std430) uniform Push { SUN_SHADOW_PUSH_FIELDS } pc;
 
 void main() {
 	uint vi = uint(gl_VertexIndex);
