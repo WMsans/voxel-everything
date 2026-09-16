@@ -251,3 +251,4 @@ Appended by later tasks.
 - contact_shadow Task 10: build OK, native 565/565, gdUnit 20/20, leaked 0 (row 0)
 - outline Task 11: build OK, native 565/565, gdUnit matches row, leaked 0 (row 0)
 - ssr Task 12: build OK, native 565/565, gdUnit 20/20, leaked 0 (row 0)
+- ssgi Task 13: build OK, native 565/565, SSGI gate 26/26, full GPU 467/467, leaked 0 (row 0)
