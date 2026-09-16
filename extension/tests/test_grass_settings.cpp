@@ -135,3 +135,26 @@ TEST_CASE("the default blade density fits the scatter workgroup") {
 	ve::GrassSettings s;
 	CHECK(s.blades_per_brick <= 64);
 }
+
+// Every name the store accepts today, each with an in-range value that differs from its
+// default. The generic store (settings-store plan Task 7) must keep all of them.
+TEST_CASE("every grass knob name round-trips through the store") {
+	const struct {
+		const char *name;
+		float v;
+	} knobs[] = {
+		{"enabled", 0.0f}, {"reach_m", 25.0f}, {"vertical_reach_m", 5.0f},
+		{"blades_per_brick", 8.0f}, {"max_blades", 1000.0f}, {"blade_width_m", 0.05f},
+		{"blade_height_m", 0.5f}, {"height_jitter", 0.2f}, {"slope_cos_min", 0.3f},
+		{"wind_strength", 0.2f}, {"wind_speed", 1.0f}, {"wind_scale", 0.1f},
+		{"wind_dir_deg", 90.0f}, {"lean_spread_rad", 1.0f}, {"base_curve", 0.3f},
+		{"camera_tilt", 0.5f}, {"ring_width_gain", 2.0f}, {"flower_chance", 0.05f},
+		{"gloss", 0.5f}, {"blade_lighting", 0.3f},
+	};
+	for (const auto &k : knobs) {
+		CAPTURE(k.name);
+		ve::GrassSettingsStore store;
+		CHECK(store.set_value(k.name, k.v));
+		CHECK(store.value(k.name) == doctest::Approx(k.v));
+	}
+}

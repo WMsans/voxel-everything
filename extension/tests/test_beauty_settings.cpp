@@ -120,3 +120,60 @@ TEST_CASE("cost view is a flag, off in every quality tier") {
 	s.cost_view = true;
 	CHECK((ve::pack_beauty_flags(s) & ve::kFlagCostView) == ve::kFlagCostView);
 }
+
+namespace {
+
+// Every field, so a tier preset that silently moves any knob fails here. A commit that adds a
+// BeautySettings field adds it to this list.
+void check_same(const ve::BeautySettings &got, const ve::BeautySettings &want) {
+	CHECK(got.ssgi == want.ssgi);
+	CHECK(got.ssr == want.ssr);
+	CHECK(got.contact_shadows == want.contact_shadows);
+	CHECK(got.outlines == want.outlines);
+	CHECK(got.sun_shadow_map == want.sun_shadow_map);
+	CHECK(got.glossy_sdf_rays == want.glossy_sdf_rays);
+	CHECK(got.raymarched_sun_shadow == want.raymarched_sun_shadow);
+	CHECK(got.cost_view == want.cost_view);
+	CHECK(got.ssao == want.ssao);
+	CHECK(got.ssgi_taps == want.ssgi_taps);
+	CHECK(got.ssr_steps == want.ssr_steps);
+	CHECK(got.contact_steps == want.contact_steps);
+	CHECK(got.ssao_steps == want.ssao_steps);
+	CHECK(got.ssao_directions == want.ssao_directions);
+	CHECK(got.ssgi_radius == doctest::Approx(want.ssgi_radius));
+	CHECK(got.ssgi_temporal == doctest::Approx(want.ssgi_temporal));
+	CHECK(got.ssgi_strength == doctest::Approx(want.ssgi_strength));
+	CHECK(got.emissive_gi_radius == doctest::Approx(want.emissive_gi_radius));
+	CHECK(got.emissive_gi_strength == doctest::Approx(want.emissive_gi_strength));
+	CHECK(got.outline_depth_threshold == doctest::Approx(want.outline_depth_threshold));
+	CHECK(got.outline_normal_threshold == doctest::Approx(want.outline_normal_threshold));
+}
+
+} // namespace
+
+TEST_CASE("every tier preset is pinned field by field") {
+	const ve::BeautySettings high; // the struct defaults ARE High
+	check_same(ve::settings_for_tier(ve::QualityTier::kHigh), high);
+
+	ve::BeautySettings medium;
+	medium.glossy_sdf_rays = false;
+	medium.emissive_gi_radius = 24.0f;
+	medium.ssgi_taps = 4;
+	medium.ssr_steps = 12;
+	medium.contact_steps = 8;
+	medium.ssao_steps = 4;
+	medium.ssao_directions = 4;
+	check_same(ve::settings_for_tier(ve::QualityTier::kMedium), medium);
+
+	ve::BeautySettings low;
+	low.ssgi = low.ssr = low.contact_shadows = false;
+	low.glossy_sdf_rays = false;
+	low.ssao = false;
+	low.ssgi_taps = low.ssr_steps = low.contact_steps = 0;
+	low.ssao_steps = low.ssao_directions = 0;
+	check_same(ve::settings_for_tier(ve::QualityTier::kLow), low);
+
+	ve::BeautySettings off = low;
+	off.outlines = off.sun_shadow_map = off.raymarched_sun_shadow = false;
+	check_same(ve::settings_for_tier(ve::QualityTier::kOff), off);
+}
