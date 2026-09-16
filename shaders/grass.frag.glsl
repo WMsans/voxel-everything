@@ -7,7 +7,7 @@
 #include "grass.glslh"
 #include "grass_blade.glslh"
 
-layout(set = 0, binding = 1, std140) uniform Params { GRASS_PARAMS_BLOCK } pc;
+layout(set = 0, binding = 1, std140) uniform Params { GRASS_PARAMS_FIELDS } pc;
 
 layout(push_constant, std430) uniform Push { GRASS_RASTER_PUSH_FIELDS } push;
 

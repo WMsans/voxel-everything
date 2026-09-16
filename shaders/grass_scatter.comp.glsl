@@ -10,7 +10,7 @@
 // ceiling on GrassSettings::blades_per_brick, so a brick never needs a second group.
 layout(local_size_x = 64) in;
 
-layout(set = 0, binding = 0, std140) uniform Params { GRASS_PARAMS_BLOCK } grass;
+layout(set = 0, binding = 0, std140) uniform Params { GRASS_PARAMS_FIELDS } grass;
 layout(set = 0, binding = 1, std430) readonly buffer BrickList { uint v[]; } brick_list;
 layout(set = 0, binding = 2, std430) buffer Counters { uint brick_count; uint blade_count;
 		uint high_water; uint pad; } counters;
@@ -26,8 +26,7 @@ layout(set = 0, binding = 9) uniform usampler3D mat_atlas;
 // window through `pc.dims`, `pc.region_origin` and `pc.atlas_bricks`; the grass-params
 // block above is renamed to `grass` so the two never collide. Same block, same binding
 // as stage 1, fed from the same pass-owned UBO.
-layout(set = 0, binding = 10, std140) uniform Region { ivec4 dims; ivec4 region_origin;
-		ivec4 atlas_bricks; } pc;
+layout(set = 0, binding = 10, std140) uniform Region { GRASS_REGION_FIELDS } pc;
 layout(set = 0, binding = 11, std430) writeonly buffer Instances { GrassBlade b[]; } instances;
 // The terrain sun march's inputs, bound exactly as the raymarcher binds them so a blade is
 // shadowed by the same function as the ground it stands on (sun_march.glslh).

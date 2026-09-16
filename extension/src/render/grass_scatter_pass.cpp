@@ -1,10 +1,10 @@
 #include "render/grass_scatter_pass.h"
+#include "gpu_layout/blocks.h"
 #include "render/gpu_atlas.h"
 #include "shade/oct.h"
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <algorithm>
-#include <cstring>
 
 using namespace godot;
 
@@ -97,7 +97,8 @@ bool GrassScatterPass::ensure_buffers(RenderingDevice *rd, int max_blades, int m
 	// Region-window block for stage 1's binding 10 (three ivec4: dims, region_origin,
 	// atlas_bricks). Contents refresh every run(); the RID is stable so the uniform set
 	// survives across frames -- cached against the RID, never rebuilt per frame.
-	region_ubo_ = group_.add(gpu::Kind::Buffer, rd->uniform_buffer_create(48u));
+	region_ubo_ = group_.add(gpu::Kind::Buffer,
+			rd->uniform_buffer_create(sizeof(ve::GrassRegionBlock)));
 	capacity_ = max_blades;
 	brick_capacity_ = max_bricks;
 	return instances_.is_valid() && brick_list_.is_valid() && counters_.is_valid() &&
@@ -175,10 +176,7 @@ bool GrassScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas,
 
 	ve::GrassParams params = layout.params;
 	params.wind[3] = time_seconds;
-	PackedByteArray ubo;
-	ubo.resize(sizeof(ve::GrassParams));
-	std::memcpy(ubo.ptrw(), &params, sizeof(ve::GrassParams));
-	rd->buffer_update(params_ubo_, 0, ubo.size(), ubo);
+	rd->buffer_update(params_ubo_, 0, sizeof(params), gpu::push_bytes(params));
 
 	// Refresh the pass-owned region window from the LIVE residency-backed window the
 	// caller threads through (WorldStore::region_window(), same source debug_ssao_probe
@@ -188,13 +186,9 @@ bool GrassScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas,
 	{
 		const ve::RegionWindow &win = region_win;
 		const ve::IVec3 ab = atlas.config().atlas_bricks;
-		PackedByteArray rb;
-		rb.resize(48);
-		int32_t *w = reinterpret_cast<int32_t *>(rb.ptrw());
-		w[0] = win.dim; w[1] = win.dim; w[2] = win.dim; w[3] = 0;
-		w[4] = win.origin.x; w[5] = win.origin.y; w[6] = win.origin.z; w[7] = 0;
-		w[8] = ab.x; w[9] = ab.y; w[10] = ab.z; w[11] = 0;
-		rd->buffer_update(region_ubo_, 0, 48, rb);
+		const ve::GrassRegionBlock region{{win.dim, win.dim, win.dim, 0},
+				{win.origin.x, win.origin.y, win.origin.z, 0}, {ab.x, ab.y, ab.z, 0}};
+		rd->buffer_update(region_ubo_, 0, sizeof(region), gpu::push_bytes(region));
 	}
 
 	// Clear the counters explicitly. A fresh RD buffer reads back as zero on this machine,

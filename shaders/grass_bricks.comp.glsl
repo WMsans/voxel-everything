@@ -7,7 +7,7 @@
 
 layout(local_size_x = 64) in;
 
-layout(set = 0, binding = 0, std140) uniform Params { GRASS_PARAMS_BLOCK } grass;
+layout(set = 0, binding = 0, std140) uniform Params { GRASS_PARAMS_FIELDS } grass;
 layout(set = 0, binding = 1, std430) writeonly buffer BrickList { uint v[]; } brick_list;
 layout(set = 0, binding = 2, std430) buffer Counters { uint brick_count; uint blade_count;
 		uint high_water; uint pad; } counters;
@@ -21,8 +21,7 @@ layout(set = 0, binding = 9, std430) readonly buffer Palette { uint ids[]; } pal
 // The region-window block keeps the name `pc` because brick_atlas.glslh addresses the
 // window through `pc.dims`, `pc.region_origin` and `pc.atlas_bricks`; the grass-params
 // block above is renamed to `grass` so the two never collide.
-layout(set = 0, binding = 10, std140) uniform Region { ivec4 dims; ivec4 region_origin;
-		ivec4 atlas_bricks; } pc;
+layout(set = 0, binding = 10, std140) uniform Region { GRASS_REGION_FIELDS } pc;
 
 #include "brick_atlas.glslh"
 
