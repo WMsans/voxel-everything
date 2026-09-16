@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace ve {
 
@@ -39,6 +40,18 @@ inline constexpr int kMaterialCount = static_cast<int>(sizeof(kMaterials) / size
 // fills unused layers with flat error magenta); generated into GLSL as MATERIAL_LAYERS.
 inline constexpr int kMaterialLayers = 16;
 static_assert(kMaterialCount <= kMaterialLayers, "more materials than atlas layers");
+
+// The id of the terrain material called `name`. Code that places a material by name (terrain
+// stages, the analytic generator, grass) uses this, never a literal, so reordering kMaterials
+// renumbers every use at once. An unknown name is a compile error wherever the result must be
+// a constant expression (it reaches a non-constexpr call), and air (0) at run time.
+uint16_t unknown_material_name();
+
+constexpr uint16_t material_id(std::string_view name) {
+	for (int i = 0; i < kMaterialCount; i++)
+		if (name == kMaterials[i].name) return static_cast<uint16_t>(i + 1);
+	return unknown_material_name();
+}
 
 // Foliage draws its own albedo and grows ON terrain rather than being terrain, so it has no
 // atlas layer, no flat albedo and no hardness. Its ids start at kFoliageBase, far above every

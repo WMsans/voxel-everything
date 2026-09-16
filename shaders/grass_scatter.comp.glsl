@@ -39,8 +39,6 @@ layout(set = 0, binding = 12, std430) readonly buffer RegionSlotCounts { int n[]
 #include "sun_march.glslh"
 #include "grass_blade.glslh"
 
-const uint GRASS_MATERIAL = 1u; // grass_01, ve::kMaterials[0]
-
 // Central differences over one voxel. Cheaper and steadier than the field evaluator, and a
 // blade only needs to know which way is up, not a shading normal.
 vec3 surface_normal(vec3 p) {
@@ -104,7 +102,7 @@ void main() {
 
 	int slot = slot_at(ivec3(floor(p / BRICK_SIZE)));
 	if (slot < 0) return;
-	if (material_at(p, ivec3(floor(p / BRICK_SIZE)), slot) != GRASS_MATERIAL) return;
+	if (material_at(p, ivec3(floor(p / BRICK_SIZE)), slot) != MAT_GRASS_01) return;
 
 	uint index = atomicAdd(counters.blade_count, 1u);
 	if (index >= uint(grass.limits.x)) return; // at capacity: drop, never scribble

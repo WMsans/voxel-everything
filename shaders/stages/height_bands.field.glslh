@@ -10,5 +10,5 @@
 // below. Reads the sdf AFTER the cave stage, so carved space is correctly air.
 void stage_height_bands(inout FieldCtx ctx) {
 	if (ctx.sdf > 0.0) { ctx.material = 0u; return; }
-	ctx.material = ctx.height > 4.0 ? 2u : (ctx.height > 1.0 ? 1u : 3u);
+	ctx.material = ctx.height > 4.0 ? MAT_ROCK : (ctx.height > 1.0 ? MAT_GRASS_01 : MAT_GROUND_01);
 }

@@ -28,6 +28,10 @@ std::string upper(const char *name) {
 
 namespace ve {
 
+uint16_t unknown_material_name() {
+	return 0;
+}
+
 float material_hardness(uint16_t id) {
 	const int i = static_cast<int>(id) - 1;
 	if (i < 0 || i >= kMaterialCount) return 1.0f;
@@ -58,7 +62,10 @@ std::string material_table_glsl() {
 	     "// NOTE: never put a literal include directive inside a comment in this file -- the\n"
 	     "// loader matches include tokens anywhere in a line and would self-include.\n"
 	     "\n"
-	     "const int MATERIAL_COUNT = " << kMaterialCount << ";\n\n";
+	     "const int MATERIAL_COUNT = " << kMaterialCount << ";\n";
+	for (int i = 0; i < kMaterialCount; i++)
+		o << "const uint MAT_" << upper(kMaterials[i].name) << " = " << (i + 1) << "u;\n";
+	o << "\n";
 
 	o << "const float MAT_GLOW[MATERIAL_COUNT] = float[MATERIAL_COUNT](\n";
 	for (int i = 0; i < kMaterialCount; i++)

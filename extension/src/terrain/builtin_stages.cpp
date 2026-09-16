@@ -2,7 +2,15 @@
 // equivalent to its GLSL twin; tests/test_field_diff.gd is what catches drift.
 #include "terrain/stage_library.h"
 #include "generator/generator.h"  // ve::kSurfaceY
+#include "world/material_table.h"
 #include <cmath>
+
+namespace {
+// The analytic generator's height bands, by name: rock above 4 m, grass above 1 m, ground below.
+constexpr uint16_t kBandRock = ve::material_id("rock");
+constexpr uint16_t kBandGrass = ve::material_id("grass_01");
+constexpr uint16_t kBandGround = ve::material_id("ground_01");
+} // namespace
 
 namespace ve {
 
@@ -42,7 +50,7 @@ void stage_height_bands(FieldCtx &ctx, const StageSlots &s, const StageParams &,
 	const int height = s.extra[2];    // //!in height
 	if (ctx.f(sdf) > 0.0f) { ctx.f(material) = 0.0f; return; }
 	const float h = ctx.f(height);
-	ctx.f(material) = h > 4.0f ? 2.0f : (h > 1.0f ? 1.0f : 3.0f);
+	ctx.f(material) = h > 4.0f ? float(kBandRock) : (h > 1.0f ? float(kBandGrass) : float(kBandGround));
 }
 
 // Line-for-line equivalent of shaders/stages/relief.field.glslh; tests/test_field_diff.gd

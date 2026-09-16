@@ -7,6 +7,13 @@
 // loader matches include tokens anywhere in a line and would self-include.
 
 const int MATERIAL_COUNT = 7;
+const uint MAT_GRASS_01 = 1u;
+const uint MAT_ROCK = 2u;
+const uint MAT_GROUND_01 = 3u;
+const uint MAT_BREAKSTONE = 4u;
+const uint MAT_GROUND_CRACK_01 = 5u;
+const uint MAT_ICE_CRACK = 6u;
+const uint MAT_ICE = 7u;
 
 const float MAT_GLOW[MATERIAL_COUNT] = float[MATERIAL_COUNT](
 	0.000000, // grass_01

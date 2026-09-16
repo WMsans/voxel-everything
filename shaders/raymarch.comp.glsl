@@ -670,7 +670,7 @@ void main() {
 			length(best.p - edits.center.xyz) < edits.params.x) {
 		uint et = uint(edits.params.y);
 		vec3 tint = et == 0u ? vec3(1.0, 0.55, 0.1)
-		          : et == 1u ? flat_material_albedo(4u)
+		          : et == 1u ? flat_material_albedo(MAT_BREAKSTONE)
 		          : flat_material_albedo(uint(edits.params.z));
 		overlay_mix(overlay, overlay_w, tint, 0.45);
 	}
