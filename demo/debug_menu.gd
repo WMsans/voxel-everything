@@ -35,7 +35,7 @@ const GRASS := [
 const GRASS_VALUES := [
 	["Density", "blades_per_brick", 0.0, 64.0, 1.0],
 	["Reach", "reach_m", 0.0, 120.0, 1.0],
-	["Blade width", "blade_width_m", 0.0, 0.06, 0.002],
+	["Blade width", "blade_width_m", 0.0, 0.2, 0.005],
 	["Blade height", "blade_height_m", 0.0, 1.5, 0.05],
 	["Wind strength", "wind_strength", 0.0, 1.5, 0.05],
 	["Wind speed", "wind_speed", 0.0, 3.0, 0.1],

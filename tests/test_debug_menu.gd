@@ -118,3 +118,38 @@ func test_grass_checkbox_writes_the_enabled_flag() -> void:
 	enabled.emit_signal("toggled", false)
 	assert_float(world.get_grass_value("enabled")).is_equal_approx(0.0, 0.001)
 	assert_bool(world.get_effect_enabled("outlines")).is_true()
+
+# S5: a slider whose range excludes the knob's shipped value clamps the knob to the slider the
+# first time it is dragged (blade width ships at 0.08 against a 0.06 slider), and a slider wider
+# than the C++ clamp offers values the store silently refuses. The clamp is discovered on a
+# separate world so the world under test is only read.
+func assert_slider_range(name: String, ui_lo: float, ui_hi: float, shipped: float,
+		lo: float, hi: float) -> void:
+	assert_float(shipped).override_failure_message(
+		"%s: shipped %f outside the slider [%f, %f]" % [name, shipped, ui_lo, ui_hi]
+		).is_between(ui_lo, ui_hi)
+	assert_float(ui_lo).override_failure_message(
+		"%s: slider min %f below the C++ clamp %f" % [name, ui_lo, lo]).is_greater_equal(lo)
+	assert_float(ui_hi).override_failure_message(
+		"%s: slider max %f above the C++ clamp %f" % [name, ui_hi, hi]).is_less_equal(hi)
+
+func test_every_slider_range_contains_the_shipped_value_and_sits_inside_the_clamp() -> void:
+	var pair: Array = make_pair()
+	await get_tree().process_frame
+	var world: VoxelWorld = pair[0]
+	var probe: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	probe.use_local_device = true
+	probe.physics_enabled = false
+	pair[1].get_parent().add_child(probe)
+	for entry in MENU_SCRIPT.VALUES:
+		probe.set_effect_value(entry[1], 1e9)
+		var hi: float = probe.get_effect_value(entry[1])
+		probe.set_effect_value(entry[1], -1e9)
+		var lo: float = probe.get_effect_value(entry[1])
+		assert_slider_range(entry[1], entry[2], entry[3], world.get_effect_value(entry[1]), lo, hi)
+	for entry in MENU_SCRIPT.GRASS_VALUES:
+		probe.set_grass_value(entry[1], 1e9)
+		var hi: float = probe.get_grass_value(entry[1])
+		probe.set_grass_value(entry[1], -1e9)
+		var lo: float = probe.get_grass_value(entry[1])
+		assert_slider_range(entry[1], entry[2], entry[3], world.get_grass_value(entry[1]), lo, hi)
