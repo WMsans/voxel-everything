@@ -161,7 +161,9 @@ func _ready() -> void:
 			if kv.size() == 2:
 				_world.set_effect_value(String(kv[0]).strip_edges(), float(kv[1]))
 		elif arg.begins_with("--render-scale="):
-			get_viewport().scaling_3d_scale = float(arg.trim_prefix("--render-scale="))
+			# Through VoxelSettings, so the display store the panel reads is never stale.
+			get_parent().get_node("VoxelSettings").set_setting("display", "render_scale",
+				float(arg.trim_prefix("--render-scale=")))
 		elif arg.begins_with("--grass="):
 			# Grass on/off for A/B cost runs: 0 disables the scatter+raster, anything
 			# else leaves the shipped default. Same override shape as --render-scale.
@@ -171,14 +173,15 @@ func _ready() -> void:
 			# two of these is how a render-scale change gets judged on more than its cost.
 			_screenshot_path = arg.trim_prefix("--screenshot=")
 		elif arg.begins_with("--upscaler="):
+			# Indices of the display settings' upscaler options (settings/display_settings.cpp).
 			var m := arg.trim_prefix("--upscaler=")
-			get_viewport().scaling_3d_mode = {
-				"bilinear": Viewport.SCALING_3D_MODE_BILINEAR,
-				"fsr": Viewport.SCALING_3D_MODE_FSR,
-				"fsr2": Viewport.SCALING_3D_MODE_FSR2,
-				"metalfx_spatial": Viewport.SCALING_3D_MODE_METALFX_SPATIAL,
-				"metalfx_temporal": Viewport.SCALING_3D_MODE_METALFX_TEMPORAL,
-			}.get(m, Viewport.SCALING_3D_MODE_BILINEAR)
+			get_parent().get_node("VoxelSettings").set_setting("display", "upscaler", {
+				"bilinear": 0,
+				"fsr": 1,
+				"fsr2": 2,
+				"metalfx_spatial": 3,
+				"metalfx_temporal": 4,
+			}.get(m, 0))
 	_cam = _player.get_node("Camera3D")
 	if not _screenshot_path.is_empty():
 		get_parent().get_node("HUD").hide()
