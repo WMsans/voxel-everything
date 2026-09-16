@@ -205,3 +205,67 @@ func test_an_ambient_change_reaches_the_object_global() -> void:
 	settings.clear_overrides("beauty")
 	await get_tree().process_frame
 	assert_vector(published).is_equal_approx(Vector3(0.5, 0.4, 0.3), Vector3(0.001, 0.001, 0.001))
+
+func test_inspector_properties_mirror_every_row() -> void:
+	var parts := make_settings()
+	var world: VoxelWorld = parts[0]
+	var settings: VoxelSettings = parts[2]
+	var names := {}
+	for p in settings.get_property_list():
+		names[p["name"]] = p
+	for group in settings.groups():
+		for row in settings.describe(group):
+			var path := "%s/%s" % [group, row["name"]]
+			assert_bool(names.has(path)).override_failure_message("no property %s" % path).is_true()
+	settings.set("beauty/ssgi_strength", 2.5)
+	assert_float(world.get_effect_value("ssgi_strength")).is_equal_approx(2.5, 0.001)
+	assert_float(float(settings.get("beauty/ssgi_strength"))).is_equal_approx(2.5, 0.001)
+	assert_bool(settings.property_can_revert("beauty/ssgi_strength")).is_true()
+	assert_float(float(settings.property_get_revert("beauty/ssgi_strength"))).is_equal_approx(1.0, 0.001)
+
+func test_property_values_set_before_ready_apply_to_the_world() -> void:
+	var root := Node.new()
+	add_child(root)
+	_roots.append(root)
+	var world: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	world.name = "World"
+	world.use_local_device = true
+	world.physics_enabled = false
+	root.add_child(world)
+	var vp := SubViewport.new()
+	vp.name = "Viewport"
+	vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	root.add_child(vp)
+	var settings: VoxelSettings = ClassDB.instantiate("VoxelSettings")
+	settings.world_path = NodePath("../World")
+	settings.viewport_path = NodePath("../Viewport")
+	settings.config_path = CONFIG_PATH
+	settings.manage_window = false
+	# What loading a scene does: properties first, _ready later.
+	settings.set("beauty/ssgi_strength", 3.0)
+	settings.set("render/near_field_scale", 0.9)
+	settings.set("display/render_scale", 0.75)
+	root.add_child(settings)
+	assert_float(world.get_effect_value("ssgi_strength")).is_equal_approx(3.0, 0.001)
+	assert_float(world.near_field_scale).is_equal_approx(0.9, 0.001)
+	assert_float(vp.scaling_3d_scale).is_equal_approx(0.75, 0.001)
+	# ...and they are what the scene shipped.
+	assert_float(float(settings.get_overrides("beauty")["ssgi_strength"])).is_equal_approx(3.0, 0.001)
+
+func test_a_packed_scene_stores_only_real_overrides() -> void:
+	var holder := Node.new()
+	var settings: VoxelSettings = ClassDB.instantiate("VoxelSettings")
+	settings.name = "Settings"
+	holder.add_child(settings)
+	settings.owner = holder
+	settings.set("beauty/ssgi_strength", 2.0)
+	var packed := PackedScene.new()
+	assert_int(packed.pack(holder)).is_equal(OK)
+	var state := packed.get_state()
+	var stored: Array = []
+	for i in range(state.get_node_property_count(1)):
+		stored.append(String(state.get_node_property_name(1, i)))
+	holder.free()
+	assert_array(stored).contains(["beauty/ssgi_strength"])
+	assert_array(stored).not_contains(["beauty/ssgi_taps", "render/quality_tier", "grass/reach_m",
+		"display/render_scale"])

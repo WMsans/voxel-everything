@@ -274,3 +274,87 @@ void VoxelSettings::reset_to_shipped() {
 int VoxelSettings::resolution_index_of(Vector2i size) const {
 	return ve::resolution_index_of(size.x, size.y);
 }
+
+namespace {
+
+bool split_property(const StringName &property, String *group, String *name) {
+	const String p = property;
+	const int slash = p.find("/");
+	if (slash <= 0) return false;
+	*group = p.substr(0, slash);
+	*name = p.substr(slash + 1);
+	return true;
+}
+
+} // namespace
+
+bool VoxelSettings::_set(const StringName &property, const Variant &value) {
+	String g, n;
+	return split_property(property, &g, &n) && set_setting(g, n, value);
+}
+
+bool VoxelSettings::_get(const StringName &property, Variant &r_value) const {
+	String g, n;
+	if (!split_property(property, &g, &n)) return false;
+	ve::SettingsGroup *grp = group(g);
+	const CharString name = n.utf8();
+	ve::SettingValue v;
+	if (!grp || !grp->get(name.get_data(), &v)) return false;
+	r_value = setting_to_variant(v);
+	return true;
+}
+
+void VoxelSettings::_get_property_list(List<PropertyInfo> *list) const {
+	for (const char *g : kGroups) {
+		ve::SettingsGroup *grp = group(g);
+		if (!grp) continue;
+		for (const ve::RowInfo &r : grp->rows()) {
+			const String path = String(g) + "/" + r.name;
+			const String range = String::num(r.ui_min) + "," + String::num(r.ui_max) + "," +
+					String::num(r.step);
+			switch (r.kind) {
+				case ve::SettingKind::kBool:
+					list->push_back(PropertyInfo(Variant::BOOL, path));
+					break;
+				case ve::SettingKind::kInt:
+					list->push_back(PropertyInfo(Variant::INT, path, PROPERTY_HINT_RANGE, range));
+					break;
+				case ve::SettingKind::kFloat:
+					list->push_back(PropertyInfo(Variant::FLOAT, path, PROPERTY_HINT_RANGE, range));
+					break;
+				case ve::SettingKind::kColor:
+					list->push_back(PropertyInfo(Variant::COLOR, path, PROPERTY_HINT_COLOR_NO_ALPHA));
+					break;
+				case ve::SettingKind::kEnum: {
+					String items = r.min < 0.0f ? String("Not a preset:-1") : String();
+					for (size_t i = 0; i < r.options.size(); i++) {
+						if (!items.is_empty()) items += ",";
+						items += String(r.options[i]) + ":" + String::num_int64(static_cast<int64_t>(i));
+					}
+					list->push_back(PropertyInfo(Variant::INT, path, PROPERTY_HINT_ENUM, items));
+					break;
+				}
+			}
+		}
+	}
+}
+
+bool VoxelSettings::_property_can_revert(const StringName &property) const {
+	String g, n;
+	if (!split_property(property, &g, &n)) return false;
+	ve::SettingsGroup *grp = group(g);
+	const CharString name = n.utf8();
+	ve::SettingValue v;
+	return grp && grp->get_default(name.get_data(), &v);
+}
+
+bool VoxelSettings::_property_get_revert(const StringName &property, Variant &r_value) const {
+	String g, n;
+	if (!split_property(property, &g, &n)) return false;
+	ve::SettingsGroup *grp = group(g);
+	const CharString name = n.utf8();
+	ve::SettingValue v;
+	if (!grp || !grp->get_default(name.get_data(), &v)) return false;
+	r_value = setting_to_variant(v);
+	return true;
+}

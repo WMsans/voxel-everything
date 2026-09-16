@@ -6,11 +6,14 @@
 // persistence behind the measured-run guard, and inspector properties. VoxelWorld does not know
 // this class exists. Spec: docs/superpowers/specs/2026-09-16-settings-store-design.md §3.5.
 #include <godot_cpp/classes/node.hpp>
+#include <godot_cpp/core/property_info.hpp>
+#include <godot_cpp/templates/list.hpp>
 #include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/node_path.hpp>
 #include <godot_cpp/variant/packed_string_array.hpp>
 #include <godot_cpp/variant/string.hpp>
+#include <godot_cpp/variant/string_name.hpp>
 #include <godot_cpp/variant/variant.hpp>
 #include <godot_cpp/variant/vector2i.hpp>
 #include <cstdint>
@@ -55,6 +58,14 @@ public:
 	static bool is_measured_args(const PackedStringArray &args);
 
 	void _ready() override;
+
+	// Inspector: one "<group>/<name>" property per row. A scene stores only values that differ
+	// from the row's default, because the revert value is that default.
+	bool _set(const StringName &property, const Variant &value);
+	bool _get(const StringName &property, Variant &r_value) const;
+	void _get_property_list(List<PropertyInfo> *list) const;
+	bool _property_can_revert(const StringName &property) const;
+	bool _property_get_revert(const StringName &property, Variant &r_value) const;
 
 protected:
 	static void _bind_methods();
