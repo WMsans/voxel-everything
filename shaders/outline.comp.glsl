@@ -1,5 +1,6 @@
 #[compute]
 #version 460
+#include "generated/gbuffer.glslh"
 #include "generated/blocks.glslh"
 #define BEAUTY_CAMERA_SET 0
 #define BEAUTY_CAMERA_BINDING 6
@@ -25,7 +26,7 @@ SurfaceSample read_surface(ivec2 px) {
 	// whether a pixel has a surface. The near/far dither seam leaves pixels whose depth was
 	// dropped by BOTH fields while their g-buffer surface survives; those are holes in the
 	// seam, not background, and must not be read as silhouettes.
-	s.solid = g.z >= 0.5;
+	s.solid = GB_IS_SURFACE(g);
 	if (s.depth <= 0.0) return s;
 	vec2 uv = (vec2(px) + 0.5) / vec2(pc.dims.xy);
 	vec3 wpos = beauty_world_from_depth(uv, s.depth);
@@ -34,7 +35,7 @@ SurfaceSample read_surface(ivec2 px) {
 			: vec3(0.0, 0.0, 1.0);
 	float gd = texelFetch(gb_depth, px, 0).r;
 	if (s.solid && abs(gd - s.depth) <= 1e-5) {
-		s.n = oct_decode(g.xy); s.kind = 1;
+		s.n = GB_NORMAL(g); s.kind = 1;
 	} else if (pc.dims.z != 0) {
 		s.n = normalize(texelFetch(normal_roughness, px, 0).rgb * 2.0 - 1.0);
 		if (!isnan(s.n.x) && !isnan(s.n.y) && !isnan(s.n.z) &&
