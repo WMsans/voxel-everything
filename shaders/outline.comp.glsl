@@ -1,5 +1,6 @@
 #[compute]
 #version 460
+#include "generated/blocks.glslh"
 #define BEAUTY_CAMERA_SET 0
 #define BEAUTY_CAMERA_BINDING 6
 #include "shade.glslh"
@@ -10,10 +11,7 @@ layout(set = 0, binding = 1) uniform sampler2D gb_depth;
 layout(set = 0, binding = 2) uniform sampler2D gb_surface;
 layout(set = 0, binding = 3) uniform sampler2D normal_roughness;
 layout(set = 0, binding = 4, rgba16f) uniform image2D scene_color;
-layout(push_constant, std430) uniform Push {
-	ivec4 dims;  // xy full size, z have normal-roughness
-	vec4 params; // relative depth threshold, normal threshold, darken, unused
-} pc;
+layout(push_constant, std430) uniform Push { OUTLINE_PUSH_FIELDS } pc;
 // The steepest incidence the depth threshold is widened for. cos(87.1 deg): past that the
 // tolerance stops growing, so a true silhouette seen almost edge-on is still an edge.
 const float OUTLINE_MIN_NDV = 0.05;

@@ -1,4 +1,5 @@
 #include "render/outline_pass.h"
+#include "gpu_layout/blocks.h"
 
 using namespace godot;
 
@@ -54,14 +55,9 @@ bool OutlinePass::render(RenderingDevice *rd, RID scene_color, RID scene_depth, 
 			gpu::ubo(6, camera_ubo)});
 	if (!set.is_valid()) return false;
 	gpu::CpuTimer timer(last_ms_);
-	PackedByteArray pc;
-	pc.resize(32);
-	int32_t *i = reinterpret_cast<int32_t *>(pc.ptrw());
-	float *f = reinterpret_cast<float *>(pc.ptrw());
-	i[0] = size.x; i[1] = size.y;
-	i[2] = have_normal_roughness && normal_roughness.is_valid() ? 1 : 0; i[3] = 0;
-	f[4] = s.outline_depth_threshold; f[5] = s.outline_normal_threshold;
-	f[6] = 0.35f; f[7] = 0.0f;
-	return gpu::dispatch(rd, program_.pipeline, {{set, 0}}, pc, gpu::groups(size.x, 8),
-			gpu::groups(size.y, 8));
+	const ve::OutlinePush push{
+			{size.x, size.y, have_normal_roughness && normal_roughness.is_valid() ? 1 : 0, 0},
+			{s.outline_depth_threshold, s.outline_normal_threshold, 0.35f, 0.0f}};
+	return gpu::dispatch(rd, program_.pipeline, {{set, 0}}, gpu::push_bytes(push),
+			gpu::groups(size.x, 8), gpu::groups(size.y, 8));
 }
