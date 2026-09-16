@@ -1,14 +1,10 @@
 // Shared addressing for the LoD build passes. Mirror of extension/src/lod/lod_grid.h and
 // lod/lod_reduce.cpp; the differential test in tests/test_lod_mesh_diff.gd fails when the
 // two drift. Include common.glslh first.
+#include "generated/blocks.glslh"
 #include "lod_quad.glslh"
 
-layout(push_constant, std430) uniform LodPush {
-	ivec4 job;    // xyz = chunk coordinates, w = job index in this batch
-	ivec4 params; // x = op count, y = max quads per job, z = level, w = unused
-	vec4 grid;    // xyz = the chunk's world origin, w = the level's cell size
-	ivec4 override_data; // x = override table, y = region slot
-} lpc;
+layout(push_constant, std430) uniform LodPush { LOD_BUILD_PUSH_FIELDS } lpc;
 
 // Fine sample j sits at local coordinate (j - 3) / 2 cells, so j = 3 is the chunk origin and
 // target lattice index i is centred on fine index 2i + 1. ve::lod_fine_local mirrors this.

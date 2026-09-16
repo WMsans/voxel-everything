@@ -1,4 +1,5 @@
 #include "render/lod_build_pass.h"
+#include "gpu_layout/blocks.h"
 #include "render/field_context_set.h"
 #include "lod/lod_contour.h"
 #include "lod/lod_skirt.h"
@@ -209,28 +210,11 @@ void LodBuildPass::upload_ops(const LodBuildJob &job, int job_index) {
 void LodBuildPass::push(int64_t list, const LodBuildJob &job, int job_index) {
 	float origin[3];
 	ve::lod_chunk_origin(job.level, job.coord, origin);
-	const float cell = ve::lod_cell_size(job.level);
-	PackedByteArray pc;
-	pc.resize(64);
-	int32_t *p = reinterpret_cast<int32_t *>(pc.ptrw());
-	p[0] = job.coord.x;
-	p[1] = job.coord.y;
-	p[2] = job.coord.z;
-	p[3] = job_index;
-	p[4] = sanitized_op_count(job);
-	p[5] = ve::kLodMaxQuadsPerChunk;
-	p[6] = job.level;
-	p[7] = 0;
-	float *f = reinterpret_cast<float *>(pc.ptrw());
-	f[8] = origin[0];
-	f[9] = origin[1];
-	f[10] = origin[2];
-	f[11] = cell;
-	p[12] = job.override_table;
-	p[13] = -1;
-	p[14] = 0;
-	p[15] = 0;
-	rd_->compute_list_set_push_constant(list, pc, pc.size());
+	const ve::LodBuildPush push{{job.coord.x, job.coord.y, job.coord.z, job_index},
+			{sanitized_op_count(job), ve::kLodMaxQuadsPerChunk, job.level, 0},
+			{origin[0], origin[1], origin[2], ve::lod_cell_size(job.level)},
+			{job.override_table, -1, 0, 0}};
+	rd_->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
 }
 
 void LodBuildPass::record_field(int64_t list, const LodBuildJob &job, int job_index) {
