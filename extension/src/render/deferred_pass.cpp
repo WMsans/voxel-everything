@@ -1,18 +1,8 @@
 #include "render/deferred_pass.h"
 #include "render/gbuffer.h"
 #include "render/material_atlas.h"
-#include "render/shader_loader.h"
 #include "shade/beauty_settings.h"
-#include <godot_cpp/classes/project_settings.hpp>
-#include <godot_cpp/classes/rd_sampler_state.hpp>
-#include <godot_cpp/classes/rd_shader_source.hpp>
-#include <godot_cpp/classes/rd_shader_spirv.hpp>
-#include <godot_cpp/classes/rd_texture_format.hpp>
-#include <godot_cpp/classes/rd_texture_view.hpp>
-#include <godot_cpp/classes/rd_uniform.hpp>
 #include <godot_cpp/variant/typed_array.hpp>
-#include <godot_cpp/variant/utility_functions.hpp>
-#include <chrono>
 #include <cstring>
 
 using namespace godot;
@@ -25,89 +15,36 @@ void DeferredPass::initialize(RenderingDevice *rd) {
 	teardown();
 	if (!rd) return;
 	rd_ = rd;
-	std::string err;
-	const String path = ProjectSettings::get_singleton()->globalize_path("res://shaders/deferred.comp.glsl");
-	const String inc = ProjectSettings::get_singleton()->globalize_path("res://shaders");
-	const std::string code = ve::strip_shader_annotations(
-			ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err));
-	if (code.empty()) {
-		UtilityFunctions::printerr("DeferredPass: shader load failed: ", err.c_str());
-		return;
-	}
-	Ref<RDShaderSource> src;
-	src.instantiate();
-	src->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
-	src->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, String(code.c_str()));
-	Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(src);
-	const String compile_err = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
-	if (!compile_err.is_empty()) {
-		UtilityFunctions::printerr("DeferredPass: ", compile_err);
-		return;
-	}
-	shader_ = rd->shader_create_from_spirv(spirv);
-	pipeline_ = rd->compute_pipeline_create(shader_);
-
-	Ref<RDSamplerState> sl;
-	sl.instantiate();
-	sl->set_min_filter(RenderingDevice::SAMPLER_FILTER_LINEAR);
-	sl->set_mag_filter(RenderingDevice::SAMPLER_FILTER_LINEAR);
-	sampler_linear_ = rd->sampler_create(sl);
-	Ref<RDSamplerState> sn;
-	sn.instantiate();
-	sn->set_min_filter(RenderingDevice::SAMPLER_FILTER_NEAREST);
-	sn->set_mag_filter(RenderingDevice::SAMPLER_FILTER_NEAREST);
-	sampler_nearest_ = rd->sampler_create(sn);
+	program_ = gpu::compile_compute(rd, group_, "DeferredPass", "deferred.comp.glsl");
+	if (!program_.valid()) return;
+	sampler_linear_ = gpu::sampler(rd, group_, RenderingDevice::SAMPLER_FILTER_LINEAR);
+	sampler_nearest_ = gpu::sampler(rd, group_, RenderingDevice::SAMPLER_FILTER_NEAREST);
 }
 
 void DeferredPass::set_sun_ubo(RID buffer) {
+	// The uniform set keys on this RID, so the next render rebuilds it.
 	sun_light_ubo_ = buffer;
-	// The uniform set caches this RID; drop it so the next render rebuilds.
-	if (rd_ && rd_->uniform_set_is_valid(uset_)) {
-		rd_->free_rid(uset_);
-		uset_ = RID();
-	}
 }
 
 void DeferredPass::teardown() {
 	if (!rd_) return;
-	if (rd_->uniform_set_is_valid(uset_)) rd_->free_rid(uset_);
-	uset_ = RID();
-	for (RID *r : {&pipeline_, &shader_}) {
-		if (r->is_valid()) rd_->free_rid(*r);
-		*r = RID();
-	}
-	for (RID *r : {&dummy_black_, &dummy_far_, &dummy_white_, &sun_ubo_, &sampler_linear_, &sampler_nearest_}) {
-		if (r->is_valid()) rd_->free_rid(*r);
-		*r = RID();
-	}
-	key_albedo_ = RID();
-	key_surface_ = RID();
-	key_depth_ = RID();
-	key_lit_ = RID();
-	key_ssgi_ = RID();
-	key_ssao_ = RID();
-	key_sun_ = RID();
-	key_material_albedo_ = RID();
-	key_material_surface_ = RID();
-	key_material_sampler_ = RID();
+	gpu::RdDevice device{rd_};
+	group_.release(device);
+	program_ = gpu::Program();
+	sampler_linear_ = sampler_nearest_ = RID();
+	dummy_black_ = dummy_far_ = dummy_white_ = sun_ubo_ = RID();
+	set_ = gpu::SetCache();
 	rd_ = nullptr;
 }
 
 bool DeferredPass::ensure_dummies(RenderingDevice *rd) {
 	if (dummy_black_.is_valid() && dummy_far_.is_valid() && sun_ubo_.is_valid()) return true;
 	auto make_1x1 = [&](RenderingDevice::DataFormat fmt, const PackedByteArray &bytes) {
-		Ref<RDTextureFormat> f;
-		f.instantiate();
-		f->set_format(fmt);
-		f->set_width(1);
-		f->set_height(1);
-		f->set_usage_bits(RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
-				RenderingDevice::TEXTURE_USAGE_CAN_UPDATE_BIT);
-		Ref<RDTextureView> v;
-		v.instantiate();
 		TypedArray<PackedByteArray> data;
 		data.push_back(bytes);
-		return rd->texture_create(f, v, data);
+		return gpu::texture(rd, group_, fmt, Vector2i(1, 1),
+				RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice::TEXTURE_USAGE_CAN_UPDATE_BIT,
+				data);
 	};
 	PackedByteArray black;
 	black.resize(8);
@@ -125,77 +62,15 @@ bool DeferredPass::ensure_dummies(RenderingDevice *rd) {
 	PackedByteArray zeros;
 	zeros.resize(256);
 	zeros.fill(0);
-	sun_ubo_ = rd->uniform_buffer_create(256, zeros);
+	sun_ubo_ = group_.add(gpu::Kind::Buffer, rd->uniform_buffer_create(256, zeros));
 	return dummy_black_.is_valid() && dummy_far_.is_valid() && dummy_white_.is_valid() && sun_ubo_.is_valid();
-}
-
-bool DeferredPass::ensure_uniform_set(RenderingDevice *rd, GBuffer &gb,
-		const MaterialAtlas &materials, RID ssgi, RID ssao, RID sun_map) {
-	const RID material_albedo = materials.albedo_array();
-	const RID material_surface = materials.surface_array();
-	const RID material_sampler = materials.sampler();
-	if (rd_->uniform_set_is_valid(uset_) && key_albedo_ == gb.albedo() && key_surface_ == gb.surface() &&
-			key_depth_ == gb.depth() && key_lit_ == gb.lit() && key_ssgi_ == ssgi &&
-			key_ssao_ == ssao && key_sun_ == sun_map && key_material_albedo_ == material_albedo &&
-			key_material_surface_ == material_surface && key_material_sampler_ == material_sampler)
-		return true;
-	if (rd_->uniform_set_is_valid(uset_)) rd->free_rid(uset_);
-	uset_ = RID();
-	Ref<RDUniform> u[11];
-	for (int i = 0; i < 11; i++) u[i].instantiate();
-	const RID textures[6] = {gb.albedo(), gb.surface(), gb.depth(), ssgi, sun_map, ssao};
-	for (int i = 0; i < 5; i++) {
-		u[i]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-		u[i]->set_binding(i);
-		u[i]->add_id(i < 3 ? sampler_nearest_ : sampler_linear_);
-		u[i]->add_id(textures[i]);
-	}
-	// SSAO lives at binding 7, after the material arrays' reserved slots. Linear, not
-	// nearest: the pass renders at half the G-buffer size, so this sampler is what
-	// upsamples it. Nearest here would show the half-res grid as 2x2 blocks.
-	u[7]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-	u[7]->set_binding(7);
-	u[7]->add_id(sampler_linear_);
-	u[7]->add_id(ssao);
-	u[5]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
-	u[5]->set_binding(5);
-	u[5]->add_id(gb.lit());
-	u[6]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
-	u[6]->set_binding(6);
-	u[6]->add_id(sun_ubo_);
-	u[8]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-	u[8]->set_binding(8);
-	u[8]->add_id(materials.sampler());
-	u[8]->add_id(materials.albedo_array());
-	u[9]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-	u[9]->set_binding(9);
-	u[9]->add_id(materials.sampler());
-	u[9]->add_id(materials.surface_array());
-	u[10]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
-	u[10]->set_binding(10);
-	u[10]->add_id(sun_light_ubo_);
-	uset_ = rd->uniform_set_create(
-			Array::make(u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], u[9], u[10]),
-			shader_, 0);
-	if (!rd_->uniform_set_is_valid(uset_)) return false;
-	key_albedo_ = gb.albedo();
-	key_surface_ = gb.surface();
-	key_depth_ = gb.depth();
-	key_lit_ = gb.lit();
-	key_ssgi_ = ssgi;
-	key_ssao_ = ssao;
-	key_sun_ = sun_map;
-	key_material_albedo_ = material_albedo;
-	key_material_surface_ = material_surface;
-	key_material_sampler_ = material_sampler;
-	return true;
 }
 
 bool DeferredPass::render(RenderingDevice *rd, GBuffer &gb, const MaterialAtlas &materials,
 		RID ssgi, RID ssao, RID sun_map, const Params &p) {
 	if (!is_valid() || !gb.is_valid()) return false;
 	if (!ensure_dummies(rd)) return false;
-	const auto t0 = std::chrono::steady_clock::now();
+	gpu::CpuTimer timer(last_ms_);
 	uint32_t flags = p.flags;
 	if (!ssgi.is_valid()) flags &= ~ve::kFlagSsgi;
 	if (!ssao.is_valid()) flags &= ~ve::kFlagSsao;
@@ -203,7 +78,23 @@ bool DeferredPass::render(RenderingDevice *rd, GBuffer &gb, const MaterialAtlas 
 	const RID ssgi_bound = ssgi.is_valid() ? ssgi : dummy_black_;
 	const RID ssao_bound = ssao.is_valid() ? ssao : dummy_white_;
 	const RID sun_bound = sun_map.is_valid() ? sun_map : dummy_far_;
-	if (!ensure_uniform_set(rd, gb, materials, ssgi_bound, ssao_bound, sun_bound)) return false;
+	gpu::RdDevice device{rd};
+	// SSAO lives at binding 7, after the material arrays' reserved slots. Linear, not
+	// nearest: the pass renders at half the G-buffer size, so this sampler is what
+	// upsamples it. Nearest here would show the half-res grid as 2x2 blocks.
+	const RID set = set_.get(device, group_, program_.shader, 0, {
+			gpu::sampled(0, sampler_nearest_, gb.albedo()),
+			gpu::sampled(1, sampler_nearest_, gb.surface()),
+			gpu::sampled(2, sampler_nearest_, gb.depth()),
+			gpu::sampled(3, sampler_linear_, ssgi_bound),
+			gpu::sampled(4, sampler_linear_, sun_bound),
+			gpu::image(5, gb.lit()),
+			gpu::ubo(6, sun_ubo_),
+			gpu::sampled(7, sampler_linear_, ssao_bound),
+			gpu::sampled(8, materials.sampler(), materials.albedo_array()),
+			gpu::sampled(9, materials.sampler(), materials.surface_array()),
+			gpu::ubo(10, sun_light_ubo_)});
+	if (!set.is_valid()) return false;
 
 	// std140: mat4[3] = 192 B, then vec4[3] = 48 B, then vec4 splits = 16 B. 256 total.
 	PackedByteArray ub;
@@ -245,14 +136,6 @@ bool DeferredPass::render(RenderingDevice *rd, GBuffer &gb, const MaterialAtlas 
 	u[27] = 0;
 
 	const Vector2i size = gb.size();
-	const int64_t list = rd->compute_list_begin();
-	if (list < 0) return false;
-	rd->compute_list_bind_compute_pipeline(list, pipeline_);
-	rd->compute_list_bind_uniform_set(list, uset_, 0);
-	rd->compute_list_set_push_constant(list, pcb, pcb.size());
-	rd->compute_list_dispatch(list, (size.x + 7) / 8, (size.y + 7) / 8, 1);
-	rd->compute_list_end();
-	last_ms_ = std::chrono::duration<float, std::milli>(
-			std::chrono::steady_clock::now() - t0).count();
-	return true;
+	return gpu::dispatch(rd, program_.pipeline, {{set, 0}}, pcb, gpu::groups(size.x, 8),
+			gpu::groups(size.y, 8));
 }

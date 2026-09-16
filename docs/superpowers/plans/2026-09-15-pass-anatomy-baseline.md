@@ -253,3 +253,4 @@ Appended by later tasks.
 - ssr Task 12: build OK, native 565/565, gdUnit 20/20, leaked 0 (row 0)
 - ssgi Task 13: build OK, native 565/565, SSGI gate 26/26, full GPU 467/467, leaked 0 (row 0)
 - hiz Task 14: build OK, native 565/565, gdUnit gate 17/17, leaked 0 (row 0)
+- deferred Task 15: build OK, native 565/565, gdUnit matches row, leaked 0 (row 0)
