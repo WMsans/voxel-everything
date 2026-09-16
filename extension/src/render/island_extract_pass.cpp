@@ -1,6 +1,5 @@
 #include "render/island_extract_pass.h"
 #include "render/field_context_set.h"
-#include "render/shader_loader.h"
 #include "render/volume_pool.h"
 #include "render/override_pool.h"
 #include "world/edit_log.h"
@@ -8,10 +7,6 @@
 #include "world/brick_eval.h"
 #include "shade/oct.h"
 #include <cmath>
-#include <godot_cpp/classes/project_settings.hpp>
-#include <godot_cpp/classes/rd_shader_source.hpp>
-#include <godot_cpp/classes/rd_shader_spirv.hpp>
-#include <godot_cpp/classes/rd_uniform.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <algorithm>
 #include <cstring>
@@ -20,25 +15,11 @@ using namespace godot;
 
 namespace {
 
-Ref<RDUniform> storage(int binding, RID rid) {
-	Ref<RDUniform> u;
-	u.instantiate();
-	u->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	u->set_binding(binding);
-	u->add_id(rid);
-	return u;
-}
-
 PackedByteArray zeroed(int64_t bytes) {
 	PackedByteArray b;
 	b.resize(bytes);
 	b.fill(0);
 	return b;
-}
-
-void free_if_valid(RenderingDevice *rd, RID &rid) {
-	if (rd && rid.is_valid()) rd->free_rid(rid);
-	rid = RID();
 }
 
 } // namespace
@@ -52,55 +33,39 @@ bool IslandExtractPass::initialize(RenderingDevice *rd, const VolumePool *volume
 	if (!rd || !volumes || !volumes->is_valid()) return false;
 	rd_ = rd;
 	const int64_t voxels = static_cast<int64_t>(ve::kIslandVoxelCount);
-	out_ = rd->storage_buffer_create(static_cast<uint32_t>(voxels * 4), zeroed(voxels * 4));
-	boxes_ = rd->storage_buffer_create(ve::kMaxIslandBoxes * 32,
-			zeroed(ve::kMaxIslandBoxes * 32));
-	counts_ = rd->storage_buffer_create(16, zeroed(16));
-	ops_ = rd->storage_buffer_create(ve::kMaxRegionOps * 32, zeroed(ve::kMaxRegionOps * 32));
+	out_ = group_.add(gpu::Kind::Buffer,
+			rd->storage_buffer_create(static_cast<uint32_t>(voxels * 4), zeroed(voxels * 4)));
+	boxes_ = group_.add(gpu::Kind::Buffer,
+			rd->storage_buffer_create(ve::kMaxIslandBoxes * 32, zeroed(ve::kMaxIslandBoxes * 32)));
+	counts_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(16, zeroed(16)));
+	ops_ = group_.add(gpu::Kind::Buffer,
+			rd->storage_buffer_create(ve::kMaxRegionOps * 32, zeroed(ve::kMaxRegionOps * 32)));
 	if (!out_.is_valid() || !boxes_.is_valid() || !counts_.is_valid() || !ops_.is_valid()) {
 		UtilityFunctions::printerr("IslandExtractPass: buffer creation failed");
 		teardown();
 		return false;
 	}
 
-	// Same loader path as MeshPass::build: read the file, strip #[compute], compile, report.
-	ProjectSettings *ps = ProjectSettings::get_singleton();
-	const String path = ps->globalize_path("res://shaders/island_extract.comp.glsl");
-	const String inc = ps->globalize_path("res://shaders");
-	std::string err;
-	const std::string code = ve::strip_shader_annotations(
-			ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err));
-	if (code.empty()) {
-		UtilityFunctions::printerr("IslandExtractPass: load failed: ", err.c_str());
-		teardown();
-		return false;
-	}
-	Ref<RDShaderSource> src;
-	src.instantiate();
-	src->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
-	src->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, String(code.c_str()));
-	Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(src);
-	const String cerr = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
-	if (!cerr.is_empty()) {
-		UtilityFunctions::printerr("IslandExtractPass: ", cerr);
-		teardown();
-		return false;
-	}
-	shader_ = rd->shader_create_from_spirv(spirv);
-	pipeline_ = shader_.is_valid() ? rd->compute_pipeline_create(shader_) : RID();
-	if (!pipeline_.is_valid()) {
+	program_ = gpu::compile_compute(rd, group_, "IslandExtractPass", "island_extract.comp.glsl");
+	if (!program_.valid()) {
 		teardown();
 		return false;
 	}
 	// The extraction pass shares the worker's override mirror; its owner installs the
 	// pointer before initialize so the uniform set never changes identity.
 	if (!overrides_) return false;
-	uset_ = rd->uniform_set_create(Array::make(storage(0, out_), storage(1, ops_),
-			storage(2, volumes->sdf_buffer()), storage(3, volumes->mat_buffer()),
-			storage(4, boxes_), storage(5, counts_),
-			storage(6, overrides_->sdf_buffer()), storage(7, overrides_->mat_buffer()),
-			storage(8, overrides_->tables()), storage(9, overrides_->region_table_map())), shader_, 0);
-	if (!uset_.is_valid()) {
+	set_ = gpu::uniform_set(rd, group_, program_.shader, 0, {
+			gpu::storage(0, out_),
+			gpu::storage(1, ops_),
+			gpu::storage(2, volumes->sdf_buffer()),
+			gpu::storage(3, volumes->mat_buffer()),
+			gpu::storage(4, boxes_),
+			gpu::storage(5, counts_),
+			gpu::storage(6, overrides_->sdf_buffer()),
+			gpu::storage(7, overrides_->mat_buffer()),
+			gpu::storage(8, overrides_->tables()),
+			gpu::storage(9, overrides_->region_table_map())});
+	if (!set_.is_valid()) {
 		UtilityFunctions::printerr("IslandExtractPass: uniform set creation failed");
 		teardown();
 		return false;
@@ -109,14 +74,12 @@ bool IslandExtractPass::initialize(RenderingDevice *rd, const VolumePool *volume
 }
 
 void IslandExtractPass::teardown() {
-	// Uniform sets first: freeing a shader cascades to its pipelines and referencing sets.
-	free_if_valid(rd_, uset_);
-	free_if_valid(rd_, pipeline_);
-	free_if_valid(rd_, shader_);
-	free_if_valid(rd_, ops_);
-	free_if_valid(rd_, counts_);
-	free_if_valid(rd_, boxes_);
-	free_if_valid(rd_, out_);
+	if (rd_) {
+		gpu::RdDevice device{rd_};
+		group_.release(device);
+	}
+	program_ = gpu::Program();
+	set_ = out_ = boxes_ = counts_ = ops_ = RID();
 	rd_ = nullptr;
 }
 
@@ -168,8 +131,8 @@ bool IslandExtractPass::extract(const IslandExtractJob &job, IslandExtractResult
 	pi[7] = job.override_table;
 
 	const int64_t list = rd_->compute_list_begin();
-	rd_->compute_list_bind_compute_pipeline(list, pipeline_);
-	rd_->compute_list_bind_uniform_set(list, uset_, 0);
+	rd_->compute_list_bind_compute_pipeline(list, program_.pipeline);
+	rd_->compute_list_bind_uniform_set(list, set_, 0);
 	if (field_context_ != nullptr) field_context_->bind(rd_, list);
 	rd_->compute_list_set_push_constant(list, pc, pc.size());
 	const int g = (job.dim + 3) / 4;

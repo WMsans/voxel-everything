@@ -2,6 +2,7 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <vector>
+#include "render/gpu/gpu.h"
 #include "connectivity/occupancy.h" // ve::CellBox
 #include "generator/edit_ops.h"
 #include "generator/volume_set.h"
@@ -65,7 +66,7 @@ public:
 	// rubble already pasted into the world.
 	bool initialize(RenderingDevice *rd, const VolumePool *volumes);
 	void teardown();
-	bool is_valid() const { return pipeline_.is_valid(); }
+	bool is_valid() const { return program_.pipeline.is_valid(); }
 	OverridePool *overrides() { return overrides_; }
 	void set_override_pool(OverridePool *pool) { overrides_ = pool; }
 	// The worker device's set 1, owned by MeshService and valid for the worker's whole
@@ -78,7 +79,9 @@ private:
 	RenderingDevice *rd_ = nullptr;
 	const FieldContextSet *field_context_ = nullptr;
 	RID out_, boxes_, counts_, ops_;
-	RID shader_, pipeline_, uset_;
+	gpu::Group group_;
+	gpu::Program program_;
+	RID set_;
 	OverridePool *overrides_ = nullptr;
 };
 

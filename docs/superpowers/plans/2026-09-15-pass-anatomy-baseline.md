@@ -266,3 +266,4 @@ Appended by later tasks.
 - brick_gen Task 26: build OK, native 565/565, gdUnit 26/26 gate, leaked 0 (row 0)
 - region Task 27: build OK, native 565/565, gdUnit 20/20 gate, leaked 0 (row 0)
 - consolidate Task 28: build OK, native 565/565, gdUnit 31/31 gate, leaked 0 (row 0)
+- island_extract Task 29: build OK, native 565/565, gdUnit 18/18 gate, leaked 0 (row 0)
