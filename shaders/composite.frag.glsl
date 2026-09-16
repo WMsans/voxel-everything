@@ -1,5 +1,6 @@
 #[fragment]
 #version 460
+#include "generated/gbuffer.glslh"
 #include "generated/blocks.glslh"
 #define VE_MATERIAL_ARRAYS
 layout(set = 0, binding = 2) uniform sampler2DArray material_albedo;
@@ -57,7 +58,7 @@ void main() {
 		// deferred pass passes through unlit. Gloss is forced to 0 rather than passed
 		// through: the overlay weight lives in that channel on this side of the pass.
 		out_albedo = ov;
-		out_surface = vec4(sf.xy, sf.z, 0.0);
+		out_surface = GB_PACK_SURFACE_OCT(sf.xy, sf.z, 0.0);
 #ifdef SEAM_MARKER
 		marker = 0u;
 #endif
@@ -120,8 +121,8 @@ void main() {
 	// lod.frag.glsl applies to the far field. It darkens the MATERIAL only: the overlay is a
 	// debug tint or a reflection, not a lit surface, and the marcher's own compositing put it
 	// on top.
-	out_albedo = vec4(mix(surf.rgb * mix(1.0, props.y, 0.65), ov.rgb, sf.w), ov.a);
-	out_surface = vec4(oct_encode(shading_n), sf.z, 1.0 - props.x);
+	out_albedo = GB_PACK_ALBEDO(mix(surf.rgb * mix(1.0, props.y, 0.65), ov.rgb, sf.w), ov.a);
+	out_surface = GB_PACK_SURFACE(shading_n, sf.z, 1.0 - props.x);
 
 	float d = distance(p, pc.cam.xyz);
 	float t_fade = clamp((d - pc.cam.w) / max(pc.fade.x - pc.cam.w, 1e-3), 0.0, 1.0);
