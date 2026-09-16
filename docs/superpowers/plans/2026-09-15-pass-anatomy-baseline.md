@@ -267,3 +267,4 @@ Appended by later tasks.
 - region Task 27: build OK, native 565/565, gdUnit 20/20 gate, leaked 0 (row 0)
 - consolidate Task 28: build OK, native 565/565, gdUnit 31/31 gate, leaked 0 (row 0)
 - island_extract Task 29: build OK, native 565/565, gdUnit 18/18 gate, leaked 0 (row 0)
+- mesh Task 30: build OK, native 565/565, gdUnit matches row, leaked 0 (row 0)

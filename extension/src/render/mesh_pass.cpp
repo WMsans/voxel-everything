@@ -1,15 +1,10 @@
 #include "render/mesh_pass.h"
 #include "render/field_context_set.h"
 #include "mesh/mesh_chunk.h"
-#include "render/shader_loader.h"
 #include "world/edit_log.h"
-#include <godot_cpp/classes/project_settings.hpp>
-#include <godot_cpp/classes/rd_shader_source.hpp>
 #include <godot_cpp/classes/time.hpp>
-#include <godot_cpp/classes/rd_shader_spirv.hpp>
 #include <godot_cpp/classes/rd_texture_format.hpp>
 #include <godot_cpp/classes/rd_texture_view.hpp>
-#include <godot_cpp/classes/rd_uniform.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <algorithm>
 #include <cstring>
@@ -17,29 +12,6 @@
 using namespace godot;
 
 namespace {
-
-Ref<RDUniform> storage(int binding, RID rid) {
-	Ref<RDUniform> u;
-	u.instantiate();
-	u->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	u->set_binding(binding);
-	u->add_id(rid);
-	return u;
-}
-
-Ref<RDUniform> image(int binding, RID rid) {
-	Ref<RDUniform> u;
-	u.instantiate();
-	u->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
-	u->set_binding(binding);
-	u->add_id(rid);
-	return u;
-}
-
-void free_if_valid(RenderingDevice *rd, RID &rid) {
-	if (rd && rid.is_valid()) rd->free_rid(rid);
-	rid = RID();
-}
 
 PackedByteArray zeroed(int64_t bytes) {
 	PackedByteArray b;
@@ -60,34 +32,6 @@ int sanitized_op_count(const MeshJob &job) {
 
 MeshPass::~MeshPass() {
 	teardown();
-}
-
-bool MeshPass::build(RenderingDevice *rd, const char *res_path, RID *shader, RID *pipeline) {
-	ProjectSettings *ps = ProjectSettings::get_singleton();
-	const String path = ps->globalize_path(String(res_path));
-	const String inc = ps->globalize_path("res://shaders");
-	std::string err;
-	const std::string code = ve::strip_shader_annotations(
-			ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err));
-	if (code.empty()) {
-		UtilityFunctions::printerr("MeshPass: ", res_path, " load failed: ", err.c_str());
-		return false;
-	}
-	Ref<RDShaderSource> src;
-	src.instantiate();
-	src->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
-	src->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, String(code.c_str()));
-	Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(src);
-	const String compile_err =
-			spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
-	if (!compile_err.is_empty()) {
-		UtilityFunctions::printerr("MeshPass: ", res_path, ": ", compile_err);
-		return false;
-	}
-	*shader = rd->shader_create_from_spirv(spirv);
-	if (!shader->is_valid()) return false;
-	*pipeline = rd->compute_pipeline_create(*shader);
-	return pipeline->is_valid();
 }
 
 bool MeshPass::initialize(RenderingDevice *rd, const MeshPassConfig &cfg) {
@@ -115,22 +59,25 @@ bool MeshPass::initialize(RenderingDevice *rd, const MeshPassConfig &cfg) {
 				RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT);
 		Ref<RDTextureView> v;
 		v.instantiate();
-		lattice_ = rd->texture_create(f, v, TypedArray<PackedByteArray>());
+		lattice_ = group_.add(gpu::Kind::Texture,
+				rd->texture_create(f, v, TypedArray<PackedByteArray>()));
 	}
 	const int64_t max_cells = static_cast<int64_t>(cfg_.max_lattice - 1) *
 			(cfg_.max_lattice - 1) * (cfg_.max_lattice - 1);
-	cells_ = rd->storage_buffer_create(static_cast<uint32_t>(max_cells) * 4,
-			zeroed(max_cells * 4));
-	verts_ = rd->storage_buffer_create(
+	cells_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(
+			static_cast<uint32_t>(max_cells) * 4, zeroed(max_cells * 4)));
+	verts_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(
 			static_cast<uint32_t>(cfg_.max_jobs) * cfg_.max_verts * 12,
-			zeroed(static_cast<int64_t>(cfg_.max_jobs) * cfg_.max_verts * 12));
-	tris_ = rd->storage_buffer_create(static_cast<uint32_t>(cfg_.max_jobs) * cfg_.max_tris * 12,
-			zeroed(static_cast<int64_t>(cfg_.max_jobs) * cfg_.max_tris * 12));
-	counts_ = rd->storage_buffer_create(static_cast<uint32_t>(cfg_.max_jobs) * 16,
-			zeroed(static_cast<int64_t>(cfg_.max_jobs) * 16));
-	ops_ = rd->storage_buffer_create(
+			zeroed(static_cast<int64_t>(cfg_.max_jobs) * cfg_.max_verts * 12)));
+	tris_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(
+			static_cast<uint32_t>(cfg_.max_jobs) * cfg_.max_tris * 12,
+			zeroed(static_cast<int64_t>(cfg_.max_jobs) * cfg_.max_tris * 12)));
+	counts_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(
+			static_cast<uint32_t>(cfg_.max_jobs) * 16,
+			zeroed(static_cast<int64_t>(cfg_.max_jobs) * 16)));
+	ops_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(
 			static_cast<uint32_t>(cfg_.max_jobs) * ve::kMaxRegionOps * 32,
-			zeroed(static_cast<int64_t>(cfg_.max_jobs) * ve::kMaxRegionOps * 32));
+			zeroed(static_cast<int64_t>(cfg_.max_jobs) * ve::kMaxRegionOps * 32)));
 	if (!volumes_.initialize(rd, ve::kMaxVolumes, ve::kIslandDim) ||
 			!overrides_.initialize(rd, cfg_.max_override_bricks)) {
 		UtilityFunctions::printerr("MeshPass: field pool creation failed");
@@ -144,31 +91,39 @@ bool MeshPass::initialize(RenderingDevice *rd, const MeshPassConfig &cfg) {
 		return false;
 	}
 
-	if (!build(rd, "res://shaders/mesh_field.comp.glsl", &field_shader_, &field_pipeline_)) {
+	field_program_ = gpu::compile_compute(rd, group_, "MeshPass", "mesh_field.comp.glsl");
+	if (!field_program_.valid()) {
 		teardown();
 		return false;
 	}
-	field_uset_ = rd->uniform_set_create(Array::make(image(0, lattice_), storage(1, ops_),
-			storage(2, volumes_.sdf_buffer()), storage(3, volumes_.mat_buffer()),
-			storage(4, overrides_.sdf_buffer()), storage(5, overrides_.mat_buffer()),
-			storage(6, overrides_.tables()), storage(7, overrides_.region_table_map())),
-			field_shader_, 0);
-	if (!field_uset_.is_valid()) {
+	field_set_ = gpu::uniform_set(rd, group_, field_program_.shader, 0, {
+			gpu::image(0, lattice_),
+			gpu::storage(1, ops_),
+			gpu::storage(2, volumes_.sdf_buffer()),
+			gpu::storage(3, volumes_.mat_buffer()),
+			gpu::storage(4, overrides_.sdf_buffer()),
+			gpu::storage(5, overrides_.mat_buffer()),
+			gpu::storage(6, overrides_.tables()),
+			gpu::storage(7, overrides_.region_table_map())});
+	if (!field_set_.is_valid()) {
 		UtilityFunctions::printerr("MeshPass: uniform set creation failed");
 		teardown();
 		return false;
 	}
 
-	if (!build(rd, "res://shaders/mesh_cells.comp.glsl", &cells_shader_, &cells_pipeline_) ||
-			!build(rd, "res://shaders/mesh_quads.comp.glsl", &quads_shader_, &quads_pipeline_)) {
+	cells_program_ = gpu::compile_compute(rd, group_, "MeshPass", "mesh_cells.comp.glsl");
+	quads_program_ = gpu::compile_compute(rd, group_, "MeshPass", "mesh_quads.comp.glsl");
+	if (!cells_program_.valid() || !quads_program_.valid()) {
 		teardown();
 		return false;
 	}
-	cells_uset_ = rd->uniform_set_create(Array::make(image(0, lattice_), storage(1, cells_),
-			storage(2, verts_), storage(3, counts_)), cells_shader_, 0);
-	quads_uset_ = rd->uniform_set_create(Array::make(image(0, lattice_), storage(1, cells_),
-			storage(2, tris_), storage(3, counts_)), quads_shader_, 0);
-	if (!cells_uset_.is_valid() || !quads_uset_.is_valid()) {
+	cells_set_ = gpu::uniform_set(rd, group_, cells_program_.shader, 0, {
+			gpu::image(0, lattice_), gpu::storage(1, cells_), gpu::storage(2, verts_),
+			gpu::storage(3, counts_)});
+	quads_set_ = gpu::uniform_set(rd, group_, quads_program_.shader, 0, {
+			gpu::image(0, lattice_), gpu::storage(1, cells_), gpu::storage(2, tris_),
+			gpu::storage(3, counts_)});
+	if (!cells_set_.is_valid() || !quads_set_.is_valid()) {
 		UtilityFunctions::printerr("MeshPass: uniform set creation failed");
 		teardown();
 		return false;
@@ -183,25 +138,15 @@ void MeshPass::teardown() {
 		in_flight_ = false;
 		batch_.clear();
 	}
-	// Uniform sets first: freeing a shader cascades to its pipelines and referencing sets
-	// (M1's documented order).
-	free_if_valid(rd_, quads_uset_);
-	free_if_valid(rd_, quads_pipeline_);
-	free_if_valid(rd_, quads_shader_);
-	free_if_valid(rd_, cells_uset_);
-	free_if_valid(rd_, cells_pipeline_);
-	free_if_valid(rd_, cells_shader_);
-	free_if_valid(rd_, field_uset_);
+	// Sets, pipelines and shaders first, then this pass's lattice and buffers. The pools'
+	// buffers were bound only by field_set_, which is gone by the time they are.
+	gpu::RdDevice device{rd_};
+	group_.release(device);
 	volumes_.teardown();
 	overrides_.teardown();
-	free_if_valid(rd_, field_pipeline_);
-	free_if_valid(rd_, field_shader_);
-	free_if_valid(rd_, ops_);
-	free_if_valid(rd_, counts_);
-	free_if_valid(rd_, tris_);
-	free_if_valid(rd_, verts_);
-	free_if_valid(rd_, cells_);
-	free_if_valid(rd_, lattice_);
+	field_program_ = cells_program_ = quads_program_ = gpu::Program();
+	field_set_ = cells_set_ = quads_set_ = RID();
+	lattice_ = cells_ = verts_ = tris_ = counts_ = ops_ = RID();
 	rd_ = nullptr;
 }
 
@@ -254,8 +199,8 @@ void MeshPass::push(int64_t list, const MeshJob &job, int job_index) {
 }
 
 void MeshPass::record_field(int64_t list, const MeshJob &job, int job_index) {
-	rd_->compute_list_bind_compute_pipeline(list, field_pipeline_);
-	rd_->compute_list_bind_uniform_set(list, field_uset_, 0);
+	rd_->compute_list_bind_compute_pipeline(list, field_program_.pipeline);
+	rd_->compute_list_bind_uniform_set(list, field_set_, 0);
 	if (field_context_ != nullptr) field_context_->bind(rd_, list);
 	push(list, job, job_index);
 	const int g = groups(job.lattice);
@@ -279,16 +224,16 @@ bool MeshPass::run_field_sync(const MeshJob &job, std::vector<uint8_t> *lattice)
 }
 
 void MeshPass::record_cells(int64_t list, const MeshJob &job, int job_index) {
-	rd_->compute_list_bind_compute_pipeline(list, cells_pipeline_);
-	rd_->compute_list_bind_uniform_set(list, cells_uset_, 0);
+	rd_->compute_list_bind_compute_pipeline(list, cells_program_.pipeline);
+	rd_->compute_list_bind_uniform_set(list, cells_set_, 0);
 	push(list, job, job_index);
 	const int g = groups(job.lattice - 1);
 	rd_->compute_list_dispatch(list, g, g, g);
 }
 
 void MeshPass::record_quads(int64_t list, const MeshJob &job, int job_index) {
-	rd_->compute_list_bind_compute_pipeline(list, quads_pipeline_);
-	rd_->compute_list_bind_uniform_set(list, quads_uset_, 0);
+	rd_->compute_list_bind_compute_pipeline(list, quads_program_.pipeline);
+	rd_->compute_list_bind_uniform_set(list, quads_set_, 0);
 	push(list, job, job_index);
 	const int g = groups(job.lattice - 2);
 	rd_->compute_list_dispatch(list, g, g, g);

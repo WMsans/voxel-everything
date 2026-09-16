@@ -6,6 +6,7 @@
 #include <utility>
 #include "generator/edit_ops.h"
 #include "mesh/mesh_chunk.h"
+#include "render/gpu/gpu.h"
 #include "render/volume_pool.h"
 #include "render/override_pool.h"
 #include "world/region.h"
@@ -53,11 +54,11 @@ public:
 
 	bool initialize(RenderingDevice *rd, const MeshPassConfig &cfg);
 	void teardown();
-	bool is_valid() const { return field_pipeline_.is_valid(); }
+	bool is_valid() const { return field_program_.pipeline.is_valid(); }
 	const MeshPassConfig &config() const { return cfg_; }
 	// The worker device's set 1, owned by MeshService and valid for the worker's whole
 	// run. Borrowed, never freed here; bound beside the field pass's set 0.
-	RID field_shader() const { return field_shader_; }
+	RID field_shader() const { return field_program_.shader; }
 	void set_field_context(const FieldContextSet *fc) { field_context_ = fc; }
 	VolumePool &volumes() { return volumes_; }
 	OverridePool &overrides() { return overrides_; }
@@ -94,7 +95,6 @@ public:
 	float last_collect_ms() const { return last_collect_ms_; }
 
 private:
-	bool build(RenderingDevice *rd, const char *res_path, RID *shader, RID *pipeline);
 	void record_field(int64_t list, const MeshJob &job, int job_index);
 	void upload_ops(const MeshJob &job, int job_index);
 	void push(int64_t list, const MeshJob &job, int job_index);
@@ -116,10 +116,10 @@ private:
 	RID counts_;      // 4 uints per job: vert count, tri count, overflow bits, pad
 	RID ops_;         // max_jobs * kMaxRegionOps EditOps
 	VolumePool volumes_;
-	RID field_shader_, field_pipeline_, field_uset_;
+	gpu::Group group_;
+	gpu::Program field_program_, cells_program_, quads_program_;
+	RID field_set_, cells_set_, quads_set_;
 	OverridePool overrides_;
-	RID cells_shader_, cells_pipeline_, cells_uset_;
-	RID quads_shader_, quads_pipeline_, quads_uset_;
 
 	bool in_flight_ = false;
 	std::vector<ve::IVec3> batch_; // the chunks in flight, in job order
