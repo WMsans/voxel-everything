@@ -1,6 +1,7 @@
 #include "render/deferred_pass.h"
 #include "render/gbuffer.h"
 #include "render/material_atlas.h"
+#include "gpu_layout/blocks.h"
 #include "shade/beauty_settings.h"
 #include <godot_cpp/variant/typed_array.hpp>
 #include <cstring>
@@ -60,9 +61,10 @@ bool DeferredPass::ensure_dummies(RenderingDevice *rd) {
 	far.fill(0);
 	dummy_far_ = make_1x1(RenderingDevice::DATA_FORMAT_R32_SFLOAT, far);
 	PackedByteArray zeros;
-	zeros.resize(256);
+	zeros.resize(sizeof(ve::SunCascadeBlock));
 	zeros.fill(0);
-	sun_ubo_ = group_.add(gpu::Kind::Buffer, rd->uniform_buffer_create(256, zeros));
+	sun_ubo_ = group_.add(gpu::Kind::Buffer,
+			rd->uniform_buffer_create(sizeof(ve::SunCascadeBlock), zeros));
 	return dummy_black_.is_valid() && dummy_far_.is_valid() && dummy_white_.is_valid() && sun_ubo_.is_valid();
 }
 
@@ -96,46 +98,33 @@ bool DeferredPass::render(RenderingDevice *rd, GBuffer &gb, const MaterialAtlas 
 			gpu::ubo(10, sun_light_ubo_)});
 	if (!set.is_valid()) return false;
 
-	// std140: mat4[3] = 192 B, then vec4[3] = 48 B, then vec4 splits = 16 B. 256 total.
-	PackedByteArray ub;
-	ub.resize(256);
-	ub.fill(0);
-	float *uf = reinterpret_cast<float *>(ub.ptrw());
+	ve::SunCascadeBlock sun{};
 	const int n = sun_map.is_valid() ? p.cascade_count : 0;
-	for (int c = 0; c < ve::kSunCascades; c++)
-		for (int i = 0; i < 16; i++)
-			uf[c * 16 + i] = c < n ? p.sun_view_proj[c][i] : 0.0f;
-	for (int c = 0; c < ve::kSunCascades; c++) {
-		uf[48 + c * 4 + 0] = c < n ? p.shadow_texel[c] : 0.0f;
-		uf[48 + c * 4 + 1] = c < n ? p.shadow_depth_range_c[c] : 0.0f;
+	for (int c = 0; c < ve::kSunCascades && c < n; c++) {
+		std::memcpy(sun.view_proj[c], p.sun_view_proj[c], sizeof(sun.view_proj[c]));
+		sun.params[c][0] = p.shadow_texel[c];
+		sun.params[c][1] = p.shadow_depth_range_c[c];
+		sun.splits[c] = p.cascade_split[c];
 	}
-	uf[48 + 0*4 + 2] = n > 0 ? p.fade_start : 0.0f;
-	uf[48 + 0*4 + 3] = n > 0 ? p.fade_end : 0.0f;
-	for (int c = 0; c < ve::kSunCascades; c++)
-		uf[60 + c] = c < n ? p.cascade_split[c] : 0.0f;
-	uf[63] = float(n);
-	rd->buffer_update(sun_ubo_, 0, 256, ub);
+	if (n > 0) {
+		sun.params[0][2] = p.fade_start;
+		sun.params[0][3] = p.fade_end;
+	}
+	sun.splits[3] = static_cast<float>(n);
+	rd->buffer_update(sun_ubo_, 0, sizeof(sun), gpu::push_bytes(sun));
 
-	static_assert(sizeof(float) * 28 == 112, "deferred push block");
-	PackedByteArray pcb;
-	pcb.resize(112);
-	float *f = reinterpret_cast<float *>(pcb.ptrw());
-	for (int i = 0; i < 16; i++) f[i] = p.inv_view_proj[i];
-	f[16] = p.cam_pos[0];
-	f[17] = p.cam_pos[1];
-	f[18] = p.cam_pos[2];
-	f[19] = 0.0f;
-	f[20] = p.ambient[0];
-	f[21] = p.ambient[1];
-	f[22] = p.ambient[2];
-	f[23] = 0.0f;
-	uint32_t *u = reinterpret_cast<uint32_t *>(pcb.ptrw());
-	u[24] = flags;
-	u[25] = static_cast<uint32_t>(p.probe_mode);
-	u[26] = 0;
-	u[27] = 0;
+	ve::DeferredPush push{};
+	std::memcpy(push.inv_view_proj, p.inv_view_proj, sizeof(push.inv_view_proj));
+	push.cam[0] = p.cam_pos[0];
+	push.cam[1] = p.cam_pos[1];
+	push.cam[2] = p.cam_pos[2];
+	push.sky[0] = p.ambient[0];
+	push.sky[1] = p.ambient[1];
+	push.sky[2] = p.ambient[2];
+	push.flags[0] = flags;
+	push.flags[1] = static_cast<uint32_t>(p.probe_mode);
 
 	const Vector2i size = gb.size();
-	return gpu::dispatch(rd, program_.pipeline, {{set, 0}}, pcb, gpu::groups(size.x, 8),
+	return gpu::dispatch(rd, program_.pipeline, {{set, 0}}, gpu::push_bytes(push), gpu::groups(size.x, 8),
 			gpu::groups(size.y, 8));
 }

@@ -1,5 +1,6 @@
 #[compute]
 #version 460
+#include "generated/blocks.glslh"
 
 #define SUN_LIGHT_SET 0
 #define SUN_LIGHT_BINDING 10
@@ -20,22 +21,9 @@ layout(set = 0, binding = 4) uniform sampler2DArray sun_map;
 layout(set = 0, binding = 7) uniform sampler2D ssao_tex;
 layout(set = 0, binding = 5, rgba16f) writeonly uniform image2D out_lit;
 #define SUN_CASCADES 3
-layout(set = 0, binding = 6, std140) uniform SunBlock {
-	mat4 view_proj[SUN_CASCADES];
-	// per cascade: x = one shadow texel in world metres, y = light-space depth range in the
-	// same metres; zw on cascade 0 carries the LoD fade band (fade_start, fade_end),
-	// unused on the other cascades
-	vec4 params[SUN_CASCADES];
-	// xyz = the cascade radii; w = the count actually in use (1 when the radius collapsed)
-	vec4 splits;
-} sun;
+layout(set = 0, binding = 6, std140) uniform SunBlock { SUN_CASCADE_BLOCK_FIELDS } sun;
 
-layout(push_constant, std430) uniform Push {
-	mat4 inv_view_proj;
-	vec4 cam;
-	vec4 sky;
-	uvec4 flags;
-} pc;
+layout(push_constant, std430) uniform Push { DEFERRED_PUSH_FIELDS } pc;
 
 // The fits are camera-centred SPHERES, so a point at distance d is inside cascade i exactly
 // when d < radius_i. Selection is a scalar compare -- no depth-slice arithmetic and no
