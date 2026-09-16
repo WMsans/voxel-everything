@@ -11,6 +11,7 @@
 #include <godot_cpp/core/object.hpp>
 #include <algorithm>
 #include <iterator>
+#include <utility>
 
 using namespace godot;
 
@@ -82,10 +83,16 @@ VoxelSettings::VoxelSettings() {
 
 ve::SettingsGroup *VoxelSettings::group(const String &name) const {
 	if (name == "display") return &display_;
-	VoxelWorld *world = Object::cast_to<VoxelWorld>(ObjectDB::get_instance(world_id_));
-	if (!world) return nullptr;
-	const CharString n = name.utf8();
-	return world->context().render->settings_group(n.get_data());
+	if (VoxelWorld *world = Object::cast_to<VoxelWorld>(ObjectDB::get_instance(world_id_))) {
+		const CharString n = name.utf8();
+		return world->context().render->settings_group(n.get_data());
+	}
+	// ponytail: the beauty stand-in is not rebased when the render stand-in's tier changes, so the
+	// editor reverts beauty knobs to High's values. Wire a listener if a scene ever ships a tier.
+	if (name == "render") return &render_stand_in_;
+	if (name == "beauty") return &beauty_stand_in_;
+	if (name == "grass") return &grass_stand_in_;
+	return nullptr;
 }
 
 void VoxelSettings::_ready() {
@@ -98,6 +105,14 @@ void VoxelSettings::_ready() {
 	Viewport *vp = viewport_path_.is_empty() ? get_viewport()
 											 : Object::cast_to<Viewport>(get_node_or_null(viewport_path_));
 	viewport_id_ = vp ? vp->get_instance_id() : 0;
+	// A scene's property values went into the stand-ins before the world was known.
+	if (world_id_ != 0) {
+		const std::pair<const char *, ve::SettingsGroup *> stand_ins[] = {
+			{"render", &render_stand_in_}, {"beauty", &beauty_stand_in_}, {"grass", &grass_stand_in_}};
+		for (const auto &[name, stand_in] : stand_ins)
+			if (ve::SettingsGroup *live = group(name))
+				for (const auto &[knob, value] : stand_in->overrides()) live->set(knob, value);
+	}
 	capture_display_base();
 	ready_ = true;
 	apply_display(display_.get());

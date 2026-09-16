@@ -48,6 +48,27 @@ func make_settings(config_path := CONFIG_PATH) -> Array:
 	root.add_child(settings)
 	return [world, vp, settings]
 
+func test_render_beauty_and_grass_dials_set_before_ready_reach_world() -> void:
+	var root := Node.new()
+	add_child(root)
+	_roots.append(root)
+	var world: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	world.name = "World"
+	world.use_local_device = true
+	world.physics_enabled = false
+	root.add_child(world)
+	var settings: VoxelSettings = ClassDB.instantiate("VoxelSettings")
+	settings.world_path = NodePath("../World")
+	settings.config_path = CONFIG_PATH
+	settings.manage_window = false
+	assert_bool(settings.set_setting("render", "near_field_scale", 0.8)).is_true()
+	assert_bool(settings.set_setting("beauty", "ssgi_taps", 4)).is_true()
+	assert_bool(settings.set_setting("grass", "reach_m", 30.0)).is_true()
+	root.add_child(settings)
+	assert_float(world.near_field_scale).is_equal_approx(0.8, 0.001)
+	assert_float(world.get_effect_value("ssgi_taps")).is_equal_approx(4.0, 0.001)
+	assert_float(world.get_grass_value("reach_m")).is_equal_approx(30.0, 0.001)
+
 func test_groups_are_listed_in_panel_order() -> void:
 	var settings: VoxelSettings = make_settings()[2]
 	assert_array(Array(settings.groups())).is_equal(["display", "render", "beauty", "grass"])

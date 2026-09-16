@@ -14,7 +14,10 @@
 #include <godot_cpp/variant/variant.hpp>
 #include <godot_cpp/variant/vector2i.hpp>
 #include <cstdint>
+#include "grass/grass_settings_store.h"
 #include "settings/display_settings.h"
+#include "settings/render_settings.h"
+#include "shade/beauty_settings_store.h"
 
 namespace godot {
 
@@ -73,6 +76,12 @@ private:
 	bool measured_ = false;
 	Dictionary shipped_; // group -> overrides when this node became ready
 	mutable ve::DisplaySettingsStore display_;
+	// Until _ready resolves the world -- and always in the editor -- the world's groups are these
+	// stand-ins, so a scene's property values have somewhere to land; _ready copies their overrides
+	// into the world's stores.
+	mutable ve::RenderSettingsStore render_stand_in_;
+	mutable ve::BeautySettingsStore beauty_stand_in_;
+	mutable ve::GrassSettingsStore grass_stand_in_;
 };
 
 } // namespace godot
