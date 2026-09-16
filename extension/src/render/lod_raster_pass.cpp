@@ -3,7 +3,7 @@
 #include "render/lod_pool.h"
 #include "render/material_atlas.h"
 #include "lod/lod_contour.h"
-#include <godot_cpp/variant/packed_byte_array.hpp>
+#include "gpu_layout/blocks.h"
 #include <godot_cpp/variant/packed_color_array.hpp>
 #include <chrono>
 #include <cstring>
@@ -150,24 +150,16 @@ bool LodRasterPass::draw(RenderingDevice *rd, LodPool &pool, MaterialAtlas &mate
 	rd->draw_list_bind_render_pipeline(dl, active_pipeline());
 	rd->draw_list_bind_uniform_set(dl, set_.id(), 0);
 	rd->draw_list_bind_index_array(dl, index_array_);
-	PackedByteArray pc;
-	pc.resize(96);
-	{
-		float *f = reinterpret_cast<float *>(pc.ptrw());
-		for (int c = 0; c < 4; c++)
-			for (int r = 0; r < 4; r++)
-				f[c * 4 + r] = view_proj.columns[c][r]; // GLSL mat4 = column-major
-		// std430 push block: mat4 view_proj occupies floats 0..15 (bytes 0..63), so the
-		// vec4 cam that follows starts at float 16 and vec4 fade at float 20. Index by
-		// float, not byte (plan errata 3): byte indexing wrote past the end of the array
-		// and corrupted the heap in earlier tasks.
-		f[16] = cam_pos[0];
-		f[17] = cam_pos[1];
-		f[18] = cam_pos[2];
-		f[19] = fade_start;
-		f[20] = fade_end;
-	}
-	rd->draw_list_set_push_constant(dl, pc, pc.size());
+	ve::LodRasterPush push{};
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++)
+			push.view_proj[c * 4 + r] = view_proj.columns[c][r]; // GLSL mat4 = column-major
+	push.cam[0] = cam_pos[0];
+	push.cam[1] = cam_pos[1];
+	push.cam[2] = cam_pos[2];
+	push.cam[3] = fade_start;
+	push.fade[0] = fade_end;
+	rd->draw_list_set_push_constant(dl, gpu::push_bytes(push), sizeof(push));
 	rd->draw_list_draw_indirect(dl, true, pool.args_buffer(), 0, draw_count, 20);
 	rd->draw_list_end();
 	last_ms_ = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();

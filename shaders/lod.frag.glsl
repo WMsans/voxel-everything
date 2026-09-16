@@ -1,6 +1,7 @@
 #[fragment]
 #version 460
 
+#include "generated/blocks.glslh"
 #define MATERIAL_LAYERS 16
 layout(set = 0, binding = 3) uniform sampler2DArray material_albedo;
 layout(set = 0, binding = 4) uniform sampler2DArray material_surface_tex;
@@ -17,11 +18,7 @@ layout(location = 1) out vec4 out_surface; // xy oct normal, z material id, w gl
 layout(location = 2) out uint marker; // debug seam probe: 2 = far field kept the pixel
 #endif
 
-layout(push_constant, std430) uniform Push {
-	mat4 view_proj;
-	vec4 cam;  // xyz = camera position, w = fade start
-	vec4 fade; // x = fade end, yzw unused
-} pc;
+layout(push_constant, std430) uniform Push { LOD_RASTER_PUSH_FIELDS } pc;
 
 void main() {
 	// Fade before the material sample, so a discarded fragment costs no texture work.
