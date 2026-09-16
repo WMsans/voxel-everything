@@ -1,4 +1,5 @@
 #include "render/ssr_pass.h"
+#include "gpu_layout/blocks.h"
 #include <algorithm>
 
 using namespace godot;
@@ -70,20 +71,13 @@ bool SsrPass::render(RenderingDevice *rd, RID scene_color, RID scene_depth, RID 
 			gpu::image(1, scene_color)});
 	if (!trace_set.is_valid() || !apply_set.is_valid()) return false;
 	gpu::CpuTimer timer(last_ms_);
-	PackedByteArray trace_pc;
-	trace_pc.resize(32);
-	int32_t *i = reinterpret_cast<int32_t *>(trace_pc.ptrw());
-	float *f = reinterpret_cast<float *>(trace_pc.ptrw());
-	i[0] = half.x; i[1] = half.y; i[2] = s.ssr_steps;
-	i[3] = have_normal_roughness && normal_roughness.is_valid() ? 1 : 0;
-	f[4] = kReachM; f[5] = kStartBiasM; f[6] = kThicknessM; f[7] = kStrength;
-	if (!gpu::dispatch(rd, trace_.pipeline, {{trace_set, 0}}, trace_pc, gpu::groups(half.x, 8),
-				gpu::groups(half.y, 8)))
+	const ve::SsrTracePush trace{
+			{half.x, half.y, s.ssr_steps, have_normal_roughness && normal_roughness.is_valid() ? 1 : 0},
+			{kReachM, kStartBiasM, kThicknessM, kStrength}};
+	if (!gpu::dispatch(rd, trace_.pipeline, {{trace_set, 0}}, gpu::push_bytes(trace),
+				gpu::groups(half.x, 8), gpu::groups(half.y, 8)))
 		return false;
-	PackedByteArray apply_pc;
-	apply_pc.resize(16);
-	int32_t *dims = reinterpret_cast<int32_t *>(apply_pc.ptrw());
-	dims[0] = size.x; dims[1] = size.y; dims[2] = dims[3] = 0;
-	return gpu::dispatch(rd, apply_.pipeline, {{apply_set, 0}}, apply_pc, gpu::groups(size.x, 8),
-			gpu::groups(size.y, 8));
+	const ve::SsrApplyPush apply{{size.x, size.y, 0, 0}};
+	return gpu::dispatch(rd, apply_.pipeline, {{apply_set, 0}}, gpu::push_bytes(apply),
+			gpu::groups(size.x, 8), gpu::groups(size.y, 8));
 }
