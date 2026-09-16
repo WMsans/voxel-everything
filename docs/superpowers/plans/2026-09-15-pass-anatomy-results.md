@@ -18,11 +18,36 @@ build=0
 native=0
 
 ./gdunit_tests.sh
-Open XML Report: reports/report_191/results.xml
+Open XML Report: reports/report_192/results.xml
 Exit code: 0
 Run tests ends with 0
 gdunit=0
 leaks=0
+```
+
+Raw exit-probe output:
+
+```text
+$ rg -n "shader_compile_spirv_from_source" extension/src -g '*.cpp'
+extension/src/render/gpu/gpu.cpp:92:	Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(src);
+$ rg -n 'key_[a-z_]+_ = |uset_[a-z_]+_ = |fb_[a-z]+_ = ' extension/src/render
+extension/src/render/raymarch_pass.cpp:52:	uset_mask_ = RID();
+extension/src/render/raymarch_pass.cpp:141:		uset_mask_ = mask;
+$ ls shaders/generated/
+blocks.glslh
+cel.glslh
+cel_constants.gdshaderinc
+constants.glslh
+field.glslh.golden
+gbuffer.glslh
+$ rg -n 'TEST_CASE\("generated: ' extension/tests/test_generated_glsl.cpp
+44:TEST_CASE("generated: shaders/generated/blocks.glslh") {
+48:TEST_CASE("generated: shaders/generated/constants.glslh") {
+52:TEST_CASE("generated: shaders/generated/gbuffer.glslh") {
+71:TEST_CASE("generated: shaders/generated/cel.glslh") {
+75:TEST_CASE("generated: shaders/generated/cel_constants.gdshaderinc") {
+$ rg -n 'the committed GLSL mirror matches the C\+\+ table' extension/tests/test_material_glslh.cpp
+13:TEST_CASE("the committed GLSL mirror matches the C++ table") {
 ```
 
 `reports/report_192/results.xml`: 90 suites, 467 tests, 0 failures, 0 errors. The Task 1
@@ -43,7 +68,7 @@ zero failures in the final report.
 | New material ≤ 4 files | OPEN — 6 logical locations | Retrace: `assets/materials/07_{basecolor,normal,roughness,ambientOcclusion,height}.png` (asset set), `tools/convert_materials.sh`, `extension/src/world/material_table.h`, `shaders/material_table.glslh`, `shaders/stages/height_bands.field.glslh`, and `extension/src/terrain/builtin_stages.cpp`. The procedural placement CPU/GLSL mirror pair keeps the change two logical locations over target. |
 | New G-buffer channel ≤ 5 files | OPEN — 12 files for the full contract | Retrace: `extension/src/gpu_layout/gbuffer_layout.h`; `shaders/generated/gbuffer.glslh`; `extension/src/render/gbuffer.h`; `extension/src/render/gbuffer.cpp`; writers `shaders/composite.frag.glsl`, `shaders/lod.frag.glsl`, `shaders/grass.frag.glsl`; readers `shaders/deferred.comp.glsl`, `shaders/ssao.comp.glsl`, `shaders/ssgi.comp.glsl`, `shaders/ssr.comp.glsl`, `shaders/outline.comp.glsl`. The writer/reader fan-out is the reason this remains over target. |
 | FogPass retrace | OPEN — 9 files | `render/fog_pass.h`, `render/fog_pass.cpp`, `shaders/fog.comp.glsl`, `render/orchestrator.h`, `render/orchestrator.cpp`, `render/frame.h`, `render/frame.cpp`, `render/gpu_timings.cpp`, `tests/test_frame_contract.gd`. `gpu_timings.cpp` remains the ninth file because `known_pass()` drops an unknown label; it is the only file over the ≤8 core path. |
-| gdUnit no worse than baseline; moved pins attributed | PASS | Baseline `27bc434`: 459 tests, failure set none, leaks 0. Final `reports/report_191`: 467 tests, failure set none, leaks 0. Migration pins stayed unchanged. Added tests are coverage, not moved golden values. |
+| gdUnit no worse than baseline; moved pins attributed | PASS | Baseline `27bc434`: 459 tests, failure set none, leaks 0. Final `reports/report_192`: 467 tests, failure set none, leaks 0. Migration pins stayed unchanged. Added tests are coverage, not moved golden values. |
 | S7, S9 closed; S4 sun/ambient closed, albedo remainder open | PASS with recorded S4 remainder | S7 fixed by `ed62b44` after failing test commit `06a8187`; S9 closed by `61c62a6`; S4 sun/colour/ambient fixed by `5b130dc` after failing test commit `d53f8b5`; island rock albedo remains open because `IslandBody` has no material data. |
 
 ## 3. Pinned-value attribution

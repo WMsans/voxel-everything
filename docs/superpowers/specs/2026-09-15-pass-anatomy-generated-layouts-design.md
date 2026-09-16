@@ -194,7 +194,8 @@ Emitted from `CelParams` defaults and `kCelBands` into `shaders/generated/cel.gl
 ### 3.7 Objects follow the scene sun (S4)
 
 `cel_object.gdshader` reads sun direction, sun colour and ambient from global shader uniforms that
-the orchestrator sets from `SunState` each frame, replacing `VE_SUN_DIR`. `island_body.cpp:194`'s
+`VoxelWorld::update_sun_state` sets on the main thread from `SunState` each frame, alongside
+`RenderOrchestrator::set_sun_state`, replacing `VE_SUN_DIR`. `island_body.cpp:194`'s
 hard-coded `ambient_linear` is removed in favour of the global.
 
 The hard-coded rock albedo (`island_body.cpp:193`) is **not** fixed here: an `IslandBody` carries no
@@ -266,7 +267,7 @@ step-1 baseline, stashing and re-running before attributing a failure to the cha
 
 ## 6. Exit criteria
 
-- `rg 'shader_compile_spirv_from_source' extension/src` hits only `render/gpu/program.cpp`.
+- `rg 'shader_compile_spirv_from_source' extension/src` hits only `render/gpu/gpu.cpp`, the single compile site.
 - `rg 'invalidate_uniform_set|static_assert\(sizeof\(float\) \*|#define MATERIAL_LAYERS|GRASS_MATERIAL' extension/src shaders`
   returns nothing.
 - `rg 'key_[a-z_]+_ = ' extension/src/render` returns nothing.
