@@ -1,4 +1,5 @@
 #include "render/orchestrator.h"
+#include "gpu_layout/blocks.h"
 
 #include "render/gpu_atlas.h"
 #include "render/material_atlas.h"
@@ -143,11 +144,8 @@ bool RenderOrchestrator::downsample_history(RenderingDevice *rd, RID src, GBuffe
 	const RID set = downsample_set_.get(device, downsample_group_, downsample_.shader, 0,
 			{gpu::sampled(0, downsample_sampler_, src), gpu::image(1, gb.history())});
 	if (!set.is_valid()) return false;
-	PackedByteArray pc;
-	pc.resize(16);
-	int32_t *dims = reinterpret_cast<int32_t *>(pc.ptrw());
-	dims[0] = half.x; dims[1] = half.y; dims[2] = dims[3] = 0;
-	if (!gpu::dispatch(rd, downsample_.pipeline, {{set, 0}}, pc, gpu::groups(half.x, 8),
+	const ve::DownsamplePush push{{half.x, half.y, 0, 0}};
+	if (!gpu::dispatch(rd, downsample_.pipeline, {{set, 0}}, gpu::push_bytes(push), gpu::groups(half.x, 8),
 			gpu::groups(half.y, 8)))
 		return false;
 	has_history_ = true;
