@@ -69,6 +69,7 @@ public:
 	int debug_island_frame(float dt, Vector3 center);
 
 	Dictionary debug_island_stats();
+	int debug_contact_samples(Vector3i cell, int axis);
 
 	// Test hooks for teardown/reinit: let a test queue stale island GPU handoffs and observe
 	// that teardown_physics() clears them before the next physics lifetime starts.

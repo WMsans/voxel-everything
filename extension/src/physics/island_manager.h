@@ -123,6 +123,10 @@ public:
 #endif
 	// Not const: the ground probe takes the edit lock.
 	Dictionary stats();
+	// Solid samples on the face between `cell` and `cell + e_axis`, under the edit lock --
+	// exactly what connectivity's marginal-contact refinement asks (LogContactProbe forwards
+	// here) and what debug_contact_samples reports.
+	int contact_samples(ve::IVec3 cell, int axis) const;
 
 private:
 	struct PendingWindow {

@@ -107,3 +107,45 @@ func test_a_pasted_volume_in_open_sky_gets_a_collider(timeout := 180000) -> void
 	var info: Dictionary = w.hooks().debug_chunk_collider_info(FILL_CHUNK)
 	assert_int(int(info.get("slot", -1))).override_failure_message(
 		"the chunk holding only a pasted volume probed as empty: %s" % info).is_greater_equal(0)
+
+const CARVE_REGION := Vector3i(0, 0, 0)
+
+func make_extract_world() -> VoxelWorld:
+	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	w.use_local_device = true
+	w.physics_enabled = false
+	add_child(w)
+	_worlds.append(w)
+	assert_bool(w.hooks().debug_init_physics()).is_true()
+	w.hooks().debug_stream_region(CARVE_REGION)
+	return w
+
+# S2, contact probe. The face between cells (10,20,20) and (10,21,20) is the plane y = 16.8 m,
+# x in [8, 8.8], z in [16, 16.8]: solid rock, all 81 samples.
+func test_the_contact_probe_reads_a_consolidated_carve(timeout := 120000) -> void:
+	var w := make_extract_world()
+	assert_int(w.hooks().debug_contact_samples(Vector3i(10, 20, 20), 1)).is_equal(81)
+	var tool: VoxelEditTool = ClassDB.instantiate("VoxelEditTool")
+	w.add_child(tool)
+	tool.apply_sphere_subtract(Vector3(8.4, 16.8, 16.4), 1.0)
+	assert_int(w.hooks().debug_contact_samples(Vector3i(10, 20, 20), 1)).is_equal(0)
+	assert_bool(w.hooks().debug_consolidate_region(CARVE_REGION)).is_true()
+	assert_int(w.hooks().debug_region_op_count(CARVE_REGION)).is_equal(0)
+	assert_int(w.hooks().debug_contact_samples(Vector3i(10, 20, 20), 1)).override_failure_message(
+		"the contact probe sees uncarved rock once the carve is baked").is_equal(0)
+
+# S2, CPU island extract. The GPU extraction samples a snapshot that includes overrides; the
+# CPU reference must agree after the carve moved into them.
+func test_the_cpu_island_extract_reads_a_consolidated_carve(timeout := 120000) -> void:
+	var w := make_extract_world()
+	var tool: VoxelEditTool = ClassDB.instantiate("VoxelEditTool")
+	w.add_child(tool)
+	tool.apply_sphere_subtract(Vector3(8.4, 16.4, 16.4), 0.6)
+	assert_bool(w.hooks().debug_consolidate_region(CARVE_REGION)).is_true()
+	assert_int(w.hooks().debug_region_op_count(CARVE_REGION)).is_equal(0)
+	var d: Dictionary = w.hooks().debug_island_extract_diff(Vector3i(10, 20, 20), Vector3i(11, 20, 20))
+	assert_bool(d.get("ok", false)).override_failure_message("extraction failed: %s" % d).is_true()
+	assert_int(d["worst_steps"]).override_failure_message(
+		"CPU and GPU extraction disagree after consolidation: worst %d steps" % d["worst_steps"]
+		).is_less(2)
+	assert_int(d["mat_mismatch"]).is_equal(0)
