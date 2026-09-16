@@ -3,6 +3,7 @@
 #include <godot_cpp/variant/rid.hpp>
 #include <vector>
 #include "render/override_pool.h"
+#include "render/gpu/gpu.h"
 #include "world/region.h"
 #include "world/edit_log.h"
 #include "generator/edit_ops.h"
@@ -40,7 +41,7 @@ public:
 	// buffers; staged output never aliases a published override slot.
 	bool initialize(RenderingDevice *rd, OverridePool *pool, VolumePool *volumes, int max_bricks = 0);
 	void teardown();
-	bool is_valid() const { return pipeline_.is_valid(); }
+	bool is_valid() const { return program_.pipeline.is_valid(); }
 	// The worker device's set 1, owned by MeshService and valid for the worker's whole
 	// run. Borrowed, never freed here; bound beside set 0.
 	void set_field_context(const FieldContextSet *fc) { field_context_ = fc; }
@@ -51,7 +52,9 @@ private:
 	const FieldContextSet *field_context_ = nullptr;
 	OverridePool *pool_ = nullptr;
 	int max_bricks_ = 0;
-	RID shader_, pipeline_, uset_, ops_, jobs_;
+	gpu::Group group_;
+	gpu::Program program_;
+	RID set_, ops_, jobs_;
 	RID staging_sdf_, staging_mat_;
 };
 

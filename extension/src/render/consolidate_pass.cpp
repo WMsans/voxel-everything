@@ -1,35 +1,17 @@
 #include "render/consolidate_pass.h"
 #include "render/field_context_set.h"
-#include "render/shader_loader.h"
 #include "render/volume_pool.h"
 #include "generator/generator.h"
 #include "world/brick.h"
 #include "world/brick_eval.h"
 #include "shade/oct.h"
-#include <godot_cpp/classes/project_settings.hpp>
-#include <godot_cpp/classes/rd_shader_source.hpp>
-#include <godot_cpp/classes/rd_shader_spirv.hpp>
-#include <godot_cpp/classes/rd_uniform.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
-#include <godot_cpp/variant/utility_functions.hpp>
 #include <algorithm>
 #include <cstring>
 
 using namespace godot;
 
 namespace {
-Ref<RDUniform> storage(int binding, RID rid) {
-	Ref<RDUniform> u;
-	u.instantiate();
-	u->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	u->set_binding(binding);
-	u->add_id(rid);
-	return u;
-}
-void free_if_valid(RenderingDevice *rd, RID &rid) {
-	if (rd && rid.is_valid()) rd->free_rid(rid);
-	rid = RID();
-}
 PackedByteArray zeroed(int64_t n) {
 	PackedByteArray b;
 	b.resize(n);
@@ -50,54 +32,38 @@ bool ConsolidatePass::initialize(RenderingDevice *rd, OverridePool *pool, Volume
 	rd_ = rd;
 	pool_ = pool;
 	max_bricks_ = max_bricks;
-	ops_ = rd_->storage_buffer_create(ve::kMaxRegionOps * 32, zeroed(ve::kMaxRegionOps * 32));
-	jobs_ = rd_->storage_buffer_create(static_cast<uint32_t>(max_bricks_) * 32,
-			zeroed(static_cast<int64_t>(max_bricks_) * 32));
+	ops_ = group_.add(gpu::Kind::Buffer,
+			rd_->storage_buffer_create(ve::kMaxRegionOps * 32, zeroed(ve::kMaxRegionOps * 32)));
+	jobs_ = group_.add(gpu::Kind::Buffer, rd_->storage_buffer_create(static_cast<uint32_t>(max_bricks_) * 32,
+			zeroed(static_cast<int64_t>(max_bricks_) * 32)));
 	// Consolidation reads the currently published override through the pool, then writes the
 	// replacement into private transient storage. Writing into the pool's high slots looked
 	// like double buffering, but those slots can already hold live bricks after releases and
 	// would race the read side of a re-consolidation. The staging buffers are bounded by the
 	// pool capacity and are never visible to field consumers.
-	staging_sdf_ = rd_->storage_buffer_create(
+	staging_sdf_ = group_.add(gpu::Kind::Buffer, rd_->storage_buffer_create(
 			static_cast<uint32_t>(max_bricks_) * kSdfStride,
-			zeroed(static_cast<int64_t>(max_bricks_) * kSdfStride));
-	staging_mat_ = rd_->storage_buffer_create(
+			zeroed(static_cast<int64_t>(max_bricks_) * kSdfStride)));
+	staging_mat_ = group_.add(gpu::Kind::Buffer, rd_->storage_buffer_create(
 			static_cast<uint32_t>(max_bricks_) * kMatStride,
-			zeroed(static_cast<int64_t>(max_bricks_) * kMatStride));
-	ProjectSettings *ps = ProjectSettings::get_singleton();
-	const String path = ps->globalize_path("res://shaders/brick_consolidate.comp.glsl");
-	const String inc = ps->globalize_path("res://shaders");
-	std::string err;
-	const std::string code = ve::strip_shader_annotations(
-			ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err));
-	if (code.empty()) {
-		UtilityFunctions::printerr("ConsolidatePass: shader load failed: ", err.c_str());
+			zeroed(static_cast<int64_t>(max_bricks_) * kMatStride)));
+	program_ = gpu::compile_compute(rd_, group_, "ConsolidatePass", "brick_consolidate.comp.glsl");
+	if (!program_.valid()) {
 		teardown();
 		return false;
 	}
-	Ref<RDShaderSource> source;
-	source.instantiate();
-	source->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
-	source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, String(code.c_str()));
-	Ref<RDShaderSPIRV> spirv = rd_->shader_compile_spirv_from_source(source);
-	const String compile_err = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
-	if (!compile_err.is_empty()) {
-		UtilityFunctions::printerr("ConsolidatePass: ", compile_err);
-		teardown();
-		return false;
-	}
-	shader_ = rd_->shader_create_from_spirv(spirv);
-	pipeline_ = shader_.is_valid() ? rd_->compute_pipeline_create(shader_) : RID();
-	if (!pipeline_.is_valid()) {
-		teardown();
-		return false;
-	}
-	uset_ = rd_->uniform_set_create(Array::make(
-			storage(0, pool_->sdf_buffer()), storage(1, pool_->mat_buffer()), storage(3, staging_sdf_),
-			storage(4, staging_mat_), storage(5, jobs_), storage(6, pool_->tables()),
-			storage(7, pool_->region_table_map()), storage(8, ops_),
-			storage(9, volumes->sdf_buffer()), storage(10, volumes->mat_buffer())), shader_, 0);
-	if (!uset_.is_valid()) {
+	set_ = gpu::uniform_set(rd_, group_, program_.shader, 0, {
+			gpu::storage(0, pool_->sdf_buffer()),
+			gpu::storage(1, pool_->mat_buffer()),
+			gpu::storage(3, staging_sdf_),
+			gpu::storage(4, staging_mat_),
+			gpu::storage(5, jobs_),
+			gpu::storage(6, pool_->tables()),
+			gpu::storage(7, pool_->region_table_map()),
+			gpu::storage(8, ops_),
+			gpu::storage(9, volumes->sdf_buffer()),
+			gpu::storage(10, volumes->mat_buffer())});
+	if (!set_.is_valid()) {
 		teardown();
 		return false;
 	}
@@ -106,13 +72,10 @@ bool ConsolidatePass::initialize(RenderingDevice *rd, OverridePool *pool, Volume
 
 void ConsolidatePass::teardown() {
 	if (!rd_) return;
-	free_if_valid(rd_, uset_);
-	free_if_valid(rd_, pipeline_);
-	free_if_valid(rd_, shader_);
-	free_if_valid(rd_, jobs_);
-	free_if_valid(rd_, ops_);
-	free_if_valid(rd_, staging_sdf_);
-	free_if_valid(rd_, staging_mat_);
+	gpu::RdDevice device{rd_};
+	group_.release(device);
+	program_ = gpu::Program();
+	set_ = ops_ = jobs_ = staging_sdf_ = staging_mat_ = RID();
 	rd_ = nullptr;
 	pool_ = nullptr;
 	max_bricks_ = 0;
@@ -156,8 +119,8 @@ bool ConsolidatePass::run(const ConsolidateJob &job, ConsolidateResult *out) {
 	p[2] = static_cast<int>(job.ops.size());
 	p[3] = pool_->region_table(job.region_slot);
 	const int64_t list = rd_->compute_list_begin();
-	rd_->compute_list_bind_compute_pipeline(list, pipeline_);
-	rd_->compute_list_bind_uniform_set(list, uset_, 0);
+	rd_->compute_list_bind_compute_pipeline(list, program_.pipeline);
+	rd_->compute_list_bind_uniform_set(list, set_, 0);
 	if (field_context_ != nullptr) field_context_->bind(rd_, list);
 	rd_->compute_list_set_push_constant(list, pc, pc.size());
 	rd_->compute_list_dispatch(list, static_cast<uint32_t>(n), 1, 1);

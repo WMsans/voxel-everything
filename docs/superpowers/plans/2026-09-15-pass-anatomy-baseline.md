@@ -265,3 +265,4 @@ Appended by later tasks.
 - orchestrator Task 25: build OK, native 565/565, gdUnit 28/28 gate and 467/467 full, leaked 0 (row 0)
 - brick_gen Task 26: build OK, native 565/565, gdUnit 26/26 gate, leaked 0 (row 0)
 - region Task 27: build OK, native 565/565, gdUnit 20/20 gate, leaked 0 (row 0)
+- consolidate Task 28: build OK, native 565/565, gdUnit 31/31 gate, leaked 0 (row 0)
