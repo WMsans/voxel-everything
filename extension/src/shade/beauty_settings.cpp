@@ -42,6 +42,8 @@ const SettingRow<BeautySettings> kBeautyRows[] = {
 			&BeautySettings::outline_depth_threshold, 0.0f, 1.0f, 0.0f, 0.2f, 0.005f),
 	float_row("outline_normal_threshold", "Outline normal threshold",
 			&BeautySettings::outline_normal_threshold, 0.0f, 2.0f, 0.0f, 1.0f, 0.01f),
+	float_row("outline_darken", "Outline colour multiplier", &BeautySettings::outline_darken, 0.0f,
+			1.0f, 0.0f, 1.0f, 0.01f),
 };
 
 } // namespace

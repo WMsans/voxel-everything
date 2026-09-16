@@ -47,6 +47,9 @@ struct BeautySettings {
 
 	float outline_depth_threshold = 0.04f;  // [0, 1], relative to linear depth
 	float outline_normal_threshold = 0.25f; // [0, 2], 1 - dot(n0, n1)
+	// What an edge pixel's colour is multiplied by (OutlinePush.params.z). Was a literal in
+	// outline_pass.cpp.
+	float outline_darken = 0.35f; // [0, 1]
 };
 
 // Bit layout; kBeautyFlags below generates BEAUTY_* for the shaders. A bit is only set when the effect is

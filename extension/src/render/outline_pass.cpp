@@ -57,7 +57,7 @@ bool OutlinePass::render(RenderingDevice *rd, RID scene_color, RID scene_depth, 
 	gpu::CpuTimer timer(last_ms_);
 	const ve::OutlinePush push{
 			{size.x, size.y, have_normal_roughness && normal_roughness.is_valid() ? 1 : 0, 0},
-			{s.outline_depth_threshold, s.outline_normal_threshold, 0.35f, 0.0f}};
+			{s.outline_depth_threshold, s.outline_normal_threshold, s.outline_darken, 0.0f}};
 	return gpu::dispatch(rd, program_.pipeline, {{set, 0}}, gpu::push_bytes(push),
 			gpu::groups(size.x, 8), gpu::groups(size.y, 8));
 }

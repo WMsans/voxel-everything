@@ -151,6 +151,7 @@ void check_same(const ve::BeautySettings &got, const ve::BeautySettings &want) {
 	CHECK(got.emissive_gi_strength == doctest::Approx(want.emissive_gi_strength));
 	CHECK(got.outline_depth_threshold == doctest::Approx(want.outline_depth_threshold));
 	CHECK(got.outline_normal_threshold == doctest::Approx(want.outline_normal_threshold));
+	CHECK(got.outline_darken == doctest::Approx(want.outline_darken));
 }
 
 } // namespace
@@ -203,4 +204,8 @@ TEST_CASE("the SSAO gather shape defaults to the literals it replaced") {
 	const ve::BeautySettings s;
 	CHECK(s.ssao_radius == 5.0f);
 	CHECK(s.ssao_strength == 1.5f);
+}
+
+TEST_CASE("outline darkening defaults to the literal it replaced") {
+	CHECK(ve::BeautySettings{}.outline_darken == 0.35f);
 }
