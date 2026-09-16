@@ -1,5 +1,6 @@
 #[fragment]
 #version 460
+#include "generated/gbuffer.glslh"
 #include "generated/blocks.glslh"
 
 #include "common.glslh"
@@ -64,6 +65,6 @@ void main() {
 	// the root by the canopy. It cannot be 1.0 as it used to be: the deferred pass applies
 	// the sun map only where the far field owns the pixel, and trusts this channel
 	// everywhere else -- so a 1.0 here meant nothing near the camera ever shadowed grass.
-	out_albedo = vec4(albedo, grass_sun_term(v_sun, v_height_t));
-	out_surface = vec4(oct_encode(n), float(MAT_GRASS_BLADE), pc.style.y);
+	out_albedo = GB_PACK_ALBEDO(albedo, grass_sun_term(v_sun, v_height_t));
+	out_surface = GB_PACK_SURFACE(n, MAT_GRASS_BLADE, pc.style.y);
 }
