@@ -1,5 +1,6 @@
 #[fragment]
 #version 460
+#include "generated/blocks.glslh"
 
 #include "common.glslh"
 #include "shade.glslh"
@@ -8,10 +9,7 @@
 
 layout(set = 0, binding = 1, std140) uniform Params { GRASS_PARAMS_BLOCK } pc;
 
-layout(push_constant, std430) uniform Push {
-	mat4 view_proj;
-	vec4 cam; // xyz camera position, w unused
-} push;
+layout(push_constant, std430) uniform Push { GRASS_RASTER_PUSH_FIELDS } push;
 
 layout(location = 0) in vec3 v_wpos;
 layout(location = 1) in vec3 v_normal;

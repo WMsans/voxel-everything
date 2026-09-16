@@ -1,7 +1,7 @@
 #include "render/grass_raster_pass.h"
 #include "render/gbuffer.h"
 #include "render/grass_scatter_pass.h"
-#include <godot_cpp/variant/packed_byte_array.hpp>
+#include "gpu_layout/blocks.h"
 
 using namespace godot;
 
@@ -73,16 +73,13 @@ bool GrassRasterPass::draw(RenderingDevice *rd, GrassScatterPass &scatter, GBuff
 	if (dl < 0) return false;
 	rd->draw_list_bind_render_pipeline(dl, pipeline_);
 	rd->draw_list_bind_uniform_set(dl, set_.id(), 0);
-	PackedByteArray pc;
-	pc.resize(80);
-	float *f = reinterpret_cast<float *>(pc.ptrw());
+	ve::GrassRasterPush push{};
 	for (int c = 0; c < 4; c++)
-		for (int r = 0; r < 4; r++) f[c * 4 + r] = view_proj.columns[c][r];
-	f[16] = cam_pos[0];
-	f[17] = cam_pos[1];
-	f[18] = cam_pos[2];
-	f[19] = 0.0f;
-	rd->draw_list_set_push_constant(dl, pc, pc.size());
+		for (int r = 0; r < 4; r++) push.view_proj[c * 4 + r] = view_proj.columns[c][r];
+	push.cam[0] = cam_pos[0];
+	push.cam[1] = cam_pos[1];
+	push.cam[2] = cam_pos[2];
+	rd->draw_list_set_push_constant(dl, gpu::push_bytes(push), sizeof(push));
 	// One non-indexed indirect draw; the vertex count is whatever the scatter wrote.
 	rd->draw_list_draw_indirect(dl, false, args, 0, 1, 16);
 	rd->draw_list_end();
