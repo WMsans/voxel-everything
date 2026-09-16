@@ -1,4 +1,5 @@
 #include "render/brick_gen_pass.h"
+#include "gpu_layout/blocks.h"
 #include "render/field_context_set.h"
 #include <godot_cpp/variant/utility_functions.hpp>
 
@@ -55,13 +56,10 @@ void BrickGenPass::teardown() {
 void BrickGenPass::dispatch(RenderingDevice *rd, int64_t list, const GpuAtlas &atlas,
 		const FieldContextSet *field_context) {
 	if (!program_.pipeline.is_valid()) return;
-	PackedByteArray pc;
-	pc.resize(16);
-	int32_t *p = reinterpret_cast<int32_t *>(pc.ptrw());
-	p[0] = atlas_bricks_.x; p[1] = atlas_bricks_.y; p[2] = atlas_bricks_.z; p[3] = 0;
+	const ve::BrickGenPush push{{atlas_bricks_.x, atlas_bricks_.y, atlas_bricks_.z, 0}};
 	rd->compute_list_bind_compute_pipeline(list, program_.pipeline);
 	rd->compute_list_bind_uniform_set(list, set_, 0);
 	if (field_context != nullptr) field_context->bind(rd, list);
-	rd->compute_list_set_push_constant(list, pc, pc.size());
+	rd->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
 	rd->compute_list_dispatch_indirect(list, atlas.dispatch_args(), 0);
 }
