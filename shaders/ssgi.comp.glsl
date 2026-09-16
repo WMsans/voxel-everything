@@ -1,5 +1,6 @@
 #[compute]
 #version 460
+#include "generated/blocks.glslh"
 
 #define BEAUTY_CAMERA_SET 0
 #define BEAUTY_CAMERA_BINDING 5
@@ -21,13 +22,7 @@ layout(set = 0, binding = 4, rgba16f) writeonly uniform image2D out_ssgi;
 layout(set = 0, binding = 6, rgba16f) writeonly uniform image2D out_raw;
 layout(set = 0, binding = 7) uniform sampler2D raw_tex;
 
-layout(push_constant, std430) uniform Push {
-	mat4 prev_view_proj;
-	ivec4 dims;    // xy = target size, z = taps, w = have history
-	vec4 params;   // x = bounce radius (m), y = temporal history weight, z = bounce strength
-	vec4 emissive; // x = emissive radius (m), y = emissive strength, zw unused
-	ivec4 stage;   // x = 0 gather into out_raw, 1 resolve out_raw into out_ssgi
-} pc;
+layout(push_constant, std430) uniform Push { SSGI_PUSH_FIELDS } pc;
 
 vec2 spiral_tap(int i, int n, float rot) {
 	float t = (float(i) + 0.5) / float(n);

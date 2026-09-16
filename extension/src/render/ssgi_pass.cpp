@@ -1,5 +1,6 @@
 #include "render/ssgi_pass.h"
 #include "render/gbuffer.h"
+#include "gpu_layout/blocks.h"
 #include <algorithm>
 #include <cstring>
 
@@ -64,44 +65,34 @@ bool SsgiPass::render(RenderingDevice *rd, GBuffer &gb, RID camera_ubo,
 			gpu::sampled(7, sampler_nearest_, raw_.rid())});
 	if (!set.is_valid()) return false;
 
-	gpu::CpuTimer timer(last_ms_);
-	static_assert(sizeof(float) * 32 == 128, "ssgi push block");
-	PackedByteArray pc;
-	pc.resize(128);
-	float *f = reinterpret_cast<float *>(pc.ptrw());
-	std::memcpy(f, prev_view_proj, sizeof(float) * 16);
-	int32_t *dims = reinterpret_cast<int32_t *>(f + 16);
-	dims[0] = half.x;
-	dims[1] = half.y;
-	dims[2] = s.ssgi_taps;
-	dims[3] = have_history ? 1 : 0;
+	ve::SsgiPush push{};
+	std::memcpy(push.prev_view_proj, prev_view_proj, sizeof(push.prev_view_proj));
+	push.dims[0] = half.x;
+	push.dims[1] = half.y;
+	push.dims[2] = s.ssgi_taps;
+	push.dims[3] = have_history ? 1 : 0;
 	// These were literals here until the emissive work: 6 m, 0.90, 1.0. They are knobs in
 	// ve::BeautySettings now, which is where that struct always said every knob a pass reads
 	// has to live -- and which is what lets a tier move the emissive ring.
-	f[20] = s.ssgi_radius;
-	f[21] = s.ssgi_temporal;
-	f[22] = s.ssgi_strength;
-	f[23] = 0.0f;
-	f[24] = s.emissive_gi_radius;
-	f[25] = s.emissive_gi_strength;
-	f[26] = 0.0f;
-	f[27] = 0.0f;
-	int32_t *stage = reinterpret_cast<int32_t *>(f + 28);
-	stage[0] = 0;
-	stage[1] = stage[2] = stage[3] = 0;
+	push.params[0] = s.ssgi_radius;
+	push.params[1] = s.ssgi_temporal;
+	push.params[2] = s.ssgi_strength;
+	push.emissive[0] = s.emissive_gi_radius;
+	push.emissive[1] = s.emissive_gi_strength;
+	push.stage[0] = 0;
 	const int64_t list = rd->compute_list_begin();
 	if (list < 0) return false;
 	rd->compute_list_bind_compute_pipeline(list, program_.pipeline);
 	rd->compute_list_bind_uniform_set(list, set, 0);
-	rd->compute_list_set_push_constant(list, pc, pc.size());
-	rd->compute_list_dispatch(list, (dims[0] + 7) / 8, (dims[1] + 7) / 8, 1);
+	rd->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
+	rd->compute_list_dispatch(list, gpu::groups(half.x, 8), gpu::groups(half.y, 8), 1);
 	// The gather rotates its taps by a bayer4 phase that never changes, so without this second
 	// dispatch that phase reaches the screen as a lattice of dots. It averages one full 4x4
 	// period back out before the temporal blend, which cannot.
 	rd->compute_list_add_barrier(list);
-	stage[0] = 1;
-	rd->compute_list_set_push_constant(list, pc, pc.size());
-	rd->compute_list_dispatch(list, (dims[0] + 7) / 8, (dims[1] + 7) / 8, 1);
+	push.stage[0] = 1;
+	rd->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
+	rd->compute_list_dispatch(list, gpu::groups(half.x, 8), gpu::groups(half.y, 8), 1);
 	rd->compute_list_end();
 	output_ = targets_[out_index].rid();
 	return true;
