@@ -1,5 +1,6 @@
 #[compute]
 #version 460
+#include "generated/gbuffer.glslh"
 #include "generated/blocks.glslh"
 
 #define SUN_LIGHT_SET 0
@@ -63,7 +64,7 @@ float sun_map_visibility(vec3 wpos, float ndl, float view_dist) {
 // is the FINE field, which sits metres away from the mesh at the cut the far field draws --
 // a tent-filtered lattice several cells coarse -- so testing a raymarched pixel against this
 // map reports shadow over open sunlit ground, in the shape of the LoD geometry. The near
-// field marches its own sun ray instead; that term is already in g0.a.
+// field marches its own sun ray instead; that term is already in the G-buffer sun-visibility channel.
 //
 // This is the very dither the two fields divide the screen with: lod.frag.glsl keeps a
 // fragment where bayer4(px) < t and composite.frag.glsl drops one there. Reproducing it
@@ -150,11 +151,11 @@ void main() {
 	vec2 uv = (vec2(px) + 0.5) / vec2(size);
 	vec4 g0 = texelFetch(gb_albedo, px, 0);
 	vec4 g1 = texelFetch(gb_surface, px, 0);
-	uint mat = uint(g1.z + 0.5);
+	uint mat = GB_MATERIAL_ID(g1);
 	if (mat == 0u && pc.flags.y != 2u) {
 		// Probe 5 reads the rim gate, and background has no surface to gate -- report 0
 		// rather than the sky's colour so the readback is the gate and nothing else.
-		imageStore(out_lit, px, pc.flags.y == 5u ? vec4(0.0, 0.0, 0.0, 1.0) : vec4(g0.rgb, 1.0));
+		imageStore(out_lit, px, pc.flags.y == 5u ? vec4(0.0, 0.0, 0.0, 1.0) : vec4(GB_ALBEDO(g0), 1.0));
 		return;
 	}
 
@@ -168,13 +169,13 @@ void main() {
 		return;
 	}
 
-	vec3 n = oct_decode(g1.xy);
+	vec3 n = GB_NORMAL(g1);
 	vec3 v = normalize(pc.cam.xyz - wpos);
 	vec3 sun_dir = sun_light.dir.xyz;
 	float ndl = dot(n, sun_dir);
 	float ndv = dot(n, v);
 	float ndh = dot(n, normalize(sun_dir + v));
-	float shadow = g0.a;
+	float shadow = GB_SUN_VIS(g0);
 	if ((pc.flags.x & BEAUTY_SUN_MAP) != 0u && far_field_owns(px, wpos, pc.cam.xyz))
 		shadow = min(shadow, sun_map_visibility(wpos, ndl, distance(wpos, pc.cam.xyz)));
 	// HBAO multiplies the SKY term only: sun lighting, spec and rim keep their own
@@ -205,8 +206,8 @@ void main() {
 		imageStore(out_lit, px, vec4(sil, sil, sil, 1.0));
 		return;
 	}
-	vec3 lit = cel_shade(g0.rgb, ambient, ndl, mix(1.0, ndv, sil), ndh, shadow, 1.0,
-			g1.w, sun_light.rgb.xyz);
+	vec3 lit = cel_shade(GB_ALBEDO(g0), ambient, ndl, mix(1.0, ndv, sil), ndh, shadow, 1.0,
+			GB_GLOSS(g1), sun_light.rgb.xyz);
 
 	// Emission is ADDED after shading, never lit: a glowing surface is its own light source.
 	// The whole block is skipped for any material whose table strength is zero, which is
