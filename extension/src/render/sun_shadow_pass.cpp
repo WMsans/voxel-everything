@@ -1,18 +1,8 @@
 #include "render/sun_shadow_pass.h"
 #include "render/lod_pool.h"
 #include "render/lod_raster_pass.h"
-#include "render/shader_loader.h"
-#include <godot_cpp/classes/project_settings.hpp>
-#include <godot_cpp/classes/rd_pipeline_color_blend_state.hpp>
-#include <godot_cpp/classes/rd_pipeline_color_blend_state_attachment.hpp>
-#include <godot_cpp/classes/rd_pipeline_depth_stencil_state.hpp>
-#include <godot_cpp/classes/rd_pipeline_multisample_state.hpp>
-#include <godot_cpp/classes/rd_pipeline_rasterization_state.hpp>
-#include <godot_cpp/classes/rd_shader_source.hpp>
-#include <godot_cpp/classes/rd_shader_spirv.hpp>
 #include <godot_cpp/classes/rd_texture_format.hpp>
 #include <godot_cpp/classes/rd_texture_view.hpp>
-#include <godot_cpp/classes/rd_uniform.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <cstring>
@@ -39,7 +29,7 @@ bool SunShadowPass::initialize(RenderingDevice *rd) {
 			RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT);
 	Ref<RDTextureView> tv;
 	tv.instantiate();
-	map_ = rd_->texture_create(tf, tv, {});
+	map_ = group_.add(gpu::Kind::Texture, rd_->texture_create(tf, tv, {}));
 	if (!map_.is_valid()) {
 		UtilityFunctions::printerr("SunShadowPass: shadow map array creation failed");
 		teardown();
@@ -50,7 +40,8 @@ bool SunShadowPass::initialize(RenderingDevice *rd) {
 	// be isolated from cascade 2's expensive one; a single atlased framebuffer would force
 	// them to rebuild together and throw the amortization away.
 	for (int i = 0; i < kCascades; i++) {
-		c_[i].slice = rd_->texture_create_shared_from_slice(tv, map_, i, 0);
+		c_[i].slice = group_.add(gpu::Kind::Texture,
+				rd_->texture_create_shared_from_slice(tv, map_, i, 0));
 		if (!c_[i].slice.is_valid()) {
 			UtilityFunctions::printerr("SunShadowPass: cascade slice ", i, " failed");
 			teardown();
@@ -58,40 +49,8 @@ bool SunShadowPass::initialize(RenderingDevice *rd) {
 		}
 	}
 
-	std::string err;
-	const String path = ProjectSettings::get_singleton()->globalize_path(
-			"res://shaders/lod_shadow.vert.glsl");
-	const String inc = ProjectSettings::get_singleton()->globalize_path("res://shaders");
-	const std::string vertex = ve::strip_shader_annotations(
-			ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err));
-	if (vertex.empty()) {
-		UtilityFunctions::printerr("SunShadowPass: ", err.c_str());
-		teardown();
-		return false;
-	}
-	const String frag_path = ProjectSettings::get_singleton()->globalize_path(
-			"res://shaders/lod_shadow.frag.glsl");
-	const std::string fragment = ve::strip_shader_annotations(
-			ve::load_shader_source(frag_path.utf8().get_data(), inc.utf8().get_data(), &err));
-	if (fragment.empty()) {
-		UtilityFunctions::printerr("SunShadowPass: ", err.c_str());
-		teardown();
-		return false;
-	}
-	Ref<RDShaderSource> src;
-	src.instantiate();
-	src->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
-	src->set_stage_source(RenderingDevice::SHADER_STAGE_VERTEX, String(vertex.c_str()));
-	src->set_stage_source(RenderingDevice::SHADER_STAGE_FRAGMENT, String(fragment.c_str()));
-	Ref<RDShaderSPIRV> spirv = rd_->shader_compile_spirv_from_source(src);
-	const String compile_err = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_VERTEX) +
-			spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_FRAGMENT);
-	if (!compile_err.is_empty()) {
-		UtilityFunctions::printerr("SunShadowPass: ", compile_err);
-		teardown();
-		return false;
-	}
-	shader_ = rd_->shader_create_from_spirv(spirv);
+	shader_ = gpu::compile_raster(rd_, group_, "SunShadowPass", "lod_shadow.vert.glsl",
+			"lod_shadow.frag.glsl");
 	if (!shader_.is_valid()) {
 		teardown();
 		return false;
@@ -101,21 +60,12 @@ bool SunShadowPass::initialize(RenderingDevice *rd) {
 
 void SunShadowPass::teardown() {
 	if (rd_) {
-		for (int i = 0; i < kCascades; i++) {
-			if (rd_->framebuffer_is_valid(c_[i].framebuffer)) rd_->free_rid(c_[i].framebuffer);
-			if (c_[i].slice.is_valid()) rd_->free_rid(c_[i].slice);
-			c_[i] = Cascade{};
-		}
-		for (RID *r : {&uset_, &pipeline_, &shader_, &map_})
-			if (r->is_valid()) rd_->free_rid(*r);
+		gpu::RdDevice device{rd_};
+		group_.release(device);
 	}
-	uset_ = RID();
-	pipeline_ = RID();
-	shader_ = RID();
-	map_ = RID();
-	key_quads_ = RID();
-	key_page_chunk_ = RID();
-	key_chunks_ = RID();
+	for (int i = 0; i < kCascades; i++) c_[i] = Cascade{};
+	map_ = shader_ = pipeline_ = RID();
+	set_ = gpu::SetCache();
 	rd_ = nullptr;
 }
 
@@ -130,15 +80,16 @@ void SunShadowPass::mark_dirty() {
 
 bool SunShadowPass::ensure_pipeline(RenderingDevice *rd) {
 	if (rd->framebuffer_is_valid(c_[0].framebuffer) && pipeline_.is_valid()) return true;
+	gpu::RdDevice device{rd};
 	for (int i = 0; i < kCascades; i++) {
-		if (rd->framebuffer_is_valid(c_[i].framebuffer)) rd->free_rid(c_[i].framebuffer);
-		c_[i].framebuffer = rd->framebuffer_create(Array::make(c_[i].slice));
+		group_.free(device, c_[i].framebuffer);
+		c_[i].framebuffer = group_.add(gpu::Kind::Framebuffer,
+				rd->framebuffer_create(Array::make(c_[i].slice)));
 		if (!rd->framebuffer_is_valid(c_[i].framebuffer)) return false;
 	}
 	const int64_t format = rd->framebuffer_get_format(c_[0].framebuffer);
-
-	Ref<RDPipelineRasterizationState> rs;
-	rs.instantiate();
+	group_.free(device, pipeline_);
+	gpu::RasterState state;
 	// NO CULLING, and no borrowed front-face convention.
 	//
 	// Winding is a property of the PROJECTION, not of the geometry: this pass inherited
@@ -155,13 +106,7 @@ bool SunShadowPass::ensure_pipeline(RenderingDevice *rd) {
 	// The cost is bounded: both faces instead of one, but over the cut rather than the whole
 	// resident set (2313 -> 1687 pages on the demo view), on a depth-only target that
 	// rebuilds at most once every kMinFrames.
-	rs->set_cull_mode(RenderingDevice::POLYGON_CULL_DISABLED);
-	Ref<RDPipelineMultisampleState> ms;
-	ms.instantiate();
-	Ref<RDPipelineDepthStencilState> ds;
-	ds.instantiate();
-	ds->set_enable_depth_test(true);
-	ds->set_enable_depth_write(true);
+	state.cull = RenderingDevice::POLYGON_CULL_DISABLED;
 	// Reverse-Z (near the sun = 1): GREATER_OR_EQUAL keeps the surface NEAREST the sun, which
 	// is what a shadow map means. An overhang's roof therefore wins over its own floor, and
 	// two chunks that overlap under a low sun resolve by geometry rather than by draw order.
@@ -170,43 +115,18 @@ bool SunShadowPass::ensure_pipeline(RenderingDevice *rd) {
 	// of each texel. That was a workaround for the page list carrying several LoD levels of
 	// the same ground at once; LodSystem::prepare_shadow_raster now sends a cut instead, so
 	// there is one surface per texel and the honest test is back.
-	ds->set_depth_compare_operator(RenderingDevice::COMPARE_OP_GREATER_OR_EQUAL);
-	Ref<RDPipelineColorBlendState> cb;
-	cb.instantiate();
-	cb->set_attachments(Array());
-	pipeline_ = rd->render_pipeline_create(shader_, format, RenderingDevice::INVALID_ID,
-			RenderingDevice::RENDER_PRIMITIVE_TRIANGLES, rs, ms, ds, cb);
+	state.compare = RenderingDevice::COMPARE_OP_GREATER_OR_EQUAL;
+	state.color_attachments = 0;
+	pipeline_ = gpu::raster_pipeline(rd, group_, shader_, format, state);
 	return pipeline_.is_valid();
 }
 
 bool SunShadowPass::ensure_uniform_set(RenderingDevice *rd, LodPool &pool) {
-	const RID quads = pool.quad_buffer();
-	const RID page_chunk = pool.page_chunk_buffer();
-	const RID chunks = pool.chunk_buffer();
-	if (rd->uniform_set_is_valid(uset_) && key_quads_ == quads && key_page_chunk_ == page_chunk &&
-			key_chunks_ == chunks)
-		return true;
-	if (rd->uniform_set_is_valid(uset_)) rd->free_rid(uset_);
-	uset_ = RID();
-	Ref<RDUniform> u0, u1, u2;
-	u0.instantiate();
-	u0->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	u0->set_binding(0);
-	u0->add_id(quads);
-	u1.instantiate();
-	u1->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	u1->set_binding(1);
-	u1->add_id(page_chunk);
-	u2.instantiate();
-	u2->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	u2->set_binding(2);
-	u2->add_id(chunks);
-	uset_ = rd->uniform_set_create(Array::make(u0, u1, u2), shader_, 0);
-	if (!rd->uniform_set_is_valid(uset_)) return false;
-	key_quads_ = quads;
-	key_page_chunk_ = page_chunk;
-	key_chunks_ = chunks;
-	return true;
+	gpu::RdDevice device{rd};
+	return set_.get(device, group_, shader_, 0, {
+			gpu::storage(0, pool.quad_buffer()),
+			gpu::storage(1, pool.page_chunk_buffer()),
+			gpu::storage(2, pool.chunk_buffer())}).is_valid();
 }
 
 // THE rebuild rule, in one place. The projection moving means what is stored no longer
@@ -257,7 +177,7 @@ bool SunShadowPass::build(RenderingDevice *rd, LodPool &pool, LodRasterPass &ras
 			PackedColorArray(), 0.0f);
 	if (dl < 0) return false;
 	rd->draw_list_bind_render_pipeline(dl, pipeline_);
-	rd->draw_list_bind_uniform_set(dl, uset_, 0);
+	rd->draw_list_bind_uniform_set(dl, set_.id(), 0);
 	rd->draw_list_bind_index_array(dl, raster.index_array());
 	PackedByteArray pc;
 	pc.resize(64);
