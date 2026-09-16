@@ -2,15 +2,7 @@
 #include "lod/lod_contour.h"
 #include "render/hiz_pass.h"
 #include "render/lod_pool.h"
-#include "render/shader_loader.h"
-#include <godot_cpp/classes/project_settings.hpp>
-#include <godot_cpp/classes/rd_sampler_state.hpp>
-#include <godot_cpp/classes/rd_shader_source.hpp>
-#include <godot_cpp/classes/rd_shader_spirv.hpp>
-#include <godot_cpp/classes/rd_uniform.hpp>
-#include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
-#include <godot_cpp/variant/utility_functions.hpp>
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -26,45 +18,12 @@ bool LodCullPass::initialize(RenderingDevice *rd) {
 	if (!rd) return false;
 	rd_ = rd;
 
-	ProjectSettings *ps = ProjectSettings::get_singleton();
-	const String path = ps->globalize_path("res://shaders/lod_cull.comp.glsl");
-	const String inc = ps->globalize_path("res://shaders");
-	std::string err;
-	const std::string code = ve::strip_shader_annotations(
-			ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err));
-	if (code.empty()) {
-		UtilityFunctions::printerr("LodCullPass: shader load failed: ", err.c_str());
+	program_ = gpu::compile_compute(rd, group_, "LodCullPass", "lod_cull.comp.glsl");
+	if (!program_.valid()) {
 		teardown();
 		return false;
 	}
-	Ref<RDShaderSource> src;
-	src.instantiate();
-	src->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
-	src->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, String(code.c_str()));
-	Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(src);
-	const String compile_err = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
-	if (!compile_err.is_empty()) {
-		UtilityFunctions::printerr("LodCullPass: ", compile_err);
-		teardown();
-		return false;
-	}
-	shader_ = rd->shader_create_from_spirv(spirv);
-	if (!shader_.is_valid()) {
-		teardown();
-		return false;
-	}
-	pipeline_ = rd->compute_pipeline_create(shader_);
-	if (!pipeline_.is_valid()) {
-		UtilityFunctions::printerr("LodCullPass: pipeline creation failed");
-		teardown();
-		return false;
-	}
-
-	Ref<RDSamplerState> ss;
-	ss.instantiate();
-	ss->set_min_filter(RenderingDevice::SAMPLER_FILTER_NEAREST);
-	ss->set_mag_filter(RenderingDevice::SAMPLER_FILTER_NEAREST);
-	sampler_ = rd->sampler_create(ss);
+	sampler_ = gpu::sampler(rd, group_, RenderingDevice::SAMPLER_FILTER_NEAREST);
 	if (!sampler_.is_valid()) {
 		teardown();
 		return false;
@@ -73,7 +32,7 @@ bool LodCullPass::initialize(RenderingDevice *rd) {
 	PackedByteArray zero;
 	zero.resize(4);
 	zero.fill(0);
-	stats_ = rd->storage_buffer_create(4, zero);
+	stats_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(4, zero));
 	if (!stats_.is_valid()) {
 		teardown();
 		return false;
@@ -98,22 +57,11 @@ void LodCullPass::teardown() {
 	// targets are still alive; RenderingDevice has no cancellation operation.
 	if (stats_readback_.is_valid()) stats_readback_->drain(rd_);
 	if (args_readback_.is_valid()) args_readback_->drain(rd_);
-	// Uniform set first: it references the shader, stats, and pool buffers.
-	if (rd_->uniform_set_is_valid(uset_)) rd_->free_rid(uset_);
-	uset_ = RID();
-	if (pipeline_.is_valid()) rd_->free_rid(pipeline_);
-	pipeline_ = RID();
-	if (shader_.is_valid()) rd_->free_rid(shader_);
-	shader_ = RID();
-	if (sampler_.is_valid()) rd_->free_rid(sampler_);
-	sampler_ = RID();
-	if (stats_.is_valid()) rd_->free_rid(stats_);
-	stats_ = RID();
-	uset_args_ = RID();
-	uset_page_chunk_ = RID();
-	uset_chunks_ = RID();
-	uset_hiz_ = RID();
-	uset_stats_ = RID();
+	gpu::RdDevice device{rd_};
+	group_.release(device);
+	program_ = gpu::Program();
+	sampler_ = stats_ = RID();
+	set_ = gpu::SetCache();
 	stats_readback_ = Ref<AsyncBufferRead>();
 	args_readback_ = Ref<AsyncBufferRead>();
 	first_pass_pages_.clear();
@@ -129,50 +77,13 @@ void LodCullPass::teardown() {
 
 bool LodCullPass::ensure_uniform_set(RenderingDevice *rd, LodPool &pool, HizPass *hiz) {
 	if (!hiz || !hiz->pyramid().is_valid()) return false;
-	const RID args = pool.args_buffer();
-	const RID page_chunk = pool.page_chunk_buffer();
-	const RID chunks = pool.chunk_buffer();
-	const RID hiz_tex = hiz->pyramid();
-	if (rd->uniform_set_is_valid(uset_) && args == uset_args_ && page_chunk == uset_page_chunk_ &&
-			chunks == uset_chunks_ && hiz_tex == uset_hiz_ && stats_ == uset_stats_) {
-		return true;
-	}
-	if (rd->uniform_set_is_valid(uset_)) rd->free_rid(uset_);
-	uset_ = RID();
-	Ref<RDUniform> u0;
-	u0.instantiate();
-	u0->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	u0->set_binding(0);
-	u0->add_id(args);
-	Ref<RDUniform> u1;
-	u1.instantiate();
-	u1->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	u1->set_binding(1);
-	u1->add_id(page_chunk);
-	Ref<RDUniform> u2;
-	u2.instantiate();
-	u2->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	u2->set_binding(2);
-	u2->add_id(chunks);
-	Ref<RDUniform> u3;
-	u3.instantiate();
-	u3->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-	u3->set_binding(3);
-	u3->add_id(sampler_);
-	u3->add_id(hiz_tex);
-	Ref<RDUniform> u4;
-	u4.instantiate();
-	u4->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	u4->set_binding(4);
-	u4->add_id(stats_);
-	uset_ = rd->uniform_set_create(Array::make(u0, u1, u2, u3, u4), shader_, 0);
-	if (!uset_.is_valid()) return false;
-	uset_args_ = args;
-	uset_page_chunk_ = page_chunk;
-	uset_chunks_ = chunks;
-	uset_hiz_ = hiz_tex;
-	uset_stats_ = stats_;
-	return true;
+	gpu::RdDevice device{rd};
+	return set_.get(device, group_, program_.shader, 0, {
+			gpu::storage(0, pool.args_buffer()),
+			gpu::storage(1, pool.page_chunk_buffer()),
+			gpu::storage(2, pool.chunk_buffer()),
+			gpu::sampled(3, sampler_, hiz->pyramid()),
+			gpu::storage(4, stats_)}).is_valid();
 }
 
 void LodCullPass::consume_args_readback() {
@@ -213,7 +124,7 @@ bool LodCullPass::run(RenderingDevice *rd, LodPool &pool, HizPass *hiz,
 		const Projection &view_proj, int page_count, int total_page_count,
 		int first_pass_count) {
 	const auto t0 = std::chrono::steady_clock::now();
-	if (!rd || !rd_ || !pipeline_.is_valid() || !stats_readback_.is_valid() ||
+	if (!rd || !rd_ || !program_.valid() || !stats_readback_.is_valid() ||
 			!args_readback_.is_valid()) {
 		return false;
 	}
@@ -234,8 +145,8 @@ bool LodCullPass::run(RenderingDevice *rd, LodPool &pool, HizPass *hiz,
 	rd->buffer_update(stats_, 0, 4, zero);
 
 	const int64_t list = rd->compute_list_begin();
-	rd->compute_list_bind_compute_pipeline(list, pipeline_);
-	rd->compute_list_bind_uniform_set(list, uset_, 0);
+	rd->compute_list_bind_compute_pipeline(list, program_.pipeline);
+	rd->compute_list_bind_uniform_set(list, set_.id(), 0);
 
 	PackedByteArray pc;
 	pc.resize(80); // mat4 + ivec4 params; the shader derives frustum planes from view_proj
