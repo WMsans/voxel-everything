@@ -425,6 +425,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	dp.cam_pos[1] = cam.origin.y;
 	dp.cam_pos[2] = cam.origin.z;
 	dp.flags = beauty_flags;
+	for (int k = 0; k < 3; k++) dp.ambient[k] = beauty.ambient[k];
 	// The old `static const float kNoSun[16]` fallback goes with the single-map path: the
 	// UBO fill zeroes every cascade past `cascade_count` itself.
 	const bool use_sun = sun && sun->is_valid() && sun->rebuilds(0) > 0 &&

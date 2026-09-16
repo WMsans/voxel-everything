@@ -57,6 +57,9 @@ struct BeautySettings {
 	// What an edge pixel's colour is multiplied by (OutlinePush.params.z). Was a literal in
 	// outline_pass.cpp.
 	float outline_darken = 0.35f; // [0, 1]
+	// Sky-fill light on every surface: the deferred pass's ambient term and the ve_ambient global
+	// the cel-shaded objects read, one number for both. Was the deferred pass's ambient constant. Linear RGB.
+	float ambient[3] = {0.16f, 0.19f, 0.26f}; // [0, 4] per channel
 };
 
 // Bit layout; kBeautyFlags below generates BEAUTY_* for the shaders. A bit is only set when the effect is

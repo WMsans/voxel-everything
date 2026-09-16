@@ -152,6 +152,7 @@ void check_same(const ve::BeautySettings &got, const ve::BeautySettings &want) {
 	CHECK(got.outline_depth_threshold == doctest::Approx(want.outline_depth_threshold));
 	CHECK(got.outline_normal_threshold == doctest::Approx(want.outline_normal_threshold));
 	CHECK(got.outline_darken == doctest::Approx(want.outline_darken));
+	for (int k = 0; k < 3; k++) CHECK(got.ambient[k] == doctest::Approx(want.ambient[k]));
 	CHECK(got.contact_reach_m == doctest::Approx(want.contact_reach_m));
 	CHECK(got.contact_strength == doctest::Approx(want.contact_strength));
 	CHECK(got.contact_bias_m == doctest::Approx(want.contact_bias_m));
@@ -218,4 +219,11 @@ TEST_CASE("contact shadow shape defaults to the literals it replaced") {
 	CHECK(s.contact_reach_m == 0.6f);
 	CHECK(s.contact_strength == 0.85f);
 	CHECK(s.contact_bias_m == 0.05f);
+}
+
+TEST_CASE("ambient defaults to the constant it replaced") {
+	const ve::BeautySettings s;
+	CHECK(s.ambient[0] == 0.16f);
+	CHECK(s.ambient[1] == 0.19f);
+	CHECK(s.ambient[2] == 0.26f);
 }

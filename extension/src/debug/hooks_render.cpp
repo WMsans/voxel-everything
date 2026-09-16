@@ -2038,6 +2038,7 @@ float VoxelDebugHooks::sun_shadow_probe(Vector3 p, Vector3 viewer, int probe_mod
 	dp.cam_pos[1] = p.y;
 	dp.cam_pos[2] = p.z;
 	dp.flags = ve::pack_flags(beauty);
+	for (int k = 0; k < 3; k++) dp.ambient[k] = beauty.ambient[k];
 	dp.cascade_count = use_sun ? cascade_count : 0;
 	for (int i = 0; i < cascade_count && use_sun; i++) {
 		const float *vp = sun->view_proj(i);

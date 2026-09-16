@@ -4,6 +4,7 @@
 #include <cstdint>
 #include "render/gpu/gpu.h"
 #include "shade/sun_cascades.h"
+#include "shade/beauty_settings.h"
 
 namespace godot {
 
@@ -12,12 +13,13 @@ class MaterialAtlas;
 
 class DeferredPass {
 public:
-	static constexpr float kAmbient[3] = {0.16f, 0.19f, 0.26f};
-
 	struct Params {
 		float inv_view_proj[16] = {};
 		float cam_pos[3] = {};
-		float ambient[3] = {kAmbient[0], kAmbient[1], kAmbient[2]};
+		// The frame and the probes fill this from BeautySettings::ambient; a Params nobody fills
+		// carries the shipped default.
+		float ambient[3] = {ve::BeautySettings{}.ambient[0], ve::BeautySettings{}.ambient[1],
+				ve::BeautySettings{}.ambient[2]};
 		// Per-cascade sun state. `cascade_count` is what ve::sun_cascades() returned: 1 when
 		// the stream radius collapsed the set, which is exactly the pre-cascade behaviour.
 		float sun_view_proj[ve::kSunCascades][16] = {};

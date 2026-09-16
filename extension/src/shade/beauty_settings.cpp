@@ -52,6 +52,8 @@ const SettingRow<BeautySettings> kBeautyRows[] = {
 			&BeautySettings::outline_normal_threshold, 0.0f, 2.0f, 0.0f, 1.0f, 0.01f),
 	float_row("outline_darken", "Outline colour multiplier", &BeautySettings::outline_darken, 0.0f,
 			1.0f, 0.0f, 1.0f, 0.01f),
+	color_row("ambient", "Ambient", &BeautySettings::ambient, 0.0f, 4.0f, 0.0f, 1.0f, 0.01f,
+			"Sky-fill light on every surface; cel-shaded objects read the same colour."),
 };
 
 } // namespace
