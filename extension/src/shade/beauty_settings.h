@@ -26,6 +26,11 @@ struct BeautySettings {
 	int ssao_steps = 8;      // [0, 16]  march steps per sweep direction
 	int ssao_directions = 6; // [0, 8]   sweep directions per pixel
 
+	// SSAO's gather shape. These were file-scope constants in ssao_pass.cpp, the one place a
+	// look constant hid from both the tiers and the menu. Radius is world metres.
+	float ssao_radius = 5.0f;   // [0.25, 32]
+	float ssao_strength = 1.5f; // [0, 8]
+
 	// SSGI's gather shape. These lived as literals in SsgiPass::render, which broke this
 	// struct's own contract that no pass reads a knob that is not here -- and made the one
 	// effect that carries emissive light around the scene the only effect a tier could not

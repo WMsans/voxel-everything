@@ -142,6 +142,8 @@ void check_same(const ve::BeautySettings &got, const ve::BeautySettings &want) {
 	CHECK(got.contact_steps == want.contact_steps);
 	CHECK(got.ssao_steps == want.ssao_steps);
 	CHECK(got.ssao_directions == want.ssao_directions);
+	CHECK(got.ssao_radius == doctest::Approx(want.ssao_radius));
+	CHECK(got.ssao_strength == doctest::Approx(want.ssao_strength));
 	CHECK(got.ssgi_radius == doctest::Approx(want.ssgi_radius));
 	CHECK(got.ssgi_temporal == doctest::Approx(want.ssgi_temporal));
 	CHECK(got.ssgi_strength == doctest::Approx(want.ssgi_strength));
@@ -195,4 +197,10 @@ TEST_CASE("the beauty store starts at High and sets counts by name") {
 	CHECK(store.get().ssgi_taps == 4);
 	CHECK(store.set_value("ssgi_taps", 0.0f));
 	CHECK_FALSE(store.get().ssgi); // normalize: zero work is off
+}
+
+TEST_CASE("the SSAO gather shape defaults to the literals it replaced") {
+	const ve::BeautySettings s;
+	CHECK(s.ssao_radius == 5.0f);
+	CHECK(s.ssao_strength == 1.5f);
 }

@@ -6,10 +6,6 @@
 
 using namespace godot;
 
-// Must match the Push block in ssao.comp.glsl.
-static const float kSsaoRadius = 5.0f;
-static const float kSsaoStrength = 1.5f;
-
 SsaoPass::~SsaoPass() {
 	teardown();
 }
@@ -64,7 +60,7 @@ bool SsaoPass::render(RenderingDevice *rd, GBuffer &gb, RID camera_ubo,
 
 	gpu::CpuTimer timer(last_ms_);
 	const ve::SsaoPush push{{half.x, half.y, s.ssao_steps, s.ssao_directions},
-			{kSsaoRadius, kSsaoStrength, 0.0f, 0.0f}};
+			{s.ssao_radius, s.ssao_strength, 0.0f, 0.0f}};
 	if (!gpu::dispatch(rd, program_.pipeline, {{set, 0}}, gpu::push_bytes(push),
 				gpu::groups(half.x, 8), gpu::groups(half.y, 8)))
 		return false;

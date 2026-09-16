@@ -7,7 +7,7 @@ const BEAUTY_SWITCHES := ["ssgi", "ssr", "contact_shadows", "outlines", "sun_sha
 	"glossy_sdf_rays", "raymarched_sun_shadow", "ssao", "cost_view"]
 # [name, an in-range value that differs from the High default]
 const BEAUTY_MAGNITUDES := [["ssgi_radius", 12.0], ["ssgi_temporal", 0.5], ["ssgi_strength", 2.0],
-	["emissive_gi_radius", 32.0], ["emissive_gi_strength", 3.0],
+	["ssao_radius", 8.0], ["ssao_strength", 1.0], ["emissive_gi_radius", 32.0], ["emissive_gi_strength", 3.0],
 	["outline_depth_threshold", 0.1], ["outline_normal_threshold", 0.5]]
 const GRASS := [["enabled", 0.0], ["reach_m", 25.0], ["vertical_reach_m", 5.0],
 	["blades_per_brick", 8.0], ["max_blades", 1000.0], ["blade_width_m", 0.05],

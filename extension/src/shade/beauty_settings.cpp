@@ -20,6 +20,10 @@ const SettingRow<BeautySettings> kBeautyRows[] = {
 	int_row("contact_steps", "Contact shadow steps", &BeautySettings::contact_steps, 0, 32, 0, 32),
 	int_row("ssao_steps", "SSAO steps", &BeautySettings::ssao_steps, 0, 16, 0, 16),
 	int_row("ssao_directions", "SSAO directions", &BeautySettings::ssao_directions, 0, 8, 0, 8),
+	float_row("ssao_radius", "SSAO radius (m)", &BeautySettings::ssao_radius, 0.25f, 32.0f, 0.25f,
+			16.0f, 0.25f),
+	float_row("ssao_strength", "SSAO strength", &BeautySettings::ssao_strength, 0.0f, 8.0f, 0.0f,
+			4.0f, 0.05f),
 	// A radius floor of 0.25 m rather than 0: a zero-radius gather still dispatches, still reads
 	// the G-buffer, and returns black -- the expensive way to spell "off". `ssgi` is the switch.
 	float_row("ssgi_radius", "GI reach (m)", &BeautySettings::ssgi_radius, 0.25f, 64.0f, 0.25f,
