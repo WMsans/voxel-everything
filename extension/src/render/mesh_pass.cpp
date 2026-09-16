@@ -1,4 +1,5 @@
 #include "render/mesh_pass.h"
+#include "gpu_layout/blocks.h"
 #include "render/field_context_set.h"
 #include "mesh/mesh_chunk.h"
 #include "world/edit_log.h"
@@ -175,27 +176,11 @@ bool MeshPass::upload_volume(int slot, const ve::VolumeData &data) {
 
 // The same 48-byte block for all three passes, so one helper serves them all.
 void MeshPass::push(int64_t list, const MeshJob &job, int job_index) {
-	PackedByteArray pc;
-	pc.resize(64);
-	int32_t *p = reinterpret_cast<int32_t *>(pc.ptrw());
-	p[0] = job.chunk.x;
-	p[1] = job.chunk.y;
-	p[2] = job.chunk.z;
-	p[3] = job_index;
-	p[4] = sanitized_op_count(job);
-	p[5] = cfg_.max_verts;
-	p[6] = cfg_.max_tris;
-	p[7] = job.lattice;
-	float *f = reinterpret_cast<float *>(pc.ptrw());
-	f[8] = job.origin[0];
-	f[9] = job.origin[1];
-	f[10] = job.origin[2];
-	f[11] = job.cell_size;
-	p[12] = job.override_table;
-	p[13] = -1;
-	p[14] = 0;
-	p[15] = 0;
-	rd_->compute_list_set_push_constant(list, pc, pc.size());
+	const ve::MeshPush push{{job.chunk.x, job.chunk.y, job.chunk.z, job_index},
+			{sanitized_op_count(job), cfg_.max_verts, cfg_.max_tris, job.lattice},
+			{job.origin[0], job.origin[1], job.origin[2], job.cell_size},
+			{job.override_table, -1, 0, 0}};
+	rd_->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
 }
 
 void MeshPass::record_field(int64_t list, const MeshJob &job, int job_index) {

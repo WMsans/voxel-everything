@@ -5,15 +5,12 @@
 // one-cell overlap below the origin is what lets a chunk close the quads on its minimum
 // faces without reading a neighbouring chunk's lattice. Include common.glslh first.
 //
+#include "generated/blocks.glslh"
+
 // The lattice size, cell pitch and world origin arrive in the PUSH CONSTANT rather than as
 // constants, so one mesher serves the 0.1 m collision lattice and every LoD level. The block
 // is declared here, not in each shader, so there is exactly one layout.
-layout(push_constant, std430) uniform Push {
-	ivec4 chunk;  // xyz = chunk coordinates (job identity only), w = job index in this batch
-	ivec4 params; // x = op count, y = max verts per job, z = max tris per job, w = lattice dim
-	vec4 grid;    // xyz = the chunk's world origin, w = cell size in metres
-	ivec4 override_data; // x = override table, y = region slot
-} pc;
+layout(push_constant, std430) uniform Push { MESH_PUSH_FIELDS } pc;
 
 int override_table() { return pc.override_data.x; }
 
