@@ -12,6 +12,8 @@
 #include "render/mesh_service.h"
 #include "world/edit_log.h"
 
+namespace ve { struct OverrideSource; }
+
 namespace godot {
 
 // Turns finished chunk meshes into Jolt static bodies and keeps the set in step with the
@@ -32,7 +34,8 @@ public:
 	~ColliderStreamer();
 
 	void initialize(ve::ChunkResidency *chunks, ve::EditLog *edit_log, std::mutex *edit_mutex,
-			MeshService *mesh, int max_slots, const ve::Generator *gen);
+			MeshService *mesh, int max_slots, const ve::Generator *gen,
+			const ve::VolumeStore *volumes, const ve::OverrideSource *overrides);
 	void teardown();
 	void set_space(RID space);
 	void set_shape_builds_per_frame(int v) { max_builds_per_frame_ = v; }
@@ -123,6 +126,11 @@ private:
 	// terrain pipeline can swap the world's generator, and a copy here would silently keep
 	// generating the old world for collision while the GPU generated the new one.
 	const ve::Generator *gen_ = nullptr;
+	// Borrowed like gen_: the pasted volumes and the consolidated override bricks are part of
+	// the field the probe must see (S1). Both are read under edit_mutex_, the lock
+	// consolidation holds while it writes overrides.
+	const ve::VolumeStore *volumes_ = nullptr;
+	const ve::OverrideSource *overrides_ = nullptr;
 
 	RID space_;
 	// An inactive space forces lazy backend mesh compilation during the budgeted

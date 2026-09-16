@@ -2,6 +2,7 @@
 #include "mesh/mesh_chunk.h"
 #include "generator/generator.h"
 #include "world/brick_eval.h" // ve::eval_field, for the brute-force oracle below
+#include "world/override_store.h"
 #include <cmath>
 #include <vector>
 
@@ -138,4 +139,22 @@ TEST_CASE("chunk_has_surface sees ops, not just the generator") {
 	add.pos[0] = 6.4f; add.pos[1] = 12 * ve::kChunkSize + 6.4f; add.pos[2] = 6.4f;
 	add.radius = 3.0f;
 	CHECK(ve::chunk_has_surface(gen, &add, 1, sky));
+}
+
+// S1: a baked override replaces the generator base, so a chunk whose only surface lives in
+// override bricks must still probe as surface. The probe lattice's 1.6 m pitch lands on brick
+// boundaries, so bricks on both sides of the probe point (4.8, 80.0, 4.8) are baked solid.
+TEST_CASE("chunk_has_surface reads baked overrides as the base field") {
+	const ve::AnalyticGenerator gen;
+	const ve::IVec3 sky{0, 12, 0}; // y 76.8 .. 83.2
+	CHECK_FALSE(ve::chunk_has_surface(gen, nullptr, 0, sky));
+	ve::OverrideStore overrides(8);
+	for (int z = 5; z <= 6; z++)
+		for (int y = 99; y <= 100; y++)
+			for (int x = 5; x <= 6; x++) {
+				ve::OverrideBrick *b = overrides.data(overrides.acquire({x, y, z}));
+				REQUIRE(b != nullptr);
+				for (uint8_t &s : b->sdf) s = ve::encode_sdf(-1.0f);
+			}
+	CHECK(ve::chunk_has_surface(gen, nullptr, 0, sky, nullptr, &overrides));
 }

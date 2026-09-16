@@ -760,7 +760,7 @@ void VoxelWorld::ensure_physics_initialized() {
 	chunks_ = new ve::ChunkResidency(ccfg);
 	colliders_ = new ColliderStreamer();
 	colliders_->initialize(chunks_, store_->edit_log(), &store_->edit_mutex(), mesh_, max_collider_chunks_,
-			&store_->generator()->sampler());
+			&store_->generator()->sampler(), &store_->volumes(), store_->overrides());
 	colliders_->set_shape_builds_per_frame(shape_builds_per_frame_);
 	colliders_->set_body_bubble_radius_m(physics_bubble_radius_m_);
 	// Publish the manager under edit_mutex_: append_edit_locked() can be called from a tool

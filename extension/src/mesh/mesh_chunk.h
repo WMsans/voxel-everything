@@ -48,6 +48,8 @@ IVec3 region_of_chunk(IVec3 chunk);
 IVec3 chunk_min_brick(IVec3 chunk); // the chunk's lowest brick, for region membership
 void chunk_world_origin(IVec3 chunk, float out[3]);
 
+struct OverrideSource;
+
 // Distance from a point to the chunk's world AABB; 0 inside.
 float chunk_distance(IVec3 chunk, float cx, float cy, float cz);
 
@@ -63,6 +65,6 @@ void op_chunk_range(const EditOp &op, IVec3 *lo, IVec3 *hi);
 // probes. False positives cost one wasted mesh job; a false negative would leave a hole in
 // the collision, so the test only pins the safe direction.
 bool chunk_has_surface(const Generator &gen, const EditOp *ops, int op_count, IVec3 chunk,
-		const VolumeStore *volumes = nullptr);
+		const VolumeStore *volumes = nullptr, const OverrideSource *overrides = nullptr);
 
 } // namespace ve

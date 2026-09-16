@@ -55,7 +55,7 @@ void op_chunk_range(const EditOp &op, IVec3 *lo, IVec3 *hi) {
 }
 
 bool chunk_has_surface(const Generator &gen, const EditOp *ops, int op_count, IVec3 chunk,
-		const VolumeStore *volumes) {
+		const VolumeStore *volumes, const OverrideSource *overrides) {
 	float o[3];
 	chunk_world_origin(chunk, o);
 	const float step = kChunkSize / static_cast<float>(kChunkProbeSteps); // 1.6 m
@@ -65,7 +65,7 @@ bool chunk_has_surface(const Generator &gen, const EditOp *ops, int op_count, IV
 		for (int sy = 0; sy <= kChunkProbeSteps; sy++)
 			for (int sx = 0; sx <= kChunkProbeSteps; sx++) {
 				const float d = eval_field(gen, ops, op_count, o[0] + sx * step,
-						o[1] + sy * step, o[2] + sz * step, volumes).sdf;
+						o[1] + sy * step, o[2] + sz * step, volumes, overrides).sdf;
 				mn = std::min(mn, d);
 				mx = std::max(mx, d);
 			}
