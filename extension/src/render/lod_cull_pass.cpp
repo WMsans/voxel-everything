@@ -2,10 +2,10 @@
 #include "lod/lod_contour.h"
 #include "render/hiz_pass.h"
 #include "render/lod_pool.h"
+#include "gpu_layout/blocks.h"
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <algorithm>
 #include <chrono>
-#include <cstring>
 
 using namespace godot;
 
@@ -148,19 +148,16 @@ bool LodCullPass::run(RenderingDevice *rd, LodPool &pool, HizPass *hiz,
 	rd->compute_list_bind_compute_pipeline(list, program_.pipeline);
 	rd->compute_list_bind_uniform_set(list, set_.id(), 0);
 
-	PackedByteArray pc;
-	pc.resize(80); // mat4 + ivec4 params; the shader derives frustum planes from view_proj
-	float *f = reinterpret_cast<float *>(pc.ptrw());
+	// The shader derives frustum planes from view_proj.
+	ve::LodCullPush push{};
 	for (int c = 0; c < 4; c++)
 		for (int r = 0; r < 4; r++)
-			f[c * 4 + r] = view_proj.columns[c][r]; // GLSL mat4 = column-major
-	int32_t *ip = reinterpret_cast<int32_t *>(pc.ptrw() + 64);
-	ip[0] = page_count;
-	ip[1] = HizPass::kSize;
-	ip[2] = hiz->mip_count();
-	ip[3] = 0;
+			push.view_proj[c * 4 + r] = view_proj.columns[c][r]; // GLSL mat4 = column-major
+	push.params[0] = page_count;
+	push.params[1] = HizPass::kSize;
+	push.params[2] = hiz->mip_count();
 
-	rd->compute_list_set_push_constant(list, pc, pc.size());
+	rd->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
 	rd->compute_list_dispatch(list, (static_cast<uint32_t>(page_count) + 63u) / 64u, 1, 1);
 	rd->compute_list_end();
 
