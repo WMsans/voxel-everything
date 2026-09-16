@@ -67,8 +67,8 @@ void main() {
 	int slot = output_slot(brick_index);
 	if (slot < 0) return;
 	vec3 bo = vec3(brick) * BRICK_SIZE;
-	int sdf_base = slot * 4916;
-	int mat_base = slot * 4096;
+	int sdf_base = slot * OVERRIDE_SDF_STRIDE_BYTES;
+	int mat_base = slot * OVERRIDE_MAT_STRIDE_BYTES;
 
 	for (uint i = tid; i < uint(BRICK_SDF_COUNT); i += 256u) {
 		ivec3 v = ivec3(int(i) % BRICK_SDF_STRIDE,

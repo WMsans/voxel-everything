@@ -3,7 +3,7 @@
 
 #include "generated/blocks.glslh"
 
-#define MATERIAL_LAYERS 16
+#define VE_MATERIAL_ARRAYS
 // Set 0's established bindings 24-30 belong to the compact-normal/override interface.
 // Keep that interface unchanged; SunLight uses binding 24 in its dedicated set 2. Set 1
 // belongs to the terrain pipeline's field context (FieldContextSet): the generated

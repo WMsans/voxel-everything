@@ -2,7 +2,7 @@
 #version 460
 
 #include "generated/blocks.glslh"
-#define MATERIAL_LAYERS 16
+#define VE_MATERIAL_ARRAYS
 layout(set = 0, binding = 3) uniform sampler2DArray material_albedo;
 layout(set = 0, binding = 4) uniform sampler2DArray material_surface_tex;
 #include "common.glslh"

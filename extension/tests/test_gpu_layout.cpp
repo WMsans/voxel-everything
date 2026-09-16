@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include "gpu_layout/blocks.h"
+#include "shade/beauty_settings.h"
 #include <set>
 #include <string>
 
@@ -23,6 +24,17 @@ TEST_CASE("a table that misplaces or omits a field is refused") {
 	CHECK(missing.find("cover 16 bytes") != std::string::npos);
 	const Field arrays[] = {{"m", FieldType::Mat4, 3, 0}, {"v", FieldType::Vec4, 2, 192}};
 	CHECK(ve::layout::check_block({"ARRAYS", 224, arrays, 2}).empty());
+}
+
+TEST_CASE("beauty flags are distinct single bits") {
+	uint32_t seen = 0;
+	for (const ve::BeautyFlag &f : ve::kBeautyFlags) {
+		CHECK_MESSAGE(f.bit != 0, f.name);
+		CHECK_MESSAGE((f.bit & (f.bit - 1)) == 0, f.name);
+		CHECK_MESSAGE((seen & f.bit) == 0, f.name);
+		seen |= f.bit;
+	}
+	CHECK(sizeof(ve::kBeautyFlags) / sizeof(ve::kBeautyFlags[0]) == 9);
 }
 
 TEST_CASE("block macros are unique and emit one declaration per field") {

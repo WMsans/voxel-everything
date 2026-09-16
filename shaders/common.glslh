@@ -1,6 +1,7 @@
 // Shared constants + helpers, pulled into every voxel shader by ve::load_shader_source.
 // NOTE: never put a literal include directive inside a comment in this file — the loader
 // matches include tokens anywhere in a line and would self-include (cycle error).
+#include "generated/constants.glslh"
 const int BRICK_VOXELS = 16;
 const float VOXEL_SIZE = 0.05;
 const float BRICK_SIZE = 0.8;         // 16 * 0.05
@@ -21,8 +22,6 @@ const int OCC_WORDS_PER_REGION = REGION_BRICK_COUNT / 16; // 2048
 // and shading seams appear on every brick face. The material atlas is a plain 16^3 cell grid
 // (nearest filtered, no apron).
 const int BRICK_SDF_STRIDE = BRICK_VOXELS + 1; // 17
-const int BRICK_VOXEL_COUNT = 4096;            // 16^3
-const int BRICK_SDF_COUNT = 4913;              // 17^3
 const float BRICK_SDF_MAX = float(BRICK_VOXELS); // last valid lattice coordinate
 
 // A cell of the min-max chain holds no surface unless its range straddles this value.
@@ -45,9 +44,6 @@ const uint OP_VOLUME_ADD = 4u;
 const uint MAX_REGION_OPS = 256u;
 // ve::kOccupancyCellSize -- a box op's extent is counted in 0.8 m occupancy cells.
 const float OCCUPANCY_CELL_SIZE = 0.8;
-// ve::kIslandDim ^ 3: the per-slot stride of both volume buffers. render/volume_pool.cpp
-// static_asserts that this matches, so changing the C++ constant breaks the BUILD.
-const int VOLUME_VOXELS = 262144;
 // Mirror of ve::kSurfaceY (extension/src/generator/generator.h): 51.2 = -origin_bricks.y *
 // kBrickSize for the default world origin (0, -64, 0). Must stay in lockstep with the CPU
 // constant; tests/test_field_diff.gd guards the agreement.
@@ -87,7 +83,7 @@ const float MATERIAL_UV_SCALE = 0.5;
 // The includer must declare these before including, at bindings it owns:
 //   layout(set = ?, binding = ?) uniform sampler2DArray material_albedo;
 //   layout(set = ?, binding = ?) uniform sampler2DArray material_surface_tex;
-// and define MATERIAL_LAYERS to the array's layer count.
+// and define VE_MATERIAL_ARRAYS. MATERIAL_LAYERS comes from generated/constants.glslh.
 
 // A 4x4 Bayer threshold in [0, 1). It is independent of material layers and is shared by
 // the screen-space beauty masks as well as the terrain shaders.
@@ -96,7 +92,7 @@ float bayer4(ivec2 px) {
 	return float(M[(px.y & 3) * 4 + (px.x & 3)]) / 16.0;
 }
 
-#ifdef MATERIAL_LAYERS
+#ifdef VE_MATERIAL_ARRAYS
 
 // Triplanar with EXPLICIT gradients. The raymarcher is a compute shader and has no
 // dFdx/dFdy, so it supplies gradients from ray differentials while the LoD fragment shader

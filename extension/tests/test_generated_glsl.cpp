@@ -3,6 +3,7 @@
 //   cd extension && VE_REGEN_GOLDEN=1 ./build/tests/ve_tests
 #include <doctest/doctest.h>
 #include "gpu_layout/blocks.h"
+#include "gpu_layout/constants.h"
 #include "render/shader_loader.h"
 #include <cstdlib>
 #include <fstream>
@@ -39,4 +40,8 @@ void check_generated(const std::string &rel, const std::string &expected) {
 
 TEST_CASE("generated: shaders/generated/blocks.glslh") {
 	check_generated("shaders/generated/blocks.glslh", ve::layout::blocks_glsl());
+}
+
+TEST_CASE("generated: shaders/generated/constants.glslh") {
+	check_generated("shaders/generated/constants.glslh", ve::layout::constants_glsl());
 }

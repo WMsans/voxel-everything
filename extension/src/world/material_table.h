@@ -35,6 +35,11 @@ inline constexpr MaterialDef kMaterials[] = {
 
 inline constexpr int kMaterialCount = static_cast<int>(sizeof(kMaterials) / sizeof(kMaterials[0]));
 
+// Layers in the material texture arrays (render/material_atlas.h allocates exactly this many and
+// fills unused layers with flat error magenta); generated into GLSL as MATERIAL_LAYERS.
+inline constexpr int kMaterialLayers = 16;
+static_assert(kMaterialCount <= kMaterialLayers, "more materials than atlas layers");
+
 // Foliage draws its own albedo and grows ON terrain rather than being terrain, so it has no
 // atlas layer, no flat albedo and no hardness. Its ids start at kFoliageBase, far above every
 // terrain id: adding a terrain material never renumbers foliage, and no foliage id can reach

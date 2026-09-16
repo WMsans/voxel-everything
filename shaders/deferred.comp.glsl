@@ -4,7 +4,7 @@
 
 #define SUN_LIGHT_SET 0
 #define SUN_LIGHT_BINDING 10
-#define MATERIAL_LAYERS 16
+#define VE_MATERIAL_ARRAYS
 layout(set = 0, binding = 8) uniform sampler2DArray material_albedo;
 layout(set = 0, binding = 9) uniform sampler2DArray material_surface_tex;
 #include "common.glslh"
