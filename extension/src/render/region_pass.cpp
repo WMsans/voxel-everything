@@ -1,4 +1,5 @@
 #include "render/region_pass.h"
+#include "gpu_layout/blocks.h"
 #include "render/field_context_set.h"
 #include <godot_cpp/variant/utility_functions.hpp>
 
@@ -71,16 +72,16 @@ void RegionPass::mark(RenderingDevice *rd, int64_t list, ve::IVec3 region, int r
 	if (total <= 0) return;
 	const uint32_t groups = static_cast<uint32_t>((total + 255) / 256);
 
-	PackedByteArray pc;
-	pc.resize(64);
-	int32_t *p = reinterpret_cast<int32_t *>(pc.ptrw());
-	p[0] = region.x; p[1] = region.y; p[2] = region.z; p[3] = region_slot;
-	p[4] = lo.x; p[5] = lo.y; p[6] = lo.z; p[7] = 0;
-	p[8] = hi.x; p[9] = hi.y; p[10] = hi.z; p[11] = 0;
-	p[12] = op_count; p[13] = 0; p[14] = max_brick_jobs_;
+	ve::BrickMarkPush push{};
+	push.region[0] = region.x; push.region[1] = region.y; push.region[2] = region.z;
+	push.region[3] = region_slot;
+	push.lo[0] = lo.x; push.lo[1] = lo.y; push.lo[2] = lo.z;
+	push.hi[0] = hi.x; push.hi[1] = hi.y; push.hi[2] = hi.z;
+	push.cfg[0] = op_count;
+	push.cfg[2] = max_brick_jobs_;
 	// 0 = plain stream-in, 1 = force resident regeneration, 2 = edit: generate every
 	// touched brick so the exact lattice, rather than the activation probe, owns occupancy.
-	p[15] = generate_probe_misses ? 2 : (force_regen ? 1 : 0);
+	push.cfg[3] = generate_probe_misses ? 2 : (force_regen ? 1 : 0);
 
 	rd->compute_list_bind_compute_pipeline(list, mark_.pipeline);
 	rd->compute_list_bind_uniform_set(list, mark_set_, 0);
@@ -88,24 +89,22 @@ void RegionPass::mark(RenderingDevice *rd, int64_t list, ve::IVec3 region, int r
 	// Phase 0 (release) is only meaningful when bricks may have gone inactive, which only
 	// an edit can cause. A plain stream-in scans a region whose table is entirely absent.
 	if (force_regen) {
-		p[13] = 0;
-		rd->compute_list_set_push_constant(list, pc, pc.size());
+		push.cfg[1] = 0;
+		rd->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
 		rd->compute_list_dispatch(list, groups, 1, 1);
 		rd->compute_list_add_barrier(list);
 	}
-	p[13] = 1;
-	rd->compute_list_set_push_constant(list, pc, pc.size());
+	push.cfg[1] = 1;
+	rd->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
 	rd->compute_list_dispatch(list, groups, 1, 1);
 }
 
 void RegionPass::release_region(RenderingDevice *rd, int64_t list, int region_slot) {
 	if (!free_.pipeline.is_valid()) return;
-	PackedByteArray pc;
-	pc.resize(16);
-	reinterpret_cast<int32_t *>(pc.ptrw())[0] = region_slot;
+	const ve::RegionFreePush push{{region_slot, 0, 0, 0}};
 	rd->compute_list_bind_compute_pipeline(list, free_.pipeline);
 	rd->compute_list_bind_uniform_set(list, free_set_, 0);
-	rd->compute_list_set_push_constant(list, pc, pc.size());
+	rd->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
 	rd->compute_list_dispatch(list, (ve::kRegionBrickCount + 255) / 256, 1, 1);
 }
 
@@ -117,11 +116,9 @@ void RegionPass::write_dispatch_args(RenderingDevice *rd, int64_t list) {
 	// and we set it here — otherwise the barrier's replay would push whatever the
 	// previous dispatch set (the mark pass's 64 bytes) into a mismatched pipeline and
 	// Godot errors. The shader ignores the value.
-	PackedByteArray pc;
-	pc.resize(16);
-	pc.fill(0);
+	const ve::DispatchArgsPush push{};
 	rd->compute_list_bind_compute_pipeline(list, args_.pipeline);
 	rd->compute_list_bind_uniform_set(list, args_set_, 0);
-	rd->compute_list_set_push_constant(list, pc, pc.size());
+	rd->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
 	rd->compute_list_dispatch(list, 1, 1, 1);
 }

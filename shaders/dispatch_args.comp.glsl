@@ -1,5 +1,6 @@
 #[compute]
 #version 460
+#include "generated/blocks.glslh"
 
 layout(local_size_x = 1) in;
 
@@ -13,9 +14,7 @@ layout(set = 0, binding = 1, std430) writeonly buffer Args { uvec4 v; } args;
 // the streamer records write_dispatch_args immediately before a barrier, so this
 // pipeline must declare a push constant of the size RegionPass::write_dispatch_args
 // pushes — otherwise the barrier's replay fails the pipeline's push-size validation.
-layout(push_constant, std430) uniform Push {
-	ivec4 pad;
-} pc;
+layout(push_constant, std430) uniform Push { DISPATCH_ARGS_PUSH_FIELDS } pc;
 
 // brick_gen.comp.glsl runs one workgroup per job, so the group count IS the job count.
 void main() {
