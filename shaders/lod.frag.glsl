@@ -1,5 +1,6 @@
 #[fragment]
 #version 460
+#include "generated/gbuffer.glslh"
 
 #include "generated/blocks.glslh"
 #define VE_MATERIAL_ARRAYS
@@ -42,6 +43,6 @@ void main() {
 	vec2 props = material_props_normal(v_material, v_wpos, geometric_n, ddx, ddy, shading_n);
 	// Sun visibility is 1: shadowing the far field is the ortho shadow map's job, evaluated
 	// once in the deferred pass where the near field's raymarched term is also applied.
-	out_albedo = vec4(surf.rgb * mix(1.0, props.y, 0.65), 1.0);
-	out_surface = vec4(oct_encode(shading_n), float(v_material), 1.0 - props.x);
+	out_albedo = GB_PACK_ALBEDO(surf.rgb * mix(1.0, props.y, 0.65), 1.0);
+	out_surface = GB_PACK_SURFACE(shading_n, v_material, 1.0 - props.x);
 }
