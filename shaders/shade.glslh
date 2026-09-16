@@ -43,15 +43,7 @@ vec3 oct_decode_snorm8(uint p) {
 }
 
 // ---- ve::CelParams / ve::cel_shade ---------------------------------------------------
-const int CEL_BANDS = 4;
-const float CEL_BAND_EDGE[3] = float[3](0.08, 0.32, 0.66);
-const float CEL_BAND_LEVEL[4] = float[4](0.18, 0.45, 0.75, 1.00);
-const float CEL_SHADOW_HUE_SHIFT = 0.055;
-const float CEL_SHADOW_SATURATION = 1.35;
-const float CEL_SPEC_EDGE = 0.72;
-const float CEL_SPEC_STRENGTH = 0.45;
-const float CEL_RIM_STRENGTH = 0.35;
-const float CEL_RIM_POWER = 3.0;
+#include "generated/cel.glslh"
 
 int cel_band(float ndl) {
 	float v = clamp(ndl, 0.0, 1.0);

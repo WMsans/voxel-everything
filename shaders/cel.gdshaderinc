@@ -1,12 +1,8 @@
-const float VE_HUE = 0.055;
-const float VE_SAT = 1.35;
-const float VE_SPEC_EDGE = 0.72;
-const float VE_SPEC = 0.45;
-const float VE_RIM = 0.35;
-const float VE_RIM_POWER = 3.0;
+#include "res://shaders/generated/cel_constants.gdshaderinc"
 float ve_cel_level(float ndl) {
-	float v=clamp(ndl,0.0,1.0); if(v>0.66)return 1.0;
-	if(v>0.32)return .75; if(v>0.08)return .45; return .18;
+	float v=clamp(ndl,0.0,1.0); if(v>VE_CEL_BAND_EDGE_2)return VE_CEL_BAND_LEVEL_3;
+	if(v>VE_CEL_BAND_EDGE_1)return VE_CEL_BAND_LEVEL_2;
+	if(v>VE_CEL_BAND_EDGE_0)return VE_CEL_BAND_LEVEL_1; return VE_CEL_BAND_LEVEL_0;
 }
 vec3 ve_rgb_to_hsv(vec3 c) {
 	float mx=max(c.r,max(c.g,c.b)),mn=min(c.r,min(c.g,c.b)),d=mx-mn,h=0.0;
