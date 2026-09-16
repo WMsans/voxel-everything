@@ -240,12 +240,9 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	cp.dims[3] = islands;
 	const RID effective_mask = mask.is_valid() ? mask : render_.passes().islands->fallback_mask();
 	// If the island cull mask/target size changes, RaymarchPass releases its old target
-	// textures. CompositePass owns a uniform set that references those textures, so drop that
-	// dependent set first rather than later attempting to free a cascade-invalid RID.
-	if (rmp->targets_need_rebuild(rw, rh, effective_mask)) {
-		cmp->release_targets();
-		cmp->invalidate_uniform_set(rd);
-	}
+	// textures. CompositePass's uniform set binds them and rebuilds itself on the new RIDs;
+	// its framebuffer is dropped here as it always was.
+	if (rmp->targets_need_rebuild(rw, rh, effective_mask)) cmp->release_targets();
 	if (!rmp->render(rd, *atlas, render_.passes().islands, mask, cp, rw, rh, edit_state,
 			render_.passes().field_context)) {
 		cancel_stage(kStageRaymarch);
@@ -599,10 +596,7 @@ FrameInputs VoxelFrame::prepare_headless(RenderingDevice *rd, const FrameInputs 
 		// framebuffer over them and expose release_targets() for exactly this -- the same drops
 		// the probes made by hand. Uniform sets keyed by RID rebuild themselves. Never tear down
 		// DeferredPass/ContactShadowPass here: both mirror, and would free, the sun UBO.
-		if (CompositePass *composite = render_.passes().composite) {
-			composite->release_targets();
-			composite->invalidate_uniform_set(rd);
-		}
+		if (CompositePass *composite = render_.passes().composite) composite->release_targets();
 		if (InjectPass *inject = render_.passes().inject) inject->release_targets();
 		if (LodRasterPass *lod_raster = render_.passes().lod_raster) lod_raster->release_targets();
 		if (GrassRasterPass *grass_raster = render_.passes().grass_raster) grass_raster->release_targets();

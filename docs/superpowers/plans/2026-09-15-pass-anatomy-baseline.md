@@ -257,3 +257,4 @@ Appended by later tasks.
 - grass_raster Task 17: build OK, native 565/565, gdUnit 58/58, leaked 0 (row 0)
 - lod_raster Task 18: build OK, native 565/565, gdUnit 25/25 including fade golden, leaked 0 (row 0)
 - sun_shadow Task 19: build OK, native 565/565, gdUnit matches row, leaked 0 (row 0)
+- composite Task 20: build OK, native 565/565, gdUnit matches row, leaked 0 (row 0)

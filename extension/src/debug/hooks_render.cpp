@@ -2262,9 +2262,9 @@ Dictionary VoxelDebugHooks::debug_near_field_detail(Vector3 pos, Vector3 fwd, in
 	const int rw = std::max(1, static_cast<int>(static_cast<float>(w) * march_scale));
 	const int rh = std::max(1, static_cast<int>(static_cast<float>(h) * march_scale));
 	// The G-buffer and the marcher's targets both change size across calls; the composite's
-	// framebuffer and uniform set reference both, so drop them before either moves.
+	// framebuffer references the G-buffer, so drop it before it moves; its uniform set rebuilds
+	// on the marcher's new RIDs.
 	world_->context().render->passes().composite->release_targets();
-	world_->context().render->passes().composite->invalidate_uniform_set(device);
 	if (!world_->context().render->passes().gbuffer->ensure(device, nullptr, Vector2i(w, h))) return d;
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->context().render->passes().raymarch->render(device, *world_->context().render->passes().atlas, world_->context().render->passes().islands, RID(), cp,
