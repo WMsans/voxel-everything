@@ -1,6 +1,7 @@
 #[compute]
 #version 460
 
+#include "generated/blocks.glslh"
 #include "common.glslh"
 
 // One thread per 16x16 screen tile (spec §3). The tile grid is small -- 1440p at 0.66x is
@@ -16,16 +17,7 @@ layout(set = 0, binding = 1, std430) writeonly buffer TileMask { uint v[]; } til
 // projection, written once, below. This compute pass receives IslandCullPass's private
 // copy, which overrides dims.xy with the actual raymarch target size; the camera/projection
 // fields are identical to the raymarcher's.
-layout(push_constant, std430) uniform Push {
-	vec4 cam_pos;
-	vec4 cam_right;
-	vec4 cam_up;
-	vec4 cam_fwd;
-	vec4 params;          // tan_half_fov_x, tan_half_fov_y, max_dist, unused
-	ivec4 dims;           // x,y = actual raymarch target size (private cull copy), w = live island count
-	ivec4 region_origin;  // w = tiles per row
-	ivec4 atlas_bricks;   // w = tile rows
-} pc;
+layout(push_constant, std430) uniform Push { CAMERA_PARAMS_FIELDS } pc;
 
 const int TILE = 16; // kIslandTileSize
 

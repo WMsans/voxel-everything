@@ -4,9 +4,8 @@
 namespace ve {
 
 // Push-constant block shared by raymarch.comp.glsl. M2 grows it from 96 to exactly 128
-// bytes — Vulkan's guaranteed minimum push-constant size, so still portable. The shader
-// declares the same eight vec4s; Godot sizes the pipeline range from reflection, so the
-// two sides must agree exactly (M1 errata 1).
+// bytes — Vulkan's guaranteed minimum push-constant size, so still portable.
+// shaders/generated/blocks.glslh declares them from gpu_layout/blocks.h's table (CAMERA_PARAMS_FIELDS).
 struct CameraParams {
 	float cam_pos[4];
 	float cam_right[4];

@@ -3,7 +3,7 @@
 #include "render/gpu_atlas.h"
 #include "render/island_atlas.h"
 #include "render/material_atlas.h"
-#include <cstring>
+#include "gpu_layout/blocks.h"
 
 using namespace godot;
 
@@ -21,9 +21,10 @@ void RaymarchPass::initialize(RenderingDevice *rd) {
 	// coordinate lands exactly on the boundary.
 	sampler_linear_ = gpu::sampler(rd, group_, RenderingDevice::SAMPLER_FILTER_LINEAR, true);
 	PackedByteArray zero;
-	zero.resize(32);
+	zero.resize(sizeof(ve::EditsBlock));
 	zero.fill(0);
-	edits_ubo_ = group_.add(gpu::Kind::Buffer, rd->uniform_buffer_create(32, zero));
+	edits_ubo_ = group_.add(gpu::Kind::Buffer,
+		rd->uniform_buffer_create(sizeof(ve::EditsBlock), zero));
 }
 
 void RaymarchPass::set_materials(const MaterialAtlas &materials) {
@@ -148,21 +149,13 @@ bool RaymarchPass::render(RenderingDevice *rd, const GpuAtlas &atlas,
 	// Recorded before the compute list: buffer_update errors while a list is open, and the
 	// deferred update still lands before the dispatch at submit.
 	{
-		PackedByteArray eb;
-		eb.resize(32);
-		float *f = reinterpret_cast<float *>(eb.ptrw());
-		for (int i = 0; i < 3; i++) f[i] = edit_state[i];
-		f[3] = 0.0f;
-		f[4] = edit_state[3]; // radius
-		f[5] = edit_state[4]; // type
-		f[6] = edit_state[5]; // material
-		f[7] = edit_state[3] > 0.0f ? 1.0f : 0.0f;
-		rd->buffer_update(edits_ubo_, 0, 32, eb);
+		const ve::EditsBlock edits{{edit_state[0], edit_state[1], edit_state[2], 0.0f},
+				{edit_state[3] /* radius */, edit_state[4] /* type */, edit_state[5] /* material */,
+						edit_state[3] > 0.0f ? 1.0f : 0.0f}};
+		rd->buffer_update(edits_ubo_, 0, sizeof(edits), gpu::push_bytes(edits));
 	}
 
-	PackedByteArray pc;
-	pc.resize(sizeof(ve::CameraParams));
-	std::memcpy(pc.ptrw(), &cam, sizeof(ve::CameraParams));
+	const PackedByteArray pc = gpu::push_bytes(cam);
 
 	const int64_t list = rd->compute_list_begin();
 	rd->compute_list_bind_compute_pipeline(list, program_.pipeline);

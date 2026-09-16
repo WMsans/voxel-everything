@@ -1,6 +1,6 @@
 #include "render/island_cull_pass.h"
 #include "render/island_atlas.h"
-#include <cstring>
+#include "gpu_layout/blocks.h"
 
 using namespace godot;
 
@@ -69,9 +69,7 @@ bool IslandCullPass::render(RenderingDevice *rd, const IslandAtlas &atlas,
 	pc.dims[3] = island_count;
 	pc.region_origin[3] = tx;
 	pc.atlas_bricks[3] = ty;
-	PackedByteArray b;
-	b.resize(sizeof(ve::CameraParams));
-	std::memcpy(b.ptrw(), &pc, sizeof(ve::CameraParams));
+	const PackedByteArray b = gpu::push_bytes(pc);
 
 	// Its own compute list. Godot's RenderingDevice ends a compute list with a full barrier
 	// unless told otherwise, so the raymarch list that follows sees the finished mask.
