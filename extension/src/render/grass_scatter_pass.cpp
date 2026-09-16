@@ -1,53 +1,12 @@
 #include "render/grass_scatter_pass.h"
 #include "render/gpu_atlas.h"
-#include "render/shader_loader.h"
 #include "shade/oct.h"
-#include <godot_cpp/classes/project_settings.hpp>
-#include <godot_cpp/classes/rd_sampler_state.hpp>
-#include <godot_cpp/classes/rd_shader_source.hpp>
-#include <godot_cpp/classes/rd_shader_spirv.hpp>
-#include <godot_cpp/classes/rd_uniform.hpp>
-#include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <algorithm>
 #include <cstring>
 
 using namespace godot;
-
-namespace {
-// Loads one compute shader from res://shaders, mirroring SsaoPass's load sequence. Returns
-// false without touching `shader`/`pipeline` on any failure.
-bool load_compute(RenderingDevice *rd, const char *res, RID *shader, RID *pipeline) {
-	ProjectSettings *ps = ProjectSettings::get_singleton();
-	const String path = ps->globalize_path(res);
-	const String inc = ps->globalize_path("res://shaders");
-	std::string err;
-	const std::string code = ve::strip_shader_annotations(
-			ve::load_shader_source(path.utf8().get_data(), inc.utf8().get_data(), &err));
-	if (code.empty()) {
-		UtilityFunctions::printerr("GrassScatterPass: shader load failed: ", err.c_str());
-		return false;
-	}
-	Ref<RDShaderSource> src;
-	src.instantiate();
-	src->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
-	src->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, String(code.c_str()));
-	Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(src);
-	const String compile_err = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
-	if (!compile_err.is_empty()) {
-		UtilityFunctions::printerr("GrassScatterPass: ", compile_err);
-		return false;
-	}
-	*shader = rd->shader_create_from_spirv(spirv);
-	*pipeline = rd->compute_pipeline_create(*shader);
-	if (!shader->is_valid() || !pipeline->is_valid()) {
-		UtilityFunctions::printerr("GrassScatterPass: pipeline creation failed for ", res);
-		return false;
-	}
-	return true;
-}
-} // namespace
 
 GrassScatterPass::~GrassScatterPass() {
 	teardown();
@@ -57,37 +16,20 @@ bool GrassScatterPass::initialize(RenderingDevice *rd) {
 	teardown();
 	if (!rd) return false;
 	rd_ = rd;
-	if (!load_compute(rd, "res://shaders/grass_bricks.comp.glsl", &bricks_shader_,
-			&bricks_pipeline_)) {
+	bricks_ = gpu::compile_compute(rd, group_, "GrassScatterPass", "grass_bricks.comp.glsl");
+	if (!bricks_.valid()) {
 		teardown();
 		return false;
 	}
 	// grass_scatter.comp.glsl arrives in Task 6. Until then the scatter stage stays
 	// invalid and run() skips stage 2 -- the pass still culls bricks and reports zeros.
-	if (!load_compute(rd, "res://shaders/grass_scatter.comp.glsl", &scatter_shader_,
-			&scatter_pipeline_)) {
-		scatter_shader_ = RID();
-		scatter_pipeline_ = RID();
-	}
+	scatter_ = gpu::compile_compute(rd, group_, "GrassScatterPass", "grass_scatter.comp.glsl");
+	if (!scatter_.valid()) scatter_ = gpu::Program();
 	// Owned sampler pair for the atlas textures stage 1 declares but never samples.
 	// Mirrors RaymarchPass: the SDF atlas filters linearly, the integer material atlas
 	// must stay nearest.
-	{
-		Ref<RDSamplerState> ss;
-		ss.instantiate();
-		ss->set_min_filter(RenderingDevice::SAMPLER_FILTER_NEAREST);
-		ss->set_mag_filter(RenderingDevice::SAMPLER_FILTER_NEAREST);
-		sampler_nearest_ = rd->sampler_create(ss);
-
-		Ref<RDSamplerState> ls;
-		ls.instantiate();
-		ls->set_min_filter(RenderingDevice::SAMPLER_FILTER_LINEAR);
-		ls->set_mag_filter(RenderingDevice::SAMPLER_FILTER_LINEAR);
-		ls->set_repeat_u(RenderingDevice::SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE);
-		ls->set_repeat_v(RenderingDevice::SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE);
-		ls->set_repeat_w(RenderingDevice::SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE);
-		sampler_linear_ = rd->sampler_create(ls);
-	}
+	sampler_nearest_ = gpu::sampler(rd, group_, RenderingDevice::SAMPLER_FILTER_NEAREST);
+	sampler_linear_ = gpu::sampler(rd, group_, RenderingDevice::SAMPLER_FILTER_LINEAR, true);
 	if (!sampler_linear_.is_valid() || !sampler_nearest_.is_valid()) {
 		teardown();
 		return false;
@@ -109,20 +51,12 @@ bool GrassScatterPass::initialize(RenderingDevice *rd) {
 
 void GrassScatterPass::teardown() {
 	if (!rd_) return;
-	for (RID *r : {&bricks_uset_, &scatter_uset_, &bricks_pipeline_, &bricks_shader_,
-			&scatter_pipeline_, &scatter_shader_, &params_ubo_, &brick_list_, &counters_,
-			&dispatch_args_, &instances_, &draw_args_, &region_ubo_, &sampler_linear_,
-			&sampler_nearest_}) {
-		if (r->is_valid()) rd_->free_rid(*r);
-		*r = RID();
-	}
-	key_params_ = key_bricks_ = key_counters_ = key_dispatch_ = RID();
-	key_rmap_ = key_rtables_ = key_bflags_ = RID();
-	key_sdf_ = key_mat_ = key_palette_ = key_region_ = RID();
-	key_sparams_ = key_sbricks_ = key_scounters_ = key_sdraw_ = RID();
-	key_srmap_ = key_srtables_ = key_sbflags_ = RID();
-	key_spalette_ = key_ssdf_ = key_smat_ = RID();
-	key_sregion_ = key_sinstances_ = key_sslot_counts_ = key_ssun_ = RID();
+	gpu::RdDevice device{rd_};
+	group_.release(device);
+	bricks_ = scatter_ = gpu::Program();
+	params_ubo_ = brick_list_ = counters_ = dispatch_args_ = instances_ = draw_args_ = RID();
+	region_ubo_ = sampler_linear_ = sampler_nearest_ = RID();
+	bricks_set_ = scatter_set_ = gpu::SetCache();
 	sample_count_ = 0;
 	sample_min_normal_y_ = 1.0f;
 	sample_max_height_ = 0.0f;
@@ -141,25 +75,29 @@ bool GrassScatterPass::ensure_buffers(RenderingDevice *rd, int max_blades, int m
 	if (max_blades <= 0 || max_bricks <= 0) return false;
 	if (instances_.is_valid() && capacity_ == max_blades && brick_capacity_ >= max_bricks)
 		return true;
+	// Freeing a buffer takes the uniform sets that bind it; both caches rebuild on new RIDs.
+	gpu::RdDevice device{rd};
 	for (RID *r : {&instances_, &brick_list_, &counters_, &dispatch_args_, &draw_args_,
-			&params_ubo_, &region_ubo_, &bricks_uset_, &scatter_uset_}) {
-		if (r->is_valid()) rd->free_rid(*r);
+			&params_ubo_, &region_ubo_}) {
+		group_.free(device, *r);
 		*r = RID();
 	}
 	// 32 bytes per blade: two vec4 (design doc section 5).
-	instances_ = rd->storage_buffer_create(static_cast<uint32_t>(max_blades) * 32u);
-	brick_list_ = rd->storage_buffer_create(static_cast<uint32_t>(max_bricks) * 4u);
-	counters_ = rd->storage_buffer_create(16u);
-	dispatch_args_ = rd->storage_buffer_create(12u,
-			PackedByteArray(), RenderingDevice::STORAGE_BUFFER_USAGE_DISPATCH_INDIRECT);
+	instances_ = group_.add(gpu::Kind::Buffer,
+			rd->storage_buffer_create(static_cast<uint32_t>(max_blades) * 32u));
+	brick_list_ = group_.add(gpu::Kind::Buffer,
+			rd->storage_buffer_create(static_cast<uint32_t>(max_bricks) * 4u));
+	counters_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(16u));
+	dispatch_args_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(12u,
+			PackedByteArray(), RenderingDevice::STORAGE_BUFFER_USAGE_DISPATCH_INDIRECT));
 	// Non-indexed indirect draw args: vertexCount, instanceCount, firstVertex, firstInstance.
-	draw_args_ = rd->storage_buffer_create(16u,
-			PackedByteArray(), RenderingDevice::STORAGE_BUFFER_USAGE_DISPATCH_INDIRECT);
-	params_ubo_ = rd->uniform_buffer_create(sizeof(ve::GrassParams));
+	draw_args_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(16u,
+			PackedByteArray(), RenderingDevice::STORAGE_BUFFER_USAGE_DISPATCH_INDIRECT));
+	params_ubo_ = group_.add(gpu::Kind::Buffer, rd->uniform_buffer_create(sizeof(ve::GrassParams)));
 	// Region-window block for stage 1's binding 10 (three ivec4: dims, region_origin,
 	// atlas_bricks). Contents refresh every run(); the RID is stable so the uniform set
-	// survives across frames -- cached against the RID below, never rebuilt per frame.
-	region_ubo_ = rd->uniform_buffer_create(48u);
+	// survives across frames -- cached against the RID, never rebuilt per frame.
+	region_ubo_ = group_.add(gpu::Kind::Buffer, rd->uniform_buffer_create(48u));
 	capacity_ = max_blades;
 	brick_capacity_ = max_bricks;
 	return instances_.is_valid() && brick_list_.is_valid() && counters_.is_valid() &&
@@ -168,141 +106,47 @@ bool GrassScatterPass::ensure_buffers(RenderingDevice *rd, int max_blades, int m
 }
 
 bool GrassScatterPass::ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas, RID sun_ubo) {
+	gpu::RdDevice device{rd};
 	// Stage-1 set: 0 grass-params, 1 brick_list, 2 counters, 3 dispatch_args, 4 region_map,
 	// 5 region_tables, 6 brick_flags, 7 sdf_atlas, 8 mat_atlas, 9 palette_buf, 10 region UBO.
-	// Texture/sampler RIDs come from GpuAtlas through the same accessors RaymarchPass uses;
-	// the set is cached against every RID, SsaoPass-style, so it rebuilds only when a
-	// backing resource is recreated. (The owned samplers never change after initialize.)
-	if (rd->uniform_set_is_valid(bricks_uset_) && key_params_ == params_ubo_ &&
-			key_bricks_ == brick_list_ && key_counters_ == counters_ &&
-			key_dispatch_ == dispatch_args_ && key_rmap_ == atlas.region_map() &&
-			key_rtables_ == atlas.region_tables() && key_bflags_ == atlas.brick_flags() &&
-			key_sdf_ == atlas.sdf_atlas() && key_mat_ == atlas.mat_atlas() &&
-			key_palette_ == atlas.palette() && key_region_ == region_ubo_) {
-		// Bricks set is current; fall through to check the scatter set below.
-	} else {
-		if (rd->uniform_set_is_valid(bricks_uset_)) rd->free_rid(bricks_uset_);
-		bricks_uset_ = RID();
-		Ref<RDUniform> u[11];
-		for (Ref<RDUniform> &item : u) item.instantiate();
-		u[0]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
-		u[0]->set_binding(0);
-		u[0]->add_id(params_ubo_);
-		const RID stage1_buffers[5] = {brick_list_, counters_, dispatch_args_,
-				atlas.region_map(), atlas.region_tables()};
-		for (int i = 1; i <= 5; i++) {
-			u[i]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-			u[i]->set_binding(i);
-			u[i]->add_id(stage1_buffers[i - 1]);
-		}
-		u[6]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-		u[6]->set_binding(6);
-		u[6]->add_id(atlas.brick_flags());
-		// Bindings 7-8 are the atlas textures the sampling helpers declare but stage 1
-		// never fetches; a declared binding still has to be provided.
-		u[7]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-		u[7]->set_binding(7);
-		u[7]->add_id(sampler_linear_);
-		u[7]->add_id(atlas.sdf_atlas());
-		u[8]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-		u[8]->set_binding(8);
-		u[8]->add_id(sampler_nearest_);
-		u[8]->add_id(atlas.mat_atlas());
-		u[9]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-		u[9]->set_binding(9);
-		u[9]->add_id(atlas.palette());
-		u[10]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
-		u[10]->set_binding(10);
-		u[10]->add_id(region_ubo_);
-		Array uset_args;
-		for (int i = 0; i < 11; i++) uset_args.push_back(u[i]);
-		bricks_uset_ = rd->uniform_set_create(uset_args, bricks_shader_, 0);
-		if (!bricks_uset_.is_valid()) return false;
-		key_params_ = params_ubo_;
-		key_bricks_ = brick_list_;
-		key_counters_ = counters_;
-		key_dispatch_ = dispatch_args_;
-		key_rmap_ = atlas.region_map();
-		key_rtables_ = atlas.region_tables();
-		key_bflags_ = atlas.brick_flags();
-		key_sdf_ = atlas.sdf_atlas();
-		key_mat_ = atlas.mat_atlas();
-		key_palette_ = atlas.palette();
-		key_region_ = region_ubo_;
-	}
+	// Texture/sampler RIDs come from GpuAtlas through the same accessors RaymarchPass uses.
+	// Bindings 7-8 are the atlas textures the sampling helpers declare but stage 1 never
+	// fetches; a declared binding still has to be provided.
+	const RID bricks = bricks_set_.get(device, group_, bricks_.shader, 0, {
+			gpu::ubo(0, params_ubo_),
+			gpu::storage(1, brick_list_),
+			gpu::storage(2, counters_),
+			gpu::storage(3, dispatch_args_),
+			gpu::storage(4, atlas.region_map()),
+			gpu::storage(5, atlas.region_tables()),
+			gpu::storage(6, atlas.brick_flags()),
+			gpu::sampled(7, sampler_linear_, atlas.sdf_atlas()),
+			gpu::sampled(8, sampler_nearest_, atlas.mat_atlas()),
+			gpu::storage(9, atlas.palette()),
+			gpu::ubo(10, region_ubo_)});
+	if (!bricks.is_valid()) return false;
 	// Stage-2 set mirrors grass_scatter.comp.glsl bindings 0-13: 0 grass-params, 1
 	// brick_list, 2 counters, 3 draw_args, 4 region_map, 5 region_tables, 6 brick_flags,
 	// 7 palette_buf, 8 sdf_atlas, 9 mat_atlas, 10 region UBO, 11 instances, 12
 	// region_slot_counts, 13 the frame's SunUbo -- the last two feed the sun march. Binding 3 is
-	// draw_args_ here, NOT dispatch_args_ (that is stage 1's binding 3): separate sets
-	// against separate shaders, so the locals are named after the buffers.
-	if (!scatter_shader_.is_valid()) return true; // scatter stage absent: cull only.
+	// draw_args_ here, NOT dispatch_args_ (that is stage 1's binding 3).
+	if (!scatter_.valid()) return true; // scatter stage absent: cull only.
 	if (!sun_ubo.is_valid() || !atlas.region_slot_counts().is_valid()) return false;
-	if (rd->uniform_set_is_valid(scatter_uset_) && key_sparams_ == params_ubo_ &&
-			key_sbricks_ == brick_list_ && key_scounters_ == counters_ &&
-			key_sdraw_ == draw_args_ && key_srmap_ == atlas.region_map() &&
-			key_srtables_ == atlas.region_tables() && key_sbflags_ == atlas.brick_flags() &&
-			key_spalette_ == atlas.palette() && key_ssdf_ == atlas.sdf_atlas() &&
-			key_smat_ == atlas.mat_atlas() && key_sregion_ == region_ubo_ &&
-			key_sinstances_ == instances_ &&
-			key_sslot_counts_ == atlas.region_slot_counts() && key_ssun_ == sun_ubo)
-		return true;
-	if (rd->uniform_set_is_valid(scatter_uset_)) rd->free_rid(scatter_uset_);
-	scatter_uset_ = RID();
-	Ref<RDUniform> su[14];
-	for (Ref<RDUniform> &item : su) item.instantiate();
-	su[0]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
-	su[0]->set_binding(0);
-	su[0]->add_id(params_ubo_);
-	const RID scatter_buffers[6] = {brick_list_, counters_, draw_args_,
-			atlas.region_map(), atlas.region_tables(), atlas.brick_flags()};
-	for (int i = 1; i <= 6; i++) {
-		su[i]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-		su[i]->set_binding(i);
-		su[i]->add_id(scatter_buffers[i - 1]);
-	}
-	su[7]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	su[7]->set_binding(7);
-	su[7]->add_id(atlas.palette());
-	su[8]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-	su[8]->set_binding(8);
-	su[8]->add_id(sampler_linear_);
-	su[8]->add_id(atlas.sdf_atlas());
-	su[9]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-	su[9]->set_binding(9);
-	su[9]->add_id(sampler_nearest_);
-	su[9]->add_id(atlas.mat_atlas());
-	su[10]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
-	su[10]->set_binding(10);
-	su[10]->add_id(region_ubo_);
-	su[11]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	su[11]->set_binding(11);
-	su[11]->add_id(instances_);
-	su[12]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-	su[12]->set_binding(12);
-	su[12]->add_id(atlas.region_slot_counts());
-	su[13]->set_uniform_type(RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
-	su[13]->set_binding(13);
-	su[13]->add_id(sun_ubo);
-	Array scatter_args;
-	for (int i = 0; i < 14; i++) scatter_args.push_back(su[i]);
-	scatter_uset_ = rd->uniform_set_create(scatter_args, scatter_shader_, 0);
-	if (!scatter_uset_.is_valid()) return false;
-	key_sparams_ = params_ubo_;
-	key_sbricks_ = brick_list_;
-	key_scounters_ = counters_;
-	key_sdraw_ = draw_args_;
-	key_srmap_ = atlas.region_map();
-	key_srtables_ = atlas.region_tables();
-	key_sbflags_ = atlas.brick_flags();
-	key_spalette_ = atlas.palette();
-	key_ssdf_ = atlas.sdf_atlas();
-	key_smat_ = atlas.mat_atlas();
-	key_sregion_ = region_ubo_;
-	key_sinstances_ = instances_;
-	key_sslot_counts_ = atlas.region_slot_counts();
-	key_ssun_ = sun_ubo;
-	return true;
+	return scatter_set_.get(device, group_, scatter_.shader, 0, {
+			gpu::ubo(0, params_ubo_),
+			gpu::storage(1, brick_list_),
+			gpu::storage(2, counters_),
+			gpu::storage(3, draw_args_),
+			gpu::storage(4, atlas.region_map()),
+			gpu::storage(5, atlas.region_tables()),
+			gpu::storage(6, atlas.brick_flags()),
+			gpu::storage(7, atlas.palette()),
+			gpu::sampled(8, sampler_linear_, atlas.sdf_atlas()),
+			gpu::sampled(9, sampler_nearest_, atlas.mat_atlas()),
+			gpu::ubo(10, region_ubo_),
+			gpu::storage(11, instances_),
+			gpu::storage(12, atlas.region_slot_counts()),
+			gpu::ubo(13, sun_ubo)}).is_valid();
 }
 
 bool GrassScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas,
@@ -310,7 +154,7 @@ bool GrassScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas,
 		float time_seconds, RID sun_ubo) {
 	last_brick_count_ = 0;
 	last_blade_count_ = 0;
-	if (!rd_ || rd != rd_ || !bricks_pipeline_.is_valid()) return false;
+	if (!rd_ || rd != rd_ || !bricks_.valid()) return false;
 	if (layout.max_bricks <= 0 || layout.params.limits[0] <= 0) {
 		// Disabled: clear the GPU counters AND the indirect draw args, not just the CPU
 		// mirrors zeroed above. debug_grass_stats() re-reads the GPU counters after its own
@@ -375,13 +219,13 @@ bool GrassScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas,
 
 	const int64_t list = rd->compute_list_begin();
 	if (list < 0) return false;
-	rd->compute_list_bind_compute_pipeline(list, bricks_pipeline_);
-	rd->compute_list_bind_uniform_set(list, bricks_uset_, 0);
+	rd->compute_list_bind_compute_pipeline(list, bricks_.pipeline);
+	rd->compute_list_bind_uniform_set(list, bricks_set_.id(), 0);
 	rd->compute_list_dispatch(list, (layout.max_bricks + 63) / 64, 1, 1);
-	if (scatter_pipeline_.is_valid()) {
+	if (scatter_.valid()) {
 		rd->compute_list_add_barrier(list);
-		rd->compute_list_bind_compute_pipeline(list, scatter_pipeline_);
-		rd->compute_list_bind_uniform_set(list, scatter_uset_, 0);
+		rd->compute_list_bind_compute_pipeline(list, scatter_.pipeline);
+		rd->compute_list_bind_uniform_set(list, scatter_set_.id(), 0);
 		rd->compute_list_dispatch_indirect(list, dispatch_args_, 0);
 	}
 	rd->compute_list_end();

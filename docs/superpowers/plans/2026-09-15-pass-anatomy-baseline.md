@@ -260,3 +260,4 @@ Appended by later tasks.
 - composite Task 20: build OK, native 565/565, gdUnit matches row, leaked 0 (row 0)
 - island_cull Task 21: build OK, native 565/565, gdUnit matches row, leaked 0 (row 0)
 - lod_cull Task 22: build OK, native 565/565, gdUnit 18/18 including lod_cull golden (pins 0.0/readback default), leaked 0 (row 0)
+- grass_scatter Task 23: build OK, native 565/565, gdUnit 33/33 including grass golden, frame goldens/contracts and lifetime contract, leaked 0 (row 0)
