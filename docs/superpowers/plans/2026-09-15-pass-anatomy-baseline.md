@@ -263,3 +263,4 @@ Appended by later tasks.
 - grass_scatter Task 23: build OK, native 565/565, gdUnit 33/33 including grass golden, frame goldens/contracts and lifetime contract, leaked 0 (row 0)
 - raymarch Task 24: build OK, native 565/565, gdUnit 52/52 gate and 467/467 full, leaked 0 (row 0)
 - orchestrator Task 25: build OK, native 565/565, gdUnit 28/28 gate and 467/467 full, leaked 0 (row 0)
+- brick_gen Task 26: build OK, native 565/565, gdUnit 26/26 gate, leaked 0 (row 0)

@@ -1,6 +1,7 @@
 #pragma once
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
+#include "render/gpu/gpu.h"
 #include "render/gpu_atlas.h"
 
 namespace godot {
@@ -15,9 +16,9 @@ public:
 
 	bool initialize(RenderingDevice *rd, const GpuAtlas &atlas);
 	void teardown();
-	bool is_valid() const { return pipeline_.is_valid(); }
+	bool is_valid() const { return program_.pipeline.is_valid(); }
 	// Task 16: FieldContextSet builds set 1 against this shader's set-1 layout.
-	RID shader() const { return shader_; }
+	RID shader() const { return program_.shader; }
 
 	// Records into an OPEN compute list. RegionPass::write_dispatch_args followed by
 	// compute_list_add_barrier must already have been recorded. field_context is the
@@ -28,7 +29,9 @@ public:
 private:
 	RenderingDevice *rd_ = nullptr;
 	ve::IVec3 atlas_bricks_{};
-	RID shader_, pipeline_, uset_;
+	gpu::Group group_;
+	gpu::Program program_;
+	RID set_;
 };
 
 } // namespace godot
