@@ -122,6 +122,9 @@ void LodSystem::fade_band(float *fade_start, float *fade_end) const {
 }
 
 void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
+	// Edits queued since the last tick, applied before the walk decides what to build. Takes
+	// the edit lock and must therefore run before this tick takes lod_mutex_.
+	drain_invalidations();
 	using LodKey = ve::LodKey;
 	std::unique_lock<std::mutex> lock(lod_mutex_);
 	// Recorded before the early-outs: the sun ortho needs the camera whether or not this
@@ -360,21 +363,38 @@ void LodSystem::prepare_raster_locked() {
 	render()->passes().lod_raster->set_draw_pages(pages);
 }
 
-// The LoD half of the edit fan-out. Caller holds edit_mutex(); the lod_mutex_ acquisition
-// site travels with the code (Task 11 removes it).
+// The LoD half of the edit fan-out. Edit lock held: queue only, never the lod mutex
+// (core/edit_pipeline.h).
 void LodSystem::record(const ve::Invalidation &inv) {
 	if (inv.reason == ve::InvalidationReason::kRejected) return;
-	if (!lod_tree_) return;
-	// Every level: ve::LodTree::mark_dirty walks them itself, and the relevance cut is
-	// at the HALF-CELL supersample resolution rather than the cell -- a 5 m crater still
-	// registers at L4's 6.4 m cells, which is the point of the reduction change. Only
-	// ops shorter than half a cell on every axis are genuinely unrepresentable.
+	ve::merge_or_cap(&pending_marks_,
+			ve::Box3<float>{{inv.lo[0], inv.lo[1], inv.lo[2]}, {inv.hi[0], inv.hi[1], inv.hi[2]}});
+}
+
+void LodSystem::drain_invalidations() {
+	std::vector<ve::Box3<float>> marks;
+	{
+		std::lock_guard<std::mutex> edit_lock(store()->edit_mutex());
+		marks.swap(pending_marks_);
+	}
+	if (marks.empty()) return;
 	std::lock_guard<std::mutex> lock(lod_mutex_);
-	lod_tree_->mark_dirty(inv.lo, inv.hi);
+	// No tree yet: the marks predate it and the tree this tick builds reads the current world
+	// anyway, exactly as the synchronous mark's `if (!lod_tree_) return` dropped them. After a
+	// release_gpu the tree is cleared, so a drained mark finds no node and marks nothing --
+	// which is why release_gpu needs no queue clearing and keeps taking no lock.
+	if (!lod_tree_) return;
+	// Every level: ve::LodTree::mark_dirty walks them itself, and the relevance cut is at the
+	// HALF-CELL supersample resolution rather than the cell.
+	for (const ve::Box3<float> &m : marks) lod_tree_->mark_dirty(m.lo, m.hi);
 }
 
 // The _exit_tree() LoD half, verbatim statement-for-statement (Task 15).
 void LodSystem::teardown() {
+	{
+		std::lock_guard<std::mutex> edit_lock(store()->edit_mutex());
+		pending_marks_.clear();
+	}
 	if (lod_pool_) {
 		delete lod_pool_;
 		lod_pool_ = nullptr;

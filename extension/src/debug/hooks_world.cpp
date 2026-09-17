@@ -195,9 +195,8 @@ int VoxelDebugHooks::debug_region_op_count(Vector3i region) {
 }
 
 void VoxelDebugHooks::debug_drain_invalidations() {
-	// Each deferred consumer's own drain goes here, so debug_edit_fanout reads what the
-	// consumer will act on rather than what a hook-local copy would compute. Nothing is
-	// deferred yet.
+	// Each deferred consumer's own drain -- the function its tick calls, never a copy.
+	if (world_->context().lod) world_->context().lod->drain_invalidations();
 }
 
 Dictionary VoxelDebugHooks::debug_edit_fanout() {

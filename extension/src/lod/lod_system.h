@@ -110,6 +110,10 @@ public:
 	// InvalidationSink: an edit or a consolidation marks the tree dirty. Edit lock held
 	// (core/edit_pipeline.h). Task 11 makes this a queue-and-drain.
 	void record(const ve::Invalidation &inv) override;
+	// Swap the queued marks out under the edit lock, then apply them under mutex(). Called at
+	// the top of tick() and by the debug drain. Takes the edit lock: never call it while
+	// holding mutex() or the edit lock.
+	void drain_invalidations();
 	// The _exit_tree() LoD half, verbatim statement-for-statement: pool -> tree ->
 	// page maps, exactly where VoxelWorld used to run it (after CPU-core release).
 	void teardown();
@@ -158,6 +162,9 @@ private:
 	std::map<int, int> lod_page_quads_; // page -> number of quads stored in that page
 	std::set<ve::LodKey> lod_overflow_logged_; // once-per-chunk overflow diagnostics
 	int lod_op_overflow_ = 0; // guarded by lod_mutex_
+	// Marks queued by record(), guarded by WorldStore::edit_mutex(); drained by
+	// drain_invalidations(). Bounded by ve::merge_or_cap.
+	std::vector<ve::Box3<float>> pending_marks_;
 	int lod_pressure_ = 0;
 	float last_cam_[3] = {};
 	bool has_last_cam_ = false;
