@@ -102,11 +102,14 @@ func test_an_island_lattice_across_a_region_border_reads_no_wrapped_override(tim
 
 # S3b. The level-1 chunk (1, 1, 0) has its origin in R' = (1, 1, 0) and takes R's (none)
 # table, but its fine lattice's first samples (x = 24.4, 24.8) lie in R, over a baked carve
-# centred on sample (24.8, 38.8, 16.4).
+# centred at (24.0, 38.8, 16.4). This case purely guards table resolution (origin-region
+# table vs sample-region table): the carve sits off the border (centre x = 24.0, radius
+# 0.6, so with the 0.20 m append pad its max-x is 24.8, clear of x = 25.6), so the op
+# appends R-only and no live cross-region op can reach the LoD job's chunk-wide gather.
 func test_a_lod_chunk_reads_overrides_of_every_region_it_covers(timeout := 240000) -> void:
 	var w := make_world()
 	assert_rock(w, [Vector3(24.8, ROCK_Y, ROCK_Z)])
-	carve_and_consolidate(w, Vector3(24.8, ROCK_Y, ROCK_Z), 0.6)
+	carve_and_consolidate(w, Vector3(24.0, ROCK_Y, ROCK_Z), 0.6)
 	var d: Dictionary = w.hooks().debug_lod_diff(1, Vector3i(1, 1, 0))
 	assert_bool(d.has("fine_max_diff")).override_failure_message("fixture: LoD diff did not run: %s" % d).is_true()
 	assert_int(int(d["fine_max_diff"])).override_failure_message(
