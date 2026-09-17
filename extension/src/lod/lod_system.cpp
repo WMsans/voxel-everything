@@ -380,9 +380,7 @@ void LodSystem::drain_invalidations() {
 	if (marks.empty()) return;
 	std::lock_guard<std::mutex> lock(lod_mutex_);
 	// No tree yet: the marks predate it and the tree this tick builds reads the current world
-	// anyway, exactly as the synchronous mark's `if (!lod_tree_) return` dropped them. After a
-	// release_gpu the tree is cleared, so a drained mark finds no node and marks nothing --
-	// which is why release_gpu needs no queue clearing and keeps taking no lock.
+	// anyway, exactly as the synchronous mark's `if (!lod_tree_) return` dropped them.
 	if (!lod_tree_) return;
 	// Every level: ve::LodTree::mark_dirty walks them itself, and the relevance cut is at the
 	// HALF-CELL supersample resolution rather than the cell.
@@ -409,6 +407,10 @@ void LodSystem::teardown() {
 }
 
 void LodSystem::release_gpu() {
+	{
+		std::lock_guard<std::mutex> edit_lock(store()->edit_mutex());
+		pending_marks_.clear();
+	}
 	if (lod_pool_) lod_pool_->teardown();
 	if (lod_tree_) lod_tree_->clear();
 	lod_pages_of_.clear();

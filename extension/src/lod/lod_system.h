@@ -119,7 +119,8 @@ public:
 	void teardown();
 	// RenderOrchestrator::teardown_gpu()'s LoD step, verbatim: pool, then tree, then the page
 	// maps (the tree holds page indices the pool is about to free, and a stale index would be
-	// handed to the next chunk). Takes no lock, exactly like the statements it replaces.
+	// handed to the next chunk). Drops pending edit marks under edit_mutex(), without taking
+	// lod_mutex_.
 	void release_gpu();
 
 	LodPool *pool() const { return lod_pool_; }
