@@ -1196,3 +1196,22 @@ TEST_CASE("shadow_cut clears its output and refuses a non-positive radius") {
 	t.shadow_cut(c, -5.0f, 0, &cut);
 	CHECK(cut.empty());
 }
+
+TEST_CASE("a refused rebuild keeps drawing its pages and is not re-requested until dirtied again") {
+	ve::LodTreeConfig cfg;
+	ve::LodTree t(cfg);
+	const ve::IVec3 c{0, 0, 0};
+	t.note_ready(2, c, 5, 3);
+	float lo[3] = {1.0f, 1.0f, 1.0f}, hi[3] = {4.0f, 4.0f, 4.0f};
+	t.mark_dirty(lo, hi);
+	REQUIRE(t.is_dirty(2, c));
+	t.note_building(2, c);
+	t.note_refused(2, c);
+	CHECK(t.state_of(2, c) == ve::kLodReady);
+	CHECK_FALSE(t.is_dirty(2, c));
+
+	const ve::IVec3 fresh{3, 0, 0};
+	t.note_building(2, fresh);
+	t.note_refused(2, fresh);
+	CHECK(t.state_of(2, fresh) == ve::kLodFailed);
+}

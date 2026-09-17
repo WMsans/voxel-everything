@@ -1,5 +1,6 @@
 #include "lod/lod_grid.h"
 #include "lod/lod_skirt.h"
+#include "world/edit_log.h"
 #include <algorithm>
 #include <cmath>
 
@@ -92,6 +93,24 @@ void lod_roots_in_radius(const float cam_pos[3], float radius_m, std::vector<IVe
 				if (lod_chunk_distance(top, c, cam_pos) > radius_m) continue;
 				out->push_back(c);
 			}
+}
+
+bool lod_extent_visible(int level, float longest_m) {
+	return longest_m >= 0.5f * lod_cell_size(level);
+}
+
+bool lod_op_visible(int level, const EditOp &op) {
+	float lo[3], hi[3];
+	op_world_aabb(op, lo, hi);
+	return lod_extent_visible(level, std::max(std::max(hi[0] - lo[0], hi[1] - lo[1]), hi[2] - lo[2]));
+}
+
+bool lod_cut_ops(int level, std::vector<EditOp> *ops) {
+	if (!ops) return true;
+	ops->erase(std::remove_if(ops->begin(), ops->end(),
+				   [level](const EditOp &op) { return !lod_op_visible(level, op); }),
+			ops->end());
+	return ops->size() <= static_cast<size_t>(kMaxRegionOps);
 }
 
 void op_lod_chunk_range(const EditOp &op, int level, IVec3 *lo, IVec3 *hi) {

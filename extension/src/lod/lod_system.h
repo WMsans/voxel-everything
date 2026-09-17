@@ -54,6 +54,7 @@ struct LodStats {
 	std::vector<int> resident_page_ids; // pages holding at least one quad
 	std::vector<ve::LodBuildRequest> requests; // what the last walk still wants built
 	int partial_allocations = 0;
+	int op_overflow = 0; // LoD builds refused because their visible ops exceed the cap
 };
 
 class LodSystem {
@@ -109,11 +110,9 @@ public:
 	// actually complete. One source of truth: the composite, the LoD raster and the LoD
 	// build gate must all fade at the same two distances or the band belongs to no field.
 	void fade_band(float *fade_start, float *fade_end) const;
-	// Gathers the ops that can affect a LoD chunk: its AABB padded by two cells, flattened
-	// across regions in global append order, truncated to a chronological prefix (M4 errata 1).
-	// Reads region edits through WorldStore's public API; takes edit_mutex(). MUST NOT be
-	// called with mutex() held (lock order -- see class comment).
-	void gather_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out);
+	// False when the chunk's visible ops exceed kMaxRegionOps (S3c): the caller must refuse
+	// the build rather than submit a truncated list.
+	bool gather_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out);
 	// Append fan-out (was the LoD tail of VoxelWorld::append_edit_locked, which runs with
 	// edit_mutex() held): marks the touched world AABB dirty at every level, taking
 	// mutex() while edit_mutex() is held (safe per the lock order above).
@@ -165,6 +164,7 @@ private:
 	std::map<ve::LodKey, std::vector<int>> lod_pages_of_;
 	std::map<int, int> lod_page_quads_; // page -> number of quads stored in that page
 	std::set<ve::LodKey> lod_overflow_logged_; // once-per-chunk overflow diagnostics
+	int lod_op_overflow_ = 0; // guarded by lod_mutex_
 	int lod_pressure_ = 0;
 	float last_cam_[3] = {};
 	bool has_last_cam_ = false;

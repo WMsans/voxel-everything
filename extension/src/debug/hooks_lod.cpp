@@ -131,6 +131,7 @@ Dictionary VoxelDebugHooks::debug_lod_stats() {
 				String::num_int64(request.coord.z));
 	}
 	d["pending_request_ids"] = pending_request_ids;
+	d["op_overflow"] = s.op_overflow;
 	d["partial_allocations"] = s.partial_allocations;
 	d["builds_in_flight"] = world_->mesh_service() && world_->mesh_service()->lod_busy() ? 1 : 0;
 	// The benchmark's horizon tracker reads this name; same count as requests_pending.
@@ -614,7 +615,10 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 			ve::kLodChunkLattice * ve::kLodChunkLattice * ve::kLodChunkLattice;
 	const ve::IVec3 c{coord.x, coord.y, coord.z};
 	std::vector<ve::EditOp> ops;
-	world_->context().lod->gather_ops(level, c, &ops);
+	if (!world_->context().lod->gather_ops(level, c, &ops)) {
+		d["op_overflow"] = true;
+		return d;
+	}
 
 	std::vector<uint8_t> fine_sdf, reduced_sdf;
 	std::vector<uint16_t> fine_mat, reduced_mat;
@@ -751,8 +755,11 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 			const ve::IVec3 r = ve::region_of_point(x, y, z);
 			const std::tuple<int, int, int> key{r.x, r.y, r.z};
 			auto it = region_ops.find(key);
-			if (it == region_ops.end())
-				it = region_ops.emplace(key, log ? log->ops(r) : std::vector<ve::EditOp>{}).first;
+			if (it == region_ops.end()) {
+				std::vector<ve::EditOp> visible = log ? log->ops(r) : std::vector<ve::EditOp>{};
+				ve::lod_cut_ops(level, &visible); // the oracle never truncates: fit is not asked
+				it = region_ops.emplace(key, std::move(visible)).first;
+			}
 			return it->second;
 		};
 		for (int z = 0; z < ve::kLodFineLattice; z++)

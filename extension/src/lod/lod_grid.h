@@ -92,6 +92,14 @@ float lod_chunk_far_distance(int level, IVec3 c, const float p[3]);
 // paid for in one-time builds, not per frame.
 void lod_roots_in_radius(const float cam_pos[3], float radius_m, std::vector<IVec3> *out);
 
+// The reduced lattice samples every half cell, so a feature shorter than half a cell on every
+// axis is treated as unrepresentable at `level`: LodTree::mark_dirty does not rebuild for it
+// and the build does not spend its op cap on it.
+bool lod_extent_visible(int level, float longest_m);
+bool lod_op_visible(int level, const EditOp &op);
+// Drops the ops invisible at `level`, keeping order; true when the rest fits kMaxRegionOps.
+// A false verdict leaves the cut list in place for diagnostics; the caller must not build it.
+bool lod_cut_ops(int level, std::vector<EditOp> *ops);
 // Inclusive chunk range whose stored quads an op can move. LoD field consumers use the
 // shared lattice pad (or the larger two-cell LoD overlap pad) so narrow-band influence is not
 // lost at a chunk boundary. (Same conservative argument as ve::op_chunk_range.)

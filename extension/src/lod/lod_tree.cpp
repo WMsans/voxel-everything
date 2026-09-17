@@ -251,6 +251,12 @@ void LodTree::note_failed(int level, IVec3 c) {
 	n.state = kLodFailed;
 }
 
+void LodTree::note_refused(int level, IVec3 c) {
+	Node &n = nodes_[key(level, c)];
+	n.building = false;
+	n.state = n.page_count > 0 ? kLodReady : kLodFailed;
+}
+
 bool LodTree::children_ready(int level, IVec3 c) const {
 	if (level <= 0) return false;
 	const IVec3 base = lod_child_base(c);
@@ -455,7 +461,7 @@ void LodTree::mark_dirty(const float lo[3], const float hi[3]) {
 	for (int level = 0; level < kLodLevels; level++) {
 		// The reduced lattice samples every half cell, so an edit shorter than half a cell
 		// on every axis cannot move a sample at this level and needs no rebuild.
-		if (longest < 0.5f * lod_cell_size(level)) continue;
+		if (!lod_extent_visible(level, longest)) continue;
 		IVec3 clo{}, chi{};
 		op_lod_chunk_range(probe, level, &clo, &chi);
 		for (int z = clo.z; z <= chi.z; z++)
