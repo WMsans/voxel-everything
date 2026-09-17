@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Branch: `feat/edit-pipeline` (already checked out; spec committed as `11b0fb7`).
+- Branch: create `feat/edit-pipeline` off the spec commit `1361347` (`docs: edit pipeline design`, parent `b06b4b1`); it is not checked out yet. (`11b0fb7` is a stale duplicate of the same commit from an amended rebase; do not use it.)
 - Build: `./build.sh -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)`. A full C++ rebuild can take ~20 min; a one-file change relinks in minutes.
 - Native tests: `cd extension && scons -Q test; cd ..`. One case: `extension/build/tests/ve_tests -tc="<name>"`.
 - GPU tests: `./gdunit_tests.sh -a res://tests/<suite>.gd` (comma list allowed). Full run: `./gdunit_tests.sh`. Reports: `reports/report_N/results.xml`.
@@ -62,6 +62,7 @@ Task 14 writes these into the spec.
 | `tests/test_edit_fanout.gd` | Create | Fan-out pins |
 | `tests/test_consolidation.gd` | Modify | Workaround proof; hold seam |
 | `tests/test_connectivity.gd` | Modify | Staleness pin; hold seam replaces `max_override_bricks = 1`; deleted cases |
+| `tests/test_repro_pillar_debris.gd` | Modify | Its landing-refusal dump drops the deleted `land_carve_nothing` / `land_carve_restored` keys |
 | `tests/test_lod_stream.gd` | Modify | Drains before reading dirty counts |
 | `docs/superpowers/plans/2026-09-17-edit-pipeline-baseline.md` | Create | Baseline failure set |
 | `docs/superpowers/plans/2026-09-17-edit-pipeline-results.md` | Create | Exit evidence |
@@ -352,9 +353,11 @@ func own(w: VoxelWorld) -> VoxelWorld:
 	_worlds.append(w)
 	return w
 
-# Region (0, 1, 0) spans y 25.6 .. 51.2; the golden pipeline has at least 2.4 m of rock
-# everywhere at y = 38.4, so every op below lands in solid ground, and the ops sit in the
-# region's interior so their chunk ranges stay inside the region's own.
+# Every op below is at y = 38.4, where the golden pipeline has at least 2.4 m of rock, and
+# each sits in the interior of its own 25.6 m region: x = 12.8 / 64.0 / 115.2 / 166.4 are
+# regions 0 / 2 / 4 / 6 and z = 12.8 / 64.0 / 115.2 are regions 0 / 2 / 4, so every chunk
+# range stays inside its region's own. The ops are two regions apart, so no two collider
+# queue entries overlap and merging them cannot move an expanded chunk set.
 func make_world() -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
@@ -505,7 +508,7 @@ Expected: all four FAIL with `no golden recorded`. Copy each printed `EDITS_GOLD
 Sanity-check before pasting. If any of these is wrong, the fixture is wrong — fix the fixture, never production code:
 - `EDITS_GOLDEN.subtract.islands` has one window with a non-zero last element (the impulse); `EDITS_GOLDEN.paint.islands` has no more windows than `.add.islands` (paint moves no matter).
 - `EDITS_GOLDEN.subtract.colliders` is non-empty and `EDITS_GOLDEN.start` is empty everywhere.
-- `EDITS_GOLDEN.fill.consolidation_queue` contains `[0, 1, 0]`.
+- `EDITS_GOLDEN.fill.consolidation_queue` contains `[0, 1, 4]` — all 256 fills are at z = 115.2 m, i.e. region (0, 1, 4), not (0, 1, 0).
 - `EDITS_GOLDEN.rejected.edit_rejections` is greater than `EDITS_GOLDEN.fill.edit_rejections`.
 - `EDITS_GOLDEN.oversized` is identical to `EDITS_GOLDEN.rejected` — an oversized op changes no row.
 - `FORCED_COMMIT_GOLDEN.after.forced_regen` and `ASYNC_COMMIT_GOLDEN.after.forced_regen` contain `[0, 1, 0]`; both `after.colliders` sets are supersets of their `before`.
@@ -1111,6 +1114,7 @@ Create `extension/src/core/edit_pipeline.h`:
 // swaps its queue out under the edit lock, releases the lock, and only then acts (takes its
 // own mutex, marks chunks, labels windows). That is what keeps LodSystem::mutex() and
 // IslandManager's window bookkeeping off the edit path.
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -2010,9 +2014,10 @@ An atomic carve cannot half-apply, so the "carve rejected after some boxes lande
 - Modify: `extension/src/physics/island_manager.h`, `island_manager.cpp`
 - Modify: `extension/src/debug/hooks.h`, `hooks.cpp`, `hooks_physics.cpp`
 - Modify: `tests/test_connectivity.gd`
+- Modify: `tests/test_repro_pillar_debris.gd`
 
 **Interfaces:**
-- Consumes: `EditPipeline::preflight` (Task 8).
+- Consumes: `EditPipeline::preflight` (Task 5).
 - Produces: `land_extraction` without the restore path; `debug_set_fail_next_carve` / `debug_set_fail_next_restore` gone.
 
 - [ ] **Step 1: Replace the preflight with the pipeline's**
@@ -2044,7 +2049,7 @@ with:
 
 - [ ] **Step 2: Delete the restore branch**
 
-In the same block, replace everything from:
+In the same block, replace everything from (Task 8 has already rewritten the carve loop below this comment to one atomic `apply`, so the range being replaced is Task 8's text, not the pre-Task-8 original):
 
 ```cpp
 		// 2. Carve (spec §5 step 1). The boxes tile the component exactly, so this removes the
@@ -2085,6 +2090,8 @@ In `island_manager.cpp`: delete the `d["land_carve_nothing"]` and `d["land_carve
 
 In `extension/src/debug/hooks.h`, `hooks.cpp` and `hooks_physics.cpp`: delete the `debug_set_fail_next_restore` and `debug_set_fail_next_carve` declarations, bindings and bodies.
 
+In `tests/test_repro_pillar_debris.gd`, in `dump()`'s landing-refusal `prints`, delete the two arguments `"carve_nothing", st["land_carve_nothing"],` and `"carve_restored", st["land_carve_restored"]` — those stats keys no longer exist. Nothing else in that suite reads them.
+
 - [ ] **Step 4: Delete the two cases that exercised the branch**
 
 In `tests/test_connectivity.gd`, delete `test_post_spawn_carve_rejection_keeps_body_in_hole` (with its comment block) and `test_near_cap_carve_is_refused_before_any_carve` (with its comment block). Add, above `test_rejected_carve_keeps_component_attached`:
@@ -2103,7 +2110,7 @@ In `tests/test_connectivity.gd`, delete `test_post_spawn_carve_rejection_keeps_b
 rg 'fail_next_carve|fail_next_restore|land_carve_restored|land_carve_nothing' extension demo tests
 ```
 
-Expected: no output.
+Expected: no output. (`tests/test_repro_pillar_debris.gd` is the one other reader of `land_carve_nothing` / `land_carve_restored`; Step 3 updates it. Without that edit this scan reports those two lines and the pre-commit gate fails.)
 
 - [ ] **Step 6: Build and run**
 
@@ -2669,7 +2676,7 @@ cd extension && scons -Q test; cd ..
 ./gdunit_tests.sh
 ```
 
-Run Task 1 Step 3's extraction script on the new report and compare with the baseline by suite count and failing case name + message. The only expected count change is `test_connectivity` losing the two cases Task 9 deleted and gaining the two cases Tasks 3/4 added, plus the new `test_edit_fanout` suite. Any new failure: stash, rebuild the parent commit, re-run that suite, and only then attribute it.
+Run Task 1 Step 3's extraction script on the new report and compare with the baseline by suite count and failing case name + message. The only expected count changes are: `test_connectivity` losing the two cases Task 9 deleted and gaining the one case Task 3 added (the staleness pin, renamed by Task 10), `test_consolidation` gaining two (Tasks 3 and 4), and the new `test_edit_fanout` suite (four). Any new failure: stash, rebuild the parent commit, re-run that suite, and only then attribute it.
 
 - [ ] **Step 2: Exit scans**
 
@@ -2712,8 +2719,9 @@ Native: `<doctest summary line>`
 
 gdUnit: <cases / errors / failures>; differences from baseline:
 - `test_edit_fanout`: new suite, 4 cases.
-- `test_connectivity`: +2 cases (staleness pin, held world), -2 cases (Task 9 deletions, named).
+- `test_connectivity`: +1 case (staleness pin, renamed by Task 10), -2 cases (Task 9 deletions, named). The hold seam is a fixture change, not a new case.
 - `test_consolidation`: +2 cases (workaround proof, hold seam).
+- `test_repro_pillar_debris`: same count, its landing dump loses two keys.
 - <every other difference, or "all other suites kept their counts and failure sets">
 
 ## Pins
