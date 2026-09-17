@@ -568,12 +568,13 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	return d;
 }
 
-// The shipped marginal-contact probe, asked directly: IslandManager::contact_samples is the
-// member LogContactProbe forwards to, so this is not a re-implementation.
+// The shipped marginal-contact query: refine_anchoring asks WorldStore::field() with the
+// manager's face sample count, and so does this.
 int VoxelDebugHooks::debug_contact_samples(Vector3i cell, int axis) {
 	world_->ensure_physics_initialized();
 	if (!world_->island_manager()) return -1;
-	return world_->island_manager()->contact_samples({cell.x, cell.y, cell.z}, axis);
+	return world_->context().store->field().contact_samples({cell.x, cell.y, cell.z}, axis,
+			world_->island_manager()->refine_config().face_samples);
 }
 
 Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_cell) {

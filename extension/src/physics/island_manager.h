@@ -123,10 +123,9 @@ public:
 #endif
 	// Not const: the ground probe takes the edit lock.
 	Dictionary stats();
-	// Solid samples on the face between `cell` and `cell + e_axis`, under the edit lock --
-	// exactly what connectivity's marginal-contact refinement asks (LogContactProbe forwards
-	// here) and what debug_contact_samples reports.
-	int contact_samples(ve::IVec3 cell, int axis) const;
+	// The marginal-contact refinement's tuning; debug_contact_samples asks the field with the
+	// same face sample count the refinement uses.
+	const ve::ContactRefineConfig &refine_config() const { return refine_cfg_; }
 
 private:
 	struct PendingWindow {

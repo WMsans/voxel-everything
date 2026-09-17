@@ -79,29 +79,10 @@ bool same_rest_pose(const Transform3D &a, const Transform3D &b) {
 	return true;
 }
 
-// The residency's view of the world field, for ve::refine_anchoring. The lock is taken per
-// call rather than held, exactly as ColliderStreamer::LogProbe does, so an edit landing
-// mid-refinement waits rather than deadlocks.
-struct LogContactProbe : ve::ContactProbe {
-	const IslandManager *manager = nullptr;
-
-	int contact_samples(ve::IVec3 cell, int axis, int) const override {
-		return manager->contact_samples(cell, axis);
-	}
-};
-
 } // namespace
 
 IslandManager::~IslandManager() {
 	teardown();
-}
-
-int IslandManager::contact_samples(ve::IVec3 cell, int axis) const {
-	if (gen_ == nullptr || !handles_.store || !handles_.store->edit_log()) return 0;
-	std::lock_guard<std::mutex> lock(handles_.store->edit_mutex());
-	const std::vector<ve::EditOp> &ops = handles_.store->edit_log()->ops(ve::region_of_brick(cell));
-	return ve::contact_samples_field(*gen_, ops.data(), static_cast<int>(ops.size()), cell, axis,
-			refine_cfg_.face_samples, &handles_.store->volumes(), handles_.store->overrides());
 }
 
 void IslandManager::initialize(Collaborators handles) {
@@ -251,14 +232,15 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 	ve::FloodWindow w = ve::FloodWindow::around(pw.lo, pw.hi, ve::kFloodWindowCells);
 	ve::LinkCuts cuts;
 	ve::FloodResult r;
-	LogContactProbe probe;
-	probe.manager = this;
+	// The field locks once per contact query, so an edit landing mid-refinement waits rather
+	// than deadlocks.
+	const ve::WorldField field = handles_.store->field();
 
 	for (int expand = 0;; expand++) {
 		ve::flood_anchored(handles_.store->occupancy(), w, &cuts, &r);
 		// Spec §5's marginal-contact refinement, before labelling: a piece held by one thin
 		// neck must be cut loose BEFORE the labeller decides it is anchored.
-		ve::refine_anchoring(handles_.store->occupancy(), probe, refine_cfg_, &cuts, &r);
+		ve::refine_anchoring(handles_.store->occupancy(), field, refine_cfg_, &cuts, &r);
 		if (!r.frontier_reached || expand >= ve::kMaxWindowExpansions) break;
 		// Spec §5: "expanding if the frontier is reached".
 		w = ve::FloodWindow::around(pw.lo, pw.hi, w.dim * 2);
