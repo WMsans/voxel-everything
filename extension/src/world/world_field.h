@@ -64,7 +64,7 @@ public:
 	int contact_samples(IVec3 cell, int axis, int face_samples) const;
 	RayHit raycast(const float origin[3], const float dir[3], float max_dist) const;
 	// ops over [ops_lo, ops_hi] + kLatticeFilterPad; sources over the lattice
-	// origin .. origin + (dim - 1) * voxel. False where the old snapshot_field_sources was.
+	// origin .. origin + (dim - 1) * voxel. False where a source is unavailable.
 	bool snapshot_lattice(const float ops_lo[3], const float ops_hi[3], const float origin[3],
 			float voxel, int dim, FieldSnapshot *out) const;
 	bool snapshot_region(IVec3 region, ConsolidationSnapshot *out) const;

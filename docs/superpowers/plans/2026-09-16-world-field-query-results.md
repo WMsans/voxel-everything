@@ -1,6 +1,6 @@
 # World field query (sub-project 5a) — results
 
-Commit: `c0ac8e0`. Recorded 2026-09-17 on Jeremys-Mac-mini.local (arm64, Apple M1 / Metal 4, Godot 4.7.2.stable.official.ed1daf0bf).
+Implementation baseline tested through: `c0ac8e0`. Documentation commit: `2947a50`. Recorded 2026-09-17 on Jeremys-Mac-mini.local (arm64, Apple M1 / Metal 4, Godot 4.7.2.stable.official.ed1daf0bf).
 Baseline: `docs/superpowers/plans/2026-09-16-world-field-query-baseline.md`. Report: `reports/report_50`.
 
 ## Regression
@@ -12,7 +12,16 @@ gdUnit: 507 declared cases / 1 error / 1 failure in `reports/report_50/results.x
 - `test_override_region_border`: new suite, 6 cases, all passed.
 - `test_world_field_consumers`: new suite, 4 cases, all passed.
 - `test_voxel_world_raycast`: new suite, 3 cases, all passed.
-- Existing suite declared counts did not drop. The baseline errors/failure that disappeared were `test_gpu_timing_scopes` (1 error), `test_cel_object` (2 errors), `test_frame_shipped_golden` (1 error), and `test_render_lifetime_contract` (1 failure, 1 error).
+- Existing suite declared counts did not drop. The five vanished baseline failure/error lines are:
+  - `test_gpu_timing_scopes::test_ssao_scope_closes_before_deferred_opens — ERROR: res://tests/test_gpu_timing_scopes.gd:28`
+  - `test_cel_object::test_shaderlanguage_matches_ve_cel_shade — ERROR: res://tests/test_cel_object.gd:35`
+  - `test_cel_object::test_object_lighting_follows_the_scene_sun — ERROR: res://tests/test_cel_object.gd:73`
+  - `test_frame_shipped_golden::test_the_shipped_frame_matches_the_recorded_golden — ERROR: res://tests/test_frame_shipped_golden.gd:128`
+  - `test_render_lifetime_contract::test_the_shipped_path_survives_reload_and_shuts_down — FAILED: res://tests/test_render_lifetime_contract.gd:218`
+  The baseline `test_render_lifetime_contract` suite was `tests=6 failures=1 errors=1`: the failure line above vanished, and one separate error child also vanished (`errors=1`); the baseline artifact preserves its count but not a separate error message line.
+- Exact remaining final failure/error lines from `reports/report_50/results.xml` are:
+  - `test_voxel_settings::test_an_ambient_change_reaches_the_object_global — ERROR: res://tests/test_voxel_settings.gd:213` (`error/@message`: `ERROR: res://tests/test_voxel_settings.gd:213`; suite: `tests=17 failures=0 errors=1`)
+  - `test_sun_cascades_gpu::test_sub_texel_motion_rebuilds_no_cascade — FAILED: res://tests/test_sun_cascades_gpu.gd:73` (`failure/@message`: `FAILED: res://tests/test_sun_cascades_gpu.gd:73`; suite: `tests=7 failures=1 errors=0`)
 - `test_voxel_settings::test_an_ambient_change_reaches_the_object_global` remains the known Godot/Metal `Nil` environment error.
 - `test_sun_cascades_gpu::test_sub_texel_motion_rebuilds_no_cascade` remains the baseline failure with the same case and message location; no new failure case/message appeared.
 - All other suites kept their declared counts and failure sets. `test_connectivity` and `test_island_body` remained within their known flaky-by-case baseline rule.
@@ -43,12 +52,7 @@ Command 1:
 ```text
 rg 'struct LogProbe|struct LogContactProbe|snapshot_field_sources|raycast_down' extension/src
 ```
-Output:
-```text
-extension/src/world/world_field.cpp:// Moved verbatim from WorldStore::snapshot_field_sources (sub-project 5a).
-extension/src/world/world_field.h:    // origin .. origin + (dim - 1) * voxel. False where the old snapshot_field_sources was.
-```
-These are historical comments only; the deleted declarations/call sites are absent. The scan therefore matched comments, not live symbols.
+Output: empty.
 
 Command 2:
 ```text
@@ -87,5 +91,5 @@ Additional 5b-owned sites retained by the exit scan: `extension/src/physics/isla
 ## Open
 - Known baseline/environment failures remain: the Metal `Nil` error in `test_voxel_settings` and the `test_sun_cascades_gpu` failure.
 - `test_stored_normals.gd` is still absent; the existing native stored-normal test and `test_stored_normal_pool` were not changed.
-- The exit scan still matches two historical `snapshot_field_sources` comments in `world_field.{h,cpp}`. No production edits were made to remove them, per the docs-only exit task and the no-production-change constraint.
+- The two stale `snapshot_field_sources` mentions were removed from comments in `world_field.{h,cpp}` to satisfy the explicit empty exit scan; behavior is unchanged.
 - The consolidation snapshot is `ve::ConsolidationSnapshot`; `ve::RegionSnapshot` remains the archive interface.

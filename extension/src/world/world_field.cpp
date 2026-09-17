@@ -66,7 +66,7 @@ RayHit FieldView::raycast(const float origin[3], const float dir[3], float max_d
 	return ve::raycast(*gen_, *log_, origin, dir, max_dist, volumes_, overrides_);
 }
 
-// Moved verbatim from WorldStore::snapshot_field_sources (sub-project 5a).
+// Moved verbatim from the old WorldStore helper (sub-project 5a).
 bool FieldView::copy_sources(const std::vector<EditOp> &ops, IVec3 brick_lo, IVec3 brick_hi,
 		FieldSourceSnapshot *out) const {
 	if (!out || !overrides_) return false;
