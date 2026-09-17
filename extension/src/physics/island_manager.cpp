@@ -297,29 +297,29 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 			refused_lattice_++;
 			continue;
 		}
+		ve::FieldSnapshot snap;
 		{
-			std::lock_guard<std::mutex> lock(handles_.store->edit_mutex());
-			if (!handles_.store->edit_log()) {
+			const ve::FieldView view = handles_.store->field().lock();
+			if (!view.valid()) {
 				refused_++;
 				continue;
 			}
-			ve::collect_ops_for_aabb(*handles_.store->edit_log(), wlo, whi, &job.ops);
-			float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
-			ve::IVec3 blo = ve::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
-			ve::IVec3 bhi = ve::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
-			if (!handles_.store->snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) {
+			if (!view.snapshot_lattice(wlo, whi, job.origin, job.voxel, job.dim, &snap)) {
 				refused_++;
 				refused_op_cap_++;
 				continue;
 			}
 		}
+		job.ops = std::move(snap.ops);
+		job.snapshot = std::move(snap.sources);
 		job.gen = gen_;
-		job.override_table = handles_.store->override_table_for_region(
-				ve::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
+		// The table is captured under the same lock as the snapshot now; it used to be read
+		// after the lock was released.
+		job.override_table = snap.override_table;
 		// Refuse before allocating a volume slot or submitting: the extraction pass cannot
 		// evaluate more than kMaxRegionOps ops, so this component can never be carved by the
 		// current field/worker limits. Fail-soft leaves it attached.
-		if (job.ops.size() > static_cast<size_t>(ve::kMaxRegionOps)) {
+		if (snap.over_cap) {
 			refused_++;
 			refused_op_cap_++;
 			continue;

@@ -606,17 +606,16 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 	job.boxes = boxes;
 	if (!ve::plan_island_lattice(wlo, whi, ve::kIslandDim, &job.voxel, job.origin)) return d;
 	job.dim = ve::kIslandDim;
-	job.override_table = world_->context().store->override_table_for_region(
-			ve::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
+	ve::FieldSnapshot snap;
 	{
-		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-		ve::collect_ops_for_aabb(*world_->context().store->edit_log(), wlo, whi, &job.ops);
-		float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
-		ve::IVec3 blo = ve::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
-		ve::IVec3 bhi = ve::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
-		if (!world_->context().store->snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) return d;
-		job.gen = &world_->context().store->generator()->sampler();
+		const ve::FieldView view = world_->context().store->field().lock();
+		if (!view.valid() || !view.snapshot_lattice(wlo, whi, job.origin, job.voxel, job.dim, &snap))
+			return d;
 	}
+	job.ops = std::move(snap.ops);
+	job.snapshot = std::move(snap.sources);
+	job.override_table = snap.override_table;
+	job.gen = &world_->context().store->generator()->sampler();
 
 	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
 	std::vector<IslandExtractJob> jobs;
@@ -989,17 +988,16 @@ bool VoxelDebugHooks::debug_extract_submit(int id, Vector3i lo_cell, Vector3i hi
 	job.boxes = boxes;
 	if (!ve::plan_island_lattice(wlo, whi, ve::kIslandDim, &job.voxel, job.origin)) return false;
 	job.dim = ve::kIslandDim;
-	job.override_table = world_->context().store->override_table_for_region(
-			ve::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
+	ve::FieldSnapshot snap;
 	{
-		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-		ve::collect_ops_for_aabb(*world_->context().store->edit_log(), wlo, whi, &job.ops);
-		float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
-		ve::IVec3 blo = ve::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
-		ve::IVec3 bhi = ve::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
-		if (!world_->context().store->snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) return false;
-		job.gen = &world_->context().store->generator()->sampler();
+		const ve::FieldView view = world_->context().store->field().lock();
+		if (!view.valid() || !view.snapshot_lattice(wlo, whi, job.origin, job.voxel, job.dim, &snap))
+			return false;
 	}
+	job.ops = std::move(snap.ops);
+	job.snapshot = std::move(snap.sources);
+	job.override_table = snap.override_table;
+	job.gen = &world_->context().store->generator()->sampler();
 	std::vector<IslandExtractJob> jobs;
 	jobs.push_back(std::move(job));
 	return world_->mesh_service()->submit_extracts(std::move(jobs));
