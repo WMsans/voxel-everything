@@ -3210,7 +3210,7 @@ Deferred items (spec §9.6) have no slot; each has a trigger instead (below).
 
 ### Sub-project 5 — World field query and edit spine
 
-**Status.** 5a (read side: S3, `WorldField`, public raycast) implemented; see `docs/superpowers/plans/2026-09-16-world-field-query-results.md`. 5b (write side: `EditPipeline`, fan-out, lock order, `max_override_bricks = 1`) not started; its inheritance list is spec `2026-09-16-world-field-query-design.md` §8.
+**Status.** 5a (read side: S3, `WorldField`, public raycast) implemented; see `docs/superpowers/plans/2026-09-16-world-field-query-results.md`. 5b (write side: `EditPipeline`, fan-out, lock order, `max_override_bricks = 1`) implemented; see `docs/superpowers/plans/2026-09-17-edit-pipeline-results.md`.
 
 **Goal.** One module answers "the world field here" consistently for every consumer, and one path applies an edit and tells every consumer about it.
 

@@ -1,7 +1,7 @@
 # Voxel Everything — Edit Pipeline (Sub-project 5b)
 
 **Date:** 2026-09-17
-**Status:** Design approved; not started
+**Status:** Implemented; see docs/superpowers/plans/2026-09-17-edit-pipeline-results.md
 **Roadmap:** `docs/superpowers/specs/2026-09-13-frame-module-design.md` §9.4, and the pathway in
 `docs/superpowers/plans/2026-09-13-frame-module.md` ("Sub-project 5 — World field query and edit
 spine").
@@ -295,3 +295,20 @@ physics is off beyond the `merge_or_cap` bound; stage authoring (sub-project 6).
    change the field. The staleness pin makes the difference visible, and milestone 9 names it.
 5. **A merge-and-cap fold dirties a huge LoD span.** It is reachable only while a drain is not
    running; the fold is marked `ponytail:` with its upgrade path.
+
+## 11. Decided during planning
+
+1. **`EditPipeline::preflight(ops, full)` is public.** The re-merge paste and the landing carve must know a batch fits *before* they store, pin, upload or spawn; `apply({atomic})` then cannot fail under the same lock hold. `BatchResult` carries `bool refused` plus `std::vector<IVec3> full` (the regions at the cap), because a batch refused for a malformed or oversized op names no region.
+2. **The streamer's regeneration stays behind `ConsolidationCoordinator`'s existing `streamer()` slot.** The streamer is created and destroyed inside render init/teardown, where taking the edit lock to register a sink is a new acquisition site this plan cannot prove safe. The coordinator's `record()` handles `kConsolidated` by queueing the regeneration, exactly as its commit does today.
+3. **LoD needs no teardown drop rule.** `LodTree::mark_dirty` only touches nodes that exist (`lod_tree.cpp:477`), and `release_gpu` clears the tree, so queued marks drained afterwards mark nothing. `release_gpu` keeps taking no lock.
+4. **`test_lod_stream.gd:60` reads after `hooks().debug_drain_invalidations()`, not after a tick.** A tick would clear the dirty flags it is trying to read (`note_building` clears dirty at submission, `lod_system.cpp:270`).
+5. **The fan-out pin is split by observability.** `debug_edit_fanout()` returns collider chunk sets, island windows, the consolidation queue, pending-edit count and regions, the streamer's forced regenerations and `edit_rejections`. LoD marks need a settled LoD world, so they are a separate case reading `debug_lod_stats()`, and they are pinned as the spec's dirty **counts** per read rather than as chunk keys: `LodStats` reports `dirty_chunks` and `dirty_levels`, and `LodTree` exposes no key list. An op with `notify_islands = false` is not reachable from GDScript; it is covered by the native test and by `test_connectivity.gd`'s existing crumble case.
+6. **Collider rows are pinned as expanded chunk SETS**, and every op in the pin is far enough from the others that no two queue entries overlap, so `merge_or_cap` (Task 7) cannot move a row. Where a pin does use overlapping ops (the consolidation cases), they share their y/z extents, so a merged bounding box equals the union.
+7. **Characterization is three commits** (Tasks 2 and 3), not the spec's single milestone 2.
+8. **Staleness uses the log's append seq:** `EditLog::last_seq()`, an `after_seq` parameter on `collect_ops_for_aabb`, `FieldSnapshot::log_seq`, and `FieldView::ops_since()`. `InFlight::ops` is replaced by `InFlight::log_seq`.
+9. **Deleting the restore branch also deletes two gdUnit cases**: `test_post_spawn_carve_rejection_keeps_body_in_hole` (it forces the deleted toggles) and `test_near_cap_carve_is_refused_before_any_carve` (its 255-op premise reserved room for the restore volume-add, which no longer exists). `test_rejected_carve_keeps_component_attached` and the native all-or-nothing tests keep the cap refusal covered.
+10. **`windows_mutex_` is deleted in Task 12** once the inbox exists: every remaining `windows_` reader (`run_frame`, `run_connectivity`, the retry/failure bookkeeping, `stats()`, `teardown()`) is main-thread.
+11. **The island inbox is unbounded** and carries a `ponytail:` note. It only grows while a physics-initialized world never runs `IslandManager::run_frame`, which the shipped game does every frame.
+12. **`Invalidation::consolidated(region)`** fills `lo`/`hi` from `brick_world_aabb` so no sink derives a brick range from a float box.
+13. **`VoxelWorld` is the collider + rejection-stats sink; `WorldStore` is the pending-edits sink.** Lifetime-owned sinks register in the `VoxelWorld` constructor (and `WorldStore`'s own constructor); `IslandManager` registers in `ensure_physics_initialized` and unregisters in `teardown_physics`, both of which already hold the edit lock at those points.
+14. **`pending_dirty_` becomes `std::vector<ve::Box3<int>>`** (Task 7) so one `merge_or_cap` template serves both it and the LoD marks.
