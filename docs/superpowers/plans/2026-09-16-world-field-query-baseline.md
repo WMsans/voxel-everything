@@ -112,3 +112,13 @@ test_sun_cascades_gpu::test_sub_texel_motion_rebuilds_no_cascade — FAILED: res
 Known flaky-by-case suites (project memory): test_connectivity, test_island_body — compare the
 suite's failure COUNT, not the case name. Known environment error: test_voxel_settings::
 test_an_ambient_change_reaches_the_object_global (Godot/Metal returns Nil outside the editor).
+
+## Change cost before 5a (spec §7, plan decision 10)
+
+Scenario: "a new downward ground query in a consumer that already holds the store".
+Traced from `IslandManager`'s merge-ground gate (`git log -S raycast_down --oneline`):
+- `extension/src/core/world_store.h` — declaration of `WorldStore::raycast_down`
+- `extension/src/core/world_store.cpp` — lock, generator, log, volumes, overrides, ray
+- `extension/src/physics/island_manager.cpp` — the call
+Files: 3. The query had to be written in the store because no module assembled the field
+under the lock for a consumer.
