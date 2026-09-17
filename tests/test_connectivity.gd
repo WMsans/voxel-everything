@@ -451,6 +451,11 @@ func test_rejected_remerge_paste_keeps_the_body_alive(timeout := 180000) -> void
 	assert_int(st["live_bodies"]).override_failure_message(
 		"a rejected re-merge paste destroyed the body and left a hole: %s" % st).is_greater(0)
 
+# The two cases that used to sit here are gone with the restore branch they exercised
+# (docs/superpowers/plans/2026-09-17-edit-pipeline.md, Task 9): an atomic carve is accepted
+# whole or not at all, so there is no post-spawn rejection to restore from, and the near-cap
+# case's 255-op premise reserved room for a restore volume-add that no longer exists. The cap
+# refusal itself is covered below and in extension/tests/test_edit_pipeline.cpp.
 func test_rejected_carve_keeps_component_attached(timeout := 120000) -> void:
 	var w := make_world()
 	var t := tool_of(w)
@@ -726,33 +731,6 @@ func test_resample_submit_colliding_with_in_flight_extractions_does_not_strand_m
 	assert_int(st["islands_merged"]).override_failure_message(
 		"a resample submit colliding with in-flight extractions stranded merging_: %s" % st
 		).is_greater(merged_before)
-
-func test_near_cap_carve_is_refused_before_any_carve(timeout := 120000) -> void:
-	var w := make_world()
-	var t := tool_of(w)
-	build_pillar(w, t)
-	var top := Vector3(PILLAR_X, PILLAR_BASE + 4.0, PILLAR_Z)
-	assert_bool(solid_at(w, top)).override_failure_message(
-		"the pillar was never built").is_true()
-	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
-	# Submit the extraction but do not let the result land yet; then bring the region to 255
-	# ops. Accepting the carve would make it 256 and reject the restore volume-add, which used
-	# to reach std::abort(). Preflight must refuse before any carve is appended.
-	w.hooks().debug_stream_frame(CENTER)
-	w.hooks().debug_physics_frame(CENTER)
-	w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
-	fill_region_ops(w, t, top, 255)
-	var refused_before: int = w.hooks().debug_island_stats()["refused"]
-	step(w, 240)
-	var st: Dictionary = w.hooks().debug_island_stats()
-	assert_int(st["refused"]).override_failure_message(
-		"the near-cap extraction was not refused: %s" % st).is_greater(refused_before)
-	assert_int(st["islands_spawned"]).override_failure_message(
-		"a near-cap carve still spawned a body: %s" % st).is_equal(0)
-	assert_int(st["live_bodies"]).override_failure_message(
-		"a near-cap carve created a body in a field that still has the rock: %s" % st).is_equal(0)
-	assert_bool(solid_at(w, top)).override_failure_message(
-		"a near-cap carve left a field hole with no body: %s" % st).is_true()
 
 func test_cross_region_combined_op_count_is_refused_before_any_carve(timeout := 120000) -> void:
 	var w := make_world()
@@ -1107,36 +1085,6 @@ func test_rejected_extract_submit_rolls_back_in_flight_and_recovers(timeout := 1
 		"rejected extract submit permanently lost the edit: %s" % st).is_greater(0)
 	assert_int(st["in_flight"]).override_failure_message(
 		"post-recovery extraction stranded in-flight entries: %s" % st).is_equal(0)
-
-func test_post_spawn_carve_rejection_keeps_body_in_hole(timeout := 180000) -> void:
-	var w := make_world()
-	var t := tool_of(w)
-	build_pillar(w, t)
-	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
-	# Submit the extraction, then force the next carve to look rejected after at least one box
-	# was accepted and force its restore to appear incomplete. The structural fix spawns the
-	# body BEFORE carving, so this must leave the already-live body in the hole instead of
-	# despawned; because the restore volume-add was accepted (touched non-empty), the birth
-	# slot is referenced by the edit log and must remain pinned.
-	w.hooks().debug_stream_frame(CENTER)
-	w.hooks().debug_physics_frame(CENTER)
-	w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
-	w.hooks().debug_set_fail_next_carve(true)
-	w.hooks().debug_set_fail_next_restore(true)
-	var st: Dictionary = w.hooks().debug_island_stats()
-	for i in range(120):
-		await get_tree().physics_frame
-		w.hooks().debug_stream_frame(CENTER)
-		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.hooks().debug_island_stats()
-		if st["live_bodies"] > 0:
-			break
-	assert_int(st["live_bodies"]).override_failure_message(
-		"post-spawn carve rejection despawned the body into a hole: %s" % st).is_greater(0)
-	assert_int(st["islands_spawned"]).override_failure_message(
-		"post-spawn carve rejection body was not counted as spawned: %s" % st).is_greater(0)
-	assert_int(st["volume_pinned"]).override_failure_message(
-		"partial restore referenced the birth volume but it was unpinned: %s" % st).is_greater(0)
 
 # A component the extractor cannot represent must not be left standing.
 #

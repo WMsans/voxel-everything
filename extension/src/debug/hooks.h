@@ -153,14 +153,6 @@ public:
 	// path can be exercised without depending on a Jolt failure mode.
 	void debug_set_fail_next_spawn(bool fail);
 
-	// Test hook: make the next carve-rejection restore appear not to cover every carved
-	// region, exercising the keep-the-body-alive path without depending on an op-cap race.
-	void debug_set_fail_next_restore(bool fail);
-
-	// Test hook: treat the next carve as rejected after at least one box has been accepted,
-	// exercising the post-spawn carve-rejection path without depending on an op-cap race.
-	void debug_set_fail_next_carve(bool fail);
-
 	// Test hook: make the next re-merge resample fail so the resample backoff path can be
 	// exercised without depending on a worker-side failure mode.
 	void debug_set_fail_next_resample(bool fail);

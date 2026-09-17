@@ -238,8 +238,6 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_normal_release_override", "slot"), &VoxelDebugHooks::debug_normal_release_override);
 #endif
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_spawn", "fail"), &VoxelDebugHooks::debug_set_fail_next_spawn);
-	ClassDB::bind_method(D_METHOD("debug_set_fail_next_restore", "fail"), &VoxelDebugHooks::debug_set_fail_next_restore);
-	ClassDB::bind_method(D_METHOD("debug_set_fail_next_carve", "fail"), &VoxelDebugHooks::debug_set_fail_next_carve);
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_resample", "fail"), &VoxelDebugHooks::debug_set_fail_next_resample);
 	ClassDB::bind_method(D_METHOD("debug_set_empty_next_extraction", "v"), &VoxelDebugHooks::debug_set_empty_next_extraction);
 	ClassDB::bind_method(D_METHOD("debug_wake_island_body", "index"), &VoxelDebugHooks::debug_wake_island_body);

@@ -293,16 +293,6 @@ void VoxelDebugHooks::debug_set_fail_next_spawn(bool fail) {
 	if (world_->island_manager()) world_->island_manager()->debug_set_fail_next_spawn(fail);
 }
 
-void VoxelDebugHooks::debug_set_fail_next_restore(bool fail) {
-	world_->ensure_physics_initialized();
-	if (world_->island_manager()) world_->island_manager()->debug_set_fail_next_restore(fail);
-}
-
-void VoxelDebugHooks::debug_set_fail_next_carve(bool fail) {
-	world_->ensure_physics_initialized();
-	if (world_->island_manager()) world_->island_manager()->debug_set_fail_next_carve(fail);
-}
-
 void VoxelDebugHooks::debug_set_fail_next_resample(bool fail) {
 	world_->ensure_physics_initialized();
 	if (world_->island_manager()) world_->island_manager()->debug_set_fail_next_resample(fail);

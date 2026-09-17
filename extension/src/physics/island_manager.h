@@ -88,12 +88,6 @@ public:
 #endif
 #ifdef DEBUG_ENABLED
 	void debug_set_fail_next_spawn(bool fail) { debug_fail_next_spawn_ = fail; }
-	// Test hook: make the next carve-rejection restore appear not to cover every carved
-	// region, exercising the keep-the-body-alive path without depending on an op-cap race.
-	void debug_set_fail_next_restore(bool fail) { debug_fail_next_restore_ = fail; }
-	// Test hook: treat the next carve as rejected after at least one box has been accepted,
-	// exercising the post-spawn carve-rejection path without depending on an op-cap race.
-	void debug_set_fail_next_carve(bool fail) { debug_fail_next_carve_ = fail; }
 	// Test hook: make the next re-merge resample fail so the resample backoff path can be
 	// exercised without depending on a worker-side failure mode.
 	void debug_set_fail_next_resample(bool fail) { debug_fail_next_resample_ = fail; }
@@ -115,11 +109,8 @@ public:
 	// sleep before the next poll, but a changed transform always trips the stale guard.
 	void debug_offset_body(int index, const Vector3 &offset);
 #else
-	// Fail-injection hooks are debug-only: release builds must not be able to drive the
-	// island manager into the structurally-impossible no-hole restore branch.
+	// Fail-injection hooks are debug-only.
 	void debug_set_fail_next_spawn(bool fail) { (void)fail; }
-	void debug_set_fail_next_restore(bool fail) { (void)fail; }
-	void debug_set_fail_next_carve(bool fail) { (void)fail; }
 	void debug_set_fail_next_resample(bool fail) { (void)fail; }
 	void debug_set_empty_next_extraction(bool v) { (void)v; }
 	void debug_wake_body(int index) { (void)index; }
@@ -261,12 +252,10 @@ private:
 	// stall after an extraction comes back can name itself.
 	struct LandRefusals {
 		int atlas_full = 0, store_failed = 0, no_edit_log = 0, preflight = 0, stale = 0,
-			pin_failed = 0, spawn_failed = 0, carve_nothing = 0, carve_restored = 0;
+			pin_failed = 0, spawn_failed = 0;
 	} debug_land_;
 #endif
 	bool debug_fail_next_spawn_ = false;
-	bool debug_fail_next_restore_ = false;
-	bool debug_fail_next_carve_ = false;
 	bool debug_fail_next_resample_ = false;
 	bool debug_empty_next_extraction_ = false;
 	float last_ms_ = 0.0f;
