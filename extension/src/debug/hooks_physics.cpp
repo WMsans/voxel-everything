@@ -628,13 +628,16 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 	}
 	if (results.empty() || results[0].failed) return d;
 
+	const ve::SnapshotSources sources(job.snapshot);
+	if (!sources.ok) return d;
+
 	std::vector<float> aabbs(boxes.size() * 6);
 	for (size_t i = 0; i < boxes.size(); i++)
 		boxes[i].world_aabb(&aabbs[i * 6], &aabbs[i * 6 + 3]);
 	ve::VolumeData cpu;
 	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	ve::extract_island_volume(gen, job.ops.data(), static_cast<int>(job.ops.size()),
-			&world_->context().store->volumes(), world_->context().store->overrides(), job.origin,
+			&sources.volumes, &sources.overrides, job.origin,
 			job.voxel, job.dim, aabbs.data(), static_cast<int>(boxes.size()), &cpu);
 
 	int worst = 0, mat_mismatch = 0, mat_compared = 0;
@@ -675,7 +678,7 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 			float px = job.origin[0] + x * job.voxel;
 			float py = job.origin[1] + y * job.voxel;
 			float pz = job.origin[2] + z * job.voxel;
-			ve::FieldSample fs = ve::eval_field_gradient(agen, job.ops.data(), static_cast<int>(job.ops.size()), px, py, pz, &world_->context().store->volumes(), world_->context().store->overrides());
+			ve::FieldSample fs = ve::eval_field_gradient(agen, job.ops.data(), static_cast<int>(job.ops.size()), px, py, pz, &sources.volumes, &sources.overrides);
 			float bu = 1e30f; float bu_grad[3]={0,1,0}; bool has_bu=false;
 			for (auto &b : boxes) { float lo[3], hi[3]; b.world_aabb(lo,hi); float d = ve::box_sdf(lo,hi,px,py,pz); if (!has_bu || d < bu) { bu=d; ve::box_sdf_gradient(lo,hi,px,py,pz,bu_grad); has_bu=true; } }
 			float exp_g[3]={fs.gradient[0],fs.gradient[1],fs.gradient[2]}; bool exp_exact=fs.exact_gradient;

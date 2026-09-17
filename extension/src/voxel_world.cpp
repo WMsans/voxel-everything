@@ -915,8 +915,12 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 	ve::VolumeData cpu;
 	// Task 10: through the FieldGenerator seam -- same analytic field, no behavior change.
 	const ve::Generator &gen = store_->generator()->sampler();
+	// The reference evaluates exactly what the GPU job received, not the live store, which
+	// this used to read without the edit lock after the worker returned.
+	const ve::SnapshotSources sources(job->snapshot);
+	if (!sources.ok) return false;
 	ve::extract_island_volume(gen, job->ops.data(), static_cast<int>(job->ops.size()),
-			&store_->volumes(), store_->overrides(), job->origin, job->voxel, job->dim, aabbs.data(),
+			&sources.volumes, &sources.overrides, job->origin, job->voxel, job->dim, aabbs.data(),
 			static_cast<int>(boxes->size()), &cpu);
 	*out = std::move(cpu);
 	return true;
