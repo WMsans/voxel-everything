@@ -115,3 +115,39 @@ func test_a_lod_chunk_reads_overrides_of_every_region_it_covers(timeout := 24000
 	assert_int(int(d["fine_max_diff"])).override_failure_message(
 		"S3b: the LoD chunk ignored the override of a region other than its origin's: %s" % d
 		).is_less_equal(1)
+
+# S3c. Level-2 chunk (0, 0, 0) spans 51.2 m on each axis and so covers R and R' = (1, 1, 0).
+# Its fine lattice sits on multiples of 0.8 m; every carve below is centred on a sample.
+# 150 visible ops per region is 300 in the chunk: gather_ops used to keep the first 256.
+# R rows must sit >3.8 m above the y=25.6 border (CSG-subtract max(s,-sp) at L2's ±3.2 m encode window reaches past the op AABB; 28.8 keeps the 0.8 m on-lattice property, R-only/R'-only containment, and the 150/150 counts).
+func carve_grid(w: VoxelWorld, x0: float, radius: float, offset: float) -> void:
+	for i in range(6):
+		for k in range(5):
+			for m in range(5):
+				w.hooks().debug_apply_sphere_subtract(Vector3(
+						x0 + 3.2 * i + offset, 28.8 + 2.4 * k + offset, 4.8 + 3.2 * m + offset), radius)
+
+func test_an_over_cap_lod_chunk_is_refused_not_truncated(timeout := 300000) -> void:
+	var w := make_world()
+	assert_rock(w, [Vector3(4.8, 36.8, 4.8), Vector3(46.4, 36.8, 17.6)])
+	carve_grid(w, 4.8, 0.6, 0.0)
+	carve_grid(w, 30.4, 0.6, 0.0)
+	assert_int(w.hooks().debug_region_op_count(R)).is_equal(150)
+	assert_int(w.hooks().debug_region_op_count(Vector3i(1, 1, 0))).is_equal(150)
+	var d: Dictionary = w.hooks().debug_lod_diff(2, Vector3i(0, 0, 0))
+	assert_bool(bool(d.get("op_overflow", false)) or int(d.get("fine_max_diff", 99)) <= 1
+		).override_failure_message(
+		"S3c: a LoD chunk over the op cap was built from a truncated list: %s" % d).is_true()
+
+# S3c, the cut. The neighbour's 150 ops are 5 cm pockets, shorter than half a level-2 cell
+# (0.8 m), so they are dropped and the 150 visible ops build. Offset 0.4 m keeps them off the
+# lattice; the oracle applies the same relevance rule (plan decision 4).
+func test_ops_too_small_for_a_lod_level_do_not_count_against_its_cap(timeout := 300000) -> void:
+	var w := make_world()
+	carve_grid(w, 4.8, 0.6, 0.0)
+	carve_grid(w, 30.4, 0.05, 0.4)
+	var d: Dictionary = w.hooks().debug_lod_diff(2, Vector3i(0, 0, 0))
+	assert_bool(bool(d.get("op_overflow", false))).override_failure_message(
+		"S3c: sub-half-cell ops counted against the LoD op cap: %s" % d).is_false()
+	assert_int(int(d.get("fine_max_diff", 99))).override_failure_message(
+		"S3c: the cut LoD chunk disagrees with the world: %s" % d).is_less_equal(1)
