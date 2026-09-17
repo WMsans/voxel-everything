@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstring>
 #include <utility>
+#include <span>
 
 using namespace godot;
 
@@ -545,36 +546,16 @@ bool IslandManager::crumble_component(const InFlight &f) {
 				}
 	if (!any_solid) return false;
 
-	// Headroom region by region before the first append: a half-applied carve would leave
-	// half the sheet standing and spend the ops anyway.
-	std::vector<ve::IVec3> regions;
-	std::vector<int> ops_here;
-	for (const ve::CellBox &box : f.boxes) {
-		ve::IVec3 rlo, rhi;
-		ve::op_region_range(ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM), &rlo, &rhi);
-		for (int z = rlo.z; z <= rhi.z; z++)
-			for (int y = rlo.y; y <= rhi.y; y++)
-				for (int x = rlo.x; x <= rhi.x; x++) {
-					const ve::IVec3 region{x, y, z};
-					const auto it = std::find(regions.begin(), regions.end(), region);
-					if (it == regions.end()) {
-						regions.push_back(region);
-						ops_here.push_back(1);
-					} else {
-						ops_here[static_cast<size_t>(it - regions.begin())]++;
-					}
-				}
-	}
-	for (size_t i = 0; i < regions.size(); i++)
-		if (handles_.store->edit_log()->op_count(regions[i]) + ops_here[i] > ve::kMaxRegionOps)
-			return false;
-
-	// notify_islands = false: this matter was already labelled unanchored, so removing it
-	// cannot loosen anything that was not loose already, and a window per crumble would put
-	// the connectivity pass back into the loop this function exists to break.
+	// One atomic batch: a half-applied carve would leave half the sheet standing and spend
+	// the ops anyway. notify_islands = false: this matter was already labelled unanchored, so
+	// removing it cannot loosen anything that was not loose already, and a window per crumble
+	// would put the connectivity pass back into the loop this function exists to break.
+	std::vector<ve::EditOp> carve;
+	carve.reserve(f.boxes.size());
 	for (const ve::CellBox &box : f.boxes)
-		handles_.append_edit_locked(
-				ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM), false);
+		carve.push_back(ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM));
+	if (handles_.store->edits().apply(carve, {.atomic = true, .notify_islands = false}).refused)
+		return false;
 	// Tell the occupancy grid straight away, exactly as the spawning carve does: the GPU
 	// readback that would say the same thing is several frames out, and until it lands the
 	// next connectivity run would label this component all over again.
@@ -844,20 +825,15 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		//    live body is already in place before any rock is removed from the field.
 		bool carve_rejected = false;
 		std::vector<ve::IVec3> carved_regions;
-		for (const ve::CellBox &box : f.boxes) {
-			const ve::EditLog::AppendResult carve = handles_.append_edit_locked(
-					ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM), true);
-			for (const ve::IVec3 &region : carve.touched) carved_regions.push_back(region);
-			if (debug_fail_next_carve_) {
-				debug_fail_next_carve_ = false;
-				carve_rejected = true;
-				break;
-			}
-			if (!carve.rejected.empty()) {
-				carve_rejected = true;
-				break;
-			}
-		}
+		std::vector<ve::EditOp> carve_ops;
+		carve_ops.reserve(f.boxes.size());
+		for (const ve::CellBox &box : f.boxes)
+			carve_ops.push_back(ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM));
+		const ve::BatchResult carve = handles_.store->edits().apply(carve_ops, {.atomic = true});
+		for (const ve::EditLog::AppendResult &r : carve.ops)
+			for (const ve::IVec3 &region : r.touched) carved_regions.push_back(region);
+		if (carve.refused) carve_rejected = true;
+		if (debug_fail_next_carve_) carve_rejected = true;
 		debug_fail_next_carve_ = false;
 
 		if (!carve_rejected) {
@@ -898,9 +874,10 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 			// name it. The slot is intentionally NOT released when the restore is accepted: the
 			// edit log now references it.
 			queue_field_volume(f.volume_slot, r.data);
+			const ve::EditOp restore_op =
+					ve::make_volume_add(f.volume_slot, f.origin, f.voxel, f.dim);
 			const ve::EditLog::AppendResult restore =
-					handles_.append_edit_locked(ve::make_volume_add(f.volume_slot, f.origin,
-							f.voxel, f.dim), true);
+					handles_.store->edits().apply(std::span<const ve::EditOp>(&restore_op, 1), {}).ops[0];
 			if (!restore.touched.empty()) restore_referenced_slot = true;
 			const bool forced_restore_failure = debug_fail_next_restore_;
 			debug_fail_next_restore_ = false;
@@ -1142,18 +1119,18 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 	const Transform3D rest = bodies_[m.body_index]->transform();
 
 	// Store, PIN, upload and append under ONE edit_mutex_ hold. The preflight below verifies
-	// every region the paste will touch has room for the op; because append_edit_locked runs
+	// every region the paste will touch has room for the op; because the pipeline apply runs
 	// under the same lock, no tool-thread edit can fill a region between the check and the
 	// append. A paste that passes preflight is therefore guaranteed to be fully accepted --
 	// which is what makes reusing the body's own birth slot safe. If we cannot guarantee
 	// that, we leave the birth slot untouched and back off.
 	{
 		std::lock_guard<std::mutex> lock(handles_.store->edit_mutex());
+		// Asked BEFORE the store/pin/upload below, so a refusal costs nothing to unwind; the
+		// apply that follows runs under this same hold and therefore cannot fail.
 		ve::EditLog::AppendResult preflight;
-		for (const ve::IVec3 &region : paste_regions)
-			if (handles_.store->edit_log()->op_count(region) >= ve::kMaxRegionOps)
-				preflight.rejected.push_back(region);
-		if (!preflight.rejected.empty()) {
+		if (!handles_.store->edits().preflight(std::span<const ve::EditOp>(&r.op, 1),
+				&preflight.rejected)) {
 			// No store or pin happened, so a reused birth slot still holds the body's
 			// original volume. A separately allocated out-slot is unreferenced and can be
 			// released.
@@ -1185,7 +1162,8 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 		// A rejected paste means the field did NOT take the rock back. The body must remain a
 		// body so the carved hole still has something in it. Never despawn unless the accepted
 		// paste actually covers every region of the rest volume.
-		const ve::EditLog::AppendResult paste = handles_.append_edit_locked(r.op, true);
+		const ve::EditLog::AppendResult paste =
+				handles_.store->edits().apply(std::span<const ve::EditOp>(&r.op, 1), {.atomic = true}).ops[0];
 		const bool paste_covers = paste.rejected.empty() && !paste_regions.empty() &&
 				!paste.touched.empty() &&
 				std::all_of(paste_regions.begin(), paste_regions.end(),

@@ -4,7 +4,6 @@
 #include <godot_cpp/variant/vector3.hpp>
 #include <atomic>
 #include <deque>
-#include <functional>
 #include <mutex>
 #include <vector>
 #include "connectivity/components.h"
@@ -54,8 +53,6 @@ public:
 		Node3D *scene_node = nullptr;
 		// Body centres as xyz triples; VoxelWorld::physics_tick hands them to the colliders.
 		std::vector<float> *bubble_centers = nullptr;
-		// VoxelWorld::append_edit_locked. Named debt: sub-project 5's EditPipeline replaces it.
-		std::function<ve::EditLog::AppendResult(const ve::EditOp &, bool)> append_edit_locked;
 	};
 
 	~IslandManager();

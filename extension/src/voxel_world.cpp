@@ -684,15 +684,6 @@ Dictionary VoxelWorld::raycast(Vector3 origin, Vector3 dir, float max_distance) 
 	return d;
 }
 
-ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
-		bool notify_islands) {
-	// Named debt: IslandManager's handle. Task 8 has it call the pipeline directly.
-	return store_->edits()
-			.apply(std::span<const ve::EditOp>(&op, 1),
-					{.atomic = false, .notify_islands = notify_islands})
-			.ops[0];
-}
-
 void VoxelWorld::publish_sun_state_to_local_device(RenderingDevice *device) {
 	if (!use_local_device_ || !device || !context_.render || !context_.render->passes().sun_ubo) return;
 	SunUbo *ubo = context_.render->passes().sun_ubo;
@@ -758,8 +749,8 @@ void VoxelWorld::ensure_physics_initialized() {
 			max_collider_chunks_, store_->field());
 	colliders_->set_shape_builds_per_frame(shape_builds_per_frame_);
 	colliders_->set_body_bubble_radius_m(physics_bubble_radius_m_);
-	// Publish the manager under edit_mutex_: append_edit_locked() can be called from a tool
-	// thread and reads island_manager_ while holding that lock, so creation must not expose a
+	// Publish the manager under edit_mutex_: EditPipeline::record() can call its sink from a
+	// tool thread while holding that lock, so creation must not expose a
 	// half-initialized pointer to it. The render thread never reads the pointer: it reads the
 	// handoff's slot marks.
 	{
@@ -771,9 +762,6 @@ void VoxelWorld::ensure_physics_initialized() {
 				.mesh = mesh_,
 				.scene_node = this,
 				.bubble_centers = &physics_bubble_centers_,
-				.append_edit_locked = [this](const ve::EditOp &op, bool notify_islands) {
-					return append_edit_locked(op, notify_islands);
-				},
 		});
 		island_manager_->set_generator(&store_->generator()->sampler());
 		// The edit lock is already held here, which is where a sink must be registered.
@@ -790,8 +778,8 @@ void VoxelWorld::teardown_physics() {
 	test_bodies_.clear();
 	// The manager owns the real island bodies; tear it down before the mesher's worker and
 	// the colliders so its volume-slot bookkeeping still has a live VolumeSet to ask. Hold
-	// edit_mutex_ while detaching: a tool thread may already be inside append_edit_locked()
-	// reading island_manager_ to call note_edit(). The render thread never reads the pointer;
+	// edit_mutex_ while detaching: a tool thread may already be inside EditPipeline::record()
+	// calling the manager sink. The render thread never reads the pointer;
 	// its slot mark drops to 0 at the detach, which is what it saw from a null manager before.
 	IslandManager *manager = island_manager_;
 	island_manager_ = nullptr;

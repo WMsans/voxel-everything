@@ -211,8 +211,6 @@ public:
 	// GDScript "raycast": the CPU field ray gameplay aims with -> {hit, pos, normal,
 	// distance, material}. `material` is the struck solid's, for hardness-aware tools.
 	Dictionary raycast(Vector3 origin, Vector3 dir, float max_distance = 200.0f);
-	// Caller MUST hold edit_mutex. Low-level island-manager handle until Task 8.
-	ve::EditLog::AppendResult append_edit_locked(const ve::EditOp &op, bool notify_islands = true);
 	int64_t edit_seq() const { return store_->edit_seq(); }
 };
 
