@@ -34,7 +34,7 @@ struct ScriptedProbe : ContactProbe {
 	int fat = 81;
 	mutable int calls = 0;
 
-	int contact_samples(IVec3 c, int axis) const override {
+	int contact_samples(IVec3 c, int axis, int) const override {
 		calls++;
 		const auto it = thin.find({c.x, c.y, c.z, axis});
 		return it == thin.end() ? fat : it->second;

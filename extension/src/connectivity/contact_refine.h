@@ -14,7 +14,7 @@ struct OverrideSource;
 struct ContactProbe {
 	virtual ~ContactProbe() = default;
 	// Solid samples on the 0.8 m face between `cell` and `cell + e_axis`, of face_samples^2.
-	virtual int contact_samples(IVec3 cell, int axis) const = 0;
+	virtual int contact_samples(IVec3 cell, int axis, int face_samples) const = 0;
 };
 
 struct ContactRefineConfig {

@@ -1,4 +1,5 @@
 #include <doctest/doctest.h>
+#include "override_bake.h"
 #include "world/override_store.h"
 #include "world/brick_eval.h"
 #include "generator/generator.h"
@@ -15,30 +16,6 @@ ve::EditOp sphere_sub(float x, float y, float z, float r) {
 	op.pos[0] = x; op.pos[1] = y; op.pos[2] = z;
 	op.radius = r;
 	return op;
-}
-
-// Bake one brick's lattice out of the generator plus ops, exactly as the GPU pass will.
-void bake(const ve::Generator &gen, const ve::EditOp *ops, int n, ve::IVec3 brick,
-		ve::OverrideBrick *out) {
-	for (int z = 0; z < ve::kBrickSdfStride; z++)
-		for (int y = 0; y < ve::kBrickSdfStride; y++)
-			for (int x = 0; x < ve::kBrickSdfStride; x++) {
-				const float wx = (static_cast<float>(brick.x) * ve::kBrickVoxels + x) * ve::kVoxelSize;
-				const float wy = (static_cast<float>(brick.y) * ve::kBrickVoxels + y) * ve::kVoxelSize;
-				const float wz = (static_cast<float>(brick.z) * ve::kBrickVoxels + z) * ve::kVoxelSize;
-				const ve::Sample s = ve::eval_field(gen, ops, n, wx, wy, wz);
-				out->sdf[ve::sdf_index(x, y, z)] = ve::encode_sdf(s.sdf);
-			}
-	for (int z = 0; z < ve::kBrickVoxels; z++)
-		for (int y = 0; y < ve::kBrickVoxels; y++)
-			for (int x = 0; x < ve::kBrickVoxels; x++) {
-				const float wx = (static_cast<float>(brick.x) * ve::kBrickVoxels + x + 0.5f) * ve::kVoxelSize;
-				const float wy = (static_cast<float>(brick.y) * ve::kBrickVoxels + y + 0.5f) * ve::kVoxelSize;
-				const float wz = (static_cast<float>(brick.z) * ve::kBrickVoxels + z + 0.5f) * ve::kVoxelSize;
-				const ve::Sample s = ve::eval_field(gen, ops, n, wx, wy, wz);
-				out->mat[x + y * ve::kBrickVoxels + z * ve::kBrickVoxels * ve::kBrickVoxels] =
-						static_cast<uint8_t>(s.material & 0xFFu);
-			}
 }
 
 } // namespace
@@ -73,7 +50,7 @@ TEST_CASE("sampling an override reproduces the field it baked") {
 	const ve::IVec3 brick{30, 64, 30};
 	ve::OverrideStore store(4);
 	const int slot = store.acquire(brick);
-	bake(gen, ops, 1, brick, store.data(slot));
+	ve_test::bake_override(gen, ops, 1, brick, store.data(slot));
 
 	// At a lattice point the stored value is exact to the encoding's step (~5 mm).
 	const float px = static_cast<float>(brick.x) * ve::kBrickSize + 4 * ve::kVoxelSize;

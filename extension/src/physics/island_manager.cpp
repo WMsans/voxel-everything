@@ -85,7 +85,7 @@ bool same_rest_pose(const Transform3D &a, const Transform3D &b) {
 struct LogContactProbe : ve::ContactProbe {
 	const IslandManager *manager = nullptr;
 
-	int contact_samples(ve::IVec3 cell, int axis) const override {
+	int contact_samples(ve::IVec3 cell, int axis, int) const override {
 		return manager->contact_samples(cell, axis);
 	}
 };

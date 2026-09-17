@@ -24,6 +24,7 @@
 #include "generator/volume_set.h"
 #include "terrain/pipeline.h"
 #include "world/field_source_snapshot.h"
+#include "world/world_field.h"
 #include "world/edit_log.h"
 #include "world/region.h"
 #include "world/region_archive.h"
@@ -171,6 +172,12 @@ public:
 	// the region ops, volumes and overrides. Takes edit_mutex(); this is the store-owned field
 	// query used by IslandManager.
 	ve::RayHit raycast_down(const float xz[2]);
+	// The world field over this store's current cores. A cheap value: re-fetch it per use,
+	// because the edit log and override store are created lazily and released at exit.
+	ve::WorldField field() {
+		return ve::WorldField(generator_ ? &generator_->sampler() : nullptr, edit_log_, &volumes_,
+				overrides_, &override_tables_, &edit_mutex_, &edit_seq_);
+	}
 
 	// --- the spine (moved verbatim from VoxelWorld::append_edit/_locked) ---
 	// Tool entry point. Main thread; takes edit_mutex().
