@@ -82,6 +82,8 @@
 #include <godot_cpp/variant/utility_functions.hpp>
 
 #include <algorithm>
+#include <map>
+#include <tuple>
 #include <vector>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/memory.hpp>
@@ -621,7 +623,42 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 	float origin[3];
 	ve::lod_chunk_origin(level, c, origin);
 	const ve::IVec3 region = ve::region_of_point(origin[0], origin[1], origin[2]);
-	const int override_table = world_->context().store->override_table_for_region(region);
+	// Mirror the shipped worker: MeshService publishes EVERY consolidated region's bricks and
+	// table into its one pool, and the job carries the origin region's table. Copied under the
+	// edit lock so the upload below never reads the live store from the worker thread.
+	struct TableCopy {
+		int table = -1;
+		std::vector<std::pair<int, int>> entries;
+	};
+	int override_table = -1;
+	std::vector<TableCopy> table_copies;
+	std::vector<std::pair<int, ve::OverrideBrick>> brick_copies;
+	{
+		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
+		override_table = world_->context().store->override_table_for_region(region);
+		const ve::OverrideStore *store_overrides = world_->context().store->overrides();
+		if (store_overrides) {
+			for (const auto &it : world_->context().store->override_tables()) {
+				const ve::IVec3 base{std::get<0>(it.first) * ve::kRegionBricks,
+						std::get<1>(it.first) * ve::kRegionBricks,
+						std::get<2>(it.first) * ve::kRegionBricks};
+				TableCopy copy;
+				copy.table = it.second;
+				for (int z = 0; z < ve::kRegionBricks; z++)
+					for (int y = 0; y < ve::kRegionBricks; y++)
+						for (int x = 0; x < ve::kRegionBricks; x++) {
+							const ve::IVec3 b{base.x + x, base.y + y, base.z + z};
+							const int slot = store_overrides->slot_of(b);
+							if (slot < 0) continue;
+							const ve::OverrideBrick *data = store_overrides->data(slot);
+							if (!data) continue;
+							brick_copies.emplace_back(slot, *data);
+							copy.entries.emplace_back(ve::brick_index_in_region(b), slot);
+						}
+				table_copies.push_back(std::move(copy));
+			}
+		}
+	}
 	world_->mesh_service()->run_sync([&](MeshPass &pass) {
 		(void)pass;
 		// The worker thread owns this device for the duration of the diagnostic. Task 10
@@ -651,28 +688,19 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 			const ve::VolumeData *v = world_->context().store->volumes().get(slot);
 			if (v) lod.volumes().upload(rd, slot, *v);
 		}
-		std::vector<std::pair<int, int>> override_entries;
-		if (override_table >= 0 && world_->context().store->overrides()) {
-			const ve::IVec3 base{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
-					region.z * ve::kRegionBricks};
-			for (int z = 0; z < ve::kRegionBricks; z++)
-				for (int y = 0; y < ve::kRegionBricks; y++)
-					for (int x = 0; x < ve::kRegionBricks; x++) {
-						const ve::IVec3 b{base.x + x, base.y + y, base.z + z};
-						const int slot = world_->context().store->overrides()->slot_of(b);
-						if (slot < 0) continue;
-						const ve::OverrideBrick *data = world_->context().store->overrides()->data(slot);
-						if (!data || !lod.upload_override(slot, *data)) {
-							lod.set_field_context(nullptr);
-							lod_context.teardown();
-							lod.teardown();
-							memdelete(rd);
-							return;
-						}
-						override_entries.emplace_back(ve::brick_index_in_region(b), slot);
-					}
-			lod.set_override_table(0, override_table, override_entries);
+		for (const auto &brick : brick_copies) {
+			if (!lod.upload_override(brick.first, brick.second)) {
+				lod.set_field_context(nullptr);
+				lod_context.teardown();
+				lod.teardown();
+				memdelete(rd);
+				return;
+			}
 		}
+		// Region slots are only the region map's index on this private device; the LoD
+		// shader reads the table from the job's push constant.
+		for (size_t i = 0; i < table_copies.size(); i++)
+			lod.set_override_table(static_cast<int>(i), table_copies[i].table, table_copies[i].entries);
 		LodBuildJob job;
 		job.level = level;
 		job.coord = c;
@@ -705,21 +733,39 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 	const float cell = ve::lod_cell_size(level);
 	const ve::Generator &gen = world_->context().store->generator()->sampler();
 
-	// 1. The fine lattice against the CPU field.
+	// 1. The fine lattice against the CPU field. The oracle is the WORLD: each sample reads its
+	// own region's op list (ve::raycast's rule -- an op is appended to every region it
+	// touches), so a truncated or wrongly-tabled job shows up as a diff instead of agreeing
+	// with the same mistake.
 	int fine_max_diff = 0;
-	for (int z = 0; z < ve::kLodFineLattice; z++)
-		for (int y = 0; y < ve::kLodFineLattice; y++)
-			for (int x = 0; x < ve::kLodFineLattice; x++) {
-				const float p[3] = {origin[0] + (static_cast<float>(x) - 3.0f) * cell * 0.5f,
-						origin[1] + (static_cast<float>(y) - 3.0f) * cell * 0.5f,
-						origin[2] + (static_cast<float>(z) - 3.0f) * cell * 0.5f};
-				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-						p[0], p[1], p[2], &world_->context().store->volumes(), world_->context().store->overrides()).sdf;
-				const int idx = ve::lod_fine_index(x, y, z);
-				const int diff = std::abs(static_cast<int>(fine_sdf[idx]) -
-						static_cast<int>(ve::lod_encode_sdf(s, cell)));
-				fine_max_diff = std::max(fine_max_diff, diff);
-			}
+	{
+		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
+		const ve::EditLog *log = world_->context().store->edit_log();
+		std::map<std::tuple<int, int, int>, std::vector<ve::EditOp>> region_ops;
+		const auto ops_at = [&](float x, float y, float z) -> const std::vector<ve::EditOp> & {
+			const ve::IVec3 r = ve::region_of_point(x, y, z);
+			const std::tuple<int, int, int> key{r.x, r.y, r.z};
+			auto it = region_ops.find(key);
+			if (it == region_ops.end())
+				it = region_ops.emplace(key, log ? log->ops(r) : std::vector<ve::EditOp>{}).first;
+			return it->second;
+		};
+		for (int z = 0; z < ve::kLodFineLattice; z++)
+			for (int y = 0; y < ve::kLodFineLattice; y++)
+				for (int x = 0; x < ve::kLodFineLattice; x++) {
+					const float p[3] = {origin[0] + (static_cast<float>(x) - 3.0f) * cell * 0.5f,
+							origin[1] + (static_cast<float>(y) - 3.0f) * cell * 0.5f,
+							origin[2] + (static_cast<float>(z) - 3.0f) * cell * 0.5f};
+					const std::vector<ve::EditOp> &here = ops_at(p[0], p[1], p[2]);
+					const float s = ve::eval_field(gen, here.data(), static_cast<int>(here.size()),
+							p[0], p[1], p[2], &world_->context().store->volumes(),
+							world_->context().store->overrides()).sdf;
+					const int idx = ve::lod_fine_index(x, y, z);
+					const int diff = std::abs(static_cast<int>(fine_sdf[idx]) -
+							static_cast<int>(ve::lod_encode_sdf(s, cell)));
+					fine_max_diff = std::max(fine_max_diff, diff);
+				}
+	}
 	d["fine_max_diff"] = fine_max_diff;
 
 	// 2. The reduced lattice against ve::lod_reduce_lattice on the GPU's own fine bytes.
