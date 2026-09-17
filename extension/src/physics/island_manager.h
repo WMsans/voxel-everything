@@ -4,7 +4,6 @@
 #include <godot_cpp/variant/vector3.hpp>
 #include <atomic>
 #include <deque>
-#include <mutex>
 #include <vector>
 #include "connectivity/components.h"
 #include "core/edit_pipeline.h"
@@ -35,9 +34,8 @@ class WorldStore;
 //      connectivity ONCE (spec §5: "simultaneous blasts can't race") and submit extractions
 //   4. re-merge whatever has slept long enough
 //
-// run_frame is main-thread only. note_edit may be called from a tool thread while
-// VoxelWorld::append_edit holds the edit mutex, so the pending-window queue has its own
-// small mutex instead of being touched from two threads unsynchronised.
+// run_frame is main-thread only. record may be called from a tool thread while
+// VoxelWorld::append_edit holds the edit mutex; it only appends a copied edit to the inbox.
 class IslandManager : public ve::InvalidationSink {
 public:
 	// What the manager needs from the world, and nothing else (spec 2026-09-14 §3.4).
@@ -67,6 +65,9 @@ public:
 	// InvalidationSink: an accepted edit queues a connectivity window. Edit lock held
 	// (core/edit_pipeline.h). Task 12 makes this a queue-and-drain.
 	void record(const ve::Invalidation &inv) override;
+	// Apply the queued edits to the window list. Main thread; takes the edit lock for the
+	// swap, so never call it while holding that lock.
+	void drain_inbox();
 
 	int slot_high_water() const;
 	float last_ms() const { return last_ms_; }
@@ -207,7 +208,16 @@ private:
 	// terrain pipeline can swap the world's generator, and a copy here would silently keep
 	// generating the old world for collision while the GPU generated the new one.
 	const ve::Generator *gen_ = nullptr;
-	std::mutex windows_mutex_; // guards windows_ against note_edit from tool threads
+	// Edits queued by record(), guarded by WorldStore::edit_mutex(); drained on the main
+	// thread by drain_inbox(). windows_ is main-thread only.
+	// ponytail: unbounded. It only grows while a physics-initialized world never runs
+	// run_frame; the shipped game runs it every frame. Bound it (merging by window, as
+	// note_edit already does) if that ever stops being true.
+	struct InboxEdit {
+		ve::EditOp op;
+		int64_t seq = 0;
+	};
+	std::vector<InboxEdit> inbox_;
 	std::deque<PendingWindow> windows_;
 	std::vector<InFlight> in_flight_;
 	std::vector<Merging> merging_;

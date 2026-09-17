@@ -197,6 +197,7 @@ int VoxelDebugHooks::debug_region_op_count(Vector3i region) {
 void VoxelDebugHooks::debug_drain_invalidations() {
 	// Each deferred consumer's own drain -- the function its tick calls, never a copy.
 	if (world_->context().lod) world_->context().lod->drain_invalidations();
+	if (world_->island_manager()) world_->island_manager()->drain_inbox();
 }
 
 Dictionary VoxelDebugHooks::debug_edit_fanout() {

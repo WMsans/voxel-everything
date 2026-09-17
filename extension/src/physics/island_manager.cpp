@@ -15,6 +15,7 @@
 #include <cmath>
 #include <utility>
 #include <span>
+#include <mutex>
 
 using namespace godot;
 
@@ -141,21 +142,32 @@ void IslandManager::teardown() {
 	merging_.clear();
 	merge_retries_.clear();
 	{
-		std::lock_guard<std::mutex> lock(windows_mutex_);
 		windows_.clear();
+		// teardown_physics holds the edit lock across this call, so the inbox is cleared without
+		// taking it again.
+		inbox_.clear();
 	}
 	atlas_used_.clear();
 	handles_ = Collaborators{};
 }
 
 void IslandManager::record(const ve::Invalidation &inv) {
+	// Edit lock held: queue only, never windows bookkeeping (core/edit_pipeline.h).
 	if (inv.reason != ve::InvalidationReason::kEdit || !inv.notify_islands) return;
-	note_edit(*inv.op, inv.seq);
+	inbox_.push_back({*inv.op, inv.seq});
+}
+
+void IslandManager::drain_inbox() {
+	std::vector<InboxEdit> edits;
+	{
+		std::lock_guard<std::mutex> lock(handles_.store->edit_mutex());
+		edits.swap(inbox_);
+	}
+	for (const InboxEdit &e : edits) note_edit(e.op, e.seq);
 }
 
 void IslandManager::note_edit(const ve::EditOp &op, int64_t seq) {
 	if (op.type == ve::kOpSpherePaint) return; // paint moves no matter
-	std::lock_guard<std::mutex> lock(windows_mutex_);
 	float lo[3], hi[3];
 	ve::op_world_aabb(op, lo, hi);
 	PendingWindow w;
@@ -381,13 +393,11 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 	// in-flight extractions -- continues with the remainder once the current batch has been
 	// carved.
 	if (submitted > 0 && submitted < static_cast<int>(comps.size())) {
-		std::lock_guard<std::mutex> lock(windows_mutex_);
 		windows_.push_back(pw);
 	} else if (submitted == 0 && transient_refusal) {
 		// Zero-progress but transiently refused (body cap or volume pool full): keep the
 		// window queued with a cooldown. A genuinely full pool would otherwise relabel every
 		// frame; the run_frame capacity gate below also skips while there is no room.
-		std::lock_guard<std::mutex> lock(windows_mutex_);
 		PendingWindow retry = pw;
 		retry.retry_cooldown = kRetryCooldownFrames;
 		windows_.push_back(retry);
@@ -411,7 +421,6 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 }
 
 void IslandManager::queue_retry_window(const PendingWindow &w) {
-	std::lock_guard<std::mutex> lock(windows_mutex_);
 	PendingWindow retry = w;
 	retry.retry_cooldown = kRetryCooldownFrames;
 	// Several extractions from one connectivity window can land in the same frame. If all of
@@ -431,7 +440,6 @@ void IslandManager::queue_retry_window(const PendingWindow &w) {
 }
 
 void IslandManager::note_extract_failure(const PendingWindow &w) {
-	std::lock_guard<std::mutex> lock(windows_mutex_);
 	for (auto it = windows_.begin(); it != windows_.end(); ++it) {
 		if (it->id != w.id) continue;
 		it->extract_failures++;
@@ -459,7 +467,6 @@ void IslandManager::note_extract_failure(const PendingWindow &w) {
 }
 
 void IslandManager::note_extract_success(const PendingWindow &w) {
-	std::lock_guard<std::mutex> lock(windows_mutex_);
 	for (PendingWindow &e : windows_) {
 		if (e.id == w.id) {
 			e.extract_failures = 0;
@@ -1143,6 +1150,11 @@ int IslandManager::run_frame(float dt, const Vector3 &center) {
 		if (r.cooldown > 0) r.cooldown--;
 	publish_descriptors();
 
+	// Edits queued since the last frame become windows before anything lands or labels, so a
+	// carve this frame is seen by this frame's connectivity exactly as it was when note_edit
+	// ran under the edit lock.
+	drain_inbox();
+
 	// 2. Results.
 	std::vector<IslandExtractResult> results;
 	handles_.mesh->collect_extracts(&results);
@@ -1152,13 +1164,14 @@ int IslandManager::run_frame(float dt, const Vector3 &center) {
 		else land_extraction(r);
 	}
 
+	drain_inbox(); // step 2's own carves
+
 	// 3. Connectivity, ONCE (spec §5). Held back while extractions are outstanding so a
-	//    component cannot be labelled twice before its carve lands. The window queue is
-	//    guarded because note_edit can be called from a tool thread under the edit mutex.
+	//    component cannot be labelled twice before its carve lands. The inbox is drained
+	//    before this step, so the window queue is main-thread only.
 	bool run_window = false;
 	PendingWindow w;
 	{
-		std::lock_guard<std::mutex> lock(windows_mutex_);
 		if (!windows_.empty() && in_flight_.empty() &&
 				!handles_.mesh->extracts_busy()) {
 			w = windows_.front();
@@ -1243,7 +1256,6 @@ void IslandManager::debug_wake_body(int index) {
 }
 
 Array IslandManager::debug_windows() {
-	std::lock_guard<std::mutex> lock(windows_mutex_);
 	Array out;
 	for (const PendingWindow &w : windows_) {
 		Array row, lo, hi;
@@ -1393,10 +1405,7 @@ Dictionary IslandManager::stats() {
 	}
 #endif
 
-	{
-		std::lock_guard<std::mutex> lock(windows_mutex_);
-		d["pending_windows"] = static_cast<int>(windows_.size());
-	}
+	d["pending_windows"] = static_cast<int>(windows_.size());
 	d["in_flight"] = static_cast<int>(in_flight_.size());
 	d["merging"] = static_cast<int>(merging_.size());
 	d["volume_live"] = handles_.store ? handles_.store->volumes().live_count() : 0;
