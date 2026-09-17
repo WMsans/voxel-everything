@@ -370,11 +370,28 @@ Dictionary VoxelDebugHooks::debug_mesh_lattice_diff(Vector3i chunk) {
 	if (!world_->physics_ready() || !world_->mesh_service()) return d;
 	const ve::IVec3 c{chunk.x, chunk.y, chunk.z};
 	std::vector<ve::EditOp> ops;
+	ve::FieldSnapshot snap;
 	{
-		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
+		const ve::FieldView view = world_->context().store->field().lock();
+		if (!view.valid()) return d;
 		ops = world_->context().store->edit_log()->ops(ve::region_of_chunk(c));
+		// The oracle's sources: everything the chunk lattice (one cell below the origin to
+		// the far face) can read, copied under the lock instead of read live afterwards.
+		float o[3];
+		ve::chunk_world_origin(c, o);
+		const float lattice_origin[3] = {o[0] - ve::kChunkCellSize, o[1] - ve::kChunkCellSize,
+				o[2] - ve::kChunkCellSize};
+		const float span = static_cast<float>(ve::kChunkLattice - 1) * ve::kChunkCellSize;
+		const float lattice_hi[3] = {lattice_origin[0] + span, lattice_origin[1] + span,
+				lattice_origin[2] + span};
+		if (!view.snapshot_lattice(lattice_origin, lattice_hi, lattice_origin, ve::kChunkCellSize,
+				ve::kChunkLattice, &snap))
+			return d;
 	}
+	const ve::SnapshotSources sources(snap.sources);
+	if (!sources.ok) return d;
 	MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
+	job.override_table = snap.override_table;
 	ve::chunk_world_origin(c, job.origin);
 	job.cell_size = ve::kChunkCellSize;
 	job.lattice = ve::kChunkLattice;
@@ -393,8 +410,8 @@ Dictionary VoxelDebugHooks::debug_mesh_lattice_diff(Vector3i chunk) {
 				const float p[3] = {g.origin[0] + (x - 1) * g.cell_size,
 						g.origin[1] + (y - 1) * g.cell_size,
 						g.origin[2] + (z - 1) * g.cell_size};
-				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-						p[0], p[1], p[2], &world_->context().store->volumes()).sdf;
+				const float s = ve::eval_field(gen, snap.ops.data(), static_cast<int>(snap.ops.size()),
+						p[0], p[1], p[2], &sources.volumes, &sources.overrides).sdf;
 				if (s <= 0.0f) neg = true; else pos = true;
 				const int want = ve::encode_sdf(s);
 				const int got = gpu[ve::dc_lattice_index(g, x, y, z)];
@@ -416,12 +433,28 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	if (!world_->physics_ready() || !world_->mesh_service()) return d;
 	const ve::IVec3 c{chunk.x, chunk.y, chunk.z};
 	std::vector<ve::EditOp> ops;
+	ve::FieldSnapshot snap;
 	{
-		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
+		const ve::FieldView view = world_->context().store->field().lock();
+		if (!view.valid()) return d;
 		ops = world_->context().store->edit_log()->ops(ve::region_of_chunk(c));
+		// The oracle's sources: everything the chunk lattice (one cell below the origin to
+		// the far face) can read, copied under the lock instead of read live afterwards.
+		float o[3];
+		ve::chunk_world_origin(c, o);
+		const float lattice_origin[3] = {o[0] - ve::kChunkCellSize, o[1] - ve::kChunkCellSize,
+				o[2] - ve::kChunkCellSize};
+		const float span = static_cast<float>(ve::kChunkLattice - 1) * ve::kChunkCellSize;
+		const float lattice_hi[3] = {lattice_origin[0] + span, lattice_origin[1] + span,
+				lattice_origin[2] + span};
+		if (!view.snapshot_lattice(lattice_origin, lattice_hi, lattice_origin, ve::kChunkCellSize,
+				ve::kChunkLattice, &snap))
+			return d;
 	}
+	const ve::SnapshotSources sources(snap.sources);
+	if (!sources.ok) return d;
 	MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
-	job.override_table = world_->context().store->override_table_for_region(ve::region_of_chunk(c));
+	job.override_table = snap.override_table;
 	ve::chunk_world_origin(c, job.origin);
 	job.cell_size = ve::kChunkCellSize;
 	job.lattice = ve::kChunkLattice;
@@ -443,9 +476,9 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	for (int z = 0; z < g.lattice; z++)
 		for (int y = 0; y < g.lattice; y++)
 			for (int x = 0; x < g.lattice; x++) {
-				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
+				const float s = ve::eval_field(gen, snap.ops.data(), static_cast<int>(snap.ops.size()),
 						g.origin[0] + (x - 1) * g.cell_size, g.origin[1] + (y - 1) * g.cell_size,
-						g.origin[2] + (z - 1) * g.cell_size, &world_->context().store->volumes(), world_->context().store->overrides()).sdf;
+						g.origin[2] + (z - 1) * g.cell_size, &sources.volumes, &sources.overrides).sdf;
 				const int diff = std::abs(static_cast<int>(lattice[ve::dc_lattice_index(g, x, y, z)]) -
 						static_cast<int>(ve::encode_sdf(s)));
 				lat_max = std::max(lat_max, diff);
@@ -533,9 +566,9 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	const int tri_count = static_cast<int>(gpu.indices.size() / 3);
 	const int stride = std::max(1, tri_count / 512); // a spread sample, not the first 512
 	for (int v = 0; v < gpu_verts; v++) {
-		const float s = std::fabs(ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
+		const float s = std::fabs(ve::eval_field(gen, snap.ops.data(), static_cast<int>(snap.ops.size()),
 				gpu.positions[v * 3], gpu.positions[v * 3 + 1], gpu.positions[v * 3 + 2],
-				&world_->context().store->volumes(), world_->context().store->overrides()).sdf);
+				&sources.volumes, &sources.overrides).sdf);
 		max_sdf = std::max(max_sdf, s);
 		if (s > 0.1f) off_10cm++;
 	}
@@ -554,10 +587,10 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 		// 2 cm: far enough out of the quantisation noise, short enough that the probe cannot
 		// step clean through a thin feature and read solid on both sides.
 		const Vector3 step = n.normalized() * 0.02f;
-		const float out_side = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-				mid.x + step.x, mid.y + step.y, mid.z + step.z, &world_->context().store->volumes(), world_->context().store->overrides()).sdf;
-		const float in_side = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-				mid.x - step.x, mid.y - step.y, mid.z - step.z, &world_->context().store->volumes(), world_->context().store->overrides()).sdf;
+		const float out_side = ve::eval_field(gen, snap.ops.data(), static_cast<int>(snap.ops.size()),
+				mid.x + step.x, mid.y + step.y, mid.z + step.z, &sources.volumes, &sources.overrides).sdf;
+		const float in_side = ve::eval_field(gen, snap.ops.data(), static_cast<int>(snap.ops.size()),
+				mid.x - step.x, mid.y - step.y, mid.z - step.z, &sources.volumes, &sources.overrides).sdf;
 		tri_sampled++;
 		if (out_side <= in_side) winding_bad++;
 	}

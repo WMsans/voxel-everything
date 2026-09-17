@@ -385,6 +385,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 	std::vector<ConsolidateResult> results;
 	if (world_->mesh_service()->collect_consolidations(&results) != 1 || results[0].failed) return d;
 	const ve::Generator &gen = world_->context().store->generator()->sampler();
+	const ve::FieldView view = world_->context().store->field().locked_by_caller();
 	int sdf_mismatches = 0, mat_mismatches = 0;
 	Dictionary first;
 	for (size_t bi = 0; bi < bricks.size() && bi < results[0].baked.size(); bi++) {
@@ -395,9 +396,8 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 		for (int z = 0; z <= ve::kBrickVoxels; z++)
 			for (int y = 0; y <= ve::kBrickVoxels; y++)
 				for (int x = 0; x <= ve::kBrickVoxels; x++) {
-					const ve::Sample s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-							bo[0] + x * ve::kVoxelSize, bo[1] + y * ve::kVoxelSize,
-							bo[2] + z * ve::kVoxelSize, &world_->context().store->volumes(), world_->context().store->overrides());
+					const ve::Sample s = view.sample(bo[0] + x * ve::kVoxelSize,
+							bo[1] + y * ve::kVoxelSize, bo[2] + z * ve::kVoxelSize);
 					const uint8_t expected = ve::encode_sdf(s.sdf);
 					const uint8_t actual = b.sdf[ve::sdf_index(x, y, z)];
 					// CPU/GPU transcendental rounding can cross an R8 quantization boundary.
@@ -410,9 +410,8 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 			for (int z = 0; z < ve::kBrickVoxels; z++)
 				for (int y = 0; y < ve::kBrickVoxels; y++)
 					for (int x = 0; x < ve::kBrickVoxels; x++) {
-						const ve::Sample s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-								bo[0] + x * ve::kVoxelSize, bo[1] + y * ve::kVoxelSize,
-								bo[2] + z * ve::kVoxelSize, &world_->context().store->volumes(), world_->context().store->overrides());
+						const ve::Sample s = view.sample(bo[0] + x * ve::kVoxelSize,
+								bo[1] + y * ve::kVoxelSize, bo[2] + z * ve::kVoxelSize);
 						if (s.material != b.mat[ve::voxel_index(x, y, z)]) mat_mismatches++;
 					}
 	}
@@ -1195,13 +1194,8 @@ PackedFloat32Array VoxelDebugHooks::debug_generator_fingerprint() {
 }
 
 float VoxelDebugHooks::debug_field_sdf(Vector3 p) {
-	if (!world_->context().store->edit_log()) return 1e30f;
-	const ve::Generator &gen = world_->context().store->generator()->sampler();
-	std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-	const std::vector<ve::EditOp> &ops =
-			world_->context().store->edit_log()->ops(ve::region_of_point(p.x, p.y, p.z));
-	return ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()), p.x, p.y, p.z,
-			&world_->context().store->volumes(), world_->context().store->overrides()).sdf;
+	const ve::FieldView view = world_->context().store->field().lock();
+	return view.valid() ? view.sample(p.x, p.y, p.z).sdf : 1e30f;
 }
 
 int VoxelDebugHooks::debug_cell_state(Vector3i cell) {

@@ -742,36 +742,35 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 	const float cell = ve::lod_cell_size(level);
 	const ve::Generator &gen = world_->context().store->generator()->sampler();
 
-	// 1. The fine lattice against the CPU field. The oracle is the WORLD: each sample reads its
-	// own region's op list (ve::raycast's rule -- an op is appended to every region it
-	// touches), so a truncated or wrongly-tabled job shows up as a diff instead of agreeing
-	// with the same mistake.
+	// 1. The fine lattice against the CPU field: every op the lattice can read (never
+	// truncated), cut by the same relevance rule as the build (plan decision 4), over a
+	// source copy taken under the lock.
 	int fine_max_diff = 0;
 	{
-		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-		const ve::EditLog *log = world_->context().store->edit_log();
-		std::map<std::tuple<int, int, int>, std::vector<ve::EditOp>> region_ops;
-		const auto ops_at = [&](float x, float y, float z) -> const std::vector<ve::EditOp> & {
-			const ve::IVec3 r = ve::region_of_point(x, y, z);
-			const std::tuple<int, int, int> key{r.x, r.y, r.z};
-			auto it = region_ops.find(key);
-			if (it == region_ops.end()) {
-				std::vector<ve::EditOp> visible = log ? log->ops(r) : std::vector<ve::EditOp>{};
-				ve::lod_cut_ops(level, &visible); // the oracle never truncates: fit is not asked
-				it = region_ops.emplace(key, std::move(visible)).first;
-			}
-			return it->second;
-		};
+		ve::FieldSnapshot snap;
+		const float half = cell * 0.5f;
+		const float lattice_origin[3] = {origin[0] - 3.0f * half, origin[1] - 3.0f * half,
+				origin[2] - 3.0f * half};
+		const float span = static_cast<float>(ve::kLodFineLattice - 1) * half;
+		const float lattice_hi[3] = {lattice_origin[0] + span, lattice_origin[1] + span,
+				lattice_origin[2] + span};
+		{
+			const ve::FieldView view = world_->context().store->field().lock();
+			if (!view.valid() || !view.snapshot_lattice(lattice_origin, lattice_hi, lattice_origin,
+					half, ve::kLodFineLattice, &snap))
+				return d;
+		}
+		ve::lod_cut_ops(level, &snap.ops);
+		const ve::SnapshotSources sources(snap.sources);
+		if (!sources.ok) return d;
 		for (int z = 0; z < ve::kLodFineLattice; z++)
 			for (int y = 0; y < ve::kLodFineLattice; y++)
 				for (int x = 0; x < ve::kLodFineLattice; x++) {
-					const float p[3] = {origin[0] + (static_cast<float>(x) - 3.0f) * cell * 0.5f,
-							origin[1] + (static_cast<float>(y) - 3.0f) * cell * 0.5f,
-							origin[2] + (static_cast<float>(z) - 3.0f) * cell * 0.5f};
-					const std::vector<ve::EditOp> &here = ops_at(p[0], p[1], p[2]);
-					const float s = ve::eval_field(gen, here.data(), static_cast<int>(here.size()),
-							p[0], p[1], p[2], &world_->context().store->volumes(),
-							world_->context().store->overrides()).sdf;
+					const float p[3] = {origin[0] + (static_cast<float>(x) - 3.0f) * half,
+							origin[1] + (static_cast<float>(y) - 3.0f) * half,
+							origin[2] + (static_cast<float>(z) - 3.0f) * half};
+					const float s = ve::eval_field(gen, snap.ops.data(), static_cast<int>(snap.ops.size()),
+							p[0], p[1], p[2], &sources.volumes, &sources.overrides).sdf;
 					const int idx = ve::lod_fine_index(x, y, z);
 					const int diff = std::abs(static_cast<int>(fine_sdf[idx]) -
 							static_cast<int>(ve::lod_encode_sdf(s, cell)));
