@@ -248,7 +248,9 @@ void ConsolidationCoordinator::pump_async() {
 		return;
 	}
 
-	if (consolidation_queue_.empty()) return;
+	// Held: the queue keeps growing and the in-flight transaction above still finished; only
+	// new bakes are refused.
+	if (held_ || consolidation_queue_.empty()) return;
 	const ve::IVec3 region = consolidation_queue_.front();
 	consolidation_queue_.erase(consolidation_queue_.begin());
 	const int region_slot = store_->residency()->slot_of(region);

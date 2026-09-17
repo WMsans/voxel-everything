@@ -395,6 +395,11 @@ void VoxelDebugHooks::debug_pump_consolidation() {
 	world_->context().consolidation->pump();
 }
 
+void VoxelDebugHooks::debug_hold_consolidation(bool held) {
+	std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
+	world_->context().consolidation->set_held(held);
+}
+
 Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 	Dictionary d;
 	world_->ensure_physics_initialized();

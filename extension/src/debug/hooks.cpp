@@ -212,6 +212,7 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_set_fail_consolidations", "v"),
 			&VoxelDebugHooks::debug_set_fail_consolidations);
 	ClassDB::bind_method(D_METHOD("debug_pump_consolidation"), &VoxelDebugHooks::debug_pump_consolidation);
+	ClassDB::bind_method(D_METHOD("debug_hold_consolidation", "held"), &VoxelDebugHooks::debug_hold_consolidation);
 	ClassDB::bind_method(D_METHOD("debug_pump_consolidation_async"), &VoxelDebugHooks::debug_pump_consolidation_async);
 	ClassDB::bind_method(D_METHOD("debug_wait_consolidation"), &VoxelDebugHooks::debug_wait_consolidation);
 	ClassDB::bind_method(D_METHOD("debug_set_fail_consolidate_uploads", "v"),

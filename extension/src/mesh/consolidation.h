@@ -64,6 +64,11 @@ public:
 	// One non-blocking frame-pump step; was VoxelWorld::pump_consolidation (called from
 	// _process every frame, unconditionally).
 	void pump_async();
+	// Test seam: while held, regions still queue and an in-flight transaction still finishes,
+	// but pump_async starts no new bake. test_connectivity.gd holds consolidation so the full
+	// op lists its fail-soft cases build on stay full (test_consolidation.gd pins why).
+	// Written and read under edit_mutex().
+	void set_held(bool held) { held_ = held; }
 	// Spin until no transaction is in flight (or a 2 s deadline expires), pumping between
 	// sleeps; was debug_wait_consolidation's loop.
 	void wait();
@@ -122,6 +127,7 @@ private:
 	int consolidation_refusals_ = 0;
 	int consolidation_queue_refusals_ = 0;
 	bool consolidation_queue_refusal_logged_ = false;
+	bool held_ = false; // guarded by edit_mutex()
 
 	WorldStore *store_;
 	Collaborators handles_;

@@ -365,6 +365,9 @@ public:
 
 	void debug_pump_consolidation();
 
+	// Test seam: stop pump_async from starting new bakes (see ConsolidationCoordinator).
+	void debug_hold_consolidation(bool held);
+
 	void debug_pump_consolidation_async();
 
 	void debug_wait_consolidation();

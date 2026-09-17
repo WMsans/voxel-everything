@@ -24,7 +24,7 @@ func after_test() -> void:
 			w.free()
 	_worlds.clear()
 
-func make_world(override_bricks := 1) -> VoxelWorld:
+func make_world(hold_consolidation := true) -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.physics_enabled = false
@@ -33,11 +33,6 @@ func make_world(override_bricks := 1) -> VoxelWorld:
 	w.residency_radius_m = 40.0
 	w.atlas_bricks = Vector3i(48, 24, 48)
 	w.max_region_slots = 64
-	# Connectivity tests deliberately exercise fail-soft full op lists. M7's async
-	# consolidation would otherwise bake those lists into override bricks and clear them
-	# before the re-merge/preflight runs, so give this suite a one-brick override pool that
-	# cannot absorb a real region bake and leaves the op lists full.
-	w.max_override_bricks = override_bricks
 	w.physics_radius_m = 30.0
 	w.max_collider_chunks = 128
 	w.shape_builds_per_frame = 4
@@ -45,6 +40,12 @@ func make_world(override_bricks := 1) -> VoxelWorld:
 	_worlds.append(w)
 	assert_bool(w.hooks().debug_init_atlas()).is_true()
 	assert_bool(w.hooks().debug_init_physics()).is_true()
+	# Connectivity tests deliberately exercise fail-soft full op lists; the automatic
+	# consolidation would bake those lists away before the re-merge/preflight runs
+	# (test_consolidation.gd::test_a_full_op_list_does_not_stay_full_while_consolidation_runs
+	# pins that). Hold it instead of crippling the override pool.
+	if hold_consolidation:
+		w.hooks().debug_hold_consolidation(true)
 	return w
 
 func tool_of(w: VoxelWorld) -> VoxelEditTool:
@@ -1229,7 +1230,7 @@ func test_a_solid_component_is_never_crumbled(timeout := 120000) -> void:
 # value, so the extraction lands instead. A real override pool is needed here (the suite's
 # one-brick default cannot bake a region).
 func test_a_consolidation_during_an_extraction_is_pinned(timeout := 180000) -> void:
-	var w := make_world(8192)
+	var w := make_world(false)
 	var t := tool_of(w)
 	build_pillar(w, t)
 	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
