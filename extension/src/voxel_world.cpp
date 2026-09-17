@@ -228,6 +228,7 @@ void VoxelWorld::_bind_methods() {
 	// AppendResult-free way to push one encoded op through the spine from GDScript.
 	ClassDB::bind_method(D_METHOD("edit_seq"), &VoxelWorld::edit_seq);
 	ClassDB::bind_method(D_METHOD("append_edit", "op"), &VoxelWorld::append_edit_op);
+	ClassDB::bind_method(D_METHOD("raycast", "origin", "dir", "max_distance"), &VoxelWorld::raycast, DEFVAL(200.0f));
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
 	ClassDB::bind_method(D_METHOD("request_shader_reload"), &VoxelWorld::request_shader_reload);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "use_local_device"), "set_use_local_device", "get_use_local_device");
@@ -668,6 +669,21 @@ Dictionary VoxelWorld::append_edit_op(const PackedByteArray &op_bytes) {
 	for (const ve::IVec3 &v : r.touched) touched.push_back(Vector3i(v.x, v.y, v.z));
 	for (const ve::IVec3 &v : r.rejected) rejected.push_back(Vector3i(v.x, v.y, v.z));
 	return out;
+}
+
+Dictionary VoxelWorld::raycast(Vector3 origin, Vector3 dir, float max_distance) {
+	Dictionary d;
+	d["hit"] = false;
+	const float o[3] = {origin.x, origin.y, origin.z};
+	const float f[3] = {dir.x, dir.y, dir.z};
+	const ve::RayHit h = store_->field().lock().raycast(o, f, max_distance);
+	if (!h.hit) return d;
+	d["hit"] = true;
+	d["pos"] = Vector3(h.pos[0], h.pos[1], h.pos[2]);
+	d["normal"] = Vector3(h.normal[0], h.normal[1], h.normal[2]);
+	d["distance"] = h.distance;
+	d["material"] = static_cast<int>(h.material);
+	return d;
 }
 
 ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,

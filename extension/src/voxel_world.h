@@ -200,6 +200,9 @@ public:
 	ve::EditLog::AppendResult append_edit(const ve::EditOp &op);
 	// GDScript "append_edit": one op in its 32-byte ve::EditOp encoding -> {touched, rejected}.
 	Dictionary append_edit_op(const PackedByteArray &op_bytes);
+	// GDScript "raycast": the CPU field ray gameplay aims with -> {hit, pos, normal,
+	// distance, material}. `material` is the struck solid's, for hardness-aware tools.
+	Dictionary raycast(Vector3 origin, Vector3 dir, float max_distance = 200.0f);
 	// Caller MUST hold edit_mutex. WorldStore's spine, then this node's fan-out remainder
 	// (rejection stats, LoD dirty marks, collider remesh queue) under the same hold.
 	ve::EditLog::AppendResult append_edit_locked(const ve::EditOp &op, bool notify_islands = true);

@@ -1298,19 +1298,7 @@ bool VoxelDebugHooks::debug_region_map_consistent() {
 }
 
 Dictionary VoxelDebugHooks::debug_raycast(Vector3 origin, Vector3 dir) {
-	Dictionary d;
-	d["hit"] = false;
-	const float o[3] = {origin.x, origin.y, origin.z};
-	const float f[3] = {dir.x, dir.y, dir.z};
-	const ve::RayHit h = world_->context().store->field().lock().raycast(o, f, 200.0f);
-	if (!h.hit) return d;
-	d["hit"] = true;
-	d["pos"] = Vector3(h.pos[0], h.pos[1], h.pos[2]);
-	d["normal"] = Vector3(h.normal[0], h.normal[1], h.normal[2]);
-	d["distance"] = h.distance;
-	// The struck surface's material. Ray-driven removal tools pass this straight to
-	// VoxelEditTool.apply_sphere_subtract so its hardness is resolved once, up front.
-	d["material"] = static_cast<int>(h.material);
-	return d;
+	// Kept for the test suites; gameplay calls VoxelWorld.raycast.
+	return world_->raycast(origin, dir, 200.0f);
 }
 } // namespace godot
