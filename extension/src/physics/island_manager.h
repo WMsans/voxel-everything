@@ -150,10 +150,10 @@ private:
 		float voxel = 0.0f;
 		int dim = 0;
 		float impulse[3] = {0, 0, 0};
-		// The ops captured for this component at submit time, and the world AABB they were
-		// collected from. land_extraction() recomputes the current ops for the same AABB; if
-		// a newer edit changed them, the extraction is stale and must not be carved.
-		std::vector<ve::EditOp> ops;
+		// The log sequence the ops were captured at, and the world AABB they were collected
+		// from. land_extraction asks whether anything newer reaches the boxes; if so, the
+		// extraction is stale and must not be carved.
+		uint64_t log_seq = 0;
 		float aabb_lo[3] = {0, 0, 0};
 		float aabb_hi[3] = {0, 0, 0};
 		// The window this extraction came from, kept so a late refusal (e.g. all island

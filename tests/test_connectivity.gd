@@ -1171,13 +1171,12 @@ func test_a_solid_component_is_never_crumbled(timeout := 120000) -> void:
 	assert_bool(solid_at(w, Vector3(PILLAR_X, PILLAR_BASE, PILLAR_Z))).override_failure_message(
 		"the crumble ate the stump").is_true()
 
-# Pins today's staleness rule for sub-project 5b (docs/superpowers/plans/2026-09-17-edit-pipeline.md,
-# Task 3). land_extraction compares the ops it captured with the ops the log holds now, so a
-# consolidation that bakes those ops away over the component's boxes reads as "the field moved"
-# and the extraction is refused. Task 10 moves this pin on purpose: a bake changes no field
-# value, so the extraction lands instead. A real override pool is needed here (the suite's
-# one-brick default cannot bake a region).
-func test_a_consolidation_during_an_extraction_is_pinned(timeout := 180000) -> void:
+# Was test_a_consolidation_during_an_extraction_is_pinned. The staleness check compares append
+# sequences now instead of op lists (docs/superpowers/plans/2026-09-17-edit-pipeline.md, Task
+# 10), and a consolidation appends nothing: it turns ops into override bricks that evaluate to
+# the same field. An extraction in flight across a bake is therefore no longer stale, and the
+# component it freed becomes a body instead of being thrown away and relabelled.
+func test_a_consolidation_during_an_extraction_does_not_make_it_stale(timeout := 180000) -> void:
 	var w := make_world(false)
 	var t := tool_of(w)
 	build_pillar(w, t)
@@ -1191,7 +1190,6 @@ func test_a_consolidation_during_an_extraction_is_pinned(timeout := 180000) -> v
 			break
 	assert_int(st["in_flight"]).override_failure_message(
 		"the connectivity pass did not submit an extraction: %s" % st).is_greater(0)
-	# The pillar stands in region (0, 2, 0); baking it clears the ops the extraction captured.
 	assert_bool(w.hooks().debug_consolidate_region(Vector3i(0, 2, 0))).override_failure_message(
 		"the pillar's region did not consolidate; the fixture is wrong, not the code").is_true()
 	var stale_before: int = st["land_stale"]
@@ -1199,10 +1197,9 @@ func test_a_consolidation_during_an_extraction_is_pinned(timeout := 180000) -> v
 		await get_tree().physics_frame
 		step(w, 1)
 		st = w.hooks().debug_island_stats()
-		if st["land_stale"] > stale_before or st["islands_spawned"] + st["debris_spawned"] > 0:
+		if st["islands_spawned"] + st["debris_spawned"] > 0 or st["land_stale"] > stale_before:
 			break
 	assert_int(st["land_stale"]).override_failure_message(
-		"a consolidation during an extraction no longer reads as stale: %s" % st
-		).is_greater(stale_before)
+		"a consolidation still reads as a stale field: %s" % st).is_equal(stale_before)
 	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
-		"the stale extraction still spawned a body: %s" % st).is_equal(0)
+		"the extraction did not land after the bake: %s" % st).is_greater(0)

@@ -14,6 +14,25 @@ static ve::EditOp sphere(float x, float y, float z, float r) {
 	return op;
 }
 
+TEST_CASE("collect_ops_for_aabb can skip everything appended at or before a sequence") {
+	ve::EditLog log;
+	log.append(sphere(12.8f, 12.8f, 12.8f, 1.0f));
+	const uint64_t mark = log.last_seq();
+	log.append(sphere(13.0f, 12.8f, 12.8f, 1.0f));
+	const float lo[3] = {11.0f, 11.0f, 11.0f};
+	const float hi[3] = {15.0f, 15.0f, 15.0f};
+	std::vector<ve::EditOp> all, newer;
+	ve::collect_ops_for_aabb(log, lo, hi, &all);
+	ve::collect_ops_for_aabb(log, lo, hi, &newer, mark);
+	CHECK(all.size() == 2);
+	REQUIRE(newer.size() == 1);
+	CHECK(newer[0].pos[0] == doctest::Approx(13.0f));
+	// Nothing newer than the last append.
+	std::vector<ve::EditOp> none;
+	ve::collect_ops_for_aabb(log, lo, hi, &none, log.last_seq());
+	CHECK(none.empty());
+}
+
 TEST_CASE("an op lands in every region it touches, and only those") {
 	ve::EditLog log;
 	// Region 0 spans [0, 25.6) m. A 2 m sphere at 25.0 m straddles regions 0 and 1 on x,

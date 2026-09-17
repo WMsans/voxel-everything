@@ -13,7 +13,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstring>
 #include <utility>
 #include <span>
 
@@ -353,7 +352,7 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 		f.voxel = job.voxel;
 		f.dim = job.dim;
 		f.window = pw;
-		f.ops = job.ops;
+		f.log_seq = snap.log_seq;
 		for (int a = 0; a < 3; a++) {
 			f.origin[a] = job.origin[a];
 			f.aabb_lo[a] = wlo[a];
@@ -708,18 +707,14 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 				}
 				return false;
 			};
-			std::vector<ve::EditOp> current_ops;
-			ve::collect_ops_for_aabb(*handles_.store->edit_log(), f.aabb_lo, f.aabb_hi, &current_ops);
-			std::vector<ve::EditOp> now, then;
-			for (const ve::EditOp &op : current_ops)
-				if (reaches_the_boxes(op)) now.push_back(op);
-			for (const ve::EditOp &op : f.ops)
-				if (reaches_the_boxes(op)) then.push_back(op);
-			const bool stale = now.size() != then.size() ||
-					!std::equal(now.begin(), now.end(), then.begin(),
-							[](const ve::EditOp &a, const ve::EditOp &b) {
-								return std::memcmp(&a, &b, sizeof(ve::EditOp)) == 0;
-							});
+			// An op counts when it was appended AFTER the snapshot this extraction was
+			// computed from. Comparing the captured list against the current one also
+			// reported a consolidation as staleness -- a bake removes ops without changing a
+			// single field value, so it made extractions retry for nothing.
+			std::vector<ve::EditOp> newer;
+			handles_.store->field().locked_by_caller().ops_since(f.aabb_lo, f.aabb_hi, f.log_seq,
+					&newer);
+			const bool stale = std::any_of(newer.begin(), newer.end(), reaches_the_boxes);
 			if (stale) {
 				if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
 				release_volume_slot(handles_.store->volumes(), *handles_.handoff, f.volume_slot);
