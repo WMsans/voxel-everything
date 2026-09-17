@@ -1,4 +1,5 @@
 #pragma once
+#include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/vector3.hpp>
 #include <atomic>
@@ -106,6 +107,9 @@ public:
 	// Diagnostic: the body's full physics-server state plus a downward motion query, for
 	// diagnosing islands that do not fall.
 	Dictionary debug_body_info(int index);
+	// Diagnostic: the pending connectivity windows, for debug_edit_fanout. One row per
+	// window: [[lo x, y, z], [hi x, y, z], seq, impulse_scale].
+	Array debug_windows();
 	// Test hook: offset a live island body and wake it, again for deterministic stale-pose
 	// tests. Moving is stronger than waking alone: Jolt may put a motionless body back to
 	// sleep before the next poll, but a changed transform always trips the stale guard.
@@ -120,6 +124,7 @@ public:
 	void debug_set_empty_next_extraction(bool v) { (void)v; }
 	void debug_wake_body(int index) { (void)index; }
 	void debug_offset_body(int index, const Vector3 &offset) { (void)index; (void)offset; }
+	Array debug_windows() { return Array(); }
 #endif
 	// Not const: the ground probe takes the edit lock.
 	Dictionary stats();

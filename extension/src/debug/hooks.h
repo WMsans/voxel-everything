@@ -371,6 +371,15 @@ public:
 
 	int debug_region_op_count(Vector3i region);
 
+	// Sub-project 5b: what every edit consumer will act on, after each of them has drained
+	// its own queue through debug_drain_invalidations().
+	Dictionary debug_edit_fanout();
+
+	// Runs each consumer's own drain -- the function its tick calls, never a copy -- so a
+	// read taken after this sees what the consumer will act on. Empty until a sink becomes
+	// deferred.
+	void debug_drain_invalidations();
+
 	int debug_override_used() const;
 
 	// Test-only fixture: publish one valid table containing every override slot, exhausting

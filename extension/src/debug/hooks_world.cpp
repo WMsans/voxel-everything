@@ -82,6 +82,8 @@
 #include <godot_cpp/variant/utility_functions.hpp>
 
 #include <algorithm>
+#include <set>
+#include <tuple>
 #include <vector>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/memory.hpp>
@@ -190,6 +192,59 @@ int VoxelDebugHooks::debug_region_op_count(Vector3i region) {
 	if (!world_->context().store->edit_log()) return 0;
 	std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
 	return world_->context().store->edit_log()->op_count({region.x, region.y, region.z});
+}
+
+void VoxelDebugHooks::debug_drain_invalidations() {
+	// Each deferred consumer's own drain goes here, so debug_edit_fanout reads what the
+	// consumer will act on rather than what a hook-local copy would compute. Nothing is
+	// deferred yet.
+}
+
+Dictionary VoxelDebugHooks::debug_edit_fanout() {
+	Dictionary d;
+	WorldStore *store = world_->context().store;
+	if (!store || !store->edit_log()) return d;
+	debug_drain_invalidations();
+	using Key = std::tuple<int, int, int>;
+	const auto to_array = [](const std::set<Key> &s) {
+		Array a;
+		for (const Key &k : s) {
+			Array v;
+			v.push_back(std::get<0>(k));
+			v.push_back(std::get<1>(k));
+			v.push_back(std::get<2>(k));
+			a.push_back(v);
+		}
+		return a;
+	};
+	// One hold: every queue below is guarded by the edit mutex.
+	std::lock_guard<std::mutex> lock(store->edit_mutex());
+	std::set<Key> chunks;
+	for (const auto &range : world_->pending_dirty())
+		for (int z = range.first.z; z <= range.second.z; z++)
+			for (int y = range.first.y; y <= range.second.y; y++)
+				for (int x = range.first.x; x <= range.second.x; x++)
+					chunks.insert(Key{x, y, z});
+	d["colliders"] = to_array(chunks);
+	Array queued;
+	for (const ve::IVec3 &r : world_->context().consolidation->queued()) {
+		Array v;
+		v.push_back(r.x); v.push_back(r.y); v.push_back(r.z);
+		queued.push_back(v);
+	}
+	d["consolidation_queue"] = queued;
+	std::set<Key> regions;
+	for (const PendingEdit &e : *store->pending_edits())
+		for (const ve::IVec3 &r : e.result.touched) regions.insert(Key{r.x, r.y, r.z});
+	d["pending_edits"] = static_cast<int>(store->pending_edits()->size());
+	d["pending_regions"] = to_array(regions);
+	std::set<Key> regen;
+	if (WorldStreamer *s = world_->context().render->streamer())
+		for (const ve::IVec3 &r : s->forced_regen()) regen.insert(Key{r.x, r.y, r.z});
+	d["forced_regen"] = to_array(regen);
+	d["edit_rejections"] = world_->stats().edit_rejections;
+	d["islands"] = world_->island_manager() ? world_->island_manager()->debug_windows() : Array();
+	return d;
 }
 
 int VoxelDebugHooks::debug_override_region_table(int region_slot) const {

@@ -82,6 +82,9 @@ public:
 	int consolidated_count() const { return consolidation_count_; }
 	int refusals() const { return consolidation_refusals_; }
 	int queue_refusals() const { return consolidation_queue_refusals_; }
+	// The queue, for debug_edit_fanout. Written and read under edit_mutex(); the caller
+	// must hold it.
+	const std::vector<ve::IVec3> &queued() const { return consolidation_queue_; }
 
 private:
 	GpuAtlas *atlas() const { return *handles_.atlas; }

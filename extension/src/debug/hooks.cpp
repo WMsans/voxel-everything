@@ -156,6 +156,8 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_consolidate_diff", "region"), &VoxelDebugHooks::debug_consolidate_diff);
 	ClassDB::bind_method(D_METHOD("debug_consolidate_region", "region"), &VoxelDebugHooks::debug_consolidate_region);
 	ClassDB::bind_method(D_METHOD("debug_region_op_count", "region"), &VoxelDebugHooks::debug_region_op_count);
+	ClassDB::bind_method(D_METHOD("debug_edit_fanout"), &VoxelDebugHooks::debug_edit_fanout);
+	ClassDB::bind_method(D_METHOD("debug_drain_invalidations"), &VoxelDebugHooks::debug_drain_invalidations);
 	ClassDB::bind_method(D_METHOD("debug_override_region_table", "region_slot"),
 			&VoxelDebugHooks::debug_override_region_table);
 	ClassDB::bind_method(D_METHOD("debug_override_used"), &VoxelDebugHooks::debug_override_used);

@@ -189,6 +189,9 @@ public:
 	bool physics_ready() const { return physics_ready_; }
 	std::vector<IslandBody *> &test_bodies() { return test_bodies_; }
 	std::vector<float> &physics_bubble_centers() { return physics_bubble_centers_; }
+	// The collider remesh queue, for debug_edit_fanout. Guarded by edit_mutex: the caller
+	// must hold it.
+	const std::vector<std::pair<ve::IVec3, ve::IVec3>> &pending_dirty() const { return pending_dirty_; }
 	WorldStats stats() const { return stats_; }
 	void note_overflow(int bits) { stats_.overflow_seen |= bits; }
 	// Synchronous island extraction for diagnostics (drives the mesher worker by hand).

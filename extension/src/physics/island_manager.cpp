@@ -1387,6 +1387,22 @@ void IslandManager::debug_wake_body(int index) {
 	ps->body_set_state(bodies_[index]->body(), PhysicsServer3D::BODY_STATE_SLEEPING, false);
 }
 
+Array IslandManager::debug_windows() {
+	std::lock_guard<std::mutex> lock(windows_mutex_);
+	Array out;
+	for (const PendingWindow &w : windows_) {
+		Array row, lo, hi;
+		lo.push_back(w.lo.x); lo.push_back(w.lo.y); lo.push_back(w.lo.z);
+		hi.push_back(w.hi.x); hi.push_back(w.hi.y); hi.push_back(w.hi.z);
+		row.push_back(lo);
+		row.push_back(hi);
+		row.push_back(static_cast<int64_t>(w.seq));
+		row.push_back(w.impulse_scale);
+		out.push_back(row);
+	}
+	return out;
+}
+
 Dictionary IslandManager::debug_body_info(int index) {
 	Dictionary d;
 	if (index < 0 || index >= static_cast<int>(bodies_.size()) || !bodies_[index] ||
