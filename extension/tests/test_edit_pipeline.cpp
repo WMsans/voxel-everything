@@ -51,6 +51,31 @@ struct Fixture {
 
 } // namespace
 
+TEST_CASE("one invalidation fans out to two sinks") {
+	Fixture f;
+	Recorder second;
+	f.pipeline.add_sink(&second);
+	const ve::EditOp op = in_r0();
+	const ve::BatchResult r = f.pipeline.apply({&op, 1}, {});
+	REQUIRE(r.ops.size() == 1);
+	REQUIRE(f.sink.reasons.size() == 1);
+	REQUIRE(second.reasons.size() == 1);
+	CHECK(f.sink.reasons[0] == ve::InvalidationReason::kEdit);
+	CHECK(second.reasons[0] == ve::InvalidationReason::kEdit);
+}
+
+TEST_CASE("a fully accepted cross-region op bumps sequence once") {
+	Fixture f;
+	const ve::EditOp op = across();
+	const ve::BatchResult r = f.pipeline.apply({&op, 1}, {});
+	REQUIRE(r.ops.size() == 1);
+	CHECK(r.ops[0].touched.size() == 2);
+	CHECK(r.ops[0].rejected.empty());
+	CHECK(f.seq.load() == 1);
+	REQUIRE(f.sink.seqs.size() == 1);
+	CHECK(f.sink.seqs[0] == 1);
+}
+
 TEST_CASE("an accepted op appends, bumps the seq once and tells the sinks") {
 	Fixture f;
 	const ve::EditOp op = in_r0();

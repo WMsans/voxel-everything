@@ -40,6 +40,9 @@ struct Invalidation {
 	IVec3 region{}; // kConsolidated only: sinks derive brick/chunk ranges from this, never
 	                // from the float box, so no rounding can move a range.
 	int64_t seq = 0; // the world edit sequence AFTER this op's bump
+	// Borrowed for the synchronous record() call only. A deferred sink must copy the pointed-to
+	// EditOp and AppendResult (including their vectors) before returning; never retain these
+	// pointers in its queue.
 	const EditOp *op = nullptr;                    // kEdit, kRejected
 	const EditLog::AppendResult *append = nullptr; // kEdit, kRejected
 	bool notify_islands = true;
