@@ -24,7 +24,7 @@ func after_test() -> void:
 			w.free()
 	_worlds.clear()
 
-func make_world() -> VoxelWorld:
+func make_world(override_bricks := 1) -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.physics_enabled = false
@@ -37,7 +37,7 @@ func make_world() -> VoxelWorld:
 	# consolidation would otherwise bake those lists into override bricks and clear them
 	# before the re-merge/preflight runs, so give this suite a one-brick override pool that
 	# cannot absorb a real region bake and leaves the op lists full.
-	w.max_override_bricks = 1
+	w.max_override_bricks = override_bricks
 	w.physics_radius_m = 30.0
 	w.max_collider_chunks = 128
 	w.shape_builds_per_frame = 4
@@ -1221,3 +1221,39 @@ func test_a_solid_component_is_never_crumbled(timeout := 120000) -> void:
 	# a crumble that deletes rock on the strength of a disagreement it cannot explain.
 	assert_bool(solid_at(w, Vector3(PILLAR_X, PILLAR_BASE, PILLAR_Z))).override_failure_message(
 		"the crumble ate the stump").is_true()
+
+# Pins today's staleness rule for sub-project 5b (docs/superpowers/plans/2026-09-17-edit-pipeline.md,
+# Task 3). land_extraction compares the ops it captured with the ops the log holds now, so a
+# consolidation that bakes those ops away over the component's boxes reads as "the field moved"
+# and the extraction is refused. Task 10 moves this pin on purpose: a bake changes no field
+# value, so the extraction lands instead. A real override pool is needed here (the suite's
+# one-brick default cannot bake a region).
+func test_a_consolidation_during_an_extraction_is_pinned(timeout := 180000) -> void:
+	var w := make_world(8192)
+	var t := tool_of(w)
+	build_pillar(w, t)
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	var st: Dictionary = w.hooks().debug_island_stats()
+	for i in range(120):
+		await get_tree().physics_frame
+		step(w, 1)
+		st = w.hooks().debug_island_stats()
+		if st["in_flight"] > 0:
+			break
+	assert_int(st["in_flight"]).override_failure_message(
+		"the connectivity pass did not submit an extraction: %s" % st).is_greater(0)
+	# The pillar stands in region (0, 2, 0); baking it clears the ops the extraction captured.
+	assert_bool(w.hooks().debug_consolidate_region(Vector3i(0, 2, 0))).override_failure_message(
+		"the pillar's region did not consolidate; the fixture is wrong, not the code").is_true()
+	var stale_before: int = st["land_stale"]
+	for i in range(240):
+		await get_tree().physics_frame
+		step(w, 1)
+		st = w.hooks().debug_island_stats()
+		if st["land_stale"] > stale_before or st["islands_spawned"] + st["debris_spawned"] > 0:
+			break
+	assert_int(st["land_stale"]).override_failure_message(
+		"a consolidation during an extraction no longer reads as stale: %s" % st
+		).is_greater(stale_before)
+	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
+		"the stale extraction still spawned a body: %s" % st).is_equal(0)
