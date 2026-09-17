@@ -42,7 +42,7 @@ public:
 	// What the manager needs from the world, and nothing else (spec 2026-09-14 §3.4).
 	struct Collaborators {
 		// edit_log, edit_mutex, edit_seq, occupancy, volumes, override tables, field
-		// snapshots, raycast_down.
+		// snapshots, and the world field.
 		WorldStore *store = nullptr;
 		// Island/field-volume bytes and descriptors for the render device; slot mark.
 		IslandHandoff *handoff = nullptr;

@@ -79,6 +79,14 @@ bool same_rest_pose(const Transform3D &a, const Transform3D &b) {
 	return true;
 }
 
+// A downward ray from 200 m, 400 m long: where the ground is under a sleeping body's
+// footprint, read from the same field the paste goes into.
+ve::RayHit ground_below(WorldStore *store, const float xz[2]) {
+	const float origin[3] = {xz[0], 200.0f, xz[1]};
+	const float down[3] = {0.0f, -1.0f, 0.0f};
+	return store->field().lock().raycast(origin, down, 400.0f);
+}
+
 } // namespace
 
 IslandManager::~IslandManager() {
@@ -1001,7 +1009,7 @@ void IslandManager::start_merges() {
 		float best_ground = -1e30f;
 		bool any_ground = false;
 		for (const float(&p)[2] : probes) {
-			const ve::RayHit g = handles_.store->raycast_down(p);
+			const ve::RayHit g = ground_below(handles_.store, p);
 			if (g.hit) {
 				any_ground = true;
 				best_ground = std::max(best_ground, g.pos[1]);
@@ -1534,7 +1542,7 @@ Dictionary IslandManager::stats() {
 	// the paste went into, which is the point of asking it rather than the physics.
 	float ground = 0.0f;
 	if (handles_.store) {
-		const ve::RayHit h = handles_.store->raycast_down(last_merge_xz_);
+		const ve::RayHit h = ground_below(handles_.store, last_merge_xz_);
 		if (h.hit) ground = h.pos[1];
 	}
 	d["ground_y"] = ground;

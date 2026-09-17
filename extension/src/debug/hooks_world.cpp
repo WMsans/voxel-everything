@@ -1305,12 +1305,9 @@ bool VoxelDebugHooks::debug_region_map_consistent() {
 Dictionary VoxelDebugHooks::debug_raycast(Vector3 origin, Vector3 dir) {
 	Dictionary d;
 	d["hit"] = false;
-	if (!world_->context().store->edit_log()) return d;
-	std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	const float o[3] = {origin.x, origin.y, origin.z};
 	const float f[3] = {dir.x, dir.y, dir.z};
-	const ve::RayHit h = ve::raycast(gen, *world_->context().store->edit_log(), o, f, 200.0f, &world_->context().store->volumes(), world_->context().store->overrides());
+	const ve::RayHit h = world_->context().store->field().lock().raycast(o, f, 200.0f);
 	if (!h.hit) return d;
 	d["hit"] = true;
 	d["pos"] = Vector3(h.pos[0], h.pos[1], h.pos[2]);

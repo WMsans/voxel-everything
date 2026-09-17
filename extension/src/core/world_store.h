@@ -31,7 +31,6 @@
 #include "world/override_store.h"
 #include "world/region_window.h"
 #include "world/residency.h"
-#include "world/raycast.h"
 
 namespace ve {
 
@@ -168,10 +167,6 @@ public:
 	// VoxelWorld in Task 11 so the consolidation coordinator needs no VoxelWorld*.
 	bool snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo,
 			ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const;
-	// A downward ve::raycast at (xz[0], xz[1]) from 200 m, 400 m long, on the generator plus
-	// the region ops, volumes and overrides. Takes edit_mutex(); this is the store-owned field
-	// query used by IslandManager.
-	ve::RayHit raycast_down(const float xz[2]);
 	// The world field over this store's current cores. A cheap value: re-fetch it per use,
 	// because the edit log and override store are created lazily and released at exit.
 	ve::WorldField field() {
