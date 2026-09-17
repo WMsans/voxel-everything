@@ -4,9 +4,9 @@
 // public API and on the atlas/mesher via injected handles; it never holds a VoxelWorld*.
 //
 // Threading: consolidation runs across the main thread (frame pump, teardown) and tool
-// threads (debug hooks), while the mesher's worker owns the bake itself. Lock order is
-// verbatim from VoxelWorld: render lifetime mutex -> WorldStore::edit_mutex() ->
-// lod mutex (VoxelWorld::lod_mutex_ today; LodSystem::mutex() after Phase 5).
+// threads (debug hooks), while the mesher's worker owns the bake itself. Acquisition rules:
+// core/edit_pipeline.h. The commit holds the render lifetime mutex and the edit lock; it
+// takes no other lock.
 //
 // NOTE: this translation unit is explicitly EXCLUDED from the zero-godot-cpp native test
 // build's pure_sources in SConstruct: the moved state machine publishes transactions to

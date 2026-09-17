@@ -11,9 +11,9 @@
 // THE lod mutex moved here verbatim from VoxelWorld (Task 15) -- same guard scopes, same
 // acquisition sites:
 //
-//	Lock order is WorldStore::edit_mutex() -> LodSystem::mutex(): tick never holds
-//	lod_mutex_ across gather_ops (which takes edit_mutex()), so append_edit_locked can
-//	take LodSystem::mutex() while already holding edit_mutex().
+// THE lod mutex lives here (Task 15 of the frame-module plan). Acquisition rules for it and
+// for WorldStore::edit_mutex(): core/edit_pipeline.h. Nothing takes this mutex while holding
+// the edit lock -- record() queues, drain_invalidations() applies.
 //
 // NOTE: this translation unit is explicitly EXCLUDED from the zero-godot-cpp native test
 // build's pure_sources in SConstruct: ensure_lod()/tick() drive GPU pools and raster
@@ -80,8 +80,7 @@ public:
 
 	// THE lod mutex; guards lod_tree_, lod_walk_, lod_pages_of_, lod_page_quads_,
 	// lod_overflow_logged_ and lod_pool_ state between the render thread (tick) and
-	// main/tool threads (mark-dirty fan-out, debug stats). Lock order versus the edit
-	// path is restated at WorldStore::edit_mutex(): edit_mutex -> LodSystem::mutex()
+	// main/tool threads (mark-dirty fan-out, debug stats). See core/edit_pipeline.h.
 	// (tick never holds mutex() across gather_ops, so append_edit_locked can take it
 	// while holding edit_mutex).
 	std::mutex &mutex() { return lod_mutex_; }

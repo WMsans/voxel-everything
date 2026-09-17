@@ -135,8 +135,8 @@ public:
 	bool try_begin_render_callback();
 	void end_render_callback();
 	// Admission transitions taken by the free admission functions while they hold the
-	// global admission lock (lock order: g_voxel_compositor_admission_mutex ->
-	// render_lifetime_mutex_, unchanged from the pre-move bodies).
+	// global admission lock (admission then render lifetime, unchanged from the pre-move bodies;
+	// see core/edit_pipeline.h).
 	void reopen_admission();  // voxel_compositor_callbacks_ready()
 	void close_admission();   // voxel_compositor_callbacks_shutdown_started()
 	// ensure_initialized()/pump_shader_reload()'s gate, verbatim: refuse new init/reload

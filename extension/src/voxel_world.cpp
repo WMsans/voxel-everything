@@ -122,7 +122,7 @@ bool godot::voxel_try_begin_compositor_callback(const NodePath &world_path,
 
 void godot::voxel_compositor_callbacks_ready(RenderOrchestrator *render) {
 	std::lock_guard<std::mutex> admission(g_voxel_compositor_admission_mutex);
-	// Same lock order as before the Task 13 move: admission -> render_lifetime_mutex_
+	// Admission then render lifetime, as before the Task 13 move (see core/edit_pipeline.h)
 	// (taken inside reopen_admission()).
 	render->reopen_admission();
 	g_voxel_compositor_callbacks_enabled = true;
@@ -131,7 +131,7 @@ void godot::voxel_compositor_callbacks_ready(RenderOrchestrator *render) {
 void godot::voxel_compositor_callbacks_shutdown_started(RenderOrchestrator *render) {
 	std::lock_guard<std::mutex> admission(g_voxel_compositor_admission_mutex);
 	g_voxel_compositor_callbacks_enabled = false;
-	// Same lock order as before the Task 13 move: admission -> render_lifetime_mutex_
+	// Admission then render lifetime, as before the Task 13 move (see core/edit_pipeline.h)
 	// (taken inside close_admission()).
 	render->close_admission();
 }

@@ -147,7 +147,7 @@ public:
 	}
 
 	// THE edit spine. Tools take edit_mutex() and call edits().apply(...); consolidation
-	// calls edits().invalidate(...). Lock order and the sink contract: core/edit_pipeline.h.
+	// calls edits().invalidate(...). Acquisition order and the rule that nothing nests inside it: core/edit_pipeline.h.
 	ve::EditPipeline &edits() { return pipeline_; }
 	// InvalidationSink: the streamer handoff queue. Edit lock held; queue only.
 	void record(const ve::Invalidation &inv) override;
