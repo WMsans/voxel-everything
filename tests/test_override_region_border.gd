@@ -135,8 +135,7 @@ func test_an_over_cap_lod_chunk_is_refused_not_truncated(timeout := 300000) -> v
 	assert_int(w.hooks().debug_region_op_count(R)).is_equal(150)
 	assert_int(w.hooks().debug_region_op_count(Vector3i(1, 1, 0))).is_equal(150)
 	var d: Dictionary = w.hooks().debug_lod_diff(2, Vector3i(0, 0, 0))
-	assert_bool(bool(d.get("op_overflow", false)) or int(d.get("fine_max_diff", 99)) <= 1
-		).override_failure_message(
+	assert_bool(bool(d.get("op_overflow", false))).override_failure_message(
 		"S3c: a LoD chunk over the op cap was built from a truncated list: %s" % d).is_true()
 
 # S3c, the cut. The neighbour's 150 ops are 5 cm pockets, shorter than half a level-2 cell

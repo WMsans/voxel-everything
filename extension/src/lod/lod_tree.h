@@ -180,6 +180,7 @@ private:
 		uint8_t state = kLodUnknown;
 		bool building = false; // a build is in flight; ready nodes keep drawing old pages
 		bool dirty = false;
+		bool refused = false; // an over-cap build stays suppressed until the node is dirtied
 		int page_first = -1;
 		int page_count = 0;
 		uint32_t last_marked = 0;

@@ -1215,3 +1215,34 @@ TEST_CASE("a refused rebuild keeps drawing its pages and is not re-requested unt
 	t.note_refused(2, fresh);
 	CHECK(t.state_of(2, fresh) == ve::kLodFailed);
 }
+
+TEST_CASE("a fresh refused node is skipped until its chunk is dirtied") {
+	ve::LodTreeConfig cfg;
+	cfg.stream_radius_m = 1638.4f;
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	ve::LodWalkResult initial;
+	t.walk(c, &occ, 1u, &initial);
+	REQUIRE(!initial.requests.empty());
+	const ve::LodBuildRequest target = initial.requests.front();
+	t.note_building(target.level, target.coord);
+	t.note_refused(target.level, target.coord);
+	CHECK(t.state_of(target.level, target.coord) == ve::kLodFailed);
+
+	ve::LodWalkResult refused;
+	t.walk(c, &occ, 2u, &refused);
+	auto has_target = [&](const ve::LodWalkResult &walk) {
+		for (const ve::LodBuildRequest &q : walk.requests)
+			if (q.level == target.level && q.coord == target.coord) return true;
+		return false;
+	};
+	CHECK_FALSE(has_target(refused));
+
+	float lo[3], hi[3];
+	ve::lod_chunk_aabb(target.level, target.coord, lo, hi);
+	t.mark_dirty(lo, hi);
+	ve::LodWalkResult dirtied;
+	t.walk(c, &occ, 3u, &dirtied);
+	CHECK(has_target(dirtied));
+}
