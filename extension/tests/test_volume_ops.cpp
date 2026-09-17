@@ -711,7 +711,7 @@ TEST_CASE("extract_island_volume is the field intersected with the component's b
 	REQUIRE(plan_island_lattice(lo, hi, kIslandDim, &voxel, origin));
 
 	VolumeData v;
-	extract_island_volume(gen, nullptr, 0, nullptr, origin, voxel, kIslandDim, aabbs.data(),
+	extract_island_volume(gen, nullptr, 0, nullptr, nullptr, origin, voxel, kIslandDim, aabbs.data(),
 			1, &v);
 	CHECK(v.dim == kIslandDim);
 	CHECK(v.solid_voxels > 0);
@@ -747,7 +747,7 @@ TEST_CASE("an extraction whose boxes hold no solid comes back empty") {
 	float origin[3] = {0, 0, 0};
 	REQUIRE(plan_island_lattice(lo, hi, kIslandDim, &voxel, origin));
 	VolumeData v;
-	extract_island_volume(gen, nullptr, 0, nullptr, origin, voxel, kIslandDim, aabbs.data(),
+	extract_island_volume(gen, nullptr, 0, nullptr, nullptr, origin, voxel, kIslandDim, aabbs.data(),
 			1, &v);
 	CHECK(v.solid_voxels == 0);
 }
@@ -762,7 +762,7 @@ TEST_CASE("the volume min-max mip bounds every sample in its cell") {
 	float origin[3] = {0, 0, 0};
 	REQUIRE(plan_island_lattice(lo, hi, kIslandDim, &voxel, origin));
 	VolumeData v;
-	extract_island_volume(gen, nullptr, 0, nullptr, origin, voxel, kIslandDim, aabbs.data(),
+	extract_island_volume(gen, nullptr, 0, nullptr, nullptr, origin, voxel, kIslandDim, aabbs.data(),
 			1, &v);
 
 	std::vector<uint8_t> mip;
@@ -811,7 +811,7 @@ TEST_CASE("every air sample beside the island's surface carries a material") {
 	REQUIRE(plan_island_lattice(lo, hi, kIslandDim, &voxel, origin));
 
 	VolumeData v;
-	extract_island_volume(gen, nullptr, 0, nullptr, origin, voxel, kIslandDim, aabbs.data(),
+	extract_island_volume(gen, nullptr, 0, nullptr, nullptr, origin, voxel, kIslandDim, aabbs.data(),
 			1, &v);
 	REQUIRE(v.solid_voxels > 0);
 

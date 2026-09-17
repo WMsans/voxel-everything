@@ -100,3 +100,23 @@ func test_zero_ssao_work_disables_the_pass() -> void:
 	# Low turns SSAO off outright; the clamp must agree rather than leaving a dispatch that
 	# produces nothing. Same rule the ssgi_taps == 0 case already follows.
 	assert_bool(low["ssao"]).is_false()
+
+# S6: the tier sets defaults and tweaks layer on top, so choosing a tier must not throw away a
+# knob somebody set by hand.
+func test_a_tweak_survives_a_tier_change() -> void:
+	var w := make_world()
+	w.set_effect_enabled("ssr", false)
+	w.set_effect_value("ssgi_strength", 2.0)
+	w.quality_tier = 2
+	var d := w.hooks().debug_beauty_settings()
+	assert_bool(d["ssr"]).is_false()
+	assert_float(d["ssgi_strength"]).is_equal_approx(2.0, 0.001)
+	# ...while everything that was not tweaked follows the tier.
+	assert_int(d["ssgi_taps"]).is_equal(4)
+
+# demo/benchmark.gd applies --effects-off= before it parses --quality=; the effects must stay off.
+func test_effects_turned_off_before_a_tier_stay_off() -> void:
+	var w := make_world()
+	w.set_effect_enabled("ssgi", false)
+	w.set_quality_tier(3)
+	assert_bool(w.get_effect_enabled("ssgi")).is_false()

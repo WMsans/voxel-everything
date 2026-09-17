@@ -6,6 +6,8 @@
 
 namespace ve {
 
+struct OverrideSource;
+
 // Spec §3 stores an island as a "dense per-island texture (AABB at 5 cm, uint8 + palette +
 // own min-max mip)". M4 fixes the lattice at 64^3 and picks the pitch from the island's
 // extent, which bounds every pool in the engine with one constant instead of a size class
@@ -81,8 +83,8 @@ bool plan_island_lattice(const float lo[3], const float hi[3], int dim, float *v
 // rather than ve::CellBox so generator/ need not depend on mesh/: the extractor does not
 // care that the boxes came from occupancy cells, only where they are.
 void extract_island_volume(const Generator &gen, const EditOp *ops, int op_count,
-		const VolumeStore *volumes, const float origin[3], float voxel, int dim,
-		const float *box_aabbs, int box_count, VolumeData *out);
+		const VolumeStore *volumes, const OverrideSource *overrides, const float origin[3],
+		float voxel, int dim, const float *box_aabbs, int box_count, VolumeData *out);
 
 // Spec §3's "own min-max mip". Two bytes (min, max) per kVolumeMipStride^3 cell, INCLUSIVE
 // over the cell's corner range so a "no surface" verdict is a sound skip for the trilinear

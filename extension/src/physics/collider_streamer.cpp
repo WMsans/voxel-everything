@@ -28,16 +28,21 @@ int sub_index(int slot, int octant) {
 	return slot * ve::kColliderOctants + octant;
 }
 
-// The residency's view of the world field.
+// The residency's view of the world field: generator, region ops, pasted volumes and baked
+// overrides -- everything eval_field takes, so a consolidated or pasted chunk is not probed
+// as empty (S1).
 struct LogProbe : ve::ChunkProbe {
 	const ve::Generator *gen = nullptr;
 	ve::EditLog *log = nullptr;
 	std::mutex *mu = nullptr;
+	const ve::VolumeStore *volumes = nullptr;
+	const ve::OverrideSource *overrides = nullptr;
 
 	bool chunk_has_surface(ve::IVec3 c) const override {
 		std::lock_guard<std::mutex> lock(*mu);
 		const std::vector<ve::EditOp> &ops = log->ops(ve::region_of_chunk(c));
-		return ve::chunk_has_surface(*gen, ops.data(), static_cast<int>(ops.size()), c);
+		return ve::chunk_has_surface(*gen, ops.data(), static_cast<int>(ops.size()), c,
+				volumes, overrides);
 	}
 };
 
@@ -48,13 +53,16 @@ ColliderStreamer::~ColliderStreamer() {
 }
 
 void ColliderStreamer::initialize(ve::ChunkResidency *chunks, ve::EditLog *edit_log,
-		std::mutex *edit_mutex, MeshService *mesh, int max_slots, const ve::Generator *gen) {
+		std::mutex *edit_mutex, MeshService *mesh, int max_slots, const ve::Generator *gen,
+		const ve::VolumeStore *volumes, const ve::OverrideSource *overrides) {
 	teardown();
 	chunks_ = chunks;
 	edit_log_ = edit_log;
 	edit_mutex_ = edit_mutex;
 	mesh_ = mesh;
 	gen_ = gen;
+	volumes_ = volumes;
+	overrides_ = overrides;
 	const size_t slots = static_cast<size_t>(std::max(0, max_slots));
 	const size_t bodies = slots * ve::kColliderOctants;
 	bodies_.assign(bodies, RID());
@@ -578,6 +586,8 @@ int ColliderStreamer::run_frame(float cx, float cy, float cz, const float *extra
 	probe.gen = gen_;
 	probe.log = edit_log_;
 	probe.mu = edit_mutex_;
+	probe.volumes = volumes_;
+	probe.overrides = overrides_;
 	const int build_cap = (mesh_->busy() || !inbox_.empty() || !pending_.empty()) ? 0 : -1;
 	const Clock::time_point t_plan = Clock::now();
 	const ve::ChunkPlan plan = chunks_->update(centers.data(), radii.data(),

@@ -83,17 +83,10 @@ bool same_rest_pose(const Transform3D &a, const Transform3D &b) {
 // call rather than held, exactly as ColliderStreamer::LogProbe does, so an edit landing
 // mid-refinement waits rather than deadlocks.
 struct LogContactProbe : ve::ContactProbe {
-	const ve::Generator *gen = nullptr;
-	ve::EditLog *log = nullptr;
-	std::mutex *mu = nullptr;
-	const ve::VolumeStore *volumes = nullptr;
-	int face_samples = 9;
+	const IslandManager *manager = nullptr;
 
 	int contact_samples(ve::IVec3 cell, int axis) const override {
-		std::lock_guard<std::mutex> lock(*mu);
-		const std::vector<ve::EditOp> &ops = log->ops(ve::region_of_brick(cell));
-		return ve::contact_samples_field(*gen, ops.data(), static_cast<int>(ops.size()), cell,
-				axis, face_samples, volumes);
+		return manager->contact_samples(cell, axis);
 	}
 };
 
@@ -101,6 +94,14 @@ struct LogContactProbe : ve::ContactProbe {
 
 IslandManager::~IslandManager() {
 	teardown();
+}
+
+int IslandManager::contact_samples(ve::IVec3 cell, int axis) const {
+	if (gen_ == nullptr || !handles_.store || !handles_.store->edit_log()) return 0;
+	std::lock_guard<std::mutex> lock(handles_.store->edit_mutex());
+	const std::vector<ve::EditOp> &ops = handles_.store->edit_log()->ops(ve::region_of_brick(cell));
+	return ve::contact_samples_field(*gen_, ops.data(), static_cast<int>(ops.size()), cell, axis,
+			refine_cfg_.face_samples, &handles_.store->volumes(), handles_.store->overrides());
 }
 
 void IslandManager::initialize(Collaborators handles) {
@@ -251,11 +252,7 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 	ve::LinkCuts cuts;
 	ve::FloodResult r;
 	LogContactProbe probe;
-	probe.gen = gen_;
-	probe.log = handles_.store->edit_log();
-	probe.mu = &handles_.store->edit_mutex();
-	probe.volumes = &handles_.store->volumes();
-	probe.face_samples = refine_cfg_.face_samples;
+	probe.manager = this;
 
 	for (int expand = 0;; expand++) {
 		ve::flood_anchored(handles_.store->occupancy(), w, &cuts, &r);

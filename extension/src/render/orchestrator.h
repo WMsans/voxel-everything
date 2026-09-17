@@ -35,6 +35,8 @@
 #include "render/gpu_timings.h"
 #include "render/island_handoff.h"
 #include "shade/beauty_settings.h"
+#include "shade/beauty_settings_store.h"
+#include "settings/render_settings.h"
 #include "world/region.h"
 
 namespace godot {
@@ -168,9 +170,11 @@ public:
 	// Returns an immutable value snapshot. Render callbacks must take this once per frame
 	// and pass the copy through their work; the mutex is never held during render work.
 	ve::BeautySettings beauty_settings() const;
-	// One beauty_mutex_ hold copying settings + tier together -- the exact hold shape of
-	// the pre-move debug_beauty_settings body.
+	// Settings + tier together, for debug_beauty_settings.
 	void beauty_snapshot(ve::BeautySettings *out_settings, int *out_tier) const;
+	// The three stores by group name ("render", "beauty", "grass"); nullptr otherwise.
+	// VoxelSettings addresses them through this. Main thread.
+	ve::SettingsGroup *settings_group(const char *name);
 
 	// Outcome of the GPU-half of ensure_initialized():
 	//   kOk          -- graph complete; caller sets its initialized_ flag.
@@ -299,8 +303,7 @@ private:
 	std::vector<const char *> teardown_trace_;
 
 	RenderPasses passes_;
-	// Grass knobs live here (not in BeautySettings): the store mirrors the SHAPE of the
-	// beauty_mutex_/beauty_snapshot() pair without joining it (design doc section 7).
+	// Grass knobs live here, separate from BeautySettings (design doc section 7).
 	ve::GrassSettingsStore grass_settings_;
 	GpuTimings gpu_timings_;
 	IslandHandoff handoff_;
@@ -344,11 +347,16 @@ private:
 	int reload_count_ = 0;
 	bool reload_last_ok_ = true;
 	String reload_last_error_;
-	// --- M6 beautification settings (member-for-member from VoxelWorld, Task 14);
-	// guarded by beauty_mutex_ per the class contract documented above ---
-	mutable std::mutex beauty_mutex_;
-	int quality_tier_ = static_cast<int>(ve::QualityTier::kHigh);
-	ve::BeautySettings beauty_ = ve::settings_for_tier(ve::QualityTier::kHigh);
+	// Setters run on the main thread; render callbacks take value snapshots through
+	// beauty_settings(). The store's mutex is never held during render work.
+	std::atomic<int> quality_tier_{static_cast<int>(ve::QualityTier::kHigh)};
+	// Source of truth for the budget dials. Its listener mirrors near_field_scale, near_field and
+	// islands into the orchestrator's atomics (the render thread's lock-free reads) and rebases
+	// beauty_ when the tier moves. The listener is attached in the constructor body, after every
+	// member it touches exists.
+	ve::RenderSettingsStore render_settings_;
+	static void on_render_resolved(const ve::RenderSettings &s, void *ctx);
+	ve::BeautySettingsStore beauty_;
 	VoxelFrame frame_;
 };
 

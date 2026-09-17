@@ -5,7 +5,6 @@
 [ext_resource type="Script" uid="uid://bbqt8juf6r03q" path="res://demo/benchmark.gd" id="3"]
 [ext_resource type="Script" uid="uid://ckh70w6lwfsu6" path="res://demo/edit_tool.gd" id="4"]
 [ext_resource type="Shader" uid="uid://dfrn1we3oknf4" path="res://shaders/cel_object.gdshader" id="5"]
-[ext_resource type="Script" uid="uid://b2lhiur2hi32y" path="res://demo/debug_menu.gd" id="6"]
 [ext_resource type="Script" uid="uid://c0gpopss4qh2v" path="res://demo/help.gd" id="7"]
 [ext_resource type="Script" uid="uid://5jhax4kvtcuf" path="res://demo/dev_tools.gd" id="8"]
 [ext_resource type="Script" uid="uid://c6bt8h3miy4v1" path="res://demo/capture.gd" id="9"]
@@ -68,6 +67,9 @@ physics_center_path = NodePath("/root/Main/Player")
 sun_light_path = NodePath("/root/Main/DirectionalLight3D")
 process_mode = 3
 
+[node name="VoxelSettings" type="VoxelSettings" parent="."]
+world_path = NodePath("../VoxelWorld")
+
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1621412302]
 environment = SubResource("3")
 compositor = SubResource("2")
@@ -119,21 +121,9 @@ grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("7")
 
-[node name="DebugMenu" type="PanelContainer" parent="HUD" unique_id=1662814525]
-anchors_preset = 1
-anchor_left = 1.0
-anchor_right = 1.0
-offset_left = -600.0
-offset_top = 10.0
-offset_right = -10.0
-offset_bottom = 420.0
-grow_horizontal = 0
-script = ExtResource("6")
-world_path = NodePath("/root/Main/VoxelWorld")
-
 [node name="SettingsMenu" parent="HUD" unique_id=292828256 instance=ExtResource("10")]
 layout_mode = 3
-world_path = NodePath("/root/Main/VoxelWorld")
+settings_path = NodePath("/root/Main/VoxelSettings")
 
 [node name="MaterialPicker" parent="HUD" unique_id=902510277 instance=ExtResource("11")]
 layout_mode = 3

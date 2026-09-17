@@ -410,12 +410,15 @@ void VoxelWorld::update_sun_state() {
 	context_.render->set_sun_state(s);
 	// S4: cel-shaded objects (shaders/cel_object.gdshader) read the same sun through global
 	// shader uniforms declared in project.godot, set here on the main thread beside the UBO
-	// publish the terrain reads. Ambient is DeferredPass's, so both paths share one number.
+	// publish the terrain reads. Ambient is BeautySettings', so both paths share one number.
 	if (RenderingServer *server = RenderingServer::get_singleton()) {
 		server->global_shader_parameter_set("ve_sun_dir", Vector3(s.dir[0], s.dir[1], s.dir[2]));
 		server->global_shader_parameter_set("ve_sun_rgb", Vector3(s.rgb[0], s.rgb[1], s.rgb[2]));
-		server->global_shader_parameter_set("ve_ambient", Vector3(DeferredPass::kAmbient[0],
-				DeferredPass::kAmbient[1], DeferredPass::kAmbient[2]));
+		// Ambient is a beauty setting; the deferred pass reads the same snapshot, so both paths
+		// share one number. Published every _process, so a change lands on the next frame.
+		const ve::BeautySettings beauty = context_.render->beauty_settings();
+		server->global_shader_parameter_set("ve_ambient",
+				Vector3(beauty.ambient[0], beauty.ambient[1], beauty.ambient[2]));
 	}
 }
 
@@ -760,7 +763,7 @@ void VoxelWorld::ensure_physics_initialized() {
 	chunks_ = new ve::ChunkResidency(ccfg);
 	colliders_ = new ColliderStreamer();
 	colliders_->initialize(chunks_, store_->edit_log(), &store_->edit_mutex(), mesh_, max_collider_chunks_,
-			&store_->generator()->sampler());
+			&store_->generator()->sampler(), &store_->volumes(), store_->overrides());
 	colliders_->set_shape_builds_per_frame(shape_builds_per_frame_);
 	colliders_->set_body_bubble_radius_m(physics_bubble_radius_m_);
 	// Publish the manager under edit_mutex_: append_edit_locked() can be called from a tool
@@ -915,7 +918,7 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 	// Task 10: through the FieldGenerator seam -- same analytic field, no behavior change.
 	const ve::Generator &gen = store_->generator()->sampler();
 	ve::extract_island_volume(gen, job->ops.data(), static_cast<int>(job->ops.size()),
-			&store_->volumes(), job->origin, job->voxel, job->dim, aabbs.data(),
+			&store_->volumes(), store_->overrides(), job->origin, job->voxel, job->dim, aabbs.data(),
 			static_cast<int>(boxes->size()), &cpu);
 	*out = std::move(cpu);
 	return true;

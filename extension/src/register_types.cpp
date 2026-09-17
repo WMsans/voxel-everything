@@ -5,6 +5,7 @@
 #include "voxel_world.h"
 #include "debug/hooks.h"
 #include "voxel_edit_tool.h"
+#include "voxel_settings.h"
 #include "raymarch_compositor.h"
 #include "beauty_compositor.h"
 #include "render/async_readback.h"
@@ -21,6 +22,7 @@ void voxel_everything_initialize(ModuleInitializationLevel p_level) {
 	GDREGISTER_CLASS(RaymarchCompositor);
 	GDREGISTER_CLASS(BeautyCompositor);
 	GDREGISTER_CLASS(VoxelEditTool);
+	GDREGISTER_CLASS(VoxelSettings);
 }
 
 void voxel_everything_uninitialize(ModuleInitializationLevel p_level) {

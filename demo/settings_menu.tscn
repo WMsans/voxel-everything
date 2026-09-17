@@ -42,113 +42,12 @@ theme_override_constants/separation = 12
 
 [node name="Title" type="Label" parent="Center/Panel/Margin/Box"]
 layout_mode = 2
-text = "Graphics  (F7)"
+text = "Settings  (F1)"
 
-[node name="Grid" type="GridContainer" parent="Center/Panel/Margin/Box"]
-layout_mode = 2
-theme_override_constants/h_separation = 18
-theme_override_constants/v_separation = 10
-columns = 2
-
-[node name="ResolutionLabel" type="Label" parent="Center/Panel/Margin/Box/Grid"]
-layout_mode = 2
-text = "Window resolution"
-
-[node name="Resolution" type="OptionButton" parent="Center/Panel/Margin/Box/Grid"]
+[node name="Tabs" type="TabContainer" parent="Center/Panel/Margin/Box"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(260, 0)
+custom_minimum_size = Vector2(620, 460)
 layout_mode = 2
-
-[node name="FullscreenLabel" type="Label" parent="Center/Panel/Margin/Box/Grid"]
-layout_mode = 2
-text = "Fullscreen"
-
-[node name="Fullscreen" type="CheckBox" parent="Center/Panel/Margin/Box/Grid"]
-unique_name_in_owner = true
-layout_mode = 2
-
-[node name="RenderScaleLabel" type="Label" parent="Center/Panel/Margin/Box/Grid"]
-layout_mode = 2
-text = "Render scale"
-
-[node name="RenderScaleBox" type="HBoxContainer" parent="Center/Panel/Margin/Box/Grid"]
-layout_mode = 2
-theme_override_constants/separation = 10
-
-[node name="RenderScale" type="HSlider" parent="Center/Panel/Margin/Box/Grid/RenderScaleBox"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(200, 0)
-layout_mode = 2
-size_flags_vertical = 4
-min_value = 0.5
-max_value = 1.0
-step = 0.01
-value = 0.65
-
-[node name="RenderScaleValue" type="Label" parent="Center/Panel/Margin/Box/Grid/RenderScaleBox"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(50, 0)
-layout_mode = 2
-text = "65%"
-horizontal_alignment = 2
-
-[node name="UpscalerLabel" type="Label" parent="Center/Panel/Margin/Box/Grid"]
-layout_mode = 2
-text = "Upscaler"
-
-[node name="Upscaler" type="OptionButton" parent="Center/Panel/Margin/Box/Grid"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(260, 0)
-layout_mode = 2
-
-[node name="NearScaleLabel" type="Label" parent="Center/Panel/Margin/Box/Grid"]
-layout_mode = 2
-text = "Near-field resolution"
-
-[node name="NearScaleBox" type="HBoxContainer" parent="Center/Panel/Margin/Box/Grid"]
-layout_mode = 2
-theme_override_constants/separation = 10
-
-[node name="NearScale" type="HSlider" parent="Center/Panel/Margin/Box/Grid/NearScaleBox"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(200, 0)
-layout_mode = 2
-size_flags_vertical = 4
-min_value = 0.1
-max_value = 1.0
-step = 0.01
-value = 0.4
-
-[node name="NearScaleValue" type="Label" parent="Center/Panel/Margin/Box/Grid/NearScaleBox"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(50, 0)
-layout_mode = 2
-text = "40%"
-horizontal_alignment = 2
-
-[node name="NearFieldLabel" type="Label" parent="Center/Panel/Margin/Box/Grid"]
-layout_mode = 2
-text = "Near field"
-
-[node name="NearField" type="CheckBox" parent="Center/Panel/Margin/Box/Grid"]
-unique_name_in_owner = true
-layout_mode = 2
-
-[node name="QualityLabel" type="Label" parent="Center/Panel/Margin/Box/Grid"]
-layout_mode = 2
-text = "Beauty quality"
-
-[node name="Quality" type="OptionButton" parent="Center/Panel/Margin/Box/Grid"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(260, 0)
-layout_mode = 2
-
-[node name="Hint" type="Label" parent="Center/Panel/Margin/Box"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(480, 0)
-layout_mode = 2
-text = "Near-field resolution is the fraction of the internal 3D resolution the raymarcher runs at. Only the terrain SILHOUETTE is resolved on that coarser grid, which is what the stepped pixels along terrain edges are; the material texture is resolved per full-resolution pixel either way, so lowering this does not blur the ground. Raise it to lose the stepping, lower it to buy frame time."
-autowrap_mode = 3
 
 [node name="Buttons" type="HBoxContainer" parent="Center/Panel/Margin/Box"]
 layout_mode = 2
@@ -158,7 +57,7 @@ theme_override_constants/separation = 10
 [node name="Reset" type="Button" parent="Center/Panel/Margin/Box/Buttons"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "Reset to defaults"
+text = "Reset to shipped"
 
 [node name="Close" type="Button" parent="Center/Panel/Margin/Box/Buttons"]
 unique_name_in_owner = true

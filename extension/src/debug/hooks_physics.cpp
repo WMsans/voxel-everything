@@ -568,6 +568,14 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	return d;
 }
 
+// The shipped marginal-contact probe, asked directly: IslandManager::contact_samples is the
+// member LogContactProbe forwards to, so this is not a re-implementation.
+int VoxelDebugHooks::debug_contact_samples(Vector3i cell, int axis) {
+	world_->ensure_physics_initialized();
+	if (!world_->island_manager()) return -1;
+	return world_->island_manager()->contact_samples({cell.x, cell.y, cell.z}, axis);
+}
+
 Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_cell) {
 	Dictionary d;
 	d["ok"] = false;
@@ -626,8 +634,8 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 	ve::VolumeData cpu;
 	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	ve::extract_island_volume(gen, job.ops.data(), static_cast<int>(job.ops.size()),
-			&world_->context().store->volumes(), job.origin, job.voxel, job.dim, aabbs.data(),
-			static_cast<int>(boxes.size()), &cpu);
+			&world_->context().store->volumes(), world_->context().store->overrides(), job.origin,
+			job.voxel, job.dim, aabbs.data(), static_cast<int>(boxes.size()), &cpu);
 
 	int worst = 0, mat_mismatch = 0, mat_compared = 0;
 	const ve::VolumeData &gpu = results[0].data;

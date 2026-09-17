@@ -172,6 +172,7 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_apply_volume_add", "slot", "origin", "voxel", "dim"),
 			&VoxelDebugHooks::debug_apply_volume_add);
 	ClassDB::bind_method(D_METHOD("debug_island_extract_diff", "lo_cell", "hi_cell"), &VoxelDebugHooks::debug_island_extract_diff);
+	ClassDB::bind_method(D_METHOD("debug_contact_samples", "cell", "axis"), &VoxelDebugHooks::debug_contact_samples);
 	ClassDB::bind_method(D_METHOD("debug_place_test_island", "slot", "lo_cell", "hi_cell", "offset"), &VoxelDebugHooks::debug_place_test_island);
 	ClassDB::bind_method(D_METHOD("debug_place_test_island_rotated", "slot", "lo_cell", "hi_cell", "offset", "yaw", "volume_slot"), &VoxelDebugHooks::debug_place_test_island_rotated, DEFVAL(-1));
 	ClassDB::bind_method(D_METHOD("debug_clear_test_island", "slot"), &VoxelDebugHooks::debug_clear_test_island);

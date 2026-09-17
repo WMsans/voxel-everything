@@ -5,6 +5,11 @@ import platform
 # godot-cpp master requires an explicit api_version to generate bindings (engine is 4.7.x).
 api_version = "4.7"
 env = SConscript("godot-cpp/SConstruct", exports="api_version")
+# Task 6 settings use std::span; override godot-cpp's C++17 default for the extension.
+if env.get("is_msvc", False):
+    env.Append(CXXFLAGS=["/std:c++20"])
+else:
+    env.Append(CXXFLAGS=["-std=c++20"])
 env.Append(CPPPATH=["src/"])
 sources = Glob("src/*.cpp") + Glob("src/*/*.cpp") + Glob("src/*/*/*.cpp")
 lib = env.SharedLibrary("bin/voxel_everything{}{}".format(env["suffix"], env["SHLIBSUFFIX"]), source=sources)
@@ -30,7 +35,8 @@ pure_sources = (Glob("src/world/*.cpp") + Glob("src/generator/*.cpp") +
                 Glob("src/core/*.cpp") + Glob("src/terrain/*.cpp") +
                 Glob("src/mesh/*.cpp") + Glob("src/connectivity/*.cpp") +
                 Glob("src/lod/*.cpp") + Glob("src/shade/*.cpp") +
-                Glob("src/grass/*.cpp") + Glob("src/gpu_layout/*.cpp"))
+                Glob("src/grass/*.cpp") + Glob("src/gpu_layout/*.cpp") +
+                Glob("src/settings/*.cpp"))
 for f in ["src/render/shader_loader.cpp", "src/render/camera_params.cpp",
           "src/render/frame_params.cpp", "src/render/island_handoff.cpp"]:
     if os.path.exists(f):

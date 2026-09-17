@@ -1,6 +1,8 @@
 #include <doctest/doctest.h>
 #include <initializer_list>
+#include "settings_row_checks.h"
 #include "shade/beauty_settings.h"
+#include "shade/beauty_settings_store.h"
 
 TEST_CASE("the Off tier turns every effect off and leaves no work in any counter") {
 	const ve::BeautySettings s = ve::settings_for_tier(ve::QualityTier::kOff);
@@ -119,4 +121,109 @@ TEST_CASE("cost view is a flag, off in every quality tier") {
 	ve::BeautySettings s = ve::settings_for_tier(ve::QualityTier::kHigh);
 	s.cost_view = true;
 	CHECK((ve::pack_beauty_flags(s) & ve::kFlagCostView) == ve::kFlagCostView);
+}
+
+namespace {
+
+// Every field, so a tier preset that silently moves any knob fails here. A commit that adds a
+// BeautySettings field adds it to this list.
+void check_same(const ve::BeautySettings &got, const ve::BeautySettings &want) {
+	CHECK(got.ssgi == want.ssgi);
+	CHECK(got.ssr == want.ssr);
+	CHECK(got.contact_shadows == want.contact_shadows);
+	CHECK(got.outlines == want.outlines);
+	CHECK(got.sun_shadow_map == want.sun_shadow_map);
+	CHECK(got.glossy_sdf_rays == want.glossy_sdf_rays);
+	CHECK(got.raymarched_sun_shadow == want.raymarched_sun_shadow);
+	CHECK(got.cost_view == want.cost_view);
+	CHECK(got.ssao == want.ssao);
+	CHECK(got.ssgi_taps == want.ssgi_taps);
+	CHECK(got.ssr_steps == want.ssr_steps);
+	CHECK(got.contact_steps == want.contact_steps);
+	CHECK(got.ssao_steps == want.ssao_steps);
+	CHECK(got.ssao_directions == want.ssao_directions);
+	CHECK(got.ssao_radius == doctest::Approx(want.ssao_radius));
+	CHECK(got.ssao_strength == doctest::Approx(want.ssao_strength));
+	CHECK(got.ssgi_radius == doctest::Approx(want.ssgi_radius));
+	CHECK(got.ssgi_temporal == doctest::Approx(want.ssgi_temporal));
+	CHECK(got.ssgi_strength == doctest::Approx(want.ssgi_strength));
+	CHECK(got.emissive_gi_radius == doctest::Approx(want.emissive_gi_radius));
+	CHECK(got.emissive_gi_strength == doctest::Approx(want.emissive_gi_strength));
+	CHECK(got.outline_depth_threshold == doctest::Approx(want.outline_depth_threshold));
+	CHECK(got.outline_normal_threshold == doctest::Approx(want.outline_normal_threshold));
+	CHECK(got.outline_darken == doctest::Approx(want.outline_darken));
+	for (int k = 0; k < 3; k++) CHECK(got.ambient[k] == doctest::Approx(want.ambient[k]));
+	CHECK(got.contact_reach_m == doctest::Approx(want.contact_reach_m));
+	CHECK(got.contact_strength == doctest::Approx(want.contact_strength));
+	CHECK(got.contact_bias_m == doctest::Approx(want.contact_bias_m));
+}
+
+} // namespace
+
+TEST_CASE("every tier preset is pinned field by field") {
+	const ve::BeautySettings high; // the struct defaults ARE High
+	check_same(ve::settings_for_tier(ve::QualityTier::kHigh), high);
+
+	ve::BeautySettings medium;
+	medium.glossy_sdf_rays = false;
+	medium.emissive_gi_radius = 24.0f;
+	medium.ssgi_taps = 4;
+	medium.ssr_steps = 12;
+	medium.contact_steps = 8;
+	medium.ssao_steps = 4;
+	medium.ssao_directions = 4;
+	check_same(ve::settings_for_tier(ve::QualityTier::kMedium), medium);
+
+	ve::BeautySettings low;
+	low.ssgi = low.ssr = low.contact_shadows = false;
+	low.glossy_sdf_rays = false;
+	low.ssao = false;
+	low.ssgi_taps = low.ssr_steps = low.contact_steps = 0;
+	low.ssao_steps = low.ssao_directions = 0;
+	check_same(ve::settings_for_tier(ve::QualityTier::kLow), low);
+
+	ve::BeautySettings off = low;
+	off.outlines = off.sun_shadow_map = off.raymarched_sun_shadow = false;
+	check_same(ve::settings_for_tier(ve::QualityTier::kOff), off);
+}
+
+TEST_CASE("the beauty rows satisfy the table invariants for every tier") {
+	check_rows(ve::beauty_rows(),
+			{ve::BeautySettings{}, ve::settings_for_tier(ve::QualityTier::kOff),
+					ve::settings_for_tier(ve::QualityTier::kLow),
+					ve::settings_for_tier(ve::QualityTier::kMedium),
+					ve::settings_for_tier(ve::QualityTier::kHigh)});
+}
+
+TEST_CASE("the beauty store starts at High and sets counts by name") {
+	ve::BeautySettingsStore store;
+	check_same(store.get(), ve::settings_for_tier(ve::QualityTier::kHigh));
+	CHECK(store.set_value("ssgi_taps", 4.0f));
+	CHECK(store.get().ssgi_taps == 4);
+	CHECK(store.set_value("ssgi_taps", 0.0f));
+	CHECK_FALSE(store.get().ssgi); // normalize: zero work is off
+}
+
+TEST_CASE("the SSAO gather shape defaults to the literals it replaced") {
+	const ve::BeautySettings s;
+	CHECK(s.ssao_radius == 5.0f);
+	CHECK(s.ssao_strength == 1.5f);
+}
+
+TEST_CASE("outline darkening defaults to the literal it replaced") {
+	CHECK(ve::BeautySettings{}.outline_darken == 0.35f);
+}
+
+TEST_CASE("contact shadow shape defaults to the literals it replaced") {
+	const ve::BeautySettings s;
+	CHECK(s.contact_reach_m == 0.6f);
+	CHECK(s.contact_strength == 0.85f);
+	CHECK(s.contact_bias_m == 0.05f);
+}
+
+TEST_CASE("ambient defaults to the constant it replaced") {
+	const ve::BeautySettings s;
+	CHECK(s.ambient[0] == 0.16f);
+	CHECK(s.ambient[1] == 0.19f);
+	CHECK(s.ambient[2] == 0.26f);
 }
