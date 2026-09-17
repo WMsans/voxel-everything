@@ -220,6 +220,12 @@ TEST_CASE("a hostile radius is rejected rather than iterated") {
 	CHECK(!ve::op_region_span_ok(op));
 }
 
+TEST_CASE("an extreme finite sphere span is rejected without signed overflow") {
+	ve::EditOp op = sphere(ve::kOpSphereSubtract, 0.0f, 0.0f, 0.0f, 5.48e10f);
+	CHECK(ve::op_region_span(op) > ve::kMaxOpRegionSpan);
+	CHECK_FALSE(ve::op_region_span_ok(op));
+}
+
 TEST_CASE("the cap admits the largest legitimate edit") {
 	ve::EditOp op{};
 	op.type = ve::kOpSphereSubtract;
