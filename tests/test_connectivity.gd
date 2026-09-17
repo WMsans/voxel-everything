@@ -1203,3 +1203,39 @@ func test_a_consolidation_during_an_extraction_does_not_make_it_stale(timeout :=
 		"a consolidation still reads as a stale field: %s" % st).is_equal(stale_before)
 	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
 		"the extraction did not land after the bake: %s" % st).is_greater(0)
+
+# Regression for an append that lands after the extraction snapshot but is baked away before
+# the result lands. The retained-op query cannot see the edit after consolidation; the global
+# append sequence must conservatively refuse the stale extraction instead of carving from the
+# old field snapshot.
+func test_an_append_after_snapshot_then_consolidation_stays_stale(timeout := 180000) -> void:
+	var w := make_world(false)
+	var t := tool_of(w)
+	build_pillar(w, t)
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	var st: Dictionary = w.hooks().debug_island_stats()
+	for i in range(120):
+		await get_tree().physics_frame
+		step(w, 1)
+		st = w.hooks().debug_island_stats()
+		if st["in_flight"] > 0:
+			break
+	assert_int(st["in_flight"]).override_failure_message(
+		"the connectivity pass did not submit an extraction: %s" % st).is_greater(0)
+	var newer: Dictionary = t.apply_sphere_subtract(
+		Vector3(PILLAR_X, PILLAR_BASE + 2.5, PILLAR_Z), 0.8)
+	assert_array(newer["rejected"]).override_failure_message(
+		"the post-snapshot edit was rejected: %s" % newer).is_empty()
+	assert_bool(w.hooks().debug_consolidate_region(Vector3i(0, 2, 0))).override_failure_message(
+		"the pillar's region did not consolidate; the fixture is wrong, not the code").is_true()
+	assert_int(w.hooks().debug_region_op_count(Vector3i(0, 2, 0))).is_equal(0)
+	var stale_before: int = st["land_stale"]
+	for i in range(240):
+		await get_tree().physics_frame
+		step(w, 1)
+		st = w.hooks().debug_island_stats()
+		if st["land_stale"] > stale_before:
+			break
+	assert_int(st["land_stale"]).override_failure_message(
+		"an appended edit consolidated away without refusing the stale extraction: %s" % st
+		).is_greater(stale_before)

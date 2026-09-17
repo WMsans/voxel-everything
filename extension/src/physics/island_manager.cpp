@@ -714,7 +714,14 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 			std::vector<ve::EditOp> newer;
 			handles_.store->field().locked_by_caller().ops_since(f.aabb_lo, f.aabb_hi, f.log_seq,
 					&newer);
-			const bool stale = std::any_of(newer.begin(), newer.end(), reaches_the_boxes);
+			// Consolidation can erase an appended op before this check, so an empty spatial
+			// result is ambiguous. The global stamp is conservative in that case: it retries
+			// for unrelated appends rather than carving from a snapshot that may be stale.
+			// ponytail: global fallback can retry unrelated edits; retain append tombstones/history
+			// if that becomes a measurable throughput ceiling.
+			const bool stale = newer.empty() ?
+					handles_.store->edit_log()->last_seq() > f.log_seq :
+					std::any_of(newer.begin(), newer.end(), reaches_the_boxes);
 			if (stale) {
 				if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
 				release_volume_slot(handles_.store->volumes(), *handles_.handoff, f.volume_slot);
