@@ -80,7 +80,8 @@ Result: 5/5 passed, including the previously timed-out case.
 
 ## Scope check
 
-Changed files are limited to the seven files named by the brief:
+The original Task 10 implementation commit contains 8 files: the seven task files named by
+its brief plus this report:
 
 - `extension/src/world/edit_log.h`
 - `extension/src/world/world_field.h`
@@ -89,5 +90,71 @@ Changed files are limited to the seven files named by the brief:
 - `extension/src/physics/island_manager.cpp`
 - `extension/tests/test_edit_log.cpp`
 - `tests/test_connectivity.gd`
+- `.superpowers/sdd/2026-09-17-edit-pipeline/task-10-report.md`
 
 `git diff --check` passed. No subagents were dispatched.
+
+## Task 10 fix round: append after snapshot, then consolidation
+
+### Status
+
+Implemented and committed as `a42b36e fix: reject extraction after an edit is consolidated away`.
+The landing check now uses `EditLog::last_seq() > InFlight::log_seq` when `ops_since()` returns no
+retained operations. This catches an append that consolidation removed before the extraction
+landed, while preserving the precise box-overlap check when retained newer operations exist.
+
+Added `test_an_append_after_snapshot_then_consolidation_stays_stale` to
+`tests/test_connectivity.gd`. It appends a second edit after an extraction is in flight, forces
+that region to consolidate so the edit-log list is empty, and requires the extraction to be
+refused as stale.
+
+### RED
+
+With the regression test added before the production fallback, ran:
+
+```text
+./gdunit_tests.sh -a res://tests/test_connectivity.gd
+```
+
+Result: 33 test cases, 1 failure, 0 errors. The new case failed with `land_stale == 0` after the
+post-snapshot edit had been consolidated away and the stale extraction landed.
+
+### GREEN and required verification
+
+After the fallback and its regression comment were added:
+
+```text
+./gdunit_tests.sh -a res://tests/test_connectivity.gd
+```
+
+Result: 33/33 passed, 0 errors, 0 failures, 0 flaky.
+
+```text
+./build.sh -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)
+```
+
+Result: passed; universal debug GDExtension linked.
+
+```text
+cd extension && scons -Q test
+```
+
+Result: 645/645 doctest cases and 9,120,150/9,120,150 assertions passed.
+
+```text
+./gdunit_tests.sh -a res://tests/test_connectivity.gd,res://tests/test_island_body.gd,res://tests/test_edit_fanout.gd
+```
+
+Result: 3/3 suites, 42/42 cases, 0 errors, 0 failures, 0 flaky. The existing real-edit stale
+refusal and consolidation-does-not-make-stale cases both passed. `EDITS_GOLDEN`,
+`FORCED_COMMIT_GOLDEN`, `ASYNC_COMMIT_GOLDEN`, and `LOD_GOLDEN` output remained unchanged.
+
+### Concerns
+
+The global fallback intentionally retries for unrelated appends when the spatial query is empty;
+this is the documented conservative ceiling. `ponytail:` records the upgrade path: retain append
+tombstones/history if that retry cost becomes measurable. No Task 13 lock-order prose or fan-out
+golden data was touched.
+
+The fix commit changes 2 source/test files. The report append is a separate documentation commit,
+so the fix round is 3 files including this report.
