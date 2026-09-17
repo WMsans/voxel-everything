@@ -221,10 +221,10 @@ Dictionary VoxelDebugHooks::debug_edit_fanout() {
 	// One hold: every queue below is guarded by the edit mutex.
 	std::lock_guard<std::mutex> lock(store->edit_mutex());
 	std::set<Key> chunks;
-	for (const auto &range : world_->pending_dirty())
-		for (int z = range.first.z; z <= range.second.z; z++)
-			for (int y = range.first.y; y <= range.second.y; y++)
-				for (int x = range.first.x; x <= range.second.x; x++)
+	for (const ve::Box3<int> &range : world_->pending_dirty())
+		for (int z = range.lo[2]; z <= range.hi[2]; z++)
+			for (int y = range.lo[1]; y <= range.hi[1]; y++)
+				for (int x = range.lo[0]; x <= range.hi[0]; x++)
 					chunks.insert(Key{x, y, z});
 	d["colliders"] = to_array(chunks);
 	Array queued;

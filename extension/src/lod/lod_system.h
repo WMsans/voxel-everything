@@ -86,13 +86,6 @@ public:
 	// while holding edit_mutex).
 	std::mutex &mutex() { return lod_mutex_; }
 
-	// Address-of slots consumed by RenderOrchestrator's teardown interleaving and
-	// ConsolidationCoordinator's dirty-marking handles. The pool/tree are created lazily
-	// and destroyed across teardown cycles, so collaborators hold these addresses and
-	// re-read them at every use instead of caching stranded pointers.
-	std::mutex *mutex_slot() { return &lod_mutex_; }
-	ve::LodTree **tree_slot() { return &lod_tree_; }
-
 	// Was VoxelWorld::lod_tick; render thread (compositor callback).
 	void tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ);
 	// Where the last walk was run from. The shadow cut is a distance test against exactly

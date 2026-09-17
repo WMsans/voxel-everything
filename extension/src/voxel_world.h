@@ -80,7 +80,10 @@ class VoxelWorld : public Node3D, public ve::InvalidationSink {
 	ColliderStreamer *colliders_ = nullptr;
 	IslandManager *island_manager_ = nullptr; // published/detached under edit_mutex
 	bool physics_ready_ = false;
-	std::vector<std::pair<ve::IVec3, ve::IVec3>> pending_dirty_; // guarded by edit_mutex
+	// Collider remesh queue; guarded by edit_mutex, drained by physics_tick. Bounded by
+	// ve::merge_or_cap (core/edit_pipeline.h): overlapping ranges merge, so a thousand edits
+	// in one place stay one entry.
+	std::vector<ve::Box3<int>> pending_dirty_;
 	std::vector<float> physics_bubble_centers_;                  // xyz triples, main thread
 	std::vector<IslandBody *> test_bodies_;                      // hand-driven test pool
 	WorldStats stats_;
@@ -193,7 +196,7 @@ public:
 	std::vector<float> &physics_bubble_centers() { return physics_bubble_centers_; }
 	// The collider remesh queue, for debug_edit_fanout. Guarded by edit_mutex: the caller
 	// must hold it.
-	const std::vector<std::pair<ve::IVec3, ve::IVec3>> &pending_dirty() const { return pending_dirty_; }
+	const std::vector<ve::Box3<int>> &pending_dirty() const { return pending_dirty_; }
 	WorldStats stats() const { return stats_; }
 	void note_overflow(int bits) { stats_.overflow_seen |= bits; }
 	// Synchronous island extraction for diagnostics (drives the mesher worker by hand).

@@ -463,10 +463,6 @@ VoxelWorld::VoxelWorld() {
 					.atlas = context_.render->atlas_slot(),
 					.mesh = &mesh_,
 					.streamer = context_.render->streamer_slot(),
-					// Task 15: tree/mutex handles now address LodSystem's state.
-					.lod_tree = context_.lod->tree_slot(),
-					.lod_mutex = context_.lod->mutex_slot(),
-					.pending_dirty = &pending_dirty_,
 					.use_local_device = &use_local_device_,
 					.main_rd = context_.render->main_rd_slot(),
 					.local_rd = context_.render->local_rd_slot(),
@@ -834,12 +830,13 @@ int VoxelWorld::physics_tick(Vector3 center) {
 	// Drain the dirty ranges the edit path queued. They are COLLECTED under edit_mutex_ and
 	// APPLIED here, on the main thread, so ChunkResidency needs no lock of its own — and the
 	// probe inside update(), which takes edit_mutex_, can never deadlock against an edit.
-	std::vector<std::pair<ve::IVec3, ve::IVec3>> dirty;
+	std::vector<ve::Box3<int>> dirty;
 	{
 		std::lock_guard<std::mutex> lock(store_->edit_mutex());
 		dirty.swap(pending_dirty_);
 	}
-	for (const auto &r : dirty) chunks_->mark_dirty(r.first, r.second);
+	for (const ve::Box3<int> &r : dirty)
+		chunks_->mark_dirty({r.lo[0], r.lo[1], r.lo[2]}, {r.hi[0], r.hi[1], r.hi[2]});
 	const Ref<World3D> w = get_world_3d();
 	if (w.is_valid()) colliders_->set_space(w->get_space());
 	const int actions = colliders_->run_frame(center.x, center.y, center.z,
@@ -880,15 +877,16 @@ void VoxelWorld::record(const ve::Invalidation &inv) {
 		// starts consistent.
 		ve::IVec3 clo{}, chi{};
 		ve::op_chunk_range(*inv.op, &clo, &chi);
-		pending_dirty_.push_back({clo, chi});
+		ve::merge_or_cap(&pending_dirty_, ve::Box3<int>{{clo.x, clo.y, clo.z}, {chi.x, chi.y, chi.z}});
 		return;
 	}
 	case ve::InvalidationReason::kConsolidated: {
 		const ve::IVec3 base{inv.region.x * ve::kRegionBricks, inv.region.y * ve::kRegionBricks,
 				inv.region.z * ve::kRegionBricks};
-		pending_dirty_.push_back({ve::chunk_of_brick(base),
-				ve::chunk_of_brick({base.x + ve::kRegionBricks - 1,
-						base.y + ve::kRegionBricks - 1, base.z + ve::kRegionBricks - 1})});
+		const ve::IVec3 lo = ve::chunk_of_brick(base);
+		const ve::IVec3 hi = ve::chunk_of_brick({base.x + ve::kRegionBricks - 1,
+				base.y + ve::kRegionBricks - 1, base.z + ve::kRegionBricks - 1});
+		ve::merge_or_cap(&pending_dirty_, ve::Box3<int>{{lo.x, lo.y, lo.z}, {hi.x, hi.y, hi.z}});
 		return;
 	}
 	}

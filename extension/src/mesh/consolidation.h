@@ -23,10 +23,6 @@
 #include "world/override_store.h"    // ve::OverrideBrick members
 #include "world/region.h"
 
-namespace ve {
-class LodTree; // forward: the coordinator only ever holds a pointer to it
-}
-
 namespace godot {
 
 class GpuAtlas;
@@ -37,7 +33,7 @@ class WorldStore;
 
 class ConsolidationCoordinator : public ve::InvalidationSink {
 public:
-	// Handles, not ownership. The atlas/mesher/streamer/lod-tree are created lazily and
+	// Handles, not ownership. The atlas/mesher/streamer are created lazily and
 	// destroyed across ensure_initialized()/ensure_physics_initialized()/teardown cycles,
 	// so the coordinator receives ADDRESSES of VoxelWorld's fields and re-reads them at
 	// every use instead of caching pointers that a teardown would strand.
@@ -45,10 +41,6 @@ public:
 		GpuAtlas **atlas = nullptr;
 		MeshService **mesh = nullptr;
 		WorldStreamer **streamer = nullptr;
-		ve::LodTree **lod_tree = nullptr;
-		std::mutex *lod_mutex = nullptr;
-		// Collider remesh queue guarded by edit_mutex(); drained by physics_tick().
-		std::vector<std::pair<ve::IVec3, ve::IVec3>> *pending_dirty = nullptr;
 		// Device selection seam (use_local_device_ stays on the world; the device pointers
 		// moved to RenderOrchestrator in Task 12 and are wired here by address-of slot).
 		const bool *use_local_device = nullptr;
@@ -99,11 +91,6 @@ private:
 	GpuAtlas *atlas() const { return *handles_.atlas; }
 	MeshService *mesh() const { return *handles_.mesh; }
 	WorldStreamer *streamer() const { return *handles_.streamer; }
-	ve::LodTree *lod_tree() const { return *handles_.lod_tree; }
-	std::mutex &lod_mutex() const { return *handles_.lod_mutex; }
-	std::vector<std::pair<ve::IVec3, ve::IVec3>> &pending_dirty() const {
-		return *handles_.pending_dirty;
-	}
 	RenderingDevice *device() const {
 		return *handles_.use_local_device ? *handles_.local_rd : *handles_.main_rd;
 	}
