@@ -3,6 +3,7 @@
 #include "shade/beauty_settings.h"
 #include "world/brick.h"
 #include "world/material_table.h"
+#include "world/override_store.h"
 #include <sstream>
 
 namespace ve::layout {
@@ -25,7 +26,11 @@ std::string constants_glsl() {
 	     "const int BRICK_SDF_COUNT = " << kBrickSdfCount << ";\n"
 	     "const int VOLUME_VOXELS = " << kIslandVoxelCount << ";\n"
 	     "const int OVERRIDE_SDF_STRIDE_BYTES = " << kOverrideSdfStrideBytes << ";\n"
-	     "const int OVERRIDE_MAT_STRIDE_BYTES = " << kOverrideMatStrideBytes << ";\n";
+	     "const int OVERRIDE_MAT_STRIDE_BYTES = " << kOverrideMatStrideBytes << ";\n"
+	     "\n"
+	     "// Override table tags (world/override_store.h)\n"
+	     "const int MAX_OVERRIDE_TABLES = " << kMaxOverrideTables << ";\n"
+	     "const int OVERRIDE_TABLE_TAG_BASE = " << kOverrideTableTagBase << ";\n";
 	return o.str();
 }
 

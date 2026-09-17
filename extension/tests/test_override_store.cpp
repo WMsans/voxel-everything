@@ -4,6 +4,8 @@
 #include "generator/generator.h"
 #include "shade/oct.h"
 #include <cmath>
+#include <map>
+#include <tuple>
 
 namespace {
 
@@ -234,4 +236,25 @@ TEST_CASE("ops still apply on top of an override") {
 	const ve::EditOp cut[1] = {sphere_sub(px, py, pz, 1.0f)};
 	const ve::Sample s = ve::eval_field(gen, cut, 1, px, py, pz, nullptr, &store);
 	CHECK(s.sdf > 0.0f); // the sphere carved the baked rock away
+}
+
+TEST_CASE("override table tags name each table's region and the highest table in use") {
+	std::map<std::tuple<int, int, int>, int> tables;
+	tables[{0, 1, 0}] = 0;
+	tables[{-3, 2, 7}] = 5;
+	tables[{9, 9, 9}] = ve::kMaxOverrideTables; // out of range: never tagged
+	const std::vector<int32_t> tags = ve::override_table_tags(tables);
+	REQUIRE(static_cast<int>(tags.size()) == ve::kOverrideTableTagInts);
+	CHECK(tags[0] == 6);
+	CHECK(tags[1 + 0 * 4] == 0);
+	CHECK(tags[1 + 0 * 4 + 1] == 1);
+	CHECK(tags[1 + 0 * 4 + 2] == 0);
+	CHECK(tags[1 + 0 * 4 + 3] == 1);
+	CHECK(tags[1 + 5 * 4] == -3);
+	CHECK(tags[1 + 5 * 4 + 1] == 2);
+	CHECK(tags[1 + 5 * 4 + 2] == 7);
+	CHECK(tags[1 + 5 * 4 + 3] == 1);
+	CHECK(tags[1 + 3 * 4 + 3] == 0); // an unused table is untagged
+	CHECK(ve::override_table_tags({})[0] == 0);
+	CHECK(ve::kOverrideTableTagBase == ve::kMaxOverrideTables * ve::kRegionBrickCount);
 }

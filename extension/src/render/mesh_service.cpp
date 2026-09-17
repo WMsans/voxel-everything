@@ -598,6 +598,9 @@ void MeshService::run() {
 				override_publications.swap(pending_override_publications_);
 			}
 		}
+		// S3: tag every worker table with its region before this iteration's work reads the
+		// pool. override_tables_ is only mutated on this thread, by earlier iterations.
+		pass.overrides().set_table_tags(rd, ve::override_table_tags(override_tables_));
 
 		if (sync_fn) {
 			(*sync_fn)(pass);

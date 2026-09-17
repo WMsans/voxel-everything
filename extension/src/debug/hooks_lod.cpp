@@ -632,6 +632,7 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 	};
 	int override_table = -1;
 	std::vector<TableCopy> table_copies;
+	std::vector<std::pair<std::tuple<int, int, int>, int>> table_regions;
 	std::vector<std::pair<int, ve::OverrideBrick>> brick_copies;
 	{
 		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
@@ -656,6 +657,7 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 							copy.entries.emplace_back(ve::brick_index_in_region(b), slot);
 						}
 				table_copies.push_back(std::move(copy));
+				table_regions.emplace_back(it.first, it.second);
 			}
 		}
 	}
@@ -701,6 +703,9 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 		// shader reads the table from the job's push constant.
 		for (size_t i = 0; i < table_copies.size(); i++)
 			lod.set_override_table(static_cast<int>(i), table_copies[i].table, table_copies[i].entries);
+		std::map<std::tuple<int, int, int>, int> tagged;
+		for (const auto &region_table : table_regions) tagged[region_table.first] = region_table.second;
+		lod.overrides().set_table_tags(rd, ve::override_table_tags(tagged));
 		LodBuildJob job;
 		job.level = level;
 		job.coord = c;

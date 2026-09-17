@@ -44,8 +44,12 @@ bool OverridePool::initialize(RenderingDevice *rd, int capacity, int max_region_
 	zero.resize(mat_bytes);
 	zero.fill(0);
 	mat_ = rd_->storage_buffer_create(static_cast<uint32_t>(mat_bytes), zero);
-	PackedByteArray table_zero = filled_i32(kMaxOverrideTables * ve::kRegionBrickCount, -1);
+	// Every table entry starts empty (-1); the tag tail starts untagged (all zero).
+	PackedByteArray table_zero = filled_i32(ve::kOverrideTableTagBase + ve::kOverrideTableTagInts, -1);
+	std::memset(table_zero.ptrw() + static_cast<int64_t>(ve::kOverrideTableTagBase) * 4, 0,
+			static_cast<size_t>(ve::kOverrideTableTagInts) * 4);
 	tables_ = rd_->storage_buffer_create(static_cast<uint32_t>(table_zero.size()), table_zero);
+	tags_.assign(static_cast<size_t>(ve::kOverrideTableTagInts), 0);
 	region_map_ = rd_->storage_buffer_create(static_cast<uint32_t>(max_region_slots_) * 4,
 			filled_i32(max_region_slots_, -1));
 	if (!is_valid()) {
@@ -67,6 +71,7 @@ void OverridePool::teardown() {
 	capacity_ = 0;
 	max_region_slots_ = 0;
 	region_tables_.clear();
+	tags_.clear();
 }
 
 bool OverridePool::upload(int slot, const ve::OverrideBrick &brick) {
@@ -114,4 +119,16 @@ void OverridePool::clear_table(RenderingDevice *rd, int table) {
 	rd->buffer_update(tables_, static_cast<uint32_t>(table * ve::kRegionBrickCount * 4),
 			static_cast<uint32_t>(ve::kRegionBrickCount * 4),
 			filled_i32(ve::kRegionBrickCount, -1));
+}
+
+void OverridePool::set_table_tags(RenderingDevice *rd, const std::vector<int32_t> &tags) {
+	if (!rd || !tables_.is_valid() || static_cast<int>(tags.size()) != ve::kOverrideTableTagInts ||
+			tags == tags_)
+		return;
+	PackedByteArray b;
+	b.resize(static_cast<int64_t>(tags.size()) * 4);
+	std::memcpy(b.ptrw(), tags.data(), tags.size() * 4);
+	rd->buffer_update(tables_, static_cast<uint32_t>(ve::kOverrideTableTagBase) * 4,
+			static_cast<uint32_t>(b.size()), b);
+	tags_ = tags;
 }

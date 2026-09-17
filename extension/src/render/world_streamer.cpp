@@ -376,6 +376,14 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		std::lock_guard<std::mutex> lock(*edit_mutex_);
 		forced_regen.swap(forced_regen_);
 	}
+	// S3: tag every atlas table with its region before this frame's mark/generate and the
+	// raymarch read the pool. Unchanged tags cost one vector compare.
+	std::vector<int32_t> table_tags;
+	{
+		std::lock_guard<std::mutex> lock(*edit_mutex_);
+		if (override_tables_) table_tags = ve::override_table_tags(*override_tables_);
+	}
+	if (!table_tags.empty()) atlas_->overrides().set_table_tags(rd, table_tags);
 	// Clear evicted tenants before assigning any reused slot to a load in this same frame.
 	// The ordering matters: clearing after the load would erase the replacement table map.
 	for (const auto &e : plan.evicts) {
