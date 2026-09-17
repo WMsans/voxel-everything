@@ -217,6 +217,7 @@ Dictionary VoxelDebugHooks::debug_edit_fanout() {
 		}
 		return a;
 	};
+	const Array islands = world_->island_manager() ? world_->island_manager()->debug_windows() : Array();
 	// One hold: every queue below is guarded by the edit mutex.
 	std::lock_guard<std::mutex> lock(store->edit_mutex());
 	std::set<Key> chunks;
@@ -243,7 +244,7 @@ Dictionary VoxelDebugHooks::debug_edit_fanout() {
 		for (const ve::IVec3 &r : s->forced_regen()) regen.insert(Key{r.x, r.y, r.z});
 	d["forced_regen"] = to_array(regen);
 	d["edit_rejections"] = world_->stats().edit_rejections;
-	d["islands"] = world_->island_manager() ? world_->island_manager()->debug_windows() : Array();
+	d["islands"] = islands;
 	return d;
 }
 
