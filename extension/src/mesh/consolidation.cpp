@@ -257,27 +257,23 @@ void ConsolidationCoordinator::pump_async() {
 		requeue(region);
 		return;
 	}
-	const std::vector<ve::EditOp> &ops = store_->edit_log()->ops(region);
-	if (ops.empty()) return;
+	ve::ConsolidationSnapshot snap;
+	// edit_lock above spans this whole function, so the ops, overrides and volumes are read in
+	// one consistent state.
+	if (!store_->field().locked_by_caller().snapshot_region(region, &snap)) {
+		consolidation_refusals_++;
+		requeue(region);
+		return;
+	}
+	if (snap.ops.empty()) return;
 	ConsolidateJob job;
 	job.region = region;
 	job.region_slot = region_slot;
-	job.ops = ops;
-	const std::vector<uint64_t> &seqs = store_->edit_log()->seqs(region);
-	job.through_seq = seqs.empty() ? 0 : seqs.back();
+	job.ops = std::move(snap.ops);
+	job.through_seq = snap.through_seq;
 	job.gen = &store_->generator()->sampler();
-	ve::plan_consolidation(job.ops.data(), static_cast<int>(job.ops.size()), region, &job.bricks);
-	if (!job.bricks.empty()) {
-		// Spec requires collect + snapshot while edit_mutex_ is held: edit_lock above spans this
-		// whole function, so the overrides, edit log, and volumes are read in one consistent state.
-		ve::IVec3 lo = job.bricks[0], hi = job.bricks[0];
-		for (const auto &b : job.bricks) { lo.x = std::min(lo.x, b.x); lo.y = std::min(lo.y, b.y); lo.z = std::min(lo.z, b.z); hi.x = std::max(hi.x, b.x); hi.y = std::max(hi.y, b.y); hi.z = std::max(hi.z, b.z); }
-		if (!store_->snapshot_field_sources(job.ops, lo, hi, &job.source)) {
-			consolidation_refusals_++;
-			requeue(region);
-			return;
-		}
-	}
+	job.bricks = std::move(snap.bricks);
+	job.source = std::move(snap.sources);
 	int needed_slots = 0;
 	for (const ve::IVec3 brick : job.bricks) if (store_->overrides()->slot_of(brick) < 0) needed_slots++;
 	if (job.bricks.empty() || needed_slots > store_->overrides()->capacity() - store_->overrides()->used()) {
@@ -415,9 +411,10 @@ bool ConsolidationCoordinator::force_region(ve::IVec3 r) {
 	std::unique_lock<std::mutex> edit_lock(store_->edit_mutex());
 	const auto refuse = [this]() { consolidation_refusals_++; return false; };
 	if (!mesh() || !store_->edit_log() || !store_->overrides()) return refuse();
-	std::vector<ve::EditOp> ops = store_->edit_log()->ops(r);
-	std::vector<ve::IVec3> bricks;
-	ve::plan_consolidation(ops.data(), static_cast<int>(ops.size()), r, &bricks);
+	ve::ConsolidationSnapshot snap;
+	const bool sources_ok = store_->field().locked_by_caller().snapshot_region(r, &snap);
+	std::vector<ve::EditOp> &ops = snap.ops;
+	std::vector<ve::IVec3> &bricks = snap.bricks;
 	int needed_slots = 0;
 	for (const ve::IVec3 b : bricks) if (store_->overrides()->slot_of(b) < 0) needed_slots++;
 	if (bricks.empty() || needed_slots > store_->overrides()->capacity() - store_->overrides()->used()) return refuse();
@@ -460,9 +457,8 @@ bool ConsolidationCoordinator::force_region(ve::IVec3 r) {
 	job.ops = ops;
 	job.gen = &store_->generator()->sampler();
 	if (!bricks.empty()) {
-		ve::IVec3 lo = bricks[0], hi = bricks[0];
-		for (auto &b : bricks) { lo.x = std::min(lo.x, b.x); lo.y = std::min(lo.y, b.y); lo.z = std::min(lo.z, b.z); hi.x = std::max(hi.x, b.x); hi.y = std::max(hi.y, b.y); hi.z = std::max(hi.z, b.z); }
-		if (!store_->snapshot_field_sources(ops, lo, hi, &job.source)) return refuse();
+		if (!sources_ok) return refuse();
+		job.source = snap.sources;
 	}
 	// A reused worker region slot must see the old table while the bake reads its base.
 	if (!mesh()->set_override_region(r, job.region_slot, old_table, old_entries)) return refuse();

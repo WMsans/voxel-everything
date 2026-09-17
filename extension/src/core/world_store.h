@@ -23,7 +23,6 @@
 #include "generator/field_generator.h"
 #include "generator/volume_set.h"
 #include "terrain/pipeline.h"
-#include "world/field_source_snapshot.h"
 #include "world/world_field.h"
 #include "world/edit_log.h"
 #include "world/region.h"
@@ -163,10 +162,6 @@ public:
 	// Streamer handoff queue; RenderOrchestrator (Task 12) wires it into
 	// WorldStreamer::initialize at exactly the point VoxelWorld used to.
 	std::vector<PendingEdit> *pending_edits() { return &pending_edits_; }
-	// Pure data-plane read over overrides + stored volumes; moved verbatim from
-	// VoxelWorld in Task 11 so the consolidation coordinator needs no VoxelWorld*.
-	bool snapshot_field_sources(const std::vector<ve::EditOp> &ops, ve::IVec3 brick_lo,
-			ve::IVec3 brick_hi, ve::FieldSourceSnapshot *out) const;
 	// The world field over this store's current cores. A cheap value: re-fetch it per use,
 	// because the edit log and override store are created lazily and released at exit.
 	ve::WorldField field() {
