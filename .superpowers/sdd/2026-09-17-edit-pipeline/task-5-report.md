@@ -24,42 +24,7 @@ Command exited with code 2
 
 Implemented the smallest module using existing `EditLog`, edit-op, region, and AABB helpers.
 
-Focused native tests:
-
-```text
-./extension/build/tests/ve_tests --test-case='*pipeline*'
-```
-
-```text
-[doctest] test cases:   12 |   12 passed | 0 failed | 629 skipped
-[doctest] assertions: 1137 | 1137 passed | 0 failed |
-[doctest] Status: SUCCESS!
-```
-
-Full native suite:
-
-```text
-cd extension && scons -Q test
-```
-
-```text
-[doctest] test cases:     641 |     641 passed | 0 failed | 0 skipped
-[doctest] assertions: 9120133 | 9120133 passed | 0 failed |
-[doctest] Status: SUCCESS!
-```
-
-Extension build:
-
-```text
-./build.sh -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)
-```
-
-```text
-==> Build OK: 3.2M libvoxel_everything.macos.template_debug.universal.dylib
-==> Done.
-```
-
-Also ran `git diff --cached --check` with no whitespace errors.
+Verification after the Round 1 fixes is recorded below.
 
 ## Files
 
@@ -171,3 +136,7 @@ Extension build:
 
 - `66d687f fix: guard region span arithmetic against overflow`
 - `8e2b865 fix: clarify edit pipeline invalidation contract`
+
+## Round 2 Fix Note
+
+Removed the superseded `--test-case='*pipeline*'` command/output from the initial GREEN evidence. The source-file command below is the single reproducible focused-suite evidence; the final full native suite remains 644/644.
