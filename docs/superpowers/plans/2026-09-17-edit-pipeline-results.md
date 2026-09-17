@@ -1,6 +1,6 @@
 # Edit pipeline (sub-project 5b) — results
 
-Implementation baseline tested through: `30d2838`. Documentation commit: this commit.
+Implementation baseline tested through: `30d2838`. Documentation commit: `b806a3c`.
 Recorded 2026-09-17 on Darwin Jeremys-Mac-mini.attlocal.net (Apple M1 / Metal 4, Godot 4.7.2.stable.official.ed1daf0bf).
 Baseline: `docs/superpowers/plans/2026-09-17-edit-pipeline-baseline.md`. Report: `reports/report_46`.
 
@@ -14,7 +14,7 @@ gdUnit: 509 executed cases / 1 error / 1 failure; 96/96 suites and 509/509 cases
 - `test_connectivity`: current declared count 33, same as baseline. It has two Task 10 staleness cases (the Task 3 pin renamed by Task 10 and the consolidated-away-append regression) and loses the two Task 9 cases: `test_post_spawn_carve_rejection_keeps_body_in_hole` and `test_near_cap_carve_is_refused_before_any_carve`. The hold seam is a fixture change, not a new case.
 - `test_consolidation`: +2 cases, `test_a_full_op_list_does_not_stay_full_while_consolidation_runs` and `test_a_held_consolidation_keeps_a_full_op_list_full`.
 - `test_repro_pillar_debris`: same count, its landing dump loses `land_carve_nothing` and `land_carve_restored`.
-- `test_sun_cascades_gpu`: same declared count (7), baseline had 2 failures and the full run had 1. The current failure was `test_sub_texel_motion_rebuilds_no_cascade — FAILED: res://tests/test_sun_cascades_gpu.gd:73`; the parent control retained one failure in `test_the_min_level_clamp_does_not_peter_pan` (see Concerns), so this is GPU/environment drift, not an edit-pipeline failure.
+- `test_sun_cascades_gpu`: same declared count (7), baseline had 2 failures and the full run had 1. The current failure was `test_sub_texel_motion_rebuilds_no_cascade — FAILED: res://tests/test_sun_cascades_gpu.gd:73`; the parent control retained one failure in `test_the_min_level_clamp_does_not_peter_pan` (see Concerns), leaving the relationship to the edit-pipeline changes unresolved; GPU/environment drift is likely.
 - `test_voxel_settings::test_an_ambient_change_reaches_the_object_global — ERROR: res://tests/test_voxel_settings.gd:213` is unchanged and remains the documented Godot/Metal `Nil` environment error.
 - All other suites kept their declared counts and failure/error sets.
 
@@ -103,6 +103,6 @@ restore branch with `debug_set_fail_next_carve` / `debug_set_fail_next_restore`,
 ## Open
 `extension/src/debug/hooks_physics.cpp:942` (`debug_mesh_submit`), handed over by 5a, is a diagnostic mesh-job op copy like its 5a siblings, not part of the edit spine; it stays.
 
-The final full run's non-clean status is limited to the unchanged ambient Metal error and GPU sun-cascade drift. The required parent control was rebuilt at `a725648` and reran with `./gdunit_tests.sh -a res://tests/test_sun_cascades_gpu.gd`: it passed the sub-texel case and failed one `test_the_min_level_clamp_does_not_peter_pan` assertion (`Expecting: 'true' but is 'false'` at line 108), confirming the suite-level GPU instability. A current-commit rerun (`reports/report_48`) failed earlier during shader compilation (`unexpected LEFT_OP`) with 1 executed case and 8 failures; no passing data is claimed from it.
+The final full run's non-clean status is limited to the unchanged ambient Metal error and an unresolved sun-cascade failure. The required parent control was rebuilt at `a725648` and reran with `./gdunit_tests.sh -a res://tests/test_sun_cascades_gpu.gd`: it passed the current sub-texel case and failed one `test_the_min_level_clamp_does_not_peter_pan` assertion (`Expecting: 'true' but is 'false'` at line 108). Because the parent and current runs failed different cases, the current failure is not confirmed unrelated; GPU/environment drift is likely. A current-commit rerun (`reports/report_48`) failed earlier during shader compilation (`unexpected LEFT_OP`) with 1 executed case and 8 failures; no passing data is claimed from it.
 
 Deferred ledger items were triaged as follows: the Task 1 baseline commit-label mismatch, Task 2 omitted empty-golden failure transcript, Task 5 report wording, and Task 12 structural-TDD label are historical documentation/evidence defects with no production impact; Task 6's registration/removal concurrency remains review-only rather than directly tested; Task 9's store-before-preflight comment mismatch remains a minor documentation concern. The Task 4 one-brick wording and Task 8 partial-carve comments were superseded by the later hold/atomic-carve changes. No additional edit-pipeline exit finding remains.

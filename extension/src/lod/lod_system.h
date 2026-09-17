@@ -81,8 +81,8 @@ public:
 	// THE lod mutex; guards lod_tree_, lod_walk_, lod_pages_of_, lod_page_quads_,
 	// lod_overflow_logged_ and lod_pool_ state between the render thread (tick) and
 	// main/tool threads (mark-dirty fan-out, debug stats). See core/edit_pipeline.h.
-	// (tick never holds mutex() across gather_ops, so the edit path can run without
-	// nesting this mutex under edit_mutex).
+	// (tick never holds mutex() across gather_ops, so append_edit_locked can take it
+	// while holding edit_mutex).
 	std::mutex &mutex() { return lod_mutex_; }
 
 	// Was VoxelWorld::lod_tick; render thread (compositor callback).
