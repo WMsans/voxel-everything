@@ -157,7 +157,7 @@ func _reticle_circle_radius() -> float:
 	var cam: Camera3D = viewport.get_camera_3d() if viewport else null
 	if cam == null:
 		return 0.0
-	var hit: Dictionary = _world.hooks().debug_raycast(
+	var hit: Dictionary = _world.raycast(
 		cam.global_position, -cam.global_transform.basis.z)
 	if not hit["hit"]:
 		return 0.0
