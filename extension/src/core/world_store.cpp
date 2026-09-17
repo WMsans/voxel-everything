@@ -6,7 +6,11 @@ WorldStore::WorldStore(const ve::WorldConfig &config, ve::FieldGenerator *genera
 	: config_(config),
 	  // Task 10: the field-generation seam is injected at construction; a null pointer
 	  // means "today's terrain". Owned from here on (see the header comment).
-	  generator_(generator ? generator : new ve::ProceduralFieldGenerator()) {}
+	  generator_(generator ? generator : new ve::ProceduralFieldGenerator()) {
+	// The store is its own sink for the streamer handoff queue. Registered here because
+	// nothing else exists yet: no lock is needed and none is held.
+	pipeline_.add_sink(this);
+}
 
 WorldStore::~WorldStore() {
 	delete generator_;
@@ -24,44 +28,11 @@ void WorldStore::set_generator(ve::FieldGenerator *generator) {
 	generator_ = generator ? generator : new ve::ProceduralFieldGenerator();
 }
 
-ve::EditLog::AppendResult WorldStore::append_edit(const ve::EditOp &op) {
-	std::lock_guard<std::mutex> lock(edit_mutex_);
-	return append_edit_locked(op);
-}
-
-ve::EditLog::AppendResult WorldStore::append_edit_locked(const ve::EditOp &op,
-		bool notify_islands) {
-	if (!edit_log_) return {};
-	ve::EditLog::AppendResult r = edit_log_->append(op);
-	// Empty results are fail-soft no-ops: malformed/oversized operations and fully rejected
-	// operations changed no field state, so they must not advance the edit sequence, wake
-	// connectivity, or enter the render-thread pending queue.
-	if (r.touched.empty()) return r;
-	// Queue before the list reaches its hard cap. The bake is asynchronous, so the spare 64
-	// entries absorb edits appended while the worker is in flight.
-	for (const ve::IVec3 &region : r.touched)
-		if (edit_log_->op_count(region) >= ve::kConsolidateAtOps)
-			consolidation_sink_->queue_consolidation(region);
-	// Bump AFTER the append and under the same lock the streamer uses to capture op counts.
-	// If the seq moved before the append, a readback stamped between the bump and the append
-	// would claim edits that are not in the GPU state the readback describes.
-	bump_edit_seq();
-	// Connectivity's half of the fan-out. Runs under the append lock; the manager's
-	// pending-window queue is guarded by its own windows_mutex_ (note_edit may be called
-	// from a tool thread), and the seq bump above lets the window know which readback is
-	// "new enough" to act on. A fully rejected op changed no field state, so it must not
-	// enqueue a window: doing so would re-label the same component and retry the rejected
-	// edit forever. (The touched-empty gate lives here because only this body sees `r`;
-	// the sink's `notify_islands` argument keeps the caller's intent for the adapter to
-	// re-check alongside its own island-manager presence check.)
-	if (notify_islands && !r.touched.empty())
-		edit_sink_->on_edit_appended(op, notify_islands);
-	pending_edits_.push_back({op, r});
-	return r;
-}
-
-int64_t WorldStore::bump_edit_seq() {
-	return edit_seq_.fetch_add(1, std::memory_order_relaxed);
+void WorldStore::record(const ve::Invalidation &inv) {
+	// The render thread's copy of the edit; WorldStreamer::run_frame swaps this queue out
+	// under the same lock.
+	if (inv.reason == ve::InvalidationReason::kEdit)
+		pending_edits_.push_back({*inv.op, *inv.append});
 }
 
 int WorldStore::drain_occupancy() {

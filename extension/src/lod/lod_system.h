@@ -25,6 +25,7 @@
 #include <set>
 #include <vector>
 
+#include "core/edit_pipeline.h"
 #include "lod/lod_tree.h" // ve::LodKey / ve::LodWalkResult / ve::LodCamera / ve::LodOcclusion
 #include "world/edit_log.h"
 
@@ -57,7 +58,7 @@ struct LodStats {
 	int op_overflow = 0; // LoD builds refused because their visible ops exceed the cap
 };
 
-class LodSystem {
+class LodSystem : public ve::InvalidationSink {
 public:
 	struct Collaborators {
 		WorldStore *store = nullptr;
@@ -113,10 +114,9 @@ public:
 	// False when the chunk's visible ops exceed kMaxRegionOps (S3c): the caller must refuse
 	// the build rather than submit a truncated list.
 	bool gather_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out);
-	// Append fan-out (was the LoD tail of VoxelWorld::append_edit_locked, which runs with
-	// edit_mutex() held): marks the touched world AABB dirty at every level, taking
-	// mutex() while edit_mutex() is held (safe per the lock order above).
-	void note_edit(const ve::EditOp &op);
+	// InvalidationSink: an edit or a consolidation marks the tree dirty. Edit lock held
+	// (core/edit_pipeline.h). Task 11 makes this a queue-and-drain.
+	void record(const ve::Invalidation &inv) override;
 	// The _exit_tree() LoD half, verbatim statement-for-statement: pool -> tree ->
 	// page maps, exactly where VoxelWorld used to run it (after CPU-core release).
 	void teardown();

@@ -18,7 +18,7 @@
 #include <utility>
 #include <vector>
 
-#include "core/world_store.h"        // ConsolidationSink port + WorldStore public API
+#include "core/world_store.h"        // WorldStore public API
 #include "render/consolidate_pass.h" // ConsolidateJob member
 #include "world/override_store.h"    // ve::OverrideBrick members
 #include "world/region.h"
@@ -35,7 +35,7 @@ class RenderingDevice;
 class WorldStreamer;
 class WorldStore;
 
-class ConsolidationCoordinator : public ConsolidationSink { // satisfies the port from Task 8
+class ConsolidationCoordinator : public ve::InvalidationSink {
 public:
 	// Handles, not ownership. The atlas/mesher/streamer/lod-tree are created lazily and
 	// destroyed across ensure_initialized()/ensure_physics_initialized()/teardown cycles,
@@ -60,6 +60,10 @@ public:
 	};
 
 	ConsolidationCoordinator(WorldStore *store, Collaborators handles);
+
+	// InvalidationSink: an accepted edit queues the region once its list nears the cap. Edit
+	// lock held (core/edit_pipeline.h).
+	void record(const ve::Invalidation &inv) override;
 
 	// One non-blocking frame-pump step; was VoxelWorld::pump_consolidation (called from
 	// _process every frame, unconditionally).
@@ -104,8 +108,8 @@ private:
 		return *handles_.use_local_device ? *handles_.local_rd : *handles_.main_rd;
 	}
 
-	// edit_mutex must be held (ConsolidationSink port satisfied for WorldStore's spine).
-	bool queue_consolidation(ve::IVec3 region) override;
+	// edit_mutex must be held.
+	bool queue_consolidation(ve::IVec3 region);
 	void requeue_consolidation_locked(ve::IVec3 region);
 
 	// Consolidation is deliberately one-region-at-a-time. The worker owns the bake; the main

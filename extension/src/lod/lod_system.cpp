@@ -1,7 +1,7 @@
 #include "lod/lod_system.h"
 
 #include "core/world_store.h"
-#include "generator/edit_ops.h" // ve::op_world_aabb (note_edit fan-out)
+#include "generator/edit_ops.h" // ve::op_world_aabb (edit fan-out)
 #include "lod/lod_arena.h"     // ve::lod_pages_for_quads
 #include "lod/lod_contour.h"   // ve::kLodQuadsPerPage
 #include "lod/lod_grid.h"      // ve::lod_chunk_aabb / lod_cell_size / kLodFadeStartM
@@ -360,20 +360,17 @@ void LodSystem::prepare_raster_locked() {
 	render()->passes().lod_raster->set_draw_pages(pages);
 }
 
-// The LoD tail of VoxelWorld::append_edit_locked, moved verbatim (Task 15): caller holds
-// edit_mutex(); the lod_mutex_ acquisition site travels with the code.
-void LodSystem::note_edit(const ve::EditOp &op) {
+// The LoD half of the edit fan-out. Caller holds edit_mutex(); the lod_mutex_ acquisition
+// site travels with the code (Task 11 removes it).
+void LodSystem::record(const ve::Invalidation &inv) {
+	if (inv.reason == ve::InvalidationReason::kRejected) return;
 	if (!lod_tree_) return;
-	float lo[3], hi[3];
-	ve::op_world_aabb(op, lo, hi);
 	// Every level: ve::LodTree::mark_dirty walks them itself, and the relevance cut is
 	// at the HALF-CELL supersample resolution rather than the cell -- a 5 m crater still
 	// registers at L4's 6.4 m cells, which is the point of the reduction change. Only
 	// ops shorter than half a cell on every axis are genuinely unrepresentable.
-	// Lock order: caller holds edit_mutex(), tick never holds lod_mutex_ while taking
-	// edit_mutex(), so edit_mutex -> lod_mutex_ is safe.
 	std::lock_guard<std::mutex> lock(lod_mutex_);
-	lod_tree_->mark_dirty(lo, hi);
+	lod_tree_->mark_dirty(inv.lo, inv.hi);
 }
 
 // The _exit_tree() LoD half, verbatim statement-for-statement (Task 15).

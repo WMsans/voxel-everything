@@ -18,6 +18,15 @@ namespace godot {
 ConsolidationCoordinator::ConsolidationCoordinator(WorldStore *store, Collaborators handles)
 		: store_(store), handles_(handles) {}
 
+void ConsolidationCoordinator::record(const ve::Invalidation &inv) {
+	if (inv.reason != ve::InvalidationReason::kEdit) return;
+	// Queue before the list reaches its hard cap. The bake is asynchronous, so the spare 64
+	// entries absorb edits appended while the worker is in flight.
+	for (const ve::IVec3 &region : inv.append->touched)
+		if (store_->edit_log()->op_count(region) >= ve::kConsolidateAtOps)
+			queue_consolidation(region);
+}
+
 bool ConsolidationCoordinator::queue_consolidation(ve::IVec3 region) {
 	if (consolidation_in_flight_ && consolidation_job_.region == region) return false;
 	for (const ve::IVec3 &queued : consolidation_queue_)

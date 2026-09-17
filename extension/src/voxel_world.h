@@ -15,6 +15,7 @@
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/string.hpp>
 #include <memory>
+#include <span>
 #include <utility>
 #include <vector>
 #include "core/context.h"
@@ -47,7 +48,7 @@ struct WorldStats {
 	float last_physics_tick_ms = 0.0f;
 };
 
-class VoxelWorld : public Node3D, public EditSink {
+class VoxelWorld : public Node3D, public ve::InvalidationSink {
 	GDCLASS(VoxelWorld, Node3D)
 
 	VoxelDebugHooks *debug_hooks_ = nullptr;
@@ -86,8 +87,9 @@ class VoxelWorld : public Node3D, public EditSink {
 
 	void update_sun_state();
 	void publish_sun_state_to_local_device(RenderingDevice *device);
-	// EditSink: WorldStore's spine calls this with edit_mutex held.
-	void on_edit_appended(const ve::EditOp &op, bool notify_islands) override;
+	// InvalidationSink: the collider remesh queue (kEdit) and the rejection stats
+	// (kRejected). Edit lock held; queue only (core/edit_pipeline.h).
+	void record(const ve::Invalidation &inv) override;
 
 protected:
 	static void _bind_methods();
@@ -206,8 +208,7 @@ public:
 	// GDScript "raycast": the CPU field ray gameplay aims with -> {hit, pos, normal,
 	// distance, material}. `material` is the struck solid's, for hardness-aware tools.
 	Dictionary raycast(Vector3 origin, Vector3 dir, float max_distance = 200.0f);
-	// Caller MUST hold edit_mutex. WorldStore's spine, then this node's fan-out remainder
-	// (rejection stats, LoD dirty marks, collider remesh queue) under the same hold.
+	// Caller MUST hold edit_mutex. Low-level island-manager handle until Task 8.
 	ve::EditLog::AppendResult append_edit_locked(const ve::EditOp &op, bool notify_islands = true);
 	int64_t edit_seq() const { return store_->edit_seq(); }
 };

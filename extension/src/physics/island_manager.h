@@ -8,6 +8,7 @@
 #include <mutex>
 #include <vector>
 #include "connectivity/components.h"
+#include "core/edit_pipeline.h"
 #include "connectivity/contact_refine.h"
 #include "connectivity/flood_fill.h"
 #include "generator/generator.h"
@@ -38,7 +39,7 @@ class WorldStore;
 // run_frame is main-thread only. note_edit may be called from a tool thread while
 // VoxelWorld::append_edit holds the edit mutex, so the pending-window queue has its own
 // small mutex instead of being touched from two threads unsynchronised.
-class IslandManager {
+class IslandManager : public ve::InvalidationSink {
 public:
 	// What the manager needs from the world, and nothing else (spec 2026-09-14 §3.4).
 	struct Collaborators {
@@ -66,7 +67,9 @@ public:
 	// Called from VoxelWorld::append_edit for every SDF-changing op, including the manager's
 	// own carves: removing an island can unsupport the next piece up, and that cascade is
 	// the behaviour spec §5 describes, not a bug.
-	void note_edit(const ve::EditOp &op, int64_t seq);
+	// InvalidationSink: an accepted edit queues a connectivity window. Edit lock held
+	// (core/edit_pipeline.h). Task 12 makes this a queue-and-drain.
+	void record(const ve::Invalidation &inv) override;
 
 	int slot_high_water() const;
 	float last_ms() const { return last_ms_; }
@@ -133,6 +136,11 @@ public:
 	const ve::ContactRefineConfig &refine_config() const { return refine_cfg_; }
 
 private:
+	// Called from VoxelWorld::append_edit for every SDF-changing op, including the manager's
+	// own carves: removing an island can unsupport the next piece up, and that cascade is the
+	// behaviour spec §5 describes, not a bug.
+	void note_edit(const ve::EditOp &op, int64_t seq);
+
 	struct PendingWindow {
 		// Stable across overlapping-edit merges. note_edit() may expand an existing window
 		// (mutating lo/hi/seq), but InFlight and retry/failure bookkeeping copy the window

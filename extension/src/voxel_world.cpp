@@ -86,6 +86,7 @@
 #include <array>
 #include <iterator>
 #include <vector>
+#include <span>
 
 using namespace godot;
 
@@ -456,9 +457,7 @@ VoxelWorld::VoxelWorld() {
 	context_.render = render_.get();
 	// Task 11: the consolidation state machine moves off this class into the coordinator.
 	// It receives ADDRESSES of the fields below (they are created lazily and destroyed
-	// across teardown cycles, so it re-reads them at every use). The store's ConsolidationSink
-	// port is satisfied by the coordinator directly now; VoxelWorld keeps only its EditSink
-	// adapter half until IslandManager implements that port itself.
+	// across teardown cycles, so it re-reads them at every use).
 	consolidation_ = std::make_unique<ConsolidationCoordinator>(store_.get(),
 			ConsolidationCoordinator::Collaborators{
 					.atlas = context_.render->atlas_slot(),
@@ -477,12 +476,15 @@ VoxelWorld::VoxelWorld() {
 					.render_shutting_down = context_.render->render_shutting_down_slot(),
 			});
 	context_.consolidation = consolidation_.get();
-	// Task 8: the edit-append spine lives in WorldStore now. Inject its notification ports
-	// (the edit sink forwards to today's island logic; consolidation is the coordinator).
-	// Since Task 9 the store also owns the occupancy grid/inbox and the edit_seq_ atomic.
-	// Sinks are never null from this point on, matching append_edit_locked's unguarded
-	// expectations.
-	store_->set_sinks(this, consolidation_.get());
+	// The fan-out (core/edit_pipeline.h). These three live as long as the world does; the
+	// island manager registers and unregisters with physics. Registered under the edit lock,
+	// holding no other lock.
+	{
+		std::lock_guard<std::mutex> lock(store_->edit_mutex());
+		store_->edits().add_sink(this);                 // collider remesh queue + rejection stats
+		store_->edits().add_sink(lod_.get());           // LoD dirty marks
+		store_->edits().add_sink(consolidation_.get()); // the consolidation queue
+	}
 }
 
 VoxelWorld::~VoxelWorld() {
@@ -648,7 +650,7 @@ void VoxelWorld::ensure_initialized() {
 
 ve::EditLog::AppendResult VoxelWorld::append_edit(const ve::EditOp &op) {
 	std::lock_guard<std::mutex> lock(store_->edit_mutex());
-	return append_edit_locked(op);
+	return store_->edits().apply(std::span<const ve::EditOp>(&op, 1), {}).ops[0];
 }
 
 Dictionary VoxelWorld::append_edit_op(const PackedByteArray &op_bytes) {
@@ -688,33 +690,11 @@ Dictionary VoxelWorld::raycast(Vector3 origin, Vector3 dir, float max_distance) 
 
 ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
 		bool notify_islands) {
-	// The spine (log append, consolidation queueing, seq bump, island notification via the
-	// EditSink port, pending_edits_) runs in WorldStore; the VoxelWorld-owned fan-out below
-	// stays here under the SAME single lock hold, in the same relative order as before the
-	// split.
-	if (!store_->edit_log()) return {};
-	ve::EditLog::AppendResult r = store_->append_edit_locked(op, notify_islands);
-	if (r.oversized) {
-		UtilityFunctions::printerr("VoxelWorld: edit op exceeds the bounded region span — spec §8 fail-soft");
-	}
-	if (!r.rejected.empty()) {
-		stats_.edit_rejections += static_cast<int>(r.rejected.size());
-		UtilityFunctions::printerr("VoxelWorld: region op list full, op rejected (",
-				r.rejected[0].x, ", ", r.rejected[0].y, ", ", r.rejected[0].z,
-				") — spec §8 fail-soft");
-	}
-	if (r.touched.empty()) return r;
-	// The LoD half of the fan-out moved verbatim into LodSystem::note_edit (Task 15): it
-	// checks its tree, takes lod_mutex under edit_mutex exactly as this block did.
-	if (!r.touched.empty()) context_.lod->note_edit(op);
-	// Collision's half of the fan-out (spec §5: "Fan-out: raymarch set, physics remesh queue,
-	// LoD chain, connectivity"). Queued rather than applied, because this may run on any
-	// thread that owns a tool while ChunkResidency belongs to the main one; physics_tick
-	// drains it. Queued even when physics is off, so enabling it later starts consistent.
-	ve::IVec3 clo{}, chi{};
-	ve::op_chunk_range(op, &clo, &chi);
-	pending_dirty_.push_back({clo, chi});
-	return r;
+	// Named debt: IslandManager's handle. Task 8 has it call the pipeline directly.
+	return store_->edits()
+			.apply(std::span<const ve::EditOp>(&op, 1),
+					{.atomic = false, .notify_islands = notify_islands})
+			.ops[0];
 }
 
 void VoxelWorld::publish_sun_state_to_local_device(RenderingDevice *device) {
@@ -800,6 +780,8 @@ void VoxelWorld::ensure_physics_initialized() {
 				},
 		});
 		island_manager_->set_generator(&store_->generator()->sampler());
+		// The edit lock is already held here, which is where a sink must be registered.
+		store_->edits().add_sink(island_manager_);
 	}
 	physics_ready_ = true;
 }
@@ -817,6 +799,9 @@ void VoxelWorld::teardown_physics() {
 	// its slot mark drops to 0 at the detach, which is what it saw from a null manager before.
 	IslandManager *manager = island_manager_;
 	island_manager_ = nullptr;
+	// The same hold that detaches the pointer unregisters the sink, so no edit can reach a
+	// manager that is being torn down.
+	store_->edits().remove_sink(manager);
 	context_.render->handoff().manager_slots.store(0, std::memory_order_relaxed);
 	if (manager) {
 		manager->teardown();
@@ -876,14 +861,37 @@ int VoxelWorld::sun_cascade_count() const {
 	return ve::sun_cascades(get_stream_radius_m(), SunShadowPass::kSize, c);
 }
 
-void VoxelWorld::on_edit_appended(const ve::EditOp &op, bool notify_islands) {
-	// EditSink adapter (Task 8): called by WorldStore::append_edit_locked with edit_mutex()
-	// held, at exactly the point where this logic used to sit inside append_edit_locked.
-	// WorldStore has already gated on `notify_islands` and on the op changing region field
-	// state; only the manager-presence check remains here. Permanent by ruling: IslandManager
-	// keeps its own notification path; VoxelWorld remains the EditSink.
-	if (notify_islands && island_manager_)
-		island_manager_->note_edit(op, store_->edit_seq());
+void VoxelWorld::record(const ve::Invalidation &inv) {
+	switch (inv.reason) {
+	case ve::InvalidationReason::kRejected:
+		if (inv.append->oversized)
+			UtilityFunctions::printerr("VoxelWorld: edit op exceeds the bounded region span — spec §8 fail-soft");
+		if (!inv.append->rejected.empty()) {
+			stats_.edit_rejections += static_cast<int>(inv.append->rejected.size());
+			UtilityFunctions::printerr("VoxelWorld: region op list full, op rejected (",
+					inv.append->rejected[0].x, ", ", inv.append->rejected[0].y, ", ",
+					inv.append->rejected[0].z, ") — spec §8 fail-soft");
+		}
+		return;
+	case ve::InvalidationReason::kEdit: {
+		// Collision's half of the fan-out (spec §5). Queued rather than applied, because this
+		// may run on any thread that owns a tool while ChunkResidency belongs to the main
+		// one; physics_tick drains it. Queued even when physics is off, so enabling it later
+		// starts consistent.
+		ve::IVec3 clo{}, chi{};
+		ve::op_chunk_range(*inv.op, &clo, &chi);
+		pending_dirty_.push_back({clo, chi});
+		return;
+	}
+	case ve::InvalidationReason::kConsolidated: {
+		const ve::IVec3 base{inv.region.x * ve::kRegionBricks, inv.region.y * ve::kRegionBricks,
+				inv.region.z * ve::kRegionBricks};
+		pending_dirty_.push_back({ve::chunk_of_brick(base),
+				ve::chunk_of_brick({base.x + ve::kRegionBricks - 1,
+						base.y + ve::kRegionBricks - 1, base.z + ve::kRegionBricks - 1})});
+		return;
+	}
+	}
 }
 
 bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandExtractJob *job,

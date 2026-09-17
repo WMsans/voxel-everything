@@ -148,6 +148,11 @@ void IslandManager::teardown() {
 	handles_ = Collaborators{};
 }
 
+void IslandManager::record(const ve::Invalidation &inv) {
+	if (inv.reason != ve::InvalidationReason::kEdit || !inv.notify_islands) return;
+	note_edit(*inv.op, inv.seq);
+}
+
 void IslandManager::note_edit(const ve::EditOp &op, int64_t seq) {
 	if (op.type == ve::kOpSpherePaint) return; // paint moves no matter
 	std::lock_guard<std::mutex> lock(windows_mutex_);
