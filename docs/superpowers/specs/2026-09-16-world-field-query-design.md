@@ -1,7 +1,7 @@
 # Voxel Everything — World Field Query (Sub-project 5a) + S3
 
 **Date:** 2026-09-16
-**Status:** Design approved; plan not yet written
+**Status:** Implemented; see docs/superpowers/plans/2026-09-16-world-field-query-results.md
 **Roadmap:** `docs/superpowers/specs/2026-09-13-frame-module-design.md` §9.4 and §10, and the
 pathway in `docs/superpowers/plans/2026-09-13-frame-module.md` ("Sub-project 5 — World field
 query and edit spine").
@@ -130,7 +130,7 @@ class WorldField : public ChunkProbe, public ContactProbe {
 public:
 	WorldField(const Generator *gen, const EditLog *log, const VolumeSet *volumes,
 			const OverrideStore *overrides, std::mutex *edit_mutex,
-			const std::atomic<int64_t> *edit_seq, OverrideTableLookup tables);
+			const std::atomic<int64_t> *edit_seq, const OverrideTableMap *tables);
 	bool valid() const;       // false before the edit log exists / after release_cores
 	FieldView lock() const;   // holds edit_mutex for the view's lifetime
 
@@ -146,7 +146,7 @@ public:
 	int contact_samples(IVec3 cell, int axis, int face_samples) const;
 	RayHit raycast(const float origin[3], const float dir[3], float max_dist) const;
 	bool snapshot(const float lo[3], const float hi[3], FieldSnapshot *out) const;
-	bool snapshot_region(IVec3 region, RegionSnapshot *out) const;
+	bool snapshot_region(IVec3 region, ConsolidationSnapshot *out) const;
 };
 
 struct FieldSnapshot {        // island extract lattice
@@ -157,7 +157,7 @@ struct FieldSnapshot {        // island extract lattice
 	bool over_cap = false;    // ops.size() > kMaxRegionOps; never truncated
 };
 
-struct RegionSnapshot {       // consolidation bake
+struct ConsolidationSnapshot {       // consolidation bake
 	std::vector<EditOp> ops;
 	uint64_t through_seq = 0;
 	std::vector<IVec3> bricks; // plan_consolidation order
@@ -167,7 +167,7 @@ struct RegionSnapshot {       // consolidation bake
 } // namespace ve
 ```
 
-`OverrideTableLookup` is a callable `(IVec3 region) → int` over `WorldStore::override_tables()`.
+`OverrideTableMap` is the region→table map from `WorldStore::override_tables()`, passed by pointer.
 `sample` stays only if a migrated caller in §5 uses it (row 7 does); `gradient` is not added.
 
 `WorldStore::field()` builds the value from the store's current pointers. Callers re-fetch it per
@@ -325,3 +325,21 @@ lock/read/upload; terrain pipeline and stage authoring (sub-project 6); pass int
    that moves is a race the old code hid, and is reported, not re-pinned silently.
 4. **`ColliderStreamer` holds a `WorldField` across a teardown.** Mitigation: it is rebuilt in
    `initialize` exactly where the raw pointers are assigned today, and cleared in `teardown`.
+
+## 11. Decided during planning
+
+1. **S3a and S3b share one mechanism and one `fix:` commit** (region tags); S3c has its own.
+2. **Tags live in the tail of the existing override table buffer** (`[count, then x, y, z, valid per table]` at index `32 * 32768`), so no shader gains a binding and no uniform set changes. They are synced from the CPU region→table maps: once per `WorldStreamer::run_frame` for the render atlas, once per `MeshService` worker loop iteration for the worker pool, and explicitly in `debug_lod_diff`. An **untagged** table keeps today's lookup: debug fixtures (`debug_fill_override_pool`) install tables without a CPU map entry.
+3. **§3.1 amended.** The oracle the S3 tests depend on is `debug_lod_diff`'s: it evaluates the gathered (truncated) job list and uploads only the origin region's overrides, so it cannot see S3b or S3c. Task 2 fixes that. `debug_mesh_lattice_diff` is self-consistent (no override table on either side) and moves in Task 13, where it gains the chunk region's table like `debug_mesh_diff`.
+4. **The S3c oracle applies the same relevance rule as the fix.** The property under test is "no silent truncation". Dropping ops shorter than half a LoD cell is the approximation `LodTree::mark_dirty` already makes (those ops never trigger a rebuild), now applied consistently at build time.
+5. **`FieldView::snapshot` is lattice-shaped:** `snapshot_lattice(ops_lo, ops_hi, origin, voxel, dim, out)`. All four island-extract sites collect ops over the box union's AABB but copy override bricks over the lattice's brick range and take the table of the lattice origin's region; one AABB cannot reproduce that verbatim. The same shape serves the chunk and LoD diff oracles in Task 13.
+6. **`WorldField` takes a pointer to the region→table map**, not a lookup callable (one implementation).
+7. **`FieldView` copies the field's pointers**, so `store->field().lock()` outlives the `WorldField` temporary. `WorldField::locked_by_caller()` builds a view that neither takes nor releases the mutex, for `ConsolidationCoordinator::pump_async`, `force_region` and `debug_consolidate_diff`, which hold the edit lock across far more than the snapshot.
+8. **`ve::SnapshotSources`** (a materialized `FieldSourceSnapshot`) is added for §5 rows 4 and 7: CPU evaluation over exactly what the GPU job received, without the live store.
+9. **Consumer characterization pins are printed and pasted** (the `test_frame_shipped_golden` pattern). The op-cap refusal and the merge-ground gate that consumes `raycast_down` are already pinned by `test_connectivity.gd` and `test_island_body.gd`; those suites are the pin.
+10. **Change-cost scenario** is traced as "a new downward ground query in a consumer that already holds the store": today `raycast_down` needed `core/world_store.h`, `core/world_store.cpp` and the consumer (3 files); after 5a it is the consumer alone (1 file).
+11. **The S3a brick-generation claim can be float-boundary dependent:** the +x apron sample sits exactly on x = 25.6. A green result closes that half with the test as evidence; the single-table job claims (collider chunk, island extract) do not depend on it.
+12. **`IslandManager` gains `refine_config()`** so `debug_contact_samples` asks the field with the manager's `face_samples` after `IslandManager::contact_samples` is deleted.
+13. **The S3c counter is `LodStats::op_overflow`**, reported as `debug_lod_stats()["op_overflow"]` (the spec's `lod_op_overflow` name, without the prefix every other key in that Dictionary omits). A refused chunk is marked with a new `LodTree::note_refused`: it keeps drawing its pages and is not re-gathered until an edit or consolidation dirties it again.
+14. **S3 fixture worlds use the golden pipeline** and carve closed pockets at y = 38.8, where the analytic terrain is at least 2.4 m of rock everywhere, so every CPU/GPU difference is a lookup difference and never a surface-crossing one.
+15. **The new consolidation snapshot is named `ConsolidationSnapshot` because `ve::RegionSnapshot` is already the archive interface.**

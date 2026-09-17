@@ -3210,6 +3210,8 @@ Deferred items (spec §9.6) have no slot; each has a trigger instead (below).
 
 ### Sub-project 5 — World field query and edit spine
 
+**Status.** 5a (read side: S3, `WorldField`, public raycast) implemented; see `docs/superpowers/plans/2026-09-16-world-field-query-results.md`. 5b (write side: `EditPipeline`, fan-out, lock order, `max_override_bricks = 1`) not started; its inheritance list is spec `2026-09-16-world-field-query-design.md` §8.
+
 **Goal.** One module answers "the world field here" consistently for every consumer, and one path applies an edit and tells every consumer about it.
 
 **Entry gate.** Characterization for S1–S3 as failing (or pinning) tests: collider probe after consolidation and after a volume paste; island contact probe after consolidation; a LoD chunk spanning two consolidated regions. Remove the `max_override_bricks = 1` workaround from `test_connectivity.gd` in a test that proves it is still needed today. Pin the edit fan-out: which consumer (islands, LoD, colliders, streamer, consolidation) is notified for a representative op set.
@@ -3262,7 +3264,7 @@ Deferred items (spec §9.6) have no slot; each has a trigger instead (below).
 | Id | Fixed in | Before which milestone |
 |---|---|---|
 | S1, S2 | Sub-project 3 (pulled forward from sub-project 5) | Fixed; before `WorldField` exists |
-| S3 | Sub-project 5 | Milestone 1, before `WorldField` exists |
+| S3 | Sub-project 5a | <FIXED/CLOSED per claim> |
 | S4, S7, S9 | Sub-project 4 | Before (b) milestones 4–5 |
 | S5, S6 | Sub-project 3 | Fixed; Milestone 1, on today's store |
 | S8 | Sub-project 2 | After milestone 3, with `benchmark.gd` labels |
