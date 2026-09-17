@@ -61,16 +61,17 @@ LodStats LodSystem::stats() {
 	}
 	const int unowned = (s.pages_total - s.pages_free) - static_cast<int>(owned_pages);
 	s.partial_allocations = partial + (unowned > 0 ? unowned : 0);
+	s.op_overflow = lod_op_overflow_;
 	return s;
 }
 
 // Moved verbatim from VoxelWorld::gather_lod_ops (Task 15); the WorldStore accesses are
 // already through its public API, unchanged.
-void LodSystem::gather_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out) {
-	if (!out) return;
+bool LodSystem::gather_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out) {
+	if (!out) return false;
 	out->clear();
 	std::lock_guard<std::mutex> lock(store()->edit_mutex());
-	if (!store()->edit_log()) return;
+	if (!store()->edit_log()) return true;
 	float lo[3], hi[3];
 	ve::lod_chunk_aabb(level, coord, lo, hi);
 	const float pad = std::max(2.0f * ve::lod_cell_size(level), ve::kLatticeFilterPad);
@@ -79,10 +80,10 @@ void LodSystem::gather_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *
 		hi[a] += pad;
 	}
 	ve::collect_ops_for_aabb(*store()->edit_log(), lo, hi, out);
-	// M4 errata 1: the flattened cross-region list can exceed the cap. A chronological
-	// prefix is a valid world state; a suffix could apply an add without the subtract that
-	// made room for it.
-	if (out->size() > ve::kMaxRegionOps) out->resize(ve::kMaxRegionOps);
+	// S3c: a chronological prefix used to be kept past the cap, silently dropping the newest
+	// edits. Ops this level cannot represent go first; if the rest still does not fit, the
+	// build is refused and the chunk keeps its last good pages.
+	return ve::lod_cut_ops(level, out);
 }
 
 void LodSystem::ensure_lod() {
@@ -273,17 +274,28 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 
 	if (!batch_requests.empty()) {
 		std::vector<LodBuildJob> batch;
+		std::vector<ve::LodBuildRequest> submitted, refused;
 		batch.reserve(batch_requests.size());
 		for (const ve::LodBuildRequest &q : batch_requests) {
 			LodBuildJob j;
 			j.level = q.level;
 			j.coord = q.coord;
-			gather_ops(q.level, q.coord, &j.ops);
+			if (!gather_ops(q.level, q.coord, &j.ops)) {
+				refused.push_back(q);
+				continue;
+			}
+			submitted.push_back(q);
 			batch.push_back(std::move(j));
 		}
-		if (!mesh()->submit_lod(std::move(batch))) {
+		if (!refused.empty()) {
 			lock.lock();
-			for (const ve::LodBuildRequest &q : batch_requests) {
+			for (const ve::LodBuildRequest &q : refused) lod_tree_->note_refused(q.level, q.coord);
+			lod_op_overflow_ += static_cast<int>(refused.size());
+			lock.unlock();
+		}
+		if (!batch.empty() && !mesh()->submit_lod(std::move(batch))) {
+			lock.lock();
+			for (const ve::LodBuildRequest &q : submitted) {
 				const LodKey key{q.level, q.coord.x, q.coord.y, q.coord.z};
 				if (lod_pages_of_.find(key) != lod_pages_of_.end()) {
 					lod_tree_->note_ready_dirty(q.level, q.coord);
@@ -376,6 +388,7 @@ void LodSystem::teardown() {
 	}
 	lod_pages_of_.clear();
 	lod_page_quads_.clear();
+	lod_op_overflow_ = 0;
 }
 
 void LodSystem::release_gpu() {
@@ -384,6 +397,7 @@ void LodSystem::release_gpu() {
 	lod_pages_of_.clear();
 	lod_page_quads_.clear();
 	lod_overflow_logged_.clear();
+	lod_op_overflow_ = 0;
 }
 
 } // namespace godot

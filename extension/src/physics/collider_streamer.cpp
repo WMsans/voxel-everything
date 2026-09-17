@@ -28,24 +28,6 @@ int sub_index(int slot, int octant) {
 	return slot * ve::kColliderOctants + octant;
 }
 
-// The residency's view of the world field: generator, region ops, pasted volumes and baked
-// overrides -- everything eval_field takes, so a consolidated or pasted chunk is not probed
-// as empty (S1).
-struct LogProbe : ve::ChunkProbe {
-	const ve::Generator *gen = nullptr;
-	ve::EditLog *log = nullptr;
-	std::mutex *mu = nullptr;
-	const ve::VolumeStore *volumes = nullptr;
-	const ve::OverrideSource *overrides = nullptr;
-
-	bool chunk_has_surface(ve::IVec3 c) const override {
-		std::lock_guard<std::mutex> lock(*mu);
-		const std::vector<ve::EditOp> &ops = log->ops(ve::region_of_chunk(c));
-		return ve::chunk_has_surface(*gen, ops.data(), static_cast<int>(ops.size()), c,
-				volumes, overrides);
-	}
-};
-
 } // namespace
 
 ColliderStreamer::~ColliderStreamer() {
@@ -53,16 +35,13 @@ ColliderStreamer::~ColliderStreamer() {
 }
 
 void ColliderStreamer::initialize(ve::ChunkResidency *chunks, ve::EditLog *edit_log,
-		std::mutex *edit_mutex, MeshService *mesh, int max_slots, const ve::Generator *gen,
-		const ve::VolumeStore *volumes, const ve::OverrideSource *overrides) {
+		std::mutex *edit_mutex, MeshService *mesh, int max_slots, ve::WorldField field) {
 	teardown();
 	chunks_ = chunks;
 	edit_log_ = edit_log;
 	edit_mutex_ = edit_mutex;
 	mesh_ = mesh;
-	gen_ = gen;
-	volumes_ = volumes;
-	overrides_ = overrides;
+	field_ = field;
 	const size_t slots = static_cast<size_t>(std::max(0, max_slots));
 	const size_t bodies = slots * ve::kColliderOctants;
 	bodies_.assign(bodies, RID());
@@ -103,7 +82,7 @@ void ColliderStreamer::teardown() {
 	edit_log_ = nullptr;
 	edit_mutex_ = nullptr;
 	mesh_ = nullptr;
-	gen_ = nullptr;
+	field_ = ve::WorldField();
 }
 
 void ColliderStreamer::set_space(RID space) {
@@ -475,7 +454,7 @@ int ColliderStreamer::run_frame(float cx, float cy, float cz) {
 int ColliderStreamer::run_frame(float cx, float cy, float cz, const float *extra_centers,
 		int extra_count) {
 	if (!chunks_ || !mesh_ || !mesh_->is_valid()) return 0;
-	if (gen_ == nullptr) return 0; // not initialized: no field, no collider
+	if (!field_.valid()) return 0; // not initialized: no field, no collider
 	const Clock::time_point t_frame = Clock::now();
 	last_plan_ms_ = 0.0f;
 	last_apply_ms_ = 0.0f;
@@ -582,16 +561,10 @@ int ColliderStreamer::run_frame(float cx, float cy, float cz, const float *extra
 		centers.insert(centers.end(), extra_centers, extra_centers + bubbles * 3);
 		radii.insert(radii.end(), static_cast<size_t>(bubbles), bubble_radius_m_);
 	}
-	LogProbe probe;
-	probe.gen = gen_;
-	probe.log = edit_log_;
-	probe.mu = edit_mutex_;
-	probe.volumes = volumes_;
-	probe.overrides = overrides_;
 	const int build_cap = (mesh_->busy() || !inbox_.empty() || !pending_.empty()) ? 0 : -1;
 	const Clock::time_point t_plan = Clock::now();
 	const ve::ChunkPlan plan = chunks_->update(centers.data(), radii.data(),
-			static_cast<int>(centers.size() / 3), probe, build_cap);
+			static_cast<int>(centers.size() / 3), field_, build_cap);
 	last_plan_ms_ = ms_since(t_plan);
 	for (const auto &e : plan.releases) {
 		release_slot(e.slot);

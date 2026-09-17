@@ -328,6 +328,29 @@ uint override_mat_byte(int i) {
 	return (field_override_mat.w[i >> 2] >> ((uint(i) & 3u) * 8u)) & 0xFFu;
 }
 
+// S3: a table belongs to ONE region, and `brick & 31` indexes it correctly only for a sample
+// inside that region. The tag tail (ve::override_table_tags) says which region each table
+// belongs to. `hint` is the job's table; an UNTAGGED hint keeps the pre-S3 lookup, because
+// debug fixtures install tables that no CPU region map names.
+ivec4 override_table_tag(int table) {
+	int t = OVERRIDE_TABLE_TAG_BASE + 1 + table * 4;
+	return ivec4(field_override_tables.slot[t], field_override_tables.slot[t + 1],
+			field_override_tables.slot[t + 2], field_override_tables.slot[t + 3]);
+}
+int override_table_at(ivec3 brick, int hint) {
+	ivec3 region = ivec3(floor(vec3(brick) / float(REGION_BRICKS)));
+	if (hint >= 0 && hint < MAX_OVERRIDE_TABLES) {
+		ivec4 tag = override_table_tag(hint);
+		if (tag.w == 0 || tag.xyz == region) return hint;
+	}
+	int count = min(field_override_tables.slot[OVERRIDE_TABLE_TAG_BASE], MAX_OVERRIDE_TABLES);
+	for (int t = 0; t < count; t++) {
+		ivec4 tag = override_table_tag(t);
+		if (tag.w != 0 && tag.xyz == region) return t;
+	}
+	return -1;
+}
+
 // Forward declaration: sample_field_override_gradient (below) reads the same baked base.
 bool sample_field_override(vec3 p, uint op_base, out float sdf, out uint mat);
 
@@ -342,9 +365,9 @@ layout(set = 0, binding = FIELD_NORMAL_OVERRIDE_BINDING, std430) readonly buffer
 bool sample_field_override_gradient(vec3 p, uint op_base, out float sdf, out uint mat, out vec3 grad, out bool exact) {
 	float osdf; uint omat;
 	if (!sample_field_override(p, op_base, osdf, omat)) return false;
-	int table = FIELD_OVERRIDE_TABLE(op_base);
-	if (table < 0 || table >= 32) return false;
 	ivec3 brick = ivec3(floor(p / BRICK_SIZE));
+	int table = override_table_at(brick, FIELD_OVERRIDE_TABLE(op_base));
+	if (table < 0 || table >= MAX_OVERRIDE_TABLES) return false;
 	int bi = (brick.x & 31) + (brick.y & 31) * REGION_BRICKS + (brick.z & 31) * REGION_BRICKS * REGION_BRICKS;
 	int slot = field_override_tables.slot[table * REGION_BRICK_COUNT + bi];
 	if (slot < 0) return false;
@@ -387,9 +410,9 @@ bool sample_field_override_gradient(vec3 p, uint op_base, out float sdf, out uin
 bool sample_field_override(vec3 p, uint op_base, out float sdf, out uint mat) {
 	sdf = 0.0;
 	mat = 0u;
-	int table = FIELD_OVERRIDE_TABLE(op_base);
-	if (table < 0 || table >= 32) return false;
 	ivec3 brick = ivec3(floor(p / BRICK_SIZE));
+	int table = override_table_at(brick, FIELD_OVERRIDE_TABLE(op_base));
+	if (table < 0 || table >= MAX_OVERRIDE_TABLES) return false;
 	int bi = (brick.x & 31) + (brick.y & 31) * REGION_BRICKS +
 			(brick.z & 31) * REGION_BRICKS * REGION_BRICKS;
 	int slot = field_override_tables.slot[table * REGION_BRICK_COUNT + bi];

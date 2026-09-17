@@ -187,6 +187,7 @@ bool LodTree::is_dirty(int level, IVec3 c) const {
 
 void LodTree::note_building(int level, IVec3 c) {
 	Node &n = nodes_[key(level, c)];
+	n.refused = false;
 	n.building = true;
 	// The in-flight build is for the state as of submission; clear any dirty that the walk
 	// observed. Edits that land AFTER this call re-set dirty and are preserved by note_ready.
@@ -198,6 +199,7 @@ void LodTree::note_building(int level, IVec3 c) {
 
 void LodTree::note_ready(int level, IVec3 c, int page_first, int page_count) {
 	Node &n = nodes_[key(level, c)];
+	n.refused = false;
 	const bool was_building = n.building;
 	n.building = false;
 	n.state = kLodReady;
@@ -220,6 +222,7 @@ void LodTree::note_ready_dirty(int level, IVec3 c) {
 	// drawing until the retry succeeds). Mark it as resident so eviction does not reclaim
 	// the old pages while the retry is pending.
 	Node &n = nodes_[key(level, c)];
+	n.refused = false;
 	n.building = false;
 	n.state = kLodReady;
 	n.dirty = true;
@@ -228,6 +231,7 @@ void LodTree::note_ready_dirty(int level, IVec3 c) {
 
 void LodTree::note_empty(int level, IVec3 c) {
 	Node &n = nodes_[key(level, c)];
+	n.refused = false;
 	const bool was_building = n.building;
 	n.building = false;
 	if (was_building && n.dirty) {
@@ -247,8 +251,16 @@ void LodTree::note_empty(int level, IVec3 c) {
 
 void LodTree::note_failed(int level, IVec3 c) {
 	Node &n = nodes_[key(level, c)];
+	n.refused = false;
 	n.building = false;
 	n.state = kLodFailed;
+}
+
+void LodTree::note_refused(int level, IVec3 c) {
+	Node &n = nodes_[key(level, c)];
+	n.refused = true;
+	n.building = false;
+	n.state = n.page_count > 0 ? kLodReady : kLodFailed;
 }
 
 bool LodTree::children_ready(int level, IVec3 c) const {
@@ -282,6 +294,7 @@ void LodTree::request(int level, IVec3 c, float area, LodWalkResult *out,
 	// Never build what the fragment shader would discard on every pixel (spec section 6.4).
 	if (lod_chunk_far_distance(level, c, last_cam_pos_) < cfg_.fade_start_m) return;
 	Node &n = nodes_[key(level, c)];
+	if (n.refused) return;
 	if (n.building) return;
 	if (n.state == kLodBuilding) return;
 	if (n.state == kLodEmpty) return;
@@ -455,7 +468,7 @@ void LodTree::mark_dirty(const float lo[3], const float hi[3]) {
 	for (int level = 0; level < kLodLevels; level++) {
 		// The reduced lattice samples every half cell, so an edit shorter than half a cell
 		// on every axis cannot move a sample at this level and needs no rebuild.
-		if (longest < 0.5f * lod_cell_size(level)) continue;
+		if (!lod_extent_visible(level, longest)) continue;
 		IVec3 clo{}, chi{};
 		op_lod_chunk_range(probe, level, &clo, &chi);
 		for (int z = clo.z; z <= chi.z; z++)
@@ -465,6 +478,7 @@ void LodTree::mark_dirty(const float lo[3], const float hi[3]) {
 					if (it == nodes_.end()) continue;
 					// A cached "empty" would hide a surface an add-op just put there.
 					if (it->second.state == kLodEmpty) it->second.state = kLodUnknown;
+					it->second.refused = false;
 					it->second.dirty = true;
 				}
 	}

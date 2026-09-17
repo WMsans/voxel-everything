@@ -1,9 +1,12 @@
 #include <doctest/doctest.h>
+#include "override_bake.h"
 #include "world/override_store.h"
 #include "world/brick_eval.h"
 #include "generator/generator.h"
 #include "shade/oct.h"
 #include <cmath>
+#include <map>
+#include <tuple>
 
 namespace {
 
@@ -13,30 +16,6 @@ ve::EditOp sphere_sub(float x, float y, float z, float r) {
 	op.pos[0] = x; op.pos[1] = y; op.pos[2] = z;
 	op.radius = r;
 	return op;
-}
-
-// Bake one brick's lattice out of the generator plus ops, exactly as the GPU pass will.
-void bake(const ve::Generator &gen, const ve::EditOp *ops, int n, ve::IVec3 brick,
-		ve::OverrideBrick *out) {
-	for (int z = 0; z < ve::kBrickSdfStride; z++)
-		for (int y = 0; y < ve::kBrickSdfStride; y++)
-			for (int x = 0; x < ve::kBrickSdfStride; x++) {
-				const float wx = (static_cast<float>(brick.x) * ve::kBrickVoxels + x) * ve::kVoxelSize;
-				const float wy = (static_cast<float>(brick.y) * ve::kBrickVoxels + y) * ve::kVoxelSize;
-				const float wz = (static_cast<float>(brick.z) * ve::kBrickVoxels + z) * ve::kVoxelSize;
-				const ve::Sample s = ve::eval_field(gen, ops, n, wx, wy, wz);
-				out->sdf[ve::sdf_index(x, y, z)] = ve::encode_sdf(s.sdf);
-			}
-	for (int z = 0; z < ve::kBrickVoxels; z++)
-		for (int y = 0; y < ve::kBrickVoxels; y++)
-			for (int x = 0; x < ve::kBrickVoxels; x++) {
-				const float wx = (static_cast<float>(brick.x) * ve::kBrickVoxels + x + 0.5f) * ve::kVoxelSize;
-				const float wy = (static_cast<float>(brick.y) * ve::kBrickVoxels + y + 0.5f) * ve::kVoxelSize;
-				const float wz = (static_cast<float>(brick.z) * ve::kBrickVoxels + z + 0.5f) * ve::kVoxelSize;
-				const ve::Sample s = ve::eval_field(gen, ops, n, wx, wy, wz);
-				out->mat[x + y * ve::kBrickVoxels + z * ve::kBrickVoxels * ve::kBrickVoxels] =
-						static_cast<uint8_t>(s.material & 0xFFu);
-			}
 }
 
 } // namespace
@@ -71,7 +50,7 @@ TEST_CASE("sampling an override reproduces the field it baked") {
 	const ve::IVec3 brick{30, 64, 30};
 	ve::OverrideStore store(4);
 	const int slot = store.acquire(brick);
-	bake(gen, ops, 1, brick, store.data(slot));
+	ve_test::bake_override(gen, ops, 1, brick, store.data(slot));
 
 	// At a lattice point the stored value is exact to the encoding's step (~5 mm).
 	const float px = static_cast<float>(brick.x) * ve::kBrickSize + 4 * ve::kVoxelSize;
@@ -234,4 +213,25 @@ TEST_CASE("ops still apply on top of an override") {
 	const ve::EditOp cut[1] = {sphere_sub(px, py, pz, 1.0f)};
 	const ve::Sample s = ve::eval_field(gen, cut, 1, px, py, pz, nullptr, &store);
 	CHECK(s.sdf > 0.0f); // the sphere carved the baked rock away
+}
+
+TEST_CASE("override table tags name each table's region and the highest table in use") {
+	std::map<std::tuple<int, int, int>, int> tables;
+	tables[{0, 1, 0}] = 0;
+	tables[{-3, 2, 7}] = 5;
+	tables[{9, 9, 9}] = ve::kMaxOverrideTables; // out of range: never tagged
+	const std::vector<int32_t> tags = ve::override_table_tags(tables);
+	REQUIRE(static_cast<int>(tags.size()) == ve::kOverrideTableTagInts);
+	CHECK(tags[0] == 6);
+	CHECK(tags[1 + 0 * 4] == 0);
+	CHECK(tags[1 + 0 * 4 + 1] == 1);
+	CHECK(tags[1 + 0 * 4 + 2] == 0);
+	CHECK(tags[1 + 0 * 4 + 3] == 1);
+	CHECK(tags[1 + 5 * 4] == -3);
+	CHECK(tags[1 + 5 * 4 + 1] == 2);
+	CHECK(tags[1 + 5 * 4 + 2] == 7);
+	CHECK(tags[1 + 5 * 4 + 3] == 1);
+	CHECK(tags[1 + 3 * 4 + 3] == 0); // an unused table is untagged
+	CHECK(ve::override_table_tags({})[0] == 0);
+	CHECK(ve::kOverrideTableTagBase == ve::kMaxOverrideTables * ve::kRegionBrickCount);
 }

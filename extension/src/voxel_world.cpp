@@ -228,6 +228,7 @@ void VoxelWorld::_bind_methods() {
 	// AppendResult-free way to push one encoded op through the spine from GDScript.
 	ClassDB::bind_method(D_METHOD("edit_seq"), &VoxelWorld::edit_seq);
 	ClassDB::bind_method(D_METHOD("append_edit", "op"), &VoxelWorld::append_edit_op);
+	ClassDB::bind_method(D_METHOD("raycast", "origin", "dir", "max_distance"), &VoxelWorld::raycast, DEFVAL(200.0f));
 	ClassDB::bind_method(D_METHOD("is_initialized"), &VoxelWorld::is_initialized);
 	ClassDB::bind_method(D_METHOD("request_shader_reload"), &VoxelWorld::request_shader_reload);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "use_local_device"), "set_use_local_device", "get_use_local_device");
@@ -670,6 +671,21 @@ Dictionary VoxelWorld::append_edit_op(const PackedByteArray &op_bytes) {
 	return out;
 }
 
+Dictionary VoxelWorld::raycast(Vector3 origin, Vector3 dir, float max_distance) {
+	Dictionary d;
+	d["hit"] = false;
+	const float o[3] = {origin.x, origin.y, origin.z};
+	const float f[3] = {dir.x, dir.y, dir.z};
+	const ve::RayHit h = store_->field().lock().raycast(o, f, max_distance);
+	if (!h.hit) return d;
+	d["hit"] = true;
+	d["pos"] = Vector3(h.pos[0], h.pos[1], h.pos[2]);
+	d["normal"] = Vector3(h.normal[0], h.normal[1], h.normal[2]);
+	d["distance"] = h.distance;
+	d["material"] = static_cast<int>(h.material);
+	return d;
+}
+
 ve::EditLog::AppendResult VoxelWorld::append_edit_locked(const ve::EditOp &op,
 		bool notify_islands) {
 	// The spine (log append, consolidation queueing, seq bump, island notification via the
@@ -762,8 +778,8 @@ void VoxelWorld::ensure_physics_initialized() {
 	ccfg.max_builds_per_frame = mesh_jobs_per_frame_;
 	chunks_ = new ve::ChunkResidency(ccfg);
 	colliders_ = new ColliderStreamer();
-	colliders_->initialize(chunks_, store_->edit_log(), &store_->edit_mutex(), mesh_, max_collider_chunks_,
-			&store_->generator()->sampler(), &store_->volumes(), store_->overrides());
+	colliders_->initialize(chunks_, store_->edit_log(), &store_->edit_mutex(), mesh_,
+			max_collider_chunks_, store_->field());
 	colliders_->set_shape_builds_per_frame(shape_builds_per_frame_);
 	colliders_->set_body_bubble_radius_m(physics_bubble_radius_m_);
 	// Publish the manager under edit_mutex_: append_edit_locked() can be called from a tool
@@ -887,18 +903,16 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 	job->boxes = *boxes;
 	if (!ve::plan_island_lattice(wlo, whi, ve::kIslandDim, &job->voxel, job->origin)) return false;
 	job->dim = ve::kIslandDim;
-	job->override_table = store_->override_table_for_region(
-			ve::region_of_point(job->origin[0], job->origin[1], job->origin[2]));
+	ve::FieldSnapshot snap;
 	{
-		std::lock_guard<std::mutex> lock(store_->edit_mutex());
-		if (!store_->edit_log()) return false;
-		ve::collect_ops_for_aabb(*store_->edit_log(), wlo, whi, &job->ops);
-		float lattice_hi[3] = {job->origin[0] + (job->dim - 1) * job->voxel, job->origin[1] + (job->dim - 1) * job->voxel, job->origin[2] + (job->dim - 1) * job->voxel};
-		ve::IVec3 blo = ve::brick_of_point(job->origin[0], job->origin[1], job->origin[2]);
-		ve::IVec3 bhi = ve::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
-		if (!store_->snapshot_field_sources(job->ops, blo, bhi, &job->snapshot)) return false;
-		job->gen = &store_->generator()->sampler();
+		const ve::FieldView view = store_->field().lock();
+		if (!view.valid() || !view.snapshot_lattice(wlo, whi, job->origin, job->voxel, job->dim, &snap))
+			return false;
 	}
+	job->ops = std::move(snap.ops);
+	job->snapshot = std::move(snap.sources);
+	job->override_table = snap.override_table;
+	job->gen = &store_->generator()->sampler();
 
 	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
 	std::vector<IslandExtractJob> jobs;
@@ -917,8 +931,12 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 	ve::VolumeData cpu;
 	// Task 10: through the FieldGenerator seam -- same analytic field, no behavior change.
 	const ve::Generator &gen = store_->generator()->sampler();
+	// The reference evaluates exactly what the GPU job received, not the live store, which
+	// this used to read without the edit lock after the worker returned.
+	const ve::SnapshotSources sources(job->snapshot);
+	if (!sources.ok) return false;
 	ve::extract_island_volume(gen, job->ops.data(), static_cast<int>(job->ops.size()),
-			&store_->volumes(), store_->overrides(), job->origin, job->voxel, job->dim, aabbs.data(),
+			&sources.volumes, &sources.overrides, job->origin, job->voxel, job->dim, aabbs.data(),
 			static_cast<int>(boxes->size()), &cpu);
 	*out = std::move(cpu);
 	return true;

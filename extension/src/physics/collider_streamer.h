@@ -11,8 +11,7 @@
 #include "mesh/octant_split.h"
 #include "render/mesh_service.h"
 #include "world/edit_log.h"
-
-namespace ve { struct OverrideSource; }
+#include "world/world_field.h"
 
 namespace godot {
 
@@ -34,8 +33,7 @@ public:
 	~ColliderStreamer();
 
 	void initialize(ve::ChunkResidency *chunks, ve::EditLog *edit_log, std::mutex *edit_mutex,
-			MeshService *mesh, int max_slots, const ve::Generator *gen,
-			const ve::VolumeStore *volumes, const ve::OverrideSource *overrides);
+			MeshService *mesh, int max_slots, ve::WorldField field);
 	void teardown();
 	void set_space(RID space);
 	void set_shape_builds_per_frame(int v) { max_builds_per_frame_ = v; }
@@ -122,15 +120,11 @@ private:
 	ve::EditLog *edit_log_ = nullptr;
 	std::mutex *edit_mutex_ = nullptr;
 	MeshService *mesh_ = nullptr;
-	// Borrowed from WorldStore via VoxelWorld, exactly like edit_log_. Never owned: the
-	// terrain pipeline can swap the world's generator, and a copy here would silently keep
-	// generating the old world for collision while the GPU generated the new one.
-	const ve::Generator *gen_ = nullptr;
-	// Borrowed like gen_: the pasted volumes and the consolidated override bricks are part of
-	// the field the probe must see (S1). Both are read under edit_mutex_, the lock
-	// consolidation holds while it writes overrides.
-	const ve::VolumeStore *volumes_ = nullptr;
-	const ve::OverrideSource *overrides_ = nullptr;
+	// The residency probe's view of the world (sub-project 5a). Built by WorldStore::field()
+	// at initialize, where the store's cores already exist, and valid until teardown -- the
+	// lifetime the raw generator/volume/override pointers had. edit_log_/edit_mutex_ stay for
+	// the mesh request's op copy, which sub-project 5b moves.
+	ve::WorldField field_;
 
 	RID space_;
 	// An inactive space forces lazy backend mesh compilation during the budgeted

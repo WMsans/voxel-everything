@@ -370,11 +370,28 @@ Dictionary VoxelDebugHooks::debug_mesh_lattice_diff(Vector3i chunk) {
 	if (!world_->physics_ready() || !world_->mesh_service()) return d;
 	const ve::IVec3 c{chunk.x, chunk.y, chunk.z};
 	std::vector<ve::EditOp> ops;
+	ve::FieldSnapshot snap;
 	{
-		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
+		const ve::FieldView view = world_->context().store->field().lock();
+		if (!view.valid()) return d;
 		ops = world_->context().store->edit_log()->ops(ve::region_of_chunk(c));
+		// The oracle's sources: everything the chunk lattice (one cell below the origin to
+		// the far face) can read, copied under the lock instead of read live afterwards.
+		float o[3];
+		ve::chunk_world_origin(c, o);
+		const float lattice_origin[3] = {o[0] - ve::kChunkCellSize, o[1] - ve::kChunkCellSize,
+				o[2] - ve::kChunkCellSize};
+		const float span = static_cast<float>(ve::kChunkLattice - 1) * ve::kChunkCellSize;
+		const float lattice_hi[3] = {lattice_origin[0] + span, lattice_origin[1] + span,
+				lattice_origin[2] + span};
+		if (!view.snapshot_lattice(lattice_origin, lattice_hi, lattice_origin, ve::kChunkCellSize,
+				ve::kChunkLattice, &snap))
+			return d;
 	}
+	const ve::SnapshotSources sources(snap.sources);
+	if (!sources.ok) return d;
 	MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
+	job.override_table = snap.override_table;
 	ve::chunk_world_origin(c, job.origin);
 	job.cell_size = ve::kChunkCellSize;
 	job.lattice = ve::kChunkLattice;
@@ -393,8 +410,8 @@ Dictionary VoxelDebugHooks::debug_mesh_lattice_diff(Vector3i chunk) {
 				const float p[3] = {g.origin[0] + (x - 1) * g.cell_size,
 						g.origin[1] + (y - 1) * g.cell_size,
 						g.origin[2] + (z - 1) * g.cell_size};
-				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-						p[0], p[1], p[2], &world_->context().store->volumes()).sdf;
+				const float s = ve::eval_field(gen, snap.ops.data(), static_cast<int>(snap.ops.size()),
+						p[0], p[1], p[2], &sources.volumes, &sources.overrides).sdf;
 				if (s <= 0.0f) neg = true; else pos = true;
 				const int want = ve::encode_sdf(s);
 				const int got = gpu[ve::dc_lattice_index(g, x, y, z)];
@@ -416,12 +433,28 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	if (!world_->physics_ready() || !world_->mesh_service()) return d;
 	const ve::IVec3 c{chunk.x, chunk.y, chunk.z};
 	std::vector<ve::EditOp> ops;
+	ve::FieldSnapshot snap;
 	{
-		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
+		const ve::FieldView view = world_->context().store->field().lock();
+		if (!view.valid()) return d;
 		ops = world_->context().store->edit_log()->ops(ve::region_of_chunk(c));
+		// The oracle's sources: everything the chunk lattice (one cell below the origin to
+		// the far face) can read, copied under the lock instead of read live afterwards.
+		float o[3];
+		ve::chunk_world_origin(c, o);
+		const float lattice_origin[3] = {o[0] - ve::kChunkCellSize, o[1] - ve::kChunkCellSize,
+				o[2] - ve::kChunkCellSize};
+		const float span = static_cast<float>(ve::kChunkLattice - 1) * ve::kChunkCellSize;
+		const float lattice_hi[3] = {lattice_origin[0] + span, lattice_origin[1] + span,
+				lattice_origin[2] + span};
+		if (!view.snapshot_lattice(lattice_origin, lattice_hi, lattice_origin, ve::kChunkCellSize,
+				ve::kChunkLattice, &snap))
+			return d;
 	}
+	const ve::SnapshotSources sources(snap.sources);
+	if (!sources.ok) return d;
 	MeshJob job{c, ops.data(), static_cast<int>(ops.size())};
-	job.override_table = world_->context().store->override_table_for_region(ve::region_of_chunk(c));
+	job.override_table = snap.override_table;
 	ve::chunk_world_origin(c, job.origin);
 	job.cell_size = ve::kChunkCellSize;
 	job.lattice = ve::kChunkLattice;
@@ -443,9 +476,9 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	for (int z = 0; z < g.lattice; z++)
 		for (int y = 0; y < g.lattice; y++)
 			for (int x = 0; x < g.lattice; x++) {
-				const float s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
+				const float s = ve::eval_field(gen, snap.ops.data(), static_cast<int>(snap.ops.size()),
 						g.origin[0] + (x - 1) * g.cell_size, g.origin[1] + (y - 1) * g.cell_size,
-						g.origin[2] + (z - 1) * g.cell_size, &world_->context().store->volumes(), world_->context().store->overrides()).sdf;
+						g.origin[2] + (z - 1) * g.cell_size, &sources.volumes, &sources.overrides).sdf;
 				const int diff = std::abs(static_cast<int>(lattice[ve::dc_lattice_index(g, x, y, z)]) -
 						static_cast<int>(ve::encode_sdf(s)));
 				lat_max = std::max(lat_max, diff);
@@ -533,9 +566,9 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	const int tri_count = static_cast<int>(gpu.indices.size() / 3);
 	const int stride = std::max(1, tri_count / 512); // a spread sample, not the first 512
 	for (int v = 0; v < gpu_verts; v++) {
-		const float s = std::fabs(ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
+		const float s = std::fabs(ve::eval_field(gen, snap.ops.data(), static_cast<int>(snap.ops.size()),
 				gpu.positions[v * 3], gpu.positions[v * 3 + 1], gpu.positions[v * 3 + 2],
-				&world_->context().store->volumes(), world_->context().store->overrides()).sdf);
+				&sources.volumes, &sources.overrides).sdf);
 		max_sdf = std::max(max_sdf, s);
 		if (s > 0.1f) off_10cm++;
 	}
@@ -554,10 +587,10 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 		// 2 cm: far enough out of the quantisation noise, short enough that the probe cannot
 		// step clean through a thin feature and read solid on both sides.
 		const Vector3 step = n.normalized() * 0.02f;
-		const float out_side = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-				mid.x + step.x, mid.y + step.y, mid.z + step.z, &world_->context().store->volumes(), world_->context().store->overrides()).sdf;
-		const float in_side = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-				mid.x - step.x, mid.y - step.y, mid.z - step.z, &world_->context().store->volumes(), world_->context().store->overrides()).sdf;
+		const float out_side = ve::eval_field(gen, snap.ops.data(), static_cast<int>(snap.ops.size()),
+				mid.x + step.x, mid.y + step.y, mid.z + step.z, &sources.volumes, &sources.overrides).sdf;
+		const float in_side = ve::eval_field(gen, snap.ops.data(), static_cast<int>(snap.ops.size()),
+				mid.x - step.x, mid.y - step.y, mid.z - step.z, &sources.volumes, &sources.overrides).sdf;
 		tri_sampled++;
 		if (out_side <= in_side) winding_bad++;
 	}
@@ -568,12 +601,13 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	return d;
 }
 
-// The shipped marginal-contact probe, asked directly: IslandManager::contact_samples is the
-// member LogContactProbe forwards to, so this is not a re-implementation.
+// The shipped marginal-contact query: refine_anchoring asks WorldStore::field() with the
+// manager's face sample count, and so does this.
 int VoxelDebugHooks::debug_contact_samples(Vector3i cell, int axis) {
 	world_->ensure_physics_initialized();
 	if (!world_->island_manager()) return -1;
-	return world_->island_manager()->contact_samples({cell.x, cell.y, cell.z}, axis);
+	return world_->context().store->field().contact_samples({cell.x, cell.y, cell.z}, axis,
+			world_->island_manager()->refine_config().face_samples);
 }
 
 Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i hi_cell) {
@@ -605,17 +639,16 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 	job.boxes = boxes;
 	if (!ve::plan_island_lattice(wlo, whi, ve::kIslandDim, &job.voxel, job.origin)) return d;
 	job.dim = ve::kIslandDim;
-	job.override_table = world_->context().store->override_table_for_region(
-			ve::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
+	ve::FieldSnapshot snap;
 	{
-		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-		ve::collect_ops_for_aabb(*world_->context().store->edit_log(), wlo, whi, &job.ops);
-		float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
-		ve::IVec3 blo = ve::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
-		ve::IVec3 bhi = ve::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
-		if (!world_->context().store->snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) return d;
-		job.gen = &world_->context().store->generator()->sampler();
+		const ve::FieldView view = world_->context().store->field().lock();
+		if (!view.valid() || !view.snapshot_lattice(wlo, whi, job.origin, job.voxel, job.dim, &snap))
+			return d;
 	}
+	job.ops = std::move(snap.ops);
+	job.snapshot = std::move(snap.sources);
+	job.override_table = snap.override_table;
+	job.gen = &world_->context().store->generator()->sampler();
 
 	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
 	std::vector<IslandExtractJob> jobs;
@@ -628,13 +661,16 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 	}
 	if (results.empty() || results[0].failed) return d;
 
+	const ve::SnapshotSources sources(job.snapshot);
+	if (!sources.ok) return d;
+
 	std::vector<float> aabbs(boxes.size() * 6);
 	for (size_t i = 0; i < boxes.size(); i++)
 		boxes[i].world_aabb(&aabbs[i * 6], &aabbs[i * 6 + 3]);
 	ve::VolumeData cpu;
 	const ve::Generator &gen = world_->context().store->generator()->sampler();
 	ve::extract_island_volume(gen, job.ops.data(), static_cast<int>(job.ops.size()),
-			&world_->context().store->volumes(), world_->context().store->overrides(), job.origin,
+			&sources.volumes, &sources.overrides, job.origin,
 			job.voxel, job.dim, aabbs.data(), static_cast<int>(boxes.size()), &cpu);
 
 	int worst = 0, mat_mismatch = 0, mat_compared = 0;
@@ -675,7 +711,7 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 			float px = job.origin[0] + x * job.voxel;
 			float py = job.origin[1] + y * job.voxel;
 			float pz = job.origin[2] + z * job.voxel;
-			ve::FieldSample fs = ve::eval_field_gradient(agen, job.ops.data(), static_cast<int>(job.ops.size()), px, py, pz, &world_->context().store->volumes(), world_->context().store->overrides());
+			ve::FieldSample fs = ve::eval_field_gradient(agen, job.ops.data(), static_cast<int>(job.ops.size()), px, py, pz, &sources.volumes, &sources.overrides);
 			float bu = 1e30f; float bu_grad[3]={0,1,0}; bool has_bu=false;
 			for (auto &b : boxes) { float lo[3], hi[3]; b.world_aabb(lo,hi); float d = ve::box_sdf(lo,hi,px,py,pz); if (!has_bu || d < bu) { bu=d; ve::box_sdf_gradient(lo,hi,px,py,pz,bu_grad); has_bu=true; } }
 			float exp_g[3]={fs.gradient[0],fs.gradient[1],fs.gradient[2]}; bool exp_exact=fs.exact_gradient;
@@ -988,17 +1024,16 @@ bool VoxelDebugHooks::debug_extract_submit(int id, Vector3i lo_cell, Vector3i hi
 	job.boxes = boxes;
 	if (!ve::plan_island_lattice(wlo, whi, ve::kIslandDim, &job.voxel, job.origin)) return false;
 	job.dim = ve::kIslandDim;
-	job.override_table = world_->context().store->override_table_for_region(
-			ve::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
+	ve::FieldSnapshot snap;
 	{
-		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-		ve::collect_ops_for_aabb(*world_->context().store->edit_log(), wlo, whi, &job.ops);
-		float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
-		ve::IVec3 blo = ve::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
-		ve::IVec3 bhi = ve::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
-		if (!world_->context().store->snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) return false;
-		job.gen = &world_->context().store->generator()->sampler();
+		const ve::FieldView view = world_->context().store->field().lock();
+		if (!view.valid() || !view.snapshot_lattice(wlo, whi, job.origin, job.voxel, job.dim, &snap))
+			return false;
 	}
+	job.ops = std::move(snap.ops);
+	job.snapshot = std::move(snap.sources);
+	job.override_table = snap.override_table;
+	job.gen = &world_->context().store->generator()->sampler();
 	std::vector<IslandExtractJob> jobs;
 	jobs.push_back(std::move(job));
 	return world_->mesh_service()->submit_extracts(std::move(jobs));

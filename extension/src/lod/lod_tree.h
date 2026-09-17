@@ -138,6 +138,10 @@ public:
 	void note_ready_dirty(int level, IVec3 c);
 	void note_empty(int level, IVec3 c);
 	void note_failed(int level, IVec3 c);
+	// The build was refused before submission (over the op cap after the cut). A node with
+	// pages keeps drawing them and stays clean -- the next edit or consolidation that
+	// touches it dirties it again -- so a refused chunk is not re-gathered every frame.
+	void note_refused(int level, IVec3 c);
 
 	// Every level whose chunks the world AABB touches is re-requested. A drawn node keeps
 	// drawing its stale pages until the rebuild lands -- stale beats missing.
@@ -176,6 +180,7 @@ private:
 		uint8_t state = kLodUnknown;
 		bool building = false; // a build is in flight; ready nodes keep drawing old pages
 		bool dirty = false;
+		bool refused = false; // an over-cap build stays suppressed until the node is dirtied
 		int page_first = -1;
 		int page_count = 0;
 		uint32_t last_marked = 0;

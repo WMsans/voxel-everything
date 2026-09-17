@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include "lod/lod_grid.h"
+#include "world/edit_log.h"
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -139,4 +140,34 @@ TEST_CASE("root selection has no origin bias") {
 	ve::lod_roots_in_radius(near_cam, 2000.0f, &a);
 	ve::lod_roots_in_radius(far_cam, 2000.0f, &b);
 	CHECK(a.size() == b.size());
+}
+
+TEST_CASE("an op shorter than half a LoD cell on every axis is invisible at that level") {
+	ve::EditOp tiny{};
+	tiny.type = ve::kOpSphereSubtract;
+	tiny.radius = 0.05f; // 0.1 m across
+	ve::EditOp big = tiny;
+	big.radius = 0.6f;   // 1.2 m across
+	CHECK(ve::lod_op_visible(0, tiny) == ve::lod_extent_visible(0, 0.1f));
+	CHECK_FALSE(ve::lod_op_visible(2, tiny)); // half of 1.6 m is 0.8 m
+	CHECK(ve::lod_op_visible(2, big));
+	CHECK_FALSE(ve::lod_extent_visible(3, 1.5f));
+	CHECK(ve::lod_extent_visible(3, 1.6f));
+}
+
+TEST_CASE("the LoD op cut keeps order, drops invisible ops and reports whether the rest fits") {
+	std::vector<ve::EditOp> ops;
+	for (int i = 0; i < ve::kMaxRegionOps + 10; i++) {
+		ve::EditOp op{};
+		op.type = ve::kOpSphereSubtract;
+		op.pos[0] = static_cast<float>(i);
+		op.radius = (i % 2 == 0) ? 0.6f : 0.05f;
+		ops.push_back(op);
+	}
+	std::vector<ve::EditOp> cut = ops;
+	CHECK(ve::lod_cut_ops(2, &cut));
+	REQUIRE(cut.size() == static_cast<size_t>((ve::kMaxRegionOps + 10 + 1) / 2));
+	for (size_t i = 1; i < cut.size(); i++) CHECK(cut[i - 1].pos[0] < cut[i].pos[0]);
+	for (ve::EditOp &op : ops) op.radius = 0.6f;
+	CHECK_FALSE(ve::lod_cut_ops(2, &ops));
 }

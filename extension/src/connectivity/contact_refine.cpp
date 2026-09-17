@@ -103,7 +103,7 @@ int refine_anchoring(const OccupancyGrid &grid, const ContactProbe &probe,
 		int made = 0;
 		for (const BridgeLink &b : bridges) {
 			if (cuts->cut(b.cell, b.axis)) continue;
-			if (probe.contact_samples(b.cell, b.axis) >= cfg.min_contact_samples) continue;
+			if (probe.contact_samples(b.cell, b.axis, cfg.face_samples) >= cfg.min_contact_samples) continue;
 			cuts->add(b.cell, b.axis);
 			made++;
 		}

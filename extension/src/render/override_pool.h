@@ -8,7 +8,7 @@ namespace godot {
 
 class OverridePool {
 public:
-	static constexpr int kMaxOverrideTables = 32;
+	static constexpr int kMaxOverrideTables = ve::kMaxOverrideTables;
 	static constexpr int kDefaultCapacity = 8192;
 	static constexpr int kDefaultRegionSlots = 512;
 
@@ -29,6 +29,10 @@ public:
 	int region_table(int region_slot) const;
 	void clear_table(RenderingDevice *rd, int table);
 
+	// S3: the region of every table (ve::override_table_tags), written into the tail of
+	// tables(). A no-op when unchanged, so owners sync it every frame / worker iteration.
+	void set_table_tags(RenderingDevice *rd, const std::vector<int32_t> &tags);
+
 	RID sdf_buffer() const { return sdf_; }
 	RID mat_buffer() const { return mat_; }
 	RID tables() const { return tables_; }
@@ -40,6 +44,7 @@ private:
 	int capacity_ = 0;
 	int max_region_slots_ = 0;
 	std::vector<int> region_tables_;
+	std::vector<int32_t> tags_;
 };
 
 } // namespace godot

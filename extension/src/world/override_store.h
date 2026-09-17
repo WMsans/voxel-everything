@@ -4,9 +4,19 @@
 #include "world/region.h"
 #include <cstdint>
 #include <map>
+#include <tuple>
 #include <vector>
 
 namespace ve {
+
+// The GPU keeps at most this many override tables, one per consolidated region
+// (render/override_pool.h aliases it).
+inline constexpr int kMaxOverrideTables = 32;
+// S3: which region each table belongs to, in the tail of the GPU table buffer:
+// [count, then per table x, y, z, valid]. A sample outside its job's region finds its own
+// region's table through these (shaders/field_ops.glslh override_table_at).
+inline constexpr int kOverrideTableTagBase = kMaxOverrideTables * kRegionBrickCount;
+inline constexpr int kOverrideTableTagInts = 1 + 4 * kMaxOverrideTables;
 
 // One brick's baked field: the same 17^3 encoded lattice the atlas stores, plus one byte of
 // GLOBAL material id per cell. Overrides replace the generator base; they are not edit ops.
@@ -66,5 +76,9 @@ private:
 // one lattice pitch. Output order is deterministic with x varying fastest.
 void plan_consolidation(const EditOp *ops, int op_count, IVec3 region,
 		std::vector<IVec3> *bricks);
+
+// The tag tail for a region -> table map. `count` is one past the highest tagged table, so
+// the shader's scan stops early; out-of-range tables are ignored.
+std::vector<int32_t> override_table_tags(const std::map<std::tuple<int, int, int>, int> &tables);
 
 } // namespace ve

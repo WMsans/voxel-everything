@@ -79,29 +79,18 @@ bool same_rest_pose(const Transform3D &a, const Transform3D &b) {
 	return true;
 }
 
-// The residency's view of the world field, for ve::refine_anchoring. The lock is taken per
-// call rather than held, exactly as ColliderStreamer::LogProbe does, so an edit landing
-// mid-refinement waits rather than deadlocks.
-struct LogContactProbe : ve::ContactProbe {
-	const IslandManager *manager = nullptr;
-
-	int contact_samples(ve::IVec3 cell, int axis) const override {
-		return manager->contact_samples(cell, axis);
-	}
-};
+// A downward ray from 200 m, 400 m long: where the ground is under a sleeping body's
+// footprint, read from the same field the paste goes into.
+ve::RayHit ground_below(WorldStore *store, const float xz[2]) {
+	const float origin[3] = {xz[0], 200.0f, xz[1]};
+	const float down[3] = {0.0f, -1.0f, 0.0f};
+	return store->field().lock().raycast(origin, down, 400.0f);
+}
 
 } // namespace
 
 IslandManager::~IslandManager() {
 	teardown();
-}
-
-int IslandManager::contact_samples(ve::IVec3 cell, int axis) const {
-	if (gen_ == nullptr || !handles_.store || !handles_.store->edit_log()) return 0;
-	std::lock_guard<std::mutex> lock(handles_.store->edit_mutex());
-	const std::vector<ve::EditOp> &ops = handles_.store->edit_log()->ops(ve::region_of_brick(cell));
-	return ve::contact_samples_field(*gen_, ops.data(), static_cast<int>(ops.size()), cell, axis,
-			refine_cfg_.face_samples, &handles_.store->volumes(), handles_.store->overrides());
 }
 
 void IslandManager::initialize(Collaborators handles) {
@@ -251,14 +240,15 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 	ve::FloodWindow w = ve::FloodWindow::around(pw.lo, pw.hi, ve::kFloodWindowCells);
 	ve::LinkCuts cuts;
 	ve::FloodResult r;
-	LogContactProbe probe;
-	probe.manager = this;
+	// The field locks once per contact query, so an edit landing mid-refinement waits rather
+	// than deadlocks.
+	const ve::WorldField field = handles_.store->field();
 
 	for (int expand = 0;; expand++) {
 		ve::flood_anchored(handles_.store->occupancy(), w, &cuts, &r);
 		// Spec §5's marginal-contact refinement, before labelling: a piece held by one thin
 		// neck must be cut loose BEFORE the labeller decides it is anchored.
-		ve::refine_anchoring(handles_.store->occupancy(), probe, refine_cfg_, &cuts, &r);
+		ve::refine_anchoring(handles_.store->occupancy(), field, refine_cfg_, &cuts, &r);
 		if (!r.frontier_reached || expand >= ve::kMaxWindowExpansions) break;
 		// Spec §5: "expanding if the frontier is reached".
 		w = ve::FloodWindow::around(pw.lo, pw.hi, w.dim * 2);
@@ -315,29 +305,29 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 			refused_lattice_++;
 			continue;
 		}
+		ve::FieldSnapshot snap;
 		{
-			std::lock_guard<std::mutex> lock(handles_.store->edit_mutex());
-			if (!handles_.store->edit_log()) {
+			const ve::FieldView view = handles_.store->field().lock();
+			if (!view.valid()) {
 				refused_++;
 				continue;
 			}
-			ve::collect_ops_for_aabb(*handles_.store->edit_log(), wlo, whi, &job.ops);
-			float lattice_hi[3] = {job.origin[0] + (job.dim - 1) * job.voxel, job.origin[1] + (job.dim - 1) * job.voxel, job.origin[2] + (job.dim - 1) * job.voxel};
-			ve::IVec3 blo = ve::brick_of_point(job.origin[0], job.origin[1], job.origin[2]);
-			ve::IVec3 bhi = ve::brick_of_point(lattice_hi[0], lattice_hi[1], lattice_hi[2]);
-			if (!handles_.store->snapshot_field_sources(job.ops, blo, bhi, &job.snapshot)) {
+			if (!view.snapshot_lattice(wlo, whi, job.origin, job.voxel, job.dim, &snap)) {
 				refused_++;
 				refused_op_cap_++;
 				continue;
 			}
 		}
+		job.ops = std::move(snap.ops);
+		job.snapshot = std::move(snap.sources);
 		job.gen = gen_;
-		job.override_table = handles_.store->override_table_for_region(
-				ve::region_of_point(job.origin[0], job.origin[1], job.origin[2]));
+		// The table is captured under the same lock as the snapshot now; it used to be read
+		// after the lock was released.
+		job.override_table = snap.override_table;
 		// Refuse before allocating a volume slot or submitting: the extraction pass cannot
 		// evaluate more than kMaxRegionOps ops, so this component can never be carved by the
 		// current field/worker limits. Fail-soft leaves it attached.
-		if (job.ops.size() > static_cast<size_t>(ve::kMaxRegionOps)) {
+		if (snap.over_cap) {
 			refused_++;
 			refused_op_cap_++;
 			continue;
@@ -1019,7 +1009,7 @@ void IslandManager::start_merges() {
 		float best_ground = -1e30f;
 		bool any_ground = false;
 		for (const float(&p)[2] : probes) {
-			const ve::RayHit g = handles_.store->raycast_down(p);
+			const ve::RayHit g = ground_below(handles_.store, p);
 			if (g.hit) {
 				any_ground = true;
 				best_ground = std::max(best_ground, g.pos[1]);
@@ -1552,7 +1542,7 @@ Dictionary IslandManager::stats() {
 	// the paste went into, which is the point of asking it rather than the physics.
 	float ground = 0.0f;
 	if (handles_.store) {
-		const ve::RayHit h = handles_.store->raycast_down(last_merge_xz_);
+		const ve::RayHit h = ground_below(handles_.store, last_merge_xz_);
 		if (h.hit) ground = h.pos[1];
 	}
 	d["ground_y"] = ground;

@@ -170,4 +170,21 @@ void plan_consolidation(const EditOp *ops, int op_count, IVec3 region,
 			}
 }
 
+std::vector<int32_t> override_table_tags(const std::map<std::tuple<int, int, int>, int> &tables) {
+	std::vector<int32_t> tags(static_cast<size_t>(kOverrideTableTagInts), 0);
+	int count = 0;
+	for (const auto &it : tables) {
+		const int table = it.second;
+		if (table < 0 || table >= kMaxOverrideTables) continue;
+		const size_t at = 1 + static_cast<size_t>(table) * 4;
+		tags[at] = std::get<0>(it.first);
+		tags[at + 1] = std::get<1>(it.first);
+		tags[at + 2] = std::get<2>(it.first);
+		tags[at + 3] = 1;
+		count = std::max(count, table + 1);
+	}
+	tags[0] = count;
+	return tags;
+}
+
 } // namespace ve

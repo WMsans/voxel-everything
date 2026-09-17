@@ -345,9 +345,11 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 	std::unique_lock<std::mutex> edit_lock(world_->context().store->edit_mutex());
 	if (!world_->mesh_service() || !world_->context().store->edit_log() || !world_->context().store->overrides() || !world_->context().store->residency()) return d;
 	const ve::IVec3 r{region.x, region.y, region.z};
-	std::vector<ve::EditOp> ops = world_->context().store->edit_log()->ops(r);
-	std::vector<ve::IVec3> bricks;
-	ve::plan_consolidation(ops.data(), static_cast<int>(ops.size()), r, &bricks);
+	ve::ConsolidationSnapshot snap;
+	const bool sources_ok =
+			world_->context().store->field().locked_by_caller().snapshot_region(r, &snap);
+	const std::vector<ve::EditOp> &ops = snap.ops;
+	const std::vector<ve::IVec3> &bricks = snap.bricks;
 	d["bricks"] = static_cast<int>(bricks.size());
 	d["sdf_mismatches"] = 0;
 	d["mat_mismatches"] = 0;
@@ -359,9 +361,8 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 	job.bricks = bricks;
 	job.ops = ops;
 	if (!bricks.empty()) {
-		ve::IVec3 lo = bricks[0], hi = bricks[0];
-		for (auto &b : bricks) { lo.x = std::min(lo.x, b.x); lo.y = std::min(lo.y, b.y); lo.z = std::min(lo.z, b.z); hi.x = std::max(hi.x, b.x); hi.y = std::max(hi.y, b.y); hi.z = std::max(hi.z, b.z); }
-		if (!world_->context().store->snapshot_field_sources(ops, lo, hi, &job.source)) return d;
+		if (!sources_ok) return d;
+		job.source = snap.sources;
 		job.gen = &world_->context().store->generator()->sampler();
 	}
 	const int existing_table = world_->context().store->override_table_for_region(r);
@@ -384,6 +385,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 	std::vector<ConsolidateResult> results;
 	if (world_->mesh_service()->collect_consolidations(&results) != 1 || results[0].failed) return d;
 	const ve::Generator &gen = world_->context().store->generator()->sampler();
+	const ve::FieldView view = world_->context().store->field().locked_by_caller();
 	int sdf_mismatches = 0, mat_mismatches = 0;
 	Dictionary first;
 	for (size_t bi = 0; bi < bricks.size() && bi < results[0].baked.size(); bi++) {
@@ -394,9 +396,8 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 		for (int z = 0; z <= ve::kBrickVoxels; z++)
 			for (int y = 0; y <= ve::kBrickVoxels; y++)
 				for (int x = 0; x <= ve::kBrickVoxels; x++) {
-					const ve::Sample s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-							bo[0] + x * ve::kVoxelSize, bo[1] + y * ve::kVoxelSize,
-							bo[2] + z * ve::kVoxelSize, &world_->context().store->volumes(), world_->context().store->overrides());
+					const ve::Sample s = view.sample(bo[0] + x * ve::kVoxelSize,
+							bo[1] + y * ve::kVoxelSize, bo[2] + z * ve::kVoxelSize);
 					const uint8_t expected = ve::encode_sdf(s.sdf);
 					const uint8_t actual = b.sdf[ve::sdf_index(x, y, z)];
 					// CPU/GPU transcendental rounding can cross an R8 quantization boundary.
@@ -409,9 +410,8 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 			for (int z = 0; z < ve::kBrickVoxels; z++)
 				for (int y = 0; y < ve::kBrickVoxels; y++)
 					for (int x = 0; x < ve::kBrickVoxels; x++) {
-						const ve::Sample s = ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()),
-								bo[0] + x * ve::kVoxelSize, bo[1] + y * ve::kVoxelSize,
-								bo[2] + z * ve::kVoxelSize, &world_->context().store->volumes(), world_->context().store->overrides());
+						const ve::Sample s = view.sample(bo[0] + x * ve::kVoxelSize,
+								bo[1] + y * ve::kVoxelSize, bo[2] + z * ve::kVoxelSize);
 						if (s.material != b.mat[ve::voxel_index(x, y, z)]) mat_mismatches++;
 					}
 	}
@@ -1194,13 +1194,8 @@ PackedFloat32Array VoxelDebugHooks::debug_generator_fingerprint() {
 }
 
 float VoxelDebugHooks::debug_field_sdf(Vector3 p) {
-	if (!world_->context().store->edit_log()) return 1e30f;
-	const ve::Generator &gen = world_->context().store->generator()->sampler();
-	std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-	const std::vector<ve::EditOp> &ops =
-			world_->context().store->edit_log()->ops(ve::region_of_point(p.x, p.y, p.z));
-	return ve::eval_field(gen, ops.data(), static_cast<int>(ops.size()), p.x, p.y, p.z,
-			&world_->context().store->volumes(), world_->context().store->overrides()).sdf;
+	const ve::FieldView view = world_->context().store->field().lock();
+	return view.valid() ? view.sample(p.x, p.y, p.z).sdf : 1e30f;
 }
 
 int VoxelDebugHooks::debug_cell_state(Vector3i cell) {
@@ -1303,22 +1298,7 @@ bool VoxelDebugHooks::debug_region_map_consistent() {
 }
 
 Dictionary VoxelDebugHooks::debug_raycast(Vector3 origin, Vector3 dir) {
-	Dictionary d;
-	d["hit"] = false;
-	if (!world_->context().store->edit_log()) return d;
-	std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-	const ve::Generator &gen = world_->context().store->generator()->sampler();
-	const float o[3] = {origin.x, origin.y, origin.z};
-	const float f[3] = {dir.x, dir.y, dir.z};
-	const ve::RayHit h = ve::raycast(gen, *world_->context().store->edit_log(), o, f, 200.0f, &world_->context().store->volumes(), world_->context().store->overrides());
-	if (!h.hit) return d;
-	d["hit"] = true;
-	d["pos"] = Vector3(h.pos[0], h.pos[1], h.pos[2]);
-	d["normal"] = Vector3(h.normal[0], h.normal[1], h.normal[2]);
-	d["distance"] = h.distance;
-	// The struck surface's material. Ray-driven removal tools pass this straight to
-	// VoxelEditTool.apply_sphere_subtract so its hardness is resolved once, up front.
-	d["material"] = static_cast<int>(h.material);
-	return d;
+	// Kept for the test suites; gameplay calls VoxelWorld.raycast.
+	return world_->raycast(origin, dir, 200.0f);
 }
 } // namespace godot
