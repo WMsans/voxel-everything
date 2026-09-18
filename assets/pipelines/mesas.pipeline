@@ -1,0 +1,16 @@
+# The "add a stage" scenario from the roadmap's Appendix A, and the multi-channel fixture
+# tests/test_field_diff.gd needs: mesas publishes its own channel and places a material.
+#
+# Deliberately NOT part of default.pipeline. Demo terrain and every golden stay where they
+# are, and this file is picked up by the field diff automatically.
+#
+# No `lipschitz` line: with no ceiling declared, resolve reports the computed bound
+# (1.78 + 0.21 + 1.3 = 3.29). A steep stage costs raycast steps; declaring a ceiling here
+# is how an author would refuse to pay them.
+seed      1337
+
+stage stages/hills.field.glslh
+stage stages/relief.field.glslh
+stage stages/cave.field.glslh
+stage stages/height_bands.field.glslh
+stage stages/mesas.field.glslh
