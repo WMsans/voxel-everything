@@ -13,6 +13,11 @@ int channel_component_count(ChannelType t);   // 1,2,3,4,1,1
 const char *channel_glsl_type(ChannelType t); // "float","vec2","vec3","vec4","int","uint"
 
 struct ChannelDecl { std::string name; ChannelType type = ChannelType::kFloat; };
+
+// How a stage's gradient bound combines with the bound of the stages before it. An
+// additive stage (one that adds a term to sdf) adds; a composing stage (a domain warp, a
+// CSG combine) multiplies. See the terrain-pipeline design section 10.1.
+enum class LipschitzMode { kNone, kAdd, kMul };
 struct ResourceDecl { std::string name, type; float fallback = 0.0f; };
 struct ParamDecl { std::string name; ChannelType type = ChannelType::kFloat; float value = 0.0f; };
 
@@ -22,7 +27,8 @@ struct StageManifest {
     std::vector<ChannelDecl> reads, writes;
     std::vector<ResourceDecl> samples;
     std::vector<ParamDecl> params;
-    float lipschitz = 1.0f;
+    LipschitzMode lipschitz_mode = LipschitzMode::kNone;
+    float lipschitz = 0.0f;
     float bounds = 0.0f;
     int iterate = 1;
     std::string domain;

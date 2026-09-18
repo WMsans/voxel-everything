@@ -10,6 +10,7 @@ ve::StageManifest field_stage(const char *name, std::vector<const char *> writes
 	m.name = name;
 	m.kind = ve::StageKind::kField;
 	m.cpu_symbol = cpu;
+	m.lipschitz_mode = ve::LipschitzMode::kMul;
 	m.lipschitz = 1.0f;
 	auto type_for = [](const char *n) {
 		return std::string(n) == "material" ? ve::ChannelType::kUint : ve::ChannelType::kFloat;

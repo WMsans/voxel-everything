@@ -6,7 +6,7 @@ static const char *kHills =
 	"//!kind      field\n"
 	"//!out       sdf : float\n"
 	"//!param     amplitude : float = 6.0\n"
-	"//!lipschitz 2.0\n"
+	"//!lipschitz add 2.0\n"
 	"//!cpu       ve::stage_hills\n"
 	"\n"
 	"void stage_hills(inout FieldCtx ctx) {\n"
@@ -26,6 +26,7 @@ TEST_CASE("parses every directive and keeps the body verbatim") {
 	CHECK(m.params[0].name == "amplitude");
 	CHECK(m.params[0].value == doctest::Approx(6.0f));
 	CHECK(m.lipschitz == doctest::Approx(2.0f));
+	CHECK(m.lipschitz_mode == ve::LipschitzMode::kAdd);
 	CHECK(m.cpu_symbol == "ve::stage_hills");
 	CHECK(m.body.find("void stage_hills(inout FieldCtx ctx) {") != std::string::npos);
 	CHECK(m.body.find("//!") == std::string::npos);
@@ -80,4 +81,61 @@ TEST_CASE("errors name the problem") {
 	err.clear();
 	CHECK_FALSE(ve::parse_stage_manifest("//!stage s\n//!kind field\n//!bogus x\n", &m, &err));
 	CHECK(err.find("bogus") != std::string::npos);
+}
+
+TEST_CASE("//!lipschitz carries a mode") {
+	const char *src =
+			"//!stage     s\n"
+			"//!kind      field\n"
+			"//!out       sdf : float\n"
+			"//!lipschitz add 1.78\n"
+			"//!cpu       ve::s\n"
+			"void s(inout FieldCtx c){}\n";
+	ve::StageManifest m;
+	std::string err;
+	REQUIRE_MESSAGE(ve::parse_stage_manifest(src, &m, &err), err);
+	CHECK(m.lipschitz_mode == ve::LipschitzMode::kAdd);
+	CHECK(m.lipschitz == doctest::Approx(1.78f));
+}
+
+TEST_CASE("//!lipschitz mul parses") {
+	const char *src =
+			"//!stage     s\n//!kind field\n//!out sdf : float\n"
+			"//!lipschitz mul 1.0\n//!cpu ve::s\nvoid s(inout FieldCtx c){}\n";
+	ve::StageManifest m;
+	std::string err;
+	REQUIRE_MESSAGE(ve::parse_stage_manifest(src, &m, &err), err);
+	CHECK(m.lipschitz_mode == ve::LipschitzMode::kMul);
+	CHECK(m.lipschitz == doctest::Approx(1.0f));
+}
+
+TEST_CASE("the bare //!lipschitz form is rejected, with the two modes named") {
+	const char *src =
+			"//!stage s\n//!kind field\n//!out sdf : float\n"
+			"//!lipschitz 2.0\n//!cpu ve::s\nvoid s(inout FieldCtx c){}\n";
+	ve::StageManifest m;
+	std::string err;
+	CHECK_FALSE(ve::parse_stage_manifest(src, &m, &err));
+	CHECK(err.find("add") != std::string::npos);
+	CHECK(err.find("mul") != std::string::npos);
+}
+
+TEST_CASE("an unknown //!lipschitz mode is rejected by name") {
+	const char *src =
+			"//!stage s\n//!kind field\n//!out sdf : float\n"
+			"//!lipschitz compose 2.0\n//!cpu ve::s\nvoid s(inout FieldCtx c){}\n";
+	ve::StageManifest m;
+	std::string err;
+	CHECK_FALSE(ve::parse_stage_manifest(src, &m, &err));
+	CHECK(err.find("compose") != std::string::npos);
+}
+
+TEST_CASE("a stage with no //!lipschitz reports no mode") {
+	const char *src =
+			"//!stage s\n//!kind field\n//!out material : uint\n"
+			"//!cpu ve::s\nvoid s(inout FieldCtx c){}\n";
+	ve::StageManifest m;
+	std::string err;
+	REQUIRE_MESSAGE(ve::parse_stage_manifest(src, &m, &err), err);
+	CHECK(m.lipschitz_mode == ve::LipschitzMode::kNone);
 }

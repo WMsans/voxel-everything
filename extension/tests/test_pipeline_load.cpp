@@ -22,7 +22,7 @@ const char *kHills =
 		"//!kind      field\n"
 		"//!out       sdf : float\n"
 		"//!param     amp : float = 6.0\n"
-		"//!lipschitz 2.0\n"
+		"//!lipschitz add 2.0\n"
 		"//!cpu       ve::stage_hills\n"
 		"void stage_hills(inout FieldCtx ctx) { ctx.sdf = ctx.p.y; }\n";
 
