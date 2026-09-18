@@ -1,4 +1,5 @@
 #include "terrain/stage_manifest.h"
+#include <cmath>
 #include <cstdlib>
 #include <sstream>
 
@@ -107,6 +108,8 @@ bool parse_stage_manifest(const std::string &source, StageManifest *out, std::st
 			else if (mode == "mul") out->lipschitz_mode = LipschitzMode::kMul;
 			else return fail("unknown //!lipschitz mode '" + mode + "' (expected add or mul)");
 			out->lipschitz = float(std::atof(trim(rest.substr(sp2)).c_str()));
+			if (!std::isfinite(out->lipschitz) || out->lipschitz <= 0.0f)
+				return fail("//!lipschitz value must be finite and positive: " + rest);
 		}
 		else if (key == "bounds")    { out->bounds = float(std::atof(rest.c_str())); }
 		else if (key == "iterate")   { out->iterate = std::atoi(rest.c_str()); }

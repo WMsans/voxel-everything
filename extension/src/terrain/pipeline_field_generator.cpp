@@ -1,5 +1,9 @@
 #include "terrain/pipeline_field_generator.h"
 
+#include <cstddef>
+#include <cstring>
+#include <new>
+
 namespace ve {
 
 namespace {
@@ -18,6 +22,15 @@ int find_param(const ResolvedPipeline &p, const std::string &stage, const std::s
 	}
 	return -1;
 }
+
+std::shared_ptr<void> make_blob(const void *words, size_t word_bytes, size_t size) {
+	void *storage = ::operator new(size, std::align_val_t(alignof(std::max_align_t)));
+	std::memset(storage, 0, size);
+	if (word_bytes != 0) std::memcpy(storage, words, word_bytes);
+	return std::shared_ptr<void>(storage, [](void *p) {
+		::operator delete(p, std::align_val_t(alignof(std::max_align_t)));
+	});
+}
 } // namespace
 
 PipelineFieldGenerator *PipelineFieldGenerator::create(const ResolvedPipeline &p,
@@ -33,8 +46,8 @@ PipelineFieldGenerator *PipelineFieldGenerator::create(const ResolvedPipeline &p
 		if (s.cpu_symbol.empty()) {
 			// GPU-only stage: the CPU field is already inexact, and sample() skips it.
 			g->fns_.push_back(nullptr);
-			g->slot_words_.emplace_back();
-			g->param_words_.emplace_back(1, 0.0f);
+			g->slot_blobs_.push_back(nullptr);
+			g->param_blobs_.push_back(nullptr);
 			continue;
 		}
 		const StageBinding *b = StageLibrary::instance().lookup(s.cpu_symbol);
@@ -57,7 +70,7 @@ PipelineFieldGenerator *PipelineFieldGenerator::create(const ResolvedPipeline &p
 			}
 			slots.push_back(slot);
 		}
-		g->slot_words_.push_back(slots);
+		g->slot_blobs_.push_back(make_blob(slots.data(), slots.size() * sizeof(int), b->slot_size));
 
 		std::vector<float> params;
 		for (const std::string &n : split_binding_names(b->param_names)) {
@@ -70,8 +83,7 @@ PipelineFieldGenerator *PipelineFieldGenerator::create(const ResolvedPipeline &p
 			}
 			params.push_back(p.params[size_t(idx)].value);
 		}
-		if (params.empty()) params.push_back(0.0f);
-		g->param_words_.push_back(params);
+		g->param_blobs_.push_back(make_blob(params.data(), params.size() * sizeof(float), b->param_size));
 	}
 	return g;
 }
@@ -88,7 +100,7 @@ Sample PipelineFieldGenerator::sample(float x, float y, float z) const {
 		StageFn fn = fns_[i];
 		if (fn == nullptr) continue;  // GPU-only stage: the CPU field is already inexact
 		FieldResources res;
-		fn(ctx, slot_words_[i].data(), param_words_[i].data(), res);
+		fn(ctx, slot_blobs_[i].get(), param_blobs_[i].get(), res);
 	}
 
 	Sample s{};

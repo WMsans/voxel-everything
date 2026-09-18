@@ -186,22 +186,28 @@ bool resolve_pipeline(const PipelineDesc &desc, const std::vector<StageManifest>
 			if (!seen) out->resources.push_back(r);
 		}
 
+		bool writes_sdf = false;
+		for (const ChannelDecl &w : m.writes)
+			if (w.name == "sdf") writes_sdf = true;
 		for (const auto &ov : desc.stages[i].param_overrides) {
 			bool found = false;
-			for (ParamDecl &p : m.params)
-				if (p.name == ov.first) { p.value = ov.second; found = true; break; }
+			for (const ParamDecl &p : m.params)
+				if (p.name == ov.first) { found = true; break; }
 			if (!found)
 				return fail("stage '" + m.name + "' has no param '" + ov.first + "'");
 		}
+		if (writes_sdf && !desc.stages[i].param_overrides.empty())
+			return fail("stage '" + m.name + "' has parameter overrides that may change its "
+					"gradient bound; static //!lipschitz is not recomputed");
+		for (const auto &ov : desc.stages[i].param_overrides)
+			for (ParamDecl &p : m.params)
+				if (p.name == ov.first) { p.value = ov.second; break; }
 		for (const ParamDecl &p : m.params) {
 			ParamDecl flat = p;
 			flat.name = m.name + "." + p.name;
 			out->params.push_back(flat);
 		}
 
-		bool writes_sdf = false;
-		for (const ChannelDecl &w : m.writes)
-			if (w.name == "sdf") writes_sdf = true;
 		if (writes_sdf) {
 			if (m.lipschitz_mode == LipschitzMode::kNone)
 				return fail("stage '" + m.name + "' writes sdf but declares no "

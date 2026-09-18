@@ -5,6 +5,7 @@
 #include "generator/generator.h"
 #include "terrain/pipeline.h"
 #include "terrain/stage_library.h"
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -33,8 +34,11 @@ public:
 private:
 	ResolvedPipeline pipeline_;
 	std::vector<StageFn> fns_;
-	std::vector<std::vector<int>> slot_words_;
-	std::vector<std::vector<float>> param_words_;
+	// Each blob is allocated at max alignment and populated through memcpy. The registered
+	// trampoline casts it back to its own implicit-lifetime aggregate type; StageFn itself
+	// stays unchanged and the pointer is still passed directly at every sample.
+	std::vector<std::shared_ptr<void>> slot_blobs_;
+	std::vector<std::shared_ptr<void>> param_blobs_;
 };
 
 } // namespace ve

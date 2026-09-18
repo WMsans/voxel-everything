@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -35,6 +36,8 @@ struct StageBinding {
 	StageFn fn = nullptr;
 	std::string slot_names;   // "p, sdf, height" -- exactly as spelled in VE_STAGE_SLOTS
 	std::string param_names;  // "amp_a, amp_b, amp_c"; empty for a stage with no params
+	size_t slot_size = 0;
+	size_t param_size = 0;
 };
 
 // Splits a stringised __VA_ARGS__ list into trimmed names. Empty input yields no names.
@@ -51,7 +54,7 @@ private:
 
 struct StageRegistrar {
 	StageRegistrar(const char *symbol, StageFn fn, const char *slot_names,
-			const char *param_names);
+			const char *param_names, size_t slot_size, size_t param_size);
 };
 } // namespace ve
 
@@ -76,4 +79,5 @@ struct StageRegistrar {
 	}                                                                                 \
 	static ::ve::StageRegistrar ve_stage_reg_##fn(symbol, &ve_tramp_##fn,             \
 			ve_slot_names(static_cast<Stage##Slots *>(nullptr)),                      \
-			ve_param_names(static_cast<Stage##Params *>(nullptr)))
+			ve_param_names(static_cast<Stage##Params *>(nullptr)), sizeof(Stage##Slots), \
+			sizeof(Stage##Params))

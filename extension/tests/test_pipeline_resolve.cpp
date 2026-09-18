@@ -219,18 +219,33 @@ TEST_CASE("a ceiling the stages fit under is accepted and does not replace the b
 	CHECK(p.lipschitz == doctest::Approx(1.78f));  // NOT 2.0
 }
 
-TEST_CASE("param overrides win, and the hash moves when they do") {
-	std::vector<ve::StageManifest> st{field_stage("a", {"sdf"}, {})};
-	st[0].params.push_back({"amplitude", ve::ChannelType::kFloat, 6.0f});
+TEST_CASE("safe param overrides win, and the hash moves when they do") {
+	std::vector<ve::StageManifest> st{
+			field_stage("a", {"sdf"}, {}),
+			field_stage("bands", {"material"}, {"sdf"})};
+	st[1].lipschitz_mode = ve::LipschitzMode::kNone;
+	st[1].params.push_back({"amplitude", ve::ChannelType::kFloat, 6.0f});
 	ve::ResolvedPipeline p1, p2;
 	std::string err;
-	REQUIRE(ve::resolve_pipeline(desc_for(1), st, &p1, &err));
+	REQUIRE(ve::resolve_pipeline(desc_for(2), st, &p1, &err));
 	CHECK(p1.params[0].value == doctest::Approx(6.0f));
-	ve::PipelineDesc d = desc_for(1);
-	d.stages[0].param_overrides.emplace_back("amplitude", 9.0f);
+	ve::PipelineDesc d = desc_for(2);
+	d.stages[1].param_overrides.emplace_back("amplitude", 9.0f);
 	REQUIRE(ve::resolve_pipeline(d, st, &p2, &err));
 	CHECK(p2.params[0].value == doctest::Approx(9.0f));
 	CHECK(p1.hash != p2.hash);
+}
+
+TEST_CASE("overrides on sdf stages are rejected until their gradient bound is recomputed") {
+	std::vector<ve::StageManifest> st{field_stage("a", {"sdf"}, {})};
+	st[0].params.push_back({"amplitude", ve::ChannelType::kFloat, 6.0f});
+	ve::PipelineDesc d = desc_for(1);
+	d.stages[0].param_overrides.emplace_back("amplitude", 9.0f);
+	ve::ResolvedPipeline p;
+	std::string err;
+	CHECK_FALSE(ve::resolve_pipeline(d, st, &p, &err));
+	CHECK(err.find("a") != std::string::npos);
+	CHECK(err.find("gradient bound") != std::string::npos);
 }
 
 TEST_CASE("an override naming an unknown param is rejected") {

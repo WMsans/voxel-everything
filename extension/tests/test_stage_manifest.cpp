@@ -139,3 +139,14 @@ TEST_CASE("a stage with no //!lipschitz reports no mode") {
 	REQUIRE_MESSAGE(ve::parse_stage_manifest(src, &m, &err), err);
 	CHECK(m.lipschitz_mode == ve::LipschitzMode::kNone);
 }
+
+TEST_CASE("//!lipschitz rejects non-positive and non-finite values") {
+	for (const char *value : {"0", "-1", "nan", "inf"}) {
+		const std::string src = "//!stage s\n//!kind field\n//!out sdf : float\n//!lipschitz add " +
+				std::string(value) + "\n//!cpu ve::s\nvoid s(inout FieldCtx c){}\n";
+		ve::StageManifest m;
+		std::string err;
+		CHECK_FALSE(ve::parse_stage_manifest(src, &m, &err));
+		CHECK(err.find("finite and positive") != std::string::npos);
+	}
+}

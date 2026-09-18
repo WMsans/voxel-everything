@@ -39,12 +39,14 @@ const StageBinding *StageLibrary::lookup(const std::string &symbol) const {
 }
 
 StageRegistrar::StageRegistrar(const char *symbol, StageFn fn, const char *slot_names,
-		const char *param_names) {
+		const char *param_names, size_t slot_size, size_t param_size) {
 	StageBinding b;
 	b.symbol = symbol;
 	b.fn = fn;
 	b.slot_names = slot_names;
 	b.param_names = param_names;
+	b.slot_size = slot_size;
+	b.param_size = param_size;
 	StageLibrary::instance().register_stage(b);
 }
 
