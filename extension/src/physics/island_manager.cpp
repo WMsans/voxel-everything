@@ -614,12 +614,11 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 	// only persistently failing batches accumulate toward dropping the remainder.
 	note_extract_success(f.window);
 
-	// The extraction was computed from the field as of submit time. If a newer edit (including
-	// another carve from the same batch) has changed any op that can influence this component's
-	// AABB, the volume in hand is stale: carving it into the current field would remove matter
-	// using a shape that no longer matches the field. The freshness comparison is deliberately
-	// re-run INSIDE the edit_mutex_ hold that also does preflight/pin/spawn/carve, so no
-	// tool-thread edit can land between the comparison and the first carve.
+	// The extraction was computed from the field as of submit time. If anything was appended
+	// since then, the volume in hand may be stale: carving it into the current field could
+	// remove matter using a shape that no longer matches the field. The freshness comparison
+	// is deliberately re-run INSIDE the edit_mutex_ hold that also does preflight/pin/spawn/carve,
+	// so no tool-thread edit can land between the comparison and the first carve.
 
 	const float solid_m3 = static_cast<float>(r.data.solid_voxels) * f.voxel * f.voxel * f.voxel;
 	const bool debris = solid_m3 < kDebrisVolumeM3;
@@ -681,54 +680,14 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		// volume. Release the atlas/volume resources and back off -- the edit that changed the
 		// field queued its own connectivity window.
 		//
-		// Only ops that reach INSIDE THE BOXES count. The captured list was gathered over the
-		// component's whole AABB, but the island is the field intersected with the box union
-		// (ve::extract_island_volume masks every sample with max(field, box union)), so an op
-		// that misses every box changed nothing this extraction depends on and nothing the
-		// carve is about to remove.
-		//
-		// Comparing the whole AABB list instead was a livelock. One connectivity pass submits
-		// kExtractsPerFrame extractions from the SAME blast, and neighbouring components have
-		// overlapping AABBs; the first to land appends its carve ops, which land in the second
-		// one's AABB and declare it stale even though the two components are cell-disjoint by
-		// construction (ve::label_islands emits disjoint components and ve::greedy_box_merge
-		// tiles each one exactly). The second was thrown away and its window re-queued, every
-		// time -- so a blast that freed many pieces dropped one piece per pass at best, and
-		// could make no progress at all. That is the "some parts take a very long time to fall,
-		// or never do" report. Overlap is STRICT so that a sibling's box sharing a face plane
-		// with ours -- which removes nothing on our side of it -- does not count.
+		// Consolidation can erase an appended op before this check, so a retained spatial
+		// query cannot prove that no append happened. The global stamp is deliberately
+		// conservative: same-sequence consolidation is not stale, while any later append
+		// retries rather than carving from a snapshot that may be stale.
 		{
-			const auto reaches_the_boxes = [&f](const ve::EditOp &op) {
-				float olo[3], ohi[3];
-				ve::op_world_aabb(op, olo, ohi);
-				for (const ve::CellBox &box : f.boxes) {
-					float blo[3], bhi[3];
-					box.world_aabb(blo, bhi);
-					bool overlaps = true;
-					for (int a = 0; a < 3; a++)
-						if (!(olo[a] < bhi[a] && ohi[a] > blo[a])) {
-							overlaps = false;
-							break;
-						}
-					if (overlaps) return true;
-				}
-				return false;
-			};
-			// An op counts when it was appended AFTER the snapshot this extraction was
-			// computed from. Comparing the captured list against the current one also
-			// reported a consolidation as staleness -- a bake removes ops without changing a
-			// single field value, so it made extractions retry for nothing.
-			std::vector<ve::EditOp> newer;
-			handles_.store->field().locked_by_caller().ops_since(f.aabb_lo, f.aabb_hi, f.log_seq,
-					&newer);
-			// Consolidation can erase an appended op before this check, so an empty spatial
-			// result is ambiguous. The global stamp is conservative in that case: it retries
-			// for unrelated appends rather than carving from a snapshot that may be stale.
-			// ponytail: global fallback can retry unrelated edits; retain append tombstones/history
+			// ponytail: global retry can include unrelated appends; retain append tombstones/history
 			// if that becomes a measurable throughput ceiling.
-			const bool stale = newer.empty() ?
-					handles_.store->edit_log()->last_seq() > f.log_seq :
-					std::any_of(newer.begin(), newer.end(), reaches_the_boxes);
+			const bool stale = handles_.store->edit_log()->last_seq() > f.log_seq;
 			if (stale) {
 				if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
 				release_volume_slot(handles_.store->volumes(), *handles_.handoff, f.volume_slot);
