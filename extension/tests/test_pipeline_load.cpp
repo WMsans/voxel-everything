@@ -35,7 +35,8 @@ TEST_CASE("load_pipeline reads the pipeline and every stage it names, then resol
 	};
 	ve::ResolvedPipeline p;
 	std::string err;
-	REQUIRE_MESSAGE(ve::load_pipeline(table_reader(files), "pipe/a.pipeline", "root/", &p, &err), err);
+	REQUIRE_MESSAGE(ve::load_pipeline(table_reader(files), "pipe/a.pipeline", "root/", &p,
+			nullptr, &err), err);
 	REQUIRE(p.stages.size() == 1);
 	CHECK(p.stages[0].name == "hills");
 	CHECK(p.channel_slot("sdf") == 1);
@@ -47,7 +48,8 @@ TEST_CASE("load_pipeline reports an unreadable pipeline file") {
 	ve::ResolvedPipeline p;
 	std::string err;
 	const std::map<std::string, std::string> files{};
-	CHECK_FALSE(ve::load_pipeline(table_reader(files), "pipe/missing.pipeline", "root/", &p, &err));
+	CHECK_FALSE(ve::load_pipeline(table_reader(files), "pipe/missing.pipeline", "root/", &p,
+			nullptr, &err));
 	CHECK(err.find("pipe/missing.pipeline") != std::string::npos);
 }
 
@@ -57,7 +59,8 @@ TEST_CASE("load_pipeline reports an unreadable stage, naming the resolved path")
 	};
 	ve::ResolvedPipeline p;
 	std::string err;
-	CHECK_FALSE(ve::load_pipeline(table_reader(files), "pipe/a.pipeline", "root/", &p, &err));
+	CHECK_FALSE(ve::load_pipeline(table_reader(files), "pipe/a.pipeline", "root/", &p, nullptr,
+			&err));
 	CHECK(err.find("root/stages/absent.field.glslh") != std::string::npos);
 }
 
@@ -68,7 +71,25 @@ TEST_CASE("load_pipeline prefixes a manifest parse error with the stage path") {
 	};
 	ve::ResolvedPipeline p;
 	std::string err;
-	CHECK_FALSE(ve::load_pipeline(table_reader(files), "pipe/a.pipeline", "root/", &p, &err));
+	CHECK_FALSE(ve::load_pipeline(table_reader(files), "pipe/a.pipeline", "root/", &p, nullptr,
+			&err));
 	CHECK(err.find("root/stages/bad.field.glslh") != std::string::npos);
 	CHECK(err.find("nonsense") != std::string::npos);
+}
+
+TEST_CASE("load_pipeline hands the resolver's warnings to its caller") {
+	const char *gpu_only =
+			"//!stage g\n//!kind field\n//!out sdf : float\n//!lipschitz add 1.0\n"
+			"void stage_g(inout FieldCtx c){ c.sdf = c.p.y; }\n";
+	const std::map<std::string, std::string> files{
+		{"pipe/a.pipeline", "allow_gpu_only 1\nstage stages/g.field.glslh\n"},
+		{"root/stages/g.field.glslh", gpu_only},
+	};
+	ve::ResolvedPipeline p;
+	std::vector<std::string> warnings;
+	std::string err;
+	REQUIRE_MESSAGE(ve::load_pipeline(table_reader(files), "pipe/a.pipeline", "root/", &p,
+			&warnings, &err), err);
+	REQUIRE(warnings.size() == 1);
+	CHECK(warnings[0].find("collider") != std::string::npos);
 }

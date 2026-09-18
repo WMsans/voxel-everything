@@ -311,3 +311,28 @@ TEST_CASE("a param name inside a comment is not a read") {
 	std::string err;
 	CHECK_MESSAGE(ve::resolve_pipeline(desc_for(2), st, &p, &err), err);
 }
+
+TEST_CASE("a GPU-only stage warns, naming the CPU consumers that will diverge") {
+	std::vector<ve::StageManifest> st{field_stage("a", {"sdf"}, {}, "")};
+	st[0].lipschitz_mode = ve::LipschitzMode::kAdd;
+	st[0].lipschitz = 1.0f;
+	ve::ResolvedPipeline p;
+	std::string err;
+	REQUIRE_MESSAGE(ve::resolve_pipeline(desc_for(1, true), st, &p, &err), err);
+	CHECK_FALSE(p.cpu_exact);
+	REQUIRE(p.warnings.size() == 1);
+	CHECK(p.warnings[0].find("a") != std::string::npos);
+	CHECK(p.warnings[0].find("collider") != std::string::npos);
+	CHECK(p.warnings[0].find("island") != std::string::npos);
+	CHECK(p.warnings[0].find("raycast") != std::string::npos);
+}
+
+TEST_CASE("a pipeline whose stages all have mirrors warns about nothing") {
+	std::vector<ve::StageManifest> st{field_stage("a", {"sdf"}, {})};
+	st[0].lipschitz_mode = ve::LipschitzMode::kAdd;
+	st[0].lipschitz = 1.0f;
+	ve::ResolvedPipeline p;
+	std::string err;
+	REQUIRE_MESSAGE(ve::resolve_pipeline(desc_for(1), st, &p, &err), err);
+	CHECK(p.warnings.empty());
+}

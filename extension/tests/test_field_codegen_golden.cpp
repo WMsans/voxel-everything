@@ -44,7 +44,7 @@ TEST_CASE("the default pipeline generates the committed source") {
 	ve::ResolvedPipeline p;
 	std::string err;
 	REQUIRE_MESSAGE(ve::load_pipeline(repo_reader, root() + "/assets/pipelines/default.pipeline",
-			root() + "/shaders/", &p, &err), err);
+			root() + "/shaders/", &p, nullptr, &err), err);
 
 	const std::string prelude = slurp(root() + "/shaders/field_ops.glslh");
 	const std::string got = ve::generate_field_glslh(p, prelude);

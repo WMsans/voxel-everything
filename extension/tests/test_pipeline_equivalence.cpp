@@ -42,7 +42,7 @@ std::unique_ptr<ve::PipelineFieldGenerator> golden_pipeline() {
 	ve::ResolvedPipeline p;
 	std::string err;
 	REQUIRE_MESSAGE(ve::load_pipeline(repo_reader, root + "/assets/pipelines/golden.pipeline",
-			root + "/shaders/", &p, &err), err);
+			root + "/shaders/", &p, nullptr, &err), err);
 	ve::PipelineFieldGenerator *g = ve::PipelineFieldGenerator::create(p, &err);
 	REQUIRE_MESSAGE(g != nullptr, err);
 	return std::unique_ptr<ve::PipelineFieldGenerator>(g);

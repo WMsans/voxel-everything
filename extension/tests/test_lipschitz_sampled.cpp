@@ -31,7 +31,7 @@ void check_bound(const char *pipeline) {
 	ve::ResolvedPipeline p;
 	std::string err;
 	REQUIRE_MESSAGE(ve::load_pipeline(repo_reader,
-			root + "/assets/pipelines/" + pipeline, root + "/shaders/", &p, &err), err);
+			root + "/assets/pipelines/" + pipeline, root + "/shaders/", &p, nullptr, &err), err);
 	std::unique_ptr<ve::PipelineFieldGenerator> g(ve::PipelineFieldGenerator::create(p, &err));
 	REQUIRE_MESSAGE(g != nullptr, err);
 

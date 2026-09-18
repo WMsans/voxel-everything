@@ -32,7 +32,7 @@ std::unique_ptr<ve::PipelineFieldGenerator> build(const std::string &pipeline_te
 	};
 	ve::ResolvedPipeline p;
 	std::string err;
-	REQUIRE_MESSAGE(ve::load_pipeline(reader, "<memory>", root + "/shaders/", &p, &err), err);
+	REQUIRE_MESSAGE(ve::load_pipeline(reader, "<memory>", root + "/shaders/", &p, nullptr, &err), err);
 	ve::PipelineFieldGenerator *g = ve::PipelineFieldGenerator::create(p, &err);
 	REQUIRE_MESSAGE(g != nullptr, err);
 	return std::unique_ptr<ve::PipelineFieldGenerator>(g);

@@ -7,7 +7,8 @@
 namespace ve {
 
 bool load_pipeline(const TextReader &reader, const std::string &pipeline_path,
-		const std::string &stage_root, ResolvedPipeline *out, std::string *error) {
+		const std::string &stage_root, ResolvedPipeline *out,
+		std::vector<std::string> *warnings, std::string *error) {
 	auto fail = [&](const std::string &m) { if (error) *error = m; return false; };
 
 	std::string src;
@@ -31,7 +32,9 @@ bool load_pipeline(const TextReader &reader, const std::string &pipeline_path,
 		loaded.push_back(m);
 	}
 
-	return resolve_pipeline(desc, loaded, out, error);
+	if (!resolve_pipeline(desc, loaded, out, error)) return false;
+	if (warnings != nullptr) *warnings = out->warnings;
+	return true;
 }
 
 } // namespace ve

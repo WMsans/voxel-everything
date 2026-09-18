@@ -563,14 +563,18 @@ void VoxelWorld::load_terrain_pipeline() {
 	if (!store_->terrain_pipeline().stages.empty()) return;
 	std::string err;
 	ve::ResolvedPipeline resolved;
+	std::vector<std::string> warnings;
 	if (!ve::load_pipeline(
 				[](const std::string &path, std::string *text) {
 					return read_res_text(String(path.c_str()), text);
 				},
-				terrain_pipeline_path_.utf8().get_data(), "res://shaders/", &resolved, &err)) {
+				terrain_pipeline_path_.utf8().get_data(), "res://shaders/", &resolved, &warnings,
+				&err)) {
 		UtilityFunctions::push_error(String("terrain pipeline: ") + err.c_str());
 		return;
 	}
+	for (const std::string &w : warnings)
+		UtilityFunctions::push_warning(String("terrain pipeline: ") + w.c_str());
 
 	std::string prelude;
 	if (!read_res_text("res://shaders/field_ops.glslh", &prelude)) {

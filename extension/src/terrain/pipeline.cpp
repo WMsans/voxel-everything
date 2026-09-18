@@ -146,6 +146,12 @@ bool resolve_pipeline(const PipelineDesc &desc, const std::vector<StageManifest>
 				return fail("stage '" + m.name + "' has no //!cpu mirror; set allow_gpu_only "
 						"to accept a GPU-authoritative field");
 			out->cpu_exact = false;
+			// allow_gpu_only is a deliberate opt-in, so this is not an error -- but it
+			// stops being silent. Everything that evaluates the field on the CPU will
+			// disagree with what the player sees.
+			out->warnings.push_back("stage '" + m.name + "' has no //!cpu mirror, so these "
+					"CPU consumers will diverge from the rendered field: collider meshing, "
+					"island extraction, raycast, and consolidation");
 		}
 
 		for (const ChannelDecl &r : m.reads) {
