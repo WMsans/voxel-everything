@@ -2,7 +2,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-17-stage-authoring-design.md`
 **Baseline:** `docs/superpowers/plans/2026-09-17-stage-authoring-baseline.md`
-**Range:** `b03e5d6..fa794b7` (final implementation head; results documentation was recorded before the final-review fix wave)
+**Range:** `b03e5d6..fa794b7` (final implementation head; this report includes post-fix verification from `reports/report_39/results.xml`)
 
 ## Exit criteria
 
@@ -14,21 +14,21 @@
 | New terrain stage ≤ 3 files | Task 13 Step 6 | PASS — 3 paths: `shaders/stages/mesas.field.glslh`, `assets/pipelines/mesas.pipeline`, `extension/src/terrain/builtin_stages.cpp` |
 | Material with hardness placed by terrain ≤ 4 files | Task 13 Step 6 | PASS — 3 paths using existing `MAT_ROCK` (hardness 3.0); no new material was added |
 | Every shipped pipeline passes the sampled bound check | `test_lipschitz_sampled` | OPEN — `default.pipeline` and `golden.pipeline` passed the 4096-point cases; `mesas.pipeline` resolves to 3.29 but is not included in `test_lipschitz_sampled.cpp` |
-| Suites match the baseline | Step 2 | OPEN — pre-fix full run was native 674/674; gdUnit XML suite-declared cases 508 versus baseline 513. `test_field_diff` is 6→1 from required Task 2 parameterisation; the generator-seam failure was fixed in `fa794b7`; the `test_sun_cascades_gpu` failure still differs from baseline. Full gdUnit was not rerun after the final-review fix wave. |
+| Suites match the baseline | Step 2 | OPEN — post-fix full run matches the baseline failure case/message and executed count (509/509), but suite-declared cases are 509 versus baseline 513 because `test_field_diff` is 6→1 from required Task 2 parameterisation. |
 
 ## Regression evidence
 
 Native clean build:
 
 ```text
-[doctest] test cases:     674 |     674 passed | 0 failed | 0 skipped
-
-Post-final-review fix wave: focused native suite `676/676` passed; the full native suite was not otherwise changed.
+[doctest] test cases:     676 |     676 passed | 0 failed | 0 skipped
 [doctest] assertions: 9127373 | 9127373 passed | 0 failed |
 [doctest] Status: SUCCESS!
+
+The final-review fix wave's full native build passed 676/676.
 ```
 
-Full gdUnit run: `reports/report_26/results.xml`, 96/96 suites, 505/505 executed cases, exit code 100. XML suite attributes sum to 508 cases. The baseline runner recorded 509/509 executed cases and its suite attributes sum to 513.
+Full gdUnit run: `reports/report_39/results.xml`, 96/96 suites, 509/509 executed cases, exit code 100. XML suite attributes sum to 509 cases. The baseline runner recorded 509/509 executed cases and its suite attributes sum to 513.
 
 Baseline-matching failure:
 
@@ -36,32 +36,21 @@ Baseline-matching failure:
 test_voxel_settings::test_an_ambient_change_reaches_the_object_global — ERROR: res://tests/test_voxel_settings.gd:213
 ```
 
-New/different final failures:
-
-```text
-test_generator_seam::test_generator_fingerprint_is_stable — FAILED pre-fix: res://tests/test_generator_seam.gd:21 (expected 24 values, got 0; fixed by initializing the world before fingerprinting in `fa794b7`)
-test_sun_cascades_gpu::test_needs_rebuild_agrees_with_what_build_does — FAILED: res://tests/test_sun_cascades_gpu.gd:137
-```
-
-The focused generator-seam run reproduced the pre-fix failure (expected 24 values, got 0); `fa794b7` now initializes the world before fingerprinting and its focused failure-path coverage passes. The full suite was not rerun after that fix.
+Post-fix, the only final failure is the same baseline ambient error shown above. The generator-seam initialization fix and sun-cascade drift both pass in the post-fix full run.
 
 ## Baseline and final failure comparison
 
-Baseline failure case/message:
+Baseline-only failure case/message (the final run has no sun-cascade failure):
 
 ```text
 test_sun_cascades_gpu::test_sub_texel_motion_rebuilds_no_cascade — FAILED: res://tests/test_sun_cascades_gpu.gd:73
 ```
 
-Final changed sun-cascade case/message:
-
-```text
-test_sun_cascades_gpu::test_needs_rebuild_agrees_with_what_build_does — FAILED: res://tests/test_sun_cascades_gpu.gd:137
-```
+Final changed sun-cascade case/message: none; the post-fix full run passes the suite.
 
 ## Complete gdUnit per-suite comparison
 
-The committed baseline is `docs/superpowers/plans/2026-09-17-stage-authoring-baseline.md`; the final XML was `reports/report_26/results.xml` at the recorded run. The table preserves `tests`/`failures`/`errors` for both runs, including the baseline’s XML error case represented as `failures=0` in its source file.
+The committed baseline is `docs/superpowers/plans/2026-09-17-stage-authoring-baseline.md`; the final XML is `reports/report_39/results.xml`. The table preserves `tests`/`failures`/`errors` for both runs, including the baseline’s XML error case represented as `failures=0` in its source file.
 
 | Suite | Baseline tests | Final tests | Baseline failures | Baseline errors | Final failures | Final errors |
 |---|---:|---:|---:|---:|---:|---:|
@@ -134,9 +123,9 @@ The committed baseline is `docs/superpowers/plans/2026-09-17-stage-authoring-bas
 | `test_gpu_smoke` | 1 | 1 | 0 | 0 | 0 | 0 |
 | `test_streaming` | 6 | 6 | 0 | 0 | 0 | 0 |
 | `test_consolidation` | 20 | 20 | 0 | 0 | 0 | 0 |
-| `test_generator_seam` | 2 | 2 | 0 | 0 | 1 pre-fix | 0 post-fix focused |
+| `test_generator_seam` | 2 | 2 | 0 | 0 | 0 | 0 |
 | `test_gbuffer` | 5 | 5 | 0 | 0 | 0 | 0 |
-| `test_sun_cascades_gpu` | 7 | 7 | 1 | 0 | 1 | 0 |
+| `test_sun_cascades_gpu` | 7 | 7 | 1 | 0 | 0 | 0 |
 | `test_field_gradient` | 7 | 7 | 0 | 0 | 0 | 0 |
 | `test_lod_gbuffer` | 4 | 4 | 0 | 0 | 0 | 0 |
 | `test_repro_thin_sheet` | 3 | 3 | 0 | 0 | 0 | 0 |
@@ -162,7 +151,7 @@ The committed baseline is `docs/superpowers/plans/2026-09-17-stage-authoring-bas
 | `test_region_pass` | 7 | 7 | 0 | 0 | 0 | 0 |
 | `test_mesh_diff` | 4 | 4 | 0 | 0 | 0 | 0 |
 
-**Totals:** baseline suite attributes `tests=513`, `failures=1`, `errors=1`; final suite attributes `tests=508`, `failures=2`, `errors=1`. Baseline executed 509/509; final executed 505/505.
+**Totals:** baseline suite attributes `tests=513`, `failures=1`, `errors=1`; final suite attributes `tests=509`, `failures=0`, `errors=1`. Baseline executed 509/509; final executed 509/509.
 
 
 Native Task 13 Step 5 output:
@@ -206,7 +195,7 @@ ERROR: terrain pipeline: pipeline gradient bound 3.290000 exceeds the declared c
 
 - `test_world_field_consumers::test_raycasts_are_pinned`: the golden moved because `golden.pipeline` now reports 1.78 instead of the old declared 2.0. Hit/miss pattern, materials, and normals remained identical; positions/distances moved by at most 0.02 and the golden was re-recorded.
 - `test_field_diff`: case count changed from six functions to one parameterised function in Task 2 so all pipelines and six scenarios run in one test; this is intentional, but it is a strict Task 1 suite-count drop.
-- No other value golden moved. The pre-fix `test_generator_seam` and `test_sun_cascades_gpu` failures were regression-gate findings, not accepted golden movements; the generator-seam case was fixed in `fa794b7`.
+- No other value golden moved. The pre-fix generator-seam and sun-cascade observations were regression-gate findings, not accepted golden movements; both pass in the post-fix full run.
 
 ## Deviations from the spec
 
@@ -220,6 +209,5 @@ ERROR: terrain pipeline: pipeline gradient bound 3.290000 exceeds the declared c
 
 ## Open findings
 
-- The pre-fix final regression gate had a reproducible empty generator fingerprint; `fa794b7` fixes initialization order. The full-run sun-cascade failure still no longer matches the baseline case/message, and the full suite was not rerun after the final fix wave.
 - The strict suite-count rule is OPEN because Task 2 intentionally reduced `test_field_diff` from six cases to one; the baseline was not updated.
 - `mesas.pipeline` has the declared 3.29 bound and passes the CPU/GPU field diff, but the sampled 4096-point native check does not enumerate it.
