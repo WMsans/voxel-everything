@@ -57,6 +57,10 @@ func test_an_edit_rebuilds_every_level_it_touches(timeout := 180000) -> void:
 	var surface := w.hooks().debug_raycast(Vector3(400.0, 180.0, 380.0), Vector3.DOWN)
 	assert_bool(surface["hit"]).is_true()
 	w.hooks().debug_apply_sphere_subtract(surface["pos"], 8.0)
+	# The LoD mark is queued under the edit lock and applied by the next tick's drain
+	# (core/edit_pipeline.h). Drain it here rather than ticking: a tick would clear the dirty
+	# flags this case is about to read, because note_building clears them at submission.
+	w.hooks().debug_drain_invalidations()
 	var dirty := w.hooks().debug_lod_stats()
 	# Run one LoD tick so lod_walk_ reflects the post-edit walk; the stale-beats-missing
 	# assertion below is vacuous if it reads the pre-edit draw list.

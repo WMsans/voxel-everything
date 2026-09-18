@@ -13,8 +13,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstring>
 #include <utility>
+#include <span>
+#include <mutex>
 
 using namespace godot;
 
@@ -141,16 +142,32 @@ void IslandManager::teardown() {
 	merging_.clear();
 	merge_retries_.clear();
 	{
-		std::lock_guard<std::mutex> lock(windows_mutex_);
 		windows_.clear();
+		// teardown_physics holds the edit lock across this call, so the inbox is cleared without
+		// taking it again.
+		inbox_.clear();
 	}
 	atlas_used_.clear();
 	handles_ = Collaborators{};
 }
 
+void IslandManager::record(const ve::Invalidation &inv) {
+	// Edit lock held: queue only, never windows bookkeeping (core/edit_pipeline.h).
+	if (inv.reason != ve::InvalidationReason::kEdit || !inv.notify_islands) return;
+	inbox_.push_back({*inv.op, inv.seq});
+}
+
+void IslandManager::drain_inbox() {
+	std::vector<InboxEdit> edits;
+	{
+		std::lock_guard<std::mutex> lock(handles_.store->edit_mutex());
+		edits.swap(inbox_);
+	}
+	for (const InboxEdit &e : edits) note_edit(e.op, e.seq);
+}
+
 void IslandManager::note_edit(const ve::EditOp &op, int64_t seq) {
 	if (op.type == ve::kOpSpherePaint) return; // paint moves no matter
-	std::lock_guard<std::mutex> lock(windows_mutex_);
 	float lo[3], hi[3];
 	ve::op_world_aabb(op, lo, hi);
 	PendingWindow w;
@@ -347,7 +364,7 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 		f.voxel = job.voxel;
 		f.dim = job.dim;
 		f.window = pw;
-		f.ops = job.ops;
+		f.log_seq = snap.log_seq;
 		for (int a = 0; a < 3; a++) {
 			f.origin[a] = job.origin[a];
 			f.aabb_lo[a] = wlo[a];
@@ -376,13 +393,11 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 	// in-flight extractions -- continues with the remainder once the current batch has been
 	// carved.
 	if (submitted > 0 && submitted < static_cast<int>(comps.size())) {
-		std::lock_guard<std::mutex> lock(windows_mutex_);
 		windows_.push_back(pw);
 	} else if (submitted == 0 && transient_refusal) {
 		// Zero-progress but transiently refused (body cap or volume pool full): keep the
 		// window queued with a cooldown. A genuinely full pool would otherwise relabel every
 		// frame; the run_frame capacity gate below also skips while there is no room.
-		std::lock_guard<std::mutex> lock(windows_mutex_);
 		PendingWindow retry = pw;
 		retry.retry_cooldown = kRetryCooldownFrames;
 		windows_.push_back(retry);
@@ -406,7 +421,6 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 }
 
 void IslandManager::queue_retry_window(const PendingWindow &w) {
-	std::lock_guard<std::mutex> lock(windows_mutex_);
 	PendingWindow retry = w;
 	retry.retry_cooldown = kRetryCooldownFrames;
 	// Several extractions from one connectivity window can land in the same frame. If all of
@@ -426,7 +440,6 @@ void IslandManager::queue_retry_window(const PendingWindow &w) {
 }
 
 void IslandManager::note_extract_failure(const PendingWindow &w) {
-	std::lock_guard<std::mutex> lock(windows_mutex_);
 	for (auto it = windows_.begin(); it != windows_.end(); ++it) {
 		if (it->id != w.id) continue;
 		it->extract_failures++;
@@ -454,7 +467,6 @@ void IslandManager::note_extract_failure(const PendingWindow &w) {
 }
 
 void IslandManager::note_extract_success(const PendingWindow &w) {
-	std::lock_guard<std::mutex> lock(windows_mutex_);
 	for (PendingWindow &e : windows_) {
 		if (e.id == w.id) {
 			e.extract_failures = 0;
@@ -540,36 +552,16 @@ bool IslandManager::crumble_component(const InFlight &f) {
 				}
 	if (!any_solid) return false;
 
-	// Headroom region by region before the first append: a half-applied carve would leave
-	// half the sheet standing and spend the ops anyway.
-	std::vector<ve::IVec3> regions;
-	std::vector<int> ops_here;
-	for (const ve::CellBox &box : f.boxes) {
-		ve::IVec3 rlo, rhi;
-		ve::op_region_range(ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM), &rlo, &rhi);
-		for (int z = rlo.z; z <= rhi.z; z++)
-			for (int y = rlo.y; y <= rhi.y; y++)
-				for (int x = rlo.x; x <= rhi.x; x++) {
-					const ve::IVec3 region{x, y, z};
-					const auto it = std::find(regions.begin(), regions.end(), region);
-					if (it == regions.end()) {
-						regions.push_back(region);
-						ops_here.push_back(1);
-					} else {
-						ops_here[static_cast<size_t>(it - regions.begin())]++;
-					}
-				}
-	}
-	for (size_t i = 0; i < regions.size(); i++)
-		if (handles_.store->edit_log()->op_count(regions[i]) + ops_here[i] > ve::kMaxRegionOps)
-			return false;
-
-	// notify_islands = false: this matter was already labelled unanchored, so removing it
-	// cannot loosen anything that was not loose already, and a window per crumble would put
-	// the connectivity pass back into the loop this function exists to break.
+	// One atomic batch: a half-applied carve would leave half the sheet standing and spend
+	// the ops anyway. notify_islands = false: this matter was already labelled unanchored, so
+	// removing it cannot loosen anything that was not loose already, and a window per crumble
+	// would put the connectivity pass back into the loop this function exists to break.
+	std::vector<ve::EditOp> carve;
+	carve.reserve(f.boxes.size());
 	for (const ve::CellBox &box : f.boxes)
-		handles_.append_edit_locked(
-				ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM), false);
+		carve.push_back(ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM));
+	if (handles_.store->edits().apply(carve, {.atomic = true, .notify_islands = false}).refused)
+		return false;
 	// Tell the occupancy grid straight away, exactly as the spawning carve does: the GPU
 	// readback that would say the same thing is several frames out, and until it lands the
 	// next connectivity run would label this component all over again.
@@ -622,12 +614,11 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 	// only persistently failing batches accumulate toward dropping the remainder.
 	note_extract_success(f.window);
 
-	// The extraction was computed from the field as of submit time. If a newer edit (including
-	// another carve from the same batch) has changed any op that can influence this component's
-	// AABB, the volume in hand is stale: carving it into the current field would remove matter
-	// using a shape that no longer matches the field. The freshness comparison is deliberately
-	// re-run INSIDE the edit_mutex_ hold that also does preflight/pin/spawn/carve, so no
-	// tool-thread edit can land between the comparison and the first carve.
+	// The extraction was computed from the field as of submit time. If anything was appended
+	// since then, the volume in hand may be stale: carving it into the current field could
+	// remove matter using a shape that no longer matches the field. The freshness comparison
+	// is deliberately re-run INSIDE the edit_mutex_ hold that also does preflight/pin/spawn/carve,
+	// so no tool-thread edit can land between the comparison and the first carve.
 
 	const float solid_m3 = static_cast<float>(r.data.solid_voxels) * f.voxel * f.voxel * f.voxel;
 	const bool debris = solid_m3 < kDebrisVolumeM3;
@@ -658,59 +649,11 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		return; // nothing carved yet: the piece stays attached in the field
 	}
 
-	// Before any carve lands, verify every region the carve (and the later restore volume-add)
-	// will touch has enough op-list headroom. A region at kMaxRegionOps - 1 would accept the
-	// carve, hit 256, and then reject the restore; the old abort paths turned that into a
-	// release-build crash. Refuse up front: the component stays attached, which is the safe
-	// fail-soft direction.
-	//
-	// The preflight, the carve loop, and any restore all run under one edit_mutex_ hold. A
-	// tool-thread append_edit cannot fill a region between the preflight and the restore, so
-	// a preflight pass means every carve box will be accepted and the restore volume-add will
-	// be accepted if a spawn failure later needs it.
-	const auto has_restore_headroom = [&]() -> bool {
-		std::vector<ve::IVec3> carve_regions;
-		std::vector<ve::IVec3> restore_regions;
-		const auto add_region = [&](std::vector<ve::IVec3> &out, ve::IVec3 r) {
-			if (std::find(out.begin(), out.end(), r) == out.end()) out.push_back(r);
-		};
-		for (const ve::CellBox &box : f.boxes) {
-			ve::IVec3 rlo, rhi;
-			ve::op_region_range(ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM),
-					&rlo, &rhi);
-			for (int z = rlo.z; z <= rhi.z; z++)
-				for (int y = rlo.y; y <= rhi.y; y++)
-					for (int x = rlo.x; x <= rhi.x; x++)
-						add_region(carve_regions, {x, y, z});
-		}
-		ve::IVec3 rlo, rhi;
-		ve::op_region_range(ve::make_volume_add(f.volume_slot, f.origin, f.voxel, f.dim),
-				&rlo, &rhi);
-		for (int z = rlo.z; z <= rhi.z; z++)
-			for (int y = rlo.y; y <= rhi.y; y++)
-				for (int x = rlo.x; x <= rhi.x; x++)
-					add_region(restore_regions, {x, y, z});
-		for (const ve::IVec3 &region : carve_regions)
-			if (std::find(restore_regions.begin(), restore_regions.end(), region) ==
-					restore_regions.end())
-				return false;
-		for (const ve::IVec3 &region : restore_regions) {
-			int carve_ops_here = 0;
-			for (const ve::CellBox &box : f.boxes) {
-				ve::IVec3 brlo, brhi;
-				ve::op_region_range(ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM),
-						&brlo, &brhi);
-				if (region.x >= brlo.x && region.x <= brhi.x &&
-						region.y >= brlo.y && region.y <= brhi.y &&
-						region.z >= brlo.z && region.z <= brhi.z)
-					carve_ops_here++;
-			}
-			if (handles_.store->edit_log()->op_count(region) + carve_ops_here + 1 >
-					ve::kMaxRegionOps)
-				return false;
-		}
-		return true;
-	};
+	// The carve, as one atomic batch. Asked before anything is pinned or spawned.
+	std::vector<ve::EditOp> carve_ops;
+	carve_ops.reserve(f.boxes.size());
+	for (const ve::CellBox &box : f.boxes)
+		carve_ops.push_back(ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM));
 
 	IslandBody *b = nullptr;
 	const Ref<World3D> w3 = handles_.scene_node->get_world_3d();
@@ -722,7 +665,10 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 			refused_++; DBG_LAND(no_edit_log);
 			return;
 		}
-		if (!has_restore_headroom()) {
+		// Refuse before any side effect: the apply below runs under this same hold, so a
+		// batch that fits here is accepted whole, and one that does not leaves the component
+		// attached — the safe fail-soft direction.
+		if (!handles_.store->edits().preflight(carve_ops, nullptr)) {
 			if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
 			release_volume_slot(handles_.store->volumes(), *handles_.handoff, f.volume_slot);
 			refused_++; DBG_LAND(preflight);
@@ -734,51 +680,14 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		// volume. Release the atlas/volume resources and back off -- the edit that changed the
 		// field queued its own connectivity window.
 		//
-		// Only ops that reach INSIDE THE BOXES count. The captured list was gathered over the
-		// component's whole AABB, but the island is the field intersected with the box union
-		// (ve::extract_island_volume masks every sample with max(field, box union)), so an op
-		// that misses every box changed nothing this extraction depends on and nothing the
-		// carve is about to remove.
-		//
-		// Comparing the whole AABB list instead was a livelock. One connectivity pass submits
-		// kExtractsPerFrame extractions from the SAME blast, and neighbouring components have
-		// overlapping AABBs; the first to land appends its carve ops, which land in the second
-		// one's AABB and declare it stale even though the two components are cell-disjoint by
-		// construction (ve::label_islands emits disjoint components and ve::greedy_box_merge
-		// tiles each one exactly). The second was thrown away and its window re-queued, every
-		// time -- so a blast that freed many pieces dropped one piece per pass at best, and
-		// could make no progress at all. That is the "some parts take a very long time to fall,
-		// or never do" report. Overlap is STRICT so that a sibling's box sharing a face plane
-		// with ours -- which removes nothing on our side of it -- does not count.
+		// Consolidation can erase an appended op before this check, so a retained spatial
+		// query cannot prove that no append happened. The global stamp is deliberately
+		// conservative: same-sequence consolidation is not stale, while any later append
+		// retries rather than carving from a snapshot that may be stale.
 		{
-			const auto reaches_the_boxes = [&f](const ve::EditOp &op) {
-				float olo[3], ohi[3];
-				ve::op_world_aabb(op, olo, ohi);
-				for (const ve::CellBox &box : f.boxes) {
-					float blo[3], bhi[3];
-					box.world_aabb(blo, bhi);
-					bool overlaps = true;
-					for (int a = 0; a < 3; a++)
-						if (!(olo[a] < bhi[a] && ohi[a] > blo[a])) {
-							overlaps = false;
-							break;
-						}
-					if (overlaps) return true;
-				}
-				return false;
-			};
-			std::vector<ve::EditOp> current_ops;
-			ve::collect_ops_for_aabb(*handles_.store->edit_log(), f.aabb_lo, f.aabb_hi, &current_ops);
-			std::vector<ve::EditOp> now, then;
-			for (const ve::EditOp &op : current_ops)
-				if (reaches_the_boxes(op)) now.push_back(op);
-			for (const ve::EditOp &op : f.ops)
-				if (reaches_the_boxes(op)) then.push_back(op);
-			const bool stale = now.size() != then.size() ||
-					!std::equal(now.begin(), now.end(), then.begin(),
-							[](const ve::EditOp &a, const ve::EditOp &b) {
-								return std::memcmp(&a, &b, sizeof(ve::EditOp)) == 0;
-							});
+			// ponytail: global retry can include unrelated appends; retain append tombstones/history
+			// if that becomes a measurable throughput ceiling.
+			const bool stale = handles_.store->edit_log()->last_seq() > f.log_seq;
 			if (stale) {
 				if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
 				release_volume_slot(handles_.store->volumes(), *handles_.handoff, f.volume_slot);
@@ -789,8 +698,8 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		}
 
 		// Pin the birth volume before the first carve. The slot is already stored; pinning
-		// here means every later restore path can reference it, and a pin failure happens
-		// before any hole exists, so the stored slot can still be released.
+		// here keeps the live body's volume available, and a pin failure happens before any
+		// hole exists, so the stored slot can still be released.
 		if (!handles_.store->volumes().pin(f.volume_slot)) {
 			if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
 			release_volume_slot(handles_.store->volumes(), *handles_.handoff, f.volume_slot);
@@ -809,17 +718,16 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		for (int a = 0; a < 3; a++) info.impulse[a] = f.impulse[a];
 		info.debris = debris;
 
-		bool restore_referenced_slot = false;
 		const auto release_unreferenced_birth_slot = [&]() {
 			handles_.store->volumes().unpin(f.volume_slot);
 			release_volume_slot(handles_.store->volumes(), *handles_.handoff, f.volume_slot);
 		};
 
 		// 1. Spawn (spec §5 step 3, reordered). A live body must exist before any carve is
-		//    committed: then a carve can never return with neither a body nor a full restore.
+		//    committed: then a carve can never return with neither a body nor a carved field.
 		//    The body is created at its final position; it is not added to the manager's body
-		//    list until the carve outcome is known, so the restore-and-despawn paths do not
-		//    need to unwind a published body.
+		//    list until the carve outcome is known, so a spawn failure does not need to unwind
+		//    a published body.
 		IslandBody *body = new IslandBody();
 		const bool spawn_failed = debug_fail_next_spawn_ ||
 				!body->spawn(w3.is_valid() ? w3->get_space() : RID(),
@@ -827,7 +735,6 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		debug_fail_next_spawn_ = false;
 		if (spawn_failed) {
 			delete body;
-			debug_fail_next_carve_ = false;
 			if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
 			release_unreferenced_birth_slot();
 			refused_++; DBG_LAND(spawn_failed);
@@ -836,114 +743,27 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 
 		// 2. Carve (spec §5 step 1). The boxes tile the component exactly, so this removes the
 		//    material that just became a body and nothing else. Ordered after the spawn so a
-		//    live body is already in place before any rock is removed from the field.
-		bool carve_rejected = false;
-		std::vector<ve::IVec3> carved_regions;
-		for (const ve::CellBox &box : f.boxes) {
-			const ve::EditLog::AppendResult carve = handles_.append_edit_locked(
-					ve::make_box_subtract(box.lo, box.hi, kCarveClearanceM), true);
-			for (const ve::IVec3 &region : carve.touched) carved_regions.push_back(region);
-			if (debug_fail_next_carve_) {
-				debug_fail_next_carve_ = false;
-				carve_rejected = true;
-				break;
-			}
-			if (!carve.rejected.empty()) {
-				carve_rejected = true;
-				break;
-			}
-		}
-		debug_fail_next_carve_ = false;
-
-		if (!carve_rejected) {
-			// The carve is fully committed and the body is already live. Tell the occupancy
-			// grid straight away; the GPU readback that would say the same thing is several
-			// frames out, and until it lands the next connectivity run would find this
-			// component all over again and carve it twice.
-			for (const ve::CellBox &box : f.boxes)
-				for (int z = box.lo.z; z <= box.hi.z; z++)
-					for (int y = box.lo.y; y <= box.hi.y; y++)
-						for (int x = box.lo.x; x <= box.hi.x; x++)
-							handles_.store->occupancy().set_cell(
-									{x, y, z}, ve::kCellAir, handles_.store->edit_seq());
+		//    live body is already in place before any rock is removed from the field. The
+		//    batch is atomic and its preflight ran under this same hold, so it is accepted
+		//    whole: there is no half-carved field to restore, and no branch for one.
+		handles_.store->edits().apply(carve_ops, {.atomic = true});
+		// Tell the occupancy grid straight away; the GPU readback that would say the same
+		// thing is several frames out, and until it lands the next connectivity run would
+		// find this component all over again and carve it twice.
+		for (const ve::CellBox &box : f.boxes)
+			for (int z = box.lo.z; z <= box.hi.z; z++)
+				for (int y = box.lo.y; y <= box.hi.y; y++)
+					for (int x = box.lo.x; x <= box.hi.x; x++)
+						handles_.store->occupancy().set_cell(
+								{x, y, z}, ve::kCellAir, handles_.store->edit_seq());
 #ifdef DEBUG_ENABLED
-			for (const ve::CellBox &box : f.boxes) debug_carved_boxes_.push_back(box);
+		for (const ve::CellBox &box : f.boxes) debug_carved_boxes_.push_back(box);
 #endif
-			// A live body's birth volume is normally unpinned. If a carve-rejection restore
-			// already appended a volume-add naming this slot, it must stay pinned forever.
-			if (!restore_referenced_slot) handles_.store->volumes().unpin(f.volume_slot);
-			b = body;
-		} else {
-			// With the preflight and the carve under the same lock this is unreachable under
-			// op-cap pressure. It remains as a defensive fail-soft branch: a carve was
-			// rejected (possibly after some boxes were already removed). A live body already
-			// exists, so the only question is whether the field can be fully restored and the
-			// body despawned, or whether the body must stay to fill every carved cell.
-			if (carved_regions.empty()) {
-				// Nothing was carved (e.g. an out-of-bounds edge case), so there is no hole to
-				// restore. The body is redundant; the stored birth slot is unreferenced and can
-				// be released.
-				delete body;
-				if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
-				release_unreferenced_birth_slot();
-				refused_++; DBG_LAND(carve_nothing);
-				return; // nothing was carved: the component simply stays attached
-			}
-			// The slot was pinned before the first carve, so the restore volume-add can always
-			// name it. The slot is intentionally NOT released when the restore is accepted: the
-			// edit log now references it.
-			queue_field_volume(f.volume_slot, r.data);
-			const ve::EditLog::AppendResult restore =
-					handles_.append_edit_locked(ve::make_volume_add(f.volume_slot, f.origin,
-							f.voxel, f.dim), true);
-			if (!restore.touched.empty()) restore_referenced_slot = true;
-			const bool forced_restore_failure = debug_fail_next_restore_;
-			debug_fail_next_restore_ = false;
-			bool restored_all_carved = !forced_restore_failure && restore.rejected.empty() &&
-					!restore.touched.empty();
-			for (const ve::IVec3 &region : carved_regions)
-				if (std::find(restore.touched.begin(), restore.touched.end(), region) ==
-						restore.touched.end())
-					restored_all_carved = false;
-			if (restored_all_carved) {
-				// The field has the rock back everywhere that was carved; the regions that
-				// rejected the carve were never carved and already read solid. Despawn the
-				// body and leave the component attached in the field.
-				for (const ve::CellBox &box : f.boxes)
-					for (int z = box.lo.z; z <= box.hi.z; z++)
-						for (int y = box.lo.y; y <= box.hi.y; y++)
-							for (int x = box.lo.x; x <= box.hi.x; x++)
-								handles_.store->occupancy().set_cell(
-										{x, y, z}, ve::kCellSolid, handles_.store->edit_seq());
-				delete body;
-				if (atlas_slot >= 0) atlas_used_[static_cast<size_t>(atlas_slot)] = 0;
-				refused_++; DBG_LAND(carve_restored);
-				return; // no hole: the component is back in the field, not a body
-			}
-			// The restore cannot cover every carved region. Keep the body alive so every
-			// carved cell is occupied by a body; never despawn into a hole. Mark occupancy air
-			// only for the regions the carve actually touched so the next connectivity pass
-			// does not re-extract the same component.
-			UtilityFunctions::printerr(
-					"IslandManager: restore after carve rejection did not cover every carved "
-					"region; keeping the already-spawned body in the hole");
-			for (const ve::CellBox &box : f.boxes)
-				for (int z = box.lo.z; z <= box.hi.z; z++)
-					for (int y = box.lo.y; y <= box.hi.y; y++)
-						for (int x = box.lo.x; x <= box.hi.x; x++) {
-							const ve::IVec3 region =
-									ve::region_of_brick({x, y, z});
-							if (std::find(carved_regions.begin(), carved_regions.end(), region) !=
-									carved_regions.end())
-								handles_.store->occupancy().set_cell(
-										{x, y, z}, ve::kCellAir, handles_.store->edit_seq());
-						}
-			if (!restore_referenced_slot) handles_.store->volumes().unpin(f.volume_slot);
-			b = body;
-		}
+		handles_.store->volumes().unpin(f.volume_slot);
+		b = body;
 	}
-	// The edit lock is released only after the carve either has a live body in the hole or
-	// has put the rock back. No tool-thread edit can create a carved cell with neither.
+	// The edit lock is released only after the atomic carve and occupancy update, so the
+	// component is either still attached or represented by a live body in the carved hole.
 
 	// Reuse a hole left by a despawn; append only when there is none.
 	{
@@ -1137,18 +957,18 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 	const Transform3D rest = bodies_[m.body_index]->transform();
 
 	// Store, PIN, upload and append under ONE edit_mutex_ hold. The preflight below verifies
-	// every region the paste will touch has room for the op; because append_edit_locked runs
+	// every region the paste will touch has room for the op; because the pipeline apply runs
 	// under the same lock, no tool-thread edit can fill a region between the check and the
 	// append. A paste that passes preflight is therefore guaranteed to be fully accepted --
 	// which is what makes reusing the body's own birth slot safe. If we cannot guarantee
 	// that, we leave the birth slot untouched and back off.
 	{
 		std::lock_guard<std::mutex> lock(handles_.store->edit_mutex());
+		// Asked BEFORE the store/pin/upload below, so a refusal costs nothing to unwind; the
+		// apply that follows runs under this same hold and therefore cannot fail.
 		ve::EditLog::AppendResult preflight;
-		for (const ve::IVec3 &region : paste_regions)
-			if (handles_.store->edit_log()->op_count(region) >= ve::kMaxRegionOps)
-				preflight.rejected.push_back(region);
-		if (!preflight.rejected.empty()) {
+		if (!handles_.store->edits().preflight(std::span<const ve::EditOp>(&r.op, 1),
+				&preflight.rejected)) {
 			// No store or pin happened, so a reused birth slot still holds the body's
 			// original volume. A separately allocated out-slot is unreferenced and can be
 			// released.
@@ -1180,7 +1000,8 @@ void IslandManager::land_resample(const IslandExtractResult &r) {
 		// A rejected paste means the field did NOT take the rock back. The body must remain a
 		// body so the carved hole still has something in it. Never despawn unless the accepted
 		// paste actually covers every region of the rest volume.
-		const ve::EditLog::AppendResult paste = handles_.append_edit_locked(r.op, true);
+		const ve::EditLog::AppendResult paste =
+				handles_.store->edits().apply(std::span<const ve::EditOp>(&r.op, 1), {.atomic = true}).ops[0];
 		const bool paste_covers = paste.rejected.empty() && !paste_regions.empty() &&
 				!paste.touched.empty() &&
 				std::all_of(paste_regions.begin(), paste_regions.end(),
@@ -1288,6 +1109,11 @@ int IslandManager::run_frame(float dt, const Vector3 &center) {
 		if (r.cooldown > 0) r.cooldown--;
 	publish_descriptors();
 
+	// Edits queued since the last frame become windows before anything lands or labels, so a
+	// carve this frame is seen by this frame's connectivity exactly as it was when note_edit
+	// ran under the edit lock.
+	drain_inbox();
+
 	// 2. Results.
 	std::vector<IslandExtractResult> results;
 	handles_.mesh->collect_extracts(&results);
@@ -1297,13 +1123,14 @@ int IslandManager::run_frame(float dt, const Vector3 &center) {
 		else land_extraction(r);
 	}
 
+	drain_inbox(); // step 2's own carves
+
 	// 3. Connectivity, ONCE (spec §5). Held back while extractions are outstanding so a
-	//    component cannot be labelled twice before its carve lands. The window queue is
-	//    guarded because note_edit can be called from a tool thread under the edit mutex.
+	//    component cannot be labelled twice before its carve lands. The inbox is drained
+	//    before this step, so the window queue is main-thread only.
 	bool run_window = false;
 	PendingWindow w;
 	{
-		std::lock_guard<std::mutex> lock(windows_mutex_);
 		if (!windows_.empty() && in_flight_.empty() &&
 				!handles_.mesh->extracts_busy()) {
 			w = windows_.front();
@@ -1385,6 +1212,21 @@ void IslandManager::debug_wake_body(int index) {
 	PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
 	if (!ps) return;
 	ps->body_set_state(bodies_[index]->body(), PhysicsServer3D::BODY_STATE_SLEEPING, false);
+}
+
+Array IslandManager::debug_windows() {
+	Array out;
+	for (const PendingWindow &w : windows_) {
+		Array row, lo, hi;
+		lo.push_back(w.lo.x); lo.push_back(w.lo.y); lo.push_back(w.lo.z);
+		hi.push_back(w.hi.x); hi.push_back(w.hi.y); hi.push_back(w.hi.z);
+		row.push_back(lo);
+		row.push_back(hi);
+		row.push_back(static_cast<int64_t>(w.seq));
+		row.push_back(w.impulse_scale);
+		out.push_back(row);
+	}
+	return out;
 }
 
 Dictionary IslandManager::debug_body_info(int index) {
@@ -1519,15 +1361,10 @@ Dictionary IslandManager::stats() {
 		d["land_stale"] = debug_land_.stale;
 		d["land_pin_failed"] = debug_land_.pin_failed;
 		d["land_spawn_failed"] = debug_land_.spawn_failed;
-		d["land_carve_nothing"] = debug_land_.carve_nothing;
-		d["land_carve_restored"] = debug_land_.carve_restored;
 	}
 #endif
 
-	{
-		std::lock_guard<std::mutex> lock(windows_mutex_);
-		d["pending_windows"] = static_cast<int>(windows_.size());
-	}
+	d["pending_windows"] = static_cast<int>(windows_.size());
 	d["in_flight"] = static_cast<int>(in_flight_.size());
 	d["merging"] = static_cast<int>(merging_.size());
 	d["volume_live"] = handles_.store ? handles_.store->volumes().live_count() : 0;

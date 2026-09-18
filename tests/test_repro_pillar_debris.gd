@@ -60,8 +60,7 @@ func dump(tag: String, st: Dictionary) -> void:
 			"atlas_full", st["land_atlas_full"], "store", st["land_store_failed"],
 			"no_log", st["land_no_edit_log"], "preflight", st["land_preflight"],
 			"stale", st["land_stale"], "pin", st["land_pin_failed"],
-			"spawn", st["land_spawn_failed"], "carve_nothing", st["land_carve_nothing"],
-			"carve_restored", st["land_carve_restored"])
+			"spawn", st["land_spawn_failed"])
 
 # Solid field samples on a `pitch` lattice, inset half a step so no sample lands on a 0.8 m
 # cell face (where a carve box's own surface reads sdf == 0). Then 6-connectivity from the

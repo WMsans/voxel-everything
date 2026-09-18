@@ -153,14 +153,6 @@ public:
 	// path can be exercised without depending on a Jolt failure mode.
 	void debug_set_fail_next_spawn(bool fail);
 
-	// Test hook: make the next carve-rejection restore appear not to cover every carved
-	// region, exercising the keep-the-body-alive path without depending on an op-cap race.
-	void debug_set_fail_next_restore(bool fail);
-
-	// Test hook: treat the next carve as rejected after at least one box has been accepted,
-	// exercising the post-spawn carve-rejection path without depending on an op-cap race.
-	void debug_set_fail_next_carve(bool fail);
-
 	// Test hook: make the next re-merge resample fail so the resample backoff path can be
 	// exercised without depending on a worker-side failure mode.
 	void debug_set_fail_next_resample(bool fail);
@@ -365,11 +357,23 @@ public:
 
 	void debug_pump_consolidation();
 
+	// Test seam: stop pump_async from starting new bakes (see ConsolidationCoordinator).
+	void debug_hold_consolidation(bool held);
+
 	void debug_pump_consolidation_async();
 
 	void debug_wait_consolidation();
 
 	int debug_region_op_count(Vector3i region);
+
+	// Sub-project 5b: what every edit consumer will act on, after each of them has drained
+	// its own queue through debug_drain_invalidations().
+	Dictionary debug_edit_fanout();
+
+	// Runs each consumer's own drain -- the function its tick calls, never a copy -- so a
+	// read taken after this sees what the consumer will act on. Empty until a sink becomes
+	// deferred.
+	void debug_drain_invalidations();
 
 	int debug_override_used() const;
 

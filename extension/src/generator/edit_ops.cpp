@@ -412,10 +412,11 @@ int op_region_span(const EditOp &op) {
 	if (!edit_op_is_well_formed(op)) return 0;
 	IVec3 lo{}, hi{};
 	op_region_range(op, &lo, &hi);
-	const int sx = hi.x - lo.x + 1;
-	const int sy = hi.y - lo.y + 1;
-	const int sz = hi.z - lo.z + 1;
-	return std::max(sx, std::max(sy, sz));
+	const auto span = [](int low, int high) -> uint64_t {
+		return high < low ? 0u : static_cast<uint64_t>(high) - static_cast<uint64_t>(low) + 1u;
+	};
+	const uint64_t largest = std::max(span(lo.x, hi.x), std::max(span(lo.y, hi.y), span(lo.z, hi.z)));
+	return static_cast<int>(std::min(largest, static_cast<uint64_t>(std::numeric_limits<int>::max())));
 }
 
 bool op_region_span_ok(const EditOp &op) {

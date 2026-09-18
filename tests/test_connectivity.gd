@@ -24,7 +24,7 @@ func after_test() -> void:
 			w.free()
 	_worlds.clear()
 
-func make_world() -> VoxelWorld:
+func make_world(hold_consolidation := true) -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.physics_enabled = false
@@ -33,11 +33,6 @@ func make_world() -> VoxelWorld:
 	w.residency_radius_m = 40.0
 	w.atlas_bricks = Vector3i(48, 24, 48)
 	w.max_region_slots = 64
-	# Connectivity tests deliberately exercise fail-soft full op lists. M7's async
-	# consolidation would otherwise bake those lists into override bricks and clear them
-	# before the re-merge/preflight runs, so give this suite a one-brick override pool that
-	# cannot absorb a real region bake and leaves the op lists full.
-	w.max_override_bricks = 1
 	w.physics_radius_m = 30.0
 	w.max_collider_chunks = 128
 	w.shape_builds_per_frame = 4
@@ -45,6 +40,12 @@ func make_world() -> VoxelWorld:
 	_worlds.append(w)
 	assert_bool(w.hooks().debug_init_atlas()).is_true()
 	assert_bool(w.hooks().debug_init_physics()).is_true()
+	# Connectivity tests deliberately exercise fail-soft full op lists; the automatic
+	# consolidation would bake those lists away before the re-merge/preflight runs
+	# (test_consolidation.gd::test_a_full_op_list_does_not_stay_full_while_consolidation_runs
+	# pins that). Hold it instead of crippling the override pool.
+	if hold_consolidation:
+		w.hooks().debug_hold_consolidation(true)
 	return w
 
 func tool_of(w: VoxelWorld) -> VoxelEditTool:
@@ -450,6 +451,11 @@ func test_rejected_remerge_paste_keeps_the_body_alive(timeout := 180000) -> void
 	assert_int(st["live_bodies"]).override_failure_message(
 		"a rejected re-merge paste destroyed the body and left a hole: %s" % st).is_greater(0)
 
+# The two cases that used to sit here are gone with the restore branch they exercised
+# (docs/superpowers/plans/2026-09-17-edit-pipeline.md, Task 9): an atomic carve is accepted
+# whole or not at all, so there is no post-spawn rejection to restore from, and the near-cap
+# case's 255-op premise reserved room for a restore volume-add that no longer exists. The cap
+# refusal itself is covered below and in extension/tests/test_edit_pipeline.cpp.
 func test_rejected_carve_keeps_component_attached(timeout := 120000) -> void:
 	var w := make_world()
 	var t := tool_of(w)
@@ -725,33 +731,6 @@ func test_resample_submit_colliding_with_in_flight_extractions_does_not_strand_m
 	assert_int(st["islands_merged"]).override_failure_message(
 		"a resample submit colliding with in-flight extractions stranded merging_: %s" % st
 		).is_greater(merged_before)
-
-func test_near_cap_carve_is_refused_before_any_carve(timeout := 120000) -> void:
-	var w := make_world()
-	var t := tool_of(w)
-	build_pillar(w, t)
-	var top := Vector3(PILLAR_X, PILLAR_BASE + 4.0, PILLAR_Z)
-	assert_bool(solid_at(w, top)).override_failure_message(
-		"the pillar was never built").is_true()
-	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
-	# Submit the extraction but do not let the result land yet; then bring the region to 255
-	# ops. Accepting the carve would make it 256 and reject the restore volume-add, which used
-	# to reach std::abort(). Preflight must refuse before any carve is appended.
-	w.hooks().debug_stream_frame(CENTER)
-	w.hooks().debug_physics_frame(CENTER)
-	w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
-	fill_region_ops(w, t, top, 255)
-	var refused_before: int = w.hooks().debug_island_stats()["refused"]
-	step(w, 240)
-	var st: Dictionary = w.hooks().debug_island_stats()
-	assert_int(st["refused"]).override_failure_message(
-		"the near-cap extraction was not refused: %s" % st).is_greater(refused_before)
-	assert_int(st["islands_spawned"]).override_failure_message(
-		"a near-cap carve still spawned a body: %s" % st).is_equal(0)
-	assert_int(st["live_bodies"]).override_failure_message(
-		"a near-cap carve created a body in a field that still has the rock: %s" % st).is_equal(0)
-	assert_bool(solid_at(w, top)).override_failure_message(
-		"a near-cap carve left a field hole with no body: %s" % st).is_true()
 
 func test_cross_region_combined_op_count_is_refused_before_any_carve(timeout := 120000) -> void:
 	var w := make_world()
@@ -1107,36 +1086,6 @@ func test_rejected_extract_submit_rolls_back_in_flight_and_recovers(timeout := 1
 	assert_int(st["in_flight"]).override_failure_message(
 		"post-recovery extraction stranded in-flight entries: %s" % st).is_equal(0)
 
-func test_post_spawn_carve_rejection_keeps_body_in_hole(timeout := 180000) -> void:
-	var w := make_world()
-	var t := tool_of(w)
-	build_pillar(w, t)
-	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
-	# Submit the extraction, then force the next carve to look rejected after at least one box
-	# was accepted and force its restore to appear incomplete. The structural fix spawns the
-	# body BEFORE carving, so this must leave the already-live body in the hole instead of
-	# despawned; because the restore volume-add was accepted (touched non-empty), the birth
-	# slot is referenced by the edit log and must remain pinned.
-	w.hooks().debug_stream_frame(CENTER)
-	w.hooks().debug_physics_frame(CENTER)
-	w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
-	w.hooks().debug_set_fail_next_carve(true)
-	w.hooks().debug_set_fail_next_restore(true)
-	var st: Dictionary = w.hooks().debug_island_stats()
-	for i in range(120):
-		await get_tree().physics_frame
-		w.hooks().debug_stream_frame(CENTER)
-		w.hooks().debug_island_frame(1.0 / 60.0, CENTER)
-		st = w.hooks().debug_island_stats()
-		if st["live_bodies"] > 0:
-			break
-	assert_int(st["live_bodies"]).override_failure_message(
-		"post-spawn carve rejection despawned the body into a hole: %s" % st).is_greater(0)
-	assert_int(st["islands_spawned"]).override_failure_message(
-		"post-spawn carve rejection body was not counted as spawned: %s" % st).is_greater(0)
-	assert_int(st["volume_pinned"]).override_failure_message(
-		"partial restore referenced the birth volume but it was unpinned: %s" % st).is_greater(0)
-
 # A component the extractor cannot represent must not be left standing.
 #
 # ve::plan_island_lattice drops to the 10 cm pitch for any component wider than 2.95 m, while
@@ -1221,3 +1170,79 @@ func test_a_solid_component_is_never_crumbled(timeout := 120000) -> void:
 	# a crumble that deletes rock on the strength of a disagreement it cannot explain.
 	assert_bool(solid_at(w, Vector3(PILLAR_X, PILLAR_BASE, PILLAR_Z))).override_failure_message(
 		"the crumble ate the stump").is_true()
+
+# Was test_a_consolidation_during_an_extraction_is_pinned. The staleness check compares append
+# sequences now instead of op lists (docs/superpowers/plans/2026-09-17-edit-pipeline.md, Task
+# 10), and a consolidation appends nothing: it turns ops into override bricks that evaluate to
+# the same field. An extraction in flight across a bake is therefore no longer stale, and the
+# component it freed becomes a body instead of being thrown away and relabelled.
+func test_a_consolidation_during_an_extraction_does_not_make_it_stale(timeout := 180000) -> void:
+	var w := make_world(false)
+	var t := tool_of(w)
+	build_pillar(w, t)
+	t.apply_sphere_subtract(Vector3(PILLAR_X, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	var st: Dictionary = w.hooks().debug_island_stats()
+	for i in range(120):
+		await get_tree().physics_frame
+		step(w, 1)
+		st = w.hooks().debug_island_stats()
+		if st["in_flight"] > 0:
+			break
+	assert_int(st["in_flight"]).override_failure_message(
+		"the connectivity pass did not submit an extraction: %s" % st).is_greater(0)
+	assert_bool(w.hooks().debug_consolidate_region(Vector3i(0, 2, 0))).override_failure_message(
+		"the pillar's region did not consolidate; the fixture is wrong, not the code").is_true()
+	var stale_before: int = st["land_stale"]
+	for i in range(240):
+		await get_tree().physics_frame
+		step(w, 1)
+		st = w.hooks().debug_island_stats()
+		if st["islands_spawned"] + st["debris_spawned"] > 0 or st["land_stale"] > stale_before:
+			break
+	assert_int(st["land_stale"]).override_failure_message(
+		"a consolidation still reads as a stale field: %s" % st).is_equal(stale_before)
+	assert_int(st["islands_spawned"] + st["debris_spawned"]).override_failure_message(
+		"the extraction did not land after the bake: %s" % st).is_greater(0)
+
+# Regression for an append that lands after the extraction snapshot but is baked away before
+# the result lands. The retained-op query cannot see the relevant edit after consolidation,
+# while an unrelated later op remains in the extraction AABB; the global append sequence must
+# still refuse the stale extraction instead of carving from the old field snapshot.
+func test_an_append_after_snapshot_then_consolidation_stays_stale(timeout := 180000) -> void:
+	var w := make_world(false)
+	var t := tool_of(w)
+	var x := 24.8 # Put the component across x's region boundary.
+	build_pillar(w, t, x)
+	t.apply_sphere_subtract(Vector3(x, PILLAR_BASE + 2.0, PILLAR_Z), 1.6)
+	var st: Dictionary = w.hooks().debug_island_stats()
+	for i in range(120):
+		await get_tree().physics_frame
+		step(w, 1)
+		st = w.hooks().debug_island_stats()
+		if st["in_flight"] > 0:
+			break
+	assert_int(st["in_flight"]).override_failure_message(
+		"the connectivity pass did not submit an extraction: %s" % st).is_greater(0)
+	var newer: Dictionary = t.apply_sphere_subtract(
+		Vector3(x, PILLAR_BASE + 2.5, PILLAR_Z), 0.3)
+	assert_array(newer["rejected"]).override_failure_message(
+		"the post-snapshot edit was rejected: %s" % newer).is_empty()
+	# This later paint is in region 1, inside the extraction AABB but outside the component boxes.
+	var retained: Dictionary = t.apply_sphere_paint(
+		Vector3(x + 1.3, PILLAR_BASE + 4.0, PILLAR_Z + 1.3), 0.1, 4)
+	assert_array(retained["rejected"]).override_failure_message(
+		"the retained post-snapshot edit was rejected: %s" % retained).is_empty()
+	assert_bool(w.hooks().debug_consolidate_region(Vector3i(0, 2, 0))).override_failure_message(
+		"the pillar's region did not consolidate; the fixture is wrong, not the code").is_true()
+	assert_int(w.hooks().debug_region_op_count(Vector3i(0, 2, 0))).is_equal(0)
+	assert_int(w.hooks().debug_region_op_count(Vector3i(1, 2, 0))).is_greater(0)
+	var stale_before: int = st["land_stale"]
+	for i in range(240):
+		await get_tree().physics_frame
+		step(w, 1)
+		st = w.hooks().debug_island_stats()
+		if st["land_stale"] > stale_before:
+			break
+	assert_int(st["land_stale"]).override_failure_message(
+		"an appended edit consolidated away while another remained retained: %s" % st
+		).is_greater(stale_before)

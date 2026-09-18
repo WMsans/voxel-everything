@@ -11,9 +11,9 @@
 // THE lod mutex moved here verbatim from VoxelWorld (Task 15) -- same guard scopes, same
 // acquisition sites:
 //
-//	Lock order is WorldStore::edit_mutex() -> LodSystem::mutex(): tick never holds
-//	lod_mutex_ across gather_ops (which takes edit_mutex()), so append_edit_locked can
-//	take LodSystem::mutex() while already holding edit_mutex().
+// THE lod mutex lives here (Task 15 of the frame-module plan). Acquisition rules for it and
+// for WorldStore::edit_mutex(): core/edit_pipeline.h. Nothing takes this mutex while holding
+// the edit lock -- record() queues, drain_invalidations() applies.
 //
 // NOTE: this translation unit is explicitly EXCLUDED from the zero-godot-cpp native test
 // build's pure_sources in SConstruct: ensure_lod()/tick() drive GPU pools and raster
@@ -25,6 +25,7 @@
 #include <set>
 #include <vector>
 
+#include "core/edit_pipeline.h"
 #include "lod/lod_tree.h" // ve::LodKey / ve::LodWalkResult / ve::LodCamera / ve::LodOcclusion
 #include "world/edit_log.h"
 
@@ -57,7 +58,7 @@ struct LodStats {
 	int op_overflow = 0; // LoD builds refused because their visible ops exceed the cap
 };
 
-class LodSystem {
+class LodSystem : public ve::InvalidationSink {
 public:
 	struct Collaborators {
 		WorldStore *store = nullptr;
@@ -79,18 +80,10 @@ public:
 
 	// THE lod mutex; guards lod_tree_, lod_walk_, lod_pages_of_, lod_page_quads_,
 	// lod_overflow_logged_ and lod_pool_ state between the render thread (tick) and
-	// main/tool threads (mark-dirty fan-out, debug stats). Lock order versus the edit
-	// path is restated at WorldStore::edit_mutex(): edit_mutex -> LodSystem::mutex()
-	// (tick never holds mutex() across gather_ops, so append_edit_locked can take it
-	// while holding edit_mutex).
+	// main/tool threads (mark-dirty fan-out, debug stats). See core/edit_pipeline.h.
+	// (tick never holds mutex() across gather_ops; deferred edit marks are applied after
+	// releasing edit_mutex()).
 	std::mutex &mutex() { return lod_mutex_; }
-
-	// Address-of slots consumed by RenderOrchestrator's teardown interleaving and
-	// ConsolidationCoordinator's dirty-marking handles. The pool/tree are created lazily
-	// and destroyed across teardown cycles, so collaborators hold these addresses and
-	// re-read them at every use instead of caching stranded pointers.
-	std::mutex *mutex_slot() { return &lod_mutex_; }
-	ve::LodTree **tree_slot() { return &lod_tree_; }
 
 	// Was VoxelWorld::lod_tick; render thread (compositor callback).
 	void tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ);
@@ -113,16 +106,20 @@ public:
 	// False when the chunk's visible ops exceed kMaxRegionOps (S3c): the caller must refuse
 	// the build rather than submit a truncated list.
 	bool gather_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *out);
-	// Append fan-out (was the LoD tail of VoxelWorld::append_edit_locked, which runs with
-	// edit_mutex() held): marks the touched world AABB dirty at every level, taking
-	// mutex() while edit_mutex() is held (safe per the lock order above).
-	void note_edit(const ve::EditOp &op);
+	// InvalidationSink: an edit or a consolidation marks the tree dirty. Edit lock held
+	// (core/edit_pipeline.h). Task 11 makes this a queue-and-drain.
+	void record(const ve::Invalidation &inv) override;
+	// Swap the queued marks out under the edit lock, then apply them under mutex(). Called at
+	// the top of tick() and by the debug drain. Takes the edit lock: never call it while
+	// holding mutex() or the edit lock.
+	void drain_invalidations();
 	// The _exit_tree() LoD half, verbatim statement-for-statement: pool -> tree ->
 	// page maps, exactly where VoxelWorld used to run it (after CPU-core release).
 	void teardown();
 	// RenderOrchestrator::teardown_gpu()'s LoD step, verbatim: pool, then tree, then the page
 	// maps (the tree holds page indices the pool is about to free, and a stale index would be
-	// handed to the next chunk). Takes no lock, exactly like the statements it replaces.
+	// handed to the next chunk). Drops pending edit marks under edit_mutex(), without taking
+	// lod_mutex_.
 	void release_gpu();
 
 	LodPool *pool() const { return lod_pool_; }
@@ -165,6 +162,9 @@ private:
 	std::map<int, int> lod_page_quads_; // page -> number of quads stored in that page
 	std::set<ve::LodKey> lod_overflow_logged_; // once-per-chunk overflow diagnostics
 	int lod_op_overflow_ = 0; // guarded by lod_mutex_
+	// Marks queued by record(), guarded by WorldStore::edit_mutex(); drained by
+	// drain_invalidations(). Bounded by ve::merge_or_cap.
+	std::vector<ve::Box3<float>> pending_marks_;
 	int lod_pressure_ = 0;
 	float last_cam_[3] = {};
 	bool has_last_cam_ = false;

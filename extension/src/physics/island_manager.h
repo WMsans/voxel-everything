@@ -1,12 +1,12 @@
 #pragma once
+#include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/vector3.hpp>
 #include <atomic>
 #include <deque>
-#include <functional>
-#include <mutex>
 #include <vector>
 #include "connectivity/components.h"
+#include "core/edit_pipeline.h"
 #include "connectivity/contact_refine.h"
 #include "connectivity/flood_fill.h"
 #include "generator/generator.h"
@@ -34,10 +34,9 @@ class WorldStore;
 //      connectivity ONCE (spec §5: "simultaneous blasts can't race") and submit extractions
 //   4. re-merge whatever has slept long enough
 //
-// run_frame is main-thread only. note_edit may be called from a tool thread while
-// VoxelWorld::append_edit holds the edit mutex, so the pending-window queue has its own
-// small mutex instead of being touched from two threads unsynchronised.
-class IslandManager {
+// run_frame is main-thread only. record may be called from a tool thread while
+// VoxelWorld::append_edit holds the edit mutex; it only appends a copied edit to the inbox.
+class IslandManager : public ve::InvalidationSink {
 public:
 	// What the manager needs from the world, and nothing else (spec 2026-09-14 §3.4).
 	struct Collaborators {
@@ -52,8 +51,6 @@ public:
 		Node3D *scene_node = nullptr;
 		// Body centres as xyz triples; VoxelWorld::physics_tick hands them to the colliders.
 		std::vector<float> *bubble_centers = nullptr;
-		// VoxelWorld::append_edit_locked. Named debt: sub-project 5's EditPipeline replaces it.
-		std::function<ve::EditLog::AppendResult(const ve::EditOp &, bool)> append_edit_locked;
 	};
 
 	~IslandManager();
@@ -65,7 +62,12 @@ public:
 	// Called from VoxelWorld::append_edit for every SDF-changing op, including the manager's
 	// own carves: removing an island can unsupport the next piece up, and that cascade is
 	// the behaviour spec §5 describes, not a bug.
-	void note_edit(const ve::EditOp &op, int64_t seq);
+	// InvalidationSink: an accepted edit queues a connectivity window. Edit lock held
+	// (core/edit_pipeline.h). Task 12 makes this a queue-and-drain.
+	void record(const ve::Invalidation &inv) override;
+	// Apply the queued edits to the window list. Main thread; takes the edit lock for the
+	// swap, so never call it while holding that lock.
+	void drain_inbox();
 
 	int slot_high_water() const;
 	float last_ms() const { return last_ms_; }
@@ -87,12 +89,6 @@ public:
 #endif
 #ifdef DEBUG_ENABLED
 	void debug_set_fail_next_spawn(bool fail) { debug_fail_next_spawn_ = fail; }
-	// Test hook: make the next carve-rejection restore appear not to cover every carved
-	// region, exercising the keep-the-body-alive path without depending on an op-cap race.
-	void debug_set_fail_next_restore(bool fail) { debug_fail_next_restore_ = fail; }
-	// Test hook: treat the next carve as rejected after at least one box has been accepted,
-	// exercising the post-spawn carve-rejection path without depending on an op-cap race.
-	void debug_set_fail_next_carve(bool fail) { debug_fail_next_carve_ = fail; }
 	// Test hook: make the next re-merge resample fail so the resample backoff path can be
 	// exercised without depending on a worker-side failure mode.
 	void debug_set_fail_next_resample(bool fail) { debug_fail_next_resample_ = fail; }
@@ -106,20 +102,21 @@ public:
 	// Diagnostic: the body's full physics-server state plus a downward motion query, for
 	// diagnosing islands that do not fall.
 	Dictionary debug_body_info(int index);
+	// Diagnostic: the pending connectivity windows, for debug_edit_fanout. One row per
+	// window: [[lo x, y, z], [hi x, y, z], seq, impulse_scale].
+	Array debug_windows();
 	// Test hook: offset a live island body and wake it, again for deterministic stale-pose
 	// tests. Moving is stronger than waking alone: Jolt may put a motionless body back to
 	// sleep before the next poll, but a changed transform always trips the stale guard.
 	void debug_offset_body(int index, const Vector3 &offset);
 #else
-	// Fail-injection hooks are debug-only: release builds must not be able to drive the
-	// island manager into the structurally-impossible no-hole restore branch.
+	// Fail-injection hooks are debug-only.
 	void debug_set_fail_next_spawn(bool fail) { (void)fail; }
-	void debug_set_fail_next_restore(bool fail) { (void)fail; }
-	void debug_set_fail_next_carve(bool fail) { (void)fail; }
 	void debug_set_fail_next_resample(bool fail) { (void)fail; }
 	void debug_set_empty_next_extraction(bool v) { (void)v; }
 	void debug_wake_body(int index) { (void)index; }
 	void debug_offset_body(int index, const Vector3 &offset) { (void)index; (void)offset; }
+	Array debug_windows() { return Array(); }
 #endif
 	// Not const: the ground probe takes the edit lock.
 	Dictionary stats();
@@ -128,6 +125,11 @@ public:
 	const ve::ContactRefineConfig &refine_config() const { return refine_cfg_; }
 
 private:
+	// Called from VoxelWorld::append_edit for every SDF-changing op, including the manager's
+	// own carves: removing an island can unsupport the next piece up, and that cascade is the
+	// behaviour spec §5 describes, not a bug.
+	void note_edit(const ve::EditOp &op, int64_t seq);
+
 	struct PendingWindow {
 		// Stable across overlapping-edit merges. note_edit() may expand an existing window
 		// (mutating lo/hi/seq), but InFlight and retry/failure bookkeeping copy the window
@@ -149,10 +151,10 @@ private:
 		float voxel = 0.0f;
 		int dim = 0;
 		float impulse[3] = {0, 0, 0};
-		// The ops captured for this component at submit time, and the world AABB they were
-		// collected from. land_extraction() recomputes the current ops for the same AABB; if
-		// a newer edit changed them, the extraction is stale and must not be carved.
-		std::vector<ve::EditOp> ops;
+		// The log sequence the ops were captured at, and the world AABB they were collected
+		// from. land_extraction asks whether anything newer reaches the boxes; if so, the
+		// extraction is stale and must not be carved.
+		uint64_t log_seq = 0;
 		float aabb_lo[3] = {0, 0, 0};
 		float aabb_hi[3] = {0, 0, 0};
 		// The window this extraction came from, kept so a late refusal (e.g. all island
@@ -206,7 +208,16 @@ private:
 	// terrain pipeline can swap the world's generator, and a copy here would silently keep
 	// generating the old world for collision while the GPU generated the new one.
 	const ve::Generator *gen_ = nullptr;
-	std::mutex windows_mutex_; // guards windows_ against note_edit from tool threads
+	// Edits queued by record(), guarded by WorldStore::edit_mutex(); drained on the main
+	// thread by drain_inbox(). windows_ is main-thread only.
+	// ponytail: unbounded. It only grows while a physics-initialized world never runs
+	// run_frame; the shipped game runs it every frame. Bound it (merging by window, as
+	// note_edit already does) if that ever stops being true.
+	struct InboxEdit {
+		ve::EditOp op;
+		int64_t seq = 0;
+	};
+	std::vector<InboxEdit> inbox_;
 	std::deque<PendingWindow> windows_;
 	std::vector<InFlight> in_flight_;
 	std::vector<Merging> merging_;
@@ -251,12 +262,10 @@ private:
 	// stall after an extraction comes back can name itself.
 	struct LandRefusals {
 		int atlas_full = 0, store_failed = 0, no_edit_log = 0, preflight = 0, stale = 0,
-			pin_failed = 0, spawn_failed = 0, carve_nothing = 0, carve_restored = 0;
+			pin_failed = 0, spawn_failed = 0;
 	} debug_land_;
 #endif
 	bool debug_fail_next_spawn_ = false;
-	bool debug_fail_next_restore_ = false;
-	bool debug_fail_next_carve_ = false;
 	bool debug_fail_next_resample_ = false;
 	bool debug_empty_next_extraction_ = false;
 	float last_ms_ = 0.0f;

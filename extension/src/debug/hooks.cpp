@@ -156,6 +156,8 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_consolidate_diff", "region"), &VoxelDebugHooks::debug_consolidate_diff);
 	ClassDB::bind_method(D_METHOD("debug_consolidate_region", "region"), &VoxelDebugHooks::debug_consolidate_region);
 	ClassDB::bind_method(D_METHOD("debug_region_op_count", "region"), &VoxelDebugHooks::debug_region_op_count);
+	ClassDB::bind_method(D_METHOD("debug_edit_fanout"), &VoxelDebugHooks::debug_edit_fanout);
+	ClassDB::bind_method(D_METHOD("debug_drain_invalidations"), &VoxelDebugHooks::debug_drain_invalidations);
 	ClassDB::bind_method(D_METHOD("debug_override_region_table", "region_slot"),
 			&VoxelDebugHooks::debug_override_region_table);
 	ClassDB::bind_method(D_METHOD("debug_override_used"), &VoxelDebugHooks::debug_override_used);
@@ -210,6 +212,7 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_set_fail_consolidations", "v"),
 			&VoxelDebugHooks::debug_set_fail_consolidations);
 	ClassDB::bind_method(D_METHOD("debug_pump_consolidation"), &VoxelDebugHooks::debug_pump_consolidation);
+	ClassDB::bind_method(D_METHOD("debug_hold_consolidation", "held"), &VoxelDebugHooks::debug_hold_consolidation);
 	ClassDB::bind_method(D_METHOD("debug_pump_consolidation_async"), &VoxelDebugHooks::debug_pump_consolidation_async);
 	ClassDB::bind_method(D_METHOD("debug_wait_consolidation"), &VoxelDebugHooks::debug_wait_consolidation);
 	ClassDB::bind_method(D_METHOD("debug_set_fail_consolidate_uploads", "v"),
@@ -235,8 +238,6 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_normal_release_override", "slot"), &VoxelDebugHooks::debug_normal_release_override);
 #endif
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_spawn", "fail"), &VoxelDebugHooks::debug_set_fail_next_spawn);
-	ClassDB::bind_method(D_METHOD("debug_set_fail_next_restore", "fail"), &VoxelDebugHooks::debug_set_fail_next_restore);
-	ClassDB::bind_method(D_METHOD("debug_set_fail_next_carve", "fail"), &VoxelDebugHooks::debug_set_fail_next_carve);
 	ClassDB::bind_method(D_METHOD("debug_set_fail_next_resample", "fail"), &VoxelDebugHooks::debug_set_fail_next_resample);
 	ClassDB::bind_method(D_METHOD("debug_set_empty_next_extraction", "v"), &VoxelDebugHooks::debug_set_empty_next_extraction);
 	ClassDB::bind_method(D_METHOD("debug_wake_island_body", "index"), &VoxelDebugHooks::debug_wake_island_body);

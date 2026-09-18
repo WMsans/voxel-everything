@@ -1,7 +1,6 @@
 #pragma once
 // WorldStore — the edit log / override data plane extracted from VoxelWorld
-// (spec Phase 2). Owns edits, overrides, the edit-append spine, and the
-// EditSink/ConsolidationSink ports; consumers talk only to its public API.
+// (spec Phase 2). Owns edits, overrides, the edit pipeline, and its public API.
 //
 // Phase 2b scope (Task 8): the edit-append path moved in verbatim behind the
 // sink ports, together with edit_mutex_ + pending_edits_. Phase 2c scope
@@ -19,6 +18,7 @@
 #include <vector>
 
 #include "connectivity/occupancy.h"
+#include "core/edit_pipeline.h"
 #include "generator/edit_ops.h"
 #include "generator/field_generator.h"
 #include "generator/volume_set.h"
@@ -77,30 +77,7 @@ struct OccupancyBlock {
 	std::vector<uint8_t> bytes; // ve::kOccupancyBlockBytes
 };
 
-// Notification port injected at construction (spec §5 Phase 2). Implemented today by a
-// VoxelWorld adapter that forwards to the island-manager wiring; Phase 3+ IslandManager
-// implements it directly and the adapter dies.
-struct EditSink {
-	virtual ~EditSink() = default;
-	// called with edit_mutex() HELD, after append_edit_locked accepts an op.
-	// `notify_islands` is false only for the island manager's own crumble carve: the matter
-	// it removes was already labelled UNANCHORED, so nothing that was holding on can be
-	// loosened by its going, and enqueueing a window would relabel the same neighbourhood
-	// every time a speck of sub-voxel dust is swept up. It is ALSO folded false when the
-	// accepted op changed no region field state, so implementors never re-label an
-	// untouched neighbourhood.
-	virtual void on_edit_appended(const ve::EditOp &op, bool notify_islands) = 0;
-};
-
-// Consolidation queue port; satisfied by ConsolidationCoordinator, which queues windows
-// for the streamer directly (VoxelWorld held it only during the early strangler steps).
-struct ConsolidationSink {
-	virtual ~ConsolidationSink() = default;
-	// edit_mutex() held (the append path calls this while accepting an op).
-	virtual bool queue_consolidation(ve::IVec3 region) = 0;
-};
-
-class WorldStore {
+class WorldStore : public ve::InvalidationSink {
 	// Task 13: the strangler friendships (VoxelWorld, VoxelDebugHooks) are gone -- every
 	// former direct field read goes through the public accessors below (config(),
 	// edit_log(), overrides(), residency(), volumes(), override_tables(),
@@ -169,26 +146,12 @@ public:
 				overrides_, &override_tables_, &edit_mutex_, &edit_seq_);
 	}
 
-	// --- the spine (moved verbatim from VoxelWorld::append_edit/_locked) ---
-	// Tool entry point. Main thread; takes edit_mutex().
-	// WARNING: does NOT run the VoxelWorld fan-out remainder (rejection stats, LoD dirty
-	// marks, collider remesh queue) -- that lives in VoxelWorld::append_edit, which is why
-	// tools must go through VoxelWorld::append_edit, not this.
-	ve::EditLog::AppendResult append_edit(const ve::EditOp &op);
-	// Low-level append used by callers that hold edit_mutex() across a whole
-	// carve/restore sequence (IslandManager). The caller MUST already hold edit_mutex().
-	ve::EditLog::AppendResult append_edit_locked(const ve::EditOp &op,
-			bool notify_islands = true);
+	// THE edit spine. Tools take edit_mutex() and call edits().apply(...); consolidation
+	// calls edits().invalidate(...). Acquisition order and the rule that nothing nests inside it: core/edit_pipeline.h.
+	ve::EditPipeline &edits() { return pipeline_; }
+	// InvalidationSink: the streamer handoff queue. Edit lock held; queue only.
+	void record(const ve::Invalidation &inv) override;
 	int override_table_for_region(ve::IVec3 region) const;
-
-	// Sinks are injected at construction and never re-pointed: append_edit_locked()
-	// dereferences both without a guard, exactly as the pre-split body dereferenced its
-	// collaborators. WorldStore is only constructed by VoxelWorld, which calls this from
-	// its own constructor before any edit can exist.
-	void set_sinks(EditSink *edits, ConsolidationSink *consolidation) {
-		edit_sink_ = edits;
-		consolidation_sink_ = consolidation;
-	}
 	// Retention-sweep centre for the occupancy grid (drain_occupancy's evict_outside call).
 	// Written from the main thread by VoxelWorld::_process, read by drain_occupancy on the
 	// same thread: no synchronisation needed. Keeps its last value while the physics anchor
@@ -204,8 +167,6 @@ public:
 	// Main thread only (same contract as the pre-split field).
 	ve::OccupancyGrid &occupancy() { return occupancy_; }
 	int64_t edit_seq() const { return edit_seq_.load(std::memory_order_relaxed); }
-	// Called by append_edit_locked; returns the PREVIOUS seq (fetch_add semantics).
-	int64_t bump_edit_seq();
 	// Render-thread producers hand blocks over through occupancy_mutex_ exactly as they
 	// pushed into the pre-split inbox inline.
 	void enqueue_occupancy_block(OccupancyBlock b) {
@@ -217,11 +178,8 @@ public:
 	int drain_occupancy();
 
 	// THE edit mutex; guards the edit log, override tables' append path, pending_edits_,
-	// and everything the fan-out touches while an op is accepted.
-	// Lock order restated at the new owner (spec §6): Lock order is edit_mutex() ->
-	// LodSystem::mutex(): lod_tick never holds LodSystem::mutex() while it calls
-	// gather_lod_ops (which takes edit_mutex()), so append_edit_locked can safely take
-	// LodSystem::mutex() while already holding edit_mutex().
+	// and everything the fan-out touches while an op is accepted. Acquisition order and the
+	// rule that nothing nests inside it: core/edit_pipeline.h.
 	std::mutex &edit_mutex() { return edit_mutex_; }
 
 	// --- lazy core creation; call order near GPU setup is load-bearing ---
@@ -299,13 +257,12 @@ private:
 	// the blast.
 	std::atomic<int64_t> edit_seq_{0};
 
-	EditSink *edit_sink_ = nullptr;
-	ConsolidationSink *consolidation_sink_ = nullptr;
-
 	// The world-generation seam (spec §4); owned, see the constructor comment.
 	ve::FieldGenerator *generator_ = nullptr;
 	// The compiled terrain pipeline; empty until the first successful load.
 	ve::ResolvedPipeline terrain_pipeline_;
+	// Declared last: it holds the addresses of edit_log_ and edit_seq_ above.
+	ve::EditPipeline pipeline_{&edit_log_, &edit_seq_};
 };
 
 } // namespace godot

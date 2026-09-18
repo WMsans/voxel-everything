@@ -381,3 +381,46 @@ func test_render_pool_replays_consolidated_override_after_atlas_reinit() -> void
 	assert_int(int(state["table_slot"])).override_failure_message("render state %s" % state).is_equal(int(state["cpu_slot"]))
 	assert_bool(state["sdf_match"]).override_failure_message("render state %s" % state).is_true()
 	assert_bool(state["mat_match"]).override_failure_message("render state %s" % state).is_true()
+
+# The premise behind test_connectivity.gd's max_override_bricks = 1 (sub-project 5b,
+# docs/superpowers/plans/2026-09-17-edit-pipeline.md, Task 3). That suite fills a region's op
+# list on purpose to exercise the fail-soft rejection paths; with a normal override pool the
+# automatic consolidation bakes the list away first, so a test built on a full list would be
+# vacuous. Task 4 replaces the pool trick with an explicit hold, and this case is what proves
+# the trick was doing something.
+func test_a_full_op_list_does_not_stay_full_while_consolidation_runs(timeout := 120000) -> void:
+	var w := make_world()
+	w.hooks().debug_stream_region(Vector3i(0, 1, 0))
+	for i in range(256):
+		w.hooks().debug_apply_sphere_paint(Vector3(12.8, 38.4, 12.8), 0.1, 4)
+	assert_int(w.hooks().debug_region_op_count(Vector3i(0, 1, 0))).override_failure_message(
+		"the region did not reach its op cap; the fixture is wrong").is_equal(256)
+	for i in range(8):
+		w.hooks().debug_pump_consolidation() # what _process does once a frame
+	assert_int(w.hooks().debug_region_op_count(Vector3i(0, 1, 0))).override_failure_message(
+		"a full op list survived consolidation: the max_override_bricks = 1 workaround may be "
+		+ "unnecessary. Stop and report before Task 4.").is_less(256)
+
+# The hold seam that replaces test_connectivity.gd's max_override_bricks = 1: a held
+# consolidation leaves the op list alone, and releasing the hold bakes it.
+func test_a_held_consolidation_keeps_a_full_op_list_full(timeout := 120000) -> void:
+	var w := make_world()
+	w.hooks().debug_hold_consolidation(true)
+	w.hooks().debug_stream_region(Vector3i(0, 1, 0))
+	for i in range(256):
+		w.hooks().debug_apply_sphere_paint(Vector3(12.8, 38.4, 12.8), 0.1, 4)
+	for i in range(8):
+		w.hooks().debug_pump_consolidation()
+	assert_int(w.hooks().debug_region_op_count(Vector3i(0, 1, 0))).override_failure_message(
+		"a held consolidation baked the op list anyway").is_equal(256)
+	# A full list still rejects, which is what the connectivity suite builds its fail-soft
+	# cases on.
+	var before: int = int(w.hooks().debug_stream_stats()["edit_rejections"])
+	w.hooks().debug_apply_sphere_paint(Vector3(12.8, 38.4, 12.8), 0.1, 4)
+	assert_int(int(w.hooks().debug_stream_stats()["edit_rejections"])).override_failure_message(
+		"the 257th op was not rejected while the list was full").is_greater(before)
+	w.hooks().debug_hold_consolidation(false)
+	for i in range(8):
+		w.hooks().debug_pump_consolidation()
+	assert_int(w.hooks().debug_region_op_count(Vector3i(0, 1, 0))).override_failure_message(
+		"releasing the hold did not bake the queued region").is_less(256)

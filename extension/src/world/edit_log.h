@@ -46,6 +46,9 @@ public:
 	// override on the next bake.
 	void clear_region_through(IVec3 region, uint64_t seq);
 	int region_count() const { return static_cast<int>(lists_.size()); }
+	// The sequence of the most recent append. A consumer that captured a snapshot can ask
+	// later whether anything has been appended since (collect_ops_for_aabb's after_seq).
+	uint64_t last_seq() const { return next_seq_ - 1; }
 	void clear() {
 		lists_.clear();
 		seqs_.clear();
@@ -79,8 +82,10 @@ private:
 // only a subsequence of the global op stream, so region iteration order cannot recover it.
 // Every copy of one append op shares the same sequence; distinct byte-identical edits have
 // distinct sequences and are therefore preserved as separate ops.
+// `after_seq` keeps only ops appended after that sequence, which is how a consumer holding a
+// snapshot asks "has anything changed since?" without re-reading and comparing the whole list.
 inline void collect_ops_for_aabb(const EditLog &log, const float lo[3], const float hi[3],
-		std::vector<EditOp> *out) {
+		std::vector<EditOp> *out, uint64_t after_seq = 0) {
 	if (!out) return;
 	out->clear();
 	if (!lo || !hi || lo[0] > hi[0] || lo[1] > hi[1] || lo[2] > hi[2]) return;
@@ -131,6 +136,7 @@ inline void collect_ops_for_aabb(const EditLog &log, const float lo[3], const fl
 				// the helper safe even if a corrupted log ever desynchronised them.
 				const size_t n = std::min(ops.size(), seqs.size());
 				for (size_t i = 0; i < n; i++) {
+					if (seqs[i] <= after_seq) continue; // older than the caller's snapshot
 					if (!intersects(ops[i])) continue;
 					found.push_back({ops[i], seqs[i]});
 				}

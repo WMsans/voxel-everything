@@ -15,6 +15,7 @@
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/string.hpp>
 #include <memory>
+#include <span>
 #include <utility>
 #include <vector>
 #include "core/context.h"
@@ -47,7 +48,7 @@ struct WorldStats {
 	float last_physics_tick_ms = 0.0f;
 };
 
-class VoxelWorld : public Node3D, public EditSink {
+class VoxelWorld : public Node3D, public ve::InvalidationSink {
 	GDCLASS(VoxelWorld, Node3D)
 
 	VoxelDebugHooks *debug_hooks_ = nullptr;
@@ -79,15 +80,19 @@ class VoxelWorld : public Node3D, public EditSink {
 	ColliderStreamer *colliders_ = nullptr;
 	IslandManager *island_manager_ = nullptr; // published/detached under edit_mutex
 	bool physics_ready_ = false;
-	std::vector<std::pair<ve::IVec3, ve::IVec3>> pending_dirty_; // guarded by edit_mutex
+	// Collider remesh queue; guarded by edit_mutex, drained by physics_tick. Bounded by
+	// ve::merge_or_cap (core/edit_pipeline.h): overlapping ranges merge, so a thousand edits
+	// in one place stay one entry.
+	std::vector<ve::Box3<int>> pending_dirty_;
 	std::vector<float> physics_bubble_centers_;                  // xyz triples, main thread
 	std::vector<IslandBody *> test_bodies_;                      // hand-driven test pool
 	WorldStats stats_;
 
 	void update_sun_state();
 	void publish_sun_state_to_local_device(RenderingDevice *device);
-	// EditSink: WorldStore's spine calls this with edit_mutex held.
-	void on_edit_appended(const ve::EditOp &op, bool notify_islands) override;
+	// InvalidationSink: the collider remesh queue (kEdit) and the rejection stats
+	// (kRejected). Edit lock held; queue only (core/edit_pipeline.h).
+	void record(const ve::Invalidation &inv) override;
 
 protected:
 	static void _bind_methods();
@@ -189,6 +194,9 @@ public:
 	bool physics_ready() const { return physics_ready_; }
 	std::vector<IslandBody *> &test_bodies() { return test_bodies_; }
 	std::vector<float> &physics_bubble_centers() { return physics_bubble_centers_; }
+	// The collider remesh queue, for debug_edit_fanout. Guarded by edit_mutex: the caller
+	// must hold it.
+	const std::vector<ve::Box3<int>> &pending_dirty() const { return pending_dirty_; }
 	WorldStats stats() const { return stats_; }
 	void note_overflow(int bits) { stats_.overflow_seen |= bits; }
 	// Synchronous island extraction for diagnostics (drives the mesher worker by hand).
@@ -203,9 +211,6 @@ public:
 	// GDScript "raycast": the CPU field ray gameplay aims with -> {hit, pos, normal,
 	// distance, material}. `material` is the struck solid's, for hardness-aware tools.
 	Dictionary raycast(Vector3 origin, Vector3 dir, float max_distance = 200.0f);
-	// Caller MUST hold edit_mutex. WorldStore's spine, then this node's fan-out remainder
-	// (rejection stats, LoD dirty marks, collider remesh queue) under the same hold.
-	ve::EditLog::AppendResult append_edit_locked(const ve::EditOp &op, bool notify_islands = true);
 	int64_t edit_seq() const { return store_->edit_seq(); }
 };
 

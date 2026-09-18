@@ -4,9 +4,9 @@
 // public API and on the atlas/mesher via injected handles; it never holds a VoxelWorld*.
 //
 // Threading: consolidation runs across the main thread (frame pump, teardown) and tool
-// threads (debug hooks), while the mesher's worker owns the bake itself. Lock order is
-// verbatim from VoxelWorld: render lifetime mutex -> WorldStore::edit_mutex() ->
-// lod mutex (VoxelWorld::lod_mutex_ today; LodSystem::mutex() after Phase 5).
+// threads (debug hooks), while the mesher's worker owns the bake itself. Acquisition rules:
+// core/edit_pipeline.h. The commit holds the render lifetime mutex and the edit lock; it
+// takes no other lock.
 //
 // NOTE: this translation unit is explicitly EXCLUDED from the zero-godot-cpp native test
 // build's pure_sources in SConstruct: the moved state machine publishes transactions to
@@ -18,14 +18,10 @@
 #include <utility>
 #include <vector>
 
-#include "core/world_store.h"        // ConsolidationSink port + WorldStore public API
+#include "core/world_store.h"        // WorldStore public API
 #include "render/consolidate_pass.h" // ConsolidateJob member
 #include "world/override_store.h"    // ve::OverrideBrick members
 #include "world/region.h"
-
-namespace ve {
-class LodTree; // forward: the coordinator only ever holds a pointer to it
-}
 
 namespace godot {
 
@@ -35,9 +31,9 @@ class RenderingDevice;
 class WorldStreamer;
 class WorldStore;
 
-class ConsolidationCoordinator : public ConsolidationSink { // satisfies the port from Task 8
+class ConsolidationCoordinator : public ve::InvalidationSink {
 public:
-	// Handles, not ownership. The atlas/mesher/streamer/lod-tree are created lazily and
+	// Handles, not ownership. The atlas/mesher/streamer are created lazily and
 	// destroyed across ensure_initialized()/ensure_physics_initialized()/teardown cycles,
 	// so the coordinator receives ADDRESSES of VoxelWorld's fields and re-reads them at
 	// every use instead of caching pointers that a teardown would strand.
@@ -45,10 +41,6 @@ public:
 		GpuAtlas **atlas = nullptr;
 		MeshService **mesh = nullptr;
 		WorldStreamer **streamer = nullptr;
-		ve::LodTree **lod_tree = nullptr;
-		std::mutex *lod_mutex = nullptr;
-		// Collider remesh queue guarded by edit_mutex(); drained by physics_tick().
-		std::vector<std::pair<ve::IVec3, ve::IVec3>> *pending_dirty = nullptr;
 		// Device selection seam (use_local_device_ stays on the world; the device pointers
 		// moved to RenderOrchestrator in Task 12 and are wired here by address-of slot).
 		const bool *use_local_device = nullptr;
@@ -61,9 +53,18 @@ public:
 
 	ConsolidationCoordinator(WorldStore *store, Collaborators handles);
 
+	// InvalidationSink: an accepted edit queues the region once its list nears the cap. Edit
+	// lock held (core/edit_pipeline.h).
+	void record(const ve::Invalidation &inv) override;
+
 	// One non-blocking frame-pump step; was VoxelWorld::pump_consolidation (called from
 	// _process every frame, unconditionally).
 	void pump_async();
+	// Test seam: while held, regions still queue and an in-flight transaction still finishes,
+	// but pump_async starts no new bake. test_connectivity.gd holds consolidation so the full
+	// op lists its fail-soft cases build on stay full (test_consolidation.gd pins why).
+	// Written and read under edit_mutex().
+	void set_held(bool held) { held_ = held; }
 	// Spin until no transaction is in flight (or a 2 s deadline expires), pumping between
 	// sleeps; was debug_wait_consolidation's loop.
 	void wait();
@@ -82,22 +83,20 @@ public:
 	int consolidated_count() const { return consolidation_count_; }
 	int refusals() const { return consolidation_refusals_; }
 	int queue_refusals() const { return consolidation_queue_refusals_; }
+	// The queue, for debug_edit_fanout. Written and read under edit_mutex(); the caller
+	// must hold it.
+	const std::vector<ve::IVec3> &queued() const { return consolidation_queue_; }
 
 private:
 	GpuAtlas *atlas() const { return *handles_.atlas; }
 	MeshService *mesh() const { return *handles_.mesh; }
 	WorldStreamer *streamer() const { return *handles_.streamer; }
-	ve::LodTree *lod_tree() const { return *handles_.lod_tree; }
-	std::mutex &lod_mutex() const { return *handles_.lod_mutex; }
-	std::vector<std::pair<ve::IVec3, ve::IVec3>> &pending_dirty() const {
-		return *handles_.pending_dirty;
-	}
 	RenderingDevice *device() const {
 		return *handles_.use_local_device ? *handles_.local_rd : *handles_.main_rd;
 	}
 
-	// edit_mutex must be held (ConsolidationSink port satisfied for WorldStore's spine).
-	bool queue_consolidation(ve::IVec3 region) override;
+	// edit_mutex must be held.
+	bool queue_consolidation(ve::IVec3 region);
 	void requeue_consolidation_locked(ve::IVec3 region);
 
 	// Consolidation is deliberately one-region-at-a-time. The worker owns the bake; the main
@@ -119,6 +118,7 @@ private:
 	int consolidation_refusals_ = 0;
 	int consolidation_queue_refusals_ = 0;
 	bool consolidation_queue_refusal_logged_ = false;
+	bool held_ = false; // guarded by edit_mutex()
 
 	WorldStore *store_;
 	Collaborators handles_;

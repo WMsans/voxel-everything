@@ -7,7 +7,6 @@
 #include <godot_cpp/variant/utility_functions.hpp>
 
 #include "generator/edit_ops.h"
-#include "lod/lod_tree.h"
 #include "render/gpu_atlas.h"
 #include "render/mesh_service.h"
 #include "render/world_streamer.h"
@@ -17,6 +16,23 @@ namespace godot {
 
 ConsolidationCoordinator::ConsolidationCoordinator(WorldStore *store, Collaborators handles)
 		: store_(store), handles_(handles) {}
+
+void ConsolidationCoordinator::record(const ve::Invalidation &inv) {
+	if (inv.reason == ve::InvalidationReason::kConsolidated) {
+		// The base bytes changed without an op, so the render atlas must not keep pre-bake
+		// data. The streamer is created and destroyed with the render graph, which is why
+		// this stays behind the coordinator's slot instead of the streamer registering a
+		// sink of its own (plan decision 2).
+		if (streamer()) streamer()->queue_region_regeneration_locked(inv.region);
+		return;
+	}
+	if (inv.reason != ve::InvalidationReason::kEdit) return;
+	// Queue before the list reaches its hard cap. The bake is asynchronous, so the spare 64
+	// entries absorb edits appended while the worker is in flight.
+	for (const ve::IVec3 &region : inv.append->touched)
+		if (store_->edit_log()->op_count(region) >= ve::kConsolidateAtOps)
+			queue_consolidation(region);
+}
 
 bool ConsolidationCoordinator::queue_consolidation(ve::IVec3 region) {
 	if (consolidation_in_flight_ && consolidation_job_.region == region) return false;
@@ -139,8 +155,6 @@ void ConsolidationCoordinator::pump_async() {
 			// The worker transaction is complete. CPU bytes are committed only now; the old
 			// table and op list were untouched until both consumers succeeded.
 			const ve::IVec3 r = region;
-			const ve::IVec3 base{r.x * ve::kRegionBricks, r.y * ve::kRegionBricks,
-					r.z * ve::kRegionBricks};
 			// The baked bytes live in the transaction's slots through the worker command; copy
 			// them from the publication command's result is unnecessary because acquire slots
 			// were populated before submission below.
@@ -155,19 +169,10 @@ void ConsolidationCoordinator::pump_async() {
 				if (ve::OverrideBrick *data = store_->overrides()->data(consolidation_slots_[i]))
 					*data = consolidation_baked_[i];
 			store_->edit_log()->clear_region_through(r, consolidation_job_.through_seq);
-			pending_dirty().push_back({ve::chunk_of_brick(base),
-					ve::chunk_of_brick({base.x + ve::kRegionBricks - 1,
-							base.y + ve::kRegionBricks - 1, base.z + ve::kRegionBricks - 1})});
+			// Colliders, LoD and the streamer hear the same region through the one fan-out
+			// (core/edit_pipeline.h); this used to be three hand-written calls, twice.
+			store_->edits().invalidate(ve::Invalidation::consolidated(r));
 			if (store_->edit_log()->op_count(r) >= ve::kConsolidateAtOps) queue_consolidation(r);
-			float lo[3], first_hi[3], last_lo[3], hi[3];
-			ve::brick_world_aabb(base, lo, first_hi);
-			ve::brick_world_aabb({base.x + ve::kRegionBricks - 1,
-					base.y + ve::kRegionBricks - 1, base.z + ve::kRegionBricks - 1}, last_lo, hi);
-			if (lod_tree()) {
-				std::lock_guard<std::mutex> lod_lock(lod_mutex());
-				lod_tree()->mark_dirty(lo, hi);
-			}
-			if (streamer()) streamer()->queue_region_regeneration_locked(r);
 			store_->override_tables()[std::tuple<int, int, int>{r.x, r.y, r.z}] = consolidation_table_;
 			consolidation_count_++;
 			reset_transaction();
@@ -248,7 +253,9 @@ void ConsolidationCoordinator::pump_async() {
 		return;
 	}
 
-	if (consolidation_queue_.empty()) return;
+	// Held: the queue keeps growing and the in-flight transaction above still finished; only
+	// new bakes are refused.
+	if (held_ || consolidation_queue_.empty()) return;
 	const ve::IVec3 region = consolidation_queue_.front();
 	consolidation_queue_.erase(consolidation_queue_.begin());
 	const int region_slot = store_->residency()->slot_of(region);
@@ -545,18 +552,7 @@ bool ConsolidationCoordinator::force_region(ve::IVec3 r) {
 	}
 	for (size_t i = 0; i < slots.size(); i++) *store_->overrides()->data(slots[i]) = results[0].baked[i];
 	store_->edit_log()->clear_region(r);
-	const ve::IVec3 hi_brick{base.x + ve::kRegionBricks - 1,
-			base.y + ve::kRegionBricks - 1, base.z + ve::kRegionBricks - 1};
-	pending_dirty().push_back({ve::chunk_of_brick(base), ve::chunk_of_brick(hi_brick)});
-	float lo[3], first_hi[3], last_lo[3], hi[3];
-	ve::brick_world_aabb(base, lo, first_hi);
-	ve::brick_world_aabb({base.x + ve::kRegionBricks - 1, base.y + ve::kRegionBricks - 1,
-			base.z + ve::kRegionBricks - 1}, last_lo, hi);
-	if (lod_tree()) {
-		std::lock_guard<std::mutex> lock(lod_mutex());
-		lod_tree()->mark_dirty(lo, hi);
-	}
-	if (streamer()) streamer()->queue_region_regeneration_locked(r);
+	store_->edits().invalidate(ve::Invalidation::consolidated(r));
 	store_->override_tables()[key] = table;
 	return true;
 }

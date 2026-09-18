@@ -103,6 +103,7 @@ bool FieldView::snapshot_lattice(const float ops_lo[3], const float ops_hi[3],
 	*out = FieldSnapshot{};
 	if (!valid()) return false;
 	collect_ops_for_aabb(*log_, ops_lo, ops_hi, &out->ops);
+	out->log_seq = log_->last_seq();
 	out->over_cap = out->ops.size() > static_cast<size_t>(kMaxRegionOps);
 	out->edit_seq = seq_ ? seq_->load(std::memory_order_relaxed) : 0;
 	if (tables_) {
@@ -114,6 +115,14 @@ bool FieldView::snapshot_lattice(const float ops_lo[3], const float ops_hi[3],
 	const IVec3 blo = brick_of_point(origin[0], origin[1], origin[2]);
 	const IVec3 bhi = brick_of_point(origin[0] + span, origin[1] + span, origin[2] + span);
 	return copy_sources(out->ops, blo, bhi, &out->sources);
+}
+
+void FieldView::ops_since(const float lo[3], const float hi[3], uint64_t after_seq,
+		std::vector<EditOp> *out) const {
+	if (!out) return;
+	out->clear();
+	if (!valid()) return;
+	collect_ops_for_aabb(*log_, lo, hi, out, after_seq);
 }
 
 bool FieldView::snapshot_region(IVec3 region, ConsolidationSnapshot *out) const {

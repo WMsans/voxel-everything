@@ -30,6 +30,7 @@ struct FieldSnapshot {
 	FieldSourceSnapshot sources;
 	int override_table = -1;
 	int64_t edit_seq = 0;
+	uint64_t log_seq = 0; // EditLog::last_seq() when these ops were read
 	bool over_cap = false; // ops.size() > kMaxRegionOps; the caller decides
 };
 
@@ -67,6 +68,10 @@ public:
 	// origin .. origin + (dim - 1) * voxel. False where a source is unavailable.
 	bool snapshot_lattice(const float ops_lo[3], const float ops_hi[3], const float origin[3],
 			float voxel, int dim, FieldSnapshot *out) const;
+	// Ops appended after `after_seq` that can influence [lo, hi]. The cheap form of "has the
+	// field moved since my snapshot?".
+	void ops_since(const float lo[3], const float hi[3], uint64_t after_seq,
+			std::vector<EditOp> *out) const;
 	bool snapshot_region(IVec3 region, ConsolidationSnapshot *out) const;
 
 private:
