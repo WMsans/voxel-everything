@@ -242,3 +242,72 @@ TEST_CASE("an override naming an unknown param is rejected") {
 	CHECK_FALSE(ve::resolve_pipeline(d, st, &p, &err));
 	CHECK(err.find("nope") != std::string::npos);
 }
+
+TEST_CASE("a body reading another stage's param without //!use is rejected, naming the token") {
+	std::vector<ve::StageManifest> st{
+		field_stage("hills", {"sdf"}, {}),
+		field_stage("cave", {"sdf"}, {"sdf"}),
+	};
+	st[0].lipschitz_mode = ve::LipschitzMode::kAdd; st[0].lipschitz = 1.78f;
+	st[0].params.push_back({"amp_a", ve::ChannelType::kFloat, 6.0f});
+	st[1].lipschitz_mode = ve::LipschitzMode::kMul; st[1].lipschitz = 1.0f;
+	st[1].body = "void stage_cave(inout FieldCtx c){ c.sdf = P.hills_amp_a; }\n";
+
+	ve::ResolvedPipeline p;
+	std::string err;
+	CHECK_FALSE(ve::resolve_pipeline(desc_for(2), st, &p, &err));
+	CHECK(err.find("hills_amp_a") != std::string::npos);
+	CHECK(err.find("cave") != std::string::npos);
+	CHECK(err.find("//!use") != std::string::npos);
+}
+
+TEST_CASE("a declared //!use accepts the same body") {
+	std::vector<ve::StageManifest> st{
+		field_stage("hills", {"sdf"}, {}),
+		field_stage("cave", {"sdf"}, {"sdf"}),
+	};
+	st[0].lipschitz_mode = ve::LipschitzMode::kAdd; st[0].lipschitz = 1.78f;
+	st[0].params.push_back({"amp_a", ve::ChannelType::kFloat, 6.0f});
+	st[1].lipschitz_mode = ve::LipschitzMode::kMul; st[1].lipschitz = 1.0f;
+	st[1].body = "void stage_cave(inout FieldCtx c){ c.sdf = P.hills_amp_a; }\n";
+	st[1].uses.push_back("hills.amp_a");
+
+	ve::ResolvedPipeline p;
+	std::string err;
+	CHECK_MESSAGE(ve::resolve_pipeline(desc_for(2), st, &p, &err), err);
+}
+
+TEST_CASE("a //!use naming a param no stage declares is rejected") {
+	std::vector<ve::StageManifest> st{field_stage("cave", {"sdf"}, {})};
+	st[0].lipschitz_mode = ve::LipschitzMode::kAdd; st[0].lipschitz = 1.0f;
+	st[0].uses.push_back("hills.amp_a");
+	ve::ResolvedPipeline p;
+	std::string err;
+	CHECK_FALSE(ve::resolve_pipeline(desc_for(1), st, &p, &err));
+	CHECK(err.find("hills.amp_a") != std::string::npos);
+}
+
+TEST_CASE("a stage reads its own params without declaring anything") {
+	std::vector<ve::StageManifest> st{field_stage("hills", {"sdf"}, {})};
+	st[0].lipschitz_mode = ve::LipschitzMode::kAdd; st[0].lipschitz = 1.78f;
+	st[0].params.push_back({"amp_a", ve::ChannelType::kFloat, 6.0f});
+	st[0].body = "void stage_hills(inout FieldCtx c){ c.sdf = P.hills_amp_a; }\n";
+	ve::ResolvedPipeline p;
+	std::string err;
+	CHECK_MESSAGE(ve::resolve_pipeline(desc_for(1), st, &p, &err), err);
+}
+
+TEST_CASE("a param name inside a comment is not a read") {
+	std::vector<ve::StageManifest> st{
+		field_stage("hills", {"sdf"}, {}),
+		field_stage("cave", {"sdf"}, {"sdf"}),
+	};
+	st[0].lipschitz_mode = ve::LipschitzMode::kAdd; st[0].lipschitz = 1.78f;
+	st[0].params.push_back({"amp_a", ve::ChannelType::kFloat, 6.0f});
+	st[1].lipschitz_mode = ve::LipschitzMode::kMul; st[1].lipschitz = 1.0f;
+	st[1].body = "// once read P.hills_amp_a; it does not any more\n"
+			"void stage_cave(inout FieldCtx c){ c.sdf = 1.0; }\n";
+	ve::ResolvedPipeline p;
+	std::string err;
+	CHECK_MESSAGE(ve::resolve_pipeline(desc_for(2), st, &p, &err), err);
+}

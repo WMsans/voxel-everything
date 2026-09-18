@@ -3,8 +3,6 @@
 # (assets/pipelines/golden.pipeline) produces bit-identical bricks to
 # ve::AnalyticGenerator; this file has since gained the relief stage below, so that
 # claim no longer holds for default.pipeline.
-# NOTE: overriding hills amp_* also requires updating the literals in stage_cave's CPU
-# mirror (extension/src/terrain/builtin_stages.cpp) -- the cave GLSL reads P.hills_*.
 # Edits apply on fresh world init (no C++ rebuild); shader reload keeps the loaded pipeline.
 seed      1337
 # A CEILING, not the bound. resolve_pipeline computes the bound from the stages below

@@ -60,6 +60,42 @@ int ResolvedPipeline::channel_slot(const std::string &name) const {
 }
 
 namespace {
+// Every "P.<ident>" token in a stage body, with // comments stripped first so a name
+// mentioned in prose is not a read. A preceding identifier character means this is the
+// tail of a longer name (XP.foo), not a params access.
+std::vector<std::string> param_reads(const std::string &body) {
+	std::vector<std::string> out;
+	std::string src;
+	src.reserve(body.size());
+	for (size_t i = 0; i < body.size();) {
+		if (body[i] == '/' && i + 1 < body.size() && body[i + 1] == '/') {
+			while (i < body.size() && body[i] != '\n') i++;
+		} else {
+			src += body[i++];
+		}
+	}
+	auto ident_char = [](char c) {
+		return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+				(c >= '0' && c <= '9') || c == '_';
+	};
+	for (size_t i = 0; i + 1 < src.size(); i++) {
+		if (src[i] != 'P' || src[i + 1] != '.') continue;
+		if (i > 0 && ident_char(src[i - 1])) continue;
+		size_t j = i + 2;
+		while (j < src.size() && ident_char(src[j])) j++;
+		if (j > i + 2) out.push_back(src.substr(i + 2, j - i - 2));
+		i = j - 1;
+	}
+	return out;
+}
+
+// "hills.amp_a" -> "hills_amp_a", the way generate_field_glslh flattens it into the UBO.
+std::string flat_ident(const std::string &dotted) {
+	std::string s = dotted;
+	for (char &c : s) if (c == '.') c = '_';
+	return s;
+}
+
 void hash_feed(uint64_t &h, const std::string &s) {
 	for (unsigned char c : s) { h ^= c; h *= 1099511628211ull; }
 }
@@ -186,6 +222,33 @@ bool resolve_pipeline(const PipelineDesc &desc, const std::vector<StageManifest>
 
 	if (!wrote_sdf)
 		return fail("pipeline never writes channel 'sdf'; the final field stage must produce one");
+
+	// Cross-stage parameter reads must be declared. The GLSL reads another stage's param
+	// through the flattened ident (P.hills_amp_a) and the resolver used not to see that at
+	// all -- so overriding hills.amp_a in a pipeline file silently diverged the CPU mirror,
+	// which had the old value as a literal. Declaring the read is what carries the value
+	// into the mirror's blob.
+	for (size_t i = 0; i < out->stages.size(); i++) {
+		const StageManifest &m = out->stages[i];
+		for (const std::string &use : m.uses) {
+			bool found = false;
+			for (const ParamDecl &pd : out->params)
+				if (pd.name == use) { found = true; break; }
+			if (!found)
+				return fail("stage '" + m.name + "' declares //!use " + use +
+						", but no stage in this pipeline declares that param");
+		}
+		for (const std::string &read : param_reads(m.body)) {
+			bool ok = false;
+			for (const ParamDecl &pd : m.params)
+				if (flat_ident(m.name + "." + pd.name) == read) { ok = true; break; }
+			for (const std::string &use : m.uses)
+				if (flat_ident(use) == read) { ok = true; break; }
+			if (!ok)
+				return fail("stage '" + m.name + "' reads P." + read +
+						", which is neither its own param nor a declared //!use");
+		}
+	}
 
 	// Sorted so set-1 binding indices are a pure function of the resource names, which keeps
 	// the generated GLSL stable and diffable across unrelated pipeline edits.
