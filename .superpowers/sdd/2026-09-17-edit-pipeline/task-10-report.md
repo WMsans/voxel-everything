@@ -158,3 +158,72 @@ golden data was touched.
 
 The fix commit changes 2 source/test files. The report append is a separate documentation commit,
 so the fix round is 3 files including this report.
+
+## Final fix wave: conservative sequence rule
+
+### Finding and root cause
+
+The prior fallback only consulted `EditLog::last_seq()` when `ops_since()` returned no retained
+operations. If a relevant post-snapshot edit was consolidated away while a later unrelated edit
+remained in the extraction AABB, `ops_since()` was nonempty but no retained operation reached the
+island boxes. The extraction was therefore incorrectly treated as fresh.
+
+### Fix
+
+`IslandManager::land_extraction()` now uses the smallest conservative rule:
+
+```cpp
+const bool stale = handles_.store->edit_log()->last_seq() > f.log_seq;
+```
+
+A consolidation-only landing keeps the same sequence and remains not stale. Any append after the
+snapshot rejects the landing, including when consolidation removed the relevant retained op. The
+spatial comparison was removed because it could not distinguish that case.
+
+### TDD and verification
+
+The regression was strengthened before the production change to place the component across a
+region boundary, consolidate the relevant post-snapshot edit in region `(0, 2, 0)`, and retain a
+later unrelated paint edit in region `(1, 2, 0)` inside the extraction AABB but outside its boxes.
+
+RED command:
+
+```text
+./gdunit_tests.sh -a res://tests/test_connectivity.gd
+```
+
+`reports/report_50/results.xml`: 33 cases, 1 failure, 0 errors. The new regression failed with
+`land_stale == 0` and a spawned body, proving the old nonempty-`newer` path missed the stale edit.
+
+GREEN fix commit: `ca30d9f fix: conservatively reject any newer island extraction`.
+It changes `extension/src/physics/island_manager.cpp`, `extension/src/lod/lod_system.h`, and
+`tests/test_connectivity.gd`.
+
+```text
+./build.sh -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)
+```
+
+Build passed and linked the universal debug GDExtension.
+
+```text
+cd extension && scons -Q test; cd ..
+```
+
+`645/645` native test cases and `9,120,150/9,120,150` assertions passed.
+
+```text
+./gdunit_tests.sh -a res://tests/test_connectivity.gd
+```
+
+`reports/report_51/results.xml`: 33/33 cases, 0 errors, 0 failures, 0 flaky. The consolidation
+characterization still passed, so equal-sequence consolidation is not stale.
+
+### Ceiling
+
+The global sequence rule deliberately retries for unrelated appends. This is conservative and
+avoids carving from an obsolete snapshot when consolidation has erased evidence. If that retry
+cost becomes measurable, retain append tombstones/history keyed by sequence and restore a spatial
+check only for sequence ranges proven to have no erased relevant edits.
+
+The LoD header's stale deleted-symbol comment was reworded in the same fix commit; the required
+exit scan is recorded in the Task 14 final fix report.

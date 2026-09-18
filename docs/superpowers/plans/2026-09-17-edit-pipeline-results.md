@@ -1,6 +1,7 @@
 # Edit pipeline (sub-project 5b) — results
 
-Implementation baseline tested through: `30d2838`. Documentation commit: `b806a3c`.
+Implementation baseline tested through: `30d2838`. Initial documentation commit: `b806a3c`.
+Final source/test fix commit: `ca30d9f`; final fix evidence is appended below.
 Recorded 2026-09-17 on Darwin Jeremys-Mac-mini.attlocal.net (Apple M1 / Metal 4, Godot 4.7.2.stable.official.ed1daf0bf).
 Baseline: `docs/superpowers/plans/2026-09-17-edit-pipeline-baseline.md`. Report: `reports/report_46`.
 
@@ -106,3 +107,74 @@ restore branch with `debug_set_fail_next_carve` / `debug_set_fail_next_restore`,
 The final full run's non-clean status is limited to the unchanged ambient Metal error and an unresolved sun-cascade failure. The required parent control was rebuilt at `a725648` and reran with `./gdunit_tests.sh -a res://tests/test_sun_cascades_gpu.gd`: it passed the current sub-texel case and failed one `test_the_min_level_clamp_does_not_peter_pan` assertion (`Expecting: 'true' but is 'false'` at line 108). Because the parent and current runs failed different cases, the current failure is not confirmed unrelated; GPU/environment drift is likely. A current-commit rerun (`reports/report_48`) failed earlier during shader compilation (`unexpected LEFT_OP`) with 1 executed case and 8 failures; no passing data is claimed from it.
 
 Deferred ledger items were triaged as follows: the Task 1 baseline commit-label mismatch, Task 2 omitted empty-golden failure transcript, Task 5 report wording, and Task 12 structural-TDD label are historical documentation/evidence defects with no production impact; Task 6's registration/removal concurrency remains review-only rather than directly tested; Task 9's store-before-preflight comment mismatch remains a minor documentation concern. The Task 4 one-brick wording and Task 8 partial-carve comments were superseded by the later hold/atomic-carve changes. No additional edit-pipeline exit finding remains.
+
+## Final fix wave
+
+### Staleness correction
+
+The previous landing rule consulted `last_seq() > f.log_seq` only when no retained post-snapshot
+operation was returned. That missed a relevant append which consolidation removed while an
+unrelated later operation remained in the extraction AABB but did not reach the island boxes.
+`extension/src/physics/island_manager.cpp` now uses the conservative rule directly:
+
+```cpp
+const bool stale = handles_.store->edit_log()->last_seq() > f.log_seq;
+```
+
+Consolidation alone does not advance the append sequence and remains not stale. Any later append
+causes a retry, including when its retained log entry was erased by consolidation. The accepted
+ceiling is extra retries for unrelated appends; append tombstones/history keyed by sequence are the
+upgrade path if that becomes measurable.
+
+### Regression and verification
+
+`tests/test_connectivity.gd` was strengthened before the production edit. It places the extracted
+component across a region boundary, consolidates the relevant post-snapshot edit away from region
+`(0, 2, 0)`, and retains a later unrelated paint edit in region `(1, 2, 0)` inside the extraction
+AABB but outside the component boxes.
+
+RED: `./gdunit_tests.sh -a res://tests/test_connectivity.gd` produced
+`reports/report_50/results.xml` with 33 cases, 1 failure, and 0 errors; the new case observed
+`land_stale == 0` and a spawned body.
+
+GREEN: source/test fix commit `ca30d9f` also reworded the deleted-symbol comment in
+`extension/src/lod/lod_system.h`.
+
+- `./build.sh -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)` — passed; universal debug library linked.
+- `cd extension && scons -Q test; cd ..` — 645/645 cases and 9,120,150/9,120,150 assertions
+  passed.
+- `./gdunit_tests.sh -a res://tests/test_connectivity.gd` — `reports/report_51/results.xml`,
+  33/33 cases, 0 errors, 0 failures, 0 flaky.
+
+### Refreshed exit scans
+
+Run after `ca30d9f`:
+
+```text
+$ rg 'WorldStore::append_edit\(|append_edit_locked|struct EditSink|struct ConsolidationSink|on_edit_appended|LodSystem::note_edit' extension/src
+# empty; exit 1
+
+$ rg -il 'lock order' extension/src
+extension/src/core/edit_pipeline.h
+# exit 0
+
+$ rg 'max_override_bricks' tests/test_connectivity.gd
+# empty; exit 1
+
+$ rg 'collect_ops_for_aabb|edit_log\(\)->ops\(' extension/src/physics
+# empty; exit 1
+
+$ git diff --check
+# exit 0
+```
+
+The first, third, and fourth scans are empty; the lock-order text has one intended owner. This
+replaces the stale scan evidence from the prior documentation pass.
+
+### Final concerns
+
+The full-run evidence remains `reports/report_46`: 509 executed cases with the documented
+Godot/Metal ambient error and one sun-cascade failure. The parent control and current rerun failed
+different sun cases, so the relationship to the branch remains unresolved and GPU/environment drift
+is only a likely contributor, not an attribution. The focused final staleness suite and native suite
+are clean; no clean full-GPU result is claimed.
