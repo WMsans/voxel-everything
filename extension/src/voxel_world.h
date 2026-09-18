@@ -170,7 +170,7 @@ public:
 	// --- lifetime ---
 	void ensure_initialized();
 	bool is_initialized() const;
-	void load_terrain_pipeline(); // first successful load wins; see the definition
+	bool load_terrain_pipeline(); // first successful load wins; see the definition
 	void request_shader_reload(); // a latch; the render callback pumps it
 	void teardown_gpu();          // every GPU object; CPU cores survive
 	void shutdown_render_resources();

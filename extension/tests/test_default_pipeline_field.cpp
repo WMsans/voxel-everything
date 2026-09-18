@@ -91,7 +91,7 @@ TEST_CASE("the default pipeline's CPU field matches the committed corpus bit for
 				"(hex float bits), material.\n");
 		std::fprintf(f, "# Regenerate: VE_REGEN_GOLDEN=1 ./build.sh --test\n");
 		for (const Pt &p : pts) {
-			ve::Sample s = g->eval(p.x, p.y, p.z);
+			ve::Sample s = g->sample(p.x, p.y, p.z);
 			std::fprintf(f, "%08x %08x %08x %08x %u\n", bits(p.x), bits(p.y), bits(p.z),
 					bits(s.sdf), unsigned(s.material));
 		}
@@ -111,7 +111,7 @@ TEST_CASE("the default pipeline's CPU field matches the committed corpus bit for
 		CHECK(bits(pts[i].x) == bx);
 		CHECK(bits(pts[i].y) == by);
 		CHECK(bits(pts[i].z) == bz);
-		ve::Sample s = g->eval(pts[i].x, pts[i].y, pts[i].z);
+		ve::Sample s = g->sample(pts[i].x, pts[i].y, pts[i].z);
 		CHECK(bits(s.sdf) == bsdf);
 		CHECK(unsigned(s.material) == mat);
 		i++;

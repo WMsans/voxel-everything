@@ -63,7 +63,7 @@ TEST_CASE("a mirror's declared names resolve to the manifest's channels and para
 	std::unique_ptr<ve::PipelineFieldGenerator> g(ve::PipelineFieldGenerator::create(p, &err));
 	REQUIRE_MESSAGE(g != nullptr, err);
 	// height = gain * x = 3 * 2 = 6; sdf = y - height = 10 - 6 = 4.
-	CHECK(g->eval(2.0f, 10.0f, 0.0f).sdf == doctest::Approx(4.0f));
+	CHECK(g->sample(2.0f, 10.0f, 0.0f).sdf == doctest::Approx(4.0f));
 }
 
 TEST_CASE("a mirror binding a channel the manifest does not declare fails create, by name") {

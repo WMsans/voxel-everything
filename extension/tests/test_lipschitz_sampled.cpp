@@ -50,9 +50,9 @@ void check_bound(const char *pipeline) {
 		const float x = next(-3000.0f, 3000.0f);
 		const float y = next(-200.0f, 400.0f);
 		const float z = next(-3000.0f, 3000.0f);
-		const float dx = (g->eval(x + e, y, z).sdf - g->eval(x - e, y, z).sdf) / (2.0f * e);
-		const float dy = (g->eval(x, y + e, z).sdf - g->eval(x, y - e, z).sdf) / (2.0f * e);
-		const float dz = (g->eval(x, y, z + e).sdf - g->eval(x, y, z - e).sdf) / (2.0f * e);
+		const float dx = (g->sample(x + e, y, z).sdf - g->sample(x - e, y, z).sdf) / (2.0f * e);
+		const float dy = (g->sample(x, y + e, z).sdf - g->sample(x, y - e, z).sdf) / (2.0f * e);
+		const float dz = (g->sample(x, y, z + e).sdf - g->sample(x, y, z - e).sdf) / (2.0f * e);
 		const float mag = std::sqrt(dx * dx + dy * dy + dz * dz);
 		if (mag > worst) { worst = mag; wx = x; wy = y; wz = z; }
 	}

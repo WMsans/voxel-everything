@@ -62,5 +62,5 @@ TEST_CASE("overriding hills.amp_a moves the cave's CPU mirror too") {
 	// A point on the cave's rim, where the carve's centre height depends on hills' amp_a.
 	// If the mirror still held the old literal, this sample would be identical in both.
 	const float x = 30.0f, y = 49.0f, z = 30.0f;
-	CHECK(base->eval(x, y, z).sdf != doctest::Approx(over->eval(x, y, z).sdf));
+	CHECK(base->sample(x, y, z).sdf != doctest::Approx(over->sample(x, y, z).sdf));
 }

@@ -278,7 +278,7 @@ void ConsolidationCoordinator::pump_async() {
 	job.region_slot = region_slot;
 	job.ops = std::move(snap.ops);
 	job.through_seq = snap.through_seq;
-	job.gen = &store_->generator()->sampler();
+	job.gen = store_->generator();
 	job.bricks = std::move(snap.bricks);
 	job.source = std::move(snap.sources);
 	int needed_slots = 0;
@@ -462,7 +462,7 @@ bool ConsolidationCoordinator::force_region(ve::IVec3 r) {
 	job.region_slot = resident_slot;
 	job.bricks = bricks;
 	job.ops = ops;
-	job.gen = &store_->generator()->sampler();
+	job.gen = store_->generator();
 	if (!bricks.empty()) {
 		if (!sources_ok) return refuse();
 		job.source = snap.sources;

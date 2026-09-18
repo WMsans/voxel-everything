@@ -76,19 +76,19 @@ PipelineFieldGenerator *PipelineFieldGenerator::create(const ResolvedPipeline &p
 	return g;
 }
 
-Sample PipelineFieldGenerator::View::sample(float x, float y, float z) const {
+Sample PipelineFieldGenerator::sample(float x, float y, float z) const {
 	FieldCtx ctx;
-	const ResolvedPipeline &p = owner_->pipeline_;
+	const ResolvedPipeline &p = pipeline_;
 	const int pslot = p.channel_slot("p");
 	ctx.v(pslot)[0] = x;
 	ctx.v(pslot)[1] = y;
 	ctx.v(pslot)[2] = z;
 
-	for (size_t i = 0; i < owner_->fns_.size(); i++) {
-		StageFn fn = owner_->fns_[i];
+	for (size_t i = 0; i < fns_.size(); i++) {
+		StageFn fn = fns_[i];
 		if (fn == nullptr) continue;  // GPU-only stage: the CPU field is already inexact
 		FieldResources res;
-		fn(ctx, owner_->slot_words_[i].data(), owner_->param_words_[i].data(), res);
+		fn(ctx, slot_words_[i].data(), param_words_[i].data(), res);
 	}
 
 	Sample s{};
@@ -97,7 +97,7 @@ Sample PipelineFieldGenerator::View::sample(float x, float y, float z) const {
 	return s;
 }
 
-FieldSample PipelineFieldGenerator::View::sample_gradient(float x, float y, float z) const {
+FieldSample PipelineFieldGenerator::sample_gradient(float x, float y, float z) const {
 	// The base implementation already differentiates through THIS view's sample() (the
 	// pipeline field) with the same epsilon the GPU uses; only the flag changes (see the
 	// header for why exact is the honest report here).

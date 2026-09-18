@@ -20,7 +20,7 @@
 #include "connectivity/occupancy.h"
 #include "core/edit_pipeline.h"
 #include "generator/edit_ops.h"
-#include "generator/field_generator.h"
+#include "generator/generator.h"
 #include "generator/volume_set.h"
 #include "terrain/pipeline.h"
 #include "world/world_field.h"
@@ -87,19 +87,19 @@ class WorldStore : public ve::InvalidationSink {
 
 public:
 	// The field-generation seam (spec §4) is injected at construction and OWNED by the
-	// store: a null pointer falls back to the default procedural generator, and the
-	// destructor deletes whatever is installed. Pre-init swaps go through set_generator().
-	explicit WorldStore(const ve::WorldConfig &config, ve::FieldGenerator *generator);
+	// store: a null pointer means no generator, and the destructor deletes whatever is
+	// installed. Pre-init swaps go through set_generator().
+	explicit WorldStore(const ve::WorldConfig &config, ve::Generator *generator);
 	~WorldStore();
 
-	ve::FieldGenerator *generator() const { return generator_; }
+	ve::Generator *generator() const { return generator_; }
 	// Pre-init-only swap path for future worldgen features: nothing evaluates the field
 	// before ensure_initialized() streams the base world, so the raw replace needs no
-	// guard. Takes ownership of `generator` (a null pointer resets to the default).
-	void set_generator(ve::FieldGenerator *generator);
+	// guard. Takes ownership of `generator` (a null pointer leaves the store without one).
+	void set_generator(ve::Generator *generator);
 
 	// The compiled terrain pipeline. Empty until VoxelWorld::load_terrain_pipeline()
-	// succeeds; the generator seam falls back to ProceduralFieldGenerator until then.
+	// succeeds; until then the store has no generator and nothing may sample the field.
 	// RenderOrchestrator builds set 1 from this, and MeshService builds the worker copy.
 	const ve::ResolvedPipeline &terrain_pipeline() const { return terrain_pipeline_; }
 	void set_terrain_pipeline(const ve::ResolvedPipeline &p) { terrain_pipeline_ = p; }
@@ -142,7 +142,7 @@ public:
 	// The world field over this store's current cores. A cheap value: re-fetch it per use,
 	// because the edit log and override store are created lazily and released at exit.
 	ve::WorldField field() {
-		return ve::WorldField(generator_ ? &generator_->sampler() : nullptr, edit_log_, &volumes_,
+		return ve::WorldField(generator_, edit_log_, &volumes_,
 				overrides_, &override_tables_, &edit_mutex_, &edit_seq_);
 	}
 
@@ -258,7 +258,7 @@ private:
 	std::atomic<int64_t> edit_seq_{0};
 
 	// The world-generation seam (spec §4); owned, see the constructor comment.
-	ve::FieldGenerator *generator_ = nullptr;
+	ve::Generator *generator_ = nullptr;
 	// The compiled terrain pipeline; empty until the first successful load.
 	ve::ResolvedPipeline terrain_pipeline_;
 	// Declared last: it holds the addresses of edit_log_ and edit_seq_ above.

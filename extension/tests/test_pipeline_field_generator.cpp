@@ -63,10 +63,10 @@ TEST_CASE("stages run in order and the last sdf write wins") {
 	std::string err;
 	ve::PipelineFieldGenerator *g = ve::PipelineFieldGenerator::create(build(), &err);
 	REQUIRE_MESSAGE(g != nullptr, err);
-	CHECK(g->eval(0.0f, 61.2f, 0.0f).sdf == doctest::Approx(10.0f));
-	CHECK(g->eval(0.0f, 41.2f, 0.0f).sdf == doctest::Approx(-10.0f));
-	CHECK(g->eval(0.0f, 41.2f, 0.0f).material == 3);
-	CHECK(g->eval(0.0f, 61.2f, 0.0f).material == 0);
+	CHECK(g->sample(0.0f, 61.2f, 0.0f).sdf == doctest::Approx(10.0f));
+	CHECK(g->sample(0.0f, 41.2f, 0.0f).sdf == doctest::Approx(-10.0f));
+	CHECK(g->sample(0.0f, 41.2f, 0.0f).material == 3);
+	CHECK(g->sample(0.0f, 61.2f, 0.0f).material == 0);
 	CHECK(g->is_cpu_exact());
 	delete g;
 }
@@ -76,21 +76,19 @@ TEST_CASE("a stage with no parameters receives a padding blob, never null") {
 	std::string err;
 	ve::PipelineFieldGenerator *g = ve::PipelineFieldGenerator::create(build(), &err);
 	REQUIRE_MESSAGE(g != nullptr, err);
-	g->eval(0.0f, 41.2f, 0.0f);
+	g->sample(0.0f, 41.2f, 0.0f);
 	CHECK(last_empty_stage_params != nullptr);
 	CHECK(last_empty_stage_params != &empty_stage_params_sentinel);
 	delete g;
 }
 
-TEST_CASE("sampler() hands out a Generator view with the pipeline's lipschitz bound") {
+TEST_CASE("the generator reports the pipeline's lipschitz bound") {
 	std::string err;
 	ve::ResolvedPipeline p = build();
 	p.lipschitz = 3.5f;
 	ve::PipelineFieldGenerator *g = ve::PipelineFieldGenerator::create(p, &err);
 	REQUIRE_MESSAGE(g != nullptr, err);
-	const ve::Generator &view = g->sampler();
-	CHECK(view.sample(0.0f, 61.2f, 0.0f).sdf == doctest::Approx(10.0f));
-	CHECK(view.lipschitz() == doctest::Approx(3.5f));
+	CHECK(g->lipschitz() == doctest::Approx(3.5f));
 	delete g;
 }
 

@@ -64,7 +64,7 @@ TEST_CASE("the frozen golden pipeline reproduces the analytic field over the bas
 	for (int i = 0; i < 512; i++) {
 		const float x = next(-20.0f, 60.0f), y = next(21.2f, 81.2f), z = next(-20.0f, 60.0f);
 		const ve::Sample a = ref.sample(x, y, z);
-		const ve::Sample b = g->eval(x, y, z);
+		const ve::Sample b = g->sample(x, y, z);
 		CHECK(bits(a.sdf) == bits(b.sdf));
 		CHECK(a.material == b.material);
 		checked++;
@@ -82,7 +82,7 @@ TEST_CASE("the frozen golden pipeline reproduces whole bricks") {
 	for (const ve::IVec3 &b : bricks) {
 		ve::BrickEval want{}, got{};
 		ve::eval_brick(ref, nullptr, 0, b, &want);
-		ve::eval_brick(g->sampler(), nullptr, 0, b, &got);
+		ve::eval_brick(*g, nullptr, 0, b, &got);
 		CHECK(std::memcmp(want.brick.sdf, got.brick.sdf, sizeof(want.brick.sdf)) == 0);
 		CHECK(std::memcmp(want.brick.mat, got.brick.mat, sizeof(want.brick.mat)) == 0);
 		CHECK(std::memcmp(&want.mips, &got.mips, sizeof(want.mips)) == 0);
@@ -97,6 +97,6 @@ TEST_CASE("the frozen golden pipeline reproduces whole bricks") {
 TEST_CASE("the pipeline's bound is no looser than the analytic generator's") {
 	auto g = golden_pipeline();
 	ve::AnalyticGenerator ref;
-	CHECK(g->sampler().lipschitz() <= ref.lipschitz());
-	CHECK(g->sampler().lipschitz() == doctest::Approx(1.78f));
+	CHECK(g->lipschitz() <= ref.lipschitz());
+	CHECK(g->lipschitz() == doctest::Approx(1.78f));
 }
