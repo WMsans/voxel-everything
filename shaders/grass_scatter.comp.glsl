@@ -126,12 +126,10 @@ void main() {
 	uint lane = gl_LocalInvocationID.x;
 	if ((entry.w & 0x80000000u) != 0u) { far_blade(entry, lane); return; }
 
-	uint packed = entry.x;
-	// Unpacks the 11/10/11-bit layout stage 1 writes (see grass_bricks.comp.glsl): X/Z
-	// bias 1024 in 11-bit fields, Y bias 512 in a 10-bit field.
-	ivec3 local = ivec3(int(packed & 0x7FFu) - 1024, int((packed >> 11) & 0x3FFu) - 512,
-			int((packed >> 21) & 0x7FFu) - 1024);
-	ivec3 brick = grass.brick_min.xyz + local;
+	// The global brick coordinate, one signed word each (see grass_bricks.comp.glsl). It used
+	// to be bit-packed into .x against grass.brick_min, which bounded how tall the near box
+	// could be; the box is now as tall as the reach, so the coordinate travels whole.
+	ivec3 brick = ivec3(int(entry.x), int(entry.y), int(entry.z));
 	vec3 base = vec3(brick) * BRICK_SIZE;
 
 	// Ring from the brick's centre, so every blade in a brick agrees on its budget.

@@ -58,10 +58,18 @@ func _probe(w: VoxelWorld, key: String) -> Dictionary:
 # ssgi off move nothing. lit_luma rises on the two far-seeing cameras only (down_close
 # is unchanged within tolerance) because far pixels are now LoD mesh past the fade band
 # instead of field raymarched to 200 m. ran stays true and max_ao stays 1.0 throughout.
+#
+# min_ao/lit_luma re-recorded 2026-09-18: near-field grass covers the whole resident sphere
+# now, not a 10 m slab around the camera, and all three cameras stand 14 m above the ground --
+# so where the note above could say "grass max_blades = 0 moves nothing", these probes now see
+# blades. Isolated the same way: setting grass enabled = 0 returns every one of these six
+# numbers to the line above, min_ao bit-exactly. min_ao is 0 because AO between blades is
+# total, and lit_luma rises by about 0.01 on every camera because grass is brighter than the
+# ground it covers. max_ao stays 1.0 and ran stays true.
 const GOLDEN := {
-	"down_close": {"min_ao": 0.705882, "max_ao": 1.000000, "lit_luma": 0.241199},
-	"oblique": {"min_ao": 0.584314, "max_ao": 1.000000, "lit_luma": 0.311697},
-	"horizon": {"min_ao": 0.431373, "max_ao": 1.000000, "lit_luma": 0.346033},
+	"down_close": {"min_ao": 0.000000, "max_ao": 1.000000, "lit_luma": 0.252933},
+	"oblique": {"min_ao": 0.000000, "max_ao": 1.000000, "lit_luma": 0.318546},
+	"horizon": {"min_ao": 0.000000, "max_ao": 1.000000, "lit_luma": 0.355182},
 }
 const TOL_AO := 0.002
 const TOL_LUMA := 0.004

@@ -58,10 +58,18 @@ func test_a_headless_frame_runs_the_core_stages() -> void:
 
 # SSGI accumulates across frames and grass sways with the frame counter; with both held still
 # the frame is a pure function of the world and the camera.
+#
+# Holding grass still takes wind_speed = 0, not wind_strength = 0 alone: the blade's LEAN is
+# offset by the gust field (grass.vert.glsl, `lean = blade.b.z + (gust - 0.5) * 0.35`), and
+# that term is scaled by neither the strength nor anything else -- only a gust field that has
+# stopped scrolling drops the time out of it. The strength alone was enough while this camera,
+# 14 m above the ground, saw no blades at all; near-field grass covers the whole resident
+# sphere now, so it sees 6686 of them.
 func test_two_frames_of_one_view_are_identical_without_temporal_effects() -> void:
 	var w := make_world()
 	w.set_effect_enabled("ssgi", false)
 	w.set_grass_value("wind_strength", 0.0)
+	w.set_grass_value("wind_speed", 0.0)
 	var a := frame(w)
 	var b := frame(w)
 	assert_bool(a["ok"] and b["ok"]).is_true()

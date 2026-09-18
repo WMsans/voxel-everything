@@ -9,11 +9,13 @@
 layout(local_size_x = 64) in;
 
 layout(set = 0, binding = 0, std140) uniform Params { GRASS_PARAMS_FIELDS } grass;
-// One uvec4 per surviving cell. A NEAR entry is the packed brick local coordinate in .x with
-// .w == 0; a FAR entry carries its cell's world XZ origin, the ground height stage 1 found
-// there and the oct-packed ground normal, with bit 31 of .w set. Sixteen bytes rather than
-// four because the far rings have no resident brick to re-read: everything stage 2 needs
-// about a far cell has to travel in the list.
+// One uvec4 per surviving cell. A NEAR entry is the GLOBAL brick coordinate in .xyz (signed,
+// bit-cast) with .w == 0; a FAR entry carries its cell's world XZ origin, the ground height
+// stage 1 found there and the oct-packed ground normal, with bit 31 of .w set. Sixteen bytes
+// rather than four because the far rings have no resident brick to re-read: everything stage
+// 2 needs about a far cell has to travel in the list. The near entry spends three of those
+// words on a coordinate that used to be bit-packed into one -- the packing bounded the box
+// height, and the box is now as tall as the reach.
 layout(set = 0, binding = 1, std430) writeonly buffer BrickList { uvec4 v[]; } brick_list;
 layout(set = 0, binding = 2, std430) buffer Counters { uint brick_count; uint blade_count;
 		uint high_water; uint pad; } counters;
@@ -71,9 +73,10 @@ bool far_ground(vec2 xz, float top, float bot, float min_step, out float ground_
 	return true;
 }
 
-// One far LoD cell. `f` runs over far.x rings of far.z cells each; ring r (1-based) covers
-// out to reach << r in cells of BRICK_SIZE << r, so every ring has the same cell count and
-// the dispatch grows with the ring COUNT rather than with the cube of the radius.
+// One far LoD cell. `f` runs over far.x rings of far.z cells each; ring r (1-based) covers out
+// to kGrassFarBaseM << r in cells of BRICK_SIZE << r, so every ring has the same cell count
+// and the dispatch grows with the ring COUNT rather than with the cube of the radius. Cells
+// inside the near reach are dropped: the raymarched area is the near field's, brick by brick.
 void far_cell(int f) {
 	int per = grass.far.z;
 	if (grass.far.x <= 0 || per <= 0 || grass.far.w <= 0) return;
@@ -82,8 +85,18 @@ void far_cell(int f) {
 	int k = f - (ring - 1) * per;
 	int dim = grass.far.y;
 	float cell = BRICK_SIZE * float(1 << ring);
-	float outer = grass.cam.w * float(1 << ring);
-	float inner = grass.cam.w * float(1 << (ring - 1));
+	// The ring's radius comes from its own GRID, not from the reach: the grid is
+	// 2 * outer / cell cells wide plus two of slack (ve::grass_layout), so inverting that is
+	// the one radius the annulus test and the cell lattice below cannot disagree about. The
+	// far schedule is ABSOLUTE -- 80 / 160 / 320 m in 1.6 / 3.2 / 6.4 m cells -- so extending
+	// the near reach to the raymarcher's seam moves where ring 1 begins, not how coarse it is.
+	float outer = float(dim - 2) * cell * 0.5;
+	// ...but the rings still have to MEET the near field, wherever it happens to end. Rings 2+
+	// start at their predecessor's outer edge; ring 1 has no predecessor, and its inner edge is
+	// the near field's -- which is NOT `reach` metres horizontally. The near field owns a
+	// SPHERE around the camera, so its edge on the ground moves with the camera's height and is
+	// the sphere test below far_ground(). Testing it here in XZ is what used to lose grass.
+	float inner = max(outer * 0.5, grass.cam.w);
 
 	// Anchored on the ring's own cell lattice rather than on the camera, so a cell keeps its
 	// blades as the camera moves and the far field does not crawl.
@@ -100,20 +113,44 @@ void far_cell(int f) {
 	// band TWICE. Not worth it until it is visibly the worst thing in the far field.
 	vec2 nearest = clamp(grass.cam.xz, lo2, hi2);
 	if (distance(nearest, grass.cam.xz) > outer) return;
-	vec2 farthest = mix(lo2, hi2, step(grass.cam.xz, 0.5 * (lo2 + hi2)));
-	if (distance(farthest, grass.cam.xz) < inner) return;
+	// Ring 1 keeps its whole disc; the near field's share of it is dropped by the sphere test
+	// below, once the ground under the cell is known. Rings 2+ keep the cheap XZ test, because
+	// their inner edge is another ring's outer edge rather than the near field's.
+	// ponytail: ring 1 therefore sphere-traces its whole disc every frame, including ground the
+	// near field already owns -- a couple of thousand extra far_ground() traces at the default
+	// reach. Add an XZ pre-filter if the far pass ever shows up in a profile.
+	if (ring > 1) {
+		vec2 farthest = mix(lo2, hi2, step(grass.cam.xz, 0.5 * (lo2 + hi2)));
+		if (distance(farthest, grass.cam.xz) < inner) return;
+	}
 
-	// The vertical span the column is searched over. A ring radius is a generous bound on
-	// how far terrain climbs across that same radius, and sphere tracing makes an empty
-	// span nearly free.
-	vec3 lo3 = vec3(lo2.x, grass.cam.y - outer, lo2.y);
-	vec3 hi3 = vec3(hi2.x, grass.cam.y + outer, hi2.y);
+	// The vertical span the column is searched over. Terrain sits in a bounded band around
+	// SURFACE_Y (the stages' amplitudes are bounded -- see shaders/stages), while the camera
+	// can be anywhere above it, so the span has to follow the BAND and not the camera. It used
+	// to be `cam.y ± outer`: a bound on how far terrain climbs across the ring radius, but
+	// anchored on the camera. Once the camera was more than `outer` above the ground,
+	// far_ground() hit `bot` before it reached the surface, so ring 1 placed nothing under the
+	// camera while the outer rings -- whose larger `outer` reaches further down -- kept drawing
+	// further out (near grass vanished, far grass did not). Sphere tracing makes the taller
+	// empty span nearly free; the taller AABB does weaken the frustum pre-filter below, but the
+	// precise blade-box test after far_ground() still culls, so the cost is traces, not blades.
+	const float kTerrainBandM = 512.0; // > the stages' largest |height| (relief 310 + mesas 45 + hills 10)
+	vec3 lo3 = vec3(lo2.x, min(grass.cam.y - outer, SURFACE_Y - kTerrainBandM), lo2.y);
+	vec3 hi3 = vec3(hi2.x, max(grass.cam.y + outer, SURFACE_Y + kTerrainBandM), hi2.y);
 	if (grass_brick_culled(lo3, hi3, grass.planes)) return;
 
 	float gy;
 	if (!far_ground(0.5 * (lo2 + hi2), hi3.y, lo3.y, cell * 0.05, gy)) return;
 
 	vec3 p = vec3(0.5 * (lo2.x + hi2.x), gy, 0.5 * (lo2.y + hi2.y));
+	// The near field's edge on the GROUND is where its reach SPHERE cuts it: sqrt(reach^2 -
+	// height^2) metres out, shrinking to nothing as the camera climbs. Ring 1's inner radius
+	// used to be `reach` measured in XZ, which claims the wrong ground from any height above
+	// the terrain: the band between the sphere's footprint and `reach` belonged to NEITHER
+	// field, so grass disappeared under a high camera while the rings kept drawing further
+	// out. Past reach_m of height the near field's whole footprint was inside that band. This
+	// is the correct edge, and it also keeps the two fields from doubling up at ground level.
+	if (distance(p, grass.cam.xyz) < grass.cam.w) return;
 	// Central differences at a quarter cell: the blade only needs which way is up and the
 	// tangent plane stage 2 lays its blades on, not a shading normal.
 	float e = cell * 0.25;
@@ -147,6 +184,72 @@ void far_cell(int f) {
 	atomicMax(dispatch_args.x, out_index + 1u);
 }
 
+// One XZ column of the near box: every resident surface brick in it, walking DOWN from the
+// top. One thread per column rather than per brick because the box is now as tall as it is
+// wide -- the raymarcher's whole resident sphere, not a slab around the camera -- and a thread
+// per brick would dispatch its volume.
+void near_column(int c) {
+	ivec3 dim = grass.brick_dim.xyz;
+	if (dim.x <= 0 || dim.z <= 0) return;
+	int bx = grass.brick_min.x + c % dim.x;
+	int bz = grass.brick_min.z + c / dim.x;
+	vec2 lo2 = vec2(bx, bz) * BRICK_SIZE;
+	vec2 hi2 = lo2 + vec2(BRICK_SIZE);
+
+	// Horizontal distance cull first, to the column's nearest point so a column straddling the
+	// boundary is kept rather than flickering. The box is square; the reach is a sphere.
+	vec2 nearest2 = clamp(grass.cam.xz, lo2, hi2);
+	float dxz = distance(nearest2, grass.cam.xz);
+	if (dxz > grass.cam.w) return;
+
+	// Vertical span: the sphere's own height over THIS column, intersected with the box. A
+	// column 50 m out walks a few metres, not the full box height, so the walk costs the
+	// sphere's volume rather than its bounding cube's.
+	float dy = sqrt(max(grass.cam.w * grass.cam.w - dxz * dxz, 0.0));
+	int y_lo = max(grass.brick_min.y, int(floor((grass.cam.y - dy) / BRICK_SIZE)));
+	int y_hi = min(grass.brick_min.y + dim.y - 1, int(floor((grass.cam.y + dy) / BRICK_SIZE)));
+	if (y_hi < y_lo) return;
+
+	// One frustum test for the whole column before the walk. Looking at the horizon puts most
+	// of the box behind the camera, and this drops each of those columns for one plane loop.
+	if (grass_brick_culled(vec3(lo2.x, float(y_lo) * BRICK_SIZE, lo2.y),
+			vec3(hi2.x, float(y_hi + 1) * BRICK_SIZE, hi2.y), grass.planes)) return;
+
+	int found = 0;
+	for (int by = y_hi; by >= y_lo; by--) {
+		ivec3 brick = ivec3(bx, by, bz);
+		int rs = region_slot_of(brick);
+		if (rs < 0) {
+			// Whole region absent: jump to the bottom of its 32-brick span in Y instead of
+			// re-resolving region_map for each of them. `& ~31` floors, negatives included.
+			by = by & ~31;
+			continue;
+		}
+		int slot = slot_in_region(rs, brick);
+		if (slot < 0) continue;                       // not resident
+		if (!brick_straddles_surface(slot)) continue; // no surface crossing: nothing to stand on
+
+		vec3 lo = vec3(brick) * BRICK_SIZE;
+		vec3 hi = lo + vec3(BRICK_SIZE);
+		if (grass_brick_culled(lo, hi, grass.planes)) continue;
+		vec3 nearest = clamp(grass.cam.xyz, lo, hi);
+		if (distance(nearest, grass.cam.xyz) > grass.cam.w) continue;
+
+		uint out_index = atomicAdd(counters.brick_count, 1u);
+		if (out_index >= uint(grass.limits.y)) return; // full: drop, never scribble
+		// Global brick coordinate, one word each. Stage 2 needs no brick_min and no unpacking,
+		// and nothing here bounds the box's height any more.
+		brick_list.v[out_index] = uvec4(uint(brick.x), uint(brick.y), uint(brick.z), 0u);
+
+		// Stage 2 runs one workgroup of 64 threads per brick, so the dispatch width is the
+		// brick count. atomicMax rather than a store: every thread that appends may be the last.
+		atomicMax(dispatch_args.x, out_index + 1u);
+		// GRASS_COLUMN_BRICKS is what the brick list reserved for this column, so the walk
+		// stops there rather than eating another column's reserve.
+		if (++found >= GRASS_COLUMN_BRICKS) return;
+	}
+}
+
 void main() {
 	uint i = gl_GlobalInvocationID.x;
 	// Thread 0 seeds the stage-2 dispatch dimensions that do not depend on the count.
@@ -159,38 +262,12 @@ void main() {
 		counters.brick_count += uint(textureLod(sdf_atlas, vec3(0.0), 0.0).r) * 0u +
 				palette_buf.ids[0] * 0u + texelFetch(mat_atlas, ivec3(0), 0).r * 0u;
 	}
-	if (i >= uint(grass.limits.y)) return;
-	if (i >= uint(grass.brick_dim.w)) { far_cell(int(i) - grass.brick_dim.w); return; }
-
-	ivec3 dim = grass.brick_dim.xyz;
-	ivec3 local = ivec3(int(i) % dim.x, (int(i) / dim.x) % dim.y, int(i) / (dim.x * dim.y));
-	ivec3 brick = grass.brick_min.xyz + local;
-
-	int slot = slot_at(brick);
-	if (slot < 0) return;                       // not resident
-	if (!brick_straddles_surface(slot)) return; // no surface crossing: nothing to stand on
-
-	vec3 lo = vec3(brick) * BRICK_SIZE;
-	vec3 hi = lo + vec3(BRICK_SIZE);
-	if (grass_brick_culled(lo, hi, grass.planes)) return;
-
-	// Distance cull against the reach, measured to the brick's nearest point so a brick
-	// straddling the boundary is kept rather than flickering.
-	vec3 nearest = clamp(grass.cam.xyz, lo, hi);
-	if (distance(nearest, grass.cam.xyz) > grass.cam.w) return;
-
-	uint out_index = atomicAdd(counters.brick_count, 1u);
-	if (out_index >= uint(grass.limits.y)) return; // full: drop, never scribble
-	// Brick-list packing: 11 bits for X/Z, 10 for Y (11+10+11 = 32 bits exactly). The
-	// horizontal reach advertises 256 m, which gives brick dims up to ~641, so
-	// local+512 reaches ~1152 and spills out of a 10-bit field into its neighbour.
-	// X/Z use bias 1024 (range 1024..1664, under the 2048 ceiling); Y keeps bias 512
-	// because the vertical reach caps at 64 m (dim_y ~161, local+512 stays under 1024).
-	// Three 11-bit fields would need 33 bits and NOT fit a uint -- hence the split.
-	brick_list.v[out_index] = uvec4(uint(local.x + 1024) | (uint(local.y + 512) << 11) |
-			(uint(local.z + 1024) << 21), 0u, 0u, 0u);
-
-	// Stage 2 runs one workgroup of 64 threads per brick, so the dispatch width is the
-	// brick count. atomicMax rather than a store: every thread that appends may be the last.
-	atomicMax(dispatch_args.x, out_index + 1u);
+	// Threads: one per near column, then one per far cell. The brick-list CAPACITY
+	// (grass.limits.y) is no longer the thread count -- a column may fill several entries --
+	// so the bound is the dispatch's own width.
+	int near_threads = grass.brick_dim.w;
+	int far_threads = grass.far.x * grass.far.z;
+	if (i >= uint(near_threads + far_threads)) return;
+	if (i >= uint(near_threads)) { far_cell(int(i) - near_threads); return; }
+	near_column(int(i));
 }

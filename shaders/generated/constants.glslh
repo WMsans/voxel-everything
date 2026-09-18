@@ -23,6 +23,10 @@ const int VOLUME_VOXELS = 262144;
 const int OVERRIDE_SDF_STRIDE_BYTES = 4916;
 const int OVERRIDE_MAT_STRIDE_BYTES = 4096;
 
+// Brick-list entries one grass column may fill (grass/grass_layout.h). The near
+// list's capacity is this times the column count, so the walk must stop here.
+const int GRASS_COLUMN_BRICKS = 4;
+
 // Override table tags (world/override_store.h)
 const int MAX_OVERRIDE_TABLES = 32;
 const int OVERRIDE_TABLE_TAG_BASE = 1048576;

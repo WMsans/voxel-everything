@@ -151,6 +151,9 @@ func make_shipped_scene() -> Dictionary:
 	add_child(world)
 	_nodes.append(world)
 	assert_bool(world.hooks().debug_init_physics()).is_true()
+	# This case measures against the shipped golden's tiles, so it has to hold the grass as
+	# still as the recording did (Golden.freeze_grass).
+	Golden.freeze_grass(world)
 	var raymarch: RaymarchCompositor = ClassDB.instantiate("RaymarchCompositor")
 	raymarch.world_path = world.get_path()
 	var beauty: BeautyCompositor = ClassDB.instantiate("BeautyCompositor")

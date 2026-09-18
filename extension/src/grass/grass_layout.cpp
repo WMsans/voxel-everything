@@ -61,7 +61,12 @@ GrassLayout grass_layout(const GrassSettings &settings, const float camera[3],
 	GrassLayout l;
 	l.ring_count = kGrassRings;
 	for (int i = 0; i < kGrassRings; i++) {
-		l.ring_end_m[i] = s.reach_m * static_cast<float>(i + 1) / static_cast<float>(kGrassRings);
+		// Absolute 10 m steps, with the LAST ring stretched to the reach: the reach follows the
+		// raymarcher's seam and moves with streaming, so ring boundaries that were fractions of
+		// it would re-thin the grass under the player every time the seam stepped out.
+		l.ring_end_m[i] = i == kGrassRings - 1
+				? s.reach_m
+				: std::min(s.reach_m, kGrassRingStepM * static_cast<float>(i + 1));
 		// Halve per ring, with a floor of one so a far ring thins rather than disappears.
 		// This used to drop 3 of every 4, which took the default density to one blade per
 		// 0.8 m brick by ring 2 and made the field end abruptly instead of fading. The
@@ -74,33 +79,46 @@ GrassLayout grass_layout(const GrassSettings &settings, const float camera[3],
 	}
 
 	const bool live = s.enabled && s.reach_m > 0.0f && s.blades_per_brick > 0 && s.max_blades > 0;
+	// The box is as tall as the reach lets it be: grass has to cover everything the raymarcher
+	// draws, which is a SPHERE of resident bricks around the camera -- the valley floor thirty
+	// metres below a clifftop is raytraced ground like any other. vertical_reach_m survives as
+	// the dial that shortens it back to a slab when the blades under an overhang are not worth
+	// their cost.
+	const float vertical = std::min(s.vertical_reach_m, s.reach_m);
 	if (live) {
 		l.brick_min = IVec3{floor_div_brick(camera[0] - s.reach_m),
-				floor_div_brick(camera[1] - s.vertical_reach_m),
+				floor_div_brick(camera[1] - vertical),
 				floor_div_brick(camera[2] - s.reach_m)};
 		l.brick_max = IVec3{floor_div_brick(camera[0] + s.reach_m),
-				floor_div_brick(camera[1] + s.vertical_reach_m),
+				floor_div_brick(camera[1] + vertical),
 				floor_div_brick(camera[2] + s.reach_m)};
 	}
 
 	const int dim_x = live ? (l.brick_max.x - l.brick_min.x + 1) : 0;
 	const int dim_y = live ? (l.brick_max.y - l.brick_min.y + 1) : 0;
 	const int dim_z = live ? (l.brick_max.z - l.brick_min.z + 1) : 0;
-	l.near_bricks = dim_x * dim_y * dim_z;
+	// One thread per COLUMN. A thread per brick was affordable while the box was a 20 m-thick
+	// slab; over the whole sphere it would be its volume, and the column walk visits the same
+	// bricks with a thirtieth of the threads (grass_bricks.comp.glsl).
+	l.near_columns = dim_x * dim_z;
+	l.near_brick_cap = l.near_columns * kGrassColumnBricks;
 
-	// Far LoD rings. Ring r covers out to reach_m << r in cells of kBrickSize << r, so the
-	// cell COUNT is the same for every ring and the dispatch grows linearly in ring count
+	// Far LoD rings. Ring r covers out to kGrassFarBaseM << r in cells of kBrickSize << r, so
+	// the cell COUNT is the same for every ring and the dispatch grows linearly in ring count
 	// rather than with the cube of the radius. Two cells of slack on each side because the
-	// grid is anchored on the floor of the ring's own cell lattice, not on the camera.
+	// grid is anchored on the floor of the ring's own cell lattice, not on the camera. The
+	// schedule is absolute, so a near reach that grows with streaming pushes ring 1's INNER
+	// edge out (the rings keep their LoD) instead of coarsening every ring with it.
 	l.far_ring_count = live ? s.far_lod_rings : 0;
 	if (l.far_ring_count > 0 && s.far_blades_per_cell > 0) {
-		l.far_cell_dim = static_cast<int>(std::ceil(2.0f * s.reach_m / kBrickSize)) + 2;
+		l.far_cell_dim = static_cast<int>(std::ceil(2.0f * kGrassFarBaseM / kBrickSize)) + 2;
 		l.far_cells = l.far_cell_dim * l.far_cell_dim;
-		l.far_reach_m = s.reach_m * static_cast<float>(1 << l.far_ring_count);
+		l.far_reach_m = kGrassFarBaseM * static_cast<float>(1 << l.far_ring_count);
 	} else {
 		l.far_ring_count = 0;
 	}
-	l.max_bricks = l.near_bricks + l.far_ring_count * l.far_cells;
+	l.max_bricks = l.near_brick_cap + l.far_ring_count * l.far_cells;
+	l.dispatch_threads = l.near_columns + l.far_ring_count * l.far_cells;
 
 	// Estimate: ground is a surface, so surface bricks in a ring go as its ANNULUS AREA over
 	// the brick footprint, times a slack factor for slope (a hillside presents more bricks
@@ -119,8 +137,14 @@ GrassLayout grass_layout(const GrassSettings &settings, const float camera[3],
 	// Far rings: one flat annulus of cells, no slope slack -- a far cell places blades on
 	// its own tangent plane, so a hillside gives one cell's worth either way.
 	for (int i = 1; i <= l.far_ring_count; i++) {
-		const float outer = s.reach_m * static_cast<float>(1 << i);
-		const float inner = s.reach_m * static_cast<float>(1 << (i - 1));
+		const float outer = kGrassFarBaseM * static_cast<float>(1 << i);
+		// The near field owns everything inside the reach, so a ring's inner edge is whichever
+		// is further out -- which is how extending the near reach pays for itself here. The
+		// FIRST ring instead starts exactly at the reach, so the two fields meet however short
+		// the reach is (grass_bricks.comp.glsl).
+		const float inner = i == 1 ? s.reach_m
+				: std::max(kGrassFarBaseM * static_cast<float>(1 << (i - 1)), s.reach_m);
+		if (outer <= inner) continue;
 		const float cell = kBrickSize * static_cast<float>(1 << i);
 		const double area = 3.14159265358979 * (static_cast<double>(outer) * outer -
 				static_cast<double>(inner) * inner);
@@ -141,7 +165,7 @@ GrassLayout grass_layout(const GrassSettings &settings, const float camera[3],
 	p.brick_dim[0] = dim_x;
 	p.brick_dim[1] = dim_y;
 	p.brick_dim[2] = dim_z;
-	p.brick_dim[3] = l.near_bricks;
+	p.brick_dim[3] = l.near_columns;
 	for (int i = 0; i < kGrassRings; i++) {
 		p.ring_end[i] = l.ring_end_m[i];
 		p.ring_blades[i] = l.blades_per_brick[i];

@@ -10,13 +10,21 @@ namespace ve {
 struct GrassSettings {
 	bool enabled = true;
 
-	// How far blades are placed, in metres. Stage 1's dispatch width grows with the CUBE
-	// of this, so it is hard-bounded at 256 m -- past roughly 64 m the flat box wants to
-	// become a hierarchy instead (design doc section 11).
-	float reach_m = 40.0f;
-	// Vertical half-extent of the brick search box, in metres. Grass grows on the ground,
-	// so the box is much shorter than it is wide.
-	float vertical_reach_m = 10.0f;
+	// CAP on how far blades are placed, in metres. The reach that ships is the raymarcher's
+	// own near/far seam: VoxelFrame::grass_layout() clamps this to whichever is nearer, the
+	// seam the composite hands the pixel over at or the completely-resident radius the blades
+	// are scattered from. Near grass therefore covers exactly the area the raymarcher draws,
+	// and the far LoD rings start where it stops. 120 m sits above every seam this atlas can
+	// fund -- the brick pool, not the residency radius, is the binding pool, so the measured
+	// seam runs 32..80 m -- and below ve::kLodFadeEndM, where the near field's blade count
+	// would pass max_blades and the scatter would start dropping blades at random.
+	float reach_m = 120.0f;
+	// Vertical half-extent of the brick search box, in metres, itself capped by the reach.
+	// The default is "the whole sphere": ground far below or above the camera is raytraced
+	// like any other, and the old 10 m slab left a clifftop looking down at bare terrain.
+	// Lower it to buy back the blades that land in caves and under overhangs, which cost
+	// their budget without being seen.
+	float vertical_reach_m = 256.0f;
 
 	// Candidate blades per brick in the nearest ring. Capped at 64, the scatter's workgroup
 	// width -- one thread per candidate, so a brick never needs a second group.

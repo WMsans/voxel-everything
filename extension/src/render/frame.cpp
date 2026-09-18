@@ -74,12 +74,25 @@ float VoxelFrame::grass_reach_limit_m() const {
 }
 
 ve::GrassLayout VoxelFrame::grass_layout(const float cam_pos[3], const float view_proj[16]) const {
-	// Grass is scattered from resident bricks, so a reach past the completely-resident
-	// radius buys nothing: those candidates are dropped in stage 2 and the field ends on
-	// a hard edge wherever residency happens to stop. Clamping here instead makes the
-	// reach -- and therefore the ring fade that ends at it -- land on ground that exists.
+	// Near grass covers exactly what the RAYMARCHER covers, and the far LoD rings own
+	// everything past it. Two limits say where that is, and the nearer one wins:
+	//
+	//  - the completely-resident radius, because blades are scattered from resident bricks and
+	//    a reach past it buys nothing: those candidates are dropped in stage 2 and the field
+	//    ends on a hard edge wherever residency happens to stop;
+	//  - the fade band's end, the seam where composite.frag.glsl stops drawing the near field
+	//    at all. Grass past it would stand on pixels the far field owns, which is the LoD
+	//    rings' job -- and they are scattered against the field, so they see terrain the brick
+	//    atlas no longer holds.
+	//
+	// GrassSettings::reach_m is the cap over both, not the shipped reach: its default sits
+	// above every seam the band can produce, so the raymarched area is covered whatever the
+	// streamer managed this frame.
 	ve::GrassSettings gs = render_.grass_settings();
-	gs.reach_m = std::min(gs.reach_m, grass_reach_limit_m());
+	float fade_start = ve::kLodFadeStartM;
+	float fade_end = ve::kLodFadeEndM;
+	lod_.fade_band(&fade_start, &fade_end);
+	gs.reach_m = std::min(gs.reach_m, std::min(fade_end, grass_reach_limit_m()));
 	return ve::grass_layout(gs, cam_pos, view_proj);
 }
 

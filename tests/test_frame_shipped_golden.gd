@@ -26,8 +26,11 @@ const CAMERAS := {
 	"horizon": [Vector3(30.0, 70.0, 30.0), Vector3(0.35, -0.2, 0.35)],
 }
 
-# Recorded 2026-09-13 on Apple M1; run-to-run spread 0.0, tolerance = max(3x spread, 0.004).
-const GOLDEN := {"down_close":{"hiz_built":true,"tiles":[0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196],"two_phase":true},"horizon":{"hiz_built":true,"tiles":[0.283769,0.256863,0.252396,0.25177,0.273475,0.280501,0.300463,0.301906,0.296977,0.294907,0.283006,0.284831,0.284885,0.267919,0.255065,0.249428,0.298556,0.293246,0.301906,0.28818,0.288752,0.2875,0.287581,0.29153,0.301688,0.300953,0.30196,0.30196,0.30177,0.30196,0.29665,0.290877,0.300435,0.301361,0.30196,0.30196,0.30196,0.30196,0.30196,0.300544,0.300653,0.300844,0.301307,0.30196,0.30196,0.30196,0.30196,0.30196,0.30098,0.301416,0.30147,0.300925,0.301634,0.301906,0.30098,0.301062,0.30196,0.301361,0.300844,0.30196,0.301307,0.301143,0.301851,0.301742],"two_phase":true},"oblique":{"hiz_built":true,"tiles":[0.297412,0.294607,0.299101,0.287636,0.298066,0.287881,0.285321,0.293709,0.301933,0.301443,0.30196,0.300708,0.295561,0.30196,0.295043,0.293763,0.300653,0.301089,0.30196,0.30196,0.30196,0.30196,0.30196,0.297031,0.299918,0.301143,0.301742,0.30196,0.30196,0.30196,0.30196,0.30196,0.300326,0.30128,0.301062,0.301143,0.30196,0.30196,0.301497,0.300817,0.30196,0.301171,0.301143,0.301688,0.301034,0.301116,0.301388,0.301552,0.30196,0.30196,0.30177,0.300817,0.301661,0.301824,0.300925,0.30128,0.30196,0.30196,0.30196,0.30196,0.30147,0.30147,0.301906,0.30196],"two_phase":true}}
+# Re-recorded 2026-09-18 on Apple M1: near-field grass now covers the whole resident sphere
+# rather than a 10 m slab around the camera, and these cameras all sit 14 m above the ground,
+# so every tile with ground in it moved. Recorded with the gust frozen (see freeze_grass
+# below); run-to-run spread is 0.0 again, so the tolerance stays where it was.
+const GOLDEN := {"down_close":{"hiz_built":true,"tiles":[0.30196,0.30196,0.30196,0.298529,0.276498,0.287064,0.297576,0.30196,0.30196,0.30196,0.30196,0.30196,0.298148,0.298502,0.30147,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.30196,0.301879,0.301416,0.299019,0.30196,0.30196,0.30196,0.30196,0.30196,0.283987,0.270098,0.28799,0.296459],"two_phase":true},"horizon":{"hiz_built":true,"tiles":[0.283769,0.256863,0.252396,0.25177,0.273475,0.280501,0.300463,0.301906,0.296977,0.294907,0.283006,0.284831,0.284885,0.267919,0.255065,0.249128,0.298556,0.293246,0.301906,0.28818,0.288752,0.2875,0.287581,0.290849,0.301688,0.300953,0.30196,0.30196,0.30177,0.30196,0.29665,0.291775,0.300354,0.301361,0.30196,0.30196,0.30196,0.30196,0.30196,0.301089,0.300599,0.300844,0.301307,0.30196,0.30196,0.30196,0.30196,0.301579,0.30098,0.301416,0.30147,0.295833,0.299972,0.301034,0.299264,0.300925,0.30196,0.301361,0.300844,0.298611,0.279902,0.285593,0.297875,0.301742],"two_phase":true},"oblique":{"hiz_built":true,"tiles":[0.297412,0.294607,0.299101,0.287636,0.298066,0.287881,0.285321,0.293709,0.301933,0.301443,0.30196,0.300708,0.295561,0.30196,0.295043,0.293464,0.300626,0.301089,0.30196,0.30196,0.30196,0.30196,0.30196,0.29763,0.299863,0.301143,0.301742,0.30196,0.30196,0.30196,0.30196,0.301715,0.300326,0.30128,0.301062,0.299564,0.300626,0.30196,0.301007,0.300708,0.30196,0.301171,0.301143,0.297358,0.278676,0.281154,0.299646,0.301552,0.30196,0.30196,0.30177,0.300817,0.298175,0.299074,0.300817,0.30128,0.30196,0.30196,0.30196,0.30196,0.30147,0.30147,0.301906,0.30196],"two_phase":true}}
 const TOL_TILE := 0.004
 
 var _nodes: Array = []
@@ -38,6 +41,18 @@ func after_test() -> void:
 			n.free()
 	_nodes.clear()
 
+# Grass covers the whole resident sphere now, so all three of these cameras have blades in
+# frame -- and a blade's LEAN follows the gust field (grass.vert.glsl), which scrolls with the
+# frame counter whatever the wind strength is. Eight frames do not average that out: it moved
+# the run-to-run tile spread from 0.0 to 0.0016 here and to 0.008 in the reload contract, which
+# is characterising the wind's phase at capture time rather than the frame. Stopping the scroll
+# makes the picture a function of the world and the camera again, the same fix
+# test_frame_contract's determinism case needs. Shared with that contract, which compares
+# against this suite's golden.
+static func freeze_grass(world: VoxelWorld) -> void:
+	world.set_grass_value("wind_speed", 0.0)
+	world.set_grass_value("wind_strength", 0.0)
+
 func make_scene() -> Dictionary:
 	var world: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	world.use_local_device = false
@@ -46,6 +61,7 @@ func make_scene() -> Dictionary:
 	_nodes.append(world)
 	# The far field needs a MeshService; without it this golden would not cover the LoD stage.
 	assert_bool(world.hooks().debug_init_physics()).is_true()
+	freeze_grass(world)
 	var raymarch: RaymarchCompositor = ClassDB.instantiate("RaymarchCompositor")
 	raymarch.world_path = world.get_path()
 	var beauty: BeautyCompositor = ClassDB.instantiate("BeautyCompositor")

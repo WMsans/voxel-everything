@@ -76,6 +76,12 @@ func test_turning_ssgi_off_produces_nothing_and_costs_no_dispatch() -> void:
 # (9.49e-5) exceeds the moved delta (8.5e-5) at these levels (2026-09-14 analysis).
 func test_temporal_history_uses_previous_camera_mapping() -> void:
 	var w := make_world()
+	# Grass off, so the three reference levels above stay the ones that were hand-fed on
+	# 2026-09-14. This camera stands 14 m above the ground; near-field grass covers the whole
+	# resident sphere now, and blades in frame move the gathered luma well past the 2% band
+	# that is doing the discriminating. The reprojection mapping under test does not care what
+	# the scene contains.
+	w.set_grass_value("enabled", 0.0)
 	var d: Dictionary = w.hooks().debug_ssgi_reprojection_probe(
 		Vector3(30.0, 70.0, 30.0), Vector3(0.2, -1.0, 0.2).normalized(),
 		Vector3(34.0, 70.0, 30.0), Vector3(-0.2, -1.0, 0.2).normalized(), 128, 128)

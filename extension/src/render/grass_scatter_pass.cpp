@@ -191,7 +191,7 @@ bool GrassScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas,
 	// zeroing the ring count leaves exactly the near-field grass this pass always drew.
 	const bool far_ok = field && field->is_valid();
 	if (!far_ok) { params.far[0] = params.far[2] = params.far[3] = 0; }
-	const int dispatch_threads = far_ok ? layout.max_bricks : layout.near_bricks;
+	const int dispatch_threads = far_ok ? layout.dispatch_threads : layout.near_columns;
 	rd->buffer_update(params_ubo_, 0, sizeof(params), gpu::push_bytes(params));
 
 	// Refresh the pass-owned region window from the LIVE residency-backed window the

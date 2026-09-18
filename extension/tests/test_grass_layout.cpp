@@ -15,7 +15,7 @@ void identity(float m[16]) {
 }
 } // namespace
 
-TEST_CASE("the brick box covers reach horizontally and vertical_reach vertically") {
+TEST_CASE("vertical_reach shortens the box back to a slab") {
 	ve::GrassSettings s;
 	s.reach_m = 40.0f;
 	s.vertical_reach_m = 10.0f;
@@ -88,7 +88,9 @@ TEST_CASE("ring boundaries split the reach evenly and cover it") {
 TEST_CASE("the blade estimate grows with reach and is capped by max_blades") {
 	ve::GrassSettings s;
 	s.reach_m = 20.0f;
-	s.max_blades = 400000;
+	// Uncapped for the comparison: the far rings are on an ABSOLUTE schedule now, so their
+	// share of the estimate does not shrink with the reach and 400k caps both layouts.
+	s.max_blades = 4000000;
 	const float cam[3] = {0, 0, 0};
 	float vp[16];
 	identity(vp);
@@ -204,13 +206,13 @@ TEST_CASE("far LoD rings extend the reach without growing the per-ring cell coun
 	CHECK(l.far_reach_m == doctest::Approx(320.0f)); // 40 m doubled three times
 	CHECK(l.far_cells == l.far_cell_dim * l.far_cell_dim);
 	// One cell grid per ring on top of the near brick box, and nothing more.
-	CHECK(l.max_bricks == l.near_bricks + 3 * l.far_cells);
+	CHECK(l.max_bricks == l.near_brick_cap + 3 * l.far_cells);
 	CHECK(l.params.far[0] == 3);
 	CHECK(l.params.far[1] == l.far_cell_dim);
 	CHECK(l.params.far[2] == l.far_cells);
 	CHECK(l.params.far[3] == 8);
-	// Stage 1 splits near from far on brick_dim.w, so it must be the NEAR count alone.
-	CHECK(l.params.brick_dim[3] == l.near_bricks);
+	// Stage 1 splits near from far on brick_dim.w, so it must be the NEAR thread count alone.
+	CHECK(l.params.brick_dim[3] == l.near_columns);
 }
 
 // Doubling the reach doubles every far radius with it, so the cell count per ring does not
@@ -233,6 +235,78 @@ TEST_CASE("far cell count per ring is independent of the reach") {
 	CHECK(lc.max_bricks == la.max_bricks + la.far_cells);
 }
 
+// The near box is as tall as it is wide by DEFAULT: grass covers everything the raymarcher
+// draws, which is a sphere of resident bricks, not a slab around the camera's own height.
+TEST_CASE("the default box is as tall as the reach") {
+	ve::GrassSettings s;
+	s.reach_m = 40.0f;
+	const float cam[3] = {0.0f, 100.0f, 0.0f};
+	float vp[16];
+	identity(vp);
+	const ve::GrassLayout l = ve::grass_layout(s, cam, vp);
+	CHECK(l.brick_max.y - l.brick_min.y == l.brick_max.x - l.brick_min.x);
+}
+
+// Stage 1 walks a COLUMN per thread. A thread per brick over a box this tall would dispatch
+// its volume: at a 40 m reach that is 101 x 101 x 101 threads against 101 x 101 columns.
+TEST_CASE("stage 1 dispatches one thread per column, then one per far cell") {
+	ve::GrassSettings s;
+	s.reach_m = 40.0f;
+	const float cam[3] = {0, 0, 0};
+	float vp[16];
+	identity(vp);
+	const ve::GrassLayout l = ve::grass_layout(s, cam, vp);
+	const int dim_x = l.brick_max.x - l.brick_min.x + 1;
+	const int dim_y = l.brick_max.y - l.brick_min.y + 1;
+	const int dim_z = l.brick_max.z - l.brick_min.z + 1;
+	CHECK(l.near_columns == dim_x * dim_z);
+	CHECK(l.dispatch_threads == l.near_columns + l.far_ring_count * l.far_cells);
+	CHECK(l.dispatch_threads < dim_x * dim_y * dim_z);
+	// Capacity is a STRICT bound, not a guess: the walk stops at kGrassColumnBricks per
+	// column, so stage 1 can never want more brick list than was allocated.
+	CHECK(l.near_brick_cap == ve::kGrassColumnBricks * l.near_columns);
+	CHECK(l.max_bricks == l.near_brick_cap + l.far_ring_count * l.far_cells);
+}
+
+// The far schedule is absolute, so a reach that grows to the raymarcher's seam eats into the
+// far rings instead of dragging them outward with it. That is what pays for the wider near
+// field: the blade estimate barely moves even though the dense area doubles.
+TEST_CASE("extending the reach to the seam does not multiply the blade budget") {
+	ve::GrassSettings s;
+	s.max_blades = 4000000; // uncapped, so the estimate itself is what is compared
+	s.reach_m = 40.0f;
+	const float cam[3] = {0, 0, 0};
+	float vp[16];
+	identity(vp);
+	const int tuned = ve::grass_layout(s, cam, vp).estimated_blades;
+	s.reach_m = 56.0f; // a typical fade-band seam (ve::lod_fade_band at a 60 m residency)
+	const int seam = ve::grass_layout(s, cam, vp).estimated_blades;
+	CHECK(seam > tuned);                                  // it does cover more ground
+	CHECK(seam < tuned + tuned / 4);                      // ...without a second budget
+	// A reach past a ring's whole annulus swallows it: ring 1 is 40..80 m, so at 80 m it
+	// contributes nothing and the far rings start at ring 2.
+	s.reach_m = 80.0f;
+	const ve::GrassLayout wide = ve::grass_layout(s, cam, vp);
+	CHECK(wide.far_reach_m == doctest::Approx(320.0f)); // ...and the far reach does not move
+}
+
+// The far ring schedule is absolute: 80 / 160 / 320 m, whatever the near reach is doing. A
+// schedule keyed to the reach would coarsen every ring as the streamer caught up.
+TEST_CASE("the far ring schedule does not follow the reach") {
+	ve::GrassSettings a;
+	a.reach_m = 40.0f;
+	ve::GrassSettings b = a;
+	b.reach_m = 56.0f;
+	const float cam[3] = {0, 0, 0};
+	float vp[16];
+	identity(vp);
+	const ve::GrassLayout la = ve::grass_layout(a, cam, vp);
+	const ve::GrassLayout lb = ve::grass_layout(b, cam, vp);
+	CHECK(la.far_reach_m == doctest::Approx(lb.far_reach_m));
+	CHECK(la.far_cell_dim == lb.far_cell_dim);
+	CHECK(la.far_cells == lb.far_cells);
+}
+
 TEST_CASE("zero far rings leaves exactly the near-field brick box") {
 	ve::GrassSettings s;
 	s.far_lod_rings = 0;
@@ -241,6 +315,6 @@ TEST_CASE("zero far rings leaves exactly the near-field brick box") {
 	identity(vp);
 	const ve::GrassLayout l = ve::grass_layout(s, cam, vp);
 	CHECK(l.far_ring_count == 0);
-	CHECK(l.max_bricks == l.near_bricks);
+	CHECK(l.max_bricks == l.near_brick_cap);
 	CHECK(l.params.far[0] == 0);
 }

@@ -7,10 +7,13 @@ namespace {
 // to the low end, which is the conservative end for every knob here.
 const SettingRow<GrassSettings> kGrassRows[] = {
 	bool_row("enabled", "Grass", &GrassSettings::enabled),
-	// Stage 1's dispatch width grows with the cube of reach, hence the hard 256 m bound.
-	float_row("reach_m", "Reach (m)", &GrassSettings::reach_m, 0.0f, 256.0f, 0.0f, 120.0f, 1.0f),
+	// Stage 1 dispatches one thread per COLUMN, so its width grows with the square of reach,
+	// not the cube. The hard 256 m bound stays: the reach also scales the far rings' inner
+	// edge and the width ramp.
+	float_row("reach_m", "Reach (m)", &GrassSettings::reach_m, 0.0f, 256.0f, 0.0f, 256.0f, 1.0f),
+	// Clamped to the reach in grass_layout(), so the 256 m ceiling is "the whole sphere".
 	float_row("vertical_reach_m", "Vertical reach (m)", &GrassSettings::vertical_reach_m, 0.0f,
-			64.0f, 0.0f, 32.0f, 0.5f),
+			256.0f, 0.0f, 256.0f, 0.5f),
 	int_row("blades_per_brick", "Density", &GrassSettings::blades_per_brick, 0, 64, 0, 64),
 	int_row("max_blades", "Max blades", &GrassSettings::max_blades, 0, 4000000, 0, 2000000, 10000),
 	float_row("blade_width_m", "Blade width (m)", &GrassSettings::blade_width_m, 0.0f, 0.5f, 0.0f,
