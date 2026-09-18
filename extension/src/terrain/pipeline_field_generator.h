@@ -43,11 +43,13 @@ private:
 	};
 
 	ResolvedPipeline pipeline_;
-	std::vector<StageFn> fns_;              // parallel to pipeline_.stages
-	std::vector<StageSlots> slots_;         // parallel to pipeline_.stages
-	std::vector<float> param_values_;       // flattened, in pipeline_.params order
-	std::vector<int> param_base_;           // parallel to stages: first param index
-	std::vector<int> param_count_;
+	std::vector<StageFn> fns_;                  // parallel to pipeline_.stages
+	// One blob per stage, in the mirror's declared order. Separate int and float vectors
+	// rather than one byte buffer, so each blob's alignment matches the struct that reads
+	// it. A stage with no params still gets one padding float: the trampoline forms a
+	// reference to the blob, and an empty vector's data() may be null.
+	std::vector<std::vector<int>> slot_words_;
+	std::vector<std::vector<float>> param_words_;
 	View view_{this};
 
 	friend class View;

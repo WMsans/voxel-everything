@@ -7,15 +7,23 @@ namespace {
 
 // A two-stage pipeline whose result is checkable by hand: sdf = y - amplitude, then a
 // second stage that sets material from the sign of sdf.
-void tp_plane(ve::FieldCtx &ctx, const ve::StageSlots &s, const ve::StageParams &p,
+VE_STAGE_SLOTS(TpPlane, p, sdf);
+VE_STAGE_PARAMS(TpPlane, height);
+
+void tp_plane(ve::FieldCtx &ctx, const TpPlaneSlots &s, const TpPlaneParams &p,
 		const ve::FieldResources &) {
-	ctx.f(s.sdf) = ctx.v(s.p)[1] - p.at(0);
+	ctx.f(s.sdf) = ctx.v(s.p)[1] - p.height;
 }
+VE_STAGE_SLOTS(TpMat, p, sdf, material);
+VE_STAGE_PARAMS(TpMat);
+
 float empty_stage_params_sentinel = 0.0f;
 const float *last_empty_stage_params = &empty_stage_params_sentinel;
-void tp_mat(ve::FieldCtx &ctx, const ve::StageSlots &s, const ve::StageParams &p,
+void tp_mat(ve::FieldCtx &ctx, const TpMatSlots &s, const TpMatParams &p,
 		const ve::FieldResources &) {
-	last_empty_stage_params = p.values;
+	// TpMatParams is empty, so the only observable is the blob's address: create() pads
+	// param-less stages with one float rather than passing null.
+	last_empty_stage_params = reinterpret_cast<const float *>(&p);
 	ctx.f(s.material) = ctx.f(s.sdf) <= 0.0f ? 3.0f : 0.0f;
 }
 
@@ -48,8 +56,8 @@ ve::ResolvedPipeline build(bool with_cpu = true) {
 
 } // namespace
 
-VE_REGISTER_STAGE("ve::tp_plane", tp_plane);
-VE_REGISTER_STAGE("ve::tp_mat", tp_mat);
+VE_REGISTER_STAGE("ve::tp_plane", TpPlane, tp_plane);
+VE_REGISTER_STAGE("ve::tp_mat", TpMat, tp_mat);
 
 TEST_CASE("stages run in order and the last sdf write wins") {
 	std::string err;
@@ -63,13 +71,14 @@ TEST_CASE("stages run in order and the last sdf write wins") {
 	delete g;
 }
 
-TEST_CASE("a stage with no parameters receives a null parameter slice") {
+TEST_CASE("a stage with no parameters receives a padding blob, never null") {
 	last_empty_stage_params = &empty_stage_params_sentinel;
 	std::string err;
 	ve::PipelineFieldGenerator *g = ve::PipelineFieldGenerator::create(build(), &err);
 	REQUIRE_MESSAGE(g != nullptr, err);
 	g->eval(0.0f, 41.2f, 0.0f);
-	CHECK(last_empty_stage_params == nullptr);
+	CHECK(last_empty_stage_params != nullptr);
+	CHECK(last_empty_stage_params != &empty_stage_params_sentinel);
 	delete g;
 }
 

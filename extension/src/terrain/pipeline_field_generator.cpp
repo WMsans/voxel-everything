@@ -2,6 +2,24 @@
 
 namespace ve {
 
+namespace {
+// A mirror's param name is either this stage's own ("<stage>.<name>") or a cross-stage use
+// spelled the way the GLSL spells it -- "hills_amp_a" for "hills.amp_a", which is exactly
+// how the params UBO flattens them. Task: //!use declares which of these are legal; this
+// only has to find the value.
+int find_param(const ResolvedPipeline &p, const std::string &stage, const std::string &name) {
+	const std::string own = stage + "." + name;
+	for (size_t i = 0; i < p.params.size(); i++)
+		if (p.params[i].name == own) return int(i);
+	for (size_t i = 0; i < p.params.size(); i++) {
+		std::string ident = p.params[i].name;
+		for (char &c : ident) if (c == '.') c = '_';
+		if (ident == name) return int(i);
+	}
+	return -1;
+}
+} // namespace
+
 PipelineFieldGenerator *PipelineFieldGenerator::create(const ResolvedPipeline &p,
 		std::string *error) {
 	if (int(p.channels.size()) > FieldCtx::kMaxChannels) {
@@ -11,38 +29,50 @@ PipelineFieldGenerator *PipelineFieldGenerator::create(const ResolvedPipeline &p
 	PipelineFieldGenerator *g = new PipelineFieldGenerator();
 	g->pipeline_ = p;
 
-	int cursor = 0;
 	for (const StageManifest &s : p.stages) {
-		StageFn fn = nullptr;
-		if (!s.cpu_symbol.empty()) {
-			fn = StageLibrary::instance().lookup(s.cpu_symbol);
-			if (fn == nullptr) {
-				if (error) *error = "stage '" + s.name + "' names an unregistered cpu symbol: " +
-						s.cpu_symbol;
+		if (s.cpu_symbol.empty()) {
+			// GPU-only stage: the CPU field is already inexact, and sample() skips it.
+			g->fns_.push_back(nullptr);
+			g->slot_words_.emplace_back();
+			g->param_words_.emplace_back(1, 0.0f);
+			continue;
+		}
+		const StageBinding *b = StageLibrary::instance().lookup(s.cpu_symbol);
+		if (b == nullptr) {
+			if (error) *error = "stage '" + s.name + "' names an unregistered cpu symbol: " +
+					s.cpu_symbol;
+			delete g;
+			return nullptr;
+		}
+		g->fns_.push_back(b->fn);
+
+		std::vector<int> slots;
+		for (const std::string &n : split_binding_names(b->slot_names)) {
+			const int slot = p.channel_slot(n);
+			if (slot < 0) {
+				if (error) *error = "stage '" + s.name + "' cpu mirror binds channel '" + n +
+						"', which this pipeline does not declare";
 				delete g;
 				return nullptr;
 			}
+			slots.push_back(slot);
 		}
-		g->fns_.push_back(fn);
+		g->slot_words_.push_back(slots);
 
-		StageSlots slots;
-		slots.p = p.channel_slot("p");
-		slots.sdf = p.channel_slot("sdf");
-		slots.material = p.channel_slot("material");
-		// extra[i] is the slot of this stage's i-th declared write, then its reads, in
-		// declaration order -- the same order the generated GLSL names them.
-		int n = 0;
-		for (const ChannelDecl &w : s.writes)
-			if (n < FieldCtx::kMaxChannels) slots.extra[n++] = p.channel_slot(w.name);
-		for (const ChannelDecl &r : s.reads)
-			if (n < FieldCtx::kMaxChannels) slots.extra[n++] = p.channel_slot(r.name);
-		g->slots_.push_back(slots);
-
-		g->param_base_.push_back(cursor);
-		g->param_count_.push_back(int(s.params.size()));
-		cursor += int(s.params.size());
+		std::vector<float> params;
+		for (const std::string &n : split_binding_names(b->param_names)) {
+			const int idx = find_param(p, s.name, n);
+			if (idx < 0) {
+				if (error) *error = "stage '" + s.name + "' cpu mirror binds param '" + n +
+						"', which neither this stage nor a //!use declares";
+				delete g;
+				return nullptr;
+			}
+			params.push_back(p.params[size_t(idx)].value);
+		}
+		if (params.empty()) params.push_back(0.0f);
+		g->param_words_.push_back(params);
 	}
-	for (const ParamDecl &pm : p.params) g->param_values_.push_back(pm.value);
 	return g;
 }
 
@@ -57,12 +87,8 @@ Sample PipelineFieldGenerator::View::sample(float x, float y, float z) const {
 	for (size_t i = 0; i < owner_->fns_.size(); i++) {
 		StageFn fn = owner_->fns_[i];
 		if (fn == nullptr) continue;  // GPU-only stage: the CPU field is already inexact
-		StageParams sp;
-		sp.count = owner_->param_count_[i];
-		sp.values = sp.count == 0 ? nullptr
-				: owner_->param_values_.data() + owner_->param_base_[i];
 		FieldResources res;
-		fn(ctx, owner_->slots_[i], sp, res);
+		fn(ctx, owner_->slot_words_[i].data(), owner_->param_words_[i].data(), res);
 	}
 
 	Sample s{};

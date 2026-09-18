@@ -27,6 +27,11 @@ struct StageManifest {
     std::vector<ChannelDecl> reads, writes;
     std::vector<ResourceDecl> samples;
     std::vector<ParamDecl> params;
+	// Params this stage reads from ANOTHER stage, as "<stage>.<param>". The GLSL reads
+	// them through the flattened ident (P.hills_amp_a); declaring them here is what lets
+	// the resolver reject an undeclared cross-stage read and what carries the value into
+	// the CPU mirror's blob. Task 9's resolve check is what makes the declaration binding.
+	std::vector<std::string> uses;
     LipschitzMode lipschitz_mode = LipschitzMode::kNone;
     float lipschitz = 0.0f;
     float bounds = 0.0f;

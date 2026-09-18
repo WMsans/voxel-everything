@@ -6,6 +6,9 @@
 //!param     cz : float = 30.0
 //!param     depth : float = 2.0
 //!param     radius : float = 5.0
+//!use       hills.amp_a
+//!use       hills.amp_b
+//!use       hills.amp_c
 //!lipschitz mul 1.0
 //!cpu       ve::stage_cave
 

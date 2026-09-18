@@ -91,6 +91,11 @@ bool parse_stage_manifest(const std::string &source, StageManifest *out, std::st
 			p.value = float(std::atof(trim(rest.substr(eq + 1)).c_str()));
 			out->params.push_back(p);
 		}
+		else if (key == "use") {
+			if (rest.find('.') == std::string::npos)
+				return fail("//!use needs '<stage>.<param>': " + rest);
+			out->uses.push_back(rest);
+		}
 		else if (key == "lipschitz") {
 			const size_t sp2 = rest.find_first_of(" \t");
 			if (sp2 == std::string::npos)
