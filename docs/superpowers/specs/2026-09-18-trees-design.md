@@ -6,7 +6,7 @@
 module pattern this follows and deliberately diverges from);
 `docs/superpowers/specs/2026-09-17-stage-authoring-design.md` (the 3-file stage contract,
 `//!use`, and the computed Lipschitz bound this stage must satisfy).
-**Start commit:** `0f65061`.
+**Start commit:** `9209d82`.
 
 Fluffy, painterly broadleaf trees: a hash-placed trunk-and-branch skeleton carved into the
 voxel field as real destructible geometry, with canopies drawn as scattered leaf-clump
@@ -430,7 +430,7 @@ Ordered so golden churn never lands inside a feature commit.
 | **M4** | Leaf scatter and raster passes, `LeafSettings` and its store, demo knobs, the `--leaves=` flag. |
 | **M5** | Shading and wind polish, golden capture, A/B/A measurement. |
 
-A baseline gate precedes M1: re-record the gdUnit failure set at `0f65061` into
+A baseline gate precedes M1: re-record the gdUnit failure set at `9209d82` into
 `docs/superpowers/plans/2026-09-18-trees-baseline.md`. That set drifts, so an older baseline
 is stale by default and every "did I break this" question is unanswerable without it.
 
