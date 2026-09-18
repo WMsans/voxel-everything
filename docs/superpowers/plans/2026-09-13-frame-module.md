@@ -3234,6 +3234,8 @@ Deferred items (spec §9.6) have no slot; each has a trigger instead (below).
 
 ### Sub-project 6 — Stage authoring
 
+**Status.** Implemented; see `docs/superpowers/plans/2026-09-17-stage-authoring-results.md`. OPEN exit findings: `test_generator_seam::test_generator_fingerprint_is_stable` returns an empty fingerprint; the final gdUnit failure set differs from the Task 1 baseline; `mesas.pipeline` is not covered by `test_lipschitz_sampled`.
+
 **Goal.** A terrain artist adds a stage (the "mesas" scenario) in ≤ 3 files with names, not positions, on both CPU and GPU, and the tools refuse an unsafe Lipschitz budget.
 
 **Entry gate.** Sub-project 4(b) accepted (`MAT_*` generator exists). `test_field_diff.gd` pipeline-parameterised and a native CPU test over `default.pipeline` pinned, both green on today's code. A test that locks today's multiplicative Lipschitz combination, marked as the behaviour to change.
