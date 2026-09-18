@@ -17,17 +17,30 @@ const OP_PAINT := 2
 var _world: VoxelWorld
 var _rd: RenderingDevice
 
-func before_test() -> void:
+func _pipeline_paths() -> PackedStringArray:
+	# Enumerated rather than listed, so adding a pipeline file needs no edit here.
+	var out := PackedStringArray()
+	var dir := DirAccess.open("res://assets/pipelines")
+	assert_object(dir).is_not_null()
+	for f in dir.get_files():
+		if f.ends_with(".pipeline"):
+			out.append("res://assets/pipelines/" + f)
+	out.sort()
+	assert_int(out.size()).is_greater(0)
+	return out
+
+func _open_world(pipeline_path: String) -> void:
 	_world = ClassDB.instantiate("VoxelWorld")
+	_world.terrain_pipeline_path = pipeline_path
 	add_child(_world)
-	# The probes compile field.glslh through the shader-source override map, so the
-	# world must be initialized (pipeline load installs the generated override and the
-	# CPU generator) before any dispatch. Without this both sides silently fall back to
-	# the stub field and the built-in generator, and the suite proves nothing.
+	# The probes compile field.glslh through the shader-source override map, so the world
+	# must be initialized (pipeline load installs the generated override and the CPU
+	# generator) before any dispatch. Without this both sides silently fall back and the
+	# suite proves nothing.
 	assert_bool(_world.hooks().debug_init_atlas()).is_true()
 	_rd = RenderingServer.create_local_rendering_device()
 
-func after_test() -> void:
+func _close_world() -> void:
 	if _rd != null:
 		_rd.free()
 		_rd = null
@@ -185,35 +198,37 @@ func compare(pts: PackedVector3Array, ops: PackedByteArray, op_count: int, label
 	assert_int(mat_mismatch).override_failure_message(
 		"%s: %d material mismatches" % [label, mat_mismatch]).is_equal(0)
 
-func test_base_field_matches_the_cpu_generator() -> void:
-	compare(sample_points(), PackedByteArray(), 0, "base")
+# One world init per pipeline, not per scenario: init streams an atlas and is the
+# expensive part. `compare` already names the scenario in its failure messages; the
+# pipeline name is prefixed here so a red run says which pipeline broke.
+func test_every_pipeline_agrees_between_cpu_and_gpu() -> void:
+	for path in _pipeline_paths():
+		_open_world(path)
+		var tag := path.get_file()
+		var pts := sample_points()
 
-func test_sphere_subtract_matches() -> void:
-	# Op centred on the new surface (51.2) so the samples actually pass through its sphere.
-	var ops := make_op(OP_SUBTRACT, 0, Vector3(10.0, 51.2, 10.0), 6.0)
-	compare(sample_points(), ops, 1, "subtract")
+		compare(pts, PackedByteArray(), 0, tag + " base")
 
-func test_sphere_add_matches() -> void:
-	var ops := make_op(OP_ADD, 4, Vector3(10.0, 56.2, 10.0), 6.0)
-	compare(sample_points(), ops, 1, "add")
+		var subtract := make_op(OP_SUBTRACT, 0, Vector3(10.0, 51.2, 10.0), 6.0)
+		compare(pts, subtract, 1, tag + " subtract")
 
-func test_sphere_paint_matches() -> void:
-	var ops := make_op(OP_PAINT, 2, Vector3(10.0, 49.2, 10.0), 8.0)
-	compare(sample_points(), ops, 1, "paint")
+		var add := make_op(OP_ADD, 4, Vector3(10.0, 56.2, 10.0), 6.0)
+		compare(pts, add, 1, tag + " add")
 
-func test_subtract_across_a_material_seam_matches() -> void:
-	# The guard against either evaluator reintroducing a per-sample hardness lookup. The
-	# paint lays a slab of rock (hardness 3.0) across part of the sampled volume, so the
-	# carve that follows straddles a hardness boundary. A stored subtract has ONE radius:
-	# if ve::apply_op or field.glslh started dividing by the material at the sample point,
-	# only one of the two would be doing it here and the sdf comparison goes red.
-	var ops := make_op(OP_PAINT, 2, Vector3(6.0, 51.2, 6.0), 8.0)
-	ops.append_array(make_op(OP_SUBTRACT, 0, Vector3(10.0, 51.2, 10.0), 6.0))
-	compare(sample_points(), ops, 2, "material seam")
+		var paint := make_op(OP_PAINT, 2, Vector3(10.0, 49.2, 10.0), 8.0)
+		compare(pts, paint, 1, tag + " paint")
 
-func test_ordered_op_chain_matches() -> void:
-	# Order matters: an add inside an earlier subtract must refill it on both sides.
-	var ops := make_op(OP_SUBTRACT, 0, Vector3(10.0, 51.2, 10.0), 8.0)
-	ops.append_array(make_op(OP_ADD, 4, Vector3(10.0, 51.2, 10.0), 4.0))
-	ops.append_array(make_op(OP_PAINT, 3, Vector3(12.0, 51.2, 12.0), 5.0))
-	compare(sample_points(), ops, 3, "chain")
+		# The guard against either evaluator reintroducing a per-sample hardness lookup:
+		# the paint lays rock (hardness 3.0) across part of the volume and the carve that
+		# follows straddles the boundary. A stored subtract has ONE radius.
+		var seam := make_op(OP_PAINT, 2, Vector3(6.0, 51.2, 6.0), 8.0)
+		seam.append_array(make_op(OP_SUBTRACT, 0, Vector3(10.0, 51.2, 10.0), 6.0))
+		compare(pts, seam, 2, tag + " material seam")
+
+		# Order matters: an add inside an earlier subtract must refill it on both sides.
+		var chain := make_op(OP_SUBTRACT, 0, Vector3(10.0, 51.2, 10.0), 8.0)
+		chain.append_array(make_op(OP_ADD, 4, Vector3(10.0, 51.2, 10.0), 4.0))
+		chain.append_array(make_op(OP_PAINT, 3, Vector3(12.0, 51.2, 12.0), 5.0))
+		compare(pts, chain, 3, tag + " chain")
+
+		_close_world()
