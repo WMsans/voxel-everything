@@ -24,6 +24,7 @@ struct GrassParams {
 	float style[4];        // flower_chance, gloss, camera_tilt, blade_lighting
 	float shape[4];        // wind_dir_rad, lean_spread_rad, base_curve, ring_width_gain
 	int32_t limits[4];     // max_blades, max_bricks, unused, unused
+	int32_t far[4];        // far LoD rings, cells per ring side, cells per ring, blades per cell
 };
 
 struct GrassLayout {
@@ -32,7 +33,16 @@ struct GrassLayout {
 	int ring_count = kGrassRings;
 	float ring_end_m[kGrassRings] = {0, 0, 0, 0};
 	int blades_per_brick[kGrassRings] = {0, 0, 0, 0};
-	// Threads stage 1 dispatches: the full brick box, one thread per brick.
+	// Bricks in the near box alone: stage 1's first `near_bricks` threads.
+	int near_bricks = 0;
+	// Far LoD rings past the near reach. Ring r (1-based) uses cells of kBrickSize << r over
+	// a radius of reach_m << r, so every ring has the same far_cell_dim^2 cells -- the whole
+	// reason grass can follow the LoD at all.
+	int far_ring_count = 0;
+	int far_cell_dim = 0;   // cells along one side of a ring's XZ grid
+	int far_cells = 0;      // far_cell_dim^2, per ring
+	float far_reach_m = 0;  // outer radius of the last far ring
+	// Threads stage 1 dispatches: the near brick box plus every far ring's cell grid.
 	int max_bricks = 0;
 	// Diagnostic upper bound on blades this layout can produce, already capped by
 	// GrassSettings::max_blades. The instance buffer is sized from settings.max_blades,

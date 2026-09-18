@@ -399,7 +399,8 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		GrassRasterPass *grass_raster = render_.passes().grass_raster;
 		SunUbo *grass_sun = render_.passes().sun_ubo;
 		const bool grass_ok = grass_sun && grass->run(rd, *atlas, gl, store_.region_window(),
-				static_cast<float>(render_.beauty_frame()) / 60.0f, grass_sun->buffer()) &&
+				static_cast<float>(render_.beauty_frame()) / 60.0f, grass_sun->buffer(),
+				render_.passes().field_context) &&
 				grass_raster && grass_raster->draw(rd, *grass, *gb, view_proj, cam_pos);
 		if (grass_ok) end_stage(rd, kStageGrass);
 		else cancel_stage(kStageGrass);

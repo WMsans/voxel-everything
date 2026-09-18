@@ -35,9 +35,16 @@ float grass_snorm(uint h) { return grass_unit(h) * 2.0 - 1.0; }
 // visibly thin with distance. Width grows exp2 in the reach fraction by the same factor the
 // count shrinks, which holds COVERAGE flat: fewer, fatter blades read as the same meadow.
 // Continuous in distance rather than stepped per ring, so no banding appears at a ring edge.
+//
+// Past `reach_m` the blade is in a far LoD ring, whose cell size DOUBLES every ring
+// (GrassSettings::far_lod_rings). The second factor widens it in exact proportion to the
+// LoD it was scattered at -- ring 1 twice, ring 2 four times, ring 3 eight -- which is what
+// keeps a blade the same width ON SCREEN however far out it stands, instead of letting the
+// coarser rings read as scattered spikes over bare ground. It is linear in distance rather
+// than stepped per ring for the same reason the near ramp is: a step would band at the seam.
 float grass_width_scale(float distance_m, float reach_m, float gain) {
-	float f = clamp(distance_m / max(reach_m, 1e-3), 0.0, 1.0);
-	return exp2(f * gain);
+	float r = max(reach_m, 1e-3);
+	return exp2(clamp(distance_m / r, 0.0, 1.0) * gain) * max(1.0, distance_m / r);
 }
 
 // True when the brick's world-space AABB is outside any frustum plane.

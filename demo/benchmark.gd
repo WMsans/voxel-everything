@@ -168,6 +168,13 @@ func _ready() -> void:
 			# Grass on/off for A/B cost runs: 0 disables the scatter+raster, anything
 			# else leaves the shipped default. Same override shape as --render-scale.
 			_world.set_grass_value("enabled", float(arg.trim_prefix("--grass=")))
+		elif arg.begins_with("--grass-value="):
+			# name=value, repeatable -- the --effect-value shape, for the grass store. The
+			# far LoD rings are what this exists for: their cost has to be measurable by
+			# sweeping far_lod_rings across otherwise identical runs.
+			var gkv := arg.trim_prefix("--grass-value=").split("=", false)
+			if gkv.size() == 2:
+				_world.set_grass_value(String(gkv[0]).strip_edges(), float(gkv[1]))
 		elif arg.begins_with("--screenshot="):
 			# One frame of the sampled leg, written just before the run reports. Comparing
 			# two of these is how a render-scale change gets judged on more than its cost.

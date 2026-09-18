@@ -1,5 +1,6 @@
 #include "render/grass_scatter_pass.h"
 #include "gpu_layout/blocks.h"
+#include "render/field_context_set.h"
 #include "render/gpu_atlas.h"
 #include "shade/oct.h"
 #include <godot_cpp/variant/packed_byte_array.hpp>
@@ -55,6 +56,7 @@ void GrassScatterPass::teardown() {
 	group_.release(device);
 	bricks_ = scatter_ = gpu::Program();
 	params_ubo_ = brick_list_ = counters_ = dispatch_args_ = instances_ = draw_args_ = RID();
+	field_ops_ = RID();
 	region_ubo_ = sampler_linear_ = sampler_nearest_ = RID();
 	bricks_set_ = scatter_set_ = gpu::SetCache();
 	sample_count_ = 0;
@@ -78,15 +80,17 @@ bool GrassScatterPass::ensure_buffers(RenderingDevice *rd, int max_blades, int m
 	// Freeing a buffer takes the uniform sets that bind it; both caches rebuild on new RIDs.
 	gpu::RdDevice device{rd};
 	for (RID *r : {&instances_, &brick_list_, &counters_, &dispatch_args_, &draw_args_,
-			&params_ubo_, &region_ubo_}) {
+			&params_ubo_, &region_ubo_, &field_ops_}) {
 		group_.free(device, *r);
 		*r = RID();
 	}
 	// 32 bytes per blade: two vec4 (design doc section 5).
 	instances_ = group_.add(gpu::Kind::Buffer,
 			rd->storage_buffer_create(static_cast<uint32_t>(max_blades) * 32u));
+	// One uvec4 per entry: a far cell has no resident brick to re-read, so its ground point
+	// and normal travel in the list (grass_bricks.comp.glsl).
 	brick_list_ = group_.add(gpu::Kind::Buffer,
-			rd->storage_buffer_create(static_cast<uint32_t>(max_bricks) * 4u));
+			rd->storage_buffer_create(static_cast<uint32_t>(max_bricks) * 16u));
 	counters_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(16u));
 	dispatch_args_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(12u,
 			PackedByteArray(), RenderingDevice::STORAGE_BUFFER_USAGE_DISPATCH_INDIRECT));
@@ -99,17 +103,23 @@ bool GrassScatterPass::ensure_buffers(RenderingDevice *rd, int max_blades, int m
 	// survives across frames -- cached against the RID, never rebuilt per frame.
 	region_ubo_ = group_.add(gpu::Kind::Buffer,
 			rd->uniform_buffer_create(sizeof(ve::GrassRegionBlock)));
+	// One EditOp (32 bytes) of zeroes. field.glslh declares the pool; stage 1 evaluates with
+	// an op count of zero, so it is never read -- but a declared binding still has to be
+	// provided, the same rule the unsampled atlas textures follow above.
+	field_ops_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(32u));
 	capacity_ = max_blades;
 	brick_capacity_ = max_bricks;
 	return instances_.is_valid() && brick_list_.is_valid() && counters_.is_valid() &&
 			dispatch_args_.is_valid() && draw_args_.is_valid() && params_ubo_.is_valid() &&
-			region_ubo_.is_valid();
+			region_ubo_.is_valid() && field_ops_.is_valid();
 }
 
 bool GrassScatterPass::ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas, RID sun_ubo) {
 	gpu::RdDevice device{rd};
 	// Stage-1 set: 0 grass-params, 1 brick_list, 2 counters, 3 dispatch_args, 4 region_map,
-	// 5 region_tables, 6 brick_flags, 7 sdf_atlas, 8 mat_atlas, 9 palette_buf, 10 region UBO.
+	// 5 region_tables, 6 brick_flags, 7 sdf_atlas, 8 mat_atlas, 9 palette_buf, 10 region UBO,
+	// 11 the field op pool field.glslh declares for the far LoD rings. The terrain pipeline's
+	// set 1 is bound separately in run(), from the caller-supplied FieldContextSet.
 	// Texture/sampler RIDs come from GpuAtlas through the same accessors RaymarchPass uses.
 	// Bindings 7-8 are the atlas textures the sampling helpers declare but stage 1 never
 	// fetches; a declared binding still has to be provided.
@@ -124,7 +134,8 @@ bool GrassScatterPass::ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas,
 			gpu::sampled(7, sampler_linear_, atlas.sdf_atlas()),
 			gpu::sampled(8, sampler_nearest_, atlas.mat_atlas()),
 			gpu::storage(9, atlas.palette()),
-			gpu::ubo(10, region_ubo_)});
+			gpu::ubo(10, region_ubo_),
+			gpu::storage(11, field_ops_)});
 	if (!bricks.is_valid()) return false;
 	// Stage-2 set mirrors grass_scatter.comp.glsl bindings 0-13: 0 grass-params, 1
 	// brick_list, 2 counters, 3 draw_args, 4 region_map, 5 region_tables, 6 brick_flags,
@@ -152,7 +163,7 @@ bool GrassScatterPass::ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas,
 
 bool GrassScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas,
 		const ve::GrassLayout &layout, const ve::RegionWindow &region_win,
-		float time_seconds, RID sun_ubo) {
+		float time_seconds, RID sun_ubo, const FieldContextSet *field) {
 	last_brick_count_ = 0;
 	last_blade_count_ = 0;
 	if (!rd_ || rd != rd_ || !bricks_.valid()) return false;
@@ -176,6 +187,11 @@ bool GrassScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas,
 
 	ve::GrassParams params = layout.params;
 	params.wind[3] = time_seconds;
+	// No field context means no set 1 to bind, so stage 1 must not walk the far rings:
+	// zeroing the ring count leaves exactly the near-field grass this pass always drew.
+	const bool far_ok = field && field->is_valid();
+	if (!far_ok) { params.far[0] = params.far[2] = params.far[3] = 0; }
+	const int dispatch_threads = far_ok ? layout.max_bricks : layout.near_bricks;
 	rd->buffer_update(params_ubo_, 0, sizeof(params), gpu::push_bytes(params));
 
 	// Refresh the pass-owned region window from the LIVE residency-backed window the
@@ -215,7 +231,8 @@ bool GrassScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas,
 	if (list < 0) return false;
 	rd->compute_list_bind_compute_pipeline(list, bricks_.pipeline);
 	rd->compute_list_bind_uniform_set(list, bricks_set_.id(), 0);
-	rd->compute_list_dispatch(list, (layout.max_bricks + 63) / 64, 1, 1);
+	if (far_ok) field->bind(rd, list);
+	rd->compute_list_dispatch(list, (dispatch_threads + 63) / 64, 1, 1);
 	if (scatter_.valid()) {
 		rd->compute_list_add_barrier(list);
 		rd->compute_list_bind_compute_pipeline(list, scatter_.pipeline);

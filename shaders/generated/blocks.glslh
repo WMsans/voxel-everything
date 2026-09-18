@@ -105,7 +105,8 @@
 	vec4 wind; \
 	vec4 style; \
 	vec4 shape; \
-	ivec4 limits;
+	ivec4 limits; \
+	ivec4 far;
 
 #define GRASS_REGION_FIELDS \
 	ivec4 dims; \

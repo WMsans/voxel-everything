@@ -531,7 +531,9 @@ Dictionary VoxelDebugHooks::debug_grass_stats() {
 		// buffer the compositor hands the pass.
 		if (!w->context().render->passes().sun_ubo || !w->context().render->passes().sun_ubo->ensure(device)) return d;
 		if (!g->run(device, *atlas, gl, w->context().store->region_window(),
-				static_cast<float>(w->context().render->beauty_frame()) / 60.0f, w->context().render->passes().sun_ubo->buffer())) return d;
+				static_cast<float>(w->context().render->beauty_frame()) / 60.0f,
+				w->context().render->passes().sun_ubo->buffer(),
+				w->context().render->passes().field_context)) return d;
 		// run()'s internal readback lands before the dispatch executes; the counters are
 		// only valid after a submit+sync, which the compositor does at frame end and the
 		// hook must do itself before refreshing through the pass's re-read entry point.

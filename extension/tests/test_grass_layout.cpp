@@ -128,10 +128,11 @@ TEST_CASE("frustum planes point inward and are normalised") {
 	}
 }
 
-TEST_CASE("GrassParams is 256 bytes and its floats land where GLSL expects") {
-	// Sixteen vec4: cam, planes[6], brick_min, brick_dim, ring_end, ring_blades, blade,
-	// wind, style, shape, limits. If this number moves, the grass parameter block moved with it.
-	CHECK(sizeof(ve::GrassParams) == 256);
+TEST_CASE("GrassParams is 272 bytes and its floats land where GLSL expects") {
+	// Seventeen vec4: cam, planes[6], brick_min, brick_dim, ring_end, ring_blades, blade,
+	// wind, style, shape, limits, far. If this number moves, the grass parameter block moved
+	// with it.
+	CHECK(sizeof(ve::GrassParams) == 272);
 	ve::GrassSettings s;
 	const float cam[3] = {1.0f, 2.0f, 3.0f};
 	float vp[16];
@@ -185,4 +186,61 @@ TEST_CASE("the shape block carries the wind-alignment and blade-curve knobs") {
 	CHECK(l.params.shape[1] == doctest::Approx(0.5f));
 	CHECK(l.params.shape[2] == doctest::Approx(0.4f));
 	CHECK(l.params.shape[3] == doctest::Approx(3.0f));
+}
+
+// Far LoD rings are what put grass past the brick atlas's residency radius. Cell size and
+// radius double together, so every ring dispatches the SAME cell count -- that is the whole
+// reason the dispatch stays affordable at eight times the near reach.
+TEST_CASE("far LoD rings extend the reach without growing the per-ring cell count") {
+	ve::GrassSettings s;
+	s.reach_m = 40.0f;
+	s.far_lod_rings = 3;
+	s.far_blades_per_cell = 8;
+	const float cam[3] = {0, 0, 0};
+	float vp[16];
+	identity(vp);
+	const ve::GrassLayout l = ve::grass_layout(s, cam, vp);
+	CHECK(l.far_ring_count == 3);
+	CHECK(l.far_reach_m == doctest::Approx(320.0f)); // 40 m doubled three times
+	CHECK(l.far_cells == l.far_cell_dim * l.far_cell_dim);
+	// One cell grid per ring on top of the near brick box, and nothing more.
+	CHECK(l.max_bricks == l.near_bricks + 3 * l.far_cells);
+	CHECK(l.params.far[0] == 3);
+	CHECK(l.params.far[1] == l.far_cell_dim);
+	CHECK(l.params.far[2] == l.far_cells);
+	CHECK(l.params.far[3] == 8);
+	// Stage 1 splits near from far on brick_dim.w, so it must be the NEAR count alone.
+	CHECK(l.params.brick_dim[3] == l.near_bricks);
+}
+
+// Doubling the reach doubles every far radius with it, so the cell count per ring does not
+// move: the cost of far grass is linear in the RING COUNT, never in the radius.
+TEST_CASE("far cell count per ring is independent of the reach") {
+	ve::GrassSettings a;
+	a.reach_m = 40.0f;
+	ve::GrassSettings b = a;
+	b.reach_m = 80.0f;
+	const float cam[3] = {0, 0, 0};
+	float vp[16];
+	identity(vp);
+	CHECK(ve::grass_layout(b, cam, vp).far_cells >
+			ve::grass_layout(a, cam, vp).far_cells / 2);
+	// ...and adding a ring adds exactly one grid.
+	ve::GrassSettings c = a;
+	c.far_lod_rings = a.far_lod_rings + 1;
+	const ve::GrassLayout la = ve::grass_layout(a, cam, vp);
+	const ve::GrassLayout lc = ve::grass_layout(c, cam, vp);
+	CHECK(lc.max_bricks == la.max_bricks + la.far_cells);
+}
+
+TEST_CASE("zero far rings leaves exactly the near-field brick box") {
+	ve::GrassSettings s;
+	s.far_lod_rings = 0;
+	const float cam[3] = {0, 0, 0};
+	float vp[16];
+	identity(vp);
+	const ve::GrassLayout l = ve::grass_layout(s, cam, vp);
+	CHECK(l.far_ring_count == 0);
+	CHECK(l.max_bricks == l.near_bricks);
+	CHECK(l.params.far[0] == 0);
 }

@@ -268,6 +268,7 @@ inline constexpr Field kGrassParamsFields[] = {
 	VE_LAYOUT_FIELD(GrassParams, style, Vec4, 0),
 	VE_LAYOUT_FIELD(GrassParams, shape, Vec4, 0),
 	VE_LAYOUT_FIELD(GrassParams, limits, IVec4, 0),
+	VE_LAYOUT_FIELD(GrassParams, far, IVec4, 0),
 };
 inline constexpr Field kGrassRegionBlockFields[] = {
 	VE_LAYOUT_FIELD(GrassRegionBlock, dims, IVec4, 0),

@@ -68,6 +68,31 @@ struct GrassSettings {
 	// exp2(ring_fraction * this) so the gain is continuous and rings do not band.
 	float ring_width_gain = 3.0f;
 
+	// LoD rings placed BEYOND reach_m, each one doubling both its cell size and its outer
+	// radius: ring 1 covers reach..2*reach in 1.6 m cells, ring 2 out to 4*reach in 3.2 m
+	// cells, ring 3 out to 8*reach in 6.4 m cells. Cell size and radius double together, so
+	// every ring dispatches the SAME number of cells -- that is what lets grass follow the
+	// far-field LoD at all, where the flat 0.8 m brick box of the near rings would need
+	// 4^ring times the threads. 0 is the old near-field-only grass.
+	//
+	// These rings are scattered against eval_field, not against the brick atlas, because
+	// full-resolution bricks are only resident for roughly the first 60 m (lod_grid.h). The
+	// cost is that a far ring does NOT see voxel edits: dig a hole at 300 m and its grass
+	// stays until the ring is close enough to be a near ring again.
+	int far_lod_rings = 3;
+	// Candidate blades per far cell, the same for every far ring. Constant per CELL (not per
+	// square metre) is the point: cell area quadruples per ring while blade width only
+	// doubles, so coverage halves per ring and the field fades out over the far rings
+	// instead of ending at a line.
+	//
+	// 16, not the 8 this shipped at first: at 8 the far bands read as scattered bushes on
+	// bare ground rather than as grass, and the difference is plainly visible in a 25 m-up
+	// capture (tools/grass_capture.gd --grass=far_blades_per_cell,N). 24 is only marginally
+	// better than 16 and costs half again as many blades against max_blades.
+	// ponytail: coverage halving per ring is the ceiling of a blade-only far field. Holding
+	// it flat needs an imposter/ground-tint blend, not more blades.
+	int far_blades_per_cell = 16;
+
 	// Fraction of blades that get a flower tint at the tip.
 	float flower_chance = 0.012f;
 

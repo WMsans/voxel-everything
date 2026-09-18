@@ -36,6 +36,14 @@ const SettingRow<GrassSettings> kGrassRows[] = {
 	float_row("camera_tilt", "Camera tilt", &GrassSettings::camera_tilt, 0.0f, 1.0f, 0.0f, 1.0f, 0.01f),
 	float_row("ring_width_gain", "Far ring width gain", &GrassSettings::ring_width_gain, 0.0f, 6.0f,
 			0.0f, 6.0f, 0.1f),
+	// Three rings take the reach to 8x (320 m at the default), which is as far as a blade is
+	// still worth more than a pixel. The hard bound is what stops the far dispatch growing
+	// without one.
+	int_row("far_lod_rings", "Far LoD rings", &GrassSettings::far_lod_rings, 0, 5, 0, 5),
+	// 64 is the scatter's workgroup width: one thread per candidate, so a cell never needs
+	// a second group -- the same ceiling blades_per_brick has.
+	int_row("far_blades_per_cell", "Far LoD density", &GrassSettings::far_blades_per_cell, 0, 64,
+			0, 64),
 	float_row("flower_chance", "Flower chance", &GrassSettings::flower_chance, 0.0f, 1.0f, 0.0f,
 			0.1f, 0.001f),
 	float_row("gloss", "Gloss", &GrassSettings::gloss, 0.0f, 1.0f, 0.0f, 1.0f, 0.01f),

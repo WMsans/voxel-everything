@@ -86,7 +86,21 @@ GrassLayout grass_layout(const GrassSettings &settings, const float camera[3],
 	const int dim_x = live ? (l.brick_max.x - l.brick_min.x + 1) : 0;
 	const int dim_y = live ? (l.brick_max.y - l.brick_min.y + 1) : 0;
 	const int dim_z = live ? (l.brick_max.z - l.brick_min.z + 1) : 0;
-	l.max_bricks = dim_x * dim_y * dim_z;
+	l.near_bricks = dim_x * dim_y * dim_z;
+
+	// Far LoD rings. Ring r covers out to reach_m << r in cells of kBrickSize << r, so the
+	// cell COUNT is the same for every ring and the dispatch grows linearly in ring count
+	// rather than with the cube of the radius. Two cells of slack on each side because the
+	// grid is anchored on the floor of the ring's own cell lattice, not on the camera.
+	l.far_ring_count = live ? s.far_lod_rings : 0;
+	if (l.far_ring_count > 0 && s.far_blades_per_cell > 0) {
+		l.far_cell_dim = static_cast<int>(std::ceil(2.0f * s.reach_m / kBrickSize)) + 2;
+		l.far_cells = l.far_cell_dim * l.far_cell_dim;
+		l.far_reach_m = s.reach_m * static_cast<float>(1 << l.far_ring_count);
+	} else {
+		l.far_ring_count = 0;
+	}
+	l.max_bricks = l.near_bricks + l.far_ring_count * l.far_cells;
 
 	// Estimate: ground is a surface, so surface bricks in a ring go as its ANNULUS AREA over
 	// the brick footprint, times a slack factor for slope (a hillside presents more bricks
@@ -101,6 +115,16 @@ GrassLayout grass_layout(const GrassSettings &settings, const float camera[3],
 		const double bricks = area / (kBrickSize * kBrickSize) * kSlopeSlack;
 		blades += bricks * l.blades_per_brick[i];
 		prev = r;
+	}
+	// Far rings: one flat annulus of cells, no slope slack -- a far cell places blades on
+	// its own tangent plane, so a hillside gives one cell's worth either way.
+	for (int i = 1; i <= l.far_ring_count; i++) {
+		const float outer = s.reach_m * static_cast<float>(1 << i);
+		const float inner = s.reach_m * static_cast<float>(1 << (i - 1));
+		const float cell = kBrickSize * static_cast<float>(1 << i);
+		const double area = 3.14159265358979 * (static_cast<double>(outer) * outer -
+				static_cast<double>(inner) * inner);
+		blades += area / (static_cast<double>(cell) * cell) * s.far_blades_per_cell;
 	}
 	l.estimated_blades = static_cast<int>(std::min<double>(blades, s.max_blades));
 
@@ -117,7 +141,7 @@ GrassLayout grass_layout(const GrassSettings &settings, const float camera[3],
 	p.brick_dim[0] = dim_x;
 	p.brick_dim[1] = dim_y;
 	p.brick_dim[2] = dim_z;
-	p.brick_dim[3] = l.max_bricks;
+	p.brick_dim[3] = l.near_bricks;
 	for (int i = 0; i < kGrassRings; i++) {
 		p.ring_end[i] = l.ring_end_m[i];
 		p.ring_blades[i] = l.blades_per_brick[i];
@@ -143,6 +167,10 @@ GrassLayout grass_layout(const GrassSettings &settings, const float camera[3],
 	p.style[3] = s.blade_lighting;
 	p.limits[0] = s.max_blades;
 	p.limits[1] = l.max_bricks;
+	p.far[0] = l.far_ring_count;
+	p.far[1] = l.far_cell_dim;
+	p.far[2] = l.far_cells;
+	p.far[3] = l.far_ring_count > 0 ? s.far_blades_per_cell : 0;
 	return l;
 }
 

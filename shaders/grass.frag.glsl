@@ -51,9 +51,13 @@ void main() {
 	}
 
 	// Dither out at the reach limit with the SAME test lod.frag.glsl uses at the LoD seam,
-	// so the density tail fades instead of popping.
+	// so the density tail fades instead of popping. The limit is the OUTERMOST far LoD ring
+	// (each doubles the near reach), not ring_end.w -- fading at the near reach would cut
+	// every far-ring blade the moment it was placed. With no far rings this is
+	// ring_end.z..ring_end.w again, the band it always was.
 	float d = distance(v_wpos, push.cam.xyz);
-	float fade = clamp((d - pc.ring_end.z) / max(pc.ring_end.w - pc.ring_end.z, 1e-3), 0.0, 1.0);
+	float limit = pc.cam.w * exp2(float(pc.far.x));
+	float fade = clamp((d - limit * 0.75) / max(limit * 0.25, 1e-3), 0.0, 1.0);
 	if (bayer4(ivec2(gl_FragCoord.xy)) < fade) discard;
 
 	// Never flipped on backfaces. grass.vert.glsl already turned the face to the viewer and

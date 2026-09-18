@@ -3,6 +3,9 @@ extends SceneTree
 # debug hooks, which re-implement it. Run with:
 # godot --path . --resolution 1280x720 -s res://tools/grass_capture.gd -- --out=/tmp/grass
 #
+# --grass=key,value overrides one grass setting before the world streams, repeatable. This
+# is how the far LoD rings get an A/B: --grass=far_lod_rings,0 against --grass=far_lod_rings,3.
+#
 # --rock=radius,distance floats a rock sphere `distance` metres up-sun of the --at spot, so
 # a frame over open rolling grass can show whether blades take the terrain's shadow.
 #
@@ -19,7 +22,11 @@ func capture() -> void:
 	var look := Vector3.ZERO
 	var at := Vector3(30.0, 56.2, 30.0)
 	var rock := Vector2.ZERO
+	var overrides := {}
 	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--grass="):
+			var kv := arg.trim_prefix("--grass=").split(",")
+			overrides[kv[0]] = float(kv[1])
 		if arg.begins_with("--out="):
 			out = arg.trim_prefix("--out=")
 		if arg.begins_with("--height="):
@@ -43,6 +50,8 @@ func capture() -> void:
 	player.set_physics_process(false)
 	player.set_process_unhandled_input(false)
 	world.physics_enabled = false
+	for key in overrides:
+		world.set_grass_value(key, overrides[key])
 	if not world.hooks().debug_init_physics():
 		push_error("grass capture could not initialize the mesh worker")
 		quit(1)

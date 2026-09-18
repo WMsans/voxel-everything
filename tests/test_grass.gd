@@ -170,16 +170,21 @@ func test_no_blades_means_no_draw_but_not_a_failure() -> void:
 	assert_int(d["vertices"]).is_equal(0)
 	assert_bool(d["ran"]).is_true()
 
-# The edit-awareness contract from the design doc: the scatter reads the LIVE atlas, so an
-# edit that takes grass away must take its blades on the next frame, with no invalidation
+# The edit-awareness contract from the design doc: the NEAR scatter reads the LIVE atlas, so
+# an edit that takes grass away must take its blades on the next frame, with no invalidation
 # code anywhere. Tested rather than assumed. This paints the whole reach to rock instead
 # of digging a crater: a crater floor is fresh grass-band surface and legitimately grows
 # NEW blades (74 -> 409 measured), which confounds removal with exposure. Painting moves
 # only the material layer, so zero blades afterwards can only mean the scatter read it.
 # (Hook name/signature verbatim from extension/src/debug/hooks.cpp:
 # debug_apply_sphere_paint(centre, radius, material); rock is material id 2.)
+#
+# Far LoD rings are turned OFF here on purpose. They are scattered against eval_field, which
+# has no override bricks bound, so they cannot see this paint -- and they reach eight times
+# further than the 45 m sphere anyway. Their behaviour has its own case below.
 func test_painting_grass_to_rock_removes_its_blades() -> void:
 	var w := make_world()
+	w.set_grass_value("far_lod_rings", 0.0)
 	var before: int = w.hooks().debug_grass_stats()["blades"]
 	assert_int(before).is_greater(0)
 	w.hooks().debug_apply_sphere_paint(Vector3(30.0, 50.0, 30.0), 45.0, 2)
@@ -187,6 +192,43 @@ func test_painting_grass_to_rock_removes_its_blades() -> void:
 		w.hooks().debug_stream_frame(Vector3(30.0, 56.2, 30.0))
 	var after: int = w.hooks().debug_grass_stats()["blades"]
 	assert_int(after).is_equal(0)
+
+# Grass past the near reach is the whole point of the far LoD rings: the brick atlas only
+# holds full-resolution data for the first ~60 m, so before them the field ended at reach_m
+# and every LoD beyond it was bare. Turning the rings on must place blades the near box
+# cannot -- and turning them off again must return exactly the old counts.
+func test_far_lod_rings_place_blades_past_the_near_reach() -> void:
+	var w := make_world()
+	# An 8 m reach, not the shipped 40: the hook's probe camera looks straight DOWN at 90
+	# degrees (hooks_render.cpp), so its cone only widens slowly, and at 40 m stage 1
+	# frustum-culls every far cell -- correctly, because none of them is on screen. At 8 m
+	# ring 1 covers 8..16 m, inside what this camera sees, and the near box reaches nothing
+	# at all: the ground here is further below the camera than its 10 m vertical reach. So
+	# EVERY blade this case counts is one the near field could not have placed.
+	w.set_grass_value("reach_m", 8.0)
+	w.set_grass_value("far_lod_rings", 0.0)
+	var near_only: Dictionary = w.hooks().debug_grass_stats()
+	assert_int(near_only["blades"]).is_equal(0)
+	w.set_grass_value("far_lod_rings", 3.0)
+	var with_far: Dictionary = w.hooks().debug_grass_stats()
+	# Cells, then blades: the far rings appear in the compacted list first.
+	assert_int(with_far["bricks"]).is_greater(near_only["bricks"])
+	assert_int(with_far["blades"]).is_greater(0)
+	# ...and every far blade still stands on ground the slope test accepted.
+	assert_float(with_far["min_normal_y"]).is_greater_equal(0.5)
+
+# A far ring is scattered against the procedural field with no override bricks bound, so it
+# is blind to edits by construction (GrassSettings::far_lod_rings). Pinned, not assumed: the
+# day someone binds the override pool into stage 1, this is the case that says so.
+func test_far_lod_rings_do_not_see_edits() -> void:
+	var w := make_world()
+	w.set_grass_value("reach_m", 8.0) # push the paint radius past the near box entirely
+	var before: int = w.hooks().debug_grass_stats()["blades"]
+	assert_int(before).is_greater(0)
+	w.hooks().debug_apply_sphere_paint(Vector3(30.0, 50.0, 30.0), 45.0, 2)
+	for i in range(60):
+		w.hooks().debug_stream_frame(Vector3(30.0, 56.2, 30.0))
+	assert_int(w.hooks().debug_grass_stats()["blades"]).is_greater(0)
 
 # Disabling grass on a world that already drew must REALLY stop the draw: the disabled
 # run() clears the GPU draw args (not just the CPU counters), so the raster issues an

@@ -11,7 +11,8 @@
 layout(local_size_x = 64) in;
 
 layout(set = 0, binding = 0, std140) uniform Params { GRASS_PARAMS_FIELDS } grass;
-layout(set = 0, binding = 1, std430) readonly buffer BrickList { uint v[]; } brick_list;
+// uvec4 entries; see grass_bricks.comp.glsl for the near/far packing.
+layout(set = 0, binding = 1, std430) readonly buffer BrickList { uvec4 v[]; } brick_list;
 layout(set = 0, binding = 2, std430) buffer Counters { uint brick_count; uint blade_count;
 		uint high_water; uint pad; } counters;
 layout(set = 0, binding = 3, std430) buffer DrawArgs { uint vertex_count; uint instance_count;
@@ -49,11 +50,83 @@ vec3 surface_normal(vec3 p) {
 		world_sdf(p + vec3(0, 0, e)) - world_sdf(p - vec3(0, 0, e))));
 }
 
+// Clump noise at world XZ: neighbouring blades share height and colour, which is what makes
+// a field patchy rather than a lawn.
+float grass_clump(vec3 p) {
+	return grass_unit(grass_hash3(ivec3(int(floor(p.x * 0.35)), 0, int(floor(p.z * 0.35))),
+			0x5BD1u));
+}
+
+float grass_height(uint h, float clump) {
+	float jitter = (grass_unit(grass_hash(h ^ 0x85EBCA6Bu)) * 2.0 - 1.0) * grass.blade.z;
+	return grass.blade.y * (1.0 + jitter) * mix(0.7, 1.15, clump);
+}
+
+// Everything about a blade that does not depend on where its ground came from. Near cells
+// and far LoD cells differ only in how they found `p`, `n` and `sun`, so the record and the
+// draw-args bookkeeping are written once rather than twice.
+//
+// The wind-aligned lean used to be a uniform random 0..2pi, which is what made the field
+// read as a pincushion of spikes rather than grass lying one way. The mean direction is the
+// wind angle, bent by a low-frequency swirl so the meadow is not a comb, and each blade
+// scatters about that mean by at most shape.y.
+void emit_blade(vec3 p, vec3 n, uint h, float clump, float height, float sun) {
+	uint index = atomicAdd(counters.blade_count, 1u);
+	if (index >= uint(grass.limits.x)) return; // at capacity: drop, never scribble
+
+	float swirl = (grass_gust(p.xz, 0.0, 0.0, grass.wind.z * 0.35) - 0.5) * 1.2;
+	float lean = grass.shape.x + swirl +
+			grass_snorm(grass_hash(h ^ 0xC2B2AE35u)) * grass.shape.y;
+
+	GrassBlade blade;
+	blade.a = vec4(p, height);
+	blade.b = vec4(grass_pack_ground(oct_encode_snorm8(n), sun), uintBitsToFloat(h), lean, clump);
+	instances.b[index] = blade;
+
+	// Twenty-seven vertices per blade: four quads along the Bezier profile plus the tip
+	// triangle. Must agree with the decode in grass.vert.glsl and with GrassRasterPass::draw's
+	// CPU-side mirror. atomicMax, not a store: any appending thread may be last.
+	atomicMax(draw_args.vertex_count, (index + 1u) * 27u);
+	draw_args.instance_count = 1u;
+}
+
+// A blade in a far LoD cell. Stage 1 already paid for the field: it found the cell's ground
+// point and normal, so a blade here costs NO field evaluation at all -- it lands on that
+// cell's TANGENT PLANE. Over a 6.4 m cell at 300 m that plane is a couple of pixels wide,
+// which is exactly the resolution the far LoD mesh under it is drawn at.
+void far_blade(uvec4 entry, uint lane) {
+	if (lane >= uint(grass.far.w)) return;
+	int ring = int(entry.w & 0xFFu);
+	float cell = BRICK_SIZE * float(1 << ring);
+	vec2 lo2 = vec2(uintBitsToFloat(entry.x), uintBitsToFloat(entry.y));
+	float gy = uintBitsToFloat(entry.z);
+	vec3 n = oct_decode_snorm8((entry.w >> 8) & 0xFFFFu);
+
+	// Seeded from the cell's own lattice coordinate, so a blade keeps its identity as the
+	// camera moves -- the same rule the near path follows with the world brick coord.
+	ivec3 key = ivec3(int(floor(lo2.x / cell)), ring, int(floor(lo2.y / cell)));
+	uint h = grass_hash3(key, lane * 2654435761u);
+	vec2 off = (vec2(grass_unit(h), grass_unit(grass_hash(h ^ 0x9E3779B9u))) - 0.5) * cell;
+	float dy = abs(n.y) > 1e-3 ? -(n.x * off.x + n.z * off.y) / n.y : 0.0;
+	vec3 p = vec3(lo2.x + cell * 0.5 + off.x, gy + dy, lo2.y + cell * 0.5 + off.y);
+
+	// Sun visibility 1.0, and that is not the old bug: the terrain march reads the brick
+	// atlas, which has no data out here. Past the LoD fade band deferred.comp.glsl's
+	// far_field_owns() is true for every pixel, so these blades are shadowed by the sun MAP
+	// -- the same one shading the far-field mesh they stand on.
+	float clump = grass_clump(p);
+	emit_blade(p, n, h, clump, grass_height(h, clump), 1.0);
+}
+
 void main() {
 	uint brick_index = gl_WorkGroupID.x;
 	if (brick_index >= counters.brick_count) return;
 
-	uint packed = brick_list.v[brick_index];
+	uvec4 entry = brick_list.v[brick_index];
+	uint lane = gl_LocalInvocationID.x;
+	if ((entry.w & 0x80000000u) != 0u) { far_blade(entry, lane); return; }
+
+	uint packed = entry.x;
 	// Unpacks the 11/10/11-bit layout stage 1 writes (see grass_bricks.comp.glsl): X/Z
 	// bias 1024 in 11-bit fields, Y bias 512 in a 10-bit field.
 	ivec3 local = ivec3(int(packed & 0x7FFu) - 1024, int((packed >> 11) & 0x3FFu) - 512,
@@ -67,7 +140,6 @@ void main() {
 	for (int i = 0; i < 4; i++) { if (d <= grass.ring_end[i]) { ring = i; break; } }
 	if (d > grass.ring_end[3]) return;
 	uint budget = uint(grass.ring_blades[ring]);
-	uint lane = gl_LocalInvocationID.x;
 	if (lane >= budget) return;
 
 	// Jittered XZ inside the brick. The hash is seeded from the WORLD brick coordinate, so
@@ -104,42 +176,17 @@ void main() {
 	if (slot < 0) return;
 	if (material_at(p, ivec3(floor(p / BRICK_SIZE)), slot) != MAT_GRASS_01) return;
 
-	uint index = atomicAdd(counters.blade_count, 1u);
-	if (index >= uint(grass.limits.x)) return; // at capacity: drop, never scribble
-
-	// Clump noise at world XZ: neighbouring blades share height and colour, which is what
-	// makes a field patchy rather than a lawn.
-	ivec3 clump_cell = ivec3(int(floor(p.x * 0.35)), 0, int(floor(p.z * 0.35)));
-	float clump = grass_unit(grass_hash3(clump_cell, 0x5BD1u));
-	float jitter = (grass_unit(grass_hash(h ^ 0x85EBCA6Bu)) * 2.0 - 1.0) * grass.blade.z;
-	float height = grass.blade.y * (1.0 + jitter) * mix(0.7, 1.15, clump);
-	// Wind-aligned lean. This used to be a uniform random 0..2pi, which is what made the
-	// field read as a pincushion of spikes rather than grass lying one way. The mean
-	// direction is the wind angle, bent by a low-frequency swirl so the meadow is not a
-	// comb, and each blade scatters about that mean by at most shape.y.
-	float swirl = (grass_gust(p.xz, 0.0, 0.0, grass.wind.z * 0.35) - 0.5) * 1.2;
-	float lean = grass.shape.x + swirl +
-			grass_snorm(grass_hash(h ^ 0xC2B2AE35u)) * grass.shape.y;
-
 	// Terrain sun visibility, ONE march per blade rather than per fragment, so overdraw never
 	// multiplies it. This is what the blade writes as G-buffer sun visibility: before it,
 	// every blade wrote 1.0 and the deferred pass -- which only applies the sun map where the
 	// far field owns the pixel -- shadowed nothing near the camera. Sampled from a third of
 	// the way up the blade and lifted off the surface, so the march does not start inside
 	// the ground it grew from.
+	float clump = grass_clump(p);
+	float height = grass_height(h, clump);
 	float sun = terrain_sun_visibility(p + n * 0.05 + vec3(0.0, height * 0.35, 0.0),
 			RAY_SHADOW_DIST);
-
-	GrassBlade blade;
-	blade.a = vec4(p, height);
-	blade.b = vec4(grass_pack_ground(oct_encode_snorm8(n), sun), uintBitsToFloat(h), lean, clump);
-	instances.b[index] = blade;
-
-	// Twenty-seven vertices per blade: four quads along the Bezier profile plus the tip
-	// triangle. Must agree with the decode in grass.vert.glsl and with GrassRasterPass::draw's
-	// CPU-side mirror. atomicMax, not a store: any appending thread may be last.
-	atomicMax(draw_args.vertex_count, (index + 1u) * 27u);
-	draw_args.instance_count = 1u;
+	emit_blade(p, n, h, clump, height, sun);
 
 	// brick_atlas.glslh declares brick_flags for the flag-word helpers this stage never
 	// calls. The branch below can never execute, but the reference keeps the binding live
