@@ -2,7 +2,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-17-stage-authoring-design.md`
 **Baseline:** `docs/superpowers/plans/2026-09-17-stage-authoring-baseline.md`
-**Range:** `b03e5d6..4685a1d` (Task 14 documentation is the closing commit)
+**Range:** `b03e5d6..6598d86` (Task 14 documentation is the closing commit)
 
 ## Exit criteria
 
@@ -43,7 +43,125 @@ test_sun_cascades_gpu::test_needs_rebuild_agrees_with_what_build_does — FAILED
 
 The focused generator-seam run reproduced the failure: expected 24 values, got 0. This is an OPEN regression and was not masked or regenerated.
 
-## The refusal message
+## Baseline and final failure comparison
+
+Baseline failure case/message:
+
+```text
+test_sun_cascades_gpu::test_sub_texel_motion_rebuilds_no_cascade — FAILED: res://tests/test_sun_cascades_gpu.gd:73
+```
+
+Final changed sun-cascade case/message:
+
+```text
+test_sun_cascades_gpu::test_needs_rebuild_agrees_with_what_build_does — FAILED: res://tests/test_sun_cascades_gpu.gd:137
+```
+
+## Complete gdUnit per-suite comparison
+
+The committed baseline is `docs/superpowers/plans/2026-09-17-stage-authoring-baseline.md`; the final XML was `reports/report_26/results.xml` at the recorded run. Counts below preserve each suite record (`tests`, `failures`, `errors`), including the baseline’s XML error case represented as `failures=0` in its source file.
+
+| Suite | Baseline tests | Final tests | Baseline failures | Final failures | Final errors |
+|---|---:|---:|---:|---:|---:|
+| `test_world_store_contract` | 4 | 4 | 0 | 0 | 0 |
+| `test_gpu_timing_scopes` | 1 | 1 | 0 | 0 | 0 |
+| `test_collider_octants` | 4 | 4 | 0 | 0 | 0 |
+| `test_mesh_lattice` | 3 | 3 | 0 | 0 | 0 |
+| `test_outline` | 9 | 9 | 0 | 0 | 0 |
+| `test_edit_fanout` | 4 | 4 | 0 | 0 | 0 |
+| `test_capture` | 3 | 3 | 0 | 0 | 0 |
+| `test_self_check` | 1 | 1 | 0 | 0 | 0 |
+| `test_material_registry` | 3 | 3 | 0 | 0 | 0 |
+| `test_demo_shell` | 5 | 5 | 0 | 0 | 0 |
+| `test_render_shutdown` | 3 | 3 | 0 | 0 | 0 |
+| `test_extension_boot` | 2 | 2 | 0 | 0 | 0 |
+| `test_settings_menu` | 22 | 22 | 0 | 0 | 0 |
+| `test_cel_object` | 3 | 3 | 0 | 0 | 0 |
+| `test_field_volume_diff` | 5 | 5 | 0 | 0 | 0 |
+| `test_repro_pillar_debris` | 1 | 1 | 0 | 0 | 0 |
+| `test_frame_contract` | 6 | 6 | 0 | 0 | 0 |
+| `test_lod_mesh_diff` | 3 | 3 | 0 | 0 | 0 |
+| `test_frame_shipped_golden` | 1 | 1 | 0 | 0 | 0 |
+| `test_contact_shadow` | 7 | 7 | 0 | 0 | 0 |
+| `test_stored_normal_pool` | 2 | 2 | 0 | 0 | 0 |
+| `test_raymarch_pixel` | 5 | 5 | 0 | 0 | 0 |
+| `test_benchmark` | 8 | 8 | 0 | 0 | 0 |
+| `test_composite_golden` | 2 | 2 | 0 | 0 | 0 |
+| `test_voxel_settings` | 17 | 17 | 0 | 0 | 1 |
+| `test_hiz` | 4 | 4 | 0 | 0 | 0 |
+| `test_island_body` | 5 | 5 | 0 | 0 | 0 |
+| `test_contact_shadow_golden` | 1 | 1 | 0 | 0 | 0 |
+| `test_op_filter_gpu` | 4 | 4 | 0 | 0 | 0 |
+| `test_render_lifetime_contract` | 6 | 6 | 0 | 0 | 0 |
+| `test_ssgi` | 7 | 7 | 0 | 0 | 0 |
+| `test_lod_cull` | 4 | 4 | 0 | 0 | 0 |
+| `test_occupancy` | 4 | 4 | 0 | 0 | 0 |
+| `test_connectivity` | 33 | 33 | 0 | 0 | 0 |
+| `test_field_diff` | 6 | 1 | 0 | 0 | 0 |
+| `test_shader_reload` | 2 | 2 | 0 | 0 | 0 |
+| `test_raymarch_magenta` | 1 | 1 | 0 | 0 | 0 |
+| `test_material_atlas` | 8 | 8 | 0 | 0 | 0 |
+| `test_lod_pool` | 4 | 4 | 0 | 0 | 0 |
+| `test_deferred` | 9 | 9 | 0 | 0 | 0 |
+| `test_ssao_golden` | 1 | 1 | 0 | 0 | 0 |
+| `test_region_dda` | 3 | 3 | 0 | 0 | 0 |
+| `test_lod_build` | 5 | 5 | 0 | 0 | 0 |
+| `test_grass` | 19 | 19 | 0 | 0 | 0 |
+| `test_world_field_consumers` | 4 | 4 | 0 | 0 | 0 |
+| `test_material_glow` | 3 | 3 | 0 | 0 | 0 |
+| `test_world_field_overrides` | 4 | 4 | 0 | 0 | 0 |
+| `test_normal_artifact` | 6 | 6 | 0 | 0 | 0 |
+| `test_brick_flags_gpu` | 2 | 2 | 0 | 0 | 0 |
+| `test_island_extract` | 5 | 5 | 0 | 0 | 0 |
+| `test_collider_edits` | 3 | 3 | 0 | 0 | 0 |
+| `test_player_kick` | 1 | 1 | 0 | 0 | 0 |
+| `test_island_render` | 16 | 16 | 0 | 0 | 0 |
+| `test_mesh_stream` | 5 | 5 | 0 | 0 | 0 |
+| `test_emissive_gi` | 6 | 6 | 0 | 0 | 0 |
+| `test_lod_budget` | 3 | 3 | 0 | 0 | 0 |
+| `test_material_picker` | 5 | 5 | 0 | 0 | 0 |
+| `test_field_baseline_gpu` | 1 | 1 | 0 | 0 | 0 |
+| `test_raymarch_cost` | 2 | 2 | 0 | 0 | 0 |
+| `test_lod_stream` | 3 | 3 | 0 | 0 | 0 |
+| `test_pipeline_reload` | 1 | 1 | 0 | 0 | 0 |
+| `test_beauty_settings` | 11 | 11 | 0 | 0 | 0 |
+| `test_ssao` | 6 | 6 | 0 | 0 | 0 |
+| `test_settings_names` | 5 | 5 | 0 | 0 | 0 |
+| `test_lod_seam` | 3 | 3 | 0 | 0 | 0 |
+| `test_material_seam` | 4 | 4 | 0 | 0 | 0 |
+| `test_gpu_smoke` | 1 | 1 | 0 | 0 | 0 |
+| `test_streaming` | 6 | 6 | 0 | 0 | 0 |
+| `test_consolidation` | 20 | 20 | 0 | 0 | 0 |
+| `test_generator_seam` | 2 | 2 | 0 | 1 | 0 |
+| `test_gbuffer` | 5 | 5 | 0 | 0 | 0 |
+| `test_sun_cascades_gpu` | 7 | 7 | 1 | 1 | 0 |
+| `test_field_gradient` | 7 | 7 | 0 | 0 | 0 |
+| `test_lod_gbuffer` | 4 | 4 | 0 | 0 | 0 |
+| `test_repro_thin_sheet` | 3 | 3 | 0 | 0 | 0 |
+| `test_collider_build_timing` | 1 | 1 | 0 | 0 | 0 |
+| `test_near_field_scale` | 4 | 4 | 0 | 0 | 0 |
+| `test_collider_stream` | 7 | 7 | 0 | 0 | 0 |
+| `test_override_region_border` | 6 | 6 | 0 | 0 | 0 |
+| `test_gpu_timings` | 10 | 10 | 0 | 0 | 0 |
+| `test_raymarch_gbuffer` | 13 | 13 | 0 | 0 | 0 |
+| `test_grass_golden` | 1 | 1 | 0 | 0 | 0 |
+| `test_lod_render` | 4 | 4 | 0 | 0 | 0 |
+| `test_sun_shadow` | 11 | 11 | 0 | 0 | 0 |
+| `test_lod_cull_golden` | 1 | 1 | 0 | 0 | 0 |
+| `test_lod_raster_golden` | 1 | 1 | 0 | 0 | 0 |
+| `test_deferred_golden` | 1 | 1 | 0 | 0 | 0 |
+| `test_ssr` | 7 | 7 | 0 | 0 | 0 |
+| `test_gpu_atlas` | 8 | 8 | 0 | 0 | 0 |
+| `test_edit_pipeline` | 8 | 8 | 0 | 0 | 0 |
+| `test_brick_diff` | 7 | 7 | 0 | 0 | 0 |
+| `test_voxel_world_raycast` | 3 | 3 | 0 | 0 | 0 |
+| `test_raymarch_mips` | 2 | 2 | 0 | 0 | 0 |
+| `test_occupancy_lattice` | 3 | 3 | 0 | 0 | 0 |
+| `test_region_pass` | 7 | 7 | 0 | 0 | 0 |
+| `test_mesh_diff` | 4 | 4 | 0 | 0 | 0 |
+
+**Totals:** baseline suite attributes `tests=513`, `failures=1`; final suite attributes `tests=508`, `failures=2`, `errors=1`. Baseline executed 509/509; final executed 505/505.
+
 
 Native Task 13 Step 5 output:
 
