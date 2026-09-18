@@ -11,6 +11,8 @@ ve::ResolvedPipeline two_stage() {
 	a.name = "hills"; a.kind = ve::StageKind::kField; a.cpu_symbol = "ve::stage_hills";
 	a.writes.push_back({"sdf", ve::ChannelType::kFloat});
 	a.writes.push_back({"steepness", ve::ChannelType::kFloat});
+	a.lipschitz_mode = ve::LipschitzMode::kAdd;
+	a.lipschitz = 1.0f;
 	a.params.push_back({"amplitude", ve::ChannelType::kFloat, 6.0f});
 	a.body = "void stage_hills(inout FieldCtx ctx) { ctx.sdf = ctx.p.y; }\n";
 

@@ -25,6 +25,7 @@ ve::ResolvedPipeline build(bool with_cpu = true) {
 	a.cpu_symbol = with_cpu ? "ve::tp_plane" : "";
 	a.writes.push_back({"sdf", ve::ChannelType::kFloat});
 	a.params.push_back({"height", ve::ChannelType::kFloat, 51.2f});
+	a.lipschitz_mode = ve::LipschitzMode::kAdd;
 	a.lipschitz = 1.0f;
 	a.body = "void stage_plane(inout FieldCtx c){}\n";
 

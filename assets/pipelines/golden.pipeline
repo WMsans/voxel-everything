@@ -6,6 +6,9 @@
 # this pipeline and demo terrain evolves in default.pipeline instead.
 # Do not add stages here.
 seed      1337
+# A CEILING, not the bound. resolve_pipeline computes the bound from the stages below
+# (hills add 1.78, cave mul 1.0 => 1.78) and refuses to load this pipeline if that
+# exceeds the number here. Raising it costs raycast steps and widens mesh padding.
 lipschitz 2.0
 
 stage stages/hills.field.glslh

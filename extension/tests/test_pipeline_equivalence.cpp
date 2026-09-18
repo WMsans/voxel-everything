@@ -89,8 +89,14 @@ TEST_CASE("the frozen golden pipeline reproduces whole bricks") {
 	}
 }
 
-TEST_CASE("the pipeline reports the analytic generator's lipschitz bound") {
+// The pipeline's bound is now COMPUTED from its stages (golden.pipeline: hills add 1.78,
+// cave mul 1.0 => 1.78), where AnalyticGenerator returns a hand-derived 2.0. Equality no
+// longer holds and should not: what matters is that the pipeline never claims a LARGER
+// bound than the analytic field it reproduces, because overstating costs raycast steps
+// while understating tunnels.
+TEST_CASE("the pipeline's bound is no looser than the analytic generator's") {
 	auto g = golden_pipeline();
 	ve::AnalyticGenerator ref;
-	CHECK(g->sampler().lipschitz() == doctest::Approx(ref.lipschitz()));
+	CHECK(g->sampler().lipschitz() <= ref.lipschitz());
+	CHECK(g->sampler().lipschitz() == doctest::Approx(1.78f));
 }

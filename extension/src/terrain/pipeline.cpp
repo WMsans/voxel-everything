@@ -40,7 +40,7 @@ bool parse_pipeline_desc(const std::string &source, PipelineDesc *out, std::stri
 			continue;
 		}
 		if (key == "seed") out->seed = uint32_t(std::strtoul(rest.c_str(), nullptr, 10));
-		else if (key == "lipschitz") out->lipschitz_override = float(std::atof(rest.c_str()));
+		else if (key == "lipschitz") out->lipschitz_ceiling = float(std::atof(rest.c_str()));
 		else if (key == "allow_gpu_only") out->allow_gpu_only = std::atoi(rest.c_str()) != 0;
 		else if (key == "stage") {
 			if (rest.empty()) return fail("stage needs a path");
@@ -63,6 +63,21 @@ namespace {
 void hash_feed(uint64_t &h, const std::string &s) {
 	for (unsigned char c : s) { h ^= c; h *= 1099511628211ull; }
 }
+
+// Every contributor, so a rejected pipeline tells the artist which stage to budget rather
+// than just that the total is too large.
+std::string bound_report(float lip, float ceiling, const std::vector<StageManifest> &st) {
+	std::string s = "pipeline gradient bound " + std::to_string(lip) +
+			" exceeds the declared ceiling " + std::to_string(ceiling) +
+			"; raise the ceiling only if the raymarcher can afford the steps:";
+	for (const StageManifest &m : st) {
+		if (m.lipschitz_mode == LipschitzMode::kNone) continue;
+		s += "\n  " + m.name + ": " +
+				(m.lipschitz_mode == LipschitzMode::kAdd ? "add " : "mul ") +
+				std::to_string(m.lipschitz);
+	}
+	return s;
+}
 } // namespace
 
 bool resolve_pipeline(const PipelineDesc &desc, const std::vector<StageManifest> &loaded,
@@ -79,7 +94,9 @@ bool resolve_pipeline(const PipelineDesc &desc, const std::vector<StageManifest>
 	out->channels.push_back({"material", ChannelType::kUint, 2});
 
 	bool wrote_sdf = false;
-	float lip = 1.0f;
+	// Starts at zero: the first sdf writer establishes the field and adds its own bound.
+	float lip = 0.0f;
+	bool seen_sdf_writer = false;
 	uint64_t h = 1469598103934665603ull;
 
 	for (size_t i = 0; i < loaded.size(); i++) {
@@ -140,7 +157,24 @@ bool resolve_pipeline(const PipelineDesc &desc, const std::vector<StageManifest>
 			out->params.push_back(flat);
 		}
 
-		lip *= (m.lipschitz > 0.0f ? m.lipschitz : 1.0f);
+		bool writes_sdf = false;
+		for (const ChannelDecl &w : m.writes)
+			if (w.name == "sdf") writes_sdf = true;
+		if (writes_sdf) {
+			if (m.lipschitz_mode == LipschitzMode::kNone)
+				return fail("stage '" + m.name + "' writes sdf but declares no "
+						"//!lipschitz <add|mul> <n>; an unbounded field tunnels the raymarcher");
+			if (!seen_sdf_writer && m.lipschitz_mode != LipschitzMode::kAdd)
+				return fail("stage '" + m.name + "' is the first stage to write sdf, so its "
+						"//!lipschitz mode must be 'add': it establishes the field, and "
+						"multiplying a zero bound is not a bound");
+			lip = m.lipschitz_mode == LipschitzMode::kAdd ? lip + m.lipschitz
+			                                              : lip * m.lipschitz;
+			seen_sdf_writer = true;
+		} else if (m.lipschitz_mode != LipschitzMode::kNone) {
+			return fail("stage '" + m.name + "' declares //!lipschitz but writes no sdf, so it "
+					"cannot move the gradient of the distance field");
+		}
 		hash_feed(h, m.name);
 		hash_feed(h, m.body);
 		for (const ParamDecl &p : m.params) {
@@ -160,7 +194,9 @@ bool resolve_pipeline(const PipelineDesc &desc, const std::vector<StageManifest>
 			if (out->resources[b].name < out->resources[a].name)
 				std::swap(out->resources[a], out->resources[b]);
 
-	out->lipschitz = desc.lipschitz_override > 0.0f ? desc.lipschitz_override : lip;
+	out->lipschitz = lip;
+	if (desc.lipschitz_ceiling > 0.0f && lip > desc.lipschitz_ceiling)
+		return fail(bound_report(lip, desc.lipschitz_ceiling, out->stages));
 	hash_feed(h, std::to_string(desc.seed));
 	out->hash = h;
 	return true;

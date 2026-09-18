@@ -13,7 +13,9 @@ struct PipelineStageRef {
 };
 struct PipelineDesc {
     uint32_t seed = 1337;
-    float lipschitz_override = 0.0f;               // 0 => use the combined bound
+    // A CEILING, not an override: resolve computes the bound from the stages and refuses a
+    // pipeline whose computed bound exceeds this. 0 => no ceiling declared, no check.
+    float lipschitz_ceiling = 0.0f;
     bool allow_gpu_only = false;
     std::vector<PipelineStageRef> stages;
 };

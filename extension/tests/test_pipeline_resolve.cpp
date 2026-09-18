@@ -10,7 +10,7 @@ ve::StageManifest field_stage(const char *name, std::vector<const char *> writes
 	m.name = name;
 	m.kind = ve::StageKind::kField;
 	m.cpu_symbol = cpu;
-	m.lipschitz_mode = ve::LipschitzMode::kMul;
+	m.lipschitz_mode = ve::LipschitzMode::kAdd;
 	m.lipschitz = 1.0f;
 	auto type_for = [](const char *n) {
 		return std::string(n) == "material" ? ve::ChannelType::kUint : ve::ChannelType::kFloat;
@@ -35,6 +35,7 @@ TEST_CASE("built-in channels exist and declared channels get stable slots") {
 		field_stage("a", {"sdf", "temperature"}, {}),
 		field_stage("b", {"material"}, {"temperature"}),
 	};
+	st[1].lipschitz_mode = ve::LipschitzMode::kNone;
 	ve::ResolvedPipeline p;
 	std::string err;
 	REQUIRE_MESSAGE(ve::resolve_pipeline(desc_for(2), st, &p, &err), err);
@@ -117,14 +118,11 @@ TEST_CASE("a map stage in a field pipeline is rejected in Plan A") {
 	CHECK(err.find("map") != std::string::npos);
 }
 
-// LOCKED, AND DUE TO CHANGE. Multiplying every stage's bound understates an additive
-// stage, which is a correctness bug (raycast.cpp steps by 1 / lipschitz() and would
-// tunnel). The rule becomes "additive stages add, composing stages multiply" in the
-// fix: commit for the Lipschitz combination; this case moves with it.
-TEST_CASE("resources sort by name and lipschitz combines multiplicatively") {
+TEST_CASE("resources sort by name") {
 	std::vector<ve::StageManifest> st{field_stage("a", {"sdf"}, {})};
 	st[0].samples.push_back({"sector.z", "texture2d_r32f", 0.0f});
 	st[0].samples.push_back({"sector.a", "texture2d_r32f", 0.0f});
+	st[0].lipschitz_mode = ve::LipschitzMode::kAdd;
 	st[0].lipschitz = 1.5f;
 	ve::ResolvedPipeline p;
 	std::string err;
@@ -132,7 +130,93 @@ TEST_CASE("resources sort by name and lipschitz combines multiplicatively") {
 	REQUIRE(p.resources.size() == 2);
 	CHECK(p.resources[0].name == "sector.a");
 	CHECK(p.resources[1].name == "sector.z");
-	CHECK(p.lipschitz == doctest::Approx(1.5f));
+}
+
+TEST_CASE("additive stages add to the bound and composing stages multiply it") {
+	std::vector<ve::StageManifest> st{
+		field_stage("base", {"sdf"}, {}),
+		field_stage("relief", {"sdf"}, {"sdf"}),
+		field_stage("warp", {"sdf"}, {"sdf"}),
+	};
+	st[0].lipschitz_mode = ve::LipschitzMode::kAdd; st[0].lipschitz = 1.78f;
+	st[1].lipschitz_mode = ve::LipschitzMode::kAdd; st[1].lipschitz = 0.21f;
+	st[2].lipschitz_mode = ve::LipschitzMode::kMul; st[2].lipschitz = 2.0f;
+	ve::ResolvedPipeline p;
+	std::string err;
+	REQUIRE_MESSAGE(ve::resolve_pipeline(desc_for(3), st, &p, &err), err);
+	CHECK(p.lipschitz == doctest::Approx(3.98f));  // (1.78 + 0.21) * 2.0
+}
+
+TEST_CASE("a stage that writes no sdf contributes nothing and must declare nothing") {
+	std::vector<ve::StageManifest> st{
+		field_stage("base", {"sdf"}, {}),
+		field_stage("bands", {"material"}, {"sdf"}),
+	};
+	st[0].lipschitz_mode = ve::LipschitzMode::kAdd; st[0].lipschitz = 1.78f;
+	st[1].lipschitz_mode = ve::LipschitzMode::kNone;
+	ve::ResolvedPipeline p;
+	std::string err;
+	REQUIRE_MESSAGE(ve::resolve_pipeline(desc_for(2), st, &p, &err), err);
+	CHECK(p.lipschitz == doctest::Approx(1.78f));
+
+	st[1].lipschitz_mode = ve::LipschitzMode::kMul; st[1].lipschitz = 3.0f;
+	CHECK_FALSE(ve::resolve_pipeline(desc_for(2), st, &p, &err));
+	CHECK(err.find("bands") != std::string::npos);
+	CHECK(err.find("writes no sdf") != std::string::npos);
+}
+
+TEST_CASE("an sdf writer with no declared bound is rejected by name") {
+	std::vector<ve::StageManifest> st{field_stage("base", {"sdf"}, {})};
+	st[0].lipschitz_mode = ve::LipschitzMode::kNone;
+	ve::ResolvedPipeline p;
+	std::string err;
+	CHECK_FALSE(ve::resolve_pipeline(desc_for(1), st, &p, &err));
+	CHECK(err.find("base") != std::string::npos);
+	CHECK(err.find("//!lipschitz") != std::string::npos);
+}
+
+TEST_CASE("the first sdf writer must be additive, because a multiplied zero is not a bound") {
+	std::vector<ve::StageManifest> st{field_stage("base", {"sdf"}, {})};
+	st[0].lipschitz_mode = ve::LipschitzMode::kMul; st[0].lipschitz = 2.0f;
+	ve::ResolvedPipeline p;
+	std::string err;
+	CHECK_FALSE(ve::resolve_pipeline(desc_for(1), st, &p, &err));
+	CHECK(err.find("base") != std::string::npos);
+	CHECK(err.find("add") != std::string::npos);
+}
+
+TEST_CASE("the pipeline's lipschitz line is a ceiling, and exceeding it fails the load") {
+	std::vector<ve::StageManifest> st{
+		field_stage("base", {"sdf"}, {}),
+		field_stage("steep", {"sdf"}, {"sdf"}),
+	};
+	st[0].lipschitz_mode = ve::LipschitzMode::kAdd; st[0].lipschitz = 1.78f;
+	st[1].lipschitz_mode = ve::LipschitzMode::kAdd; st[1].lipschitz = 8.0f;
+
+	ve::PipelineDesc d = desc_for(2);
+	d.lipschitz_ceiling = 2.0f;
+	ve::ResolvedPipeline p;
+	std::string err;
+	CHECK_FALSE(ve::resolve_pipeline(d, st, &p, &err));
+	// The message must name every contributor, so the artist can see which stage to budget.
+	CHECK(err.find("base") != std::string::npos);
+	CHECK(err.find("steep") != std::string::npos);
+
+	// No ceiling declared: the computed bound is reported and the load succeeds.
+	d.lipschitz_ceiling = 0.0f;
+	REQUIRE_MESSAGE(ve::resolve_pipeline(d, st, &p, &err), err);
+	CHECK(p.lipschitz == doctest::Approx(9.78f));
+}
+
+TEST_CASE("a ceiling the stages fit under is accepted and does not replace the bound") {
+	std::vector<ve::StageManifest> st{field_stage("base", {"sdf"}, {})};
+	st[0].lipschitz_mode = ve::LipschitzMode::kAdd; st[0].lipschitz = 1.78f;
+	ve::PipelineDesc d = desc_for(1);
+	d.lipschitz_ceiling = 2.0f;
+	ve::ResolvedPipeline p;
+	std::string err;
+	REQUIRE_MESSAGE(ve::resolve_pipeline(d, st, &p, &err), err);
+	CHECK(p.lipschitz == doctest::Approx(1.78f));  // NOT 2.0
 }
 
 TEST_CASE("param overrides win, and the hash moves when they do") {
