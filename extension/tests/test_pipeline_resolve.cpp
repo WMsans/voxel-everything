@@ -116,6 +116,10 @@ TEST_CASE("a map stage in a field pipeline is rejected in Plan A") {
 	CHECK(err.find("map") != std::string::npos);
 }
 
+// LOCKED, AND DUE TO CHANGE. Multiplying every stage's bound understates an additive
+// stage, which is a correctness bug (raycast.cpp steps by 1 / lipschitz() and would
+// tunnel). The rule becomes "additive stages add, composing stages multiply" in the
+// fix: commit for the Lipschitz combination; this case moves with it.
 TEST_CASE("resources sort by name and lipschitz combines multiplicatively") {
 	std::vector<ve::StageManifest> st{field_stage("a", {"sdf"}, {})};
 	st[0].samples.push_back({"sector.z", "texture2d_r32f", 0.0f});
