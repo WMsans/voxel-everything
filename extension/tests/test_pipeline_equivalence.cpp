@@ -11,6 +11,7 @@
 #include "terrain/pipeline_load.h"
 #include "terrain/stage_manifest.h"
 #include "generator/generator.h"
+#include "analytic_oracle.h"
 #include "world/brick_eval.h"
 #include <cstring>
 #include <fstream>

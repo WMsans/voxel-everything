@@ -554,7 +554,7 @@ bool read_res_text(const String &path, std::string *out) {
 // override and (b) a PipelineFieldGenerator on the seam. Returns false when anything fails.
 //
 // A failure ABORTS world init rather than falling back. There used to be a fallback -- the
-// hardcoded AnalyticGenerator -- and it was worse than no terrain: the GPU would be on the
+// hardcoded fallback terrain -- and it was worse than no terrain: the GPU would be on the
 // pipeline's field or the stub while the CPU was on the analytic one, which is the silent
 // CPU/GPU divergence the whole pipeline design exists to prevent. A world that refuses to
 // start says so; a world that generates different terrain than its pipeline declares does not.

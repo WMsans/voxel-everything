@@ -4,6 +4,7 @@
 #include "mesh/chunk_residency.h"
 #include "mesh/mesh_chunk.h"
 #include "world/world_field.h"
+#include "analytic_oracle.h"
 #include <atomic>
 #include <cmath>
 #include <map>
