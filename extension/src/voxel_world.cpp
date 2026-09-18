@@ -25,6 +25,7 @@
 #include "terrain/stage_manifest.h"
 #include "terrain/field_codegen.h"
 #include "terrain/pipeline_field_generator.h"
+#include "terrain/pipeline_load.h"
 #include "render/mesh_pass.h"
 #include "render/mesh_service.h"
 #include "render/lod_build_pass.h"
@@ -47,7 +48,6 @@
 #include "mesh/box_merge.h"
 #include "mesh/consolidation.h"
 #include "generator/generator.h"
-#include "generator/field_generator.h"
 #include "world/brick_eval.h"
 #include "world/brick_flags.h"
 #include "world/brick_mip.h"
@@ -428,7 +428,7 @@ VoxelWorld::VoxelWorld() {
 	// WorldStore is created FIRST so the property setters always have a config
 	// to write -- pre-init setter semantics are identical to the plain fields
 	// they replace, and context wiring publishes the store from birth.
-	store_ = std::make_unique<WorldStore>(ve::WorldConfig{}, new ve::ProceduralFieldGenerator());
+	store_ = std::make_unique<WorldStore>(ve::WorldConfig{}, nullptr);
 	context_.store = store_.get();
 	// Task 15: the LoD runtime moves off this class into LodSystem (the lod mutex travels
 	// with it). Created BEFORE RenderOrchestrator: the orchestrator's teardown interleaves
@@ -550,55 +550,40 @@ bool read_res_text(const String &path, std::string *out) {
 
 } // namespace
 
-// Compiles assets/pipelines/default.pipeline into (a) a generated field.glslh installed as a
-// shader-source override and (b) a PipelineFieldGenerator on the seam. On ANY failure the
-// world keeps today's hardcoded terrain: a bad pipeline must degrade, never kill the world.
+// Compiles the terrain pipeline into (a) a generated field.glslh installed as a shader-source
+// override and (b) a PipelineFieldGenerator on the seam. Returns false when anything fails.
+//
+// A failure ABORTS world init rather than falling back. There used to be a fallback -- the
+// hardcoded fallback terrain -- and it was worse than no terrain: the GPU would be on the
+// pipeline's field or the stub while the CPU was on the analytic one, which is the silent
+// CPU/GPU divergence the whole pipeline design exists to prevent. A world that refuses to
+// start says so; a world that generates different terrain than its pipeline declares does not.
 //
 // First successful load wins (the stages-nonempty guard): shader-reload re-init re-runs
 // ensure_initialized, and replacing the generator deletes the old seam, so a reload-time swap
 // could pull the field out from under in-flight physics/mesh jobs. Pipeline edits therefore take
 // effect on fresh init, where nothing can hold the old seam mid-evaluation.
-void VoxelWorld::load_terrain_pipeline() {
-	if (!store_->terrain_pipeline().stages.empty()) return;
-	std::string src, err;
-	if (!read_res_text(terrain_pipeline_path_, &src)) {
-		UtilityFunctions::push_warning("terrain pipeline: cannot read ",
-				terrain_pipeline_path_, "; "
-				"keeping the built-in field");
-		return;
-	}
-	ve::PipelineDesc desc;
-	if (!ve::parse_pipeline_desc(src, &desc, &err)) {
-		UtilityFunctions::push_error(String("terrain pipeline: ") + err.c_str());
-		return;
-	}
-
-	std::vector<ve::StageManifest> loaded;
-	for (const ve::PipelineStageRef &r : desc.stages) {
-		std::string stage_src;
-		const String path = String("res://shaders/") + r.path.c_str();
-		if (!read_res_text(path, &stage_src)) {
-			UtilityFunctions::push_error("terrain pipeline: cannot read " + path);
-			return;
-		}
-		ve::StageManifest m;
-		if (!ve::parse_stage_manifest(stage_src, &m, &err)) {
-			UtilityFunctions::push_error(path + String(": ") + err.c_str());
-			return;
-		}
-		loaded.push_back(m);
-	}
-
+bool VoxelWorld::load_terrain_pipeline() {
+	if (!store_->terrain_pipeline().stages.empty()) return true;
+	std::string err;
 	ve::ResolvedPipeline resolved;
-	if (!ve::resolve_pipeline(desc, loaded, &resolved, &err)) {
+	std::vector<std::string> warnings;
+	if (!ve::load_pipeline(
+				[](const std::string &path, std::string *text) {
+					return read_res_text(String(path.c_str()), text);
+				},
+				terrain_pipeline_path_.utf8().get_data(), "res://shaders/", &resolved, &warnings,
+				&err)) {
 		UtilityFunctions::push_error(String("terrain pipeline: ") + err.c_str());
-		return;
+		return false;
 	}
+	for (const std::string &w : warnings)
+		UtilityFunctions::push_warning(String("terrain pipeline: ") + w.c_str());
 
 	std::string prelude;
 	if (!read_res_text("res://shaders/field_ops.glslh", &prelude)) {
 		UtilityFunctions::push_error("terrain pipeline: cannot read field_ops.glslh");
-		return;
+		return false;
 	}
 
 	// The CPU half must succeed BEFORE the GPU override is installed. Installing the override
@@ -607,12 +592,13 @@ void VoxelWorld::load_terrain_pipeline() {
 	ve::PipelineFieldGenerator *gen = ve::PipelineFieldGenerator::create(resolved, &err);
 	if (gen == nullptr) {
 		UtilityFunctions::push_error(String("terrain pipeline: ") + err.c_str());
-		return;
+		return false;
 	}
 
 	ve::set_shader_source_override("field.glslh", ve::generate_field_glslh(resolved, prelude));
 	store_->set_terrain_pipeline(resolved);
 	store_->set_generator(gen); // WorldStore takes ownership, as it does today
+	return true;
 }
 
 void VoxelWorld::ensure_initialized() {
@@ -620,7 +606,7 @@ void VoxelWorld::ensure_initialized() {
 	if (context_.render->shutdown_in_progress()) return;
 	if (context_.render->initialized()) return;
 	// The GPU graph compiles shaders that must already see the overridden field.glslh.
-	load_terrain_pipeline();
+	if (!load_terrain_pipeline()) return;
 	// Device acquisition + the whole GPU graph construction live in RenderOrchestrator
 	// (Task 12), in the exact allocation order this body used. Only the lifetime flag
 	// and the failure routing remain here.
@@ -708,7 +694,7 @@ void VoxelWorld::ensure_physics_initialized() {
 	if (physics_ready_) return;
 	// Physics-first worlds must see the same field the graphics init would install: the
 	// worker's set 1 is built from the stored pipeline, so load here too (first wins).
-	load_terrain_pipeline();
+	if (!load_terrain_pipeline()) return;
 	// The CPU cores are shared with the streaming path and outlive both
 	// (voxel_world.h); created through the same WorldStore lazy paths as the
 	// streaming init, so physics-first worlds get identical objects.
@@ -763,7 +749,7 @@ void VoxelWorld::ensure_physics_initialized() {
 				.scene_node = this,
 				.bubble_centers = &physics_bubble_centers_,
 		});
-		island_manager_->set_generator(&store_->generator()->sampler());
+		island_manager_->set_generator(store_->generator());
 		// The edit lock is already held here, which is where a sink must be registered.
 		store_->edits().add_sink(island_manager_);
 	}
@@ -906,7 +892,7 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 	job->ops = std::move(snap.ops);
 	job->snapshot = std::move(snap.sources);
 	job->override_table = snap.override_table;
-	job->gen = &store_->generator()->sampler();
+	job->gen = store_->generator();
 
 	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
 	std::vector<IslandExtractJob> jobs;
@@ -923,8 +909,7 @@ bool VoxelWorld::extract_component(const std::vector<ve::IVec3> &cells, IslandEx
 	for (size_t i = 0; i < boxes->size(); i++)
 		(*boxes)[i].world_aabb(&aabbs[i * 6], &aabbs[i * 6 + 3]);
 	ve::VolumeData cpu;
-	// Task 10: through the FieldGenerator seam -- same analytic field, no behavior change.
-	const ve::Generator &gen = store_->generator()->sampler();
+	const ve::Generator &gen = *store_->generator();
 	// The reference evaluates exactly what the GPU job received, not the live store, which
 	// this used to read without the edit lock after the worker returned.
 	const ve::SnapshotSources sources(job->snapshot);

@@ -1,38 +1,17 @@
 #include <doctest/doctest.h>
 #include <cmath>
 
-// The relief stage's parameters, mirrored here so the bound is checked against the numbers
-// that ship rather than against a declared constant.
-//
-// The pipeline declares lipschitz 2.0, and understating that bound is a CORRECTNESS bug:
-// raycast.cpp steps by 1/lipschitz() and would overshoot a surface. Overstating it costs
-// raycast steps and widens mesh_chunk.cpp's conservative padding. So the relief amplitudes
-// are budgeted against it rather than chosen for looks and hoped for.
-//
-//   hills d/dx: 6(0.11) + 3(0.031) + 1(0.23)  = 0.983
-//   hills d/dz: 6(0.13) + 3(0.043) + 1(0.19)  = 1.099
-//   |grad(y - h)| = sqrt(1 + |grad h|^2), so |grad h| must stay under sqrt(3) = 1.732.
+// The relief stage's parameters, mirrored here so the LOOK is checked against the numbers
+// that ship. The Lipschitz budget used to be worked by hand in this file; resolve_pipeline
+// computes it now (hills add 1.78 + relief add 0.21 = 1.99, under default.pipeline's
+// ceiling of 2.0) and test_lipschitz_sampled.cpp checks it against the real field.
 namespace {
 constexpr float kReliefAmpA = 250.0f;
 constexpr float kReliefFreqA = 0.0004f;
 constexpr float kReliefAmpB = 60.0f;
 constexpr float kReliefFreqB = 0.00083333f;
 
-constexpr float kHillsDx = 6.0f * 0.11f + 3.0f * 0.031f + 1.0f * 0.23f;
-constexpr float kHillsDz = 6.0f * 0.13f + 3.0f * 0.043f + 1.0f * 0.19f;
 } // namespace
-
-TEST_CASE("the relief stage fits inside the pipeline's declared Lipschitz bound") {
-	const float relief_per_axis = kReliefAmpA * kReliefFreqA + kReliefAmpB * kReliefFreqB;
-	CHECK(relief_per_axis == doctest::Approx(0.15f).epsilon(1e-3));
-
-	const float gx = kHillsDx + relief_per_axis;
-	const float gz = kHillsDz + relief_per_axis;
-	const float bound = std::sqrt(1.0f + gx * gx + gz * gz);
-	// Strictly under the declared 2.0, with the margin visible in the failure message.
-	CHECK(bound < 2.0f);
-	CHECK(bound == doctest::Approx(1.9606f).epsilon(1e-3));
-}
 
 // Long wavelengths are the price of the bound. The point is that they still buy a
 // landscape: this is what makes a 4 km horizon worth looking at rather than a flat sliver.

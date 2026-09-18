@@ -1,4 +1,5 @@
 #include "terrain/stage_manifest.h"
+#include <cmath>
 #include <cstdlib>
 #include <sstream>
 
@@ -91,7 +92,25 @@ bool parse_stage_manifest(const std::string &source, StageManifest *out, std::st
 			p.value = float(std::atof(trim(rest.substr(eq + 1)).c_str()));
 			out->params.push_back(p);
 		}
-		else if (key == "lipschitz") { out->lipschitz = float(std::atof(rest.c_str())); }
+		else if (key == "use") {
+			if (rest.find('.') == std::string::npos)
+				return fail("//!use needs '<stage>.<param>': " + rest);
+			out->uses.push_back(rest);
+		}
+		else if (key == "lipschitz") {
+			const size_t sp2 = rest.find_first_of(" \t");
+			if (sp2 == std::string::npos)
+				return fail("//!lipschitz needs a mode and a number: "
+						"'add' for a stage that adds a term to sdf, 'mul' for one that "
+						"composes -- e.g. //!lipschitz add 1.78");
+			const std::string mode = rest.substr(0, sp2);
+			if (mode == "add") out->lipschitz_mode = LipschitzMode::kAdd;
+			else if (mode == "mul") out->lipschitz_mode = LipschitzMode::kMul;
+			else return fail("unknown //!lipschitz mode '" + mode + "' (expected add or mul)");
+			out->lipschitz = float(std::atof(trim(rest.substr(sp2)).c_str()));
+			if (!std::isfinite(out->lipschitz) || out->lipschitz <= 0.0f)
+				return fail("//!lipschitz value must be finite and positive: " + rest);
+		}
 		else if (key == "bounds")    { out->bounds = float(std::atof(rest.c_str())); }
 		else if (key == "iterate")   { out->iterate = std::atoi(rest.c_str()); }
 		else if (key == "cpu")       { out->cpu_symbol = rest; }

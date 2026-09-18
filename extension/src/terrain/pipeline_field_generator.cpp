@@ -1,6 +1,37 @@
 #include "terrain/pipeline_field_generator.h"
 
+#include <cstddef>
+#include <cstring>
+#include <new>
+
 namespace ve {
+
+namespace {
+// A mirror's param name is either this stage's own ("<stage>.<name>") or a cross-stage use
+// spelled the way the GLSL spells it -- "hills_amp_a" for "hills.amp_a", which is exactly
+// how the params UBO flattens them. Task: //!use declares which of these are legal; this
+// only has to find the value.
+int find_param(const ResolvedPipeline &p, const std::string &stage, const std::string &name) {
+	const std::string own = stage + "." + name;
+	for (size_t i = 0; i < p.params.size(); i++)
+		if (p.params[i].name == own) return int(i);
+	for (size_t i = 0; i < p.params.size(); i++) {
+		std::string ident = p.params[i].name;
+		for (char &c : ident) if (c == '.') c = '_';
+		if (ident == name) return int(i);
+	}
+	return -1;
+}
+
+std::shared_ptr<void> make_blob(const void *words, size_t word_bytes, size_t size) {
+	void *storage = ::operator new(size, std::align_val_t(alignof(std::max_align_t)));
+	std::memset(storage, 0, size);
+	if (word_bytes != 0) std::memcpy(storage, words, word_bytes);
+	return std::shared_ptr<void>(storage, [](void *p) {
+		::operator delete(p, std::align_val_t(alignof(std::max_align_t)));
+	});
+}
+} // namespace
 
 PipelineFieldGenerator *PipelineFieldGenerator::create(const ResolvedPipeline &p,
 		std::string *error) {
@@ -11,58 +42,65 @@ PipelineFieldGenerator *PipelineFieldGenerator::create(const ResolvedPipeline &p
 	PipelineFieldGenerator *g = new PipelineFieldGenerator();
 	g->pipeline_ = p;
 
-	int cursor = 0;
 	for (const StageManifest &s : p.stages) {
-		StageFn fn = nullptr;
-		if (!s.cpu_symbol.empty()) {
-			fn = StageLibrary::instance().lookup(s.cpu_symbol);
-			if (fn == nullptr) {
-				if (error) *error = "stage '" + s.name + "' names an unregistered cpu symbol: " +
-						s.cpu_symbol;
+		if (s.cpu_symbol.empty()) {
+			// GPU-only stage: the CPU field is already inexact, and sample() skips it.
+			g->fns_.push_back(nullptr);
+			g->slot_blobs_.push_back(nullptr);
+			g->param_blobs_.push_back(nullptr);
+			continue;
+		}
+		const StageBinding *b = StageLibrary::instance().lookup(s.cpu_symbol);
+		if (b == nullptr) {
+			if (error) *error = "stage '" + s.name + "' names an unregistered cpu symbol: " +
+					s.cpu_symbol;
+			delete g;
+			return nullptr;
+		}
+		g->fns_.push_back(b->fn);
+
+		std::vector<int> slots;
+		for (const std::string &n : split_binding_names(b->slot_names)) {
+			const int slot = p.channel_slot(n);
+			if (slot < 0) {
+				if (error) *error = "stage '" + s.name + "' cpu mirror binds channel '" + n +
+						"', which this pipeline does not declare";
 				delete g;
 				return nullptr;
 			}
+			slots.push_back(slot);
 		}
-		g->fns_.push_back(fn);
+		g->slot_blobs_.push_back(make_blob(slots.data(), slots.size() * sizeof(int), b->slot_size));
 
-		StageSlots slots;
-		slots.p = p.channel_slot("p");
-		slots.sdf = p.channel_slot("sdf");
-		slots.material = p.channel_slot("material");
-		// extra[i] is the slot of this stage's i-th declared write, then its reads, in
-		// declaration order -- the same order the generated GLSL names them.
-		int n = 0;
-		for (const ChannelDecl &w : s.writes)
-			if (n < FieldCtx::kMaxChannels) slots.extra[n++] = p.channel_slot(w.name);
-		for (const ChannelDecl &r : s.reads)
-			if (n < FieldCtx::kMaxChannels) slots.extra[n++] = p.channel_slot(r.name);
-		g->slots_.push_back(slots);
-
-		g->param_base_.push_back(cursor);
-		g->param_count_.push_back(int(s.params.size()));
-		cursor += int(s.params.size());
+		std::vector<float> params;
+		for (const std::string &n : split_binding_names(b->param_names)) {
+			const int idx = find_param(p, s.name, n);
+			if (idx < 0) {
+				if (error) *error = "stage '" + s.name + "' cpu mirror binds param '" + n +
+						"', which neither this stage nor a //!use declares";
+				delete g;
+				return nullptr;
+			}
+			params.push_back(p.params[size_t(idx)].value);
+		}
+		g->param_blobs_.push_back(make_blob(params.data(), params.size() * sizeof(float), b->param_size));
 	}
-	for (const ParamDecl &pm : p.params) g->param_values_.push_back(pm.value);
 	return g;
 }
 
-Sample PipelineFieldGenerator::View::sample(float x, float y, float z) const {
+Sample PipelineFieldGenerator::sample(float x, float y, float z) const {
 	FieldCtx ctx;
-	const ResolvedPipeline &p = owner_->pipeline_;
+	const ResolvedPipeline &p = pipeline_;
 	const int pslot = p.channel_slot("p");
 	ctx.v(pslot)[0] = x;
 	ctx.v(pslot)[1] = y;
 	ctx.v(pslot)[2] = z;
 
-	for (size_t i = 0; i < owner_->fns_.size(); i++) {
-		StageFn fn = owner_->fns_[i];
+	for (size_t i = 0; i < fns_.size(); i++) {
+		StageFn fn = fns_[i];
 		if (fn == nullptr) continue;  // GPU-only stage: the CPU field is already inexact
-		StageParams sp;
-		sp.count = owner_->param_count_[i];
-		sp.values = sp.count == 0 ? nullptr
-				: owner_->param_values_.data() + owner_->param_base_[i];
 		FieldResources res;
-		fn(ctx, owner_->slots_[i], sp, res);
+		fn(ctx, slot_blobs_[i].get(), param_blobs_[i].get(), res);
 	}
 
 	Sample s{};
@@ -71,7 +109,7 @@ Sample PipelineFieldGenerator::View::sample(float x, float y, float z) const {
 	return s;
 }
 
-FieldSample PipelineFieldGenerator::View::sample_gradient(float x, float y, float z) const {
+FieldSample PipelineFieldGenerator::sample_gradient(float x, float y, float z) const {
 	// The base implementation already differentiates through THIS view's sample() (the
 	// pipeline field) with the same epsilon the GPU uses; only the flag changes (see the
 	// header for why exact is the honest report here).

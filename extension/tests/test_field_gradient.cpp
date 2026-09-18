@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include "generator/generator.h"
+#include "analytic_oracle.h"
 #include "generator/edit_ops.h"
 #include "world/brick_eval.h"
 #include "world/override_store.h"

@@ -3,6 +3,7 @@
 #include "world/override_store.h"
 #include "world/brick_eval.h"
 #include "generator/generator.h"
+#include "analytic_oracle.h"
 #include "shade/oct.h"
 #include <cmath>
 #include <map>

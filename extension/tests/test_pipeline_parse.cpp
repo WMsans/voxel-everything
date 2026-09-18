@@ -16,7 +16,7 @@ TEST_CASE("parses a pipeline with indented param overrides") {
 	std::string err;
 	REQUIRE_MESSAGE(ve::parse_pipeline_desc(src, &d, &err), err);
 	CHECK(d.seed == 1337u);
-	CHECK(d.lipschitz_override == doctest::Approx(2.0f));
+	CHECK(d.lipschitz_ceiling == doctest::Approx(2.0f));
 	REQUIRE(d.stages.size() == 2);
 	CHECK(d.stages[0].path == "stages/hills.field.glslh");
 	REQUIRE(d.stages[0].param_overrides.size() == 2);

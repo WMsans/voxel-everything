@@ -13,7 +13,9 @@ struct PipelineStageRef {
 };
 struct PipelineDesc {
     uint32_t seed = 1337;
-    float lipschitz_override = 0.0f;               // 0 => use the combined bound
+    // A CEILING, not an override: resolve computes the bound from the stages and refuses a
+    // pipeline whose computed bound exceeds this. 0 => no ceiling declared, no check.
+    float lipschitz_ceiling = 0.0f;
     bool allow_gpu_only = false;
     std::vector<PipelineStageRef> stages;
 };
@@ -26,6 +28,9 @@ struct ResolvedPipeline {
     std::vector<ParamDecl> params;          // flattened "<stage>.<param>", resolved values
     float lipschitz = 2.0f;
     bool cpu_exact = true;
+    // Non-fatal problems the caller should surface. Resolve stays pure C++ (no godot-cpp),
+    // so it collects text rather than calling push_warning itself.
+    std::vector<std::string> warnings;
     uint64_t hash = 0;                      // FNV-1a over every stage body + resolved params
     int channel_slot(const std::string &name) const;  // -1 when absent
 };

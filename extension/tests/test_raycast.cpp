@@ -2,6 +2,7 @@
 #include "world/raycast.h"
 #include "world/brick_eval.h"
 #include "generator/generator.h"
+#include "analytic_oracle.h"
 #include <cmath>
 
 TEST_CASE("a ray straight down from the sky lands on the surface") {

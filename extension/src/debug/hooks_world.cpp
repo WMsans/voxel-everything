@@ -91,6 +91,15 @@
 #include "debug/hooks_common.h"
 
 namespace godot {
+namespace {
+
+const ve::Generator *generator_or_null(VoxelWorld *world) {
+	if (world == nullptr || world->context().store == nullptr)
+		return nullptr;
+	return world->context().store->generator();
+}
+
+} // namespace
 
 Dictionary VoxelDebugHooks::debug_perf_stats() {
 	Dictionary d;
@@ -403,6 +412,8 @@ void VoxelDebugHooks::debug_hold_consolidation(bool held) {
 Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 	Dictionary d;
 	world_->ensure_physics_initialized();
+	const ve::Generator *gen_ptr = generator_or_null(world_);
+	if (gen_ptr == nullptr) return d;
 	std::unique_lock<std::mutex> edit_lock(world_->context().store->edit_mutex());
 	if (!world_->mesh_service() || !world_->context().store->edit_log() || !world_->context().store->overrides() || !world_->context().store->residency()) return d;
 	const ve::IVec3 r{region.x, region.y, region.z};
@@ -424,7 +435,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 	if (!bricks.empty()) {
 		if (!sources_ok) return d;
 		job.source = snap.sources;
-		job.gen = &world_->context().store->generator()->sampler();
+		job.gen = world_->context().store->generator();
 	}
 	const int existing_table = world_->context().store->override_table_for_region(r);
 	if (existing_table >= 0) {
@@ -445,7 +456,7 @@ Dictionary VoxelDebugHooks::debug_consolidate_diff(Vector3i region) {
 	world_->mesh_service()->run_sync([](MeshPass &) {});
 	std::vector<ConsolidateResult> results;
 	if (world_->mesh_service()->collect_consolidations(&results) != 1 || results[0].failed) return d;
-	const ve::Generator &gen = world_->context().store->generator()->sampler();
+	const ve::Generator &gen = *gen_ptr;
 	const ve::FieldView view = world_->context().store->field().locked_by_caller();
 	int sdf_mismatches = 0, mat_mismatches = 0;
 	Dictionary first;
@@ -706,7 +717,9 @@ void VoxelDebugHooks::debug_store_volume(int slot, const PackedByteArray &sdf,
 }
 
 Vector2 VoxelDebugHooks::debug_eval_field(Vector3 p, const PackedByteArray &ops, int op_count) {
-	const ve::Generator &gen = world_->context().store->generator()->sampler();
+	const ve::Generator *gen_ptr = generator_or_null(world_);
+	if (gen_ptr == nullptr) return Vector2();
+	const ve::Generator &gen = *gen_ptr;
 	const ve::EditOp *ptr = nullptr;
 	if (op_count > 0) {
 		if (ops.size() < op_count * static_cast<int64_t>(sizeof(ve::EditOp))) {
@@ -720,7 +733,9 @@ Vector2 VoxelDebugHooks::debug_eval_field(Vector3 p, const PackedByteArray &ops,
 }
 
 Dictionary VoxelDebugHooks::debug_eval_field_gradient(Vector3 p, const PackedByteArray &ops, int op_count) {
-	const ve::Generator &gen = world_->context().store->generator()->sampler();
+	const ve::Generator *gen_ptr = generator_or_null(world_);
+	if (gen_ptr == nullptr) return Dictionary();
+	const ve::Generator &gen = *gen_ptr;
 	const ve::EditOp *ptr = nullptr;
 	if (op_count > 0) {
 		if (ops.size() < op_count * static_cast<int64_t>(sizeof(ve::EditOp))) {
@@ -788,7 +803,9 @@ void VoxelDebugHooks::debug_upload_region_ops(int region_slot, const PackedByteA
 
 bool VoxelDebugHooks::debug_brick_has_surface(Vector3i brick, const PackedByteArray &ops,
 		int op_count) const {
-	const ve::Generator &gen = world_->context().store->generator()->sampler();
+	const ve::Generator *gen_ptr = generator_or_null(world_);
+	if (gen_ptr == nullptr) return false;
+	const ve::Generator &gen = *gen_ptr;
 	const ve::EditOp *ptr = nullptr;
 	if (op_count > 0) {
 		if (ops.size() < op_count * static_cast<int64_t>(sizeof(ve::EditOp))) {
@@ -850,7 +867,9 @@ Dictionary VoxelDebugHooks::debug_brick_diff(Vector3i brick, int region_slot,
 	d["slot"] = slot;
 	if (slot < 0) return d;
 
-	const ve::Generator &gen = world_->context().store->generator()->sampler();
+	const ve::Generator *gen_ptr = generator_or_null(world_);
+	if (gen_ptr == nullptr) return d;
+	const ve::Generator &gen = *gen_ptr;
 	ve::BrickEval ref{};
 	ve::eval_brick(gen, ptr, op_count, b, &ref, &world_->context().store->volumes(), world_->context().store->overrides());
 
@@ -982,7 +1001,9 @@ Dictionary VoxelDebugHooks::debug_brick_flags(Vector3i region) {
 		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
 		ops = world_->context().store->edit_log()->ops({region.x, region.y, region.z});
 	}
-	const ve::Generator &gen = world_->context().store->generator()->sampler();
+	const ve::Generator *gen_ptr = generator_or_null(world_);
+	if (gen_ptr == nullptr) return d;
+	const ve::Generator &gen = *gen_ptr;
 	const int32_t *slots = reinterpret_cast<const int32_t *>(table.ptr());
 	const uint32_t *gpu_flags = reinterpret_cast<const uint32_t *>(flags.ptr());
 	int compared = 0;
@@ -1155,7 +1176,9 @@ Dictionary VoxelDebugHooks::debug_occupancy_fallback_diff(Vector3i region) {
 			static_cast<uint32_t>(rslot) * block_bytes, block_bytes);
 	if (gpu.size() < static_cast<int>(block_bytes)) return d;
 
-	const ve::Generator &gen = world_->context().store->generator()->sampler();
+	const ve::Generator *gen_ptr = generator_or_null(world_);
+	if (gen_ptr == nullptr) return d;
+	const ve::Generator &gen = *gen_ptr;
 	int compared = 0, fallback = 0, mismatches = 0;
 	Vector3i first(-1, -1, -1);
 	for (int bi = 0; bi < ve::kRegionBrickCount; bi++) {
@@ -1207,7 +1230,9 @@ Dictionary VoxelDebugHooks::debug_occupancy_diff(Vector3i region) {
 		ops = world_->context().store->edit_log()->ops({region.x, region.y, region.z});
 	}
 	const int32_t *slots = reinterpret_cast<const int32_t *>(table.ptr());
-	const ve::Generator &gen = world_->context().store->generator()->sampler();
+	const ve::Generator *gen_ptr = generator_or_null(world_);
+	if (gen_ptr == nullptr) return d;
+	const ve::Generator &gen = *gen_ptr;
 	int compared = 0, mismatches = 0;
 	Vector3i first(-1, -1, -1);
 	for (int bi = 0; bi < ve::kRegionBrickCount; bi++) {
@@ -1238,7 +1263,7 @@ PackedFloat32Array VoxelDebugHooks::debug_generator_fingerprint() {
 			world_->context().store->generator() == nullptr) {
 		return out;
 	}
-	const ve::Generator &gen = world_->context().store->generator()->sampler();
+	const ve::Generator &gen = *world_->context().store->generator();
 	// Same regimes as tests/golden/field_baseline.txt: surface, cave, deep, sky, far.
 	static const float kPts[][3] = {
 		{0.0f, 51.2f, 0.0f}, {12.3f, 55.0f, -7.8f}, {30.0f, 50.85f, 30.0f},
@@ -1262,7 +1287,9 @@ float VoxelDebugHooks::debug_field_sdf(Vector3 p) {
 int VoxelDebugHooks::debug_cell_state(Vector3i cell) {
 	if (!world_->context().store->edit_log()) return static_cast<int>(ve::kCellUnknown);
 	const ve::IVec3 c{cell.x, cell.y, cell.z};
-	const ve::Generator &gen = world_->context().store->generator()->sampler();
+	const ve::Generator *gen_ptr = generator_or_null(world_);
+	if (gen_ptr == nullptr) return static_cast<int>(ve::kCellUnknown);
+	const ve::Generator &gen = *gen_ptr;
 	std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
 	const std::vector<ve::EditOp> &ops = world_->context().store->edit_log()->ops(ve::region_of_brick(c));
 	return static_cast<int>(ve::cell_state_field(gen, ops.data(),

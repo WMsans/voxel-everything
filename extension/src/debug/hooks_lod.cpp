@@ -740,7 +740,7 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 		return d;
 
 	const float cell = ve::lod_cell_size(level);
-	const ve::Generator &gen = world_->context().store->generator()->sampler();
+	const ve::Generator &gen = *world_->context().store->generator();
 
 	// 1. The fine lattice against the CPU field: every op the lattice can read (never
 	// truncated), cut by the same relevance rule as the build (plan decision 4), over a

@@ -8,8 +8,10 @@
 #include <doctest/doctest.h>
 #include "terrain/pipeline.h"
 #include "terrain/pipeline_field_generator.h"
+#include "terrain/pipeline_load.h"
 #include "terrain/stage_manifest.h"
 #include "generator/generator.h"
+#include "analytic_oracle.h"
 #include "world/brick_eval.h"
 #include <cstring>
 #include <fstream>
@@ -26,20 +28,22 @@ std::string slurp(const std::string &p) {
 	return o.str();
 }
 
+// An ifstream reader over the repo, the native counterpart of VoxelWorld's FileAccess one.
+bool repo_reader(const std::string &path, std::string *out) {
+	std::ifstream f(path);
+	if (!f.good()) return false;
+	std::ostringstream o;
+	o << f.rdbuf();
+	*out = o.str();
+	return true;
+}
+
 std::unique_ptr<ve::PipelineFieldGenerator> golden_pipeline() {
 	const std::string root(VE_REPO_ROOT);
-	ve::PipelineDesc d;
-	std::string err;
-	REQUIRE_MESSAGE(ve::parse_pipeline_desc(
-			slurp(root + "/assets/pipelines/golden.pipeline"), &d, &err), err);
-	std::vector<ve::StageManifest> loaded;
-	for (const auto &r : d.stages) {
-		ve::StageManifest m;
-		REQUIRE_MESSAGE(ve::parse_stage_manifest(slurp(root + "/shaders/" + r.path), &m, &err), err);
-		loaded.push_back(m);
-	}
 	ve::ResolvedPipeline p;
-	REQUIRE_MESSAGE(ve::resolve_pipeline(d, loaded, &p, &err), err);
+	std::string err;
+	REQUIRE_MESSAGE(ve::load_pipeline(repo_reader, root + "/assets/pipelines/golden.pipeline",
+			root + "/shaders/", &p, nullptr, &err), err);
 	ve::PipelineFieldGenerator *g = ve::PipelineFieldGenerator::create(p, &err);
 	REQUIRE_MESSAGE(g != nullptr, err);
 	return std::unique_ptr<ve::PipelineFieldGenerator>(g);
@@ -61,7 +65,7 @@ TEST_CASE("the frozen golden pipeline reproduces the analytic field over the bas
 	for (int i = 0; i < 512; i++) {
 		const float x = next(-20.0f, 60.0f), y = next(21.2f, 81.2f), z = next(-20.0f, 60.0f);
 		const ve::Sample a = ref.sample(x, y, z);
-		const ve::Sample b = g->eval(x, y, z);
+		const ve::Sample b = g->sample(x, y, z);
 		CHECK(bits(a.sdf) == bits(b.sdf));
 		CHECK(a.material == b.material);
 		checked++;
@@ -79,15 +83,21 @@ TEST_CASE("the frozen golden pipeline reproduces whole bricks") {
 	for (const ve::IVec3 &b : bricks) {
 		ve::BrickEval want{}, got{};
 		ve::eval_brick(ref, nullptr, 0, b, &want);
-		ve::eval_brick(g->sampler(), nullptr, 0, b, &got);
+		ve::eval_brick(*g, nullptr, 0, b, &got);
 		CHECK(std::memcmp(want.brick.sdf, got.brick.sdf, sizeof(want.brick.sdf)) == 0);
 		CHECK(std::memcmp(want.brick.mat, got.brick.mat, sizeof(want.brick.mat)) == 0);
 		CHECK(std::memcmp(&want.mips, &got.mips, sizeof(want.mips)) == 0);
 	}
 }
 
-TEST_CASE("the pipeline reports the analytic generator's lipschitz bound") {
+// The pipeline's bound is now COMPUTED from its stages (golden.pipeline: hills add 1.78,
+// cave mul 1.0 => 1.78), where AnalyticGenerator returns a hand-derived 2.0. Equality no
+// longer holds and should not: what matters is that the pipeline never claims a LARGER
+// bound than the analytic field it reproduces, because overstating costs raycast steps
+// while understating tunnels.
+TEST_CASE("the pipeline's bound is no looser than the analytic generator's") {
 	auto g = golden_pipeline();
 	ve::AnalyticGenerator ref;
-	CHECK(g->sampler().lipschitz() == doctest::Approx(ref.lipschitz()));
+	CHECK(g->lipschitz() <= ref.lipschitz());
+	CHECK(g->lipschitz() == doctest::Approx(1.78f));
 }

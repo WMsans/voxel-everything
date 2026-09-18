@@ -5,6 +5,7 @@
 // Regenerate after an INTENTIONAL terrain change:  cd extension && VE_REGEN_GOLDEN=1 ./build/tests/ve_tests
 #include <doctest/doctest.h>
 #include "generator/generator.h"
+#include "analytic_oracle.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

@@ -1,5 +1,6 @@
 #include "connectivity/contact_refine.h"
 #include "world/override_store.h"
+#include "analytic_oracle.h"
 #include <doctest/doctest.h>
 #include <map>
 

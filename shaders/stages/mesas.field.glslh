@@ -1,0 +1,30 @@
+//!stage     mesas
+//!kind      field
+//!in        sdf : float
+//!in        material : uint
+//!out       sdf : float
+//!out       mesa_mask : float
+//!out       material : uint
+//!param     spacing : float = 320.0
+//!param     lift : float = 45.0
+//!param     plateau : float = 0.5
+//!lipschitz add 1.3
+//!cpu       ve::stage_mesas
+
+// Plateaus on a square lattice: where both axis sines are positive, lift the terrain. The
+// mask is published as its own channel so a later stage can band on it without recomputing
+// the product.
+//
+// Bound: the lift term is lift * sin(kx) * sin(kz) with k = 2*pi/spacing, so each axis
+// derivative is at most lift * k = 45 * 0.019635 = 0.8836 and |grad| <= sqrt(2) * 0.8836 =
+// 1.2496. Declared 1.3. max(0, u) has a crease but no slope steeper than u's own, so it
+// does not raise the bound. This stage ADDS a term to sdf, hence `add`.
+
+void stage_mesas(inout FieldCtx ctx) {
+	float k = 6.2831853 / P.mesas_spacing;
+	float u = sin(ctx.p.x * k) * sin(ctx.p.z * k);
+	float mask = max(0.0, u);
+	ctx.mesa_mask = mask;
+	ctx.sdf -= P.mesas_lift * mask;
+	if (mask > P.mesas_plateau && ctx.sdf <= 0.0) ctx.material = MAT_ROCK;
+}

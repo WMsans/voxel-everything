@@ -1068,7 +1068,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_normal_probe(Vector3 origin, Vector3 
 	// GPU's authoritative buffers mirror -- not from an inline analytic formula, so
 	// edits, stored volumes and consolidated overrides are all covered. For a pure
 	// procedural hit this reduces exactly to Task 1's analytic gradient.
-	const ve::Generator &gen = world_->context().store->generator()->sampler();
+	const ve::Generator &gen = *world_->context().store->generator();
 	std::lock_guard<std::mutex> edit_lock(world_->context().store->edit_mutex());
 	for (int y = 0; y < h; y++) {
 		for (int x = 0; x < w; x++) {

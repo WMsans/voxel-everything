@@ -2,6 +2,7 @@
 #include "connectivity/occupancy.h"
 #include "mesh/box_merge.h"
 #include "generator/volume_set.h"
+#include "analytic_oracle.h"
 #include "world/brick_eval.h"
 #include "world/raycast.h"
 #include <doctest/doctest.h>

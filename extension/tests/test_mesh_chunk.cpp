@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 #include "mesh/mesh_chunk.h"
 #include "generator/generator.h"
+#include "analytic_oracle.h"
 #include "world/brick_eval.h" // ve::eval_field, for the brute-force oracle below
 #include "world/override_store.h"
 #include <cmath>

@@ -2,11 +2,11 @@
 
 namespace godot {
 
-WorldStore::WorldStore(const ve::WorldConfig &config, ve::FieldGenerator *generator)
+WorldStore::WorldStore(const ve::WorldConfig &config, ve::Generator *generator)
 	: config_(config),
-	  // Task 10: the field-generation seam is injected at construction; a null pointer
-	  // means "today's terrain". Owned from here on (see the header comment).
-	  generator_(generator ? generator : new ve::ProceduralFieldGenerator()) {
+	  // Task 10: the field-generation seam is injected at construction. Owned from here
+	  // on (see the header comment).
+	  generator_(generator) {
 	// The store is its own sink for the streamer handoff queue. Registered here because
 	// nothing else exists yet: no lock is needed and none is held.
 	pipeline_.add_sink(this);
@@ -22,10 +22,10 @@ ve::RegionWindow WorldStore::region_window() const {
 	return residency_ ? residency_->window() : ve::RegionWindow{};
 }
 
-void WorldStore::set_generator(ve::FieldGenerator *generator) {
+void WorldStore::set_generator(ve::Generator *generator) {
 	if (generator == generator_) return;
 	delete generator_; // pre-init only: nothing can hold the old seam mid-evaluation
-	generator_ = generator ? generator : new ve::ProceduralFieldGenerator();
+	generator_ = generator;
 }
 
 void WorldStore::record(const ve::Invalidation &inv) {

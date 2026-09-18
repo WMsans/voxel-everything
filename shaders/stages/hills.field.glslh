@@ -5,12 +5,18 @@
 //!param     amp_a : float = 6.0
 //!param     amp_b : float = 3.0
 //!param     amp_c : float = 1.0
-//!lipschitz 2.0
+//!lipschitz add 1.78
 //!cpu       ve::stage_hills
 
 // Ported verbatim from ve::AnalyticGenerator::sample (generator.cpp). SURFACE_Y comes from
 // the prelude. `height` is published so the material stage can band on it without
 // recomputing the sum.
+//
+// Bound: sdf = y - SURFACE_Y - h, so |grad sdf| = sqrt(1 + |grad h|^2).
+//   |dh/dx| <= 6(0.11) + 3(0.031) + 1(0.23) = 0.983
+//   |dh/dz| <= 6(0.13) + 3(0.043) + 1(0.19) = 1.099
+//   sqrt(1 + 0.983^2 + 1.099^2) = 1.7816
+// This stage establishes the field, so it combines with `add`.
 void stage_hills(inout FieldCtx ctx) {
 	float x = ctx.p.x, z = ctx.p.z;
 	ctx.height = P.hills_amp_a * sin(x * 0.11) * cos(z * 0.13)

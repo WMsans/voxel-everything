@@ -1,7 +1,7 @@
 # Voxel Everything — Stage Authoring (Sub-project 6)
 
 **Date:** 2026-09-17
-**Status:** Specified; not yet implemented
+**Status:** Implemented; see docs/superpowers/plans/2026-09-17-stage-authoring-results.md
 **Roadmap:** the pathway in `docs/superpowers/plans/2026-09-13-frame-module.md`
 ("Sub-project 6 — Stage authoring"). Domain nouns: `CONTEXT.md`.
 **Prior spec:** `docs/superpowers/specs/2026-09-03-terrain-pipeline-design.md` — §4 (manifest
@@ -344,3 +344,10 @@ exit criteria.
 - The Lipschitz fix is sequenced **second**, right after the loader consolidation, so it lands
   before M3 and M4 touch `resolve_pipeline`.
 - `mesas` gets its own pipeline file rather than joining `default.pipeline`.
+- All four CPU mirrors migrated in one commit rather than one per commit: `StageFn`'s
+  signature change is atomic.
+- `VE_STAGE_SLOTS` takes the PascalCase struct prefix explicitly, because a macro cannot
+  capitalise its argument.
+- The spec's `test_lipschitz_rule.cpp` is split in two: the combination-rule and ceiling
+  cases live in `test_pipeline_resolve.cpp` beside the other resolver cases, and only the
+  sampled check got its own file, `test_lipschitz_sampled.cpp`.

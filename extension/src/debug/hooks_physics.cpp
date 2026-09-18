@@ -390,7 +390,7 @@ Dictionary VoxelDebugHooks::debug_mesh_lattice_diff(Vector3i chunk) {
 	world_->mesh_service()->run_sync([&](MeshPass &pass) { ok = pass.run_field_sync(job, &gpu); });
 	if (!ok) return d;
 
-	const ve::Generator &gen = world_->context().store->generator()->sampler();
+	const ve::Generator &gen = *world_->context().store->generator();
 	const ve::DcGrid g = ve::chunk_dc_grid(c);
 	int max_diff = 0, over_one = 0;
 	bool pos = false, neg = false;
@@ -459,7 +459,7 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	if (gpu.failed) return d; // short readback: do not present partial data as a diff
 
 	const ve::DcGrid g = ve::chunk_dc_grid(c);
-	const ve::Generator &gen = world_->context().store->generator()->sampler();
+	const ve::Generator &gen = *world_->context().store->generator();
 
 	// 1. The lattice against the CPU field. One encoded step of sin() drift is invisible.
 	int lat_max = 0, lat_over = 0;
@@ -638,7 +638,7 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 	job.ops = std::move(snap.ops);
 	job.snapshot = std::move(snap.sources);
 	job.override_table = snap.override_table;
-	job.gen = &world_->context().store->generator()->sampler();
+	job.gen = world_->context().store->generator();
 
 	// Drive the worker synchronously: this is a diagnostic, not the streaming path.
 	std::vector<IslandExtractJob> jobs;
@@ -658,7 +658,7 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 	for (size_t i = 0; i < boxes.size(); i++)
 		boxes[i].world_aabb(&aabbs[i * 6], &aabbs[i * 6 + 3]);
 	ve::VolumeData cpu;
-	const ve::Generator &gen = world_->context().store->generator()->sampler();
+	const ve::Generator &gen = *world_->context().store->generator();
 	ve::extract_island_volume(gen, job.ops.data(), static_cast<int>(job.ops.size()),
 			&sources.volumes, &sources.overrides, job.origin,
 			job.voxel, job.dim, aabbs.data(), static_cast<int>(boxes.size()), &cpu);
@@ -689,7 +689,7 @@ Dictionary VoxelDebugHooks::debug_island_extract_diff(Vector3i lo_cell, Vector3i
 	// Compute normal length and alignment vs CPU masked gradient
 	float min_len = 2.0f, min_align = 2.0f;
 	if (!gpu.normal_oct.empty()) {
-		const ve::Generator &agen = world_->context().store->generator()->sampler();
+		const ve::Generator &agen = *world_->context().store->generator();
 		for (size_t i = 0; i < gpu.normal_oct.size(); i++) {
 			float dec[3];
 			ve::oct_decode_snorm8(gpu.normal_oct[i], dec);
@@ -1023,7 +1023,7 @@ bool VoxelDebugHooks::debug_extract_submit(int id, Vector3i lo_cell, Vector3i hi
 	job.ops = std::move(snap.ops);
 	job.snapshot = std::move(snap.sources);
 	job.override_table = snap.override_table;
-	job.gen = &world_->context().store->generator()->sampler();
+	job.gen = world_->context().store->generator();
 	std::vector<IslandExtractJob> jobs;
 	jobs.push_back(std::move(job));
 	return world_->mesh_service()->submit_extracts(std::move(jobs));

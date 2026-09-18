@@ -6,6 +6,7 @@
 #include <doctest/doctest.h>
 #include "world/brick_eval.h"
 #include "generator/generator.h"
+#include "analytic_oracle.h"
 #include <cstdio>
 #include <cstdlib>
 #include <string>

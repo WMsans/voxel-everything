@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include "generator/generator.h"
+#include "analytic_oracle.h"
 #include <cmath>
 
 static float hills(float x, float z) { // test oracle — mirrors implementation on purpose

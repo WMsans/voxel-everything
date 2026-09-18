@@ -1,5 +1,6 @@
 #include "connectivity/occupancy.h"
 #include "world/brick_eval.h"
+#include "analytic_oracle.h"
 #include <doctest/doctest.h>
 #include <algorithm>
 #include <vector>

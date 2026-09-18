@@ -3,6 +3,7 @@
 #include "world/palette.h"
 #include "world/world_data.h"
 #include "generator/generator.h"
+#include "analytic_oracle.h"
 #include <algorithm>
 #include <cmath>
 #include <set>

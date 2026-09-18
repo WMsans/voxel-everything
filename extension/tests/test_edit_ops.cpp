@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include "generator/edit_ops.h"
+#include "analytic_oracle.h"
 #include "world/brick_eval.h"
 #include "world/material_table.h"
 #include <cmath>

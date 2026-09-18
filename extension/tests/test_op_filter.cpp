@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 #include "generator/edit_ops.h"
 #include "generator/volume_set.h"
+#include "analytic_oracle.h"
 #include "world/brick.h"
 #include "world/edit_log.h"
 #include "world/brick_eval.h"
