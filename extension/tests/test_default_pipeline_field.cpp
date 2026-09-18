@@ -10,6 +10,7 @@
 #include <doctest/doctest.h>
 #include "terrain/pipeline.h"
 #include "terrain/pipeline_field_generator.h"
+#include "terrain/pipeline_load.h"
 #include "terrain/stage_manifest.h"
 #include <cstdio>
 #include <cstdlib>
@@ -34,19 +35,21 @@ std::string slurp(const std::string &p) {
 	return o.str();
 }
 
+// An ifstream reader over the repo, the native counterpart of VoxelWorld's FileAccess one.
+bool repo_reader(const std::string &path, std::string *out) {
+	std::ifstream f(path);
+	if (!f.good()) return false;
+	std::ostringstream o;
+	o << f.rdbuf();
+	*out = o.str();
+	return true;
+}
+
 std::unique_ptr<ve::PipelineFieldGenerator> default_pipeline() {
-	ve::PipelineDesc d;
-	std::string err;
-	REQUIRE_MESSAGE(ve::parse_pipeline_desc(
-			slurp(root() + "/assets/pipelines/default.pipeline"), &d, &err), err);
-	std::vector<ve::StageManifest> loaded;
-	for (const ve::PipelineStageRef &r : d.stages) {
-		ve::StageManifest m;
-		REQUIRE_MESSAGE(ve::parse_stage_manifest(slurp(root() + "/shaders/" + r.path), &m, &err), err);
-		loaded.push_back(m);
-	}
 	ve::ResolvedPipeline p;
-	REQUIRE_MESSAGE(ve::resolve_pipeline(d, loaded, &p, &err), err);
+	std::string err;
+	REQUIRE_MESSAGE(ve::load_pipeline(repo_reader, root() + "/assets/pipelines/default.pipeline",
+			root() + "/shaders/", &p, &err), err);
 	ve::PipelineFieldGenerator *g = ve::PipelineFieldGenerator::create(p, &err);
 	REQUIRE_MESSAGE(g != nullptr, err);
 	return std::unique_ptr<ve::PipelineFieldGenerator>(g);

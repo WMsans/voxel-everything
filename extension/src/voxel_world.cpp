@@ -25,6 +25,7 @@
 #include "terrain/stage_manifest.h"
 #include "terrain/field_codegen.h"
 #include "terrain/pipeline_field_generator.h"
+#include "terrain/pipeline_load.h"
 #include "render/mesh_pass.h"
 #include "render/mesh_service.h"
 #include "render/lod_build_pass.h"
@@ -560,37 +561,13 @@ bool read_res_text(const String &path, std::string *out) {
 // effect on fresh init, where nothing can hold the old seam mid-evaluation.
 void VoxelWorld::load_terrain_pipeline() {
 	if (!store_->terrain_pipeline().stages.empty()) return;
-	std::string src, err;
-	if (!read_res_text(terrain_pipeline_path_, &src)) {
-		UtilityFunctions::push_warning("terrain pipeline: cannot read ",
-				terrain_pipeline_path_, "; "
-				"keeping the built-in field");
-		return;
-	}
-	ve::PipelineDesc desc;
-	if (!ve::parse_pipeline_desc(src, &desc, &err)) {
-		UtilityFunctions::push_error(String("terrain pipeline: ") + err.c_str());
-		return;
-	}
-
-	std::vector<ve::StageManifest> loaded;
-	for (const ve::PipelineStageRef &r : desc.stages) {
-		std::string stage_src;
-		const String path = String("res://shaders/") + r.path.c_str();
-		if (!read_res_text(path, &stage_src)) {
-			UtilityFunctions::push_error("terrain pipeline: cannot read " + path);
-			return;
-		}
-		ve::StageManifest m;
-		if (!ve::parse_stage_manifest(stage_src, &m, &err)) {
-			UtilityFunctions::push_error(path + String(": ") + err.c_str());
-			return;
-		}
-		loaded.push_back(m);
-	}
-
+	std::string err;
 	ve::ResolvedPipeline resolved;
-	if (!ve::resolve_pipeline(desc, loaded, &resolved, &err)) {
+	if (!ve::load_pipeline(
+				[](const std::string &path, std::string *text) {
+					return read_res_text(String(path.c_str()), text);
+				},
+				terrain_pipeline_path_.utf8().get_data(), "res://shaders/", &resolved, &err)) {
 		UtilityFunctions::push_error(String("terrain pipeline: ") + err.c_str());
 		return;
 	}
