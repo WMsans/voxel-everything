@@ -67,7 +67,7 @@ void stage_relief(FieldCtx &ctx, const ReliefSlots &s, const ReliefParams &p,
 	ctx.f(s.sdf) -= r;
 }
 
-VE_STAGE_SLOTS(Mesas, p, sdf, height, mesa_mask, material);
+VE_STAGE_SLOTS(Mesas, p, sdf, mesa_mask, material);
 VE_STAGE_PARAMS(Mesas, spacing, lift, plateau);
 
 void stage_mesas(FieldCtx &ctx, const MesasSlots &s, const MesasParams &p,
@@ -75,11 +75,9 @@ void stage_mesas(FieldCtx &ctx, const MesasSlots &s, const MesasParams &p,
 	const float k = 6.2831853f / p.spacing;
 	const float u = sinf(ctx.v(s.p)[0] * k) * sinf(ctx.v(s.p)[2] * k);
 	const float mask = fmaxf(0.0f, u);
-	const float mesa_height = ctx.f(s.height) + p.lift * mask;
 	ctx.f(s.mesa_mask) = mask;
 	ctx.f(s.sdf) -= p.lift * mask;
-	if (mask > p.plateau && mesa_height > 4.0f && ctx.f(s.sdf) <= 0.0f)
-		ctx.f(s.material) = float(kBandRock);
+	if (mask > p.plateau && ctx.f(s.sdf) <= 0.0f) ctx.f(s.material) = float(kBandRock);
 }
 
 VE_REGISTER_STAGE("ve::stage_hills", Hills, stage_hills);

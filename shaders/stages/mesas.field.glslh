@@ -1,7 +1,6 @@
 //!stage     mesas
 //!kind      field
 //!in        sdf : float
-//!in        height : float
 //!in        material : uint
 //!out       sdf : float
 //!out       mesa_mask : float
@@ -25,8 +24,7 @@ void stage_mesas(inout FieldCtx ctx) {
 	float k = 6.2831853 / P.mesas_spacing;
 	float u = sin(ctx.p.x * k) * sin(ctx.p.z * k);
 	float mask = max(0.0, u);
-	float mesa_height = ctx.height + P.mesas_lift * mask;
 	ctx.mesa_mask = mask;
 	ctx.sdf -= P.mesas_lift * mask;
-	if (mask > P.mesas_plateau && mesa_height > 4.0 && ctx.sdf <= 0.0) ctx.material = MAT_ROCK;
+	if (mask > P.mesas_plateau && ctx.sdf <= 0.0) ctx.material = MAT_ROCK;
 }
