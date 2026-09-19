@@ -1,13 +1,15 @@
 extends SceneTree
 # Reproducible, GPU-backed leaf look check through the SHIPPING render path -- not the
 # debug hooks, which re-implement it. Run with:
-# godot --path . --resolution 1280x720 -s res://tools/leaf_capture.gd -- --out=/tmp/leaf
+# godot --path . --resolution 1280x720 -s res://tools/leaf_capture.gd -- --out=/tmp/leaf-capture
 # (Not --headless: like every GPU suite here this needs a real RenderingDevice, and
 # headless has none -- gdunit_tests.sh documents the same.)
 #
-# --leaf=key,value overrides one leaf setting before the world streams, repeatable. This
-# is the grass capture's --grass= shape: --leaf=crown_shade,0 against --leaf=crown_shade,1
-# A/Bs the crown self-shade.
+# --leaf=key,value overrides one leaf setting before the world streams, repeatable -- the
+# key,value override shape of tools/grass_capture.gd (grass_capture's flag for it is
+# --grass=, and the same shape appears as --grass=key,value below, because the wind freeze
+# touches grass knobs too). Not the benchmark's boolean --leaves=0|1.
+# Example: --leaf=crown_shade,0 against --leaf=crown_shade,1 A/Bs the crown self-shade.
 #
 # --rock=radius,distance floats a rock sphere `distance` metres up-sun of the --at spot, so
 # a frame over a grove can show whether cards take the terrain's shadow.
