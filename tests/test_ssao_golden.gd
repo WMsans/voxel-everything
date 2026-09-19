@@ -76,10 +76,15 @@ func _probe(w: VoxelWorld, key: String) -> Dictionary:
 # inside TOL_LUMA but most of its budget), horizon 0.344913 -> 0.344768, down_close stays at
 # 0.252933 to the recorded precision (no canopy pixels). min_ao/max_ao unchanged; ran stays
 # true. Same policy again: intentional change, recorded in the commit that causes it.
+# lit_luma re-recorded 2026-09-19 (final review wave): the spec §4 height band took the
+# out-of-band canopies out of the horizon frame -- the dark card pixels that Task 12's note
+# saw shade away, and lit_luma rises back: 0.344768 -> 0.354178 (+0.0094, over TOL_LUMA).
+# down_close and oblique stayed inside tolerance; min_ao/max_ao unchanged; ran stays true.
+# Same policy: intentional change, re-recorded in the commit that causes it.
 const GOLDEN := {
 	"down_close": {"min_ao": 0.000000, "max_ao": 1.000000, "lit_luma": 0.252934},
 	"oblique": {"min_ao": 0.000000, "max_ao": 1.000000, "lit_luma": 0.315139},
-	"horizon": {"min_ao": 0.000000, "max_ao": 1.000000, "lit_luma": 0.344768},
+	"horizon": {"min_ao": 0.000000, "max_ao": 1.000000, "lit_luma": 0.354178},
 }
 const TOL_AO := 0.002
 const TOL_LUMA := 0.004

@@ -73,10 +73,12 @@ void main() {
 	                   leaf.cell_min.z + int(idx / uint(leaf.cell_dim.x)));
 
 	vec2 xz = tree_cell_xz(cell, tp);
+	float gh = trees_ground_h(xz);
 	// trees_ground_h / trees_ground_slope: defined once in the generated field source
 	// (shaders/stages/trees.field.glslh, emitted verbatim), reading set 1 P. This call site
-	// is the whole R1 contract: no second copy of that arithmetic exists anywhere.
-	Tree t = tree_at(cell, tp, leaf.shape.w + trees_ground_h(xz), trees_ground_slope(xz));
+	// is the whole R1 contract: no second copy of that arithmetic exists anywhere. gh keeps
+	// the header terrain-free while tree_cell_present applies the spec §4 height band.
+	Tree t = tree_at(cell, tp, leaf.shape.w + gh, gh, trees_ground_slope(xz));
 	if (!t.present) return;
 
 	float dist = length(t.crown - leaf.cam.xyz);

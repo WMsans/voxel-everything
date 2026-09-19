@@ -98,7 +98,7 @@ TEST_CASE("density gates roughly the requested fraction of cells") {
 	int present = 0, total = 0;
 	for (int x = -40; x <= 40; x++)
 		for (int z = -40; z <= 40; z++, total++)
-			if (ts::tree_cell_present({x, z}, tp, 0.0f)) present++;
+			if (ts::tree_cell_present({x, z}, tp, 2.0f, 0.0f)) present++;
 	const float frac = float(present) / float(total);
 	CHECK(frac > 0.40f);
 	CHECK(frac < 0.70f);
@@ -109,12 +109,34 @@ TEST_CASE("zero density places no trees and slope rejects every cell") {
 	tp.density = 0.0f;
 	for (int x = -20; x <= 20; x++)
 		for (int z = -20; z <= 20; z++)
-			CHECK_FALSE(ts::tree_cell_present({x, z}, tp, 0.0f));
+			CHECK_FALSE(ts::tree_cell_present({x, z}, tp, 2.0f, 0.0f));
 
 	tp = params();
 	for (int x = -20; x <= 20; x++)
 		for (int z = -20; z <= 20; z++)
-			CHECK_FALSE(ts::tree_cell_present({x, z}, tp, tp.max_slope + 0.01f));
+			CHECK_FALSE(ts::tree_cell_present({x, z}, tp, 2.0f, tp.max_slope + 0.01f));
+}
+
+// SPEC §4, the height band. Final review wave: the shipped gate used to consult only the
+// slope, and the probe over the shipped pipeline counted 64,552 placing cells in +-3000 m
+// of which 32,474 stood on dirt and 31,207 on rock. The band mirrors stage_height_bands:
+// grass is 1 < h <= 4, everything else rejects.
+TEST_CASE("the height band rejects dirt, rock and their edges") {
+	const ts::TreeParams tp = params();
+	int checked = 0;
+	for (int x = -40; x <= 40; x++)
+		for (int z = -40; z <= 40; z++) {
+			if (!ts::tree_cell_present({x, z}, tp, 2.0f, 0.0f)) continue;
+			checked++;
+			CHECK_FALSE(ts::tree_cell_present({x, z}, tp, 1.0f, 0.0f)); // dirt side: grass needs h > 1
+			CHECK_FALSE(ts::tree_cell_present({x, z}, tp, 0.5f, 0.0f)); // dirt
+			CHECK_FALSE(ts::tree_cell_present({x, z}, tp, -30.0f, 0.0f)); // deep dirt
+			CHECK_FALSE(ts::tree_cell_present({x, z}, tp, 4.001f, 0.0f)); // rock
+			CHECK_FALSE(ts::tree_cell_present({x, z}, tp, 250.0f, 0.0f)); // high rock (snow world)
+			CHECK(ts::tree_cell_present({x, z}, tp, 4.0f, 0.0f)); // the rock side belongs to grass
+			CHECK(ts::tree_cell_present({x, z}, tp, 1.001f, 0.0f)); // just inside the dirt side
+		}
+	CHECK(checked > 100); // the band must reject OUT of band, not everything
 }
 
 TEST_CASE("every lobe sits inside the crown bounding sphere") {
@@ -122,8 +144,8 @@ TEST_CASE("every lobe sits inside the crown bounding sphere") {
 	int checked = 0;
 	for (int x = -15; x <= 15; x++) {
 		for (int z = -15; z <= 15; z++) {
-			if (!ts::tree_cell_present({x, z}, tp, 0.0f)) continue;
-			const ts::Tree t = ts::tree_at({x, z}, tp, 51.2f, 0.0f);
+			if (!ts::tree_cell_present({x, z}, tp, 2.0f, 0.0f)) continue;
+			const ts::Tree t = ts::tree_at({x, z}, tp, 51.2f, 2.0f, 0.0f);
 			REQUIRE(t.present);
 			for (int i = 0; i < TREE_LOBES; i++) {
 				const ts::vec3 c = ts::tree_lobe(t, tp, i);
@@ -141,8 +163,8 @@ TEST_CASE("the crown bound never exceeds the declared crown radius") {
 	const ts::TreeParams tp = params();
 	for (int x = -15; x <= 15; x++)
 		for (int z = -15; z <= 15; z++)
-			if (ts::tree_cell_present({x, z}, tp, 0.0f))
-				CHECK(ts::tree_at({x, z}, tp, 51.2f, 0.0f).crown_r <= tp.crown_radius + 1e-4f);
+			if (ts::tree_cell_present({x, z}, tp, 2.0f, 0.0f))
+				CHECK(ts::tree_at({x, z}, tp, 51.2f, 2.0f, 0.0f).crown_r <= tp.crown_radius + 1e-4f);
 }
 
 TEST_CASE("a tree sits on the ground height it was given") {
@@ -150,8 +172,8 @@ TEST_CASE("a tree sits on the ground height it was given") {
 	for (float g : {0.0f, 51.2f, -18.5f}) {
 		for (int x = -8; x <= 8; x++)
 			for (int z = -8; z <= 8; z++)
-				if (ts::tree_cell_present({x, z}, tp, 0.0f))
-					CHECK(ts::tree_at({x, z}, tp, g, 0.0f).base.y == doctest::Approx(g));
+				if (ts::tree_cell_present({x, z}, tp, 2.0f, 0.0f))
+					CHECK(ts::tree_at({x, z}, tp, g, 2.0f, 0.0f).base.y == doctest::Approx(g));
 	}
 }
 
@@ -165,7 +187,7 @@ float sweep(ts::vec3 p, const ts::TreeParams &tp, int ring) {
 	float d = 1.0e9f;
 	for (int dz = -ring; dz <= ring; dz++) {
 		for (int dx = -ring; dx <= ring; dx++) {
-			const ts::Tree t = ts::tree_at({cx + dx, cz + dz}, tp, kFlatGround, 0.0f);
+			const ts::Tree t = ts::tree_at({cx + dx, cz + dz}, tp, kFlatGround, 2.0f, 0.0f);
 			if (!t.present) continue;
 			d = std::min(d, ts::tree_skeleton_sdf(p, t, tp));
 		}
@@ -203,7 +225,7 @@ TEST_CASE("D_safe is derived from the params, not a constant") {
 
 TEST_CASE("the skeleton SDF is 1-Lipschitz") {
 	const ts::TreeParams tp = params();
-	const ts::Tree t = ts::tree_at({0, 0}, tp, kFlatGround, 0.0f);
+	const ts::Tree t = ts::tree_at({0, 0}, tp, kFlatGround, 2.0f, 0.0f);
 	uint32_t s = 7771u;
 	auto next = [&s](float lo, float hi) {
 		s = s * 1664525u + 1013904223u;
@@ -225,7 +247,7 @@ TEST_CASE("the skeleton SDF is 1-Lipschitz") {
 
 TEST_CASE("the bounding capsule never rejects a point the skeleton would claim") {
 	const ts::TreeParams tp = params();
-	const ts::Tree t = ts::tree_at({0, 0}, tp, kFlatGround, 0.0f);
+	const ts::Tree t = ts::tree_at({0, 0}, tp, kFlatGround, 2.0f, 0.0f);
 	uint32_t s = 4242u;
 	auto next = [&s](float lo, float hi) {
 		s = s * 1664525u + 1013904223u;

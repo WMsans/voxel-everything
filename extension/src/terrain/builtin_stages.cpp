@@ -117,8 +117,18 @@ inline void cell_xz(int cx, int cz, const Tp &tp, float *ox, float *oz) {
 	*oz = (float(cz) + 0.5f) * tp.cell + snorm(hash2(cx, cz, 0x85EBu)) * kJitter * tp.cell;
 }
 
-inline bool present(int cx, int cz, const Tp &tp, float slope) {
+// Forest gate plus slope and height-band rejection. `slope` is |grad h| at the tree's XZ and
+// `h` is the terrain height there above kSurfaceY, both supplied by the caller -- this mirror
+// stays terrain-free. Low-frequency lattice noise on the cell grid gives groves and clearings
+// rather than an orchard: neighbouring cells share a gate value, so trees arrive in clumps.
+inline bool present(int cx, int cz, const Tp &tp, float h, float slope) {
 	if (slope > tp.max_slope) return false;
+	// SPEC §4 HEIGHT BAND: trees grow on grass and nowhere else. The window mirrors
+	// stage_height_bands (shaders/stages/height_bands.field.glslh: rock above 4, grass above
+	// 1, dirt below), whose gates are stage text rather than pipeline params, so copying the
+	// literals cannot diverge from an author's edit. Kept IDENTICAL to shaders/tree.glslh;
+	// test_field_diff.gd pins the two together.
+	if (h <= 1.0f || h > 4.0f) return false;
 	const float qx = std::floor(float(cx) * 0.25f), qz = std::floor(float(cz) * 0.25f);
 	const int gx = int(qx), gz = int(qz);
 	float fx = float(cx) * 0.25f - qx, fz = float(cz) * 0.25f - qz;
@@ -134,10 +144,13 @@ inline bool present(int cx, int cz, const Tp &tp, float slope) {
 
 struct Tree { V3 base; float height, radius; V3 crown; float crown_r; uint32_t h; bool present; };
 
-inline Tree at(int cx, int cz, const Tp &tp, float ground_y, float slope) {
+// `ground_y`, `ground_h` (terrain height above kSurfaceY at the tree's XZ) and `slope` come
+// from the caller (the stage evaluates hills+relief at the tree's XZ). This mirror stays
+// terrain-free.
+inline Tree at(int cx, int cz, const Tp &tp, float ground_y, float ground_h, float slope) {
 	Tree t;
 	t.h = hash2(cx, cz, 0xC2B2u);
-	t.present = present(cx, cz, tp, slope);
+	t.present = present(cx, cz, tp, ground_h, slope);
 	float x, z;
 	cell_xz(cx, cz, tp, &x, &z);
 	t.base = {x, ground_y, z};
@@ -249,8 +262,10 @@ void stage_trees(FieldCtx &ctx, const TreesSlots &s, const TreesParams &p,
 			const int cx = bx + dx, cz = bz + dz;
 			float tx, tz;
 			tm::cell_xz(cx, cz, tp, &tx, &tz);
-			const tm::Tree t = tm::at(cx, cz, tp, kSurfaceY + ground_h(tx, tz),
-					ground_slope(tx, tz));
+			const float gh = ground_h(tx, tz);
+			// EARLY-OUT 2, the forest gate: one integer hash plus the analytic slope and
+			// height band (the rejection spec §4 asks for, inside present()).
+			const tm::Tree t = tm::at(cx, cz, tp, kSurfaceY + gh, gh, ground_slope(tx, tz));
 			if (!t.present) continue;
 			if (tm::bound(px, py, pz, t) >= d) continue;
 			d = fminf(d, tm::skeleton(px, py, pz, t, tp));

@@ -50,11 +50,18 @@ vec2 tree_cell_xz(ivec2 cell, TreeParams tp) {
 	            (float(cell.y) + 0.5) * tp.cell + jz);
 }
 
-// Forest gate plus slope rejection. `slope` is |grad h| at the tree's XZ, supplied by the
-// caller. Low-frequency lattice noise on the cell grid gives groves and clearings rather
-// than an orchard: neighbouring cells share a gate value, so trees arrive in clumps.
-bool tree_cell_present(ivec2 cell, TreeParams tp, float slope) {
+// Forest gate plus slope and height-band rejection. `slope` is |grad h| at the tree's XZ and
+// `h` is the terrain height there above SURFACE_Y, both supplied by the caller -- this header
+// stays terrain-free. Low-frequency lattice noise on the cell grid gives groves and clearings
+// rather than an orchard: neighbouring cells share a gate value, so trees arrive in clumps.
+bool tree_cell_present(ivec2 cell, TreeParams tp, float h, float slope) {
 	if (slope > tp.max_slope) return false;
+	// SPEC §4 HEIGHT BAND: trees grow on grass and nowhere else. The window mirrors
+	// stage_height_bands (shaders/stages/height_bands.field.glslh: rock above 4, grass above
+	// 1, dirt below), whose gates are stage text rather than pipeline params, so copying the
+	// literals cannot diverge from an author's edit. Kept IDENTICAL to the CPU mirror in
+	// extension/src/terrain/builtin_stages.cpp; test_field_diff.gd pins the two together.
+	if (h <= 1.0 || h > 4.0) return false;
 	// Grove noise: bilinear value noise on a 4-cell lattice, so a grove is ~56 m across.
 	ivec2 g = ivec2(int(floor(float(cell.x) * 0.25)), int(floor(float(cell.y) * 0.25)));
 	float fx = float(cell.x) * 0.25 - floor(float(cell.x) * 0.25);
@@ -88,12 +95,13 @@ struct Tree {
 	bool present;
 };
 
-// `ground_y` and `slope` come from the caller (the stage evaluates hills+relief at the tree's
-// XZ; the leaf scatter does the same). This header stays terrain-free.
-Tree tree_at(ivec2 cell, TreeParams tp, float ground_y, float slope) {
+// `ground_y`, `ground_h` (terrain height above SURFACE_Y at the tree's XZ) and `slope` come
+// from the caller (the stage evaluates hills+relief at the tree's XZ; the leaf scatter does
+// the same). This header stays terrain-free.
+Tree tree_at(ivec2 cell, TreeParams tp, float ground_y, float ground_h, float slope) {
 	Tree t;
 	t.hash = tree_hash2(cell, 0xC2B2u);
-	t.present = tree_cell_present(cell, tp, slope);
+	t.present = tree_cell_present(cell, tp, ground_h, slope);
 	vec2 xz = tree_cell_xz(cell, tp);
 	t.base = vec3(xz.x, ground_y, xz.y);
 	// +-25% height, +-20% radius. Variety comes from the hash; there is one species.

@@ -95,9 +95,18 @@ func probe_band_at_steady_state(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> Di
 # far field's first visible terrain is ~195 m away, so no pixel falls in the 120-150 m
 # band. This camera sits just inside the world's z edge, where the same view produces
 # thousands of band pixels (measured >200 at 256x144).
+# Height-band re-pin (final review wave, spec §4): the band gate removed every tree
+# outside 1 < h <= 4, and the CPU placement sweep found no kept cell inside this camera's
+# 30-60 m forward corridor any more (nearest kept tree: 62.6 m), so the R11 leaf-owned
+# pin below had nothing left to classify here. The view moved to (49, 68, 135) — same -z
+# heading, same settle machinery — where two kept cells ((49.0, 92.8) h=2.8 and
+# (32.5, 92.4) h=1.7) sit square in the 38.4-48 m band. Measured at steady state: 2002
+# band pixels, 2 unclaimed (bar is band/16), 0 double claims, 23 leaf-owned. Every bar
+# is unchanged — only the vantage that makes the third state reachable moved. The other
+# two tests keep the old camera; they pass on it unchanged.
 func test_the_band_is_covered_exactly_once(timeout := 180000) -> void:
 	var w := make_world()
-	var pos := Vector3(100.0, 68.0, 202.0)
+	var pos := Vector3(49.0, 68.0, 135.0)
 	var fwd := Vector3(0.0, -0.12, -1.0).normalized()
 	await settle(w, pos, fwd)
 	var d := await probe_band_at_steady_state(w, pos, fwd)
