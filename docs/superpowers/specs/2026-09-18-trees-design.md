@@ -582,10 +582,15 @@ and each now says plainly what was true before:
   `lit_luma`; R12 keeps committed PNGs human-reference only, and `leaf.png` was not
   re-captured in this wave); the look changes (no treeline-
   top or valley-floor trees). Two consumer-characterization suites moved at the final gate,
-  re-recorded with the cause named: `test_world_field_consumers`'s collider golden (one of
+  re-recorded with the cause named in the wave's third commit (the band's own goldens rode
+  the causing commit): `test_world_field_consumers`'s collider golden (one of
   its three resident chunks was a band-rejected tree's trunk) and `test_material_glow`'s
   paint sync (its quiet-window sync stopped landing paints once the band removed the tree
-  work that kept the uploader busy; results doc §3.5 holds the full record). §2's streaming
+  work that kept the uploader busy — which exposed a latent non-trees defect: a debug
+  repaint queued after the previous paint's atlas upload has fully committed never
+  propagates to the GPU at all, so test 1 now compares two identically-seeded first-paint
+  worlds; a product-side follow-up is owed outside this feature;
+  results doc §3.5 holds the full record). §2's streaming
   figures pre-date the band; the band rejects
   cells the old gate built full skeletons for, so it is not a cost regression.
 - **§9's first GPU bullet — "bark voxels exist at a known tree cell and none in a known
@@ -604,10 +609,11 @@ and each now says plainly what was true before:
   pipeline's set-1 UBO"; it does not and cannot from there — the literals it packs *are*
   what `leaf_trees.comp.glsl` sees. The comment now says so and names
   `assets/pipelines/trees.pipeline` as the source of truth, and a native pin in
-  `test_leaf_layout.cpp` asserts every tree-shape literal against the shipped pipeline
-  resolved through the engine's own loader (exact float equality): edit a tree param there
-  without moving `leaf_layout.cpp` and a test fails, instead of canopies silently floating
-  off their new trunks.
+  `test_leaf_layout.cpp` asserts every tree-shape literal against BOTH shipped pipelines —
+  `trees.pipeline` and the game-resolved `default.pipeline` — through the engine's own
+  loader (exact float equality), plus the `ve::kSurfaceY` duplication in `shape[3]`:
+  edit a tree param in either pipeline without moving `leaf_layout.cpp` and a test fails,
+  instead of canopies silently floating off their new trunks.
 
 The wave also closed two §3.4 parked minors (hole-probe exemption ordering + per-class teeth;
 leaf settings per-row clamp sweep + non-vacuous idempotence) — see results doc §3.5.

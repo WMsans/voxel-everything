@@ -325,7 +325,9 @@ the matching summary; this is the long form.
   named, per the §10 golden policy. So did the look goldens, which are numeric arrays
   inside their suites, not committed PNGs (R12: a byte-identical machine capture is not
   achievable on the shipping path): `test_frame_shipped_golden.gd` re-recorded after 59
-  tiles moved — all brighter, 14 beyond TOL_TILE, per-camera worst failures oblique 1 at
+  tiles moved — 55 brighter, 4 marginally darker (grove 19/32, horizon 5, oblique 7, all
+  ≤0.0005; removing canopies moves SSAO and lighting in both directions), 14 beyond TOL_TILE,
+  per-camera worst failures oblique 1 at
   0.014161, horizon 9 at 0.019642, grove 22 at 0.018137, down_close unchanged — and
   `test_ssao_golden.gd` re-recorded horizon `lit_luma` 0.344768 → 0.354178 (beyond
   TOL_LUMA; the other cameras inside). `tests/golden/leaf.png`, the human-readable half of
@@ -365,18 +367,23 @@ the matching summary; this is the long form.
   reads the field pipeline's set-1 UBO — and the comment claimed the opposite. The comment
   now states the duplication, names `assets/pipelines/trees.pipeline` as the source of truth,
   and says what moves if an author edits it (trunks move, canopies would not — until now).
-  The pin is native and cheap: `test_leaf_layout.cpp` loads the shipped pipeline through
-  the engine's own resolver and asserts exact float equality per tree param; an edit on
+  The pin is native and cheap: `test_leaf_layout.cpp` loads BOTH shipped pipelines —
+  `trees.pipeline` and the game-resolved `default.pipeline` — through the engine's own
+  resolver and asserts exact float equality per tree param, plus `shape[3] == ve::kSurfaceY`
+  for the one C++-constant literal a pipeline pin structurally cannot reach; an edit on
   either side without the other fails — the same no-drift discipline §9 demands of the
   layout's distance contract.
 - **Task 7 minors closed.** `debug_raymarch_hole_probe` samples the analytic `min_sdf`
   **before** the `sky_no_cpu_hit` exemption can fire (reorder in `hooks_render.cpp`;
   exemption semantics unchanged — the recalibrated R9/R11 bars did not move), and
   `test_raymarch_gbuffer.gd` now asserts the per-class exemption counts individually,
-  re-derives the aggregate from `isolated_miss_details`, checks the classified total equals
-  `isolated_misses`, and fails if a `sky_no_cpu_hit` record lacks `min_sdf` — the ordering
-  tooth for a revert. (The remaining §3.4 Task 7 minors — duplicated probe helpers,
-  equal-pair early return — were not in scope and stay parked.)
+  re-derives the aggregate from `isolated_miss_details`, and checks the classified total
+  equals `isolated_misses`. The `min_sdf`-presence check is an ordering tooth that arms
+  only if a `sky_no_cpu_hit` record exists — and a probed `>=1` premise showed this band
+  world's class is EMPTY, so the tooth waits on a world that produces the class; the suite
+  now pins the emptiness itself, loudly, with a re-aim message (the reorder is characterized
+  here by the sums, not yet proven by a live record). (The remaining §3.4 Task 7 minors —
+  duplicated probe helpers, equal-pair early return — were not in scope and stay parked.)
 - **Task 8 minors closed.** `test_leaf_layout.cpp` grew a per-row clamp sweep that reads
   min/max from `ve::leaf_rows()` itself (new rows are covered without editing the test; an
   uncovered row *kind* fails the sweep loudly), including the float NaN/±inf edges, and the
@@ -389,7 +396,10 @@ the matching summary; this is the long form.
   idx 9 = chunk (8,10,9) had been resident in both probed worlds on the strength of one
   pre-band tree's trunk collider; that cell's terrain height is band-rejected now, the
   trunk — and its collider — are gone, and the golden moved to idx 2 + idx 13. The suite's
-  other three goldens (contact/extract/rays) re-read byte-identical.
+  other three goldens (contact/extract/rays) re-read byte-identical. (Landing-letter note:
+  these two consumer re-records are discovered at the full-suite gate and therefore ride the
+  wave's third commit, not the band commit itself — bisecting the band commit alone shows
+  these two characterization suites red; each commit message names its cause.)
   `test_material_glow`'s paint sync: the suite painted dull then emissive in ONE world and
   synced on the streamer's quiet window. Pre-band, tree work kept the streamer busy long
   enough for the paint's atlas re-upload to finish inside that window; the band removed the

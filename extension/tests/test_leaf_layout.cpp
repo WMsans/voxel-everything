@@ -224,6 +224,7 @@ TEST_CASE("an unclamped snapshot is clamped internally") {
 }
 
 #include "terrain/pipeline_load.h"
+#include "generator/generator.h"
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -272,4 +273,26 @@ TEST_CASE("the layout's tree-shape params equal the shipped pipeline's tree stag
 	CHECK(l.params.shape[2] == param("trees.max_slope"));
 	// The lattice constant sizes the CPU dispatch grid, not just the uploaded block.
 	CHECK(l.cell_size_m == param("trees.cell"));
+	// shape[3] is the C++ surface constant, not a pipeline param -- pin the duplication.
+	CHECK(l.params.shape[3] == ve::kSurfaceY);
+	// The shipped game resolves default.pipeline, which includes the same trees stage with
+	// no param overrides today. An author adding one there would move trunks against
+	// canopies while trees.pipeline stays green -- pin it to the same literals.
+	ve::ResolvedPipeline dp;
+	REQUIRE_MESSAGE(ve::load_pipeline(repo_reader, root + "/assets/pipelines/default.pipeline",
+			root + "/shaders/", &dp, nullptr, &err), err);
+	auto dparam = [&dp](const char *name) {
+		for (const ve::ParamDecl &d : dp.params)
+			if (d.name == name) return d.value;
+		INFO("the shipped default pipeline resolves no param " << name);
+		return std::nanf("");
+	};
+	CHECK(l.params.tree[0] == dparam("trees.cell"));
+	CHECK(l.params.tree[1] == dparam("trees.density"));
+	CHECK(l.params.tree[2] == dparam("trees.crown_radius"));
+	CHECK(l.params.tree[3] == dparam("trees.trunk_radius"));
+	CHECK(l.params.shape[0] == dparam("trees.trunk_height"));
+	CHECK(l.params.shape[1] == dparam("trees.branch_radius_min"));
+	CHECK(l.params.shape[2] == dparam("trees.max_slope"));
+	CHECK(l.cell_size_m == dparam("trees.cell"));
 }

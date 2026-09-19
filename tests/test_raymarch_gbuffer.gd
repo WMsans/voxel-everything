@@ -212,9 +212,12 @@ func test_the_march_leaves_no_isolated_holes_in_the_gbuffer() -> void:
 	# split is asserted here -- sky-no-CPU-hit (the CPU raycast itself missed) and
 	# sub-pixel silhouette sky (the exact-ray analytic sample says no solid anywhere in
 	# the crossing window) individually, and they must re-derive the aggregate counters
-	# exactly. The min_sdf presence check is the ordering tooth: that exemption now
-	# SAMPLES the analytic field before exempting, and a revert of the reorder drops
-	# min_sdf from the sky_no_cpu_hit details and fails this case.
+	# exactly. The min_sdf presence check is an ORDERING TOOTH THAT ARMED ONLY IF a
+	# sky_no_cpu_hit record exists: that exemption now SAMPLES the analytic field before
+	# exempting, so a record lacking min_sdf proves the reorder was reverted. Honest
+	# caveat (final-review re-pass): in this band world the class is EMPTY -- the vacuous
+	# premise was probed with an >=1 assert and failed -- so here the reorder is pinned
+	# only by the per-class sums, and the tooth waits on a world that produces the class.
 	var classes := {}
 	for m in d["isolated_miss_details"]:
 		var cls: String = m["class"]
@@ -223,6 +226,11 @@ func test_the_march_leaves_no_isolated_holes_in_the_gbuffer() -> void:
 			assert_bool(m.has("min_sdf")).override_failure_message(
 				"sky_no_cpu_hit exempted before the analytic min_sdf sample was taken"
 				).is_true()
+	assert_int(int(classes.get("sky_no_cpu_hit", 0))) \
+		.override_failure_message("this characterization assumed the sky_no_cpu_hit class "
+			+ "stays empty post-band; if it now produces records, re-aim the ordering "
+			+ "asserts and update this message") \
+		.is_equal(0)
 	assert_int(int(classes.get("sky_no_cpu_hit", 0)) + int(classes.get("sub_pixel_silhouette_sky", 0))) \
 		.override_failure_message("per-class sky counts disagree with the sum: %s" % str(classes)) \
 		.is_equal(int(d["isolated_exempt_field_true_sky"]))

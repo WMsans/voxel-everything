@@ -33,8 +33,9 @@ const CAMERAS := {
 
 # Re-recorded 2026-09-19 on Apple M1: the spec §4 height band (final review wave) removed
 # every tree the old gate had placed outside the grass band, so dark bark/canopy pixels in
-# these frames revert to the bare surface. 59 tiles moved, all brighter (one-directional,
-# as tree removal can only be); 14 exceeded TOL_TILE (oblique 1/5, horizon 2/9/12/13/17/21,
+# these frames revert to the bare surface. 59 tiles moved: 55 brighter, 4 marginally
+# darker (grove 19/32, horizon 5, oblique 7, all <= 0.0005 -- removing canopies moves
+# SSAO and lighting in both directions); 14 exceeded TOL_TILE (oblique 1/5, horizon 2/9/12/13/17/21,
 # grove 14/22/23/27/28/36), so the per-camera worst-tile asserts failed on oblique tile 1
 # (0.014161), horizon tile 9 (0.019642) and grove tile 22 (0.018137), and 24 more moved
 # above 5e-4 under tolerance; down_close is unchanged. Recorded from the full-suite run
