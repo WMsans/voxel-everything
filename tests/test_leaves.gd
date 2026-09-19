@@ -71,3 +71,38 @@ func test_painting_trunks_away_empties_the_tree_list() -> void:
 	for i in range(40):
 		w.hooks().debug_stream_frame(Vector3(20.0, 60.0, 30.0))
 	assert_int(w.hooks().debug_leaf_stats()["trees"]).is_equal(0)
+
+func test_stage_two_places_clumps() -> void:
+	var w := make_world()
+	assert_int(w.hooks().debug_leaf_stats()["clumps"]).is_greater(0)
+
+func test_the_clump_count_falls_as_the_reach_shrinks() -> void:
+	var w := make_world()
+	var far: int = w.hooks().debug_leaf_stats()["clumps"]
+	w.set_leaf_value("reach_m", 60.0)
+	var near: int = w.hooks().debug_leaf_stats()["clumps"]
+	assert_int(near).is_less(far)
+
+func test_every_clump_sits_inside_its_crown() -> void:
+	var w := make_world()
+	var d: Dictionary = w.hooks().debug_leaf_stats()
+	assert_int(d["sampled"]).is_greater(0)
+	# Distance from the clump centre to its crown centre, as a fraction of the crown
+	# radius. tree.glslh's containment invariant says this never exceeds 1: a clump centre
+	# on a lobe shell is inside the crown sphere by construction (max lobe reach 0.62 plus
+	# max lobe radius 0.38 = 1.0 crown radii). The card radius is excluded on purpose: the
+	# density LOD lets a far clump's card outgrow that last margin.
+	assert_float(d["max_crown_offset"]).is_less_equal(1.001)
+
+func test_the_clump_count_clamps_at_capacity_instead_of_overflowing() -> void:
+	var w := make_world()
+	w.set_leaf_value("max_clumps", 64.0)
+	var d: Dictionary = w.hooks().debug_leaf_stats()
+	assert_int(d["clumps"]).is_less_equal(64)
+	assert_int(d["high_water"]).is_greater(0)
+
+func test_zero_clumps_per_tree_places_nothing_but_still_finds_trees() -> void:
+	var w := make_world()
+	w.set_leaf_value("clumps_per_tree", 0.0)
+	var d: Dictionary = w.hooks().debug_leaf_stats()
+	assert_int(d["clumps"]).is_equal(0)

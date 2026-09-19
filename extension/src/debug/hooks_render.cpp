@@ -481,6 +481,9 @@ Dictionary VoxelDebugHooks::debug_leaf_stats() {
 	d["trees"] = 0;
 	d["clumps"] = 0;
 	d["high_water"] = 0;
+	// Stage-2 sample keys, same "0 means not measured" convention as debug_grass_stats.
+	d["sampled"] = 0;
+	d["max_crown_offset"] = 0.0;
 	VoxelWorld *w = world_;
 	if (!w) return d;
 	LeafScatterPass *l = w->context().render->passes().leaf_scatter;
@@ -509,8 +512,8 @@ Dictionary VoxelDebugHooks::debug_leaf_stats() {
 		float vp[16];
 		for (int k = 0; k < 16; k++) vp[k] = cam.view_proj[k];
 		const ve::LeafLayout ll = w->context().render->frame().leaf_layout(p, vp);
-		// Stage 1 never reads the SunUbo, but the drive keeps the compositor's shape:
-		// the same buffer, ensured the same way, so Task 11's march needs no hook change.
+		// Stage 2's sun march reads the SunUbo; stage 1 never does. The hook ensures the
+		// same buffer the compositor hands the pass, so the drive exercises both stages.
 		if (!w->context().render->passes().sun_ubo || !w->context().render->passes().sun_ubo->ensure(device)) return d;
 		if (!l->run(device, *atlas, ll, w->context().store->region_window(),
 				static_cast<float>(w->context().render->beauty_frame()) / 60.0f,
@@ -522,6 +525,7 @@ Dictionary VoxelDebugHooks::debug_leaf_stats() {
 		device->submit();
 		device->sync();
 		l->read_back_counters(device);
+		l->read_back_sample(device);
 	}
 	// Re-read for the report: demo worlds skip the drive above (the compositor owns the
 	// frame there), so fetch the pass here for the pure-read keys.
@@ -530,6 +534,8 @@ Dictionary VoxelDebugHooks::debug_leaf_stats() {
 	d["trees"] = l->last_tree_count();
 	d["clumps"] = l->last_clump_count();
 	d["high_water"] = l->clump_high_water();
+	d["sampled"] = l->sample_count();
+	d["max_crown_offset"] = l->sample_max_crown_offset();
 	return d;
 }
 
