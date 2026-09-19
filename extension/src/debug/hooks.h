@@ -495,6 +495,10 @@ public:
 	// Grass: what the SHIPPING pass wrote during a real frame. Rebuilds nothing.
 	Dictionary debug_grass_stats();
 
+	// Leaves: what the SHIPPING leaf pass wrote during a real frame. Rebuilds nothing.
+	// Keys: ran, capacity, trees, clumps, high_water.
+	Dictionary debug_leaf_stats();
+
 	// --- Task 8 hooks ---
 	Dictionary debug_sun_shadow_stats(int cascade);
 

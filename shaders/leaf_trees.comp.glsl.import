@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://blqwx8un0dech"
+path="res://.godot/imported/leaf_trees.comp.glsl-734dbbfa1cc0a1c4dfbce7f72216fe36.res"
+
+[deps]
+
+source_file="res://shaders/leaf_trees.comp.glsl"
+dest_files=["res://.godot/imported/leaf_trees.comp.glsl-734dbbfa1cc0a1c4dfbce7f72216fe36.res"]
+
+[params]
+

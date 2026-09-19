@@ -8,6 +8,13 @@ extends GdUnitTestSuite
 # merge-ground gate that reads raycast_down (test_island_body.gd, test_connectivity.gd), and
 # the consolidation bake inputs (test_consolidation.gd).
 
+# Re-recorded for the spec §4 height band — an intentional change, recorded in the commit
+# that causes it (the policy ff8e743 establishes). idx 9 = chunk (8,10,9) was resident in
+# BOTH worlds on the strength of one pre-band tree whose trunk stood there; the band now
+# rejects trees outside terrain height (1 m, 4 m] above SURFACE_Y, that spot is out of band,
+# so the trunk — and its collider — are gone (throwaway: pre-band build reads true, this
+# build reads false). idx 2 (chunk (10,10,8)) and idx 13 (chunk (9,11,9): the consolidated
+# fill sphere / the pasted ball) never depended on trees and stay true.
 const COLLIDER_GOLDEN := {"fill": [false, false, true, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false], "volume": [false, false, true, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false]}
 const CONTACT_GOLDEN := {"counts": [81, 81, 81, 81, 65, 74, 81, 81, 81, 41, 60, 41, 41, 22, 0, 81, 60, 41, 41, 81, 41, 41, 65, 0, 81, 81, 41, 74, 65, 81, 74, 0, 74, 81, 65, 81, 0, 22, 41, 0, 0, 0, 81, 22, 41, 0, 65, 41, 0, 0, 0, 81, 65, 41, 81, 81, 81, 81, 65, 81, 81, 81, 81, 41, 60, 81, 41, 22, 81, 81, 60, 81, 41, 81, 81, 41, 65, 81, 81, 81, 81]}
 const EXTRACT_GOLDEN := {"border": [true, 1, 0, 9802, 9802, 1], "inside": [true, 1, 0, 5740, 5740, 1]}

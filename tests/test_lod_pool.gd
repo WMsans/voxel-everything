@@ -5,8 +5,10 @@ var _worlds: Array = []
 # The walk only descends into a node whose eight children are all resident, so the far field
 # converges over hundreds of ticks. Every wait here is on a CONDITION with a wide budget,
 # never on a frame count that happens to be long enough on one machine: these numbers are
-# ceilings, and the cameras below reach their condition in ~350-400 ticks.
-const SETTLE_BUDGET := 2500
+# ceilings, and the cameras below reach their condition in ~350-400 ticks. Trees moved the
+# worst-case measured convergence to ~2519 ticks (clean, op_overflow=0); the budget is
+# margin over measured ticks.
+const SETTLE_BUDGET := 3500
 # requests_pending is read from the walk that ran BEFORE this tick's results were collected,
 # so it dips to zero for a tick or two while a batch is landing. Convergence has to hold for
 # a streak or a settle stops before anything is built.

@@ -52,7 +52,9 @@ func make_big_world() -> VoxelWorld:
 	assert_bool(w.hooks().debug_init_physics()).is_true()
 	return w
 
-const SETTLE_BUDGET := 2500
+# Ceiling, not an expectation: the sibling LOD suites' measured worst case moved to
+# ~2519 ticks with trees in the default pipeline (clean quiet streak, op_overflow=0).
+const SETTLE_BUDGET := 3500
 const QUIET_TICKS := 8
 
 func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> bool:

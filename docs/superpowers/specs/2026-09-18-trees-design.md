@@ -505,3 +505,115 @@ reasonably ask why two foliage modules exist rather than one parameterised modul
 What they do share — and should share rather than duplicate — is the gust field, the
 `sun_march.glslh` visibility march and its albedo-alpha packing, the bayer4 reach dither, the
 indirect-draw and overflow-clamp bookkeeping, and the settings-store shape.
+
+---
+
+## 12. What shipped (2026-09-19)
+
+The feature landed as designed across Tasks 0–15 of `docs/superpowers/plans/2026-09-18-trees.md`.
+`docs/superpowers/plans/2026-09-18-trees-results.md` is the long form: both measured costs with
+their methods and brackets, and the complete deviation record (ledger rulings R1–R13). This is
+the summary so the spec and the code do not drift apart.
+
+**Measured, Apple M1, 2560x1440, vsync genuinely disabled; GPU timestamps invalid, so wall
+percentiles only and no per-pass attribution:**
+
+- Leaf passes (frame path), interleaved A/B/A `--leaves=0|1`: **≤ +1.8 ms p50** on every
+  leg (steady +0.40, move −0.09, ridge +0.11, edit +0.24, edit-bounded +1.76, island +0.90);
+  p99 deltas −1.35…+1.88, all inside off-leg tail noise. Off brackets ≤ 1.03 ms p50.
+- Trees stage (streaming path), cold-atlas `debug_init_atlas()` + pump-to-quiet medians of 3:
+  golden 774 ms, default-minus-trees 856 ms, **default 4463 ms — the stage costs ≈ 3.6 s
+  (≈ 5.2×) of cold time-to-quiet** at camera (20, 60, 30); reps within ~50 ms. It also keeps
+  in-game streaming nonstop (§10's "hitching", and the reason the A/B/A absolute level is
+  85.7 ms where the Task-0 baseline was 23.8 ms — the deltas above sit on that saturated
+  base and isolate the leaf passes only, which is what the dial gates).
+
+**Claims this doc got wrong, in §13-of-grass fashion — named plainly:**
+
+- **§4 early-out 1** ("outside [ground − 2, ground + max_tree_height] the stage returns")
+  was unsound at the band top: the returned terrain distance lets a sphere-trace step jump
+  over a crown top just under the plane. Shipped band top:
+  `ground_y + 2.05 * (trunk_height * 1.25 + crown_radius)` (the 1.99 slab factor rounded up),
+  identical in the GPU stage and the CPU mirror.
+- **§7 integration** names `raymarch_compositor.cpp`; the block lives in
+  `VoxelFrame::render_pre_opaque` (`render/frame.cpp`) since the frame-module move — the
+  grass raster line it says to follow there has been there since then.
+- **§9's byte-identical capture golden** is unachievable through the shipping path on this
+  machine: raster draw-order depth ties move ~0.06% of pixels run-to-run — proven non-leaf
+  (249 px with grass, leaves and SSGI all off). Shipped instead: the tolerance-golden route —
+  a fourth `grove` camera in `tests/test_frame_shipped_golden.gd` (TOL_TILE 0.004; worst
+  measured per-tile margin 3.8e-4 in the Task-15 re-measurement, >10x inside it) plus
+  `tests/golden/leaf.png` as the human reference; `tools/leaf_capture.gd`
+  remains the deterministic-by-construction look tool.
+
+**Plan-level corrections worth remembering:** bark layer 07 comes from the owner's
+`bark_willow_1k` set via `tools/convert_bark.sh` — the vol2 pack the plan cited has no bark
+folder, and the missing map took every GPU suite down before the fix (placeholder look,
+reconvert trivially; `convert_materials.sh` still aborts at its bark entry on this machine).
+`allow_gpu_only` needs a value (`atoi`); the `//!cpu` directive must arrive in the same
+commit as its registration. The leaf compute shaders carry two forced extra set-0 bindings
+each (`palette_buf`, `brick_flags` — GLSL analyses the whole TU), and a custom pipeline
+without the trees stage fails the leaf compile and fail-softs the pass by design.
+
+**Accepted, stated rather than hidden:** the seam probes' third ownership state for
+`MAT_LEAF_CLUMP` pixels and the band bar at 6.25% vs the 7.3% stall reference (3 px teeth);
+the combined-card containment envelope ≤1.75 (R10); `kLeafCellM`'s deliberate duplication
+with a `ponytail:` upgrade path; the crown_radius ≥ branch_radius_min/0.38 authoring
+coupling with **no** runtime clamp (pipeline-authored param, defaults satisfy, symptom loud);
+and the funding-frontier headroom figures §4 of the results doc hands to the next feature.
+
+**Final review wave (same day; ledger R13; results doc §3.5).** The whole-branch review
+returned "with fixes"; three Important findings were deviation records this section lacked,
+and each now says plainly what was true before:
+
+- **§4's height-band rejection was specified, not implemented — and unrecorded** until the
+  review. R13 probed first: over ±3000 m of the shipped default pipeline, 64,552 cells placed
+  a tree and 63,681 of them (32,474 dirt + 31,207 rock — 98.65 %) stood **outside** the grass
+  band; the spec's sentence was aspiration, not artifact. Fixed by implementing, not by
+  recording: `tree_cell_present(cell, tp, h, slope)` in `shaders/tree.glslh` (shared by GPU
+  stage and leaf scatter) rejects `h <= 1.0 || h > 4.0` right after the slope gate, and the
+  CPU mirror in
+  `builtin_stages.cpp` carries it identically. The band literals are a mirror of
+  `stage_height_bands` (`height_bands.field.glslh`: rock above 4, grass above 1 — stage text,
+  not pipeline params, so the copy cannot diverge from an author's edit); GPU≡CPU is pinned
+  by `test_field_diff.gd`, re-verified to actually cross the band boundaries. The field
+  goldens moved and were re-recorded in the causing commit — together with the two
+  machine-checked numeric look-goldens (the frame suite's tile means, the SSAO horizon
+  `lit_luma`; R12 keeps committed PNGs human-reference only, and `leaf.png` was not
+  re-captured in this wave); the look changes (no treeline-
+  top or valley-floor trees). Two consumer-characterization suites moved at the final gate,
+  re-recorded with the cause named in the wave's third commit (the band's own goldens rode
+  the causing commit): `test_world_field_consumers`'s collider golden (one of
+  its three resident chunks was a band-rejected tree's trunk) and `test_material_glow`'s
+  paint sync (its quiet-window sync stopped landing paints once the band removed the tree
+  work that kept the uploader busy — which exposed a latent non-trees defect: a debug
+  repaint queued after the previous paint's atlas upload has fully committed never
+  propagates to the GPU at all, so test 1 now compares two identically-seeded first-paint
+  worlds; a product-side follow-up is owed outside this feature;
+  results doc §3.5 holds the full record). §2's streaming
+  figures pre-date the band; the band rejects
+  cells the old gate built full skeletons for, so it is not a cost regression.
+- **§9's first GPU bullet — "bark voxels exist at a known tree cell and none in a known
+  clearing" — shipped at this fix wave, never as `tests/test_trees.gd`.** The plan never
+  scheduled it: that is a plan gap, not a design change, and §9 stays the authority the code
+  now meets. It lives in `tests/test_leaves.gd`, where the streaming harness and the tree
+  hook already are, and reads shipping output only (§9's hooks rule): the tree list from
+  `debug_leaf_stats()` (now also reporting the dispatch grid, lattice pitch and reach the
+  last real `LeafScatterPass::run()` uploaded) names the cell, and `debug_raymarch_gbuffer()`
+  drives the real marcher to demand `MAT_BARK` (8) on the trunk axis; the clearing is the
+  first lattice cell of that shipped grid near the view centre carrying no listing and no
+  overhanging crown sphere, and its march must return a non-bark surface. Presence is read
+  from the pass's output, never re-derived from the hash in GDScript.
+- **§5's scatter shape values are duplicated pipeline defaults, not live UBO reads.**
+  `leaf_layout.cpp` carried a comment claiming the scatter "reads the LIVE values from the
+  pipeline's set-1 UBO"; it does not and cannot from there — the literals it packs *are*
+  what `leaf_trees.comp.glsl` sees. The comment now says so and names
+  `assets/pipelines/trees.pipeline` as the source of truth, and a native pin in
+  `test_leaf_layout.cpp` asserts every tree-shape literal against BOTH shipped pipelines —
+  `trees.pipeline` and the game-resolved `default.pipeline` — through the engine's own
+  loader (exact float equality), plus the `ve::kSurfaceY` duplication in `shape[3]`:
+  edit a tree param in either pipeline without moving `leaf_layout.cpp` and a test fails,
+  instead of canopies silently floating off their new trunks.
+
+The wave also closed two §3.4 parked minors (hole-probe exemption ordering + per-class teeth;
+leaf settings per-row clamp sweep + non-vacuous idempotence) — see results doc §3.5.

@@ -179,6 +179,19 @@ func test_open_sky_visibility_does_not_depend_on_world_height() -> void:
 #
 # The result is a single missed pixel surrounded by hits. Real sky is a connected region, so
 # an isolated miss in the middle of terrain can only be the march stepping over geometry.
+#
+# Trees (Task 7, ruling R9) narrowed that premise, it did not delete it: thin elevated
+# trunks put genuinely isolated SKY pixels inside terrain (sub-pixel gaps at silhouettes)
+# and moved the brick funding frontier inward (rays past it cross as "known empty" by
+# design). Both classes are field-TRUE -- the analytic field and residency agree with the
+# marcher, not against it -- and the probe now adjudicates every miss from its own field
+# data (0.25 m analytic samples across the CPU-raycast crossing; atlas slot of the crossing
+# region). The zero tolerance stays for anything the FIELD disagrees with: a solid, funded
+# crossing the march skipped counts as unexplained and fails. The residue kind is
+# pre-accepted by docs/superpowers/specs/2026-09-18-trees-design.md §10 (distant-branch
+# thinning / hairline LoD-boundary artifacts "named here so it is not later mistaken for a
+# regression"). Exemption budget: 11 measured at this camera; capped at 32 of 90500 hit px
+# -- past a budget that large, exemptions are a mass event, not silhouettes.
 func test_the_march_leaves_no_isolated_holes_in_the_gbuffer() -> void:
 	var w := make_world()
 	# Looking down onto the height field from 19 m up: the rays cross many bricks at a steep
@@ -189,7 +202,48 @@ func test_the_march_leaves_no_isolated_holes_in_the_gbuffer() -> void:
 	assert_bool(d["ran"]).is_true()
 	assert_int(d["hit_pixels"]).override_failure_message(
 		"the view hit nothing, so the hole count below proves nothing").is_greater(20000)
-	assert_int(d["isolated_misses"]).is_equal(0)
+	assert_int(d["isolated_unexplained"]).override_failure_message(
+		"field-disagreeing march holes: %s" % str(d["isolated_miss_details"])).is_equal(0)
+	assert_int(d["isolated_exempt_field_true_sky"] + d["isolated_exempt_past_funding_frontier"]) \
+		.override_failure_message("exempt misses past the budget: %s" % str(d["isolated_miss_details"])) \
+		.is_less_equal(32)
+	# Final-fix wave (Task 7 parked minor): the exemption SUM alone hides which class
+	# grew. The hook classifies every miss in isolated_miss_details, so the per-class
+	# split is asserted here -- sky-no-CPU-hit (the CPU raycast itself missed) and
+	# sub-pixel silhouette sky (the exact-ray analytic sample says no solid anywhere in
+	# the crossing window) individually, and they must re-derive the aggregate counters
+	# exactly. The min_sdf presence check is an ORDERING TOOTH THAT ARMED ONLY IF a
+	# sky_no_cpu_hit record exists: that exemption now SAMPLES the analytic field before
+	# exempting, so a record lacking min_sdf proves the reorder was reverted. Honest
+	# caveat (final-review re-pass): in this band world the class is EMPTY -- the vacuous
+	# premise was probed with an >=1 assert and failed -- so here the reorder is pinned
+	# only by the per-class sums, and the tooth waits on a world that produces the class.
+	var classes := {}
+	for m in d["isolated_miss_details"]:
+		var cls: String = m["class"]
+		classes[cls] = int(classes.get(cls, 0)) + 1
+		if cls == "sky_no_cpu_hit":
+			assert_bool(m.has("min_sdf")).override_failure_message(
+				"sky_no_cpu_hit exempted before the analytic min_sdf sample was taken"
+				).is_true()
+	assert_int(int(classes.get("sky_no_cpu_hit", 0))) \
+		.override_failure_message("this characterization assumed the sky_no_cpu_hit class "
+			+ "stays empty post-band; if it now produces records, re-aim the ordering "
+			+ "asserts and update this message") \
+		.is_equal(0)
+	assert_int(int(classes.get("sky_no_cpu_hit", 0)) + int(classes.get("sub_pixel_silhouette_sky", 0))) \
+		.override_failure_message("per-class sky counts disagree with the sum: %s" % str(classes)) \
+		.is_equal(int(d["isolated_exempt_field_true_sky"]))
+	assert_int(int(classes.get("past_funding_frontier", 0))) \
+		.is_equal(int(d["isolated_exempt_past_funding_frontier"]))
+	assert_int(int(classes.get("UNEXPLAINED", 0))) \
+		.is_equal(int(d["isolated_unexplained"]))
+	var classified := 0
+	for cls in classes:
+		classified += int(classes[cls])
+	assert_int(classified).override_failure_message(
+		"a miss was classified twice or not at all: %s" % str(classes)).is_equal(
+		int(d["isolated_misses"]))
 
 # Task 7's invariance contract, narrowed to the target it was always about: the MARCHER's
 # own G-buffer normal comes from the source field (or its R8 fallback), never from the

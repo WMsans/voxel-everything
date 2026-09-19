@@ -32,8 +32,9 @@ func make_world() -> VoxelWorld:
 # intentionally (gdunit_tests.sh) at a normal display rate.
 # requests_pending comes from the walk that ran BEFORE this tick collected its results, so it
 # dips to zero for a tick or two while a batch lands -- the streak is what makes it mean
-# "converged" rather than "between batches". Measured: ~350-400 ticks, so the budget is margin.
-const SETTLE_BUDGET := 2500
+# "converged" rather than "between batches". Measured: ~350-400 ticks pre-trees, ~2519 with
+# trees in the default pipeline (clean quiet streak, op_overflow=0), so the budget is margin.
+const SETTLE_BUDGET := 3500
 const QUIET_TICKS := 8
 
 func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> bool:
@@ -94,7 +95,11 @@ func test_a_far_edit_is_visible_in_the_far_field(timeout := 180000) -> void:
 	assert_float(absf(after["depth_sum"] - before["depth_sum"])).override_failure_message(
 		"a 20 m crater at 150 m changed nothing in the far field").is_greater(0.0)
 
-func test_teardown_and_reinit_leave_no_pages_behind(timeout := 40000) -> void:
+# Trees (Task 7): this case needs TWO full far-field settles (before and after the
+# teardown/reinit), each measured at ~2519 ticks with trees in the default pipeline --
+# the 40 s ceiling was tuned for two ~400-tick pre-trees settles. The siblings in this
+# file already run under 180 s.
+func test_teardown_and_reinit_leave_no_pages_behind(timeout := 180000) -> void:
 	var w := make_world()
 	var pos := Vector3(400.0, 90.0, 400.0)
 	var fwd := Vector3(0.0, -0.35, -1.0).normalized()

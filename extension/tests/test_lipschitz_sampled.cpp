@@ -71,3 +71,18 @@ TEST_CASE("default.pipeline never exceeds its reported gradient bound") {
 TEST_CASE("golden.pipeline never exceeds its reported gradient bound") {
 	check_bound("golden.pipeline");
 }
+
+TEST_CASE("trees.pipeline reports a sound bound") {
+	check_bound("trees.pipeline");
+}
+
+TEST_CASE("the trees stage does not raise the pipeline bound") {
+	const std::string root(VE_REPO_ROOT);
+	ve::ResolvedPipeline with, without;
+	std::string err;
+	REQUIRE_MESSAGE(ve::load_pipeline(repo_reader, root + "/assets/pipelines/trees.pipeline",
+			root + "/shaders/", &with, nullptr, &err), err);
+	REQUIRE_MESSAGE(ve::load_pipeline(repo_reader, root + "/assets/pipelines/default.pipeline",
+			root + "/shaders/", &without, nullptr, &err), err);
+	CHECK(with.lipschitz == doctest::Approx(without.lipschitz));
+}

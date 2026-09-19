@@ -31,6 +31,7 @@
 
 #include "render/gpu/gpu.h"
 #include "grass/grass_settings_store.h"
+#include "leaves/leaf_settings_store.h"
 #include "render/frame.h"
 #include "render/gpu_timings.h"
 #include "render/island_handoff.h"
@@ -76,6 +77,8 @@ class SsrPass;
 class OutlinePass;
 class GrassScatterPass;
 class GrassRasterPass;
+class LeafScatterPass;
+class LeafRasterPass;
 class Object;
 
 // Every GPU object of the pass graph. The orchestrator creates them in ensure_gpu_graph() and
@@ -108,6 +111,8 @@ struct RenderPasses {
 	OutlinePass *outline = nullptr;
 	GrassScatterPass *grass_scatter = nullptr;
 	GrassRasterPass *grass_raster = nullptr;
+	LeafScatterPass *leaf_scatter = nullptr;
+	LeafRasterPass *leaf_raster = nullptr;
 };
 
 class RenderOrchestrator {
@@ -172,7 +177,7 @@ public:
 	ve::BeautySettings beauty_settings() const;
 	// Settings + tier together, for debug_beauty_settings.
 	void beauty_snapshot(ve::BeautySettings *out_settings, int *out_tier) const;
-	// The three stores by group name ("render", "beauty", "grass"); nullptr otherwise.
+	// The four stores by group name ("render", "beauty", "grass", "leaves"); nullptr otherwise.
 	// VoxelSettings addresses them through this. Main thread.
 	ve::SettingsGroup *settings_group(const char *name);
 
@@ -239,6 +244,9 @@ public:
 	ve::GrassSettings grass_settings() const { return grass_settings_.get(); }
 	bool set_grass_value(const char *n, float v) { return grass_settings_.set_value(n, v); }
 	float grass_value(const char *n) const { return grass_settings_.value(n); }
+	ve::LeafSettings leaf_settings() const { return leaf_settings_.get(); }
+	bool set_leaf_value(const char *n, float v) { return leaf_settings_.set_value(n, v); }
+	float leaf_value(const char *n) const { return leaf_settings_.value(n); }
 	GpuTimings *gpu_timings() { return &gpu_timings_; }
 
 	// --- history/beauty frame state (moved with the pass graph) ---
@@ -303,8 +311,10 @@ private:
 	std::vector<const char *> teardown_trace_;
 
 	RenderPasses passes_;
-	// Grass knobs live here, separate from BeautySettings (design doc section 7).
+	// Grass knobs live here, separate from BeautySettings (design doc section 7). Leaves
+	// are their own module with their own store, exactly as grass is.
 	ve::GrassSettingsStore grass_settings_;
+	ve::LeafSettingsStore leaf_settings_;
 	GpuTimings gpu_timings_;
 	IslandHandoff handoff_;
 	WorldStreamer *streamer_ = nullptr; // created inside ensure_gpu_graph(), deleted in teardown_gpu()

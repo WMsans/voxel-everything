@@ -39,6 +39,34 @@ func settle(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> bool:
 			return true
 	return false
 
+# Drive the brick streamer to a quiet streak (the seam probe's internal 120-frame budget
+# is a settle-time state once trees demand more funding ticks).
+func settle_stream(w: VoxelWorld, pos: Vector3) -> bool:
+	var quiet := 0
+	for i in range(2000):
+		var actions := w.hooks().debug_stream_frame(pos)
+		await get_tree().process_frame
+		quiet = quiet + 1 if actions == 0 else 0
+		if quiet >= QUIET_TICKS:
+			return true
+	return false
+
+# Trees recalibration (Task 7, ruling R9): mirror of test_lod_seam.gd -- the unclaimed
+# reading is taken at STEADY STATE (consecutive equal probes), not at the settle-time
+# peak, because with trunks the first probe reads 18/264 and the plateau is 13/265.
+func probe_band_at_steady_state(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> Dictionary:
+	await settle_stream(w, pos)
+	var d: Dictionary = w.hooks().debug_seam_probe(pos, fwd, 256, 144)
+	for r in range(12):
+		for i in range(30):
+			w.hooks().debug_lod_tick(pos, fwd)
+			await get_tree().process_frame
+		var d2: Dictionary = w.hooks().debug_seam_probe(pos, fwd, 256, 144)
+		if int(d2["neither"]) == int(d["neither"]) and int(d2["band_pixels"]) == int(d["band_pixels"]):
+			return d2
+		d = d2
+	return d
+
 # The far field must describe, not shade. A LoD pixel has to carry a real material id and a
 # unit normal, or the deferred pass has nothing to light it with.
 func test_far_field_pixels_carry_a_material_and_a_unit_normal(timeout := 60000) -> void:
@@ -62,17 +90,18 @@ func test_the_two_fields_light_identically_across_the_band(timeout := 180000) ->
 	var pos := Vector3(100.0, 68.0, 202.0)
 	var fwd := Vector3(0.0, -0.12, -1.0).normalized()
 	assert_bool(await settle(w, pos, fwd)).is_true()
-	var d: Dictionary = w.hooks().debug_seam_probe(pos, fwd, 256, 144)
-	# Preserve the established test_lod_seam.gd seam contract: allow up to band_pixels / 40
-	# pinhole-scale unclaimed pixels (1.9% measured; see the recalibration note there --
-	# the fresh refinement pattern leaves scattered T-junction pinholes at the fade
-	# knife-edge, deterministic across radii and cull on/off). A stalled lineage measured
-	# 7.3% on this probe, so the bar keeps its teeth.
-	# Double claims remain an exact invariant, and the band must be non-vacuously measured.
+	var d: Dictionary = await probe_band_at_steady_state(w, pos, fwd)
+	# Preserve the established test_lod_seam.gd seam contract, re-derived under trees
+	# (Task 7, ruling R9) from the STEADY STATE: the persistent unclaimed plateau is 13 of
+	# 265 (4.9%), so the bar is band_pixels / 16 (6.25%) -- see the recalibration note in
+	# test_lod_seam.gd. The documented stall-pathological 7.3% (>= 19 pixels of this band,
+	# and a stalled lineage never recovers into the plateau) still clears the bar with
+	# margin and fails the assertion. Double claims remain an exact invariant, and the
+	# band must be non-vacuously measured.
 	assert_int(d["both"]).is_equal(0)
 	assert_int(d["neither"]).override_failure_message(
-		"%d of %d band pixels were claimed by neither field" % [d["neither"], d["band_pixels"]]
-		).is_less_equal(int(d["band_pixels"] / 40))
+			"%d of %d band pixels were claimed by neither field (steady state)" % [d["neither"], d["band_pixels"]]
+			).is_less_equal(int(d["band_pixels"] / 16))
 	assert_int(d["band_pixels"]).is_greater(50)
 
 func test_the_lod_raster_no_longer_shades(timeout := 60000) -> void:

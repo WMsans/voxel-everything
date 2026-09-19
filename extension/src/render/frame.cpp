@@ -14,6 +14,8 @@
 #include "render/gpu_timings.h"
 #include "render/grass_raster_pass.h"
 #include "render/grass_scatter_pass.h"
+#include "render/leaf_scatter_pass.h"
+#include "render/leaf_raster_pass.h"
 #include "render/hiz_pass.h"
 #include "render/inject_pass.h"
 #include "render/island_atlas.h"
@@ -94,6 +96,12 @@ ve::GrassLayout VoxelFrame::grass_layout(const float cam_pos[3], const float vie
 	lod_.fade_band(&fade_start, &fade_end);
 	gs.reach_m = std::min(gs.reach_m, std::min(fade_end, grass_reach_limit_m()));
 	return ve::grass_layout(gs, cam_pos, view_proj);
+}
+
+ve::LeafLayout VoxelFrame::leaf_layout(const float cam_pos[3], const float view_proj[16]) const {
+	// No fade-band/residency clamp: stage 1 attaches every candidate to a live bark voxel in
+	// the atlas, so residency bounds the list by itself. See the declaration in frame.h.
+	return ve::leaf_layout(render_.leaf_settings(), cam_pos, view_proj);
 }
 
 // Was VoxelWorld::sun_ortho(); reads the sun live, as that method did.
@@ -419,6 +427,31 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		else cancel_stage(kStageGrass);
 	}
 
+	// Leaves: the canopy scatter and its raster, one block right beside the grass it
+	// shadows. Cards write the same G-buffer channels the far field writes, so everything
+	// below shades them unchanged. The shape is grass's: run + draw are one gated pair, and
+	// a failure cancels the timing marker and skips leaves -- never aborts the frame.
+	if (LeafScatterPass *leaf = render_.passes().leaf_scatter) {
+		timings->begin(rd, "leaves");
+		float leaf_cam[3] = {cam.origin.x, cam.origin.y, cam.origin.z};
+		float leaf_vp[16];
+		for (int c = 0; c < 4; c++)
+			for (int r = 0; r < 4; r++) leaf_vp[c * 4 + r] = view_proj.columns[c][r];
+		const ve::LeafLayout ll = leaf_layout(leaf_cam, leaf_vp);
+		SunUbo *leaf_sun = render_.passes().sun_ubo;
+		LeafRasterPass *leaf_raster = render_.passes().leaf_raster;
+		// Stage 1 never reads the SunUbo (stage 2's march does); an absent one is no reason
+		// to skip the cull, so an empty RID travels through unbound. A disabled layout is a
+		// successful run that clears both arg buffers, and the raster then draws zero
+		// vertices -- true with no draw, not a failure.
+		const bool leaf_ok = leaf->run(rd, *atlas, ll, store_.region_window(),
+				static_cast<float>(render_.beauty_frame()) / 60.0f,
+				leaf_sun ? leaf_sun->buffer() : RID(), render_.passes().field_context)
+				&& leaf_raster && leaf_raster->draw(rd, *leaf, *gb, view_proj, cam_pos);
+		if (leaf_ok) timings->end(rd, "leaves");
+		else timings->cancel("leaves");
+	}
+
 	SsgiPass *ssgi = render_.passes().ssgi;
 	if (ssgi) ssgi->clear_result();
 	bool ssgi_ok = false;
@@ -615,6 +648,7 @@ FrameInputs VoxelFrame::prepare_headless(RenderingDevice *rd, const FrameInputs 
 		if (InjectPass *inject = render_.passes().inject) inject->release_targets();
 		if (LodRasterPass *lod_raster = render_.passes().lod_raster) lod_raster->release_targets();
 		if (GrassRasterPass *grass_raster = render_.passes().grass_raster) grass_raster->release_targets();
+		if (LeafRasterPass *leaf_raster = render_.passes().leaf_raster) leaf_raster->release_targets();
 	}
 	if (!headless_.ensure(rd, in.size) || !headless_.clear(rd)) return out;
 	out.scene_color = headless_.color();

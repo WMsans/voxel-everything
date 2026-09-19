@@ -1,0 +1,62 @@
+// Shared leaf definitions: the LeafParams layout, the per-clump record and its packing.
+// The LeafParams field list is LEAF_PARAMS_FIELDS in shaders/generated/blocks.glslh,
+// generated from ve::LeafParams -- add it there the same way GRASS_PARAMS_FIELDS is added.
+//
+// NOTE: never put a literal include directive inside a comment in this file -- the loader
+// matches include tokens anywhere in a line and would self-include.
+
+#include "generated/blocks.glslh"
+
+// One surviving tree, as stage 1 compacts it. 32 bytes.
+struct LeafTree {
+	vec4 a; // xyz crown centre, w crown radius
+	vec4 b; // x trunk foot y, y tree hash as float bits, z distance to camera, w clump budget
+};
+
+// One canopy clump. 32 bytes, the same budget as GrassBlade.
+struct LeafClump {
+	vec4 a; // xyz clump centre, w clump radius
+	vec4 b; // x packed normal + sun byte, y hash as float bits,
+	        // z crown depth t and curvature ratio, w roll and sway phase
+};
+
+// Oct-encode a unit vector into 16 bits, then fold the sun-visibility byte into bits 16-23.
+// Byte-identical to grass_pack_ground(): the deferred pass reads albedo alpha as sun
+// visibility, and a clump that disagrees with a blade about that packing shades wrong.
+uint leaf_pack_normal(vec3 n, float sun) {
+	vec2 p = n.xy * (1.0 / (abs(n.x) + abs(n.y) + abs(n.z)));
+	if (n.z < 0.0) {
+		vec2 s = vec2(p.x >= 0.0 ? 1.0 : -1.0, p.y >= 0.0 ? 1.0 : -1.0);
+		p = (vec2(1.0) - abs(p.yx)) * s;
+	}
+	uvec2 q = uvec2(clamp(round((p * 0.5 + 0.5) * 255.0), vec2(0.0), vec2(255.0)));
+	uint sun_byte = uint(clamp(round(sun * 255.0), 0.0, 255.0));
+	return (q.x & 0xFFu) | ((q.y & 0xFFu) << 8) | (sun_byte << 16);
+}
+
+vec3 leaf_unpack_normal(uint packed) {
+	vec2 e = vec2(float(packed & 0xFFu), float((packed >> 8) & 0xFFu)) / 255.0 * 2.0 - 1.0;
+	vec3 n = vec3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+	if (n.z < 0.0) {
+		vec2 s = vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+		n.xy = (vec2(1.0) - abs(n.yx)) * s;
+	}
+	return normalize(n);
+}
+
+float leaf_unpack_sun(uint packed) { return float((packed >> 16) & 0xFFu) / 255.0; }
+
+// Two 0..1 scalars in one float's bit pattern, 16 bits each: crown depth and the curvature
+// ratio clump_radius / crown_radius. The ratio is packed rather than recomputed because
+// crown_radius is a per-TREE value and the raster pass sees only clumps -- packing it is
+// what keeps LeafClump at 32 bytes.
+float leaf_pack_pair(float a, float b) {
+	uint ua = uint(clamp(a, 0.0, 1.0) * 65535.0);
+	uint ub = uint(clamp(b, 0.0, 1.0) * 65535.0);
+	return uintBitsToFloat((ua & 0xFFFFu) | (ub << 16));
+}
+
+vec2 leaf_unpack_pair(float packed) {
+	uint u = floatBitsToUint(packed);
+	return vec2(float(u & 0xFFFFu), float((u >> 16) & 0xFFFFu)) / 65535.0;
+}

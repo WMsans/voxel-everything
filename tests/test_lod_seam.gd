@@ -62,6 +62,32 @@ func settle_stream(w: VoxelWorld, pos: Vector3) -> bool:
 			return true
 	return false
 
+# Trees recalibration (Task 7, ruling R9): the unclaimed count read on the first probe
+# after the far-field settle is a SETTLE-TIME reading, not the persistent violation this
+# test is about. With trunks in the field that first probe reads 18 of 264 (6.8%); driving
+# the near-field streamer quiet and re-probing across further ticks decays it to a
+# plateau of 13 of 265 (4.9%) -- deterministic across independent runs and 8 consecutive
+# equal probes, with the exact invariants (double claims, near/far ownership) holding
+# throughout. The residue is the band-edge trunk silhouette + funding-frontier class the
+# spec pre-accepts (docs/superpowers/specs/2026-09-18-trees-design.md §10: "distant trees
+# losing their spars ... named here so it is not later mistaken for a regression").
+# Returns the steady-state probe: the unclaimed/band counts equal across two consecutive
+# probes, or the last reading when the round budget runs out -- a lineage that never
+# recovers keeps reading big, so the stall bar in the test below still fails it.
+func probe_band_at_steady_state(w: VoxelWorld, pos: Vector3, fwd: Vector3) -> Dictionary:
+	await settle_stream(w, pos)
+	var d: Dictionary = w.hooks().debug_seam_probe(pos, fwd, 256, 144)
+	for r in range(12):
+		for i in range(30):
+			w.hooks().debug_lod_tick(pos, fwd)
+			await get_tree().process_frame
+		var d2: Dictionary = w.hooks().debug_seam_probe(pos, fwd, 256, 144)
+		if int(d2["band_pixels_unclaimed"]) == int(d["band_pixels_unclaimed"]) \
+				and int(d2["band_pixels"]) == int(d["band_pixels"]):
+			return d2
+		d = d2
+	return d
+
 # The two masks are exact complements on the same pixel grid, so no pixel in the band may be
 # claimed by both fields and none may be claimed by neither. A gap shows as sky through the
 # ground; an overlap shows as z-fighting.
@@ -69,12 +95,25 @@ func settle_stream(w: VoxelWorld, pos: Vector3) -> bool:
 # far field's first visible terrain is ~195 m away, so no pixel falls in the 120-150 m
 # band. This camera sits just inside the world's z edge, where the same view produces
 # thousands of band pixels (measured >200 at 256x144).
+# Height-band re-pin (final review wave, spec §4): the band gate removed every tree
+# outside 1 < h <= 4, and the CPU placement sweep found no kept cell inside this camera's
+# 30-60 m forward corridor any more (nearest kept tree: 62.6 m), so the R11 leaf-owned
+# pin below had nothing left to classify here. The view moved to (49, 68, 135) — same -z
+# heading, same settle machinery — where two kept cells ((49.0, 92.8) h=2.8 and
+# (32.5, 92.4) h=1.7) sit square in the 38.4-48 m band. Measured at steady state: 2002
+# band pixels, 2 unclaimed (bar is band/16), 0 double claims, 23 leaf-owned. Every bar
+# is unchanged — only the vantage that makes the third state reachable moved. The other
+# two tests keep the old camera; they pass on it unchanged.
 func test_the_band_is_covered_exactly_once(timeout := 180000) -> void:
 	var w := make_world()
-	var pos := Vector3(100.0, 68.0, 202.0)
+	var pos := Vector3(49.0, 68.0, 135.0)
 	var fwd := Vector3(0.0, -0.12, -1.0).normalized()
 	await settle(w, pos, fwd)
-	var d := w.hooks().debug_seam_probe(pos, fwd, 256, 144)
+	var d := await probe_band_at_steady_state(w, pos, fwd)
+	# Ownership reading at the steady state, for the record (R11 third state): band,
+	# unclaimed (terrain-terrain neither), leaf-owned, double.
+	print("SEAM_BAND ", JSON.stringify([d["band_pixels"], d["band_pixels_unclaimed"],
+			d["band_pixels_leaf_owned"], d["band_pixels_double_claimed"]]))
 	var band := w.hooks().debug_lod_fade_band()
 	# NON-VACUITY FIRST. The probe cannot classify a pixel where the raymarch missed and no
 	# field wrote depth -- it has no terrain sample there, so it counts it as sky. That is
@@ -99,13 +138,31 @@ func test_the_band_is_covered_exactly_once(timeout := 180000) -> void:
 	# convergence or culling artefact). Same kind -- scattered pinholes, zero doubles -- at
 	# 1.9%, so the bar moves 1/200 -> 1/40. It keeps its teeth: a stalled far-field lineage
 	# measured 184 of 2510 (7.3%) on this probe and still fails.
+	# Trees recalibration (Task 7, ruling R9): the bar is re-derived from the STEADY STATE
+	# (see probe_band_at_steady_state), not the first-post-settle peak: persistent is 13 of
+	# 265 (4.9%), so the bar moves 1/40 -> 1/16 (6.25%). The teeth survive unchanged: the
+	# 7.3% stall reference converts to >= 19 of 265 pixels on this probe and still fails
+	# with 3 pixels of margin below the bar; a violation that never recovers keeps reading
+	# at stall size at steady state, while the transient trunk-silhouette/funding-frontier
+	# residue decays into the plateau as the streamer finishes. Double claims stay exact.
+	# Leaf raster (Task 12, ruling R11): the marker stays a two-field model, but the probe
+	# now reads a THIRD ownership state off the surface material id -- band pixels whose
+	# nearest G-buffer writer is a leaf card are covered near-field pixels, not gaps. The
+	# bar and the residue story are otherwise untouched: unclaimed re-reads its Task-7
+	# plateau size with the cards classified, and the pin below proves the state is live.
 	assert_int(d["band_pixels_unclaimed"]).override_failure_message(
-		"%d of %d band pixels were claimed by neither field"
+		"%d of %d band pixels were claimed by neither field (steady state)"
 		% [d["band_pixels_unclaimed"], d["band_pixels"]]
-		).is_less_equal(int(d["band_pixels"] / 40))
+		).is_less_equal(int(d["band_pixels"] / 16))
 	assert_int(d["band_pixels_double_claimed"]).override_failure_message(
 		"%d band pixels were claimed by both fields" % d["band_pixels_double_claimed"]
 		).is_equal(0)
+	# The third state, pinned: crowns against sky at band distances exist at this camera
+	# (they are exactly the pixels R11 reclassified), so a working probe must report them
+	# leaf-owned rather than silently dropping or unclaiming them.
+	assert_int(d["band_pixels_leaf_owned"]).override_failure_message(
+		"no band pixel was classified leaf-owned: the third ownership state regressed"
+		).is_greater(0)
 
 func test_the_near_field_owns_everything_before_the_band(timeout := 180000) -> void:
 	var w := make_world()

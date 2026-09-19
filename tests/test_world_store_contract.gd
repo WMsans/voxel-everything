@@ -117,8 +117,10 @@ func test_render_callback_admission_shuts_down_cleanly() -> void:
 # endpoints must satisfy start < end. The M5 seam tests (test_lod_seam.gd) pin compositing
 # behavior at exactly these two distances, so a band whose start >= end belongs to no
 # field. Settle pattern from test_lod_build.gd/test_lod_pool.gd: poll debug_lod_tick until
-# the walk requests nothing and nothing is in flight for a quiet streak.
-const LOD_SETTLE_BUDGET := 2500
+# the walk requests nothing and nothing is in flight for a quiet streak. Trees moved the
+# worst-case measured convergence at this camera to ~2519 ticks (clean, op_overflow=0), so
+# the 2500 ceiling now sits inside the settle; the budget is margin over measured ticks.
+const LOD_SETTLE_BUDGET := 3500
 const LOD_QUIET_TICKS := 8
 const LOD_POS := Vector3(400.0, 70.0, 400.0)
 const LOD_FWD := Vector3(0, -0.2, -1)

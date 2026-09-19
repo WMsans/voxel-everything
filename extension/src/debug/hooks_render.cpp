@@ -39,6 +39,8 @@
 #include "render/sun_ubo.h"
 #include "render/lod_cull_pass.h"
 #include "render/grass_scatter_pass.h"
+#include "render/leaf_scatter_pass.h"
+#include "render/leaf_raster_pass.h"
 #include "render/grass_raster_pass.h"
 #include "grass/grass_layout.h"
 #include "render/hiz_pass.h"
@@ -471,6 +473,135 @@ void VoxelDebugHooks::debug_normal_release_override(int slot) {
 	RenderingDevice *device = world_->rd();
 	if (!device || !world_->context().render->passes().atlas || !world_->context().render->passes().atlas->is_valid()) return;
 	world_->context().render->passes().atlas->stored_normals().release_override(device, slot);
+}
+
+Dictionary VoxelDebugHooks::debug_leaf_stats() {
+	Dictionary d;
+	d["ran"] = false;
+	d["capacity"] = 0;
+	d["trees"] = 0;
+	d["clumps"] = 0;
+	d["high_water"] = 0;
+	// Stage-2 sample keys, same "0 means not measured" convention as debug_grass_stats.
+	d["sampled"] = 0;
+	d["max_crown_offset"] = 0.0;
+	// Raster key, same convention as debug_grass_stats': the vertex count the SHIPPING
+	// raster last recorded (six per clump), never a CPU re-derivation.
+	d["vertices"] = 0;
+	VoxelWorld *w = world_;
+	if (!w) return d;
+	LeafScatterPass *l = w->context().render->passes().leaf_scatter;
+	if (!l) return d;
+	// Local-device worlds drive the SHIPPING pass on demand (the debug_grass_stats pattern:
+	// same calls, same order as the compositor block). Test bodies run synchronously with
+	// no compositor frame, so a pure read would report stale zeros forever; running the
+	// real pass is not a parallel scatter. Demo worlds stay pure-read -- the compositor
+	// owns the frame there.
+	if (w->get_use_local_device()) {
+		w->ensure_initialized();
+		RenderingDevice *device = w->rd();
+		GpuAtlas *atlas = w->context().render->passes().atlas;
+		if (!w->is_initialized() || !device || !atlas || !atlas->is_valid()) return d;
+		// Hook camera: 40 m straight above the last streamed centre (every leaf test
+		// streams before reading), looking straight down. The lift is load-bearing: the
+		// test view sits at crown height, and a camera AT canopy level frustum-clips most
+		// crowns, turning the reach comparison into a noise fight. 90-degree FOV, time
+		// and sun handling match the compositor expression, as with grass.
+		const float *c = w->context().store->center_;
+		const float p[3] = {c[0], c[1] + 40.0f, c[2]};
+		const float f[3] = {0.0f, -1.0f, 0.0f};
+		const ve::ProbeCamera pc = ve::probe_camera(p, f, 64, 64,
+				1.5707963268f, 0.1f, 4000.0f);
+		const ve::LodCamera &cam = pc.lod;
+		float vp[16];
+		for (int k = 0; k < 16; k++) vp[k] = cam.view_proj[k];
+		const ve::LeafLayout ll = w->context().render->frame().leaf_layout(p, vp);
+		// Stage 2's sun march reads the SunUbo; stage 1 never does. The hook ensures the
+		// same buffer the compositor hands the pass, so the drive exercises both stages.
+		if (!w->context().render->passes().sun_ubo || !w->context().render->passes().sun_ubo->ensure(device)) return d;
+		if (!l->run(device, *atlas, ll, w->context().store->region_window(),
+				static_cast<float>(w->context().render->beauty_frame()) / 60.0f,
+				w->context().render->passes().sun_ubo->buffer(),
+				w->context().render->passes().field_context)) return d;
+		// run()'s internal readback lands before the dispatch executes; the counters are
+		// only valid after a submit+sync, which the compositor does at frame end and the
+		// hook must do itself before refreshing through the pass's re-read entry point.
+		device->submit();
+		device->sync();
+		l->read_back_counters(device);
+		l->read_back_sample(device);
+		// The raster counter is only fresh if the SHIPPING raster ran too: same drive, same
+		// hook camera, into the owned probe-size G-buffer (the debug_grass_stats pattern).
+		// last_vertex_count() is CPU-side, but the recorded draw is submitted so the device
+		// never holds an unsubmitted list. A hooked clear first: the raster's own
+		// draw_list_begin performs no clear, so without the LoD pass's clear_targets the
+		// reverse-Z compare would test against whatever depth the last probe left behind.
+		LeafRasterPass *leaf_raster = w->context().render->passes().leaf_raster;
+		if (leaf_raster && w->context().render->passes().gbuffer &&
+				w->context().render->passes().gbuffer->ensure(device, nullptr, Vector2i(64, 64))) {
+			Projection view_proj;
+			for (int cc = 0; cc < 4; cc++)
+				for (int rr = 0; rr < 4; rr++) view_proj.columns[cc][rr] = vp[cc * 4 + rr];
+			if (w->context().render->passes().lod_raster)
+				w->context().render->passes().lod_raster->clear_targets(device, *w->context().render->passes().gbuffer);
+			leaf_raster->draw(device, *l, *w->context().render->passes().gbuffer, view_proj, p);
+			device->submit();
+			device->sync();
+		}
+	}
+	// Re-read for the report: demo worlds skip the drive above (the compositor owns the
+	// frame there), so fetch the passes here for the pure-read keys.
+	d["ran"] = true;
+	d["capacity"] = l->capacity();
+	d["trees"] = l->last_tree_count();
+	d["clumps"] = l->last_clump_count();
+	d["high_water"] = l->clump_high_water();
+	d["sampled"] = l->sample_count();
+	d["max_crown_offset"] = l->sample_max_crown_offset();
+	{
+		LeafRasterPass *r = w->context().render->passes().leaf_raster;
+		d["vertices"] = r ? r->last_vertex_count() : 0;
+	}
+	// The tree list the SHIPPING pass actually wrote (final-fix wave, spec §9 contract):
+	// GDScript names real tree cells from this instead of re-implementing the placement
+	// hash. Eight floats per record, the LeafTree pair of vec4s in shaders/leaf.glslh:
+	// crown.x, crown.y, crown.z, crown_r, base.y, hash bits, distance, budget. Only the
+	// first last_tree_count() records are written; reading exactly those keeps the §9 rule
+	// that hooks report shipping output, never a CPU re-derivation.
+	{
+		const int n = l->last_tree_count();
+		PackedFloat32Array recs;
+		RenderingDevice *dev = w->rd();
+		if (n > 0 && dev && l->tree_list_buffer().is_valid()) {
+			const PackedByteArray bytes = dev->buffer_get_data(l->tree_list_buffer(), 0,
+					static_cast<uint32_t>(n) * 32u);
+			if (bytes.size() >= n * 32) {
+				recs.resize(n * 8);
+				memcpy(recs.ptrw(), bytes.ptr(), static_cast<size_t>(n) * 32u);
+			}
+		}
+		d["tree_records"] = recs;
+	}
+	// The lattice the SHIPPING pass consumed: the params block its last run() uploaded
+	// (see LeafScatterPass::last_params). [min.x, min.z, dim.x, dim.z, dispatch threads]
+	// plus pitch and reach let the §9 contract test name cells INSIDE the grid the pass
+	// actually walked; a tree never leaves its own cell (TREE_JITTER in shaders/
+	// tree.glslh), so "listed tree" and "unlisted cell" are both read from shipping
+	// facts, never a CPU re-derivation of placement.
+	{
+		const ve::LeafParams &lp = l->last_params();
+		PackedInt32Array grid;
+		grid.resize(5);
+		grid[0] = lp.cell_min[0];
+		grid[1] = lp.cell_min[2];
+		grid[2] = lp.cell_dim[0];
+		grid[3] = lp.cell_dim[2];
+		grid[4] = lp.cell_min[3];
+		d["tree_grid"] = grid;
+		d["tree_cell_m"] = lp.tree[0];
+		d["tree_reach_m"] = lp.cam[3];
+	}
+	return d;
 }
 
 Dictionary VoxelDebugHooks::debug_grass_stats() {
@@ -963,14 +1094,29 @@ Dictionary VoxelDebugHooks::debug_raymarch_gbuffer(Vector3 origin, Vector3 dir) 
 }
 
 // Isolated g-buffer holes: a pixel the primary march missed while all four of its
-// neighbours hit. Real sky is a connected region, so an isolated miss can only be the march
-// stepping over geometry it should have found. Counting them is view-robust in a way that
-// naming one guilty pixel is not.
+// neighbours hit. Real sky is a connected region, so an isolated miss in the middle of
+// terrain can only be the march stepping over geometry it should have found. Counting
+// them is view-robust in a way that naming one guilty pixel is not.
+//
+// Task 7 (ruling R9): thin elevated trunks broke the premise, not the renderer. Each
+// isolated miss is therefore adjudicated from this hook's own field and residency data,
+// and only two field-true classes are exempt -- (1) sub-pixel sky at silhouettes: the
+// CPU raycast crosses a voxel column, but sampling the ANALYTIC field at 0.25 m along
+// the exact ray (crossing -2 m .. +12 m, the measured window) never goes solid, so the
+// marcher and the field agree the ray is sky; (2) rays landing past the funding
+// frontier: the crossing's region has no atlas slot (slot_of < 0) and the marcher
+// crosses unfunded regions as "known empty" by design (raymarch.comp.glsl header).
+// Any other miss -- field-solid on the exact ray inside funded terrain -- is
+// unexplained march tunneling and must still fail. docs/superpowers/specs/
+// 2026-09-18-trees-design.md §10 pre-accepts the silhouette/LoD-boundary residue.
 Dictionary VoxelDebugHooks::debug_raymarch_hole_probe(Vector3 origin, Vector3 dir, int w, int h) {
 	Dictionary d;
 	d["ran"] = false;
 	d["hit_pixels"] = 0;
 	d["isolated_misses"] = 0;
+	d["isolated_exempt_field_true_sky"] = 0;
+	d["isolated_exempt_past_funding_frontier"] = 0;
+	d["isolated_unexplained"] = 0;
 	if (w <= 2 || h <= 2) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
@@ -1005,16 +1151,102 @@ Dictionary VoxelDebugHooks::debug_raymarch_hole_probe(Vector3 origin, Vector3 di
 		hit[i] = f[i * 4 + 3] > 0.5f ? 1 : 0;
 		hits += hit[i];
 	}
-	int isolated = 0;
+	int isolated = 0, sky = 0, frontier = 0, unexplained = 0;
+	Array miss_details;
+	const ve::Generator *gen = world_->context().store->generator();
+	// Analytic truth along the exact ray at 0.25 m, over [lo, hi]. Same instrument the hit
+	// path uses; the final-review wave lifted it out so the sky_no_cpu_hit exemption can
+	// sample BEFORE it exempts (Task 7 parked finding) without changing what is exempt.
+	auto sample_min_sdf = [&](const Vector3 &ray, float lo, float hi) {
+		float min_sdf = 1e30f;
+		if (gen == nullptr) return min_sdf;
+		int n0 = static_cast<int>(lo / 0.25f);
+		if (n0 < 0) n0 = 0;
+		for (int s = n0; static_cast<float>(s) * 0.25f < hi; s++) {
+			const Vector3 q = origin + ray * (static_cast<float>(s) * 0.25f);
+			const ve::IVec3 qr = ve::region_of_point(q.x, q.y, q.z);
+			std::vector<ve::EditOp> ops;
+			{
+				std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
+				if (world_->context().store->edit_log())
+					ops = world_->context().store->edit_log()->ops(qr);
+			}
+			const ve::Sample sample = ve::eval_field(*gen, ops.data(),
+					static_cast<int>(ops.size()), q.x, q.y, q.z,
+					&world_->context().store->volumes(), world_->context().store->overrides());
+			if (sample.sdf < min_sdf) min_sdf = sample.sdf;
+		}
+		return min_sdf;
+	};
 	for (int y = 1; y < h - 1; y++)
 		for (int x = 1; x < w - 1; x++) {
 			const size_t i = static_cast<size_t>(y) * w + x;
 			if (hit[i]) continue;
-			if (hit[i - 1] && hit[i + 1] && hit[i - w] && hit[i + w]) isolated++;
+			if (!(hit[i - 1] && hit[i + 1] && hit[i - w] && hit[i + w])) continue;
+			isolated++;
+			Dictionary m;
+			m["x"] = x;
+			m["y"] = y;
+			// Reconstruct the pixel's exact ray from the same camera basis the probe used.
+			const float ndc_x = (static_cast<float>(x) + 0.5f) * 2.0f / static_cast<float>(w) - 1.0f;
+			const float ndc_y = 1.0f - (static_cast<float>(y) + 0.5f) * 2.0f / static_cast<float>(h);
+			Vector3 rd(basis_f[0] + pc.right[0] * ndc_x * pc.tan_x + pc.up[0] * ndc_y * pc.tan_y,
+					basis_f[1] + pc.right[1] * ndc_x * pc.tan_x + pc.up[1] * ndc_y * pc.tan_y,
+					basis_f[2] + pc.right[2] * ndc_x * pc.tan_x + pc.up[2] * ndc_y * pc.tan_y);
+			rd = rd.normalized();
+			const Dictionary r = debug_raycast(origin, rd);
+			if (!bool(r.get("hit", false))) {
+				// SAMPLE FIRST, then exempt (final-review wave; semantics unchanged): a
+				// CPU miss has no crossing distance to window the analytic samples around,
+				// so take the four neighbours' own hit depths -- an ISOLATED miss sits at
+				// their terrain, so anything the march skipped is at that depth. The
+				// exemption still fires regardless of min_sdf; what the reorder buys is
+				// that the number is in the detail, and the test asserts it is.
+				float dsum = 0.0f;
+				for (size_t j : {i - 1, i + 1, i - static_cast<size_t>(w), i + static_cast<size_t>(w)}) {
+					const Vector3 hv(f[j * 4] - origin.x, f[j * 4 + 1] - origin.y,
+							f[j * 4 + 2] - origin.z);
+					dsum += hv.length();
+				}
+				const float dref = dsum / 4.0f;
+				if (gen != nullptr) m["min_sdf"] = sample_min_sdf(rd, dref - 2.0f, dref + 12.0f);
+				sky++;
+				m["class"] = "sky_no_cpu_hit";
+				miss_details.append(m);
+				continue;
+			}
+			const Vector3 hitp = r["pos"];
+			const float d0 = origin.distance_to(hitp);
+			m["cpu_distance"] = d0;
+			m["cpu_material"] = int(r["material"]);
+			const ve::IVec3 reg = ve::region_of_point(hitp.x, hitp.y, hitp.z);
+			const int slot = debug_slot_of_region(Vector3i(reg.x, reg.y, reg.z));
+			m["slot"] = slot;
+			if (slot < 0) {
+				frontier++;
+				m["class"] = "past_funding_frontier";
+				miss_details.append(m);
+				continue;
+			}
+			// Analytic-field truth at the crossing (0.25 m steps, -2 m .. +12 m window).
+			const float min_sdf = sample_min_sdf(rd, d0 - 2.0f, d0 + 12.0f);
+			if (gen != nullptr) m["min_sdf"] = min_sdf;
+			if (gen != nullptr && min_sdf >= 0.0f) {
+				sky++;
+				m["class"] = "sub_pixel_silhouette_sky";
+			} else {
+				unexplained++;
+				m["class"] = "UNEXPLAINED";
+			}
+			miss_details.append(m);
 		}
 	d["ran"] = true;
 	d["hit_pixels"] = hits;
 	d["isolated_misses"] = isolated;
+	d["isolated_exempt_field_true_sky"] = sky;
+	d["isolated_exempt_past_funding_frontier"] = frontier;
+	d["isolated_unexplained"] = unexplained;
+	d["isolated_miss_details"] = miss_details;
 	return d;
 }
 

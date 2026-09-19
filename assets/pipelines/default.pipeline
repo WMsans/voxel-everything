@@ -16,3 +16,6 @@ stage stages/hills.field.glslh
 stage stages/relief.field.glslh
 stage stages/cave.field.glslh
 stage stages/height_bands.field.glslh
+# Trunks and primary branches as real voxels. `mul 1.0`: a union of 1-Lipschitz capsules
+# cannot raise the running bound, so the computed bound stays 1.99 under the 2.0 ceiling.
+stage stages/trees.field.glslh

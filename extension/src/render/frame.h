@@ -17,6 +17,7 @@
 #include <mutex>
 #include "render/headless_targets.h"
 #include "grass/grass_layout.h"
+#include "leaves/leaf_layout.h"
 #include "shade/sun_ortho.h"
 #include "shade/sun_state.h"
 
@@ -123,6 +124,10 @@ public:
 	ve::SunOrtho sun_ortho(int cascade) const;
 	// The SHIPPING grass layout: settings clamped to how far grass can actually be placed.
 	ve::GrassLayout grass_layout(const float cam_pos[3], const float view_proj[16]) const;
+	// The SHIPPING leaf layout. No reach clamp beside grass's: the stage-1 chop check reads
+	// the live atlas, so a canopy can never stand past where trunk voxels are resident --
+	// the residency limit enforces itself, and LeafSettings::reach_m is the honest dial.
+	ve::LeafLayout leaf_layout(const float cam_pos[3], const float view_proj[16]) const;
 
 private:
 	float grass_reach_limit_m() const;

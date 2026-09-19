@@ -32,6 +32,9 @@ inline constexpr MaterialDef kMaterials[] = {
 	{"ground_crack_01", "04", 1.1f, 6.0f, {1.00f, 0.35f, 0.08f}, {0.35f, 0.12f, 0.06f}},
 	{"ice_crack",    "05",  1.8f,    0.0f, {0.0f, 0.0f, 0.0f},   {0.61f, 0.65f, 0.68f}},
 	{"ice",          "06",  1.8f,    0.0f, {0.0f, 0.0f, 0.0f},   {0.61f, 0.65f, 0.68f}},
+	// Tree trunks and branches, written by shaders/stages/trees.field.glslh. Harder than
+	// ground, softer than rock: a trunk is meant to be choppable in a few swings.
+	{"bark",         "07",  1.6f,    0.0f, {0.0f, 0.0f, 0.0f},   {0.29f, 0.20f, 0.14f}},
 };
 
 inline constexpr int kMaterialCount = static_cast<int>(sizeof(kMaterials) / sizeof(kMaterials[0]));
@@ -69,6 +72,7 @@ inline constexpr uint16_t kFoliageBase = 200;
 inline constexpr FoliageDef kFoliage[] = {
 	// name          glow  glow_rgb
 	{"grass_blade",  0.0f, {0.0f, 0.0f, 0.0f}},
+	{"leaf_clump",   0.0f, {0.0f, 0.0f, 0.0f}},
 };
 
 inline constexpr int kFoliageCount = static_cast<int>(sizeof(kFoliage) / sizeof(kFoliage[0]));

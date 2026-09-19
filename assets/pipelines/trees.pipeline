@@ -1,0 +1,14 @@
+# Trees as a terrain stage. Deliberately NOT part of default.pipeline yet -- Task 7 of
+# docs/superpowers/plans/2026-09-18-trees.md flips that in its own commit, because demo
+# terrain and tests/golden/default_pipeline_field.txt both move when it does.
+#
+# The trees stage unions 1-Lipschitz capsules into sdf, so it declares `mul 1.0` and the
+# computed bound is identical to default.pipeline's 1.99.
+seed      1337
+lipschitz 2.0
+
+stage stages/hills.field.glslh
+stage stages/relief.field.glslh
+stage stages/cave.field.glslh
+stage stages/height_bands.field.glslh
+stage stages/trees.field.glslh

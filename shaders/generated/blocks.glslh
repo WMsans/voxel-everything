@@ -113,6 +113,24 @@
 	ivec4 region_origin; \
 	ivec4 atlas_bricks;
 
+#define LEAF_PARAMS_FIELDS \
+	vec4 cam; \
+	vec4 planes[6]; \
+	ivec4 cell_min; \
+	ivec4 cell_dim; \
+	vec4 tree; \
+	vec4 shape; \
+	vec4 clump; \
+	vec4 wind; \
+	vec4 style; \
+	ivec4 limits; \
+	vec4 spare;
+
+#define LEAF_REGION_FIELDS \
+	ivec4 dims; \
+	ivec4 region_origin; \
+	ivec4 atlas_bricks;
+
 #define DOWNSAMPLE_PUSH_FIELDS \
 	ivec4 dims;
 
