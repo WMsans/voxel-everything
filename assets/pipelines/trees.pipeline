@@ -12,8 +12,3 @@ stage stages/relief.field.glslh
 stage stages/cave.field.glslh
 stage stages/height_bands.field.glslh
 stage stages/trees.field.glslh
-
-# Until the CPU mirror lands (Task 6), the stage is GPU-only. resolve_pipeline warns and
-# names the CPU consumers that will diverge; that warning is expected and is removed by the
-# next commit, not silenced here. The parser reads a value (atoi), hence `1`.
-allow_gpu_only 1

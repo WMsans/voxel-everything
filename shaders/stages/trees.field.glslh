@@ -20,12 +20,7 @@
 //!use       relief.amp_b
 //!use       relief.freq_b
 //!lipschitz mul 1.0
-
-// No //!cpu directive yet -- the mirror lands in Task 6 as ve::stage_trees, and until it
-// is registered in the StageLibrary the directive must stay ABSENT, not merely declared:
-// PipelineFieldGenerator::create() fails the load on an unregistered cpu symbol, while an
-// empty symbol is what makes resolve_pipeline honour allow_gpu_only and push the warning
-// that trees.pipeline documents. Task 6 adds `//!cpu ve::stage_trees` beside its mirror.
+//!cpu       ve::stage_trees
 
 #include "tree.glslh"
 
@@ -91,7 +86,11 @@ void stage_trees(inout FieldCtx ctx) {
 	// already published by hills and relief, so it is free. Everything more than a couple of
 	// metres below the ground or a whole tree above it is finished in one compare.
 	float ground_y = SURFACE_Y + ctx.height;
-	float band_top = ground_y + tp.trunk_height * 1.25 + tp.crown_radius;
+	// The plane must clear not just the geometry (H = trunk_height * 1.25 + crown_radius) but
+	// the terrain height field the point is compared against: in the slab above the ground the
+	// running 1.99 bound lets f exceed 1.99 * d_tree, up to h ~= 2.0101 * H. Round that slab
+	// bound (x1.99) up to 2.05 for margin. Kept IDENTICAL to the CPU mirror in builtin_stages.cpp.
+	float band_top = ground_y + 2.05 * (tp.trunk_height * 1.25 + tp.crown_radius);
 	if (ctx.p.y < ground_y - 2.0 || ctx.p.y > band_top) return;
 
 	ivec2 base = ivec2(int(floor(ctx.p.x / tp.cell)), int(floor(ctx.p.z / tp.cell)));
