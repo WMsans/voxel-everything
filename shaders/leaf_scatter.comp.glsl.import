@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cvix2uo1a0xwc"
+path="res://.godot/imported/leaf_scatter.comp.glsl-964dab8e8d7df522c60d0449a88c919a.res"
+
+[deps]
+
+source_file="res://shaders/leaf_scatter.comp.glsl"
+dest_files=["res://.godot/imported/leaf_scatter.comp.glsl-964dab8e8d7df522c60d0449a88c919a.res"]
+
+[params]
+
