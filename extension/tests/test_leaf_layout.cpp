@@ -2,6 +2,7 @@
 #include "leaves/leaf_settings.h"
 #include "leaves/leaf_settings_store.h"
 #include <cmath>
+#include <limits>
 
 TEST_CASE("leaf settings clamp every knob, NaN included") {
 	ve::LeafSettings s;
@@ -19,14 +20,100 @@ TEST_CASE("leaf settings clamp every knob, NaN included") {
 	CHECK(s.wind_strength >= 0.0f);
 }
 
-TEST_CASE("clamping is idempotent") {
+// Task 8 parked: the per-knob spot-checks above must become a sweep. One row per
+// leaf_rows() entry: below-min and above-max each clamp to the DECLARED bound exactly
+// (the bounds come from the table, so a row added later is covered without editing this
+// test), and the float rows' NaN/+-inf edges pin clamp_setting's documented shape.
+TEST_CASE("every leaf settings row clamps exactly to its declared bounds") {
+	auto set_out_of_range = [](const ve::SettingRow<ve::LeafSettings> &r, ve::LeafSettings &s,
+			bool low) {
+		if (r.kind == ve::SettingKind::kFloat) {
+			s.*r.f = low ? r.min - 1.0f : r.max + 1.0f;
+		} else if (r.kind == ve::SettingKind::kInt || r.kind == ve::SettingKind::kEnum) {
+			s.*r.i = low ? static_cast<int>(r.min) - 100 : static_cast<int>(r.max) + 100;
+		} else {
+			FAIL("leaf settings grew a row kind this sweep does not cover");
+		}
+	};
+	for (const ve::SettingRow<ve::LeafSettings> &r : ve::leaf_rows()) {
+		INFO("row " << r.name);
+		if (r.kind == ve::SettingKind::kBool) {
+			// A bool has no range; its round-trip through clamp_all must preserve both
+			// states (the table's kBool path is `!= 0`, so 0/1 map to themselves).
+			ve::LeafSettings s;
+			s.*r.b = false;
+			ve::clamp_leaf_settings(&s);
+			CHECK_FALSE(s.*r.b);
+			s.*r.b = true;
+			ve::clamp_leaf_settings(&s);
+			CHECK(s.*r.b);
+			continue;
+		}
+		{
+			ve::LeafSettings s;
+			set_out_of_range(r, s, true);
+			ve::clamp_leaf_settings(&s);
+			if (r.kind == ve::SettingKind::kFloat) CHECK(s.*r.f == r.min);
+			else CHECK(s.*r.i == static_cast<int>(r.min));
+		}
+		{
+			ve::LeafSettings s;
+			set_out_of_range(r, s, false);
+			ve::clamp_leaf_settings(&s);
+			if (r.kind == ve::SettingKind::kFloat) CHECK(s.*r.f == r.max);
+			else CHECK(s.*r.i == static_cast<int>(r.max));
+		}
+		if (r.kind == ve::SettingKind::kFloat) {
+			// clamp_setting's documented edges: NaN floors to lo, +-inf clamp to the
+			// nearer bound. Rows outside floats can't reach it (ints round after clamping
+			// and a bool has no range).
+			ve::LeafSettings s;
+			s.*r.f = std::nanf("");
+			ve::clamp_leaf_settings(&s);
+			CHECK(s.*r.f == r.min);
+			s.*r.f = -std::numeric_limits<float>::infinity();
+			ve::clamp_leaf_settings(&s);
+			CHECK(s.*r.f == r.min);
+			s.*r.f = std::numeric_limits<float>::infinity();
+			ve::clamp_leaf_settings(&s);
+			CHECK(s.*r.f == r.max);
+		}
+	}
+}
+
+// The old form (clamp a default store, clamp again, compare) was vacuous: defaults are
+// already inside every bound, so both applies trivially agreed. This fails if the SECOND
+// apply moves anything observable AND if the FIRST apply never took: every non-bool row
+// starts deliberately out of range, and after the first clamp must read exactly its
+// declared max, not the planted value.
+TEST_CASE("clamping is idempotent, and the first apply took") {
 	ve::LeafSettings a;
+	for (const ve::SettingRow<ve::LeafSettings> &r : ve::leaf_rows()) {
+		INFO("row " << r.name);
+		if (r.kind == ve::SettingKind::kBool) {
+			a.*r.b = true; // observable state for the second-apply comparison
+		} else if (r.kind == ve::SettingKind::kFloat) {
+			a.*r.f = r.max + 1.0f;
+		} else {
+			a.*r.i = static_cast<int>(r.max) + 100;
+		}
+	}
 	ve::clamp_leaf_settings(&a);
+	for (const ve::SettingRow<ve::LeafSettings> &r : ve::leaf_rows()) {
+		INFO("first apply did not take on row " << r.name);
+		if (r.kind == ve::SettingKind::kFloat) CHECK(a.*r.f == r.max);
+		else if (r.kind == ve::SettingKind::kInt || r.kind == ve::SettingKind::kEnum)
+			CHECK(a.*r.i == static_cast<int>(r.max));
+	}
 	ve::LeafSettings b = a;
 	ve::clamp_leaf_settings(&b);
-	CHECK(a.reach_m == b.reach_m);
-	CHECK(a.clumps_per_tree == b.clumps_per_tree);
-	CHECK(a.canopy_roundness == b.canopy_roundness);
+	for (const ve::SettingRow<ve::LeafSettings> &r : ve::leaf_rows()) {
+		INFO("second apply moved row " << r.name);
+		const ve::SettingValue va = ve::read(r, a);
+		const ve::SettingValue vb = ve::read(r, b);
+		CHECK(static_cast<int>(va.kind) == static_cast<int>(vb.kind));
+		for (int k = 0; k < 3; k++) CHECK(va.v[k] == vb.v[k]);
+	}
 }
 
 TEST_CASE("clumps_per_tree is capped at the scatter workgroup width") {
@@ -134,4 +221,55 @@ TEST_CASE("an unclamped snapshot is clamped internally") {
 	const ve::LeafLayout l = ve::leaf_layout(s, kOrigin, kIdentity);
 	CHECK(l.reach_m <= 400.0f);
 	CHECK(ve::leaf_clump_budget(l, 0.0f) <= 128);
+}
+
+#include "terrain/pipeline_load.h"
+#include <fstream>
+#include <sstream>
+#include <string>
+
+namespace {
+
+// Same ifstream-over-repo reader the pipeline tests use; VE_REPO_ROOT points at the repo
+// root (SConstruct) and ve_tests runs from extension/.
+bool repo_reader(const std::string &path, std::string *out) {
+	std::ifstream f(path);
+	if (!f.good()) return false;
+	std::ostringstream o;
+	o << f.rdbuf();
+	*out = o.str();
+	return true;
+}
+
+} // namespace
+
+TEST_CASE("the layout's tree-shape params equal the shipped pipeline's tree stage") {
+	// leaf_layout.cpp hardcodes the trees stage's params (there is no live UBO read there).
+	// This is the pin: load the shipped pipeline through the engine's OWN resolver, so a
+	// stage default edited in shaders/stages/trees.field.glslh -- or a future pipeline-level
+	// override -- fails this test until leaf_layout.cpp moves with it. Exact float equality:
+	// both sides arrive at a float from the same decimal text, so any literal change is
+	// drift, and a tolerance would hide the edit that regrounds the canopies.
+	const std::string root(VE_REPO_ROOT);
+	ve::ResolvedPipeline p;
+	std::string err;
+	REQUIRE_MESSAGE(ve::load_pipeline(repo_reader, root + "/assets/pipelines/trees.pipeline",
+			root + "/shaders/", &p, nullptr, &err), err);
+	auto param = [&p](const char *name) {
+		for (const ve::ParamDecl &d : p.params)
+			if (d.name == name) return d.value;
+		INFO("the shipped trees pipeline resolves no param " << name);
+		return std::nanf(""); // NaN compares false against every literal above
+	};
+	ve::LeafSettings s;
+	const ve::LeafLayout l = ve::leaf_layout(s, kOrigin, kIdentity);
+	CHECK(l.params.tree[0] == param("trees.cell"));
+	CHECK(l.params.tree[1] == param("trees.density"));
+	CHECK(l.params.tree[2] == param("trees.crown_radius"));
+	CHECK(l.params.tree[3] == param("trees.trunk_radius"));
+	CHECK(l.params.shape[0] == param("trees.trunk_height"));
+	CHECK(l.params.shape[1] == param("trees.branch_radius_min"));
+	CHECK(l.params.shape[2] == param("trees.max_slope"));
+	// The lattice constant sizes the CPU dispatch grid, not just the uploaded block.
+	CHECK(l.cell_size_m == param("trees.cell"));
 }

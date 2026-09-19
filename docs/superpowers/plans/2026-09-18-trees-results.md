@@ -119,7 +119,7 @@ warns about. The method above is recorded in full so the number is reproducible.
 ## 3. What shipped vs what was designed
 
 The authoritative record of rulings is the SDD ledger
-(`.superpowers/sdd/2026-09-18-trees/progress.md`, rulings R1–R12); this section is its
+(`.superpowers/sdd/2026-09-18-trees/progress.md`, rulings R1–R13); this section is its
 readable summary. Where a claim in the design or the plan turned out **wrong**, it says so
 and names the section, in the style of §13 of the grass design.
 
@@ -274,6 +274,8 @@ and names the section, in the style of §13 of the grass design.
   unread (brief-verbatim; Task 13's sway touched the file without needing it). The Task 0–3
   deferred minors (baseline-doc character count, near-tautological brief-mandated probes,
   prose cone-count nit) are in the ledger and bite nothing.
+  *(Status after §3.5: the Task 7 ordering, per-class-split and total-coverage minors and
+  both Task 8 minors were taken and are recorded in §3.5; the rest still stand as written.)*
 - **`kLeafCellM` duplication (plan gap 1, stated not hidden).**
   `extension/src/leaves/leaf_layout.h`'s `kLeafCellM = 14.0f` must equal the trees stage's
   `cell` param default; the CPU layout is computed before the pipeline UBO is readable, so
@@ -291,6 +293,133 @@ and names the section, in the style of §13 of the grass design.
   `center + (0, 40, 0)` straight down; the worst-case chop-test anchor sits ≈57 m out
   against the r=60 paint sphere used by the edit-awareness test. Tight-ish; re-check if
   residency or camera constants move.
+
+### 3.5 The final review wave (2026-09-19, R13)
+
+The whole-branch review returned "with fixes" — three Important findings this document had
+missed recording, two Minor hardenings from the §3.4 parked list. The design doc's §12 gained
+the matching summary; this is the long form.
+
+- **§4's height band: specified, unimplemented, unrecorded — fixed by implementing (R13).**
+  R13's ruling was probe-first, and the probe (throwaway doctest replaying the CPU mirror's
+  ground/slope formulas over the shipped `default.pipeline`, cells ±2996 m, method and numbers
+  kept in `.superpowers/sdd/2026-09-18-trees/probe-item3-notes.md`) found 64,552 placing
+  cells, of which 32,474 stood on dirt (h ≤ 1) and 31,207 on rock (h > 4): **98.65 %** of
+  shipped trees were outside the grass band, whole groves on the high rock-band slopes
+  included.
+  This was visible wrong behavior, so the record-the-deviation branch was not available:
+  `tree_cell_present` gained the reject `h <= 1.0 || h > 4.0` in `shaders/tree.glslh` — the
+  single definition shared by the GPU field stage, the leaf scatter's stage-1 cull and the
+  CPU `trees_mirror` — with the mirror line-for-line identical, as the §10 divergence risk
+  demands. The literals mirror `stage_height_bands` (`height_bands.field.glslh`: rock above 4,
+  grass above 1, dirt below; SURFACE_Y-relative), which §4's "grass band" had always meant;
+  those gates are stage text rather than pipeline params, so the duplication cannot drift
+  from an author's edit. The claim that `test_field_diff.gd` pins the two sides through the
+  band was **verified, not assumed**: it compares GPU-generated fields against the CPU
+  pipeline generator for every `.pipeline` file (640 deterministic samples per pipeline —
+  512 at y ∈ 21.2…81.2 plus 128 far-out relief points at y ∈ 11.2…71.2, both ranges
+  straddling the boundaries), and it stayed green. `tree.glslh` is
+  compiled into the generated field source, so both goldens moved — `field.glslh.golden`
+  (new pipeline hash) and `tests/golden/default_pipeline_field.txt` (34 sample lines where
+  band-rejected trees had carved voxels) — re-recorded in the causing commit with the cause
+  named, per the §10 golden policy. So did the look goldens, which are numeric arrays
+  inside their suites, not committed PNGs (R12: a byte-identical machine capture is not
+  achievable on the shipping path): `test_frame_shipped_golden.gd` re-recorded after 59
+  tiles moved — all brighter, 14 beyond TOL_TILE, per-camera worst failures oblique 1 at
+  0.014161, horizon 9 at 0.019642, grove 22 at 0.018137, down_close unchanged — and
+  `test_ssao_golden.gd` re-recorded horizon `lit_luma` 0.344768 → 0.354178 (beyond
+  TOL_LUMA; the other cameras inside). `tests/golden/leaf.png`, the human-readable half of
+  the same R12 record and compared by no test, was deliberately NOT re-captured: it now
+  shows the pre-band grove, which belongs to §5's human acceptance pass. The probe counts
+  were independently re-derived digit-for-digit when this wave was gated. Placement-dependent
+  gdUnit suites all re-ran; one moved with the look: `test_lod_seam`'s R11 leaf-owned pin
+  lost its premise — no band-kept tree stood within the probe camera's 38-48 m band any more
+  (nearest kept cell 62.6 m; CPU sweep), so that one test's camera re-pinned to a kept grove
+  42 m down the same -z view (steady state: 2 unclaimed of 2002 band pixels, 0 doubles, 23
+  leaf-owned). Every bar and the whole plateau machinery unchanged — the cause is the
+  intentional placement change, documented in the suite's comment.
+  Native teeth: the band cases in `test_tree_shader.cpp`
+  (edge sweep at both boundaries, old-gate-vs-new agreement, >100 rejections so the sweep
+  cannot pass vacuously). Consequence for earlier numbers: §2's streaming cost predates the
+  band and is now an upper bound — the band rejects cells whose skeletons the old gate built
+  and evaluated.
+- **§9's tree/clearing G-buffer contract arrived at this wave, in `test_leaves.gd` —
+  a plan gap, not a design change.** The plan never tasked §9's first GPU bullet, and the
+  GPU suites that *were* tasked shipped green around the gap; §12 now says so. The
+  test (`test_a_known_tree_shows_bark_in_the_gbuffer_and_a_known_clearing_shows_none`)
+  obeys §9's hooks rule — it reads only shipping output. `debug_leaf_stats()` already
+  returned the compacted tree list the real scatter pass built; it now also reports the
+  dispatch grid, lattice pitch and reach that pass actually uploaded (a CPU-side snapshot of
+  `LeafScatterPass::last_params()`, taken in `run()` beside the UBO upload — so the test
+  names cells **inside the grid that ran** instead of guessing a region window). The tree
+  side picks the nearest record (unique float minimum, so the atomicAdd-ordered list cannot
+  make the test flake) and drives `debug_raymarch_gbuffer()` down the crown axis demanding
+  `MAT_BARK` (8) with the hit on the trunk column. The clearing is the first lattice cell
+  within 21 m of the hook camera's view centre carrying no listing in its cell box and no
+  overhanging crown sphere; interiority to the reach+frustum window means the only gate that
+  can have dropped it is placement, and the march there must report a surface that is not
+  bark. Determinism and the presence-from-the-list-not-the-hash discipline are asserted in
+  the test body, not just commented.
+- **`leaf_layout.cpp`'s live-UBO comment was false (Important #1).** The scatter's
+  tree-shape literals are duplicated pipeline defaults — nothing in the layout function
+  reads the field pipeline's set-1 UBO — and the comment claimed the opposite. The comment
+  now states the duplication, names `assets/pipelines/trees.pipeline` as the source of truth,
+  and says what moves if an author edits it (trunks move, canopies would not — until now).
+  The pin is native and cheap: `test_leaf_layout.cpp` loads the shipped pipeline through
+  the engine's own resolver and asserts exact float equality per tree param; an edit on
+  either side without the other fails — the same no-drift discipline §9 demands of the
+  layout's distance contract.
+- **Task 7 minors closed.** `debug_raymarch_hole_probe` samples the analytic `min_sdf`
+  **before** the `sky_no_cpu_hit` exemption can fire (reorder in `hooks_render.cpp`;
+  exemption semantics unchanged — the recalibrated R9/R11 bars did not move), and
+  `test_raymarch_gbuffer.gd` now asserts the per-class exemption counts individually,
+  re-derives the aggregate from `isolated_miss_details`, checks the classified total equals
+  `isolated_misses`, and fails if a `sky_no_cpu_hit` record lacks `min_sdf` — the ordering
+  tooth for a revert. (The remaining §3.4 Task 7 minors — duplicated probe helpers,
+  equal-pair early return — were not in scope and stay parked.)
+- **Task 8 minors closed.** `test_leaf_layout.cpp` grew a per-row clamp sweep that reads
+  min/max from `ve::leaf_rows()` itself (new rows are covered without editing the test; an
+  uncovered row *kind* fails the sweep loudly), including the float NaN/±inf edges, and the
+  idempotence test is no longer vacuous: it plants every non-bool row out of range, demands
+  the first apply land it exactly on the declared bound, then compares two applies per
+  `SettingValue` component.
+
+- **Two characterization suites moved with the band at the final gate (cause-named
+  re-records, per the §10 policy).** `test_world_field_consumers`'s COLLIDER_GOLDEN:
+  idx 9 = chunk (8,10,9) had been resident in both probed worlds on the strength of one
+  pre-band tree's trunk collider; that cell's terrain height is band-rejected now, the
+  trunk — and its collider — are gone, and the golden moved to idx 2 + idx 13. The suite's
+  other three goldens (contact/extract/rays) re-read byte-identical.
+  `test_material_glow`'s paint sync: the suite painted dull then emissive in ONE world and
+  synced on the streamer's quiet window. Pre-band, tree work kept the streamer busy long
+  enough for the paint's atlas re-upload to finish inside that window; the band removed the
+  load, and the instrumented sequence measured a surface whose repaint had never landed
+  (lit/dull 0.94). What actually advances the upload is a rendered frame, so the sync is
+  now an explicit pump — 120 centre-stream frames plus one rendered headless probe per
+  round — checked against the marched material byte (converges at round ~4). The variant
+  matrix behind that fix also pinned an older latent defect, recorded as a product concern:
+  a debug sphere repaint queued AFTER the previous paint's atlas upload has fully committed
+  never propagates to the GPU at all (20 pump rounds dead flat on the old material; on this
+  build a second plain settle-synced paint sits stale too, long settle included, and march
+  staleness without a rendered frame is documented pre-band). First paints do
+  land, so test 1 now measures the dull/emissive pair on two identically seeded worlds,
+  each receiving one FIRST paint — same deterministic terrain under both probes. The
+  assertion (lit > dull × 1.5, radius 28) is untouched; the sync and the world count moved,
+  not the teeth.
+- Gates for this wave (worktree, final state): native `./build.sh --test` 710/710
+  (9,230,110 assertions); individually green — `test_leaves` 15/15,
+  `test_raymarch_gbuffer` 13/13, `test_field_diff` 1/1, `test_frame_shipped_golden` 1/1,
+  `test_ssao_golden` 1/1, `test_lod_seam` 3/3 (re-pinned), `test_lod_gbuffer` 4/4,
+  `test_world_field_consumers` 4/4 and `test_material_glow` 3/3 (both after the re-records
+  above) — then ONE full `gdunit_tests.sh` run: **524 test cases | 1 errors | 1 failures**
+  (28 min 56 s), exactly the ledger's 2-failure baseline and nothing else —
+  `test_voxel_settings` ambient (the error) and `test_sun_cascades_gpu` sub_texel. The
+  count is the committed baseline's 523 plus this wave's one new §9 case (`test_leaves`
+  14→15; the baseline log's extra three were an untracked deleted throwaway probe suite).
+  The preflight shader-compile flood (`trees_ground_h` / "Failed parse") is present in the
+  baseline log too — a pre-existing quirk, not this wave's. The wave ships as three
+  commits: the band fix with its goldens, the hook-ordering fix with its test, and the
+  test/doc hardening.
 
 ## 4. Stream-cost headroom
 

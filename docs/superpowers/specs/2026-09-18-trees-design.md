@@ -512,7 +512,7 @@ indirect-draw and overflow-clamp bookkeeping, and the settings-store shape.
 
 The feature landed as designed across Tasks 0–15 of `docs/superpowers/plans/2026-09-18-trees.md`.
 `docs/superpowers/plans/2026-09-18-trees-results.md` is the long form: both measured costs with
-their methods and brackets, and the complete deviation record (ledger rulings R1–R12). This is
+their methods and brackets, and the complete deviation record (ledger rulings R1–R13). This is
 the summary so the spec and the code do not drift apart.
 
 **Measured, Apple M1, 2560x1440, vsync genuinely disabled; GPU timestamps invalid, so wall
@@ -561,3 +561,53 @@ the combined-card containment envelope ≤1.75 (R10); `kLeafCellM`'s deliberate 
 with a `ponytail:` upgrade path; the crown_radius ≥ branch_radius_min/0.38 authoring
 coupling with **no** runtime clamp (pipeline-authored param, defaults satisfy, symptom loud);
 and the funding-frontier headroom figures §4 of the results doc hands to the next feature.
+
+**Final review wave (same day; ledger R13; results doc §3.5).** The whole-branch review
+returned "with fixes"; three Important findings were deviation records this section lacked,
+and each now says plainly what was true before:
+
+- **§4's height-band rejection was specified, not implemented — and unrecorded** until the
+  review. R13 probed first: over ±3000 m of the shipped default pipeline, 64,552 cells placed
+  a tree and 63,681 of them (32,474 dirt + 31,207 rock — 98.65 %) stood **outside** the grass
+  band; the spec's sentence was aspiration, not artifact. Fixed by implementing, not by
+  recording: `tree_cell_present(cell, tp, h, slope)` in `shaders/tree.glslh` (shared by GPU
+  stage and leaf scatter) rejects `h <= 1.0 || h > 4.0` right after the slope gate, and the
+  CPU mirror in
+  `builtin_stages.cpp` carries it identically. The band literals are a mirror of
+  `stage_height_bands` (`height_bands.field.glslh`: rock above 4, grass above 1 — stage text,
+  not pipeline params, so the copy cannot diverge from an author's edit); GPU≡CPU is pinned
+  by `test_field_diff.gd`, re-verified to actually cross the band boundaries. The field
+  goldens moved and were re-recorded in the causing commit — together with the two
+  machine-checked numeric look-goldens (the frame suite's tile means, the SSAO horizon
+  `lit_luma`; R12 keeps committed PNGs human-reference only, and `leaf.png` was not
+  re-captured in this wave); the look changes (no treeline-
+  top or valley-floor trees). Two consumer-characterization suites moved at the final gate,
+  re-recorded with the cause named: `test_world_field_consumers`'s collider golden (one of
+  its three resident chunks was a band-rejected tree's trunk) and `test_material_glow`'s
+  paint sync (its quiet-window sync stopped landing paints once the band removed the tree
+  work that kept the uploader busy; results doc §3.5 holds the full record). §2's streaming
+  figures pre-date the band; the band rejects
+  cells the old gate built full skeletons for, so it is not a cost regression.
+- **§9's first GPU bullet — "bark voxels exist at a known tree cell and none in a known
+  clearing" — shipped at this fix wave, never as `tests/test_trees.gd`.** The plan never
+  scheduled it: that is a plan gap, not a design change, and §9 stays the authority the code
+  now meets. It lives in `tests/test_leaves.gd`, where the streaming harness and the tree
+  hook already are, and reads shipping output only (§9's hooks rule): the tree list from
+  `debug_leaf_stats()` (now also reporting the dispatch grid, lattice pitch and reach the
+  last real `LeafScatterPass::run()` uploaded) names the cell, and `debug_raymarch_gbuffer()`
+  drives the real marcher to demand `MAT_BARK` (8) on the trunk axis; the clearing is the
+  first lattice cell of that shipped grid near the view centre carrying no listing and no
+  overhanging crown sphere, and its march must return a non-bark surface. Presence is read
+  from the pass's output, never re-derived from the hash in GDScript.
+- **§5's scatter shape values are duplicated pipeline defaults, not live UBO reads.**
+  `leaf_layout.cpp` carried a comment claiming the scatter "reads the LIVE values from the
+  pipeline's set-1 UBO"; it does not and cannot from there — the literals it packs *are*
+  what `leaf_trees.comp.glsl` sees. The comment now says so and names
+  `assets/pipelines/trees.pipeline` as the source of truth, and a native pin in
+  `test_leaf_layout.cpp` asserts every tree-shape literal against the shipped pipeline
+  resolved through the engine's own loader (exact float equality): edit a tree param there
+  without moving `leaf_layout.cpp` and a test fails, instead of canopies silently floating
+  off their new trunks.
+
+The wave also closed two §3.4 parked minors (hole-probe exemption ordering + per-class teeth;
+leaf settings per-row clamp sweep + non-vacuous idempotence) — see results doc §3.5.

@@ -135,3 +135,111 @@ func test_disabling_leaves_draws_nothing() -> void:
 	var w := make_world()
 	w.set_leaf_value("enabled", 0.0)
 	assert_int(w.hooks().debug_leaf_stats()["vertices"]).is_equal(0)
+
+# THE SPEC §9 CONTRACT (arrived in the Task-15 fix wave, not as tests/test_trees.gd --
+# see the deviation record): a known tree cell shows bark material in the G-buffer and a
+# known clearing shows no tree. Everything is read from shipping output: the tree list
+# and the dispatch grid debug_leaf_stats() reports are what the real scatter pass wrote,
+# and the bark id comes from driving the real raymarch pass and reading its surface
+# texture's id channel back (the same instrument test_raymarch_gbuffer.gd uses).
+const MAT_BARK := 8 # shaders/material_table.glslh, ve::kMaterials
+
+# Geometry of debug_leaf_stats()'s hook camera (see hooks_render.cpp): 40 m straight
+# above the last streamed centre (20, 60, 30), looking straight down, 90-degree FOV.
+# A candidate clearing cell within 21 m of that centre keeps its whole crown bounding
+# sphere (crowns sit at most 51.2 + 4 + 11.25 m up under the spec §4 band gate, radius
+# at most 4 m) inside the frustum footprint at crown depth (~33 m), inside the reach
+# asserted below by a factor of more than three, and inside the funded frontier every
+# Task 7 probe established around the stream centre. Distance, frustum and chop culls
+# are therefore ruled out for it, so the only reason left for it to be absent from the
+# tree list is the placement gate itself (hash/grove/slope/height band): a clearing.
+const VIEW_CENTER := Vector2(20.0, 30.0)
+const CLEARING_MAX_OFFSET := 21.0
+
+func test_a_known_tree_shows_bark_in_the_gbuffer_and_a_known_clearing_shows_none() -> void:
+	var w := make_world()
+	var d: Dictionary = w.hooks().debug_leaf_stats()
+	var trees: int = int(d["trees"])
+	assert_int(trees).is_greater(0)
+	var recs: PackedFloat32Array = d["tree_records"]
+	assert_int(recs.size()).is_equal(trees * 8)
+	var grid: PackedInt32Array = d["tree_grid"]
+	assert_int(grid.size()).is_equal(5)
+	assert_int(grid[4]).is_equal(grid[2] * grid[3]) # one thread per cell, as shipped
+	var cell: float = float(d["tree_cell_m"])
+	assert_float(cell).is_greater(0.0)
+	assert_float(float(d["tree_reach_m"])).is_greater(100.0)
+
+	# --- THE KNOWN TREE: the nearest listing. Position-distinct floats never tie
+	# exactly, and compaction order is nondeterministic while the SET is not, so
+	# "minimum distance" picks the same tree every run.
+	var best := 0
+	for i in range(1, trees):
+		if recs[i * 8 + 6] < recs[best * 8 + 6]:
+			best = i
+	var crown := Vector3(recs[best * 8], recs[best * 8 + 1], recs[best * 8 + 2])
+	var crown_r: float = recs[best * 8 + 3]
+	var ground_y: float = recs[best * 8 + 4]
+	assert_float(recs[best * 8 + 7]).is_greater_equal(1.0) # a listing keeps budget >= 1
+	# t.crown = t.base + (0, height, 0) (shaders/tree.glslh), so the crown's XZ IS the
+	# trunk axis, and bark is solid on that axis from the foot up to the crown centre.
+	# Start above the bounding sphere -- every capsule sits within crown_r of the crown
+	# centre -- so the origin is air, and the first thing this column owns is bark.
+	var g: Dictionary = w.hooks().debug_raymarch_gbuffer(
+		Vector3(crown.x, crown.y + crown_r + 1.0, crown.z), Vector3(0, -1, 0))
+	assert_bool(g["hit"]).override_failure_message(
+		"nothing hit down the trunk axis of the nearest listed tree at %s" % str(crown)
+		).is_true()
+	var hit: Vector3 = g["position"]
+	assert_float(Vector2(hit.x - crown.x, hit.z - crown.z).length()).is_less(1.0)
+	assert_float(hit.y).is_greater_equal(ground_y - 1.0)
+	assert_float(hit.y).is_less(crown.y + crown_r)
+	assert_int(g["material"]).override_failure_message(
+		"the trunk column of a known tree cell did not report MAT_BARK in the G-buffer: %s" \
+		% str(g)).is_equal(MAT_BARK)
+
+	# --- THE KNOWN CLEARING: the first lattice cell of the shipped dispatch box, within
+	# CLEARING_MAX_OFFSET of the view centre, that carries no listing (records sit within
+	# +-0.35 cells of their centre, never near a +-0.5 boundary) AND no listing's crown
+	# sphere within crown_r + 1 m of its centre, so no branch can overhang the column
+	# either. Scan order is fixed, so the pick is deterministic.
+	var found := false
+	var c := Vector2.ZERO
+	for k in range(grid[1], grid[1] + grid[3]):
+		for i in range(grid[0], grid[0] + grid[2]):
+			c = Vector2((float(i) + 0.5) * cell, (float(k) + 0.5) * cell)
+			if c.distance_to(VIEW_CENTER) > CLEARING_MAX_OFFSET:
+				continue
+			var listed := false
+			var clear_of_bark := true
+			for j in range(trees):
+				var axis := Vector2(recs[j * 8], recs[j * 8 + 2])
+				if absf(axis.x - c.x) < cell * 0.5 and absf(axis.y - c.y) < cell * 0.5:
+					listed = true
+				if axis.distance_to(c) <= recs[j * 8 + 3] + 1.0:
+					clear_of_bark = false
+			if not listed and clear_of_bark:
+				found = true
+				break
+		if found:
+			break
+	assert_bool(found).override_failure_message(
+		"no unlisted dispatch cell near the view: the §9 clearing half needs one"
+		).is_true()
+	# Absence from the tree list -- both halves the brief allows, stated explicitly:
+	# (1) this cell is not in the shipping tree list, and (2) its column carries no
+	# bark id. The pick was chosen by these criteria; re-assert as the formal check.
+	for j in range(trees):
+		assert_bool(absf(recs[j * 8] - c.x) < cell * 0.5
+				and absf(recs[j * 8 + 2] - c.y) < cell * 0.5) \
+			.override_failure_message("the clearing cell is listed after all: %s" % str(c)) \
+			.is_false()
+		assert_float(Vector2(recs[j * 8], recs[j * 8 + 2]).distance_to(c)) \
+			.is_greater(recs[j * 8 + 3] + 1.0)
+	var air: Dictionary = w.hooks().debug_raymarch_gbuffer(Vector3(c.x, 78.0, c.y),
+		Vector3(0, -1, 0))
+	assert_bool(air["hit"]).override_failure_message(
+		"no terrain under a known clearing cell at %s" % str(c)).is_true()
+	assert_int(air["material"]).override_failure_message(
+		"a known clearing cell reported MAT_BARK in the G-buffer: %s" % str(air) \
+		).is_not_equal(MAT_BARK)

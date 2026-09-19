@@ -87,9 +87,16 @@ LeafLayout leaf_layout(const LeafSettings &settings, const float camera[3],
 	p.cell_min[3] = l.dispatch_threads;
 	p.cell_dim[0] = l.cell_dim.x;
 	p.cell_dim[2] = l.cell_dim.z;
-	// Tree shape mirrors the trees stage's //!param defaults. The scatter reads the LIVE
-	// values from the pipeline's set-1 UBO; these are the fallback for a frame with no
-	// pipeline bound, and they are what keeps the pass from drawing nothing in that case.
+	// The tree-shape values below are the shipped pipeline's tree-stage defaults DUPLICATED
+	// here, not live reads: nothing in this function touches the field pipeline's set-1 UBO,
+	// and these literals are exactly what the scatter shader sees through params.tree/
+	// params.shape (leaf_trees.comp.glsl's leaf_tree_params() reads only this block). Source
+	// of truth: assets/pipelines/trees.pipeline, i.e. the //!param defaults of
+	// shaders/stages/trees.field.glslh (cell, density, crown_radius, trunk_radius,
+	// trunk_height, branch_radius_min, max_slope; surface_y is ve::kSurfaceY). If an author
+	// edits those params (or overrides them in a pipeline file), the trunks move and the
+	// canopies do not — so that edit must come here too. test_leaf_layout.cpp pins these
+	// values against the resolved shipped pipeline and fails on drift.
 	p.tree[0] = l.cell_size_m;
 	p.tree[1] = 0.55f;
 	p.tree[2] = 4.0f;

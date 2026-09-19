@@ -562,6 +562,45 @@ Dictionary VoxelDebugHooks::debug_leaf_stats() {
 		LeafRasterPass *r = w->context().render->passes().leaf_raster;
 		d["vertices"] = r ? r->last_vertex_count() : 0;
 	}
+	// The tree list the SHIPPING pass actually wrote (final-fix wave, spec §9 contract):
+	// GDScript names real tree cells from this instead of re-implementing the placement
+	// hash. Eight floats per record, the LeafTree pair of vec4s in shaders/leaf.glslh:
+	// crown.x, crown.y, crown.z, crown_r, base.y, hash bits, distance, budget. Only the
+	// first last_tree_count() records are written; reading exactly those keeps the §9 rule
+	// that hooks report shipping output, never a CPU re-derivation.
+	{
+		const int n = l->last_tree_count();
+		PackedFloat32Array recs;
+		RenderingDevice *dev = w->rd();
+		if (n > 0 && dev && l->tree_list_buffer().is_valid()) {
+			const PackedByteArray bytes = dev->buffer_get_data(l->tree_list_buffer(), 0,
+					static_cast<uint32_t>(n) * 32u);
+			if (bytes.size() >= n * 32) {
+				recs.resize(n * 8);
+				memcpy(recs.ptrw(), bytes.ptr(), static_cast<size_t>(n) * 32u);
+			}
+		}
+		d["tree_records"] = recs;
+	}
+	// The lattice the SHIPPING pass consumed: the params block its last run() uploaded
+	// (see LeafScatterPass::last_params). [min.x, min.z, dim.x, dim.z, dispatch threads]
+	// plus pitch and reach let the §9 contract test name cells INSIDE the grid the pass
+	// actually walked; a tree never leaves its own cell (TREE_JITTER in shaders/
+	// tree.glslh), so "listed tree" and "unlisted cell" are both read from shipping
+	// facts, never a CPU re-derivation of placement.
+	{
+		const ve::LeafParams &lp = l->last_params();
+		PackedInt32Array grid;
+		grid.resize(5);
+		grid[0] = lp.cell_min[0];
+		grid[1] = lp.cell_min[2];
+		grid[2] = lp.cell_dim[0];
+		grid[3] = lp.cell_dim[2];
+		grid[4] = lp.cell_min[3];
+		d["tree_grid"] = grid;
+		d["tree_cell_m"] = lp.tree[0];
+		d["tree_reach_m"] = lp.cam[3];
+	}
 	return d;
 }
 

@@ -69,6 +69,12 @@ public:
 	int sample_count() const { return sample_count_; }
 	float sample_max_crown_offset() const { return sample_max_crown_offset_; }
 
+	// The params block the last run() uploaded — the exact dispatch grid, lattice pitch and
+	// reach the SHIPPING pass walked. debug_leaf_stats() reports it for the spec §9 contract
+	// test so GDScript can name cells INSIDE the grid that ran; presence is still read from
+	// the tree list, never re-derived here.
+	const ve::LeafParams &last_params() const { return last_params_; }
+
 private:
 	bool ensure_buffers(RenderingDevice *rd, int max_clumps, int max_trees);
 	bool ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas, RID sun_ubo);
@@ -96,6 +102,7 @@ private:
 	int clump_high_water_ = 0;
 	int sample_count_ = 0;
 	float sample_max_crown_offset_ = 0.0f;
+	ve::LeafParams last_params_{};
 	bool overflow_logged_ = false;
 };
 

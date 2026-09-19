@@ -8,7 +8,14 @@ extends GdUnitTestSuite
 # merge-ground gate that reads raycast_down (test_island_body.gd, test_connectivity.gd), and
 # the consolidation bake inputs (test_consolidation.gd).
 
-const COLLIDER_GOLDEN := {"fill": [false, false, true, false, false, false, false, false, false, true, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false], "volume": [false, false, true, false, false, false, false, false, false, true, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false]}
+# Re-recorded for the spec §4 height band — an intentional change, recorded in the commit
+# that causes it (the policy ff8e743 establishes). idx 9 = chunk (8,10,9) was resident in
+# BOTH worlds on the strength of one pre-band tree whose trunk stood there; the band now
+# rejects trees outside terrain height (1 m, 4 m] above SURFACE_Y, that spot is out of band,
+# so the trunk — and its collider — are gone (throwaway: pre-band build reads true, this
+# build reads false). idx 2 (chunk (10,10,8)) and idx 13 (chunk (9,11,9): the consolidated
+# fill sphere / the pasted ball) never depended on trees and stay true.
+const COLLIDER_GOLDEN := {"fill": [false, false, true, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false], "volume": [false, false, true, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false]}
 const CONTACT_GOLDEN := {"counts": [81, 81, 81, 81, 65, 74, 81, 81, 81, 41, 60, 41, 41, 22, 0, 81, 60, 41, 41, 81, 41, 41, 65, 0, 81, 81, 41, 74, 65, 81, 74, 0, 74, 81, 65, 81, 0, 22, 41, 0, 0, 0, 81, 22, 41, 0, 65, 41, 0, 0, 0, 81, 65, 41, 81, 81, 81, 81, 65, 81, 81, 81, 81, 41, 60, 81, 41, 22, 81, 81, 60, 81, 41, 81, 81, 41, 65, 81, 81, 81, 81]}
 const EXTRACT_GOLDEN := {"border": [true, 1, 0, 9802, 9802, 1], "inside": [true, 1, 0, 5740, 5740, 1]}
 const RAY_GOLDEN := {"rays": [[true, [24.4, 49.399, 24.4], [0.0, 1.0, 0.0], 20.601, 3], [true, [27.0, 50.667, 24.4], [-0.481, 0.876, -0.011], 19.333, 3], [true, [12.8, 51.219, 12.8], [-0.093, 0.871, 0.483], 18.781, 3], [true, [6.4, 49.181, 20.0], [0.314, 0.946, 0.075], 20.819, 3], [true, [30.0, 46.339, 30.0], [0.0, 1.0, 0.0], 23.661, 1], [true, [40.8, 47.462, 40.8], [0.168, 0.822, 0.544], 32.538, 3], [true, [25.957, 50.145, 23.971], [-0.421, 0.906, 0.047], 21.106, 3], [true, [26.449, 51.42, 17.869], [-0.15, 0.955, 0.255], 26.444, 3], [false]]}

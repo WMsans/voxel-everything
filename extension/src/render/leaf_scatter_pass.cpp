@@ -211,6 +211,7 @@ bool LeafScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas,
 	ve::LeafParams params = layout.params;
 	// R4: params.wind[3] is TIME, written here and only here; leaf_layout() leaves it 0.
 	params.wind[3] = time_seconds;
+	last_params_ = params; // §9 hook read: what this run actually uploaded.
 	rd->buffer_update(params_ubo_, 0, sizeof(params), gpu::push_bytes(params));
 
 	// Refresh the pass-owned region window from the LIVE residency-backed window the caller
