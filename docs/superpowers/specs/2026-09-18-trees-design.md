@@ -505,3 +505,59 @@ reasonably ask why two foliage modules exist rather than one parameterised modul
 What they do share — and should share rather than duplicate — is the gust field, the
 `sun_march.glslh` visibility march and its albedo-alpha packing, the bayer4 reach dither, the
 indirect-draw and overflow-clamp bookkeeping, and the settings-store shape.
+
+---
+
+## 12. What shipped (2026-09-19)
+
+The feature landed as designed across Tasks 0–15 of `docs/superpowers/plans/2026-09-18-trees.md`.
+`docs/superpowers/plans/2026-09-18-trees-results.md` is the long form: both measured costs with
+their methods and brackets, and the complete deviation record (ledger rulings R1–R12). This is
+the summary so the spec and the code do not drift apart.
+
+**Measured, Apple M1, 2560x1440, vsync genuinely disabled; GPU timestamps invalid, so wall
+percentiles only and no per-pass attribution:**
+
+- Leaf passes (frame path), interleaved A/B/A `--leaves=0|1`: **≤ +1.8 ms p50** on every
+  leg (steady +0.40, move −0.09, ridge +0.11, edit +0.24, edit-bounded +1.76, island +0.90);
+  p99 deltas −1.35…+1.88, all inside off-leg tail noise. Off brackets ≤ 1.03 ms p50.
+- Trees stage (streaming path), cold-atlas `debug_init_atlas()` + pump-to-quiet medians of 3:
+  golden 774 ms, default-minus-trees 856 ms, **default 4463 ms — the stage costs ≈ 3.6 s
+  (≈ 5.2×) of cold time-to-quiet** at camera (20, 60, 30); reps within ~50 ms. It also keeps
+  in-game streaming nonstop (§10's "hitching", and the reason the A/B/A absolute level is
+  85.7 ms where the Task-0 baseline was 23.8 ms — the deltas above sit on that saturated
+  base and isolate the leaf passes only, which is what the dial gates).
+
+**Claims this doc got wrong, in §13-of-grass fashion — named plainly:**
+
+- **§4 early-out 1** ("outside [ground − 2, ground + max_tree_height] the stage returns")
+  was unsound at the band top: the returned terrain distance lets a sphere-trace step jump
+  over a crown top just under the plane. Shipped band top:
+  `ground_y + 2.05 * (trunk_height * 1.25 + crown_radius)` (the 1.99 slab factor rounded up),
+  identical in the GPU stage and the CPU mirror.
+- **§7 integration** names `raymarch_compositor.cpp`; the block lives in
+  `VoxelFrame::render_pre_opaque` (`render/frame.cpp`) since the frame-module move — the
+  grass raster line it says to follow there has been there since then.
+- **§9's byte-identical capture golden** is unachievable through the shipping path on this
+  machine: raster draw-order depth ties move ~0.06% of pixels run-to-run — proven non-leaf
+  (249 px with grass, leaves and SSGI all off). Shipped instead: the tolerance-golden route —
+  a fourth `grove` camera in `tests/test_frame_shipped_golden.gd` (TOL_TILE 0.004; worst
+  measured per-tile margin 3.8e-4 in the Task-15 re-measurement, >10x inside it) plus
+  `tests/golden/leaf.png` as the human reference; `tools/leaf_capture.gd`
+  remains the deterministic-by-construction look tool.
+
+**Plan-level corrections worth remembering:** bark layer 07 comes from the owner's
+`bark_willow_1k` set via `tools/convert_bark.sh` — the vol2 pack the plan cited has no bark
+folder, and the missing map took every GPU suite down before the fix (placeholder look,
+reconvert trivially; `convert_materials.sh` still aborts at its bark entry on this machine).
+`allow_gpu_only` needs a value (`atoi`); the `//!cpu` directive must arrive in the same
+commit as its registration. The leaf compute shaders carry two forced extra set-0 bindings
+each (`palette_buf`, `brick_flags` — GLSL analyses the whole TU), and a custom pipeline
+without the trees stage fails the leaf compile and fail-softs the pass by design.
+
+**Accepted, stated rather than hidden:** the seam probes' third ownership state for
+`MAT_LEAF_CLUMP` pixels and the band bar at 6.25% vs the 7.3% stall reference (3 px teeth);
+the combined-card containment envelope ≤1.75 (R10); `kLeafCellM`'s deliberate duplication
+with a `ponytail:` upgrade path; the crown_radius ≥ branch_radius_min/0.38 authoring
+coupling with **no** runtime clamp (pipeline-authored param, defaults satisfy, symptom loud);
+and the funding-frontier headroom figures §4 of the results doc hands to the next feature.

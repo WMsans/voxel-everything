@@ -20,6 +20,15 @@ meshed far field out to 4 km, one deferred cel-shading stack over both.
   and the existing cel stack shades them unmodified. Wind gusts, distance thinning, and
   edit-awareness (take grass voxels away and their blades are gone the next frame, with
   no invalidation code) are in the module; the measured cost is with the M1 numbers below.
+- **Trees:** hash-placed trunks and primary branches as a **terrain generation stage** —
+  real SDF voxels at 5 cm, so they mesh, collide and destruct like everything else —
+  with canopies drawn as scalloped leaf cards scattered on lobe shells and shaded from a
+  sphere-transferred normal (the Breath-of-the-Wild technique). The canopy hangs off the
+  same hash: chopping a trunk removes its canopy on the next frame with no invalidation
+  code, because stage 1 samples the live brick atlas at the trunk attachment. Wind gusts
+  are shared verbatim with grass, so a gust crosses the meadow and the crowns together.
+  The stage runs on the *streaming* path (every voxel of every brick); the leaf passes run
+  on the frame path. Both costs are measured, separately, under M1 numbers below.
 
 ## Measured (RTX 4070 Laptop, 1440p requested; Wayland actual viewport 2560×2778)
 
@@ -83,8 +92,8 @@ the roughness and the AO -- once per full-resolution pixel from the position, no
 material id the marcher exports, so lowering the scale costs silhouette precision on the
 terrain edges and no texture detail (`tests/test_near_field_scale.gd` pins the second half
 of that). Raise both towards 1.0 on a larger GPU. The benchmark
-overrides them per run: `--render-scale=`, `--near-scale=`, `--quality=`, `--grass=0|1`, plus
-`--frames=`/`--warmup=`/`--screenshot=`.
+overrides them per run: `--render-scale=`, `--near-scale=`, `--quality=`, `--grass=0|1`,
+`--leaves=0|1`, plus `--frames=`/`--warmup=`/`--screenshot=`.
 
 `tools/run_benchmarks.sh m1-tuned`, macOS/Metal, V-Sync genuinely disabled
 (`verdict_qualified=false`):
@@ -132,6 +141,32 @@ against a 3.21 ms effect), so the delta is grass, not drift. All three runs prin
 (the mesher worker keeps submitting, as documented above), identically in every leg, so the
 comparison stays apples-to-apples but none of these is a settled-state number.
 
+### Trees cost (frame path A/B/A; streaming path cold-atlas medians)
+
+Same instrument as grass above, same caveats (GPU timestamps emulated-zero, wall
+percentiles only): `leaves-off-a --leaves=0` / `leaves-on --leaves=1` / `leaves-off-b`,
+delta = (on) − mean(off-a, off-b). The leaf passes are cheap; the two off legs bracket
+within 1.03 ms p50 everywhere, so this is the leaf module, not drift:
+
+| Leg | off-a p50/p99 | on p50/p99 | off-b p50/p99 | delta p50/p99 |
+|---|---:|---:|---:|---:|
+| steady | 85.71 / 88.89 | 86.11 / 89.18 | 85.71 / 85.72 | **+0.40 / +1.88** |
+| move | 50.00 / 150.00 | 49.45 / 150.00 | 49.08 / 150.00 | **−0.09 / 0.00** |
+| ridge | 131.89 / 150.00 | 132.51 / 150.00 | 132.92 / 150.00 | **+0.11 / 0.00** |
+| edit | 100.00 / 144.97 | 100.49 / 143.95 | 100.51 / 143.40 | **+0.24 / −0.24** |
+| edit-bounded | 88.89 / 133.97 | 90.25 / 134.35 | 88.10 / 133.54 | **+1.76 / +0.60** |
+| island | 98.27 / 139.05 | 98.74 / 138.89 | 97.42 / 141.42 | **+0.90 / −1.35** |
+
+The absolute level, though, is not comparable to the grass table: `--leaves=0` keeps the
+*trees terrain stage* on, and that stage never lets the steady leg settle (246 chunks
+pending at run end vs 0 at the Task-0 baseline, whose steady p50 was 23.81 ms here). The
+streaming measurement isolates it — cold `debug_init_atlas()` + pump-to-quiet, camera
+(20, 60, 30), median of 3, interleaved: golden **774 ms**, default-minus-trees **856 ms**,
+default **4463 ms** (≈ 5.2×; reps within ~50 ms). Four and a half seconds of canopy
+arriving late per fresh world is the number that gates the next near-field stage, and it is
+also what §1's deltas are measured on top of. Full method, probes and honesty notes:
+`docs/superpowers/plans/2026-09-18-trees-results.md` §1–2.
+
 ### Known on macOS/Metal, pre-existing
 
 Both predate this work (same failures on the parent commit) and both affect what the numbers
@@ -173,3 +208,4 @@ keys. `tools/encode_capture.sh` turns the deterministic `--capture` PNG sequence
 | Far-field LoD | `extension/src/lod/`, `shaders/lod*` | `docs/superpowers/plans/2026-08-17-m5-far-field-lod.md` |
 | Beauty stack | `extension/src/shade/`, `shaders/deferred*` | `docs/superpowers/plans/2026-08-18-m6-beautification.md` |
 | Budgets, demo shell, capture | `demo/`, `tools/`, `extension/src/render/gpu_timings.*` | `docs/superpowers/plans/2026-08-19-m7-budget-demo-capture.md` |
+| Trees (terrain stage + leaf module) | `shaders/tree.glslh`, `shaders/stages/trees.field.glslh`, `extension/src/leaves/`, `extension/src/render/leaf_*_pass.*`, `shaders/leaf*` | `docs/superpowers/plans/2026-09-18-trees.md` (+ `-results.md`) |
