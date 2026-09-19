@@ -20,7 +20,9 @@ const ASYNC_COMMIT_GOLDEN := {"after":{"colliders":[[0,4,0],[0,4,1],[0,4,2],[0,4
 const LOD_GOLDEN := {"consolidated":[77,8],"edit":[28,7]}
 
 # The LoD world settles over hundreds of ticks; these are test_lod_stream.gd's numbers.
-const SETTLE_BUDGET := 2500
+# Trees moved the worst-case measured convergence to ~2519 ticks at the suite cameras
+# (op_overflow=0, clean quiet streak); the budget is margin over measured ticks.
+const SETTLE_BUDGET := 3500
 const QUIET_TICKS := 8
 
 var _worlds: Array = []

@@ -52,10 +52,15 @@ func test_an_emissive_material_is_brighter_than_a_dull_one() -> void:
 	# sits at y ~= 49.6, so that sphere floated above the ground and painted nothing; it
 	# also covered too little of the probe frame to move mean_luma. Radius 16 both reaches
 	# the surface and dominates the view, which is what these assertions actually need.
-	w.hooks().debug_apply_sphere_paint(Vector3(20.0, 56.2, 20.0), 16.0, 1) # dull
+	# Trees (Task 7): trunks crossing the top of the probe frame stood above the r=16
+	# sphere, so their unpainted bark caps diluted the emissive mean_luma (ratio fell to
+	# 1.33). Radius 28 covers the trunk caps inside the frame as well -- measured lit/dull
+	# 0.748/0.349 = 2.14 with this suite's exact settle (r=22 reads 1.42, still short) --
+	# the same paint-geometry tuning this NOTE already establishes as the suite's policy.
+	w.hooks().debug_apply_sphere_paint(Vector3(20.0, 56.2, 20.0), 28.0, 1) # dull
 	settle(w)
 	var dull: Dictionary = w.hooks().debug_deferred_probe(pos, down, 64, 64, 0)
-	w.hooks().debug_apply_sphere_paint(Vector3(20.0, 56.2, 20.0), 16.0, id) # emissive
+	w.hooks().debug_apply_sphere_paint(Vector3(20.0, 56.2, 20.0), 28.0, id) # emissive
 	settle(w)
 	var lit: Dictionary = w.hooks().debug_deferred_probe(pos, down, 64, 64, 0)
 

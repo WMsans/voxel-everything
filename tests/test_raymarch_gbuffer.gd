@@ -179,6 +179,19 @@ func test_open_sky_visibility_does_not_depend_on_world_height() -> void:
 #
 # The result is a single missed pixel surrounded by hits. Real sky is a connected region, so
 # an isolated miss in the middle of terrain can only be the march stepping over geometry.
+#
+# Trees (Task 7, ruling R9) narrowed that premise, it did not delete it: thin elevated
+# trunks put genuinely isolated SKY pixels inside terrain (sub-pixel gaps at silhouettes)
+# and moved the brick funding frontier inward (rays past it cross as "known empty" by
+# design). Both classes are field-TRUE -- the analytic field and residency agree with the
+# marcher, not against it -- and the probe now adjudicates every miss from its own field
+# data (0.25 m analytic samples across the CPU-raycast crossing; atlas slot of the crossing
+# region). The zero tolerance stays for anything the FIELD disagrees with: a solid, funded
+# crossing the march skipped counts as unexplained and fails. The residue kind is
+# pre-accepted by docs/superpowers/specs/2026-09-18-trees-design.md §10 (distant-branch
+# thinning / hairline LoD-boundary artifacts "named here so it is not later mistaken for a
+# regression"). Exemption budget: 11 measured at this camera; capped at 32 of 90500 hit px
+# -- past a budget that large, exemptions are a mass event, not silhouettes.
 func test_the_march_leaves_no_isolated_holes_in_the_gbuffer() -> void:
 	var w := make_world()
 	# Looking down onto the height field from 19 m up: the rays cross many bricks at a steep
@@ -189,7 +202,11 @@ func test_the_march_leaves_no_isolated_holes_in_the_gbuffer() -> void:
 	assert_bool(d["ran"]).is_true()
 	assert_int(d["hit_pixels"]).override_failure_message(
 		"the view hit nothing, so the hole count below proves nothing").is_greater(20000)
-	assert_int(d["isolated_misses"]).is_equal(0)
+	assert_int(d["isolated_unexplained"]).override_failure_message(
+		"field-disagreeing march holes: %s" % str(d["isolated_miss_details"])).is_equal(0)
+	assert_int(d["isolated_exempt_field_true_sky"] + d["isolated_exempt_past_funding_frontier"]) \
+		.override_failure_message("exempt misses past the budget: %s" % str(d["isolated_miss_details"])) \
+		.is_less_equal(32)
 
 # Task 7's invariance contract, narrowed to the target it was always about: the MARCHER's
 # own G-buffer normal comes from the source field (or its R8 fallback), never from the

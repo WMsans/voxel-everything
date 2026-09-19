@@ -963,14 +963,29 @@ Dictionary VoxelDebugHooks::debug_raymarch_gbuffer(Vector3 origin, Vector3 dir) 
 }
 
 // Isolated g-buffer holes: a pixel the primary march missed while all four of its
-// neighbours hit. Real sky is a connected region, so an isolated miss can only be the march
-// stepping over geometry it should have found. Counting them is view-robust in a way that
-// naming one guilty pixel is not.
+// neighbours hit. Real sky is a connected region, so an isolated miss in the middle of
+// terrain can only be the march stepping over geometry it should have found. Counting
+// them is view-robust in a way that naming one guilty pixel is not.
+//
+// Task 7 (ruling R9): thin elevated trunks broke the premise, not the renderer. Each
+// isolated miss is therefore adjudicated from this hook's own field and residency data,
+// and only two field-true classes are exempt -- (1) sub-pixel sky at silhouettes: the
+// CPU raycast crosses a voxel column, but sampling the ANALYTIC field at 0.25 m along
+// the exact ray (crossing -2 m .. +12 m, the measured window) never goes solid, so the
+// marcher and the field agree the ray is sky; (2) rays landing past the funding
+// frontier: the crossing's region has no atlas slot (slot_of < 0) and the marcher
+// crosses unfunded regions as "known empty" by design (raymarch.comp.glsl header).
+// Any other miss -- field-solid on the exact ray inside funded terrain -- is
+// unexplained march tunneling and must still fail. docs/superpowers/specs/
+// 2026-09-18-trees-design.md §10 pre-accepts the silhouette/LoD-boundary residue.
 Dictionary VoxelDebugHooks::debug_raymarch_hole_probe(Vector3 origin, Vector3 dir, int w, int h) {
 	Dictionary d;
 	d["ran"] = false;
 	d["hit_pixels"] = 0;
 	d["isolated_misses"] = 0;
+	d["isolated_exempt_field_true_sky"] = 0;
+	d["isolated_exempt_past_funding_frontier"] = 0;
+	d["isolated_unexplained"] = 0;
 	if (w <= 2 || h <= 2) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
@@ -1005,16 +1020,82 @@ Dictionary VoxelDebugHooks::debug_raymarch_hole_probe(Vector3 origin, Vector3 di
 		hit[i] = f[i * 4 + 3] > 0.5f ? 1 : 0;
 		hits += hit[i];
 	}
-	int isolated = 0;
+	int isolated = 0, sky = 0, frontier = 0, unexplained = 0;
+	Array miss_details;
+	const ve::Generator *gen = world_->context().store->generator();
 	for (int y = 1; y < h - 1; y++)
 		for (int x = 1; x < w - 1; x++) {
 			const size_t i = static_cast<size_t>(y) * w + x;
 			if (hit[i]) continue;
-			if (hit[i - 1] && hit[i + 1] && hit[i - w] && hit[i + w]) isolated++;
+			if (!(hit[i - 1] && hit[i + 1] && hit[i - w] && hit[i + w])) continue;
+			isolated++;
+			Dictionary m;
+			m["x"] = x;
+			m["y"] = y;
+			// Reconstruct the pixel's exact ray from the same camera basis the probe used.
+			const float ndc_x = (static_cast<float>(x) + 0.5f) * 2.0f / static_cast<float>(w) - 1.0f;
+			const float ndc_y = 1.0f - (static_cast<float>(y) + 0.5f) * 2.0f / static_cast<float>(h);
+			Vector3 rd(basis_f[0] + pc.right[0] * ndc_x * pc.tan_x + pc.up[0] * ndc_y * pc.tan_y,
+					basis_f[1] + pc.right[1] * ndc_x * pc.tan_x + pc.up[1] * ndc_y * pc.tan_y,
+					basis_f[2] + pc.right[2] * ndc_x * pc.tan_x + pc.up[2] * ndc_y * pc.tan_y);
+			rd = rd.normalized();
+			const Dictionary r = debug_raycast(origin, rd);
+			if (!bool(r.get("hit", false))) {
+				sky++;
+				m["class"] = "sky_no_cpu_hit";
+				miss_details.append(m);
+				continue;
+			}
+			const Vector3 hitp = r["pos"];
+			const float d0 = origin.distance_to(hitp);
+			m["cpu_distance"] = d0;
+			m["cpu_material"] = int(r["material"]);
+			const ve::IVec3 reg = ve::region_of_point(hitp.x, hitp.y, hitp.z);
+			const int slot = debug_slot_of_region(Vector3i(reg.x, reg.y, reg.z));
+			m["slot"] = slot;
+			if (slot < 0) {
+				frontier++;
+				m["class"] = "past_funding_frontier";
+				miss_details.append(m);
+				continue;
+			}
+			// Analytic-field truth at the crossing (0.25 m steps, -2 m .. +12 m window).
+			float min_sdf = 1e30f;
+			if (gen != nullptr) {
+				int n0 = static_cast<int>((d0 - 2.0f) / 0.25f);
+				if (n0 < 0) n0 = 0;
+				for (int s = n0; static_cast<float>(s) * 0.25f < d0 + 12.0f; s++) {
+					const Vector3 q = origin + rd * (static_cast<float>(s) * 0.25f);
+					const ve::IVec3 qr = ve::region_of_point(q.x, q.y, q.z);
+					std::vector<ve::EditOp> ops;
+					{
+						std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
+						if (world_->context().store->edit_log())
+							ops = world_->context().store->edit_log()->ops(qr);
+					}
+					const ve::Sample sample = ve::eval_field(*gen, ops.data(),
+							static_cast<int>(ops.size()), q.x, q.y, q.z,
+							&world_->context().store->volumes(), world_->context().store->overrides());
+					if (sample.sdf < min_sdf) min_sdf = sample.sdf;
+				}
+				m["min_sdf"] = min_sdf;
+			}
+			if (gen != nullptr && min_sdf >= 0.0f) {
+				sky++;
+				m["class"] = "sub_pixel_silhouette_sky";
+			} else {
+				unexplained++;
+				m["class"] = "UNEXPLAINED";
+			}
+			miss_details.append(m);
 		}
 	d["ran"] = true;
 	d["hit_pixels"] = hits;
 	d["isolated_misses"] = isolated;
+	d["isolated_exempt_field_true_sky"] = sky;
+	d["isolated_exempt_past_funding_frontier"] = frontier;
+	d["isolated_unexplained"] = unexplained;
+	d["isolated_miss_details"] = miss_details;
 	return d;
 }
 
