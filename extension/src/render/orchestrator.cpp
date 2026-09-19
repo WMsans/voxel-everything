@@ -22,6 +22,7 @@
 #include "render/outline_pass.h"
 #include "render/grass_scatter_pass.h"
 #include "render/leaf_scatter_pass.h"
+#include "render/leaf_raster_pass.h"
 #include "render/grass_raster_pass.h"
 #include "render/lod_raster_pass.h"
 #include "render/sun_shadow_pass.h"
@@ -279,6 +280,11 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 		delete passes_.leaf_scatter;
 		passes_.leaf_scatter = nullptr;
 	}
+	// Fail-soft like grass_raster: a shader that will not compile leaves initialize() with
+	// no shader, draw() returns false, and the frame's timing marker is cancelled -- the
+	// scatter still runs, so the chop contract holds and the canopy simply does not draw.
+	passes_.leaf_raster = new LeafRasterPass();
+	passes_.leaf_raster->initialize(device);
 	passes_.hiz = new HizPass();
 	if (!passes_.hiz->initialize(device)) {
 		UtilityFunctions::printerr("VoxelWorld: HiZ initialization failed; continuing without "
@@ -304,6 +310,7 @@ void RenderOrchestrator::teardown_render_passes() {
 	if (passes_.outline) { delete passes_.outline; passes_.outline = nullptr; }
 	if (passes_.grass_raster) { delete passes_.grass_raster; passes_.grass_raster = nullptr; }
 	if (passes_.grass_scatter) { delete passes_.grass_scatter; passes_.grass_scatter = nullptr; }
+	if (passes_.leaf_raster) { delete passes_.leaf_raster; passes_.leaf_raster = nullptr; }
 	if (passes_.leaf_scatter) { delete passes_.leaf_scatter; passes_.leaf_scatter = nullptr; }
 	if (passes_.ssgi) { delete passes_.ssgi; passes_.ssgi = nullptr; }
 	if (passes_.ssao) { delete passes_.ssao; passes_.ssao = nullptr; }

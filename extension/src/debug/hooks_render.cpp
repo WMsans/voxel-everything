@@ -40,6 +40,7 @@
 #include "render/lod_cull_pass.h"
 #include "render/grass_scatter_pass.h"
 #include "render/leaf_scatter_pass.h"
+#include "render/leaf_raster_pass.h"
 #include "render/grass_raster_pass.h"
 #include "grass/grass_layout.h"
 #include "render/hiz_pass.h"
@@ -484,6 +485,9 @@ Dictionary VoxelDebugHooks::debug_leaf_stats() {
 	// Stage-2 sample keys, same "0 means not measured" convention as debug_grass_stats.
 	d["sampled"] = 0;
 	d["max_crown_offset"] = 0.0;
+	// Raster key, same convention as debug_grass_stats': the vertex count the SHIPPING
+	// raster last recorded (six per clump), never a CPU re-derivation.
+	d["vertices"] = 0;
 	VoxelWorld *w = world_;
 	if (!w) return d;
 	LeafScatterPass *l = w->context().render->passes().leaf_scatter;
@@ -526,9 +530,27 @@ Dictionary VoxelDebugHooks::debug_leaf_stats() {
 		device->sync();
 		l->read_back_counters(device);
 		l->read_back_sample(device);
+		// The raster counter is only fresh if the SHIPPING raster ran too: same drive, same
+		// hook camera, into the owned probe-size G-buffer (the debug_grass_stats pattern).
+		// last_vertex_count() is CPU-side, but the recorded draw is submitted so the device
+		// never holds an unsubmitted list. A hooked clear first: the raster's own
+		// draw_list_begin performs no clear, so without the LoD pass's clear_targets the
+		// reverse-Z compare would test against whatever depth the last probe left behind.
+		LeafRasterPass *leaf_raster = w->context().render->passes().leaf_raster;
+		if (leaf_raster && w->context().render->passes().gbuffer &&
+				w->context().render->passes().gbuffer->ensure(device, nullptr, Vector2i(64, 64))) {
+			Projection view_proj;
+			for (int cc = 0; cc < 4; cc++)
+				for (int rr = 0; rr < 4; rr++) view_proj.columns[cc][rr] = vp[cc * 4 + rr];
+			if (w->context().render->passes().lod_raster)
+				w->context().render->passes().lod_raster->clear_targets(device, *w->context().render->passes().gbuffer);
+			leaf_raster->draw(device, *l, *w->context().render->passes().gbuffer, view_proj, p);
+			device->submit();
+			device->sync();
+		}
 	}
 	// Re-read for the report: demo worlds skip the drive above (the compositor owns the
-	// frame there), so fetch the pass here for the pure-read keys.
+	// frame there), so fetch the passes here for the pure-read keys.
 	d["ran"] = true;
 	d["capacity"] = l->capacity();
 	d["trees"] = l->last_tree_count();
@@ -536,6 +558,10 @@ Dictionary VoxelDebugHooks::debug_leaf_stats() {
 	d["high_water"] = l->clump_high_water();
 	d["sampled"] = l->sample_count();
 	d["max_crown_offset"] = l->sample_max_crown_offset();
+	{
+		LeafRasterPass *r = w->context().render->passes().leaf_raster;
+		d["vertices"] = r ? r->last_vertex_count() : 0;
+	}
 	return d;
 }
 

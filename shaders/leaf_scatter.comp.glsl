@@ -94,7 +94,11 @@ void main() {
 	// canopy_roundness. At 0 the crown shades as one smooth ball and the overlapping masses
 	// disappear; at 1 every lobe is a separate ball and it reads as lumps.
 	vec3 n_crown = normalize(p - tr.crown);
-	vec3 n_lobe = normalize(p - lobe_c);
+	// shell_min = 0 and rr = 0 put a clump AT the lobe centre, where normalize() would
+	// divide by zero: the max() keeps the vector finite (when it binds the facing is
+	// degenerate and any direction is as good as another).
+	vec3 to_lobe = p - lobe_c;
+	vec3 n_lobe = to_lobe / max(length(to_lobe), 1e-3);
 	vec3 n = normalize(mix(n_crown, n_lobe, leaf.clump.z));
 
 	// Sun visibility, marched by the SAME function the raymarcher and the grass scatter use,
@@ -129,15 +133,15 @@ void main() {
 			leaf_pack_pair(depth_t, ratio), tree_unit(tree_hash(h ^ 0x51u)) * 6.2831853);
 	instances.c[slot] = c;
 
-	// The containment telemetry, counters.pad: how far out the shell reached, as a
-	// fixed-point multiple of the crown radius, reduced on the GPU where crown_r is in hand.
-	// DEVIATION from the plan text, which added `+ radius` to this quotient: the Task-2
-	// containment invariant bounds the clump CENTRE (max lobe reach 0.62 + max lobe radius
-	// 0.38 = exactly 1.0 crown radii) and says nothing about the CARD radius, which the
-	// density LOD deliberately inflates as the budget thins. Measured centre containment
-	// below is the shipping value of that invariant; the radius term measured 1.18 at
-	// defaults with rr < 1 already verified.
-	atomicMax(counters.pad, uint((length(p - tr.crown) / max(tr.crown_r, 1e-3)) * 65536.0));
+	// The containment telemetry, counters.pad: the CARD ENVELOPE -- how far the shell
+	// reached INCLUDING the card radius, as a fixed-point multiple of the crown radius,
+	// reduced on the GPU where crown_r is in hand. Task 2's invariant bounds the clump
+	// CENTRE at 1.0 crown radii (max lobe reach 0.62 + max lobe radius 0.38); the density
+	// LOD deliberately inflates the CARD as the budget thins, and the + radius term is
+	// what reports that -- the default-derived worst whole-card reach is 1.60, and
+	// test_the_crown_envelope_reports_the_card_radius pins the metric above 1.0 so the
+	// term can never be dropped again without a failing test.
+	atomicMax(counters.pad, uint(((length(p - tr.crown) + radius) / max(tr.crown_r, 1e-3)) * 65536.0));
 
 	// Six vertices per clump: two triangles, pulled from this buffer with no vertex format.
 	atomicMax(draw_args.vertex_count, (slot + 1u) * 6u);

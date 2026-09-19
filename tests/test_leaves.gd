@@ -87,12 +87,24 @@ func test_every_clump_sits_inside_its_crown() -> void:
 	var w := make_world()
 	var d: Dictionary = w.hooks().debug_leaf_stats()
 	assert_int(d["sampled"]).is_greater(0)
-	# Distance from the clump centre to its crown centre, as a fraction of the crown
-	# radius. tree.glslh's containment invariant says this never exceeds 1: a clump centre
-	# on a lobe shell is inside the crown sphere by construction (max lobe reach 0.62 plus
-	# max lobe radius 0.38 = 1.0 crown radii). The card radius is excluded on purpose: the
-	# density LOD lets a far clump's card outgrow that last margin.
-	assert_float(d["max_crown_offset"]).is_less_equal(1.001)
+	# The CARD ENVELOPE: distance from the clump centre to its crown centre plus the card
+	# radius, as a fraction of the crown radius. tree.glslh's containment invariant bounds
+	# the CENTRE at 1.0 radii (max lobe reach 0.62 + max lobe radius 0.38 = 1.0), and the
+	# density LOD inflates the card as the budget thins -- the default-derived worst whole
+	# card reach is 1.60 radii, so 1.75 is the shipping envelope bound. Measured ~1.18.
+	# test_the_crown_envelope_reports_the_card_radius pins the other half of the story:
+	# the same number must exceed 1.0, which only the radius term can do.
+	assert_float(d["max_crown_offset"]).is_less_equal(1.75)
+
+# R10: counters.pad carries (centre distance + radius) / crown_r again. A centre-only
+# metric can never exceed 1.0 by Task 2's invariant, so the >1.0 half here is the radius
+# tooth made observable: drop the + radius term and this case fails, loudly.
+func test_the_crown_envelope_reports_the_card_radius() -> void:
+	var w := make_world()
+	var d: Dictionary = w.hooks().debug_leaf_stats()
+	assert_int(d["sampled"]).is_greater(0)
+	assert_float(d["max_crown_offset"]).is_greater(1.0)
+	assert_float(d["max_crown_offset"]).is_less_equal(1.75)
 
 func test_the_clump_count_clamps_at_capacity_instead_of_overflowing() -> void:
 	var w := make_world()
@@ -106,3 +118,15 @@ func test_zero_clumps_per_tree_places_nothing_but_still_finds_trees() -> void:
 	w.set_leaf_value("clumps_per_tree", 0.0)
 	var d: Dictionary = w.hooks().debug_leaf_stats()
 	assert_int(d["clumps"]).is_equal(0)
+
+func test_the_raster_draws_the_clumps_the_scatter_placed() -> void:
+	var w := make_world()
+	var d: Dictionary = w.hooks().debug_leaf_stats()
+	assert_int(d["clumps"]).is_greater(0)
+	# Six vertices per clump: two triangles per card.
+	assert_int(d["vertices"]).is_equal(d["clumps"] * 6)
+
+func test_disabling_leaves_draws_nothing() -> void:
+	var w := make_world()
+	w.set_leaf_value("enabled", 0.0)
+	assert_int(w.hooks().debug_leaf_stats()["vertices"]).is_equal(0)

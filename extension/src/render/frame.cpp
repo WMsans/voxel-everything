@@ -15,6 +15,7 @@
 #include "render/grass_raster_pass.h"
 #include "render/grass_scatter_pass.h"
 #include "render/leaf_scatter_pass.h"
+#include "render/leaf_raster_pass.h"
 #include "render/hiz_pass.h"
 #include "render/inject_pass.h"
 #include "render/island_atlas.h"
@@ -426,9 +427,10 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		else cancel_stage(kStageGrass);
 	}
 
-	// Leaves: the tree cull, right beside the grass it shadows. Nothing draws yet -- Task 12
-	// hands this buffer list to the raster -- but the pass runs on the real window every
-	// frame, so the chop contract holds whether or not anyone is looking.
+	// Leaves: the canopy scatter and its raster, one block right beside the grass it
+	// shadows. Cards write the same G-buffer channels the far field writes, so everything
+	// below shades them unchanged. The shape is grass's: run + draw are one gated pair, and
+	// a failure cancels the timing marker and skips leaves -- never aborts the frame.
 	if (LeafScatterPass *leaf = render_.passes().leaf_scatter) {
 		timings->begin(rd, "leaves");
 		float leaf_cam[3] = {cam.origin.x, cam.origin.y, cam.origin.z};
@@ -437,11 +439,15 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 			for (int r = 0; r < 4; r++) leaf_vp[c * 4 + r] = view_proj.columns[c][r];
 		const ve::LeafLayout ll = leaf_layout(leaf_cam, leaf_vp);
 		SunUbo *leaf_sun = render_.passes().sun_ubo;
-		// Stage 1 never reads the SunUbo (Task 11's march will); an absent one is no reason
-		// to skip the cull, so an empty RID travels through unbound.
+		LeafRasterPass *leaf_raster = render_.passes().leaf_raster;
+		// Stage 1 never reads the SunUbo (stage 2's march does); an absent one is no reason
+		// to skip the cull, so an empty RID travels through unbound. A disabled layout is a
+		// successful run that clears both arg buffers, and the raster then draws zero
+		// vertices -- true with no draw, not a failure.
 		const bool leaf_ok = leaf->run(rd, *atlas, ll, store_.region_window(),
 				static_cast<float>(render_.beauty_frame()) / 60.0f,
-				leaf_sun ? leaf_sun->buffer() : RID(), render_.passes().field_context);
+				leaf_sun ? leaf_sun->buffer() : RID(), render_.passes().field_context)
+				&& leaf_raster && leaf_raster->draw(rd, *leaf, *gb, view_proj, cam_pos);
 		if (leaf_ok) timings->end(rd, "leaves");
 		else timings->cancel("leaves");
 	}
@@ -642,6 +648,7 @@ FrameInputs VoxelFrame::prepare_headless(RenderingDevice *rd, const FrameInputs 
 		if (InjectPass *inject = render_.passes().inject) inject->release_targets();
 		if (LodRasterPass *lod_raster = render_.passes().lod_raster) lod_raster->release_targets();
 		if (GrassRasterPass *grass_raster = render_.passes().grass_raster) grass_raster->release_targets();
+		if (LeafRasterPass *leaf_raster = render_.passes().leaf_raster) leaf_raster->release_targets();
 	}
 	if (!headless_.ensure(rd, in.size) || !headless_.clear(rd)) return out;
 	out.scene_color = headless_.color();
