@@ -71,3 +71,62 @@ bool tree_cell_present(ivec2 cell, TreeParams tp, float slope) {
 	float draw = tree_unit(tree_hash2(cell, 0x2F1Du));
 	return draw < tp.density * (0.35 + 1.3 * grove);
 }
+
+// Five primaries, each splitting once: ten branch tips, ten canopy lobes. The count is a
+// compile-time constant because both consumers unroll over it, and because a 5 cm voxel grid
+// cannot resolve more branch levels than this anyway -- see the design doc's risk table.
+#define TREE_PRIMARIES 5
+#define TREE_LOBES 10
+
+struct Tree {
+	vec3 base;      // trunk foot, world space
+	float height;   // trunk length
+	float radius;   // trunk radius at the foot
+	vec3 crown;     // crown centre, world space
+	float crown_r;  // crown bounding radius; bounds every lobe AND every capsule
+	uint hash;      // per-tree hash: colour, phase, species jitter
+	bool present;
+};
+
+// `ground_y` and `slope` come from the caller (the stage evaluates hills+relief at the tree's
+// XZ; the leaf scatter does the same). This header stays terrain-free.
+Tree tree_at(ivec2 cell, TreeParams tp, float ground_y, float slope) {
+	Tree t;
+	t.hash = tree_hash2(cell, 0xC2B2u);
+	t.present = tree_cell_present(cell, tp, slope);
+	vec2 xz = tree_cell_xz(cell, tp);
+	t.base = vec3(xz.x, ground_y, xz.y);
+	// +-25% height, +-20% radius. Variety comes from the hash; there is one species.
+	t.height = tp.trunk_height * (1.0 + 0.25 * tree_snorm(tree_hash(t.hash ^ 0x51u)));
+	t.radius = tp.trunk_radius * (1.0 + 0.20 * tree_snorm(tree_hash(t.hash ^ 0x52u)));
+	// The crown sits at the top of the trunk. Its radius scales with the trunk's own height
+	// jitter so a tall tree gets a proportionally large crown, and is CLAMPED to
+	// tp.crown_radius because tree_d_safe() (Task 3) is derived from that number.
+	t.crown_r = min(tp.crown_radius, tp.crown_radius * t.height / max(tp.trunk_height, 1e-3));
+	t.crown = t.base + vec3(0.0, t.height, 0.0);
+	return t;
+}
+
+// Lobe i, in 0..TREE_LOBES-1. Primary p = i / 2, split s = i % 2. Tips fan outward and
+// upward from the crown centre; the containment invariant
+// |lobe - crown| + lobe_radius <= crown_r is what Task 3's bound and the leaf scatter's
+// capacity both rest on, so the reach below is written as a FRACTION of crown_r.
+vec3 tree_lobe(Tree t, TreeParams tp, int i) {
+	uint h = tree_hash(t.hash ^ (uint(i) * 0x9E3779B9u));
+	int p = i / 2;
+	// Primaries evenly spaced in azimuth with a per-tree phase, splits offset either side.
+	float base_az = 6.2831853 * (float(p) / float(TREE_PRIMARIES)) + tree_unit(t.hash) * 6.2831853;
+	float az = base_az + (float(i % 2) * 2.0 - 1.0) * 0.55 + 0.25 * tree_snorm(h);
+	// Elevation from just below the horizontal to well above, so the crown is a mass rather
+	// than a ring. 0.15..0.85 of a right angle.
+	float el = mix(0.15, 0.85, tree_unit(tree_hash(h ^ 0x77u))) * 1.5707963;
+	float reach = t.crown_r * mix(0.42, 0.62, tree_unit(tree_hash(h ^ 0x88u)));
+	return t.crown + vec3(cos(az) * cos(el), sin(el), sin(az) * cos(el)) * reach;
+}
+
+// Sized so |lobe - crown| + radius never exceeds crown_r: reach maxes at 0.62 * crown_r, so
+// 0.38 * crown_r is the largest radius that still fits, and the jitter stays under it.
+float tree_lobe_radius(Tree t, TreeParams tp, int i) {
+	uint h = tree_hash(t.hash ^ (uint(i) * 0x85EBCA6Bu));
+	return t.crown_r * mix(0.26, 0.38, tree_unit(h));
+}

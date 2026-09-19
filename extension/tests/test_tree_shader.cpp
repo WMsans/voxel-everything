@@ -115,3 +115,41 @@ TEST_CASE("zero density places no trees and slope rejects every cell") {
 		for (int z = -20; z <= 20; z++)
 			CHECK_FALSE(ts::tree_cell_present({x, z}, tp, tp.max_slope + 0.01f));
 }
+
+TEST_CASE("every lobe sits inside the crown bounding sphere") {
+	const ts::TreeParams tp = params();
+	int checked = 0;
+	for (int x = -15; x <= 15; x++) {
+		for (int z = -15; z <= 15; z++) {
+			if (!ts::tree_cell_present({x, z}, tp, 0.0f)) continue;
+			const ts::Tree t = ts::tree_at({x, z}, tp, 51.2f, 0.0f);
+			REQUIRE(t.present);
+			for (int i = 0; i < TREE_LOBES; i++) {
+				const ts::vec3 c = ts::tree_lobe(t, tp, i);
+				const float r = ts::tree_lobe_radius(t, tp, i);
+				CHECK(ts::length(c - t.crown) + r <= t.crown_r + 1e-3f);
+				CHECK(r > 0.0f);
+			}
+			checked++;
+		}
+	}
+	CHECK(checked > 100); // the sweep must actually have found trees
+}
+
+TEST_CASE("the crown bound never exceeds the declared crown radius") {
+	const ts::TreeParams tp = params();
+	for (int x = -15; x <= 15; x++)
+		for (int z = -15; z <= 15; z++)
+			if (ts::tree_cell_present({x, z}, tp, 0.0f))
+				CHECK(ts::tree_at({x, z}, tp, 51.2f, 0.0f).crown_r <= tp.crown_radius + 1e-4f);
+}
+
+TEST_CASE("a tree sits on the ground height it was given") {
+	const ts::TreeParams tp = params();
+	for (float g : {0.0f, 51.2f, -18.5f}) {
+		for (int x = -8; x <= 8; x++)
+			for (int z = -8; z <= 8; z++)
+				if (ts::tree_cell_present({x, z}, tp, 0.0f))
+					CHECK(ts::tree_at({x, z}, tp, g, 0.0f).base.y == doctest::Approx(g));
+	}
+}
