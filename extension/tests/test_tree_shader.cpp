@@ -46,6 +46,7 @@ float min(float a, float b) { return a < b ? a : b; }
 float max(float a, float b) { return a > b ? a : b; }
 float floor(float v) { return std::floor(v); }
 float abs(float v) { return std::fabs(v); }
+float sign(float v) { return v > 0.0f ? 1.0f : (v < 0.0f ? -1.0f : 0.0f); }
 using std::cos;
 using std::sin;
 using std::sqrt;
@@ -151,5 +152,88 @@ TEST_CASE("a tree sits on the ground height it was given") {
 			for (int z = -8; z <= 8; z++)
 				if (ts::tree_cell_present({x, z}, tp, 0.0f))
 					CHECK(ts::tree_at({x, z}, tp, g, 0.0f).base.y == doctest::Approx(g));
+	}
+}
+
+namespace {
+// Flat ground at y = 51.2 and zero slope everywhere, so this exercises tree.glslh alone.
+constexpr float kFlatGround = 51.2f;
+
+float sweep(ts::vec3 p, const ts::TreeParams &tp, int ring) {
+	const int cx = int(std::floor(p.x / tp.cell));
+	const int cz = int(std::floor(p.z / tp.cell));
+	float d = 1.0e9f;
+	for (int dz = -ring; dz <= ring; dz++) {
+		for (int dx = -ring; dx <= ring; dx++) {
+			const ts::Tree t = ts::tree_at({cx + dx, cz + dz}, tp, kFlatGround, 0.0f);
+			if (!t.present) continue;
+			d = std::min(d, ts::tree_skeleton_sdf(p, t, tp));
+		}
+	}
+	return d;
+}
+} // namespace
+
+TEST_CASE("the 3x3 clamped sweep never overestimates the true distance") {
+	const ts::TreeParams tp = params();
+	uint32_t s = 20260918u;
+	auto next = [&s](float lo, float hi) {
+		s = s * 1664525u + 1013904223u;
+		return lo + (hi - lo) * (float((s >> 8) & 0xFFFFFFu) / 16777216.0f);
+	};
+	for (int i = 0; i < 20000; i++) {
+		const ts::vec3 p(next(-200.0f, 200.0f), next(kFlatGround - 3.0f, kFlatGround + 14.0f),
+				next(-200.0f, 200.0f));
+		const float got = std::min(sweep(p, tp, 1), ts::tree_d_safe(tp));
+		const float truth = sweep(p, tp, 4); // four rings: far wider than any tree can reach
+		CHECK(got <= truth + 1e-3f);
+	}
+}
+
+TEST_CASE("D_safe is derived from the params, not a constant") {
+	ts::TreeParams tp = params();
+	const float a = ts::tree_d_safe(tp);
+	tp.crown_radius = 8.0f; // a bigger crown must TIGHTEN the clamp
+	CHECK(ts::tree_d_safe(tp) < a);
+	tp = params();
+	tp.cell = 28.0f;        // a bigger cell must LOOSEN it
+	CHECK(ts::tree_d_safe(tp) > a);
+	CHECK(a > 0.0f);
+}
+
+TEST_CASE("the skeleton SDF is 1-Lipschitz") {
+	const ts::TreeParams tp = params();
+	const ts::Tree t = ts::tree_at({0, 0}, tp, kFlatGround, 0.0f);
+	uint32_t s = 7771u;
+	auto next = [&s](float lo, float hi) {
+		s = s * 1664525u + 1013904223u;
+		return lo + (hi - lo) * (float((s >> 8) & 0xFFFFFFu) / 16777216.0f);
+	};
+	const float e = 0.01f;
+	for (int i = 0; i < 20000; i++) {
+		const ts::vec3 p(next(-12.0f, 12.0f), next(kFlatGround - 2.0f, kFlatGround + 16.0f),
+				next(-12.0f, 12.0f));
+		const float gx = (ts::tree_skeleton_sdf({p.x + e, p.y, p.z}, t, tp)
+				- ts::tree_skeleton_sdf({p.x - e, p.y, p.z}, t, tp)) / (2.0f * e);
+		const float gy = (ts::tree_skeleton_sdf({p.x, p.y + e, p.z}, t, tp)
+				- ts::tree_skeleton_sdf({p.x, p.y - e, p.z}, t, tp)) / (2.0f * e);
+		const float gz = (ts::tree_skeleton_sdf({p.x, p.y, p.z + e}, t, tp)
+				- ts::tree_skeleton_sdf({p.x, p.y, p.z - e}, t, tp)) / (2.0f * e);
+		CHECK(std::sqrt(gx * gx + gy * gy + gz * gz) <= 1.02f);
+	}
+}
+
+TEST_CASE("the bounding capsule never rejects a point the skeleton would claim") {
+	const ts::TreeParams tp = params();
+	const ts::Tree t = ts::tree_at({0, 0}, tp, kFlatGround, 0.0f);
+	uint32_t s = 4242u;
+	auto next = [&s](float lo, float hi) {
+		s = s * 1664525u + 1013904223u;
+		return lo + (hi - lo) * (float((s >> 8) & 0xFFFFFFu) / 16777216.0f);
+	};
+	for (int i = 0; i < 20000; i++) {
+		const ts::vec3 p(next(-25.0f, 25.0f), next(kFlatGround - 5.0f, kFlatGround + 25.0f),
+				next(-25.0f, 25.0f));
+		CHECK(ts::tree_bound(p, t) <= ts::tree_skeleton_sdf(p, t, tp) + 1e-3f);
 	}
 }

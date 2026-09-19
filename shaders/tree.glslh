@@ -130,3 +130,67 @@ float tree_lobe_radius(Tree t, TreeParams tp, int i) {
 	uint h = tree_hash(t.hash ^ (uint(i) * 0x85EBCA6Bu));
 	return t.crown_r * mix(0.26, 0.38, tree_unit(h));
 }
+
+// iq's round cone: the exact distance to a capsule tapering from radius ra at a to rb at b.
+// Exactly 1-Lipschitz, which is why the union below is a plain min and never a smooth min --
+// a polynomial smooth minimum is not, and an overstated field tunnels the raymarcher.
+float tree_round_cone(vec3 p, vec3 a, vec3 b, float ra, float rb) {
+	vec3 ba = b - a;
+	float l2 = dot(ba, ba);
+	float rr = ra - rb;
+	float a2 = l2 - rr * rr;
+	float il2 = 1.0 / max(l2, 1e-8);
+
+	vec3 pa = p - a;
+	float y = dot(pa, ba);
+	float z = y - l2;
+	vec3 w = pa * l2 - ba * y;
+	float x2 = dot(w, w);
+	float y2 = y * y * l2;
+	float z2 = z * z * l2;
+
+	float k = sign(rr) * rr * rr * x2;
+	if (sign(z) * a2 * z2 > k) return sqrt(max(x2 + z2, 0.0)) * il2 - rb;
+	if (sign(y) * a2 * y2 < k) return sqrt(max(x2 + y2, 0.0)) * il2 - ra;
+	return (sqrt(max(x2 * a2 * il2, 0.0)) + y * rr) * il2 - ra;
+}
+
+// The whole tree: trunk, five primaries, ten secondaries. Exact, 1-Lipschitz.
+float tree_skeleton_sdf(vec3 p, Tree t, TreeParams tp) {
+	// Trunk: foot to crown centre, tapering to half its foot radius.
+	float d = tree_round_cone(p, t.base, t.crown, t.radius, t.radius * 0.5);
+	// The trunk forks at `fork_y` up the trunk; primaries run from there to a midpoint, and
+	// each secondary from that midpoint to its lobe centre. Every endpoint is inside the
+	// crown sphere (Task 2's invariant), so the whole skeleton is bounded by crown_r.
+	vec3 fork = t.base + vec3(0.0, t.height * 0.55, 0.0);
+	for (int i = 0; i < TREE_LOBES; i++) {
+		vec3 tip = tree_lobe(t, tp, i);
+		vec3 mid = mix(fork, tip, 0.55);
+		float r_mid = mix(t.radius * 0.45, tp.branch_radius_min, 0.5);
+		d = min(d, tree_round_cone(p, fork, mid, t.radius * 0.45, r_mid));
+		d = min(d, tree_round_cone(p, mid, tip, r_mid, tp.branch_radius_min));
+	}
+	return d;
+}
+
+// Cheap conservative bound: one capsule from the trunk foot to the crown centre, fattened to
+// the crown radius. NEVER greater than tree_skeleton_sdf, so using it as an early-out reject
+// cannot drop a cell the skeleton would have claimed.
+float tree_bound(vec3 p, Tree t) {
+	return tree_round_cone(p, t.base, t.crown, t.crown_r, t.crown_r);
+}
+
+// Callers sweep only the 3x3 cell neighbourhood, which OVERESTIMATES the distance when the
+// nearest tree is two cells out -- and an overestimate is the direction that tunnels. A tree
+// never leaves its own cell's TREE_JITTER box and never reaches past crown_r, so any tree
+// outside the swept 3x3 has its surface at least this far away:
+//
+//     1.5 * cell   the centre-to-centre distance to the nearest UNSWEPT cell's near edge
+//   - jitter                          the furthest that tree can have moved toward us
+//   - crown_r                                   the furthest its geometry can reach out
+//
+// Clamping DOWN to that value is conservative. Inside the vertical band the stage runs in,
+// the terrain distance is already smaller, so the clamp costs essentially nothing.
+float tree_d_safe(TreeParams tp) {
+	return max(0.0, (1.5 - TREE_JITTER) * tp.cell - tp.crown_radius);
+}
