@@ -1,0 +1,73 @@
+// Shared tree definition: where trees are, what shape they have, and their SDF.
+//
+// ONE definition, TWO consumers: shaders/stages/trees.field.glslh unions the capsules into
+// the terrain field, and shaders/leaf_scatter.comp.glsl scatters canopy clumps around the
+// branch tips. They read the same P.trees_* params from the terrain pipeline's set 1, so the
+// trunk you chop and the canopy you see cannot disagree.
+//
+// This header knows NOTHING about terrain. Ground height and slope at a tree's XZ are
+// supplied by the caller, which is what lets extension/tests/test_tree_shader.cpp execute it
+// natively with no pipeline.
+//
+// NOTE: never put a literal include directive inside a comment in this file -- the loader
+// matches include tokens anywhere in a line and would self-include.
+
+// Trunk jitter within its cell, as a fraction of the cell size, measured from the centre.
+// Bounded so tree_d_safe() below can be derived from it: a tree NEVER leaves its own cell.
+#define TREE_JITTER 0.35
+
+struct TreeParams {
+	float cell;               // placement lattice pitch, metres
+	float density;            // fraction of cells that carry a tree, 0..1
+	float trunk_height;       // mean trunk length, metres
+	float trunk_radius;       // trunk radius at the foot, metres
+	float branch_radius_min;  // radius at a branch tip, metres
+	float crown_radius;       // crown bounding radius AND the SDF bound radius, metres
+	float max_slope;          // reject a cell whose ground slope exceeds this
+};
+
+// PCG-style integer hash, the same one grass.glslh uses. Integer-only by requirement: the
+// CPU mirror and this GLSL must agree bit-for-bit, and a float hash chain does not.
+uint tree_hash(uint x) {
+	x = x * 747796405u + 2891336453u;
+	uint w = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u;
+	return (w >> 22u) ^ w;
+}
+
+uint tree_hash2(ivec2 c, uint salt) {
+	return tree_hash(uint(c.x) * 73856093u ^ uint(c.y) * 19349663u ^ salt);
+}
+
+float tree_unit(uint h) { return float(h & 0x00FFFFFFu) / float(0x01000000u); }
+float tree_snorm(uint h) { return tree_unit(h) * 2.0 - 1.0; }
+
+// The jittered trunk XZ for a cell. Always inside the cell's TREE_JITTER box, which is what
+// tree_d_safe() depends on.
+vec2 tree_cell_xz(ivec2 cell, TreeParams tp) {
+	float jx = tree_snorm(tree_hash2(cell, 0x9E37u)) * TREE_JITTER * tp.cell;
+	float jz = tree_snorm(tree_hash2(cell, 0x85EBu)) * TREE_JITTER * tp.cell;
+	return vec2((float(cell.x) + 0.5) * tp.cell + jx,
+	            (float(cell.y) + 0.5) * tp.cell + jz);
+}
+
+// Forest gate plus slope rejection. `slope` is |grad h| at the tree's XZ, supplied by the
+// caller. Low-frequency lattice noise on the cell grid gives groves and clearings rather
+// than an orchard: neighbouring cells share a gate value, so trees arrive in clumps.
+bool tree_cell_present(ivec2 cell, TreeParams tp, float slope) {
+	if (slope > tp.max_slope) return false;
+	// Grove noise: bilinear value noise on a 4-cell lattice, so a grove is ~56 m across.
+	ivec2 g = ivec2(int(floor(float(cell.x) * 0.25)), int(floor(float(cell.y) * 0.25)));
+	float fx = float(cell.x) * 0.25 - floor(float(cell.x) * 0.25);
+	float fz = float(cell.y) * 0.25 - floor(float(cell.y) * 0.25);
+	fx = fx * fx * (3.0 - 2.0 * fx);
+	fz = fz * fz * (3.0 - 2.0 * fz);
+	float a = tree_unit(tree_hash2(g, 0x1A2Bu));
+	float b = tree_unit(tree_hash2(g + ivec2(1, 0), 0x1A2Bu));
+	float c = tree_unit(tree_hash2(g + ivec2(0, 1), 0x1A2Bu));
+	float d = tree_unit(tree_hash2(g + ivec2(1, 1), 0x1A2Bu));
+	float grove = mix(mix(a, b, fx), mix(c, d, fx), fz);
+	// The grove field biases the per-cell draw: dense in a grove, sparse in a clearing.
+	// Centred on 1.0 so `density` still means "this fraction of cells, on average".
+	float draw = tree_unit(tree_hash2(cell, 0x2F1Du));
+	return draw < tp.density * (0.35 + 1.3 * grove);
+}
