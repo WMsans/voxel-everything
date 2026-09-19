@@ -8,6 +8,7 @@
 // has no comments of its own.
 #include "gpu_layout/layout.h"
 #include "grass/grass_layout.h"
+#include "leaves/leaf_layout.h"
 #include "render/camera_params.h"
 #include "shade/sun_cascades.h"
 #include <cstdint>
@@ -275,6 +276,30 @@ inline constexpr Field kGrassRegionBlockFields[] = {
 	VE_LAYOUT_FIELD(GrassRegionBlock, region_origin, IVec4, 0),
 	VE_LAYOUT_FIELD(GrassRegionBlock, atlas_bricks, IVec4, 0),
 };
+// Every C++ float[4]/int32_t[4] row is ONE vec4/ivec4: a scalar array in the std140 mirror
+// would add 16-byte element strides where the struct packs four floats. planes repeats 6
+// like GrassParams'. spare is the documented sixteenth vec4 (Task 9) -- the mirror must
+// carry it or every later block offset shrinks by 16 bytes.
+inline constexpr Field kLeafParamsFields[] = {
+	VE_LAYOUT_FIELD(LeafParams, cam, Vec4, 0),
+	VE_LAYOUT_FIELD(LeafParams, planes, Vec4, 6),
+	VE_LAYOUT_FIELD(LeafParams, cell_min, IVec4, 0),
+	VE_LAYOUT_FIELD(LeafParams, cell_dim, IVec4, 0),
+	VE_LAYOUT_FIELD(LeafParams, tree, Vec4, 0),
+	VE_LAYOUT_FIELD(LeafParams, shape, Vec4, 0),
+	VE_LAYOUT_FIELD(LeafParams, clump, Vec4, 0),
+	VE_LAYOUT_FIELD(LeafParams, wind, Vec4, 0),
+	VE_LAYOUT_FIELD(LeafParams, style, Vec4, 0),
+	VE_LAYOUT_FIELD(LeafParams, limits, IVec4, 0),
+	VE_LAYOUT_FIELD(LeafParams, spare, Vec4, 0),
+};
+// The leaf scatter's region-window block is the same three ivec4 grass uses -- one struct,
+// emitted under both macro names so each shader text keeps its own include.
+inline constexpr Field kLeafRegionBlockFields[] = {
+	VE_LAYOUT_FIELD(GrassRegionBlock, dims, IVec4, 0),
+	VE_LAYOUT_FIELD(GrassRegionBlock, region_origin, IVec4, 0),
+	VE_LAYOUT_FIELD(GrassRegionBlock, atlas_bricks, IVec4, 0),
+};
 inline constexpr Field kDownsamplePushFields[] = {
 	VE_LAYOUT_FIELD(DownsamplePush, dims, IVec4, 0),
 };
@@ -334,6 +359,8 @@ inline constexpr Block kBlocks[] = {
 	VE_LAYOUT_BLOCK(LodCullPush, "LOD_CULL_PUSH_FIELDS", kLodCullPushFields),
 	VE_LAYOUT_BLOCK(GrassParams, "GRASS_PARAMS_FIELDS", kGrassParamsFields),
 	VE_LAYOUT_BLOCK(GrassRegionBlock, "GRASS_REGION_FIELDS", kGrassRegionBlockFields),
+	VE_LAYOUT_BLOCK(LeafParams, "LEAF_PARAMS_FIELDS", kLeafParamsFields),
+	VE_LAYOUT_BLOCK(GrassRegionBlock, "LEAF_REGION_FIELDS", kLeafRegionBlockFields),
 	VE_LAYOUT_BLOCK(DownsamplePush, "DOWNSAMPLE_PUSH_FIELDS", kDownsamplePushFields),
 	VE_LAYOUT_BLOCK(BrickGenPush, "BRICK_GEN_PUSH_FIELDS", kBrickGenPushFields),
 	VE_LAYOUT_BLOCK(ConsolidatePush, "CONSOLIDATE_PUSH_FIELDS", kConsolidatePushFields),

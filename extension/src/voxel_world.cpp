@@ -224,6 +224,8 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::get_effect_value);
 	ClassDB::bind_method(D_METHOD("set_grass_value", "name", "value"), &VoxelWorld::set_grass_value);
 	ClassDB::bind_method(D_METHOD("get_grass_value", "name"), &VoxelWorld::get_grass_value);
+	ClassDB::bind_method(D_METHOD("set_leaf_value", "name", "value"), &VoxelWorld::set_leaf_value);
+	ClassDB::bind_method(D_METHOD("get_leaf_value", "name"), &VoxelWorld::get_leaf_value);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	// Task 10 contract smoke test: the WorldStore spine's edit sequence, and an
 	// AppendResult-free way to push one encoded op through the spine from GDScript.
@@ -328,6 +330,18 @@ bool VoxelWorld::set_grass_value(const String &name, float v) {
 
 float VoxelWorld::get_grass_value(const String &name) const {
 	return context_.render->grass_value(name.utf8().get_data());
+}
+
+bool VoxelWorld::set_leaf_value(const String &name, float v) {
+	return context_.render->set_leaf_value(name.utf8().get_data(), v);
+}
+
+float VoxelWorld::get_leaf_value(const String &name) const {
+	return context_.render->leaf_value(name.utf8().get_data());
+}
+
+LeafScatterPass *VoxelWorld::leaf_scatter_pass() const {
+	return context_.render->passes().leaf_scatter;
 }
 
 void VoxelWorld::_ready() {

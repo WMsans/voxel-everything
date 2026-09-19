@@ -40,7 +40,7 @@ TEST_CASE("beauty flags are distinct single bits") {
 TEST_CASE("block macros are unique and emit one declaration per field") {
 	std::set<std::string> names;
 	for (const Block &b : ve::layout::kBlocks) CHECK_MESSAGE(names.insert(b.macro).second, b.macro);
-	CHECK(names.size() == 29);
+	CHECK(names.size() == 31);
 	const Field f[] = {{"view_proj", FieldType::Mat4, 3, 0}, {"splits", FieldType::UVec4, 0, 192}};
 	CHECK(ve::layout::emit_block({"X_FIELDS", 208, f, 2}) ==
 			"#define X_FIELDS \\\n\tmat4 view_proj[3]; \\\n\tuvec4 splits;\n");

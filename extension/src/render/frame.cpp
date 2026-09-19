@@ -14,6 +14,7 @@
 #include "render/gpu_timings.h"
 #include "render/grass_raster_pass.h"
 #include "render/grass_scatter_pass.h"
+#include "render/leaf_scatter_pass.h"
 #include "render/hiz_pass.h"
 #include "render/inject_pass.h"
 #include "render/island_atlas.h"
@@ -94,6 +95,12 @@ ve::GrassLayout VoxelFrame::grass_layout(const float cam_pos[3], const float vie
 	lod_.fade_band(&fade_start, &fade_end);
 	gs.reach_m = std::min(gs.reach_m, std::min(fade_end, grass_reach_limit_m()));
 	return ve::grass_layout(gs, cam_pos, view_proj);
+}
+
+ve::LeafLayout VoxelFrame::leaf_layout(const float cam_pos[3], const float view_proj[16]) const {
+	// No fade-band/residency clamp: stage 1 attaches every candidate to a live bark voxel in
+	// the atlas, so residency bounds the list by itself. See the declaration in frame.h.
+	return ve::leaf_layout(render_.leaf_settings(), cam_pos, view_proj);
 }
 
 // Was VoxelWorld::sun_ortho(); reads the sun live, as that method did.
@@ -417,6 +424,26 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 				grass_raster && grass_raster->draw(rd, *grass, *gb, view_proj, cam_pos);
 		if (grass_ok) end_stage(rd, kStageGrass);
 		else cancel_stage(kStageGrass);
+	}
+
+	// Leaves: the tree cull, right beside the grass it shadows. Nothing draws yet -- Task 12
+	// hands this buffer list to the raster -- but the pass runs on the real window every
+	// frame, so the chop contract holds whether or not anyone is looking.
+	if (LeafScatterPass *leaf = render_.passes().leaf_scatter) {
+		timings->begin(rd, "leaves");
+		float leaf_cam[3] = {cam.origin.x, cam.origin.y, cam.origin.z};
+		float leaf_vp[16];
+		for (int c = 0; c < 4; c++)
+			for (int r = 0; r < 4; r++) leaf_vp[c * 4 + r] = view_proj.columns[c][r];
+		const ve::LeafLayout ll = leaf_layout(leaf_cam, leaf_vp);
+		SunUbo *leaf_sun = render_.passes().sun_ubo;
+		// Stage 1 never reads the SunUbo (Task 11's march will); an absent one is no reason
+		// to skip the cull, so an empty RID travels through unbound.
+		const bool leaf_ok = leaf->run(rd, *atlas, ll, store_.region_window(),
+				static_cast<float>(render_.beauty_frame()) / 60.0f,
+				leaf_sun ? leaf_sun->buffer() : RID(), render_.passes().field_context);
+		if (leaf_ok) timings->end(rd, "leaves");
+		else timings->cancel("leaves");
 	}
 
 	SsgiPass *ssgi = render_.passes().ssgi;

@@ -32,6 +32,7 @@ class ColliderStreamer;
 class ConsolidationCoordinator;
 class IslandBody;
 class IslandManager;
+class LeafScatterPass;
 class LodSystem;
 class MeshService;
 class RenderOrchestrator;
@@ -166,6 +167,11 @@ public:
 	float get_effect_value(const String &name) const;
 	bool set_grass_value(const String &name, float v);
 	float get_grass_value(const String &name) const;
+	bool set_leaf_value(const String &name, float v);
+	float get_leaf_value(const String &name) const;
+	// The shipping canopy pass, or null when the GPU graph refused it (fail-soft).
+	// Read-only: the orchestrator owns its lifetime, like every other pass pointer.
+	LeafScatterPass *leaf_scatter_pass() const;
 
 	// --- lifetime ---
 	void ensure_initialized();

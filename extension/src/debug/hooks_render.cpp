@@ -39,6 +39,7 @@
 #include "render/sun_ubo.h"
 #include "render/lod_cull_pass.h"
 #include "render/grass_scatter_pass.h"
+#include "render/leaf_scatter_pass.h"
 #include "render/grass_raster_pass.h"
 #include "grass/grass_layout.h"
 #include "render/hiz_pass.h"
@@ -471,6 +472,65 @@ void VoxelDebugHooks::debug_normal_release_override(int slot) {
 	RenderingDevice *device = world_->rd();
 	if (!device || !world_->context().render->passes().atlas || !world_->context().render->passes().atlas->is_valid()) return;
 	world_->context().render->passes().atlas->stored_normals().release_override(device, slot);
+}
+
+Dictionary VoxelDebugHooks::debug_leaf_stats() {
+	Dictionary d;
+	d["ran"] = false;
+	d["capacity"] = 0;
+	d["trees"] = 0;
+	d["clumps"] = 0;
+	d["high_water"] = 0;
+	VoxelWorld *w = world_;
+	if (!w) return d;
+	LeafScatterPass *l = w->context().render->passes().leaf_scatter;
+	if (!l) return d;
+	// Local-device worlds drive the SHIPPING pass on demand (the debug_grass_stats pattern:
+	// same calls, same order as the compositor block). Test bodies run synchronously with
+	// no compositor frame, so a pure read would report stale zeros forever; running the
+	// real pass is not a parallel scatter. Demo worlds stay pure-read -- the compositor
+	// owns the frame there.
+	if (w->get_use_local_device()) {
+		w->ensure_initialized();
+		RenderingDevice *device = w->rd();
+		GpuAtlas *atlas = w->context().render->passes().atlas;
+		if (!w->is_initialized() || !device || !atlas || !atlas->is_valid()) return d;
+		// Hook camera: 40 m straight above the last streamed centre (every leaf test
+		// streams before reading), looking straight down. The lift is load-bearing: the
+		// test view sits at crown height, and a camera AT canopy level frustum-clips most
+		// crowns, turning the reach comparison into a noise fight. 90-degree FOV, time
+		// and sun handling match the compositor expression, as with grass.
+		const float *c = w->context().store->center_;
+		const float p[3] = {c[0], c[1] + 40.0f, c[2]};
+		const float f[3] = {0.0f, -1.0f, 0.0f};
+		const ve::ProbeCamera pc = ve::probe_camera(p, f, 64, 64,
+				1.5707963268f, 0.1f, 4000.0f);
+		const ve::LodCamera &cam = pc.lod;
+		float vp[16];
+		for (int k = 0; k < 16; k++) vp[k] = cam.view_proj[k];
+		const ve::LeafLayout ll = w->context().render->frame().leaf_layout(p, vp);
+		// Stage 1 never reads the SunUbo, but the drive keeps the compositor's shape:
+		// the same buffer, ensured the same way, so Task 11's march needs no hook change.
+		if (!w->context().render->passes().sun_ubo || !w->context().render->passes().sun_ubo->ensure(device)) return d;
+		if (!l->run(device, *atlas, ll, w->context().store->region_window(),
+				static_cast<float>(w->context().render->beauty_frame()) / 60.0f,
+				w->context().render->passes().sun_ubo->buffer(),
+				w->context().render->passes().field_context)) return d;
+		// run()'s internal readback lands before the dispatch executes; the counters are
+		// only valid after a submit+sync, which the compositor does at frame end and the
+		// hook must do itself before refreshing through the pass's re-read entry point.
+		device->submit();
+		device->sync();
+		l->read_back_counters(device);
+	}
+	// Re-read for the report: demo worlds skip the drive above (the compositor owns the
+	// frame there), so fetch the pass here for the pure-read keys.
+	d["ran"] = true;
+	d["capacity"] = l->capacity();
+	d["trees"] = l->last_tree_count();
+	d["clumps"] = l->last_clump_count();
+	d["high_water"] = l->clump_high_water();
+	return d;
 }
 
 Dictionary VoxelDebugHooks::debug_grass_stats() {

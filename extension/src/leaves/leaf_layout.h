@@ -1,6 +1,7 @@
 #pragma once
 #include "leaves/leaf_settings.h"
 #include "world/region.h" // ve::IVec3
+#include <cstddef> // offsetof for the std140 grid below
 
 namespace ve {
 
@@ -35,6 +36,23 @@ struct LeafParams {
 	// shader-side consumer reassigns it by name.
 	float spare[4];
 };
+
+// The GLSL mirror `Params` in shaders/leaf.glslh (LEAF_PARAMS_FIELDS,
+// extension/src/gpu_layout/blocks.h) emits these fields as sixteen consecutive vec4 in this
+// order. std140 cannot pad a vec4-aligned run, so pinning this grid pins both sides; a
+// reordered or resized field now fails at compile time, not in a frame of garbage.
+static_assert(sizeof(LeafParams) == 256, "LeafParams is a 256-byte std140 block");
+static_assert(offsetof(LeafParams, cam) == 0, "LeafParams.cam");
+static_assert(offsetof(LeafParams, planes) == 16, "LeafParams.planes");
+static_assert(offsetof(LeafParams, cell_min) == 112, "LeafParams.cell_min");
+static_assert(offsetof(LeafParams, cell_dim) == 128, "LeafParams.cell_dim");
+static_assert(offsetof(LeafParams, tree) == 144, "LeafParams.tree");
+static_assert(offsetof(LeafParams, shape) == 160, "LeafParams.shape");
+static_assert(offsetof(LeafParams, clump) == 176, "LeafParams.clump");
+static_assert(offsetof(LeafParams, wind) == 192, "LeafParams.wind");
+static_assert(offsetof(LeafParams, style) == 208, "LeafParams.style");
+static_assert(offsetof(LeafParams, limits) == 224, "LeafParams.limits");
+static_assert(offsetof(LeafParams, spare) == 240, "LeafParams.spare");
 
 struct LeafLayout {
 	float cell_size_m = kLeafCellM;
