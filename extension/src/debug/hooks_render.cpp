@@ -1115,6 +1115,30 @@ Dictionary VoxelDebugHooks::debug_raymarch_hole_probe(Vector3 origin, Vector3 di
 	int isolated = 0, sky = 0, frontier = 0, unexplained = 0;
 	Array miss_details;
 	const ve::Generator *gen = world_->context().store->generator();
+	// Analytic truth along the exact ray at 0.25 m, over [lo, hi]. Same instrument the hit
+	// path uses; the final-review wave lifted it out so the sky_no_cpu_hit exemption can
+	// sample BEFORE it exempts (Task 7 parked finding) without changing what is exempt.
+	auto sample_min_sdf = [&](const Vector3 &ray, float lo, float hi) {
+		float min_sdf = 1e30f;
+		if (gen == nullptr) return min_sdf;
+		int n0 = static_cast<int>(lo / 0.25f);
+		if (n0 < 0) n0 = 0;
+		for (int s = n0; static_cast<float>(s) * 0.25f < hi; s++) {
+			const Vector3 q = origin + ray * (static_cast<float>(s) * 0.25f);
+			const ve::IVec3 qr = ve::region_of_point(q.x, q.y, q.z);
+			std::vector<ve::EditOp> ops;
+			{
+				std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
+				if (world_->context().store->edit_log())
+					ops = world_->context().store->edit_log()->ops(qr);
+			}
+			const ve::Sample sample = ve::eval_field(*gen, ops.data(),
+					static_cast<int>(ops.size()), q.x, q.y, q.z,
+					&world_->context().store->volumes(), world_->context().store->overrides());
+			if (sample.sdf < min_sdf) min_sdf = sample.sdf;
+		}
+		return min_sdf;
+	};
 	for (int y = 1; y < h - 1; y++)
 		for (int x = 1; x < w - 1; x++) {
 			const size_t i = static_cast<size_t>(y) * w + x;
@@ -1133,6 +1157,20 @@ Dictionary VoxelDebugHooks::debug_raymarch_hole_probe(Vector3 origin, Vector3 di
 			rd = rd.normalized();
 			const Dictionary r = debug_raycast(origin, rd);
 			if (!bool(r.get("hit", false))) {
+				// SAMPLE FIRST, then exempt (final-review wave; semantics unchanged): a
+				// CPU miss has no crossing distance to window the analytic samples around,
+				// so take the four neighbours' own hit depths -- an ISOLATED miss sits at
+				// their terrain, so anything the march skipped is at that depth. The
+				// exemption still fires regardless of min_sdf; what the reorder buys is
+				// that the number is in the detail, and the test asserts it is.
+				float dsum = 0.0f;
+				for (size_t j : {i - 1, i + 1, i - static_cast<size_t>(w), i + static_cast<size_t>(w)}) {
+					const Vector3 hv(f[j * 4] - origin.x, f[j * 4 + 1] - origin.y,
+							f[j * 4 + 2] - origin.z);
+					dsum += hv.length();
+				}
+				const float dref = dsum / 4.0f;
+				if (gen != nullptr) m["min_sdf"] = sample_min_sdf(rd, dref - 2.0f, dref + 12.0f);
 				sky++;
 				m["class"] = "sky_no_cpu_hit";
 				miss_details.append(m);
@@ -1152,26 +1190,8 @@ Dictionary VoxelDebugHooks::debug_raymarch_hole_probe(Vector3 origin, Vector3 di
 				continue;
 			}
 			// Analytic-field truth at the crossing (0.25 m steps, -2 m .. +12 m window).
-			float min_sdf = 1e30f;
-			if (gen != nullptr) {
-				int n0 = static_cast<int>((d0 - 2.0f) / 0.25f);
-				if (n0 < 0) n0 = 0;
-				for (int s = n0; static_cast<float>(s) * 0.25f < d0 + 12.0f; s++) {
-					const Vector3 q = origin + rd * (static_cast<float>(s) * 0.25f);
-					const ve::IVec3 qr = ve::region_of_point(q.x, q.y, q.z);
-					std::vector<ve::EditOp> ops;
-					{
-						std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-						if (world_->context().store->edit_log())
-							ops = world_->context().store->edit_log()->ops(qr);
-					}
-					const ve::Sample sample = ve::eval_field(*gen, ops.data(),
-							static_cast<int>(ops.size()), q.x, q.y, q.z,
-							&world_->context().store->volumes(), world_->context().store->overrides());
-					if (sample.sdf < min_sdf) min_sdf = sample.sdf;
-				}
-				m["min_sdf"] = min_sdf;
-			}
+			const float min_sdf = sample_min_sdf(rd, d0 - 2.0f, d0 + 12.0f);
+			if (gen != nullptr) m["min_sdf"] = min_sdf;
 			if (gen != nullptr && min_sdf >= 0.0f) {
 				sky++;
 				m["class"] = "sub_pixel_silhouette_sky";

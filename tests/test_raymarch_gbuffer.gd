@@ -207,6 +207,35 @@ func test_the_march_leaves_no_isolated_holes_in_the_gbuffer() -> void:
 	assert_int(d["isolated_exempt_field_true_sky"] + d["isolated_exempt_past_funding_frontier"]) \
 		.override_failure_message("exempt misses past the budget: %s" % str(d["isolated_miss_details"])) \
 		.is_less_equal(32)
+	# Final-fix wave (Task 7 parked minor): the exemption SUM alone hides which class
+	# grew. The hook classifies every miss in isolated_miss_details, so the per-class
+	# split is asserted here -- sky-no-CPU-hit (the CPU raycast itself missed) and
+	# sub-pixel silhouette sky (the exact-ray analytic sample says no solid anywhere in
+	# the crossing window) individually, and they must re-derive the aggregate counters
+	# exactly. The min_sdf presence check is the ordering tooth: that exemption now
+	# SAMPLES the analytic field before exempting, and a revert of the reorder drops
+	# min_sdf from the sky_no_cpu_hit details and fails this case.
+	var classes := {}
+	for m in d["isolated_miss_details"]:
+		var cls: String = m["class"]
+		classes[cls] = int(classes.get(cls, 0)) + 1
+		if cls == "sky_no_cpu_hit":
+			assert_bool(m.has("min_sdf")).override_failure_message(
+				"sky_no_cpu_hit exempted before the analytic min_sdf sample was taken"
+				).is_true()
+	assert_int(int(classes.get("sky_no_cpu_hit", 0)) + int(classes.get("sub_pixel_silhouette_sky", 0))) \
+		.override_failure_message("per-class sky counts disagree with the sum: %s" % str(classes)) \
+		.is_equal(int(d["isolated_exempt_field_true_sky"]))
+	assert_int(int(classes.get("past_funding_frontier", 0))) \
+		.is_equal(int(d["isolated_exempt_past_funding_frontier"]))
+	assert_int(int(classes.get("UNEXPLAINED", 0))) \
+		.is_equal(int(d["isolated_unexplained"]))
+	var classified := 0
+	for cls in classes:
+		classified += int(classes[cls])
+	assert_int(classified).override_failure_message(
+		"a miss was classified twice or not at all: %s" % str(classes)).is_equal(
+		int(d["isolated_misses"]))
 
 # Task 7's invariance contract, narrowed to the target it was always about: the MARCHER's
 # own G-buffer normal comes from the source field (or its R8 fallback), never from the
