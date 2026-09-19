@@ -3,6 +3,7 @@
 
 #include "common.glslh"
 #include "leaf.glslh"
+#include "wind.glslh"
 
 // No vertex buffer and no vertex attributes: geometry is PULLED, exactly as grass draws.
 // gl_VertexIndex / 6 is the clump, % 6 the corner. This also routes around Godot exposing
@@ -37,17 +38,29 @@ void main() {
 	vec2 q = kCorners[corner];
 	v_uv = q;
 
+	// Whole-clump sway, amplitude going as depth_t^2 so the base of a crown stays planted
+	// while its top moves most. Driven by the SAME gust field grass samples at world XZ, so
+	// a gust crosses the meadow and the canopies together.
+	//
+	// The trunk is voxels and cannot move, so the amplitude is capped by LeafSettings before
+	// the canopy visibly detaches from it -- that cap is a settings knob, not a constant here.
+	float gust = wind_gust(c.a.xz, leaf.wind.w, leaf.wind.y, leaf.wind.z) * 2.0 - 1.0;
+	float phase = c.b.w; // per-clump, so neighbours are never in lockstep
+	float sway = leaf.wind.x * v_depth_t * v_depth_t
+			* (gust + 0.3 * sin(leaf.wind.w * 1.7 * leaf.wind.y + phase));
+	vec3 centre = c.a.xyz + vec3(sway, 0.0, sway * 0.6);
+
 	// Camera-facing with a fixed per-clump ROLL from the hash, and the up axis locked to
 	// world Y. A full spherical billboard makes a canopy swim when the camera strafes; the
 	// roll is what keeps neighbouring cards from all aligning into a visible grid.
-	vec3 to_cam = normalize(pc.cam.xyz - c.a.xyz);
+	vec3 to_cam = normalize(pc.cam.xyz - centre);
 	vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), to_cam));
 	vec3 up = cross(to_cam, right);
 	float roll = c.b.w;
 	vec3 rr = right * cos(roll) + up * sin(roll);
 	vec3 uu = up * cos(roll) - right * sin(roll);
 
-	vec3 world = c.a.xyz + (rr * q.x + uu * q.y) * c.a.w;
+	vec3 world = centre + (rr * q.x + uu * q.y) * c.a.w;
 	v_world = world;
 
 	// Perturb the transferred sphere normal across the card. The scatter packs ONE normal per

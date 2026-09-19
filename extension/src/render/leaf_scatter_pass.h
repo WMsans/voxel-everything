@@ -14,7 +14,7 @@ class FieldContextSet;
 // the trees that survive distance, frustum and the live-atlas chop check into a LeafTree list;
 // stage 2 (leaf_scatter.comp.glsl) is dispatched INDIRECT from that list's args and scatters
 // the clump instances into instance_buffer(). Nothing draws yet -- Task 12's raster consumes
-// draw_args_buffer(). Modelled on GrassScatterPass pass-for-pass: same shader loading,
+// raster_draw_args_buffer(). Modelled on GrassScatterPass pass-for-pass: same shader loading,
 // gpu::Group teardown, SetCache, explicit per-frame counter clearing, readback and
 // overflow-logged-once.
 class LeafScatterPass {
