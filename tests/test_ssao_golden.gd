@@ -66,10 +66,15 @@ func _probe(w: VoxelWorld, key: String) -> Dictionary:
 # numbers to the line above, min_ao bit-exactly. min_ao is 0 because AO between blades is
 # total, and lit_luma rises by about 0.01 on every camera because grass is brighter than the
 # ground it covers. max_ao stays 1.0 and ran stays true.
+# min_ao/lit_luma re-recorded 2026-09-19: the leaf raster draws cards in the shipped frame
+# (Task 12), and the horizon camera's frame gains canopy pixels -- lit_luma 0.355182 ->
+# 0.344913 there (leaves shade darker than the sky/terrain they cover at that distance).
+# down_close and oblique are unchanged; min_ao/max_ao unchanged; ran stays true. Same
+# re-record policy as the frame golden above.
 const GOLDEN := {
 	"down_close": {"min_ao": 0.000000, "max_ao": 1.000000, "lit_luma": 0.252933},
 	"oblique": {"min_ao": 0.000000, "max_ao": 1.000000, "lit_luma": 0.318546},
-	"horizon": {"min_ao": 0.000000, "max_ao": 1.000000, "lit_luma": 0.355182},
+	"horizon": {"min_ao": 0.000000, "max_ao": 1.000000, "lit_luma": 0.344913},
 }
 const TOL_AO := 0.002
 const TOL_LUMA := 0.004

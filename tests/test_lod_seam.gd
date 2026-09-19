@@ -101,6 +101,10 @@ func test_the_band_is_covered_exactly_once(timeout := 180000) -> void:
 	var fwd := Vector3(0.0, -0.12, -1.0).normalized()
 	await settle(w, pos, fwd)
 	var d := await probe_band_at_steady_state(w, pos, fwd)
+	# Ownership reading at the steady state, for the record (R11 third state): band,
+	# unclaimed (terrain-terrain neither), leaf-owned, double.
+	print("SEAM_BAND ", JSON.stringify([d["band_pixels"], d["band_pixels_unclaimed"],
+			d["band_pixels_leaf_owned"], d["band_pixels_double_claimed"]]))
 	var band := w.hooks().debug_lod_fade_band()
 	# NON-VACUITY FIRST. The probe cannot classify a pixel where the raymarch missed and no
 	# field wrote depth -- it has no terrain sample there, so it counts it as sky. That is
@@ -132,6 +136,11 @@ func test_the_band_is_covered_exactly_once(timeout := 180000) -> void:
 	# with 3 pixels of margin below the bar; a violation that never recovers keeps reading
 	# at stall size at steady state, while the transient trunk-silhouette/funding-frontier
 	# residue decays into the plateau as the streamer finishes. Double claims stay exact.
+	# Leaf raster (Task 12, ruling R11): the marker stays a two-field model, but the probe
+	# now reads a THIRD ownership state off the surface material id -- band pixels whose
+	# nearest G-buffer writer is a leaf card are covered near-field pixels, not gaps. The
+	# bar and the residue story are otherwise untouched: unclaimed re-reads its Task-7
+	# plateau size with the cards classified, and the pin below proves the state is live.
 	assert_int(d["band_pixels_unclaimed"]).override_failure_message(
 		"%d of %d band pixels were claimed by neither field (steady state)"
 		% [d["band_pixels_unclaimed"], d["band_pixels"]]
@@ -139,6 +148,12 @@ func test_the_band_is_covered_exactly_once(timeout := 180000) -> void:
 	assert_int(d["band_pixels_double_claimed"]).override_failure_message(
 		"%d band pixels were claimed by both fields" % d["band_pixels_double_claimed"]
 		).is_equal(0)
+	# The third state, pinned: crowns against sky at band distances exist at this camera
+	# (they are exactly the pixels R11 reclassified), so a working probe must report them
+	# leaf-owned rather than silently dropping or unclaiming them.
+	assert_int(d["band_pixels_leaf_owned"]).override_failure_message(
+		"no band pixel was classified leaf-owned: the third ownership state regressed"
+		).is_greater(0)
 
 func test_the_near_field_owns_everything_before_the_band(timeout := 180000) -> void:
 	var w := make_world()

@@ -87,24 +87,29 @@ func test_every_clump_sits_inside_its_crown() -> void:
 	var w := make_world()
 	var d: Dictionary = w.hooks().debug_leaf_stats()
 	assert_int(d["sampled"]).is_greater(0)
-	# The CARD ENVELOPE: distance from the clump centre to its crown centre plus the card
-	# radius, as a fraction of the crown radius. tree.glslh's containment invariant bounds
-	# the CENTRE at 1.0 radii (max lobe reach 0.62 + max lobe radius 0.38 = 1.0), and the
-	# density LOD inflates the card as the budget thins -- the default-derived worst whole
-	# card reach is 1.60 radii, so 1.75 is the shipping envelope bound. Measured ~1.18.
-	# test_the_crown_envelope_reports_the_card_radius pins the other half of the story:
-	# the same number must exceed 1.0, which only the radius term can do.
+	# THE ENVELOPE (R10, fix-round note): one metric, one story. counters.pad carries
+	# (centre distance + card radius) / crown_r -- tree.glslh's containment invariant bounds
+	# the CENTRE at 1.0 radii and the density LOD inflates the card (default-derived worst
+	# whole-card reach 1.60), so 1.75 is the shipping envelope for the COMBINED word. This
+	# is the single ≤1.75 guard the suite keeps: the centre-only ≤1.001 form cannot be
+	# measured separately because the shader reports only the combined metric, so the two
+	# halves of the story live in two cases -- here the card stays inside the envelope, in
+	# test_the_crown_envelope_reports_the_card_radius the radius term is present at all.
+	# Measured ~1.18.
 	assert_float(d["max_crown_offset"]).is_less_equal(1.75)
 
-# R10: counters.pad carries (centre distance + radius) / crown_r again. A centre-only
-# metric can never exceed 1.0 by Task 2's invariant, so the >1.0 half here is the radius
-# tooth made observable: drop the + radius term and this case fails, loudly.
+# R10: counters.pad carries (centre distance + radius) / crown_r. A centre-only
+# metric can never exceed 1.0 by Task 2's invariant, so this is the radius tooth made
+# observable: drop the + radius term from the shader and this case fails, loudly, while
+# the ≤1.75 envelope above stays green -- the two cases assert different things and neither
+# duplicates the other (fix-round R11 note: the ≤1.75 half here was a copy of the envelope
+# guard above and is removed; the shader reports one combined word, so it cannot have a
+# separate centre-containment assertion).
 func test_the_crown_envelope_reports_the_card_radius() -> void:
 	var w := make_world()
 	var d: Dictionary = w.hooks().debug_leaf_stats()
 	assert_int(d["sampled"]).is_greater(0)
 	assert_float(d["max_crown_offset"]).is_greater(1.0)
-	assert_float(d["max_crown_offset"]).is_less_equal(1.75)
 
 func test_the_clump_count_clamps_at_capacity_instead_of_overflowing() -> void:
 	var w := make_world()

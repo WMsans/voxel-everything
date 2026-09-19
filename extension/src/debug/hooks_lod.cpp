@@ -37,6 +37,7 @@
 #include "render/sun_shadow_pass.h"
 #include "render/sun_ubo.h"
 #include "render/lod_cull_pass.h"
+#include "world/material_table.h"
 #include "render/grass_scatter_pass.h"
 #include "render/grass_raster_pass.h"
 #include "grass/grass_layout.h"
@@ -338,6 +339,7 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 	d["band_pixels"] = 0;
 	d["band_pixels_unclaimed"] = 0;
 	d["band_pixels_double_claimed"] = 0;
+	d["band_pixels_leaf_owned"] = 0;
 	d["near_pixels_lost_to_lod"] = 0;
 	d["far_pixels_lost_to_raymarch"] = 0;
 	if (w <= 0 || h <= 0) return d;
@@ -426,17 +428,37 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 	const PackedByteArray marker_data = device->texture_get_data(marker, 0);
 	const PackedByteArray hitpos_data = device->texture_get_data(
 			world_->context().render->passes().raymarch->hitpos_texture(), 0);
+	// R11: the marker is a two-field model (composite ORs 1 for the near field, the far field
+	// ORs 2), but the frame gained a third raster layer: leaf cards. They write no marker, so
+	// a crown against sky read as "claimed by neither field". Their ownership IS readable
+	// without touching the shipped shaders: the leaf raster is the last G-buffer writer
+	// wherever it wins the reverse-Z depth compare, and its fragment writes
+	// GB_PACK_SURFACE(..., MAT_LEAF_CLUMP) -- so the surface texture's material id channel
+	// identifies a leaf-owned pixel. That is the probe's third classification state.
+	const PackedByteArray surface_data = device->texture_get_data(world_->context().render->passes().gbuffer->surface(), 0);
 	int band_pixels = 0;
 	int band_pixels_unclaimed = 0;
 	int band_pixels_double_claimed = 0;
+	int band_pixels_leaf_owned = 0;
 	int near_pixels_lost_to_lod = 0;
 	int far_pixels_lost_to_raymarch = 0;
 	if (depth_data.size() >= static_cast<int64_t>(w) * h * 4 &&
 			marker_data.size() >= static_cast<int64_t>(w) * h &&
-			hitpos_data.size() >= static_cast<int64_t>(w) * h * 16) {
+			hitpos_data.size() >= static_cast<int64_t>(w) * h * 16 &&
+			surface_data.size() >= static_cast<int64_t>(w) * h * 8) {
 		const float *df = reinterpret_cast<const float *>(depth_data.ptr());
 		const uint8_t *mk = reinterpret_cast<const uint8_t *>(marker_data.ptr());
 		const float *hf = reinterpret_cast<const float *>(hitpos_data.ptr());
+		// surface is R16G16B16A16_SFLOAT; channel 2 carries the material id (see
+		// debug_lod_gbuffer_probe for the same decode).
+		const uint16_t *sf = reinterpret_cast<const uint16_t *>(surface_data.ptr());
+		// MAT_LEAF_CLUMP in shaders/material_table.glslh: the kFoliage row "leaf_clump".
+		const uint16_t leaf_id = [] {
+			for (int i = 0; i < ve::kFoliageCount; i++)
+				if (std::strcmp(ve::kFoliage[i].name, "leaf_clump") == 0)
+					return static_cast<uint16_t>(ve::kFoliageBase + i);
+			return uint16_t(0xffff);
+		}();
 		// Reconstruct the world hit from the reverse-Z depth and the same camera the two fields
 		// use, so the probe measures the same Euclidean distance the shaders fade on. When both
 		// fields discarded a pixel (the unclaimed case), depth is 0 but the raymarch hitpos
@@ -465,13 +487,25 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 				continue;
 			}
 			const uint8_t m = mk[i];
+			// A pixel is leaf-owned exactly when the leaf card is the nearest G-buffer
+			// writer -- the terrain material id would still be in the channel otherwise,
+			// because the card lost the depth compare.
+			const float mat_id = Math::half_to_float(sf[i * 4 + 2]);
+			const bool leaf_owned = mat_id > float(leaf_id) - 0.5f && mat_id < float(leaf_id) + 0.5f;
 			if (dist >= probe_fade_start && dist <= probe_fade_end) {
 				band_pixels++;
-				if (m == 0u) band_pixels_unclaimed++;
+				// Leaf-owned band pixels are COVERED near-field pixels, not gaps. A pixel
+				// the two terrain fields both claimed stays a double for the terrain
+				// compare even under a card: the card cannot launder a marker conflict.
+				if (m == 0u && !leaf_owned) band_pixels_unclaimed++;
+				if (m == 0u && leaf_owned) band_pixels_leaf_owned++;
 				if (m == 3u) band_pixels_double_claimed++;
-			} else if (dist < probe_fade_start && (m & 2u) != 0u) {
+			} else if (dist < probe_fade_start && (m & 2u) != 0u && !leaf_owned) {
+				// Leaf-occluded exemptions are BY OWNERSHIP, not by threshold: the far-field
+				// marker under a nearer card is normal depth order, not a lost pixel. The
+				// terrain-vs-terrain ownership invariants are otherwise untouched.
 				near_pixels_lost_to_lod++;
-			} else if (dist > probe_fade_end && (m & 1u) != 0u) {
+			} else if (dist > probe_fade_end && (m & 1u) != 0u && !leaf_owned) {
 				far_pixels_lost_to_raymarch++;
 			}
 		}
@@ -479,6 +513,11 @@ Dictionary VoxelDebugHooks::debug_seam_probe(Vector3 pos, Vector3 fwd, int w, in
 	d["band_pixels"] = band_pixels;
 	d["band_pixels_unclaimed"] = band_pixels_unclaimed;
 	d["band_pixels_double_claimed"] = band_pixels_double_claimed;
+	// The third ownership state (R11): band pixels whose nearest G-buffer writer is a leaf
+	// card. Covered near-field pixels, NOT unclaimed -- and a test pins this state so the
+	// mechanism cannot silently regress to "excluded" or "unclaimed".
+	d["band_pixels_leaf_owned"] = band_pixels_leaf_owned;
+	d["leaf"] = band_pixels_leaf_owned;
 	// Short aliases retained for the Task 7 seam contract.
 	d["neither"] = band_pixels_unclaimed;
 	d["both"] = band_pixels_double_claimed;
