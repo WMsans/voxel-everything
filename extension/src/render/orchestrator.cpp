@@ -586,6 +586,7 @@ ve::SettingsGroup *RenderOrchestrator::settings_group(const char *name) {
 	if (std::strcmp(name, "render") == 0) return &render_settings_;
 	if (std::strcmp(name, "beauty") == 0) return &beauty_;
 	if (std::strcmp(name, "grass") == 0) return &grass_settings_;
+	if (std::strcmp(name, "leaves") == 0) return &leaf_settings_;
 	return nullptr;
 }
 

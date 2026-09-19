@@ -18,7 +18,7 @@ using namespace godot;
 namespace {
 
 // Panel tab order.
-constexpr const char *kGroups[] = {"display", "render", "beauty", "grass"};
+constexpr const char *kGroups[] = {"display", "render", "beauty", "grass", "leaves"};
 
 // In the order of the display row's upscaler options (settings/display_settings.cpp).
 const Viewport::Scaling3DMode kUpscalerModes[] = {
@@ -91,6 +91,7 @@ ve::SettingsGroup *VoxelSettings::group(const String &name) const {
 	if (name == "render") return &render_stand_in_;
 	if (name == "beauty") return &beauty_stand_in_;
 	if (name == "grass") return &grass_stand_in_;
+	if (name == "leaves") return &leaf_stand_in_;
 	return nullptr;
 }
 
@@ -107,7 +108,8 @@ void VoxelSettings::_ready() {
 	// A scene's property values went into the stand-ins before the world was known.
 	if (world_id_ != 0) {
 		const std::pair<const char *, ve::SettingsGroup *> stand_ins[] = {
-			{"render", &render_stand_in_}, {"beauty", &beauty_stand_in_}, {"grass", &grass_stand_in_}};
+			{"render", &render_stand_in_}, {"beauty", &beauty_stand_in_}, {"grass", &grass_stand_in_},
+			{"leaves", &leaf_stand_in_}};
 		for (const auto &[name, stand_in] : stand_ins)
 			if (ve::SettingsGroup *live = group(name))
 				for (const auto &[knob, value] : stand_in->overrides()) live->set(knob, value);

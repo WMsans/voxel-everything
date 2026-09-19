@@ -48,7 +48,7 @@ func make_settings(config_path := CONFIG_PATH) -> Array:
 	root.add_child(settings)
 	return [world, vp, settings]
 
-func test_render_beauty_and_grass_dials_set_before_ready_reach_world() -> void:
+func test_render_beauty_grass_and_leaves_dials_set_before_ready_reach_world() -> void:
 	var root := Node.new()
 	add_child(root)
 	_roots.append(root)
@@ -64,10 +64,12 @@ func test_render_beauty_and_grass_dials_set_before_ready_reach_world() -> void:
 	assert_bool(settings.set_setting("render", "near_field_scale", 0.8)).is_true()
 	assert_bool(settings.set_setting("beauty", "ssgi_taps", 4)).is_true()
 	assert_bool(settings.set_setting("grass", "reach_m", 30.0)).is_true()
+	assert_bool(settings.set_setting("leaves", "reach_m", 180.0)).is_true()
 	root.add_child(settings)
 	assert_float(world.near_field_scale).is_equal_approx(0.8, 0.001)
 	assert_float(world.get_effect_value("ssgi_taps")).is_equal_approx(4.0, 0.001)
 	assert_float(world.get_grass_value("reach_m")).is_equal_approx(30.0, 0.001)
+	assert_float(world.get_leaf_value("reach_m")).is_equal_approx(180.0, 0.001)
 
 func test_stand_in_tier_rebases_unoverridden_beauty_and_keeps_override() -> void:
 	var settings: VoxelSettings = ClassDB.instantiate("VoxelSettings")
@@ -80,7 +82,7 @@ func test_stand_in_tier_rebases_unoverridden_beauty_and_keeps_override() -> void
 
 func test_groups_are_listed_in_panel_order() -> void:
 	var settings: VoxelSettings = make_settings()[2]
-	assert_array(Array(settings.groups())).is_equal(["display", "render", "beauty", "grass"])
+	assert_array(Array(settings.groups())).is_equal(["display", "render", "beauty", "grass", "leaves"])
 
 func test_describe_lists_every_row_with_its_value() -> void:
 	var settings: VoxelSettings = make_settings()[2]
@@ -101,7 +103,7 @@ func test_describe_lists_every_row_with_its_value() -> void:
 	var upscaler: Dictionary = settings.describe("display").filter(func(r): return r["name"] == "upscaler")[0]
 	assert_int(upscaler["options"].size()).is_equal(5)
 
-func test_render_beauty_and_grass_dials_reach_the_world() -> void:
+func test_render_beauty_grass_and_leaves_dials_reach_the_world() -> void:
 	var parts := make_settings()
 	var world: VoxelWorld = parts[0]
 	var settings: VoxelSettings = parts[2]
@@ -111,6 +113,8 @@ func test_render_beauty_and_grass_dials_reach_the_world() -> void:
 	assert_float(world.get_effect_value("ssgi_taps")).is_equal_approx(4.0, 0.001)
 	assert_bool(settings.set_setting("grass", "reach_m", 30.0)).is_true()
 	assert_float(world.get_grass_value("reach_m")).is_equal_approx(30.0, 0.001)
+	assert_bool(settings.set_setting("leaves", "reach_m", 180.0)).is_true()
+	assert_float(world.get_leaf_value("reach_m")).is_equal_approx(180.0, 0.001)
 	assert_bool(settings.set_setting("beauty", "no_such_knob", 1.0)).is_false()
 	assert_bool(settings.set_setting("nowhere", "ssgi", true)).is_false()
 	assert_bool(settings.set_setting("beauty", "ambient", 0.5)).is_false()

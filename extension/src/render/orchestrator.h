@@ -177,7 +177,7 @@ public:
 	ve::BeautySettings beauty_settings() const;
 	// Settings + tier together, for debug_beauty_settings.
 	void beauty_snapshot(ve::BeautySettings *out_settings, int *out_tier) const;
-	// The three stores by group name ("render", "beauty", "grass"); nullptr otherwise.
+	// The four stores by group name ("render", "beauty", "grass", "leaves"); nullptr otherwise.
 	// VoxelSettings addresses them through this. Main thread.
 	ve::SettingsGroup *settings_group(const char *name);
 

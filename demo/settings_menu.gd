@@ -1,5 +1,5 @@
 extends Control
-# The settings panel (F1): window, render budget, beauty and grass dials in one place.
+# The settings panel (F1): window, render budget, beauty, grass and leaves dials in one place.
 #
 # It keeps no tables and no state of its own. Every tab is built from VoxelSettings.describe(), so a
 # new row in a C++ settings table appears here with its label, range and hint, and a slider range

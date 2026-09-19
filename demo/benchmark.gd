@@ -168,6 +168,11 @@ func _ready() -> void:
 			# Grass on/off for A/B cost runs: 0 disables the scatter+raster, anything
 			# else leaves the shipped default. Same override shape as --render-scale.
 			_world.set_grass_value("enabled", float(arg.trim_prefix("--grass=")))
+		elif arg.begins_with("--leaves="):
+			# Leaves on/off for A/B cost runs: 0 disables the scatter+raster, anything
+			# else leaves the shipped default. The grass flag's twin, and what lets every
+			# existing leg keep a control in the canopy A/B.
+			_world.set_leaf_value("enabled", float(arg.trim_prefix("--leaves=")))
 		elif arg.begins_with("--grass-value="):
 			# name=value, repeatable -- the --effect-value shape, for the grass store. The
 			# far LoD rings are what this exists for: their cost has to be measurable by

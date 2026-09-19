@@ -1,7 +1,7 @@
 #pragma once
 // VoxelSettings -- the one owner of "what has been set". Every dial the demo exposes lives in a
 // settings group: display (owned here: the Viewport's scaling and the window) and render, beauty,
-// grass (RenderOrchestrator's, reached through VoxelWorld). This node adds what a group cannot do
+// grass, leaves (RenderOrchestrator's, reached through VoxelWorld). This node adds what a group cannot do
 // by itself: access by name from GDScript, describe() for the settings panel, ConfigFile
 // persistence behind the measured-run guard, and inspector properties. VoxelWorld does not know
 // this class exists. Spec: docs/superpowers/specs/2026-09-16-settings-store-design.md §3.5.
@@ -18,6 +18,7 @@
 #include <godot_cpp/variant/vector2i.hpp>
 #include <cstdint>
 #include "grass/grass_settings_store.h"
+#include "leaves/leaf_settings_store.h"
 #include "settings/display_settings.h"
 #include "settings/render_settings.h"
 #include "shade/beauty_settings_store.h"
@@ -94,6 +95,7 @@ private:
 	mutable ve::RenderSettingsStore render_stand_in_;
 	mutable ve::BeautySettingsStore beauty_stand_in_;
 	mutable ve::GrassSettingsStore grass_stand_in_;
+	mutable ve::LeafSettingsStore leaf_stand_in_;
 };
 
 } // namespace godot
