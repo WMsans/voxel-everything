@@ -1,0 +1,117 @@
+//!stage     trees
+//!kind      field
+//!in        sdf : float
+//!in        height : float
+//!in        material : uint
+//!out       sdf : float
+//!out       material : uint
+//!param     cell : float = 14.0
+//!param     density : float = 0.55
+//!param     trunk_height : float = 9.0
+//!param     trunk_radius : float = 0.30
+//!param     branch_radius_min : float = 0.10
+//!param     crown_radius : float = 4.0
+//!param     max_slope : float = 0.6
+//!use       hills.amp_a
+//!use       hills.amp_b
+//!use       hills.amp_c
+//!use       relief.amp_a
+//!use       relief.freq_a
+//!use       relief.amp_b
+//!use       relief.freq_b
+//!lipschitz mul 1.0
+
+// No //!cpu directive yet -- the mirror lands in Task 6 as ve::stage_trees, and until it
+// is registered in the StageLibrary the directive must stay ABSENT, not merely declared:
+// PipelineFieldGenerator::create() fails the load on an unregistered cpu symbol, while an
+// empty symbol is what makes resolve_pipeline honour allow_gpu_only and push the warning
+// that trees.pipeline documents. Task 6 adds `//!cpu ve::stage_trees` beside its mirror.
+
+#include "tree.glslh"
+
+// Trunks and primary branches as real voxels. The geometry itself lives in
+// shaders/tree.glslh, shared verbatim with the leaf scatter pass, so the trunk the player
+// chops and the canopy drawn above it can never disagree about where a tree is.
+//
+// Bound: this stage does `sdf = min(sdf, tree_d)` where tree_d is an exact union of
+// 1-Lipschitz round cones. min(a, b) is bounded by max of the two operands' bounds, and the
+// running bound here is 1.99 >= 1, so the union cannot raise it -- the same argument
+// cave.field.glslh makes for its max. Hence `mul 1.0`.
+//
+// Runs AFTER height_bands: the band stage would otherwise paint a trunk by the ground height
+// at its foot, so a trunk on high ground would come out rock.
+//
+// Cost: this is evaluated at every voxel of every brick, so the three early-outs below are
+// load-bearing, not tidiness. The vertical band does nearly all the work.
+
+// Terrain height above SURFACE_Y at an arbitrary XZ. This is hills + relief recomputed at a
+// point that is NOT ctx.p, which is why the hills and relief params are declared //!use --
+// exactly the pattern cave.field.glslh established for its sphere centre.
+float trees_ground_h(vec2 xz) {
+	float h = P.hills_amp_a * sin(xz.x * 0.11) * cos(xz.y * 0.13)
+	        + P.hills_amp_b * sin(xz.x * 0.031 + 1.7) * sin(xz.y * 0.043)
+	        + P.hills_amp_c * sin(xz.x * 0.23 + xz.y * 0.19);
+	float r = P.relief_amp_a * sin(xz.x * P.relief_freq_a) * cos(xz.y * P.relief_freq_a)
+	        + P.relief_amp_b * sin(xz.x * P.relief_freq_b) * cos(xz.y * P.relief_freq_b);
+	return h + r;
+}
+
+// |grad| of the above, in closed form. No marching, no sampling: a tree either stands on
+// ground flat enough or the cell carries no tree at all.
+float trees_ground_slope(vec2 xz) {
+	float dx = P.hills_amp_a * 0.11 * cos(xz.x * 0.11) * cos(xz.y * 0.13)
+	         + P.hills_amp_b * 0.031 * cos(xz.x * 0.031 + 1.7) * sin(xz.y * 0.043)
+	         + P.hills_amp_c * 0.23 * cos(xz.x * 0.23 + xz.y * 0.19)
+	         + P.relief_amp_a * P.relief_freq_a * cos(xz.x * P.relief_freq_a) * cos(xz.y * P.relief_freq_a)
+	         + P.relief_amp_b * P.relief_freq_b * cos(xz.x * P.relief_freq_b) * cos(xz.y * P.relief_freq_b);
+	float dz = -P.hills_amp_a * 0.13 * sin(xz.x * 0.11) * sin(xz.y * 0.13)
+	         + P.hills_amp_b * 0.043 * sin(xz.x * 0.031 + 1.7) * cos(xz.y * 0.043)
+	         + P.hills_amp_c * 0.19 * cos(xz.x * 0.23 + xz.y * 0.19)
+	         - P.relief_amp_a * P.relief_freq_a * sin(xz.x * P.relief_freq_a) * sin(xz.y * P.relief_freq_a)
+	         - P.relief_amp_b * P.relief_freq_b * sin(xz.x * P.relief_freq_b) * sin(xz.y * P.relief_freq_b);
+	return length(vec2(dx, dz));
+}
+
+TreeParams trees_params() {
+	TreeParams tp;
+	tp.cell = P.trees_cell;
+	tp.density = P.trees_density;
+	tp.trunk_height = P.trees_trunk_height;
+	tp.trunk_radius = P.trees_trunk_radius;
+	tp.branch_radius_min = P.trees_branch_radius_min;
+	tp.crown_radius = P.trees_crown_radius;
+	tp.max_slope = P.trees_max_slope;
+	return tp;
+}
+
+void stage_trees(inout FieldCtx ctx) {
+	TreeParams tp = trees_params();
+
+	// EARLY-OUT 1, the vertical band. ctx.height is the terrain height at THIS point's XZ,
+	// already published by hills and relief, so it is free. Everything more than a couple of
+	// metres below the ground or a whole tree above it is finished in one compare.
+	float ground_y = SURFACE_Y + ctx.height;
+	float band_top = ground_y + tp.trunk_height * 1.25 + tp.crown_radius;
+	if (ctx.p.y < ground_y - 2.0 || ctx.p.y > band_top) return;
+
+	ivec2 base = ivec2(int(floor(ctx.p.x / tp.cell)), int(floor(ctx.p.z / tp.cell)));
+	float d = tree_d_safe(tp);
+	for (int dz = -1; dz <= 1; dz++) {
+		for (int dx = -1; dx <= 1; dx++) {
+			ivec2 cell = base + ivec2(dx, dz);
+			vec2 xz = tree_cell_xz(cell, tp);
+			// EARLY-OUT 2, the forest gate: one integer hash plus the analytic slope.
+			Tree t = tree_at(cell, tp, SURFACE_Y + trees_ground_h(xz), trees_ground_slope(xz));
+			if (!t.present) continue;
+			// EARLY-OUT 3, the bounding capsule. Never greater than the skeleton distance, so
+			// this cannot drop a cell the skeleton would have claimed.
+			if (tree_bound(ctx.p, t) >= d) continue;
+			d = min(d, tree_skeleton_sdf(ctx.p, t, tp));
+		}
+	}
+
+	if (d < ctx.sdf) {
+		ctx.sdf = d;
+		if (d <= 0.0) ctx.material = MAT_BARK;
+	}
+}
