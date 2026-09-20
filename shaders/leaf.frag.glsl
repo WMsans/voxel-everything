@@ -47,8 +47,14 @@ void main() {
 	float r = length(v_uv);
 	float scallop = leaf_noise(v_uv * 3.0 + vec2(tree_unit(h) * 17.0), 0x7A1u);
 	if (r - 0.35 * (scallop - 0.5) > 0.92) discard;
-	// A few holes through the interior, so light reads through a crown rather than off a wall.
-	if (leaf_noise(v_uv * 7.0 + vec2(tree_unit(tree_hash(h ^ 0x9u)) * 31.0), 0x3C5u) > 0.86) discard;
+	// NO interior holes. A card's interior used to punch a second, higher-frequency noise
+	// through to whatever was behind it, "so light reads through a crown rather than off a
+	// wall". The clumps sit on the lobe SHELL (LeafSettings::shell_min), so the canopy is one
+	// layer thick and those holes opened onto the far background: a few pixels of sky or
+	// hillside, every one of them a depth cliff that outline.comp.glsl reads as a silhouette
+	// and darkens. Because the pattern is fixed in CARD space and the cards re-face the
+	// camera every frame, the dark specks crawled across the canopy as the camera moved --
+	// the reported flicker. The scalloped edge above is what lets sky through a crown.
 
 	// Dither out over the last fifth of the reach, so the canopy tail does not pop. Same
 	// bayer4 discard lod.frag.glsl and grass.frag.glsl use at the LoD/reach seams -- the
