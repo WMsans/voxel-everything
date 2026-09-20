@@ -17,7 +17,7 @@ layout(location = 1) in vec3 v_normal;
 layout(location = 2) in vec2 v_uv;
 layout(location = 3) in float v_sun;
 layout(location = 4) in float v_depth_t;
-layout(location = 5) in float v_hash;
+layout(location = 5) in flat uint v_hash; // flat: bit pattern, not a quantity
 
 layout(location = 0) out vec4 out_albedo;  // rgb albedo, a = sun visibility
 layout(location = 1) out vec4 out_surface; // xy oct normal, z material id, w gloss
@@ -36,7 +36,7 @@ float leaf_noise(vec2 p, uint salt) {
 }
 
 void main() {
-	uint h = floatBitsToUint(v_hash);
+	uint h = v_hash;
 
 	// THE SILHOUETTE. A plain quad reads as a rectangle; the reference's edge leaves punch
 	// out as individual round dots against the sky. Radial falloff plus noise, thresholded,
@@ -65,9 +65,11 @@ void main() {
 	if (fade > 0.0 && bayer4(ivec2(gl_FragCoord.xy)) < fade) discard;
 
 	vec3 n = normalize(v_normal);
-	// The vertex turned the face to the viewer (backfaces draw too: cull is disabled), so
-	// this normal is the visible side's -- grass.frag.glsl's lesson, taken where to_cam is
-	// in hand.
+	// The crown's normal, transferred by leaf_card_normal() and independent of the camera.
+	// Read that before touching the gradients below: they key off n.y, so this shader is
+	// only stable as long as n is. It is NOT the visible face's normal and must not be
+	// turned into one -- grass.frag.glsl's lesson does not transfer, because a blade is a
+	// surface and a clump card stands in for a volume.
 
 	// TWO GRADIENTS, baked into albedo before the deferred pass sees it. Cel shading and the
 	// outline pass then apply on top, unmodified -- this is the same arrangement grass uses

@@ -1,0 +1,34 @@
+// The canopy card's shading normal, alone in its own header so the native test can execute
+// it: extension/tests/test_leaf_shader.cpp includes THIS file, and leaf.glslh's pack/unpack
+// routines -- which want assignable swizzles -- stay out of the shim. Same split
+// grass_tilt.glslh makes out of grass.vert.glsl for the same reason.
+//
+// NOTE: never put a literal include directive inside a comment in this file -- the loader
+// matches include tokens anywhere in a line and would self-include.
+
+// THE CARD'S SHADING NORMAL, and it is VIEW-INDEPENDENT on purpose.
+//
+// `n` is the crown-sphere normal the scatter transferred (leaf_scatter.comp.glsl leans it
+// from the whole crown's normal toward the clump's own lobe by canopy_roundness); `q` is the
+// card corner in -1..1 and `ratio` is clump_radius / crown_radius. Spreading n across the
+// card in the CROWN's own tangent basis makes each card read as a small ball sitting on a
+// big one -- the stylized-canopy normal transfer, where a crown shades as one volume from
+// whichever side you stand on, rather than as a pile of separately-lit quads.
+//
+// The basis is the crown's, NEVER the camera's, and the result is never turned toward the
+// viewer. A card is not a surface; it stands in for a volume, and the far side of a crown
+// should read dark -- that is what leaf.frag.glsl's kUnder is for. Any view-dependent term
+// in here lands as a colour change when the camera moves, because the fragment picks its
+// albedo off this normal's y.
+//
+// tangent and bitan are perpendicular to n, so dot(result, n) > 0 for every q and every
+// ratio: this spread can bend the normal but can never invert it. That is the whole
+// difference from the `if (dot(sn, to_cam) < 0.0) sn = -sn;` this replaced, and
+// test_leaf_shader.cpp pins it.
+vec3 leaf_card_normal(vec3 n, vec2 q, float ratio) {
+	// cross(n, Y) collapses at the crown's poles; world X is never parallel to Y.
+	vec3 up = abs(n.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+	vec3 tangent = normalize(cross(n, up));
+	vec3 bitan = cross(n, tangent);
+	return normalize(n + (tangent * q.x + bitan * q.y) * ratio);
+}

@@ -17,7 +17,7 @@ layout(location = 1) out vec3 v_normal;
 layout(location = 2) out vec2 v_uv;
 layout(location = 3) out float v_sun;
 layout(location = 4) out float v_depth_t;
-layout(location = 5) out float v_hash;
+layout(location = 5) out flat uint v_hash;
 
 void main() {
 	uint clump = uint(gl_VertexIndex) / 6u;
@@ -30,7 +30,15 @@ void main() {
 	vec2 pair = leaf_unpack_pair(c.b.z);
 	v_depth_t = pair.x;
 	float ratio = pair.y;
-	v_hash = c.b.y;
+	// FLAT, and unpacked here rather than in the fragment. c.b.y is a HASH carried in a
+	// float's bit pattern, so a smooth varying is not merely wasteful, it is wrong: the
+	// interpolator recomputes it per fragment as a perspective-weighted sum, which lands one
+	// ULP off the vertex value and moves as the card re-faces the camera. Reinterpreted as
+	// bits, a one-ULP drift is a WHOLE DIFFERENT HASH -- so the per-clump tint jitter below
+	// resolved to a different colour from frame to frame, and the scallop threshold to a
+	// different edge. That is the subtle colour flicker. grass.vert.glsl has always passed
+	// its hash as `flat uint` for this reason; this is the same rule.
+	v_hash = floatBitsToUint(c.b.y);
 
 	// Two triangles: 0,1,2 and 2,1,3 over the unit square, mapped to -1..1.
 	const vec2 kCorners[6] = vec2[6](vec2(-1, -1), vec2(1, -1), vec2(-1, 1),
@@ -54,7 +62,12 @@ void main() {
 	// world Y. A full spherical billboard makes a canopy swim when the camera strafes; the
 	// roll is what keeps neighbouring cards from all aligning into a visible grid.
 	vec3 to_cam = normalize(pc.cam.xyz - centre);
-	vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), to_cam));
+	// cross(Y, to_cam) collapses to zero when the camera is directly above or below a clump
+	// -- looking down into a canopy, which is an ordinary camera position here. normalize()
+	// of a near-zero vector is whatever the remaining float noise says, so the card used to
+	// spin from frame to frame at exactly those angles. World X is never parallel to Y.
+	vec3 axis = cross(vec3(0.0, 1.0, 0.0), to_cam);
+	vec3 right = normalize(dot(axis, axis) > 1e-6 ? axis : vec3(1.0, 0.0, 0.0));
 	vec3 up = cross(to_cam, right);
 	float roll = c.b.w;
 	vec3 rr = right * cos(roll) + up * sin(roll);
@@ -67,12 +80,22 @@ void main() {
 	// clump; spreading it by the card's own extent, scaled by clump_radius / crown_radius,
 	// approximates a true per-fragment transfer from the crown sphere at a thirty-second of
 	// the storage. At these card sizes the two are indistinguishable.
-	// Backfaces must not shade black: the cards draw with cull disabled, so the perturbed
-	// normal is turned to the viewer -- the same treatment grass turns its blade faces with
-	// (grass.vert.glsl's `if (dot(face, to_cam) < 0.0)`), done here where to_cam already is.
-	vec3 sn = normalize(n + (rr * q.x + uu * q.y) * ratio);
-	if (dot(sn, to_cam) < 0.0) sn = -sn;
-	v_normal = sn;
+	//
+	// The spread runs in the CROWN's tangent basis (leaf_card_normal), not in the card's
+	// rr/uu, and the result is NOT turned toward the viewer. What was here before did both:
+	// it spread the normal in the camera-aligned basis and then ran grass.vert.glsl's
+	// `if (dot(sn, to_cam) < 0.0) sn = -sn;`. A grass blade is a real two-sided surface and
+	// wants that flip; a card standing in for a VOLUME does not. Negating the normal negates
+	// its y, and leaf.frag.glsl reads exactly that y to mix between the bright warm top
+	// colour and the deep cool underside -- so every clump crossing dot == 0 swapped between
+	// them in a single frame. Orbiting the tree popped whole faces from one colour to the
+	// other, and for clumps near the silhouette the wind sway below re-crossed the boundary
+	// every frame, which is the rapid flicker. Both symptoms, one line.
+	//
+	// Nothing replaces the flip: a crown's far side is SUPPOSED to read dark, cel_shade
+	// clamps ndv so a back-facing clump lands on the full rim rather than a discontinuity,
+	// and cull stays disabled because a card's winding still flips with its roll.
+	v_normal = leaf_card_normal(n, q, ratio);
 
 	gl_Position = pc.view_proj * vec4(world, 1.0);
 }
