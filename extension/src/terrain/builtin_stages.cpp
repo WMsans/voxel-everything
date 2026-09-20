@@ -94,6 +94,10 @@ namespace trees_mirror {
 //
 // Integer-only hashing, because that test demands bit-identical placement.
 constexpr float kJitter = 0.35f;
+// Mirrors TREE_LIMBS / TREE_TRUNK_SEGS / TREE_MAX_LEAN in shaders/tree.glslh.
+constexpr int kLimbs = 4;
+constexpr int kTrunkSegs = 3;
+constexpr float kMaxLean = 0.15f;
 
 struct Tp {
 	float cell, density, trunk_height, trunk_radius, branch_radius_min, crown_radius, max_slope;
@@ -158,8 +162,38 @@ inline Tree at(int cx, int cz, const Tp &tp, float ground_y, float ground_h, flo
 	t.radius = tp.trunk_radius * (1.0f + 0.20f * snorm(hash(t.h ^ 0x52u)));
 	t.crown_r = fminf(tp.crown_radius,
 			tp.crown_radius * t.height / fmaxf(tp.trunk_height, 1e-3f));
-	t.crown = {t.base.x, t.base.y + t.height, t.base.z};
+	// Lean, mirroring shaders/tree.glslh. Magnitude capped at kMaxLean * height, which is
+	// exactly what d_safe() below subtracts.
+	const float lean_az = unit(hash(t.h ^ 0x53u)) * 6.2831853f;
+	const float lean_m = kMaxLean * t.height * unit(hash(t.h ^ 0x54u));
+	t.crown = {t.base.x + cosf(lean_az) * lean_m, t.base.y + t.height,
+			t.base.z + sinf(lean_az) * lean_m};
 	return t;
+}
+
+inline V3 trunk_point(const Tree &t, float s) {
+	const V3 ctrl{t.base.x, mixf(t.base.y, t.crown.y, 0.55f), t.base.z};
+	const float u = 1.0f - s;
+	return {t.base.x * (u * u) + ctrl.x * (2.0f * u * s) + t.crown.x * (s * s),
+	        t.base.y * (u * u) + ctrl.y * (2.0f * u * s) + t.crown.y * (s * s),
+	        t.base.z * (u * u) + ctrl.z * (2.0f * u * s) + t.crown.z * (s * s)};
+}
+
+inline float trunk_radius(const Tree &t, float s) {
+	const float flare = mixf(1.55f, 1.0f, fminf(fmaxf(s / 0.15f, 0.0f), 1.0f));
+	const float taper = mixf(1.0f, 0.30f, s);
+	return t.radius * flare * taper;
+}
+
+inline float limb_fork(const Tree &t, int i) {
+	const uint32_t h = hash(t.h ^ (uint32_t(i) * 0x27D4EB2Du));
+	const float slot = float(i) / float(kLimbs);
+	return mixf(0.28f, 0.62f, slot + unit(h) * (0.6f / float(kLimbs)));
+}
+
+inline float limb_radius(const Tree &t, const Tp &tp, int i) {
+	const float thick = (i == 0) ? 0.62f : 0.40f;
+	return fmaxf(trunk_radius(t, limb_fork(t, i)) * thick, tp.branch_radius_min * 1.25f);
 }
 
 inline V3 lobe(const Tree &t, int i) {
@@ -195,15 +229,30 @@ inline float round_cone(float px, float py, float pz, V3 a, V3 b, float ra, floa
 }
 
 inline float skeleton(float px, float py, float pz, const Tree &t, const Tp &tp) {
-	float d = round_cone(px, py, pz, t.base, t.crown, t.radius, t.radius * 0.5f);
-	const V3 fork{t.base.x, t.base.y + t.height * 0.55f, t.base.z};
-	for (int i = 0; i < 10; i++) {
-		const V3 tip = lobe(t, i);
-		const V3 mid{mixf(fork.x, tip.x, 0.55f), mixf(fork.y, tip.y, 0.55f),
+	float d = 1.0e30f;
+	V3 prev = trunk_point(t, 0.0f);
+	float prev_r = trunk_radius(t, 0.0f);
+	for (int k = 1; k <= kTrunkSegs; k++) {
+		const float s = float(k) / float(kTrunkSegs);
+		const V3 cur = trunk_point(t, s);
+		const float cur_r = trunk_radius(t, s);
+		d = fminf(d, round_cone(px, py, pz, prev, cur, prev_r, cur_r));
+		prev = cur;
+		prev_r = cur_r;
+	}
+	for (int i = 0; i < kLimbs; i++) {
+		const float sf = limb_fork(t, i);
+		const V3 fork = trunk_point(t, sf);
+		const V3 tip = lobe(t, i * 2);
+		const float r0 = limb_radius(t, tp, i);
+		const float r1 = tp.branch_radius_min;
+		const float rm = mixf(r0, r1, 0.55f);
+		const float len = sqrtf((tip.x - fork.x) * (tip.x - fork.x)
+				+ (tip.y - fork.y) * (tip.y - fork.y) + (tip.z - fork.z) * (tip.z - fork.z));
+		const V3 mid{mixf(fork.x, tip.x, 0.55f), mixf(fork.y, tip.y, 0.55f) + len * 0.18f,
 				mixf(fork.z, tip.z, 0.55f)};
-		const float r_mid = mixf(t.radius * 0.45f, tp.branch_radius_min, 0.5f);
-		d = fminf(d, round_cone(px, py, pz, fork, mid, t.radius * 0.45f, r_mid));
-		d = fminf(d, round_cone(px, py, pz, mid, tip, r_mid, tp.branch_radius_min));
+		d = fminf(d, round_cone(px, py, pz, fork, mid, r0, rm));
+		d = fminf(d, round_cone(px, py, pz, mid, tip, rm, r1));
 	}
 	return d;
 }
@@ -213,7 +262,10 @@ inline float bound(float px, float py, float pz, const Tree &t) {
 }
 
 inline float d_safe(const Tp &tp) {
-	return fmaxf(0.0f, (1.5f - kJitter) * tp.cell - tp.crown_radius);
+	// The lean term, mirroring tree_d_safe() in shaders/tree.glslh: a leaning crown centre
+	// reaches kMaxLean * height further from the cell centre, and height runs to 1.25x.
+	const float max_lean = kMaxLean * tp.trunk_height * 1.25f;
+	return fmaxf(0.0f, (1.5f - kJitter) * tp.cell - tp.crown_radius - max_lean);
 }
 } // namespace trees_mirror
 

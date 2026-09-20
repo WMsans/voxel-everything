@@ -11,7 +11,7 @@ namespace ve {
 // ponytail: duplicated as a constant because the layout is computed CPU-side before the
 // pipeline UBO is readable. If the trees stage ever gains a non-default cell, plumb the
 // resolved param through instead of raising this.
-inline constexpr float kLeafCellM = 14.0f;
+inline constexpr float kLeafCellM = 18.0f;
 
 // Uploaded to a uniform buffer and mirrored by `LeafParams` in shaders/leaf.glslh. Laid out
 // as sixteen vec4 (256 bytes) so std140 padding cannot disagree with the C++ struct;

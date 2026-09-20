@@ -56,12 +56,12 @@ namespace ts = tree_shader;
 
 ts::TreeParams params() {
 	ts::TreeParams tp;
-	tp.cell = 14.0f;
+	tp.cell = 18.0f;
 	tp.density = 0.55f;
-	tp.trunk_height = 9.0f;
-	tp.trunk_radius = 0.30f;
-	tp.branch_radius_min = 0.10f;
-	tp.crown_radius = 4.0f;
+	tp.trunk_height = 8.0f;
+	tp.trunk_radius = 0.55f;
+	tp.branch_radius_min = 0.14f;
+	tp.crown_radius = 4.5f;
 	tp.max_slope = 0.6f;
 	return tp;
 }
@@ -223,6 +223,14 @@ TEST_CASE("D_safe is derived from the params, not a constant") {
 	CHECK(a > 0.0f);
 }
 
+// Lipschitz is tested by SECANTS, not by the norm of three central differences. The old
+// probe did the latter and it is unsound at a crease: for a genuinely 1-Lipschitz field
+// each per-axis difference is <= 1 by construction, but the NORM of three of them can reach
+// sqrt(3) wherever two pieces tie and the field is not differentiable. That probe held only
+// because the old skeleton's creases happened to be shallow; it flagged 2 points in 20000
+// on the reshaped trunk, both of them ties (1.4692 vs 1.4744) rather than real violations.
+// |f(a) - f(b)| <= |a - b| is the property the raymarcher actually depends on, and it is
+// exact at creases, so that is what this asserts.
 TEST_CASE("the skeleton SDF is 1-Lipschitz") {
 	const ts::TreeParams tp = params();
 	const ts::Tree t = ts::tree_at({0, 0}, tp, kFlatGround, 2.0f, 0.0f);
@@ -231,18 +239,59 @@ TEST_CASE("the skeleton SDF is 1-Lipschitz") {
 		s = s * 1664525u + 1013904223u;
 		return lo + (hi - lo) * (float((s >> 8) & 0xFFFFFFu) / 16777216.0f);
 	};
-	const float e = 0.01f;
-	for (int i = 0; i < 20000; i++) {
-		const ts::vec3 p(next(-12.0f, 12.0f), next(kFlatGround - 2.0f, kFlatGround + 16.0f),
+	for (int i = 0; i < 40000; i++) {
+		const ts::vec3 a(next(-12.0f, 12.0f), next(kFlatGround - 2.0f, kFlatGround + 16.0f),
 				next(-12.0f, 12.0f));
-		const float gx = (ts::tree_skeleton_sdf({p.x + e, p.y, p.z}, t, tp)
-				- ts::tree_skeleton_sdf({p.x - e, p.y, p.z}, t, tp)) / (2.0f * e);
-		const float gy = (ts::tree_skeleton_sdf({p.x, p.y + e, p.z}, t, tp)
-				- ts::tree_skeleton_sdf({p.x, p.y - e, p.z}, t, tp)) / (2.0f * e);
-		const float gz = (ts::tree_skeleton_sdf({p.x, p.y, p.z + e}, t, tp)
-				- ts::tree_skeleton_sdf({p.x, p.y, p.z - e}, t, tp)) / (2.0f * e);
-		CHECK(std::sqrt(gx * gx + gy * gy + gz * gz) <= 1.02f);
+		// Both a far partner and a near one: the near pairs are what probe the creases.
+		const float reach = (i % 2 == 0) ? 6.0f : 0.05f;
+		const ts::vec3 b(a.x + next(-reach, reach), a.y + next(-reach, reach),
+				a.z + next(-reach, reach));
+		const float fa = ts::tree_skeleton_sdf(a, t, tp);
+		const float fb = ts::tree_skeleton_sdf(b, t, tp);
+		CHECK(std::fabs(fa - fb) <= ts::length(b - a) + 1e-4f);
 	}
+}
+
+// The secant test above is only worth having if it fails on a field that overstates
+// distance. A 1.02x scale is the mildest realistic version of that mistake -- a smooth
+// minimum, or a mis-derived bound, inflates the field by about this much -- and it is far
+// below the 1.02 the discarded gradient probe tolerated outright.
+TEST_CASE("the Lipschitz secant test rejects a field that overstates distance") {
+	const ts::TreeParams tp = params();
+	const ts::Tree t = ts::tree_at({0, 0}, tp, kFlatGround, 2.0f, 0.0f);
+	auto overstated = [&](ts::vec3 p) { return ts::tree_skeleton_sdf(p, t, tp) * 1.02f; };
+	uint32_t s = 7771u;
+	auto next = [&s](float lo, float hi) {
+		s = s * 1664525u + 1013904223u;
+		return lo + (hi - lo) * (float((s >> 8) & 0xFFFFFFu) / 16777216.0f);
+	};
+	int violations = 0;
+	for (int i = 0; i < 40000; i++) {
+		const ts::vec3 a(next(-12.0f, 12.0f), next(kFlatGround - 2.0f, kFlatGround + 16.0f),
+				next(-12.0f, 12.0f));
+		const ts::vec3 b(a.x + next(-6.0f, 6.0f), a.y + next(-6.0f, 6.0f), a.z + next(-6.0f, 6.0f));
+		if (std::fabs(overstated(a) - overstated(b)) > ts::length(b - a) + 1e-4f) violations++;
+	}
+	CHECK(violations > 0);
+}
+
+// Limbs must taper from the fork to the tip. A subordinate limb whose fork radius fell
+// BELOW branch_radius_min came out wider at the tip than at the trunk -- measured at
+// 0.0883 -> 0.0947 m on the first cut of this reshape, which reads as a club, not a branch.
+TEST_CASE("every limb tapers from its fork to its tip") {
+	const ts::TreeParams tp = params();
+	int checked = 0;
+	for (int x = -15; x <= 15; x++) {
+		for (int z = -15; z <= 15; z++) {
+			if (!ts::tree_cell_present({x, z}, tp, 2.0f, 0.0f)) continue;
+			const ts::Tree t = ts::tree_at({x, z}, tp, kFlatGround, 2.0f, 0.0f);
+			for (int i = 0; i < TREE_LIMBS; i++) {
+				CHECK(ts::tree_limb_radius(t, tp, i) > tp.branch_radius_min);
+			}
+			checked++;
+		}
+	}
+	CHECK(checked > 100);
 }
 
 TEST_CASE("the bounding capsule never rejects a point the skeleton would claim") {
@@ -257,5 +306,88 @@ TEST_CASE("the bounding capsule never rejects a point the skeleton would claim")
 		const ts::vec3 p(next(-25.0f, 25.0f), next(kFlatGround - 5.0f, kFlatGround + 25.0f),
 				next(-25.0f, 25.0f));
 		CHECK(ts::tree_bound(p, t) <= ts::tree_skeleton_sdf(p, t, tp) + 1e-3f);
+	}
+}
+
+// --- trunk shape (2026-09-19) -------------------------------------------------------
+// The old skeleton was a plumb-straight pole that fanned ten identical branches out of ONE
+// point at 0.55 height -- a broom, not a tree. These four pin the structure that replaced
+// it. They are shape tests, not beauty tests: each names a property the references have and
+// the old skeleton provably did not.
+
+TEST_CASE("the trunk leans off the vertical, within the bound d_safe subtracts") {
+	const ts::TreeParams tp = params();
+	int leaning = 0, checked = 0;
+	for (int x = -15; x <= 15; x++) {
+		for (int z = -15; z <= 15; z++) {
+			if (!ts::tree_cell_present({x, z}, tp, 2.0f, 0.0f)) continue;
+			const ts::Tree t = ts::tree_at({x, z}, tp, kFlatGround, 2.0f, 0.0f);
+			const float dx = t.crown.x - t.base.x, dz = t.crown.z - t.base.z;
+			const float lean = std::sqrt(dx * dx + dz * dz);
+			// The bound tree_d_safe() subtracts. Breaking it understates d_safe and tunnels.
+			CHECK(lean <= TREE_MAX_LEAN * t.height + 1e-4f);
+			if (lean > 0.1f) leaning++;
+			checked++;
+		}
+	}
+	CHECK(checked > 100);
+	// Most trees lean visibly. A plumb-line forest is the thing being fixed.
+	CHECK(leaning > checked / 2);
+}
+
+TEST_CASE("the trunk rises vertically out of the ground before it leans") {
+	const ts::TreeParams tp = params();
+	for (int x = -8; x <= 8; x++) {
+		for (int z = -8; z <= 8; z++) {
+			if (!ts::tree_cell_present({x, z}, tp, 2.0f, 0.0f)) continue;
+			const ts::Tree t = ts::tree_at({x, z}, tp, kFlatGround, 2.0f, 0.0f);
+			const float dx = t.crown.x - t.base.x, dz = t.crown.z - t.base.z;
+			const float lean = std::sqrt(dx * dx + dz * dz);
+			if (lean < 0.2f) continue; // nothing to measure on an upright tree
+			const ts::vec3 low = ts::tree_trunk_point(t, 0.1f);
+			const float lx = low.x - t.base.x, lz = low.z - t.base.z;
+			const float drift = std::sqrt(lx * lx + lz * lz);
+			// A straight tilted pole would drift 0.1 * lean here. The curve must drift much
+			// less: the foot is plumb and the lean accumulates up the trunk.
+			CHECK(drift < 0.1f * lean * 0.5f);
+			CHECK(ts::tree_trunk_point(t, 0.0f).y == doctest::Approx(t.base.y));
+			CHECK(ts::tree_trunk_point(t, 1.0f).y == doctest::Approx(t.crown.y));
+		}
+	}
+}
+
+TEST_CASE("limbs leave the trunk at distinct heights") {
+	const ts::TreeParams tp = params();
+	int checked = 0;
+	for (int x = -15; x <= 15; x++) {
+		for (int z = -15; z <= 15; z++) {
+			if (!ts::tree_cell_present({x, z}, tp, 2.0f, 0.0f)) continue;
+			const ts::Tree t = ts::tree_at({x, z}, tp, kFlatGround, 2.0f, 0.0f);
+			for (int i = 0; i < TREE_LIMBS; i++) {
+				const float si = ts::tree_limb_fork(t, i);
+				CHECK(si > 0.0f);
+				CHECK(si < 1.0f);
+				for (int j = i + 1; j < TREE_LIMBS; j++)
+					// THE broom test: one shared fork point is what made it a fountain.
+					CHECK(std::fabs(si - ts::tree_limb_fork(t, j)) > 0.02f);
+			}
+			checked++;
+		}
+	}
+	CHECK(checked > 100);
+}
+
+TEST_CASE("the trunk is stoutest at the foot and tapers all the way up") {
+	const ts::TreeParams tp = params();
+	const ts::Tree t = ts::tree_at({0, 0}, tp, kFlatGround, 2.0f, 0.0f);
+	// Root flare: the foot is meaningfully fatter than the bole above it.
+	CHECK(ts::tree_trunk_radius(t, 0.0f) >= 1.4f * t.radius);
+	CHECK(ts::tree_trunk_radius(t, 1.0f) < 0.5f * t.radius);
+	float prev = ts::tree_trunk_radius(t, 0.0f);
+	for (int k = 1; k <= 50; k++) {
+		const float r = ts::tree_trunk_radius(t, float(k) / 50.0f);
+		CHECK(r <= prev + 1e-5f); // monotone: no bulge anywhere up the trunk
+		CHECK(r > 0.0f);
+		prev = r;
 	}
 }

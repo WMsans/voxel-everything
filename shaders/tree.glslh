@@ -95,6 +95,52 @@ struct Tree {
 	bool present;
 };
 
+// --- trunk shape ---------------------------------------------------------------------
+// The SDF skeleton is DELIBERATELY coarser than the canopy: TREE_LOBES lobes of leaves, but
+// only TREE_LIMBS limbs of wood. In the references a crown hides its own branching almost
+// entirely -- you read the bole and one or two limbs, never ten. Carrying ten in the field
+// cost 21 round cones per tree at every voxel to draw detail nobody sees; this carries 11.
+
+// Limbs in the SDF. Four, so that two are visible from any azimuth.
+#define TREE_LIMBS 4
+// Trunk curve segments. Three is what it takes to rise plumb and still lean at the top.
+#define TREE_TRUNK_SEGS 3
+// Horizontal offset of the crown from the foot, as a fraction of trunk height. This is a
+// HARD cap, not a typical value: tree_d_safe() subtracts it, so raising it here without
+// raising it there understates the clamp and tunnels the raymarcher.
+#define TREE_MAX_LEAN 0.15
+
+// A point on the trunk axis, s in 0..1 from foot to crown centre. Quadratic Bezier whose
+// control point sits directly above the FOOT, which is what makes the trunk leave the
+// ground vertically and accumulate its lean higher up -- a straight tilted pole reads as a
+// fallen post, not a tree.
+vec3 tree_trunk_point(Tree t, float s) {
+	vec3 ctrl = vec3(t.base.x, mix(t.base.y, t.crown.y, 0.55), t.base.z);
+	float u = 1.0 - s;
+	return t.base * (u * u) + ctrl * (2.0 * u * s) + t.crown * (s * s);
+}
+
+// Trunk radius at s. Two factors: a root flare that dies out by 15% height, and a steady
+// taper the whole way up. Monotone decreasing by construction -- a bulge anywhere would
+// show as a swollen joint.
+float tree_trunk_radius(Tree t, float s) {
+	float flare = mix(1.55, 1.0, clamp(s / 0.15, 0.0, 1.0));
+	float taper = mix(1.0, 0.30, s);
+	return t.radius * flare * taper;
+}
+
+// Where limb i leaves the trunk, as s along the curve. Each limb owns its own slice of the
+// 0.28..0.62 band and jitters only WITHIN that slice, so no two limbs can ever share a fork
+// point. That shared point is precisely what made the old skeleton read as a broom.
+float tree_limb_fork(Tree t, int i) {
+	uint h = tree_hash(t.hash ^ (uint(i) * 0x27D4EB2Du));
+	float slot = float(i) / float(TREE_LIMBS);
+	// The jitter spans 0.6 of a slice, never the whole slice, so adjacent limbs keep a
+	// guaranteed 0.4-slice gap: 0.1 in slot space, 0.034 in s. A full-width jitter leaves
+	// only 0.0085 and two limbs can then fork from what reads as the same point.
+	return mix(0.28, 0.62, slot + tree_unit(h) * (0.6 / float(TREE_LIMBS)));
+}
+
 // `ground_y`, `ground_h` (terrain height above SURFACE_Y at the tree's XZ) and `slope` come
 // from the caller (the stage evaluates hills+relief at the tree's XZ; the leaf scatter does
 // the same). This header stays terrain-free.
@@ -111,7 +157,14 @@ Tree tree_at(ivec2 cell, TreeParams tp, float ground_y, float ground_h, float sl
 	// jitter so a tall tree gets a proportionally large crown, and is CLAMPED to
 	// tp.crown_radius because tree_d_safe() (Task 3) is derived from that number.
 	t.crown_r = min(tp.crown_radius, tp.crown_radius * t.height / max(tp.trunk_height, 1e-3));
-	t.crown = t.base + vec3(0.0, t.height, 0.0);
+	// Lean. A trunk is not a plumb line, and a forest of plumb lines reads as a lamppost
+	// farm -- see the references in the 2026-09-19 trunk reshape. Direction is free, but the
+	// MAGNITUDE is capped at TREE_MAX_LEAN * height so tree_d_safe() can subtract a known
+	// worst case: a leaning crown reaches further from the cell centre than an upright one,
+	// and understating that clamp is the direction that tunnels the raymarcher.
+	float lean_az = tree_unit(tree_hash(t.hash ^ 0x53u)) * 6.2831853;
+	float lean_m = TREE_MAX_LEAN * t.height * tree_unit(tree_hash(t.hash ^ 0x54u));
+	t.crown = t.base + vec3(cos(lean_az) * lean_m, t.height, sin(lean_az) * lean_m);
 	return t;
 }
 
@@ -139,6 +192,18 @@ float tree_lobe_radius(Tree t, TreeParams tp, int i) {
 	return t.crown_r * mix(0.26, 0.38, tree_unit(h));
 }
 
+// Radius of limb i where it leaves the trunk. Limb 0 is the dominant one: real crowns have
+// one obvious leader and subordinates, and four limbs of equal thickness is the same mistake
+// as ten branches from one point.
+//
+// FLOORED at branch_radius_min, because a subordinate limb on a slim trunk can otherwise
+// compute a fork radius BELOW the tip radius and taper outward -- measured at 0.0883 ->
+// 0.0947 m on the first cut of this reshape, which reads as a club rather than a branch.
+float tree_limb_radius(Tree t, TreeParams tp, int i) {
+	float thick = (i == 0) ? 0.62 : 0.40;
+	return max(tree_trunk_radius(t, tree_limb_fork(t, i)) * thick, tp.branch_radius_min * 1.25);
+}
+
 // iq's round cone: the exact distance to a capsule tapering from radius ra at a to rb at b.
 // Exactly 1-Lipschitz, which is why the union below is a plain min and never a smooth min --
 // a polynomial smooth minimum is not, and an overstated field tunnels the raymarcher.
@@ -163,20 +228,40 @@ float tree_round_cone(vec3 p, vec3 a, vec3 b, float ra, float rb) {
 	return (sqrt(max(x2 * a2 * il2, 0.0)) + y * rr) * il2 - ra;
 }
 
-// The whole tree: trunk, five primaries, ten secondaries. Exact, 1-Lipschitz.
+// The whole tree: a curved leaning trunk in TREE_TRUNK_SEGS segments, plus TREE_LIMBS limbs
+// that each leave the trunk at their own height and arch out to a canopy lobe. Exact,
+// 1-Lipschitz: every piece is iq's round cone and the union is a plain min, never a smooth
+// min -- a polynomial smooth minimum is not 1-Lipschitz and an overstated field tunnels.
 float tree_skeleton_sdf(vec3 p, Tree t, TreeParams tp) {
-	// Trunk: foot to crown centre, tapering to half its foot radius.
-	float d = tree_round_cone(p, t.base, t.crown, t.radius, t.radius * 0.5);
-	// The trunk forks at `fork_y` up the trunk; primaries run from there to a midpoint, and
-	// each secondary from that midpoint to its lobe centre. Every endpoint is inside the
-	// crown sphere (Task 2's invariant), so the whole skeleton is bounded by crown_r.
-	vec3 fork = t.base + vec3(0.0, t.height * 0.55, 0.0);
-	for (int i = 0; i < TREE_LOBES; i++) {
-		vec3 tip = tree_lobe(t, tp, i);
-		vec3 mid = mix(fork, tip, 0.55);
-		float r_mid = mix(t.radius * 0.45, tp.branch_radius_min, 0.5);
-		d = min(d, tree_round_cone(p, fork, mid, t.radius * 0.45, r_mid));
-		d = min(d, tree_round_cone(p, mid, tip, r_mid, tp.branch_radius_min));
+	// Trunk. Walk the curve, capsule between consecutive samples.
+	float d = 1.0e30;
+	vec3 prev = tree_trunk_point(t, 0.0);
+	float prev_r = tree_trunk_radius(t, 0.0);
+	for (int k = 1; k <= TREE_TRUNK_SEGS; k++) {
+		float s = float(k) / float(TREE_TRUNK_SEGS);
+		vec3 cur = tree_trunk_point(t, s);
+		float cur_r = tree_trunk_radius(t, s);
+		d = min(d, tree_round_cone(p, prev, cur, prev_r, cur_r));
+		prev = cur;
+		prev_r = cur_r;
+	}
+	// Limbs. Each aims at an EXISTING canopy lobe (tree_lobe, unchanged), so a limb tip
+	// always ends inside leaf mass rather than poking out into open air.
+	for (int i = 0; i < TREE_LIMBS; i++) {
+		float sf = tree_limb_fork(t, i);
+		vec3 fork = tree_trunk_point(t, sf);
+		vec3 tip = tree_lobe(t, tp, i * 2);
+		// Limb 0 is the dominant one. Real crowns have one obvious leader and subordinates;
+		// four limbs of equal thickness is the same mistake as ten branches from one point.
+		float r0 = tree_limb_radius(t, tp, i);
+		float r1 = tp.branch_radius_min;
+		float rm = mix(r0, r1, 0.55);
+		// The elbow rides above the chord, so a limb sweeps up and then out. Its rise is a
+		// fraction of the limb's own length, which keeps it well inside the crown sphere --
+		// the containment test in test_tree_shader.cpp is what actually holds this honest.
+		vec3 mid = mix(fork, tip, 0.55) + vec3(0.0, length(tip - fork) * 0.18, 0.0);
+		d = min(d, tree_round_cone(p, fork, mid, r0, rm));
+		d = min(d, tree_round_cone(p, mid, tip, rm, r1));
 	}
 	return d;
 }
@@ -200,5 +285,9 @@ float tree_bound(vec3 p, Tree t) {
 // Clamping DOWN to that value is conservative. Inside the vertical band the stage runs in,
 // the terrain distance is already smaller, so the clamp costs essentially nothing.
 float tree_d_safe(TreeParams tp) {
-	return max(0.0, (1.5 - TREE_JITTER) * tp.cell - tp.crown_radius);
+	// The lean term: a leaning crown centre reaches TREE_MAX_LEAN * height further from the
+	// cell centre than an upright one, and height itself runs up to 1.25 * trunk_height.
+	// Omitting this OVERESTIMATES the distance, which is the direction that tunnels.
+	float max_lean = TREE_MAX_LEAN * tp.trunk_height * 1.25;
+	return max(0.0, (1.5 - TREE_JITTER) * tp.cell - tp.crown_radius - max_lean);
 }

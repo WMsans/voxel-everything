@@ -5,12 +5,12 @@
 //!in        material : uint
 //!out       sdf : float
 //!out       material : uint
-//!param     cell : float = 14.0
+//!param     cell : float = 18.0
 //!param     density : float = 0.55
-//!param     trunk_height : float = 9.0
-//!param     trunk_radius : float = 0.30
-//!param     branch_radius_min : float = 0.10
-//!param     crown_radius : float = 4.0
+//!param     trunk_height : float = 8.0
+//!param     trunk_radius : float = 0.55
+//!param     branch_radius_min : float = 0.14
+//!param     crown_radius : float = 4.5
 //!param     max_slope : float = 0.6
 //!use       hills.amp_a
 //!use       hills.amp_b

@@ -99,10 +99,10 @@ LeafLayout leaf_layout(const LeafSettings &settings, const float camera[3],
 	// values against the resolved shipped pipeline and fails on drift.
 	p.tree[0] = l.cell_size_m;
 	p.tree[1] = 0.55f;
-	p.tree[2] = 4.0f;
-	p.tree[3] = 0.30f;
-	p.shape[0] = 9.0f;
-	p.shape[1] = 0.10f;
+	p.tree[2] = 4.5f;
+	p.tree[3] = 0.55f;
+	p.shape[0] = 8.0f;
+	p.shape[1] = 0.14f;
 	p.shape[2] = 0.6f;
 	p.shape[3] = 51.2f; // ve::kSurfaceY
 	p.clump[0] = l.clump_radius_m;
