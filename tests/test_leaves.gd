@@ -72,6 +72,39 @@ func test_painting_trunks_away_empties_the_tree_list() -> void:
 		w.hooks().debug_stream_frame(Vector3(20.0, 60.0, 30.0))
 	assert_int(w.hooks().debug_leaf_stats()["trees"]).is_equal(0)
 
+# THE PER-CLUMP HALF of the same contract. Stage 1 answers "does this tree still stand?"
+# once, from one probe a third of the way up the trunk; a canopy used to inherit that one
+# answer whole, so carving every branch out of a crown left all of its leaves hanging in the
+# air. Stage 2 now re-asks at each clump's OWN wood -- the nearest point on the skeleton,
+# read from the live atlas -- so this dig takes the leaves with it while the trunk below it,
+# and therefore the tree's listing, survives. Digging, not painting: the point is that the
+# tree is STILL LISTED and the clumps are gone anyway.
+func test_carving_the_branches_out_of_a_crown_takes_its_leaves() -> void:
+	var w := make_world()
+	var d: Dictionary = w.hooks().debug_leaf_stats()
+	var trees: int = int(d["trees"])
+	assert_int(trees).is_greater(0)
+	var recs: PackedFloat32Array = d["tree_records"]
+	var before: int = int(d["clumps"])
+	assert_int(before).is_greater(0)
+	var best := 0
+	for i in range(1, trees):
+		if recs[i * 8 + 6] < recs[best * 8 + 6]:
+			best = i
+	var crown := Vector3(recs[best * 8], recs[best * 8 + 1], recs[best * 8 + 2])
+	var crown_r: float = recs[best * 8 + 3]
+	# Centred above the crown, so the sphere swallows every limb and the top of the trunk
+	# but stops well short of the stage-1 anchor at base + 0.33 * height.
+	w.hooks().debug_apply_sphere_subtract(crown + Vector3(0.0, crown_r * 0.6, 0.0), crown_r)
+	for i in range(60):
+		w.hooks().debug_stream_frame(Vector3(20.0, 60.0, 30.0))
+	var after: Dictionary = w.hooks().debug_leaf_stats()
+	assert_int(int(after["trees"])).override_failure_message(
+		"the dig reached the stage-1 trunk anchor; this case no longer tests stage 2"
+		).is_equal(trees)
+	assert_int(int(after["clumps"])).override_failure_message(
+		"clumps survived a crown with no branches left in it").is_less(before)
+
 func test_stage_two_places_clumps() -> void:
 	var w := make_world()
 	assert_int(w.hooks().debug_leaf_stats()["clumps"]).is_greater(0)

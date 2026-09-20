@@ -75,7 +75,10 @@ void main() {
 	tr.crown_r = t.a.w;
 	tr.base = vec3(t.a.x, t.b.x, t.a.z);
 	tr.height = t.a.y - t.b.x;
-	tr.radius = tp.trunk_radius;
+	// The SAME jittered radius tree_at() gave this tree: the attachment probe below runs
+	// tree_skeleton_sdf(), which reads it, so an unjittered trunk would aim the probe at a
+	// surface up to 20% off where the wood actually is.
+	tr.radius = tp.trunk_radius * (1.0 + 0.20 * tree_snorm(tree_hash(tr.hash ^ 0x52u)));
 	tr.present = true;
 
 	uint h = tree_hash(tr.hash ^ (cand * 0x27D4EB2Fu));
@@ -88,6 +91,29 @@ void main() {
 	vec3 dir = leaf_unit_sphere(tree_hash(h ^ 0x41u));
 	float rr = mix(leaf.clump.y, 1.0, tree_unit(tree_hash(h ^ 0x42u)));
 	vec3 p = lobe_c + dir * (lobe_r * rr);
+
+	// ATTACHMENT -- the per-clump chop check, and the reason a carved branch loses its
+	// leaves. Stage 1 asks "does this tree still stand?" once, at one point on the trunk;
+	// every clump then inherited that answer and hung in mid-air when the wood it grew on was
+	// carved away and the trunk was not. So each clump re-asks the question at ITS OWN wood:
+	// the nearest point on the skeleton, read from the LIVE atlas exactly as a grass blade
+	// reads the voxel it stands on. No invalidation anywhere -- carve a limb, its leaves are
+	// gone on the next frame.
+	float wood_d = tree_skeleton_sdf(p, tr, tp);
+	// Forward differences at a fifth of a voxel: the skeleton is analytic and exact, so one
+	// Newton step lands ON the wood -- a second iteration was measured to move not one clump.
+	const vec2 e = vec2(VOXEL_SIZE * 0.2, 0.0);
+	vec3 grad = vec3(tree_skeleton_sdf(p + e.xyy, tr, tp),
+	                 tree_skeleton_sdf(p + e.yxy, tr, tp),
+	                 tree_skeleton_sdf(p + e.yyx, tr, tp)) - vec3(wood_d);
+	// A quarter of the tip radius INSIDE the surface: past the trilinear filter's reach, never
+	// through the far side of the thinnest branch the shape can make.
+	vec3 anchor = p - grad / max(length(grad), 1e-9) * (wood_d + tp.branch_radius_min * 0.25);
+	ivec3 anchor_brick = ivec3(floor(anchor / BRICK_SIZE));
+	int anchor_slot = slot_at(anchor_brick);
+	if (anchor_slot < 0) return;
+	if (brick_sdf(anchor_slot, (anchor - vec3(anchor_brick) * BRICK_SIZE) / VOXEL_SIZE) > 0.0) return;
+	if (material_at(anchor, anchor_brick, anchor_slot) != MAT_BARK) return;
 
 	// The technique: the shading normal is transferred from a sphere over the WHOLE crown,
 	// not taken from the card's real facing, and then leaned toward this clump's own lobe by
