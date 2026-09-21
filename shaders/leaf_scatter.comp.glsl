@@ -41,6 +41,13 @@ layout(set = 0, binding = 13, std430) readonly buffer BrickFlags { uint v[]; } b
 #include "sun_march.glslh"
 #include "tree.glslh"
 
+// How far the shell direction is lifted toward +Y before renormalising, and how far past the
+// lobe surface the rare ragged clump is flung, as a fraction of the lobe radius. Constants
+// rather than knobs: they are the canopy's SHAPE, not a taste dial, and every value in the
+// envelope arithmetic below is derived from the second one.
+#define LEAF_TOP_BIAS 0.55
+#define LEAF_RAGGED 0.45
+
 // A point on the unit sphere from a hash. Marsaglia: uniform in z, uniform in azimuth.
 vec3 leaf_unit_sphere(uint h) {
 	float z = tree_snorm(h) ;
@@ -89,7 +96,25 @@ void main() {
 	// ON THE SHELL, not through the volume. The crown interior is never seen and filling it
 	// is pure overdraw -- this is the single biggest structural saving in the module.
 	vec3 dir = leaf_unit_sphere(tree_hash(h ^ 0x41u));
+	// TOP-HEAVY. A uniform shell spreads a lobe's clumps evenly and the crown reads as a
+	// billiard ball lit from one side. Every reference piles leaf mass on the upper face of
+	// each lobe and lets the underside open up, so lift the direction toward +Y and
+	// renormalise. The shell stays CLOSED -- nothing below is left bare -- it is only denser
+	// above, which is what makes the lit crest and the shaded hollows read as separate masses.
+	dir = normalize(dir + vec3(0.0, LEAF_TOP_BIAS, 0.0));
 	float rr = mix(leaf.clump.y, 1.0, tree_unit(tree_hash(h ^ 0x42u)));
+	// RAGGED. A minority of clumps are flung past the lobe surface, so the silhouette frays
+	// into detached puffs instead of closing into a smooth sphere. The fourth power is what
+	// keeps it a minority: most clumps get nothing, a few get nearly the whole kick.
+	//
+	// The kick is bounded so the crown envelope is too. Worst case is the outermost lobe
+	// (reach 0.70, radius 0.26 crown_r by tree_lobe_radius) with the full kick:
+	// 0.70 + 0.26 * (1 + LEAF_RAGGED) = 1.077 crown radii for the clump CENTRE. Stage 1
+	// frustum-culls on crown_r, so letting this grow without bound pops canopies at the
+	// screen edge; counters.pad reports the whole-card envelope on top of it.
+	float kick = tree_unit(tree_hash(h ^ 0x43u));
+	kick *= kick;
+	rr += LEAF_RAGGED * kick * kick;
 	vec3 p = lobe_c + dir * (lobe_r * rr);
 
 	// ATTACHMENT -- the per-clump chop check, and the reason a carved branch loses its

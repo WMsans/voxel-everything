@@ -26,7 +26,13 @@ struct LeafSettings {
 	// Card radius at the nearest distance, metres. Distant trees get FEWER, LARGER clumps
 	// (ve::leaf_clump_budget), which holds silhouette coverage at roughly constant instance
 	// count -- Ghost of Tsushima's density LOD, the same idea as grass's drop-3-of-4.
-	float clump_radius_m = 0.85f;
+	//
+	// A card is a SPRIG of leaves, not a blob (leaf.frag.glsl's leaf grain), so this is much
+	// larger than it was when one card meant one solid mass: the grain discards a bit over
+	// half the quad, and a 6 m crown is 1.8x the area of the 4.5 m one this module shipped
+	// with. Both of those thin a crown out, and this is what pays for them -- at 0.85 the
+	// new crown is see-through. Leaf SIZE does not follow this knob; leaf_grain divides it.
+	float clump_radius_m = 1.5f;
 
 	// Where in a lobe a clump may sit, as a fraction of the lobe radius. The crown interior
 	// is never seen, so filling it is pure overdraw: 0.65 means the inner two thirds of every
@@ -51,6 +57,12 @@ struct LeafSettings {
 	float gloss = 0.15f;
 	// Per-clump hue jitter, as a fraction. 0 is a flat green wall.
 	float hue_jitter = 0.12f;
+
+	// LEAF GRAIN: lattice cells across a card's half-width, so a card is cut into roughly
+	// (2 * grain)^2 cells and each surviving cell is one leaf. Low values give a few big
+	// paddle leaves; high values give fine confetti that aliases once a leaf is smaller than
+	// a pixel. This is the knob that sets how FLUFFY a crown reads at a given card size.
+	float leaf_grain = 5.0f;
 };
 
 // One row per knob: name, clamp and slider range. The store, the settings panel, the config

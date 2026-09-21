@@ -28,7 +28,7 @@ struct LeafParams {
 	float shape[4];          // trunk_height, branch_radius_min, max_slope, surface_y
 	float clump[4];          // radius_near, shell_min, canopy_roundness, crown_shade
 	float wind[4];           // strength, speed, scale, time_seconds
-	float style[4];          // gloss, hue_jitter, unused, unused
+	float style[4];          // gloss, hue_jitter, leaf_grain, unused
 	int32_t limits[4];       // max_clumps, max_trees, clumps_per_tree, unused
 	// Reserved. The block is sixteen vec4 by contract (the comment above and
 	// test_leaf_layout's 256-byte CHECK); the ten fields above are fifteen, so this is the

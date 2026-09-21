@@ -22,31 +22,52 @@ layout(location = 5) in flat uint v_hash; // flat: bit pattern, not a quantity
 layout(location = 0) out vec4 out_albedo;  // rgb albedo, a = sun visibility
 layout(location = 1) out vec4 out_surface; // xy oct normal, z material id, w gloss
 
-// Value noise on the card's own UV, for the scalloped edge. Procedural rather than a texture
-// so the pass needs no asset and no extra binding -- the same posture grass takes.
-float leaf_noise(vec2 p, uint salt) {
+// THE LEAF GRAIN. Distance to the nearest jittered lattice point over the card's own UV --
+// a cellular / Worley F1. Each lattice cell is ONE leaf, so thresholding this turns a card
+// from a single blob into a sprig of round leaves with real gaps between them, which is the
+// one thing all three references have in common. Procedural rather than a texture so the
+// pass still needs no asset and no extra binding -- the same posture grass takes.
+float leaf_cells(vec2 p, uint salt) {
 	vec2 i = floor(p);
-	vec2 f = fract(p);
-	f = f * f * (3.0 - 2.0 * f);
-	float a = tree_unit(tree_hash2(ivec2(i), salt));
-	float b = tree_unit(tree_hash2(ivec2(i) + ivec2(1, 0), salt));
-	float c = tree_unit(tree_hash2(ivec2(i) + ivec2(0, 1), salt));
-	float d = tree_unit(tree_hash2(ivec2(i) + ivec2(1, 1), salt));
-	return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+	vec2 f = p - i;
+	float d = 8.0;
+	for (int dy = -1; dy <= 1; dy++) {
+		for (int dx = -1; dx <= 1; dx++) {
+			vec2 g = vec2(float(dx), float(dy));
+			uint hh = tree_hash2(ivec2(i) + ivec2(dx, dy), salt);
+			// BOTH offsets out of ONE hash, 12 bits each. A second tree_hash per cell
+			// doubles the cost of this nine-iteration loop for jitter that is invisible at
+			// the size a leaf lands on screen.
+			vec2 o = vec2(float(hh & 0xFFFu), float((hh >> 12) & 0xFFFu)) / 4096.0;
+			d = min(d, length(g + o - f));
+		}
+	}
+	return d;
 }
 
 void main() {
 	uint h = v_hash;
 
-	// THE SILHOUETTE. A plain quad reads as a rectangle; the reference's edge leaves punch
-	// out as individual round dots against the sky. Radial falloff plus noise, thresholded,
-	// gives a lobed edge and opens a few holes through to sky.
+	// THE SILHOUETTE. A plain quad reads as a rectangle; a single lobed blob reads as a river
+	// stone, which is what the whole crown looked like from outside. The reference's edge
+	// leaves punch out as individual round dots against the sky, so build the card out of
+	// dots: one leaf per lattice cell, kept where the cell's F1 distance is inside `fill`.
 	//
 	// ponytail: `discard` costs early-Z. If overdraw proves to be the binding cost, build the
-	// scallop from a fan of sub-quads in leaf.vert.glsl instead -- same look, no discard.
+	// sprig from a fan of sub-quads in leaf.vert.glsl instead -- same look, no discard.
 	float r = length(v_uv);
-	float scallop = leaf_noise(v_uv * 3.0 + vec2(tree_unit(h) * 17.0), 0x7A1u);
-	if (r - 0.35 * (scallop - 0.5) > 0.92) discard;
+	// Offset per clump so neighbouring cards never share a leaf pattern, and so a card's
+	// dots do not line up with the card's own corners.
+	vec2 gp = v_uv * leaf.style.z
+			+ vec2(tree_unit(h) * 31.0, tree_unit(tree_hash(h ^ 0x3Du)) * 31.0);
+	float cell_d = leaf_cells(gp, 0x7A1u);
+	// How much of a cell its leaf fills, shrinking toward the card rim. At the centre the
+	// leaves nearly touch and the sprig is solid; by r = 1 only a small dot survives, so the
+	// card FRAYS into separate leaves instead of ending on a circle. Past ~r = 1.15 the term
+	// goes negative and everything is discarded, which is what kills the quad's corners --
+	// no separate radial cutoff is needed.
+	float fill = 0.48 * (1.0 - 0.75 * r * r);
+	if (cell_d > fill) discard;
 	// NO interior holes. A card's interior used to punch a second, higher-frequency noise
 	// through to whatever was behind it, "so light reads through a crown rather than off a
 	// wall". The clumps sit on the lobe SHELL (LeafSettings::shell_min), so the canopy is one
@@ -82,6 +103,11 @@ void main() {
 	// 2. crown depth: the whole crown darkens toward its base. This is the ambient-occlusion
 	// read in the reference, and it is a per-clump constant, so it is free.
 	albedo *= mix(0.55, 1.0, v_depth_t);
+	// 3. per-leaf: each leaf is brightest at its own centre and darkest at its rim. This is
+	// what separates overlapping leaves by VALUE, and it is the replacement for the job
+	// outline.comp.glsl used to do badly -- it drew a hard black contour on every card-to-card
+	// depth break, which is why a crown read as a heap of stones. See the foliage guard there.
+	albedo *= mix(0.74, 1.0, clamp(1.0 - cell_d / max(fill, 1e-3), 0.0, 1.0));
 	// Per-clump hue and value jitter, so a grove is not a flat green wall.
 	albedo *= 1.0 + leaf.style.y * (tree_unit(tree_hash(h ^ 0x2Bu)) * 2.0 - 1.0);
 	albedo.g *= 1.0 + leaf.style.y * 0.5 * (tree_unit(tree_hash(h ^ 0x2Cu)) * 2.0 - 1.0);

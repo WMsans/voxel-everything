@@ -2,6 +2,8 @@
 #version 460
 #include "generated/gbuffer.glslh"
 #include "generated/blocks.glslh"
+// For MAT_LEAF_CLUMP, which the foliage guard in edge() tests.
+#include "material_table.glslh"
 #define BEAUTY_CAMERA_SET 0
 #define BEAUTY_CAMERA_BINDING 6
 #include "shade.glslh"
@@ -17,11 +19,13 @@ layout(push_constant, std430) uniform Push { OUTLINE_PUSH_FIELDS } pc;
 // tolerance stops growing, so a true silhouette seen almost edge-on is still an edge.
 const float OUTLINE_MIN_NDV = 0.05;
 
-struct SurfaceSample { float depth; float linear_depth; vec3 n; vec3 view; int kind; bool solid; };
+struct SurfaceSample { float depth; float linear_depth; vec3 n; vec3 view; int kind; bool solid;
+		bool foliage; };
 SurfaceSample read_surface(ivec2 px) {
 	SurfaceSample s; s.depth = texelFetch(scene_depth, px, 0).r;
 	s.linear_depth = 0.0; s.n = vec3(0.0); s.view = vec3(0.0, 0.0, 1.0); s.kind = 0;
 	vec4 g = texelFetch(gb_surface, px, 0);
+	s.foliage = GB_MATERIAL_ID(g) == MAT_LEAF_CLUMP;
 	// Material 0 is "no voxel here", so the g-buffer -- not the scene depth -- is what says
 	// whether a pixel has a surface. The near/far dither seam leaves pixels whose depth was
 	// dropped by BOTH fields while their g-buffer surface survives; those are holes in the
@@ -79,6 +83,13 @@ bool background_continues(SurfaceSample a, ivec2 px, ivec2 step) {
 bool edge(SurfaceSample a, SurfaceSample b, ivec2 px, ivec2 step) {
 	if (a.depth <= 0.0) return false;
 	if (b.depth <= 0.0) return !b.solid && background_continues(a, px, step);
+	// TWO CANOPY CARDS ARE NOT A SILHOUETTE. A crown is a few hundred overlapping billboards
+	// at different depths, so every card boundary inside it is a depth break and this pass
+	// drew a hard black contour on all of them -- which is why a crown read as a heap of
+	// river stones rather than as foliage. Leaf-to-sky and leaf-to-terrain edges are
+	// untouched below, so a crown still outlines against the sky; only the seams INSIDE the
+	// canopy go. leaf.frag.glsl's per-leaf value gradient is what separates them now.
+	if (a.foliage && b.foliage) return false;
 	if (depth_break(a, b)) return true;
 	return a.kind != 0 && a.kind == b.kind && 1.0 - dot(a.n, b.n) > pc.params.y;
 }

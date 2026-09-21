@@ -61,7 +61,7 @@ ts::TreeParams params() {
 	tp.trunk_height = 8.0f;
 	tp.trunk_radius = 0.55f;
 	tp.branch_radius_min = 0.14f;
-	tp.crown_radius = 4.5f;
+	tp.crown_radius = 6.0f;
 	tp.max_slope = 0.6f;
 	return tp;
 }

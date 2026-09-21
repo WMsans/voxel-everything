@@ -201,8 +201,11 @@ inline V3 lobe(const Tree &t, int i) {
 	const int p = i / 2;
 	const float base_az = 6.2831853f * (float(p) / 5.0f) + unit(t.h) * 6.2831853f;
 	const float az = base_az + (float(i % 2) * 2.0f - 1.0f) * 0.55f + 0.25f * snorm(h);
-	const float el = mixf(0.15f, 0.85f, unit(hash(h ^ 0x77u))) * 1.5707963f;
-	const float reach = t.crown_r * mixf(0.42f, 0.62f, unit(hash(h ^ 0x88u)));
+	// Mirrors tree_lobe() in shaders/tree.glslh: even lobes are the limb targets and stay
+	// above the crown centre, odd lobes may drape below it.
+	const float el_lo = (i % 2 == 0) ? 0.10f : -0.55f;
+	const float el = mixf(el_lo, 0.85f, unit(hash(h ^ 0x77u))) * 1.5707963f;
+	const float reach = t.crown_r * mixf(0.28f, 0.70f, unit(hash(h ^ 0x88u)));
 	return {t.crown.x + cosf(az) * cosf(el) * reach,
 	        t.crown.y + sinf(el) * reach,
 	        t.crown.z + sinf(az) * cosf(el) * reach};

@@ -172,24 +172,40 @@ Tree tree_at(ivec2 cell, TreeParams tp, float ground_y, float ground_h, float sl
 // upward from the crown centre; the containment invariant
 // |lobe - crown| + lobe_radius <= crown_r is what Task 3's bound and the leaf scatter's
 // capacity both rest on, so the reach below is written as a FRACTION of crown_r.
+// How far out lobe i sits, as a 0..1 knob BEFORE it is turned into a distance. Shared by
+// tree_lobe and tree_lobe_radius so the two are sized against each other rather than drawn
+// independently -- see the containment argument on tree_lobe_radius.
+float tree_lobe_u(Tree t, int i) {
+	return tree_unit(tree_hash(tree_hash(t.hash ^ (uint(i) * 0x9E3779B9u)) ^ 0x88u));
+}
+
 vec3 tree_lobe(Tree t, TreeParams tp, int i) {
 	uint h = tree_hash(t.hash ^ (uint(i) * 0x9E3779B9u));
 	int p = i / 2;
 	// Primaries evenly spaced in azimuth with a per-tree phase, splits offset either side.
 	float base_az = 6.2831853 * (float(p) / float(TREE_PRIMARIES)) + tree_unit(t.hash) * 6.2831853;
 	float az = base_az + (float(i % 2) * 2.0 - 1.0) * 0.55 + 0.25 * tree_snorm(h);
-	// Elevation from just below the horizontal to well above, so the crown is a mass rather
-	// than a ring. 0.15..0.85 of a right angle.
-	float el = mix(0.15, 0.85, tree_unit(tree_hash(h ^ 0x77u))) * 1.5707963;
-	float reach = t.crown_r * mix(0.42, 0.62, tree_unit(tree_hash(h ^ 0x88u)));
+	// Elevation. EVEN lobes are the ones tree_skeleton_sdf aims limbs at (its tip is
+	// tree_lobe(i * 2)), so they stay above the crown centre: a limb whose tip hangs below
+	// its own fork reads as a broken branch, not a bough. ODD lobes are free to drape well
+	// under it, and that lower skirt is what gives a crown its billow -- the old 0.15..0.85
+	// band put EVERY lobe above the centre, which is a dome sitting on a stick.
+	float el_lo = (i % 2 == 0) ? 0.10 : -0.55;
+	float el = mix(el_lo, 0.85, tree_unit(tree_hash(h ^ 0x77u))) * 1.5707963;
+	float reach = t.crown_r * mix(0.28, 0.70, tree_lobe_u(t, i));
 	return t.crown + vec3(cos(az) * cos(el), sin(el), sin(az) * cos(el)) * reach;
 }
 
-// Sized so |lobe - crown| + radius never exceeds crown_r: reach maxes at 0.62 * crown_r, so
-// 0.38 * crown_r is the largest radius that still fits, and the jitter stays under it.
+// Sized AGAINST its own reach rather than independently of it: the radius falls from 0.34 to
+// 0.26 crown_r as the reach grows from 0.28 to 0.70, so reach + radius runs 0.62 .. 0.96 and
+// the containment invariant |lobe - crown| + radius <= crown_r holds with room to spare.
+// That correlation is also what a real crown does -- the outer lobes are the small ones.
+//
+// An INDEPENDENT jitter cannot do this. The old 0.62 reach and 0.38 radius saturated the
+// bound exactly, at 1.00, which is why the reach could not be widened by a millimetre
+// without shrinking every lobe. test_tree_shader.cpp's containment case pins the result.
 float tree_lobe_radius(Tree t, TreeParams tp, int i) {
-	uint h = tree_hash(t.hash ^ (uint(i) * 0x85EBCA6Bu));
-	return t.crown_r * mix(0.26, 0.38, tree_unit(h));
+	return t.crown_r * mix(0.34, 0.26, tree_lobe_u(t, i));
 }
 
 // Radius of limb i where it leaves the trunk. Limb 0 is the dominant one: real crowns have

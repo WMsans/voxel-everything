@@ -26,6 +26,10 @@ const SettingRow<LeafSettings> kLeafRows[] = {
 			0.005f),
 	float_row("gloss", "Gloss", &LeafSettings::gloss, 0.0f, 1.0f, 0.0f, 1.0f, 0.01f),
 	float_row("hue_jitter", "Hue jitter", &LeafSettings::hue_jitter, 0.0f, 1.0f, 0.0f, 0.5f, 0.01f),
+	// Floored above zero: at 0 the whole card collapses into one lattice cell and the leaf
+	// grain is gone, which is the look this knob exists to replace.
+	float_row("leaf_grain", "Leaf grain", &LeafSettings::leaf_grain, 0.5f, 12.0f, 0.5f, 8.0f,
+			0.25f),
 };
 
 } // namespace

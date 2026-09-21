@@ -99,7 +99,7 @@ LeafLayout leaf_layout(const LeafSettings &settings, const float camera[3],
 	// values against the resolved shipped pipeline and fails on drift.
 	p.tree[0] = l.cell_size_m;
 	p.tree[1] = 0.55f;
-	p.tree[2] = 4.5f;
+	p.tree[2] = 6.0f;
 	p.tree[3] = 0.55f;
 	p.shape[0] = 8.0f;
 	p.shape[1] = 0.14f;
@@ -114,6 +114,7 @@ LeafLayout leaf_layout(const LeafSettings &settings, const float camera[3],
 	p.wind[2] = s.wind_scale;
 	p.style[0] = s.gloss;
 	p.style[1] = s.hue_jitter;
+	p.style[2] = s.leaf_grain;
 	p.limits[0] = l.max_clumps;
 	p.limits[1] = l.max_trees;
 	p.limits[2] = l.clumps_per_tree;
