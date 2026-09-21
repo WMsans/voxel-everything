@@ -36,7 +36,7 @@ func test_leaf_settings_round_trip_through_the_store() -> void:
 	w.set_leaf_value("reach_m", 180.0)
 	assert_float(w.get_leaf_value("reach_m")).is_equal_approx(180.0, 0.001)
 	w.set_leaf_value("reach_m", 1.0e9)
-	assert_float(w.get_leaf_value("reach_m")).is_less_equal(400.0)
+	assert_float(w.get_leaf_value("reach_m")).is_less_equal(1000.0)
 
 func test_disabling_leaves_zeroes_the_pass() -> void:
 	var w := make_world()
@@ -57,17 +57,29 @@ func test_the_tree_list_shrinks_as_the_camera_retreats() -> void:
 	var far_count: int = w.hooks().debug_leaf_stats()["trees"]
 	assert_int(far_count).is_less(near_count)
 
-# THE headline contract. Painting the whole reach to rock removes every trunk's bark voxels
-# without moving any geometry, so the stage-1 attachment check must drop every tree.
+# THE headline contract. Painting every listed trunk to rock removes its bark voxels without
+# moving any geometry, so the stage-1 attachment check must drop every tree.
 #
 # Paint, NOT dig: digging a trunk exposes fresh ground around it and would confound removal
 # with exposure. This is the same correction tests/test_grass.gd already had to make.
+#
+# One small sphere per trunk anchor, not one sphere over the whole reach: a 60 m paint
+# overflows the brick pool and evicts regions, and a tree in a non-resident region is
+# trusted to the analytic tree_at() (leaf_trees.comp.glsl) -- which is how canopies reach
+# past the atlas at all. The reach is pulled in so every listed tree is resident.
 func test_painting_trunks_away_empties_the_tree_list() -> void:
 	var w := make_world()
-	var before: int = w.hooks().debug_leaf_stats()["trees"]
-	assert_int(before).is_greater(0)
+	w.set_leaf_value("reach_m", 50.0)
+	var d: Dictionary = w.hooks().debug_leaf_stats()
+	var trees: int = int(d["trees"])
+	assert_int(trees).is_greater(0)
+	var recs: PackedFloat32Array = d["tree_records"]
 	# Material 2 is rock; see ve::kMaterials in extension/src/world/material_table.h.
-	w.hooks().debug_apply_sphere_paint(Vector3(20.0, 60.0, 30.0), 60.0, 2)
+	for i in range(trees):
+		var base_y: float = recs[i * 8 + 4]
+		var height: float = recs[i * 8 + 1] - base_y
+		w.hooks().debug_apply_sphere_paint(
+				Vector3(recs[i * 8], base_y + height * 0.33, recs[i * 8 + 2]), 2.0, 2)
 	for i in range(40):
 		w.hooks().debug_stream_frame(Vector3(20.0, 60.0, 30.0))
 	assert_int(w.hooks().debug_leaf_stats()["trees"]).is_equal(0)

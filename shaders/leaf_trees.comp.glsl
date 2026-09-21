@@ -89,12 +89,22 @@ void main() {
 	// the trunk when it stands, air when it has been dug or painted away. The scatter reads
 	// the LIVE atlas, so an edit removes the canopy on the next frame and there is no
 	// invalidation code anywhere, exactly as with grass.
+	//
+	// Only where the atlas holds the REGION. Full-resolution bricks are resident for roughly
+	// the first 60 m, so past that the trunk exists only in the far LoD mesh, which is built
+	// from the same analytic tree_at() this stage just ran -- culling on an absent region is
+	// what left every distant trunk bare. Out there tree_at() is the answer, exactly as
+	// grass's far rings trust eval_field; the cost is the same too: an edit to a far tree is
+	// not seen until it is close enough to be resident again. Inside a resident region the
+	// table is authoritative, so a brick with no slot there still means "no wood".
 	vec3 anchor = t.base + vec3(0.0, t.height * 0.33, 0.0);
-	if (world_sdf(anchor) > 0.0) return;
 	ivec3 anchor_brick = ivec3(floor(anchor / BRICK_SIZE));
-	int anchor_slot = slot_at(anchor_brick);
-	if (anchor_slot < 0) return;
-	if (material_at(anchor, anchor_brick, anchor_slot) != MAT_BARK) return;
+	if (region_slot_of(anchor_brick) >= 0) {
+		if (world_sdf(anchor) > 0.0) return;
+		int anchor_slot = slot_at(anchor_brick);
+		if (anchor_slot < 0) return;
+		if (material_at(anchor, anchor_brick, anchor_slot) != MAT_BARK) return;
+	}
 
 	int budget = int(leaf.limits.z);
 	// Linear thinning to 1/8, matching ve::leaf_clump_budget exactly. The CPU function is

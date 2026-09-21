@@ -13,7 +13,11 @@ struct LeafSettings {
 	// How far canopies are drawn, in metres. Trunks are SDF and are drawn wherever terrain
 	// is; only the foliage stops here. Past the reach a clump dithers out with bayer4, the
 	// same fade grass uses at its own seam.
-	float reach_m = 250.0f;
+	//
+	// 800, as far as grass's far LoD rings go. Past the ~60 m of resident atlas the scatter
+	// trusts the analytic tree (leaf_trees.comp.glsl), so the reach is bounded only by cost:
+	// the density LOD leaves a far crown 12 clumps, and the whole grove view is ~1.4k clumps.
+	float reach_m = 800.0f;
 
 	// Candidate clumps per tree at the nearest distance. Capped at 128, the scatter's
 	// workgroup width -- one thread per candidate, so a tree never needs a second group.

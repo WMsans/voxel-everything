@@ -5,7 +5,7 @@ namespace {
 
 const SettingRow<LeafSettings> kLeafRows[] = {
 	bool_row("enabled", "Leaves", &LeafSettings::enabled),
-	float_row("reach_m", "Reach (m)", &LeafSettings::reach_m, 0.0f, 400.0f, 0.0f, 400.0f, 5.0f),
+	float_row("reach_m", "Reach (m)", &LeafSettings::reach_m, 0.0f, 1000.0f, 0.0f, 1000.0f, 10.0f),
 	// 128 is the scatter's local_size_x. Raising this needs a second workgroup per tree, not
 	// a bigger number here.
 	int_row("clumps_per_tree", "Clumps per tree", &LeafSettings::clumps_per_tree, 0, 128, 0, 128),

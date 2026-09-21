@@ -12,7 +12,7 @@ TEST_CASE("leaf settings clamp every knob, NaN included") {
 	s.canopy_roundness = std::nanf("");
 	s.wind_strength = -1.0f;
 	ve::clamp_leaf_settings(&s);
-	CHECK(s.reach_m <= 400.0f);
+	CHECK(s.reach_m <= 1000.0f);
 	CHECK(s.clumps_per_tree <= 128);
 	CHECK(s.clump_radius_m >= 0.0f);
 	CHECK(s.canopy_roundness >= 0.0f);
@@ -130,7 +130,7 @@ TEST_CASE("the store round-trips a knob by name and clamps on write") {
 	CHECK(store.set_value("reach_m", 180.0f));
 	CHECK(store.get().reach_m == doctest::Approx(180.0f));
 	CHECK(store.set_value("reach_m", 1.0e9f));
-	CHECK(store.get().reach_m <= 400.0f);
+	CHECK(store.get().reach_m <= 1000.0f);
 	CHECK_FALSE(store.set_value("no_such_knob", 1.0f));
 }
 
@@ -219,7 +219,7 @@ TEST_CASE("an unclamped snapshot is clamped internally") {
 	s.reach_m = 1.0e9f;
 	s.clumps_per_tree = 100000;
 	const ve::LeafLayout l = ve::leaf_layout(s, kOrigin, kIdentity);
-	CHECK(l.reach_m <= 400.0f);
+	CHECK(l.reach_m <= 1000.0f);
 	CHECK(ve::leaf_clump_budget(l, 0.0f) <= 128);
 }
 

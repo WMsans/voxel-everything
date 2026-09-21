@@ -134,11 +134,16 @@ void main() {
 	// A quarter of the tip radius INSIDE the surface: past the trilinear filter's reach, never
 	// through the far side of the thinnest branch the shape can make.
 	vec3 anchor = p - grad / max(length(grad), 1e-9) * (wood_d + tp.branch_radius_min * 0.25);
+	// A non-resident REGION keeps the clump: past the atlas the analytic skeleton IS the wood
+	// (leaf_trees.comp.glsl's chop check says why).
 	ivec3 anchor_brick = ivec3(floor(anchor / BRICK_SIZE));
-	int anchor_slot = slot_at(anchor_brick);
-	if (anchor_slot < 0) return;
-	if (brick_sdf(anchor_slot, (anchor - vec3(anchor_brick) * BRICK_SIZE) / VOXEL_SIZE) > 0.0) return;
-	if (material_at(anchor, anchor_brick, anchor_slot) != MAT_BARK) return;
+	if (region_slot_of(anchor_brick) >= 0) {
+		int anchor_slot = slot_at(anchor_brick);
+		if (anchor_slot < 0) return;
+		if (brick_sdf(anchor_slot, (anchor - vec3(anchor_brick) * BRICK_SIZE) / VOXEL_SIZE) > 0.0)
+			return;
+		if (material_at(anchor, anchor_brick, anchor_slot) != MAT_BARK) return;
+	}
 
 	// The technique: the shading normal is transferred from a sphere over the WHOLE crown,
 	// not taken from the card's real facing, and then leaned toward this clump's own lobe by
