@@ -160,6 +160,7 @@ bool LodRasterPass::draw(RenderingDevice *rd, LodPool &pool, MaterialAtlas &mate
 	push.cam[2] = cam_pos[2];
 	push.cam[3] = fade_start;
 	push.fade[0] = fade_end;
+	push.fade[1] = skip_transparent_ ? 1.0f : 0.0f;
 	rd->draw_list_set_push_constant(dl, gpu::push_bytes(push), sizeof(push));
 	rd->draw_list_draw_indirect(dl, true, pool.args_buffer(), 0, draw_count, 20);
 	rd->draw_list_end();

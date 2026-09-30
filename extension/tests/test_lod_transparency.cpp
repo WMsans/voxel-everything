@@ -127,3 +127,29 @@ TEST_CASE("the shell is appended after the opaque quads and never outgrows a chu
 	CHECK_FALSE(ve::lod_append_shell(&small, &small_n, shell, shell_normals));
 	CHECK(small.size() == 8);
 }
+
+TEST_CASE("page-sized ranges report shell quads only where they sit") {
+	std::vector<uint8_t> sdf;
+	std::vector<uint16_t> mat;
+	sdf.assign(kCount, 0);
+	mat.assign(kCount, 0);
+	for (int z = 0; z < kN; z++)
+		for (int y = 0; y < kN; y++)
+			for (int x = 0; x < kN; x++) {
+				const int i = ve::lod_lattice_index(x, y, z);
+				sdf[i] = ve::lod_encode_sdf((float(y) - 16.5f) * 0.4f, 0.4f);
+				if (y <= 16) mat[i] = y >= 12 ? ve::material_id("ice") : ve::material_id("rock");
+			}
+	std::vector<uint8_t> opaque(kCount);
+	ve::lod_opaque_lattice(sdf.data(), mat.data(), 0.4f, opaque.data());
+	ve::LodContourResult terrain, shell;
+	ve::lod_contour(opaque.data(), mat.data(), &terrain);
+	ve::lod_contour(sdf.data(), mat.data(), &shell, true);
+	const int opaque_count = int(terrain.quads.size());
+	ve::lod_append_shell(&terrain.quads, &terrain.normals, shell.quads, shell.normals);
+	// 1024 terrain quads fill pages 0-1; the 1024 shell quads fill pages 2-3.
+	CHECK_FALSE(ve::lod_quads_have_transparent(terrain.quads.data(), ve::kLodQuadsPerPage));
+	CHECK_FALSE(ve::lod_quads_have_transparent(terrain.quads.data() + ve::kLodQuadsPerPage,
+			opaque_count - ve::kLodQuadsPerPage));
+	CHECK(ve::lod_quads_have_transparent(terrain.quads.data() + opaque_count, ve::kLodQuadsPerPage));
+}

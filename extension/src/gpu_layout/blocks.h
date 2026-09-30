@@ -83,7 +83,7 @@ struct SunLightBlock {
 struct LodRasterPush {
 	float view_proj[16];
 	float cam[4];   // xyz = camera position, w = fade start
-	float fade[4];  // x = fade end, yzw unused
+	float fade[4];  // x = fade end, y = 1 when transparency is on (shell quads skipped), zw unused
 };
 
 struct CompositePush {

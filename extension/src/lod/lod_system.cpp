@@ -193,7 +193,10 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 				// the tree stops drawing/requesting it while the stale GPU pages stay
 				// allocated forever.
 				if (old_it != lod_pages_of_.end()) {
-					for (int p : old_it->second) lod_page_quads_.erase(p);
+					for (int p : old_it->second) {
+						lod_page_quads_.erase(p);
+						lod_transparent_pages_.erase(p);
+					}
 					lod_pool_->release(old_it->second);
 					if (render()->passes().sun_shadow) render()->passes().sun_shadow->mark_dirty();
 					lod_pages_of_.erase(old_it);
@@ -228,7 +231,10 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 			const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
 			const auto old_it = lod_pages_of_.find(key);
 			if (old_it != lod_pages_of_.end()) {
-				for (int p : old_it->second) lod_page_quads_.erase(p);
+				for (int p : old_it->second) {
+					lod_page_quads_.erase(p);
+					lod_transparent_pages_.erase(p);
+				}
 				lod_pool_->release(old_it->second);
 				lod_pages_of_.erase(old_it);
 			}
@@ -237,6 +243,8 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 				const int count = std::min(ve::kLodQuadsPerPage,
 						static_cast<int>(r.quads.size()) - first);
 				lod_page_quads_[pages[static_cast<size_t>(i)]] = count;
+				if (ve::lod_quads_have_transparent(r.quads.data() + first, count))
+					lod_transparent_pages_.insert(pages[static_cast<size_t>(i)]);
 			}
 			lod_tree_->note_ready(r.level, r.coord, pages.front(), int(pages.size()));
 			lod_pages_of_[key] = std::move(pages);
@@ -251,7 +259,10 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 		const LodKey key{e.level, e.coord.x, e.coord.y, e.coord.z};
 		const auto it = lod_pages_of_.find(key);
 		if (it == lod_pages_of_.end()) continue;
-		for (int p : it->second) lod_page_quads_.erase(p);
+		for (int p : it->second) {
+			lod_page_quads_.erase(p);
+			lod_transparent_pages_.erase(p);
+		}
 		lod_pool_->release(it->second);
 		if (render()->passes().sun_shadow) render()->passes().sun_shadow->mark_dirty();
 		lod_pages_of_.erase(it);
@@ -361,6 +372,16 @@ void LodSystem::prepare_raster_locked() {
 	for (const ve::LodPageDraw &pd : page_draws)
 		pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});
 	render()->passes().lod_raster->set_draw_pages(pages);
+	// ponytail: the shell list is the CPU walk's pages, not HiZ-culled; painted ice is rare.
+	// Cull it too if a scene ever holds much of it.
+	transparent_draw_pages_.clear();
+	for (const ve::LodPageDraw &pd : page_draws)
+		if (lod_transparent_pages_.count(pd.page)) transparent_draw_pages_.push_back(pd);
+}
+
+std::vector<ve::LodPageDraw> LodSystem::transparent_draw_pages() const {
+	std::lock_guard<std::mutex> lock(lod_mutex_);
+	return transparent_draw_pages_;
 }
 
 // The LoD half of the edit fan-out. Edit lock held: queue only, never the lod mutex
@@ -403,6 +424,8 @@ void LodSystem::teardown() {
 	}
 	lod_pages_of_.clear();
 	lod_page_quads_.clear();
+	lod_transparent_pages_.clear();
+	transparent_draw_pages_.clear();
 	lod_op_overflow_ = 0;
 }
 
@@ -415,6 +438,8 @@ void LodSystem::release_gpu() {
 	if (lod_tree_) lod_tree_->clear();
 	lod_pages_of_.clear();
 	lod_page_quads_.clear();
+	lod_transparent_pages_.clear();
+	transparent_draw_pages_.clear();
 	lod_overflow_logged_.clear();
 	lod_op_overflow_ = 0;
 }

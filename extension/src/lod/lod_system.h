@@ -23,6 +23,7 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <unordered_set>
 #include <vector>
 
 #include "core/edit_pipeline.h"
@@ -79,7 +80,8 @@ public:
 	explicit LodSystem(Collaborators handles);
 
 	// THE lod mutex; guards lod_tree_, lod_walk_, lod_pages_of_, lod_page_quads_,
-	// lod_overflow_logged_ and lod_pool_ state between the render thread (tick) and
+	// lod_transparent_pages_, transparent_draw_pages_, lod_overflow_logged_ and lod_pool_ state
+	// between the render thread (tick) and
 	// main/tool threads (mark-dirty fan-out, debug stats). See core/edit_pipeline.h.
 	// (tick never holds mutex() across gather_ops; deferred edit marks are applied after
 	// releasing edit_mutex()).
@@ -95,6 +97,9 @@ public:
 	bool last_camera(float out[3]) const;
 	// Push the current walk's page list (with per-page quad counts) into the raster pass.
 	void prepare_raster();
+	// Spec §5: this walk's drawable pages that hold a transparent shell quad, for
+	// TransparentRasterPass. Refreshed by prepare_raster().
+	std::vector<ve::LodPageDraw> transparent_draw_pages() const;
 	// One cascade's shadow cut, pushed into the raster pass. Radius and min_level come from
 	// ve::sun_cascades(); the caller skips this entirely for a cascade that will not
 	// rebuild, which for cascade 2 is most frames.
@@ -160,6 +165,8 @@ private:
 	ve::LodWalkResult lod_walk_;
 	std::map<ve::LodKey, std::vector<int>> lod_pages_of_;
 	std::map<int, int> lod_page_quads_; // page -> number of quads stored in that page
+	std::unordered_set<int> lod_transparent_pages_; // pages holding at least one shell quad
+	std::vector<ve::LodPageDraw> transparent_draw_pages_; // this walk's, see below
 	std::set<ve::LodKey> lod_overflow_logged_; // once-per-chunk overflow diagnostics
 	int lod_op_overflow_ = 0; // guarded by lod_mutex_
 	// Marks queued by record(), guarded by WorldStore::edit_mutex(); drained by

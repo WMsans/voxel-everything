@@ -22,6 +22,8 @@ void main() {
 	vec3 p = lod_corner_pos(w, int(corner), c0.xyz, c0.w);
 	// Boundary ribbons are synthetic overlap geometry. They prevent camera coverage gaps but
 	// must not become steep shadow casters; collapse each tagged quad to zero area here.
-	if (lod_bits_get(w, 94, 1) != 0u) p = c0.xyz;
+	// Transparent shells cast no sun-map shadow either (spec §1): the ground under far ice
+	// stays lit, as the near field's walked sun ray keeps it.
+	if (lod_bits_get(w, 94, 1) != 0u || mat_transparent(lod_bits_get(w, 78, 16))) p = c0.xyz;
 	gl_Position = pc.sun_view_proj * vec4(p, 1.0);
 }
