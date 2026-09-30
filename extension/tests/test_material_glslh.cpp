@@ -53,3 +53,18 @@ TEST_CASE("the emitter names every foliage row and gives mat_glow both ranges") 
 	CHECK(s.find("FOLIAGE_GLOW[j]") != std::string::npos);
 	CHECK(s.find("FOLIAGE_GLOW_RGB[j]") != std::string::npos);
 }
+
+TEST_CASE("the emitter carries transparency and names no material after its tables") {
+	const std::string s = ve::material_table_glsl();
+	CHECK(s.find("const vec3 MAT_TRANSMIT[MATERIAL_COUNT]") != std::string::npos);
+	CHECK(s.find("const float MAT_IOR[MATERIAL_COUNT]") != std::string::npos);
+	CHECK(s.find("bool mat_transparent(uint id)") != std::string::npos);
+	CHECK(s.find("vec3 mat_transmit(uint id)") != std::string::npos);
+	CHECK(s.find("float mat_ior(uint id)") != std::string::npos);
+	for (int i = 0; i < ve::kMaterialCount; i++) {
+		std::string upper = ve::kMaterials[i].name;
+		for (char &c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+		CHECK(upper != "TRANSMIT");
+		CHECK(upper != "IOR");
+	}
+}
