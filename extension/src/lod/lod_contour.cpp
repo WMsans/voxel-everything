@@ -2,7 +2,9 @@
 #include "lod/lod_grid.h"
 #include "lod/lod_reduce.h"
 #include "world/brick.h"
+#include "world/material_table.h"
 #include "shade/oct.h"
+#include <algorithm>
 #include <cmath>
 
 namespace ve {
@@ -25,7 +27,8 @@ int mesh_cell_index(int x, int y, int z) {
 
 } // namespace
 
-void lod_contour(const uint8_t *lattice, const uint16_t *material, LodContourResult *out) {
+void lod_contour(const uint8_t *lattice, const uint16_t *material, LodContourResult *out,
+		bool shell_only) {
 	out->quads.clear();
 	out->normals.clear();
 	out->overflow = false;
@@ -95,6 +98,12 @@ void lod_contour(const uint8_t *lattice, const uint16_t *material, LodContourRes
 					const float db = decode_sdf(lattice[lod_lattice_index(Lb[0], Lb[1], Lb[2])]);
 					const bool sa = da <= 0.0f, sb = db <= 0.0f;
 					if (sa == sb) continue;
+					// The material of the SOLID endpoint of the edge: deterministic, and
+					// mirrorable in one line of GLSL. Looked up before the cap so a shell
+					// quad is never dropped by an opaque quad's overflow.
+					const uint16_t solid_material = material[lod_lattice_index(
+							sa ? L[0] : Lb[0], sa ? L[1] : Lb[1], sa ? L[2] : Lb[2])];
+					if (shell_only && !material_transparent(solid_material)) continue;
 					if (int(out->quads.size()) >= kLodMaxQuadsPerChunk) {
 						out->overflow = true;
 						return;
@@ -118,10 +127,7 @@ void lod_contour(const uint8_t *lattice, const uint16_t *material, LodContourRes
 					f.u[0] = uint8_t(ux); f.u[1] = uint8_t(uy); f.u[2] = uint8_t(uz);
 					f.axis = uint8_t(axis);
 					f.sign = sa ? 1 : 0;
-					// The material of the SOLID endpoint of the edge: deterministic, and
-					// mirrorable in one line of GLSL.
-					f.material = material[lod_lattice_index(sa ? L[0] : Lb[0], sa ? L[1] : Lb[1],
-							sa ? L[2] : Lb[2])];
+					f.material = solid_material;
 					// Store the corners ALREADY WOUND. (axis, b, c) is a right-handed cycle,
 					// so c0..c3 wind counter-clockwise seen from +axis; solid -> air along
 					// +axis puts the air on the +axis side, which is the side the normal must
@@ -141,6 +147,25 @@ void lod_contour(const uint8_t *lattice, const uint16_t *material, LodContourRes
 					out->normals.push_back(qn);
 				}
 			}
+}
+
+bool lod_append_shell(std::vector<LodQuad> *quads, std::vector<LodQuadNormals> *normals,
+		const std::vector<LodQuad> &shell, const std::vector<LodQuadNormals> &shell_normals) {
+	const size_t room = quads->size() < size_t(kLodMaxQuadsPerChunk)
+			? size_t(kLodMaxQuadsPerChunk) - quads->size() : 0;
+	const size_t n = std::min({room, shell.size(), shell_normals.size()});
+	quads->insert(quads->end(), shell.begin(), shell.begin() + n);
+	normals->insert(normals->end(), shell_normals.begin(), shell_normals.begin() + n);
+	return n < shell.size();
+}
+
+bool lod_quads_have_transparent(const LodQuad *quads, int count) {
+	for (int i = 0; i < count; i++) {
+		LodQuadFields f{};
+		lod_quad_unpack(quads[i], &f);
+		if (material_transparent(f.material)) return true;
+	}
+	return false;
 }
 
 } // namespace ve

@@ -29,4 +29,22 @@ int lod_lattice_index(int x, int y, int z);  // kLodChunkLattice^3, x fastest
 void lod_reduce_lattice(const uint8_t *fine_sdf, const uint16_t *fine_mat, uint8_t *out_sdf,
 		uint16_t *out_mat);
 
+// True when any SOLID sample of a reduced lattice (kLodChunkLattice^3) carries a transparent
+// material: the per-job bit lod_reduce.comp.glsl raises, and the only chunks that grow a
+// shell (docs/superpowers/specs/2026-09-29-transparent-materials-design.md §5).
+bool lod_has_transparent(const uint8_t *lattice, const uint16_t *material);
+
+// The encoded "just outside" value a transparent sample becomes in the opaque lattice: half
+// a cell, in the scaled-distance space lod_encode_sdf stores at this level. L0 stores metres,
+// so half a 0.4 m cell is 0.2; coarser levels store kSdfRange per two cells, so half a cell
+// is a quarter of the range. Mirror of the constant in lod_opaque.comp.glsl.
+uint8_t lod_outside_byte(float cell_size);
+
+// The OPAQUE lattice the far field's terrain mesh is contoured from: every solid sample whose
+// material is transparent becomes lod_outside_byte(cell_size), everything else is copied. The
+// identity on a chunk with no transparent label. `out` must not alias `lattice`. Mirror of
+// shaders/lod_opaque.comp.glsl.
+void lod_opaque_lattice(const uint8_t *lattice, const uint16_t *material, float cell_size,
+		uint8_t *out);
+
 } // namespace ve

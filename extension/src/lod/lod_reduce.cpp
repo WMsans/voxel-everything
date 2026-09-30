@@ -1,6 +1,7 @@
 #include "lod/lod_reduce.h"
 #include "lod/lod_grid.h"
 #include "world/brick.h"
+#include "world/material_table.h"
 
 namespace ve {
 
@@ -76,6 +77,26 @@ void lod_reduce_lattice(const uint8_t *fine_sdf, const uint16_t *fine_mat, uint8
 				}
 				out_mat[oi] = best;
 			}
+}
+
+bool lod_has_transparent(const uint8_t *lattice, const uint16_t *material) {
+	constexpr int n = kLodChunkLattice * kLodChunkLattice * kLodChunkLattice;
+	for (int i = 0; i < n; i++)
+		if (decode_sdf(lattice[i]) <= 0.0f && material_transparent(material[i])) return true;
+	return false;
+}
+
+uint8_t lod_outside_byte(float cell_size) {
+	return encode_sdf(cell_size <= kLodBaseCell ? 0.5f * cell_size : 0.25f * kSdfRange);
+}
+
+void lod_opaque_lattice(const uint8_t *lattice, const uint16_t *material, float cell_size,
+		uint8_t *out) {
+	constexpr int n = kLodChunkLattice * kLodChunkLattice * kLodChunkLattice;
+	const uint8_t outside = lod_outside_byte(cell_size);
+	for (int i = 0; i < n; i++)
+		out[i] = (decode_sdf(lattice[i]) <= 0.0f && material_transparent(material[i]))
+				? outside : lattice[i];
 }
 
 } // namespace ve
