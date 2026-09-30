@@ -148,6 +148,7 @@ TEST_CASE("page-sized ranges report shell quads only where they sit") {
 	const int opaque_count = int(terrain.quads.size());
 	ve::lod_append_shell(&terrain.quads, &terrain.normals, shell.quads, shell.normals);
 	// 1024 terrain quads fill pages 0-1; the 1024 shell quads fill pages 2-3.
+	CHECK(opaque_count == 2 * ve::kLodQuadsPerPage); // else the two CHECK_FALSEs go vacuous
 	CHECK_FALSE(ve::lod_quads_have_transparent(terrain.quads.data(), ve::kLodQuadsPerPage));
 	CHECK_FALSE(ve::lod_quads_have_transparent(terrain.quads.data() + ve::kLodQuadsPerPage,
 			opaque_count - ve::kLodQuadsPerPage));

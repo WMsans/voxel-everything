@@ -223,6 +223,11 @@ func test_removing_far_ice_drops_its_shell() -> void:
 	w.hooks().debug_apply_sphere_add(s[2], 10.0, material_id(w, "ice"))
 	settle(w, s[0])
 	assert_int(int(frame_until_shell(w, s[0], s[1])["transparent_pages"])).is_greater(0)
+	# The chunk must still be DRAWABLE: the shell went because the ice did, not because its
+	# page dropped out of the opaque list. The shell shares the terrain's pages, so the opaque
+	# draw list is the same list either way; this records it before the subtract and asserts it
+	# is still populated after.
+	var before: int = int((w.hooks().debug_lod_stats() as Dictionary)["draw_pages"])
 	w.hooks().debug_apply_sphere_subtract(s[2], 12.0)
 	settle(w, s[0])
 	var d := {}
@@ -233,11 +238,18 @@ func test_removing_far_ice_drops_its_shell() -> void:
 			break
 	assert_int(int(d["transparent_pages"])).override_failure_message(
 		"the shell outlived the ice: released pages were never forgotten").is_equal(0)
+	var after: int = int((w.hooks().debug_lod_stats() as Dictionary)["draw_pages"])
+	assert_int(after).override_failure_message(
+		"the chunk stopped being drawn opaque when its shell went: %d -> %d" % [
+			before, after]).is_greater(0)
 
 # --- the composite (spec §7) -------------------------------------------------------------
 
 func dist(a: Color, b: Color) -> float:
 	return Vector3(a.r - b.r, a.g - b.g, a.b - b.b).length()
+
+func ch(c: Color, i: int) -> float:
+	return [c.r, c.g, c.b][i]
 
 func test_a_scene_without_transparency_is_bit_identical_with_the_feature_on_and_off() -> void:
 	var w := make_world()
@@ -247,6 +259,50 @@ func test_a_scene_without_transparency_is_bit_identical_with_the_feature_on_and_
 	var off := frame(w)
 	assert_int(int(on["lit_checksum"])).override_failure_message(
 		"transparency changed a frame with no transparent material in it").is_equal(
+		int(off["lit_checksum"]))
+
+# The same invariant with the FAR FIELD actually running, which is the half the test above
+# cannot reach: make_world() never calls debug_init_physics()/debug_lod_stats(), so lod_.pool()
+# is null and frame.cpp skips its whole far-field block -- no opaque lattice, no zero-quad
+# dispatches, no counts stride, no shell page list, no shell raster, no lod.vert or shadow
+# collapse. far_setup() is what adds the two calls, so borrow it (it also aims the camera at
+# ground ~200 m out, where the far field owns the centre pixel). There is no ice in this world,
+# which is the point: with the feature ON every one of those mechanisms runs and must write
+# nothing into anything a pixel is made of.
+func test_a_no_ice_far_field_frame_is_bit_identical_with_the_feature_on_and_off() -> void:
+	var w := make_world()
+	var s := far_setup(w)
+	settle(w, s[0])
+	# The far field builds on the mesh worker, and a build landing BETWEEN the two frames
+	# would move the mesh and the checksum with it. So run until the far field has pages to
+	# draw and the worker has been quiet for eight frames, then take the two frames back to
+	# back.
+	var quiet := 0
+	var on := {}
+	for i in range(600):
+		w.hooks().debug_stream_frame(s[0])
+		var stats: Dictionary = w.hooks().debug_lod_stats()
+		on = frame(w, s[0], s[1])
+		if int(stats.get("draw_pages", 0)) > 0 and int(stats.get("requests_pending", 1)) == 0 and \
+				int(stats.get("builds_in_flight", 1)) == 0:
+			quiet += 1
+			if quiet >= 8:
+				break
+		else:
+			quiet = 0
+	var ok: PackedStringArray = on["stages_ok"]
+	assert_bool(ok.has("lod")).override_failure_message(
+		"the far field never drew: the invariant below would be vacuous: %s" % on).is_true()
+	assert_bool(ok.has("transparent_raster")).override_failure_message(
+		"the shell stage never ran: %s" % on).is_true()
+	assert_int(int(on["transparent_pages"])).override_failure_message(
+		"this world is supposed to hold no ice, yet it published shell pages: %s" % on).is_equal(0)
+	assert_int(int((w.hooks().debug_lod_stats() as Dictionary)["draw_pages"])).override_failure_message(
+		"the opaque LoD draw list is empty: %s" % on).is_greater(0)
+	w.set_transparency_value("enabled", 0.0)
+	var off := frame(w, s[0], s[1])
+	assert_int(int(on["lit_checksum"])).override_failure_message(
+		"the far field changed a frame with no transparent material in it: %s" % on).is_equal(
 		int(off["lit_checksum"]))
 
 func test_clear_ice_shows_the_ground_through_it() -> void:
@@ -260,12 +316,32 @@ func test_clear_ice_shows_the_ground_through_it() -> void:
 	w.set_transparency_value("enabled", 1.0)
 	var d := frame(w)
 	var clear: Color = d["center_lit"]
+	var trans: Color = d["center_trans"] # the transmittance the composite itself read
 	var ok: PackedStringArray = d["stages_ok"]
 	assert_bool(ok.has("transparency")).is_true()
-	assert_float(dist(clear, opaque)).override_failure_message(
-		"the composite left the pixel as opaque ice: %s vs %s" % [clear, opaque]).is_greater(0.01)
-	assert_float(dist(clear, bare)).override_failure_message(
-		"clear ice should sit nearer the bare ground than opaque ice does").is_less(dist(opaque, bare))
+	# The composite implements F*sky + (1-F)*(T*behind + (1-T)*body) (spec §7 step 4). On this
+	# pixel the front faces the lens (1 - n.v ~ 0.2, so F ~ 5e-4 and the sky term is a rounding
+	# error), which leaves the mix of two fixed colours: `bare` is the ground with no ice in
+	# it, `opaque` is this same ice shaded as ordinary terrain. The per-channel weight the
+	# composite puts on the body must therefore be proportional to (1 - T) -- the
+	# transmittance THIS frame reports, per channel, which is what makes this a check of the
+	# formula and not of "the stage ran".
+	#
+	# The scale is not 1, and cannot be: the front's own cel-shaded body is BRIGHTER than the
+	# same ice shaded down the deferred path (it carries its own front sun term and no SSAO), so
+	# the weight measured against `opaque` runs above (1 - T). The measured run puts
+	# weight / (1 - T) at 1.75 / 1.39 / 1.78 -- three channels whose (1 - T) span a factor of
+	# four collapsing onto one number, and that collapse is the signature being pinned. Hence
+	# the band: [1.2, 2.0] leaves about half the observed 0.39 spread on each side, and every
+	# degenerate composite falls out of it by a wide margin -- a no-op or a T = 1 mix gives
+	# 0.0, a T = 0 mix gives 1 / (1 - T) = 3.5 / 6.8 / 13.5, and a channel-flat WRONG T scales
+	# the three ratios by 1/0.284, 1/0.146, 1/0.074, which leaves the band immediately.
+	for i in range(3):
+		var weight: float = (ch(clear, i) - ch(bare, i)) / (ch(opaque, i) - ch(bare, i))
+		var scale: float = weight / (1.0 - ch(trans, i))
+		assert_float(scale).override_failure_message(
+			"channel %d: clear %s is not T*bare + (1-T)*body for bare %s, opaque %s, T %s" % [
+				i, clear, bare, opaque, trans]).is_between(1.2, 2.0)
 
 func test_thicker_ice_moves_the_pixel_further_from_the_ground() -> void:
 	var thin_w := make_world()
