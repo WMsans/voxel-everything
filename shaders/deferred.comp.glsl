@@ -26,38 +26,7 @@ layout(set = 0, binding = 6, std140) uniform SunBlock { SUN_CASCADE_BLOCK_FIELDS
 
 layout(push_constant, std430) uniform Push { DEFERRED_PUSH_FIELDS } pc;
 
-// The fits are camera-centred SPHERES, so a point at distance d is inside cascade i exactly
-// when d < radius_i. Selection is a scalar compare -- no depth-slice arithmetic and no
-// split-plane seam to reconcile against the projection. That is what the sphere fit buys.
-int sun_cascade_of(float d) {
-	int n = int(sun.splits.w);
-	for (int i = 0; i < SUN_CASCADES; i++) {
-		if (i >= n) break;
-		if (d < sun.splits[i]) return i;
-	}
-	return n - 1;
-}
-
-float sun_map_visibility(vec3 wpos, float ndl, float view_dist) {
-	int c = sun_cascade_of(view_dist);
-	vec4 clip = sun.view_proj[c] * vec4(wpos, 1.0);
-	if (clip.w <= 0.0) return 1.0;
-	vec3 p = clip.xyz / clip.w;
-	vec2 uv = p.xy * 0.5 + 0.5;
-	// Outside the outermost cascade's map there is no shadow information, and "lit" is the
-	// honest answer -- this is also what makes "beyond the last cascade" need no branch.
-	if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return 1.0;
-	float slope = clamp(1.0 - abs(ndl), 0.0, 1.0);
-	// p.z and the stored depth are normalized [0,1], so the bias must be too. Every term is
-	// texel-relative and deliberately so: a cascade spans thousands of metres of depth
-	// range, where an absolute bias contributes metres of slop and unseats the stored
-	// surface from the ground it rasterized. Per cascade, because the texels differ by ~10x.
-	float texel = sun.params[c].x / max(sun.params[c].y, 1e-6);
-	// Four texels is the smallest measured receiver bias that removes isolated far-LoD
-	// self-shadow specks; slope scaling handles grazing cells without metre-scale bias.
-	float bias = texel * (4.0 + 4.0 * slope);
-	return (p.z + bias >= texture(sun_map, vec3(uv, float(c))).r) ? 1.0 : 0.0;
-}
+#include "sun_map.glslh"
 
 // Did the LoD mesh draw this pixel? The sun map is rasterized from that mesh and from
 // nothing else, so it may only shade the pixels that mesh produced. The near field's surface
