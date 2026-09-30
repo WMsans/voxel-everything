@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://4ptn4bhfwscu"
+path="res://.godot/imported/lod_opaque.comp.glsl-14e141c90dc9cd793215e4d43d59ffb6.res"
+
+[deps]
+
+source_file="res://shaders/lod_opaque.comp.glsl"
+dest_files=["res://.godot/imported/lod_opaque.comp.glsl-14e141c90dc9cd793215e4d43d59ffb6.res"]
+
+[params]
+

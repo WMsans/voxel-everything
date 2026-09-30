@@ -837,9 +837,21 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 	// 3. The quads against ve::lod_contour on the GPU's own reduced bytes. The CPU side gets
 	// skirts appended exactly as LodBuildPass::build_sync does, so the two sets cover the
 	// same final records.
+	// Spec §5: the GPU contours the OPAQUE lattice for terrain and the original lattice for
+	// the shell, appending the shell after the skirts. The reference does exactly that.
+	std::vector<uint8_t> opaque_sdf(kReducedCount);
+	ve::lod_opaque_lattice(reduced_sdf.data(), reduced_mat.data(), cell, opaque_sdf.data());
 	ve::LodContourResult ref;
-	ve::lod_contour(reduced_sdf.data(), reduced_mat.data(), &ref);
+	ve::lod_contour(opaque_sdf.data(), reduced_mat.data(), &ref);
 	ve::lod_append_skirts(&ref.quads, &ref.normals);
+	ve::LodContourResult shell;
+	if (ve::lod_has_transparent(reduced_sdf.data(), reduced_mat.data()))
+		ve::lod_contour(reduced_sdf.data(), reduced_mat.data(), &shell, true);
+	ve::lod_append_shell(&ref.quads, &ref.normals, shell.quads, shell.normals);
+	int shell_quads = 0;
+	for (const ve::LodQuad &q : result.quads)
+		if (ve::lod_quads_have_transparent(&q, 1)) shell_quads++;
+	d["shell_quads"] = shell_quads;
 
 	using QuadKey = std::array<int, 10>; // u xyz, axis, sign, ribbon tag/face/edge/reverse, material
 	using Offsets = std::array<int, 12>;
