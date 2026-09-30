@@ -108,6 +108,10 @@ struct EditsBlock {
 	float params[4];  // x = radius, y = type, z = material, w = 1 while a brush is shown
 };
 
+struct TransparencyBlock {
+	float params[4];  // x = min step (m), y = min transmit, z = max steps, w = 1 when enabled
+};
+
 struct LodCullPush {
 	float view_proj[16];
 	int32_t params[4];  // x = page count, y = hiz size, z = hiz mips, w = unused
@@ -253,6 +257,9 @@ inline constexpr Field kEditsBlockFields[] = {
 	VE_LAYOUT_FIELD(EditsBlock, center, Vec4, 0),
 	VE_LAYOUT_FIELD(EditsBlock, params, Vec4, 0),
 };
+inline constexpr Field kTransparencyBlockFields[] = {
+	VE_LAYOUT_FIELD(TransparencyBlock, params, Vec4, 0),
+};
 inline constexpr Field kLodCullPushFields[] = {
 	VE_LAYOUT_FIELD(LodCullPush, view_proj, Mat4, 0),
 	VE_LAYOUT_FIELD(LodCullPush, params, IVec4, 0),
@@ -356,6 +363,7 @@ inline constexpr Block kBlocks[] = {
 	VE_LAYOUT_BLOCK(SunShadowPush, "SUN_SHADOW_PUSH_FIELDS", kSunShadowPushFields),
 	VE_LAYOUT_BLOCK(CameraParams, "CAMERA_PARAMS_FIELDS", kCameraParamsFields),
 	VE_LAYOUT_BLOCK(EditsBlock, "EDITS_BLOCK_FIELDS", kEditsBlockFields),
+	VE_LAYOUT_BLOCK(TransparencyBlock, "TRANSPARENCY_BLOCK_FIELDS", kTransparencyBlockFields),
 	VE_LAYOUT_BLOCK(LodCullPush, "LOD_CULL_PUSH_FIELDS", kLodCullPushFields),
 	VE_LAYOUT_BLOCK(GrassParams, "GRASS_PARAMS_FIELDS", kGrassParamsFields),
 	VE_LAYOUT_BLOCK(GrassRegionBlock, "GRASS_REGION_FIELDS", kGrassRegionBlockFields),

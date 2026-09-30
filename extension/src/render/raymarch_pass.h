@@ -3,6 +3,8 @@
 #include <godot_cpp/variant/rid.hpp>
 #include "render/camera_params.h"
 #include "render/gpu/gpu.h"
+#include "gpu_layout/blocks.h"
+#include "transparency/transparency_settings.h"
 #include <vector>
 
 namespace godot {
@@ -37,6 +39,10 @@ public:
 	// The sun UBO is owned by RenderOrchestrator; this pass only mirrors its RID into the
 	// uniform set. Call once after initialize() and before the first render.
 	void set_sun_ubo(RID buffer);
+	// Called every frame by VoxelFrame before render(); lands in the binding-33 UBO.
+	void set_transparency(const ve::TransparencySettings &s);
+	RID front_texture() const { return front_; }
+	RID trans_texture() const { return trans_; }
 	// `islands` may be null (no island support yet initialised) and `tile_mask` invalid (no
 	// cull pass has run); both fall back to the atlas's own all-ones single-entry mask.
 	// field_context is the orchestrator's set 1 (may be null when its build failed).
@@ -49,6 +55,8 @@ public:
 	RID surface_texture() const { return surface_; }
 	RID hitpos_texture() const { return hitpos_; }
 	RID cost_buffer() const { return cost_buf_; }
+	// The G-buffer targets run at march resolution, which is not the frame's size.
+	Vector2i target_size() const { return Vector2i(width_, height_); }
 
 private:
 	void rebuild_targets(RenderingDevice *rd, int w, int h);
@@ -65,9 +73,11 @@ private:
 	// on sampler_ -- they are integer textures and cannot be filtered at all.
 	RID sampler_linear_;
 	RID edits_ubo_;   // 32-byte uniform buffer, updated every render
+	RID tr_ubo_;      // TransparencyBlock (binding 33), updated every render
+	ve::TransparencyBlock tr_block_{};
 	RID sun_ubo_; // NOT owned: RenderOrchestrator frees it
 	RID material_albedo_, material_surface_, material_sampler_;
-	RID albedo_, surface_, hitpos_, cost_buf_;
+	RID albedo_, surface_, hitpos_, cost_buf_, front_, trans_;
 	gpu::SetCache set_, sun_set_; // set 0; set 2 (SunLight)
 	RID uset_mask_;
 	int width_ = 0, height_ = 0;

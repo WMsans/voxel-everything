@@ -264,6 +264,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	// textures. CompositePass's uniform set binds them and rebuilds itself on the new RIDs;
 	// its framebuffer is dropped here as it always was.
 	if (rmp->targets_need_rebuild(rw, rh, effective_mask)) cmp->release_targets();
+	rmp->set_transparency(render_.transparency_settings());
 	if (!rmp->render(rd, *atlas, render_.passes().islands, mask, cp, rw, rh, edit_state,
 			render_.passes().field_context)) {
 		cancel_stage(kStageRaymarch);

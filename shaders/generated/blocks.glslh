@@ -90,6 +90,9 @@
 	vec4 center; \
 	vec4 params;
 
+#define TRANSPARENCY_BLOCK_FIELDS \
+	vec4 params;
+
 #define LOD_CULL_PUSH_FIELDS \
 	mat4 view_proj; \
 	ivec4 params;

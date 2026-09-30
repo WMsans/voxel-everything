@@ -76,6 +76,14 @@ layout(set = 0, binding = 22, std430) readonly buffer RegionSlotCounts { int n[]
 // The pending-edit visualizer: tint the atlas content an edit WILL change, so the player
 // gets one frame of feedback before the regenerated bricks land (spec §5 latency).
 layout(set = 0, binding = 12) uniform Edits { EDITS_BLOCK_FIELDS } edits;
+// Transparency (spec §4). The G-buffer targets above describe what is BEHIND a transparent
+// front; the front itself goes here, for transparency_composite.comp.glsl.
+//   out_front  xy = front oct normal, z = front distance along the ray, w = front material
+//              (0 = no transparent front at this pixel)
+//   out_trans  rgb = transmittance through the medium, a = the front's own sun visibility
+layout(set = 0, binding = 31, rgba32f) writeonly uniform image2D out_front;
+layout(set = 0, binding = 32, rgba16f) writeonly uniform image2D out_trans;
+layout(set = 0, binding = 33) uniform Transparency { TRANSPARENCY_BLOCK_FIELDS } tr;
 
 layout(push_constant, std430) uniform Push { CAMERA_PARAMS_FIELDS } pc;
 
@@ -141,6 +149,7 @@ const int GLOSSY_SDF_STEPS = 64;
 const float GLOSSY_SDF_MIN_GLOSS = 0.5;
 const float GLOSSY_SDF_BIAS = 0.06;
 const float GLOSSY_SDF_STRENGTH = 0.80;
+const int TRANSPARENT_SEGMENTS = 4; // media one ray may cross before it counts as absorbed
 
 layout(set = 0, binding = 13, std430) readonly buffer IslandSdf { uint w[]; } island_sdf;
 layout(set = 0, binding = 14, std430) readonly buffer IslandMat { uint w[]; } island_mat;
@@ -518,6 +527,8 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
 	return h;
 }
 
+#define SUN_WALK_ENABLED (tr.params.w > 0.5)
+
 #include "sun_march.glslh"
 
 // Spec section 5: "islands shade/shadow/reflect exactly like static terrain". The AABB
@@ -579,6 +590,66 @@ void main() {
 
 	int primary_steps = 65536;
 	Hit best = march_terrain(ro, rd, max_dist, primary_steps);
+
+	// Transparency (spec §4). A transparent front is recorded for the composite, and the
+	// G-buffer gets what is BEHIND it, so every pass downstream lights an ordinary surface.
+	// Static terrain only: islands keep treating transparent materials as opaque (spec §1).
+	vec4 front_out = vec4(0.0);
+	vec3 trans = vec3(1.0);
+	Hit front;
+	front.hit = false;
+	front.t = 0.0;
+	front.p = ro;
+	front.n = vec3(0.0, 1.0, 0.0);
+	front.mat = 0u;
+	if (best.hit && tr.params.w > 0.5 && mat_transparent(best.mat)) {
+		front = best;
+		// A camera inside the medium hits it at t ~ 0, and the hit refinement can step a hair
+		// behind the origin; clamp so the walk and the composite work from the camera.
+		front.t = max(front.t, 0.0);
+		front_out = vec4(oct_encode(front.n), front.t, float(front.mat));
+		// World width of one marched pixel per metre of ray -- the glossy path's derivation.
+		float step_per_m = 2.0 * max(pc.params.x / float(size.x), pc.params.y / float(size.y));
+		Hit cur = front;
+		bool absorbed = true;
+		for (int seg = 0; seg < TRANSPARENT_SEGMENTS; seg++) {
+			TransparentWalk w = walk_transparent(ro, rd, cur.t + VOXEL_SIZE * 0.5, tr.params.x,
+					step_per_m, tr.params.y, int(tr.params.z), primary_steps);
+			trans *= w.T;
+			if (w.end == WALK_ABSORBED) break;
+			if (w.end == WALK_OPAQUE) {
+				cur.hit = true;
+				cur.t = w.t;
+				cur.p = ro + rd * w.t;
+				cur.n = opaque_boundary_normal(cur.p, rd);
+				cur.mat = w.mat;
+				absorbed = false;
+				break;
+			}
+			// Out into air: march on from just past the exit face.
+			float t0 = w.t + VOXEL_SIZE;
+			Hit next = march_terrain(ro + rd * t0, rd, max(max_dist - t0, 0.0), primary_steps);
+			if (!next.hit) {
+				cur.hit = false;
+				cur.t = max_dist;
+				absorbed = false;
+				break;
+			}
+			next.t += t0;
+			cur = next;
+			if (!mat_transparent(cur.mat)) {
+				absorbed = false;
+				break;
+			}
+		}
+		if (absorbed) {
+			// Opaque from here on (the cutoff, the step cap or the segment cap): the G-buffer
+			// keeps the front itself and the composite shows its body alone.
+			trans = vec3(0.0);
+			cur = front;
+		}
+		best = cur;
+	}
 
 	// Which islands could be here? pc.region_origin.w is the cull grid's tiles-per-row, and
 	// 0 means "no mask" -- the 1x1 debug probes and any frame before the cull pass has run.
@@ -664,6 +735,15 @@ void main() {
 		}
 	}
 
+	// The transparent front's own sun visibility, for the composite. It is the one the ray
+	// marcher would have given the ice itself: a second sun march per transparent pixel.
+	float front_sun = 1.0;
+	if (front.hit && (flags & BEAUTY_RAY_SUN_SHADOW) != 0u) {
+		vec3 fro = front.p + front.n * 0.06;
+		front_sun = min(terrain_sun_visibility(fro, RAY_SHADOW_DIST),
+				island_sun_visibility(fro, island_count, RAY_SHADOW_DIST));
+	}
+
 	// The pending-edit visualiser tints the DESCRIPTION, so the tint survives the deferred
 	// pass instead of being relit away.
 	if (best.hit && edits.params.x > 0.0 &&
@@ -703,6 +783,8 @@ void main() {
 		// SHADING normal the map produces at zero gradients -- mip 0, no render path, no
 		// geometry -- which is the only way to ask what the art itself says.
 		imageStore(out_hitpos, px, vec4(probe_shading_n, 1.0));
+		imageStore(out_front, px, vec4(0.0));
+		imageStore(out_trans, px, vec4(1.0));
 		return;
 	}
 
@@ -723,4 +805,6 @@ void main() {
 	imageStore(out_albedo, px, vec4(overlay, sun));
 	imageStore(out_surface, px, vec4(oct, mat_id, overlay_w));
 	imageStore(out_hitpos, px, hitpos);
+	imageStore(out_front, px, front_out);
+	imageStore(out_trans, px, vec4(trans, front_sun));
 }
