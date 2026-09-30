@@ -266,3 +266,46 @@ Characterization first:
   https://users.aalto.fi/~laines9/publications/laine2010i3d_paper.pdf
 - The author's surface-nets terrain this far-field approach extends:
   https://github.com/WMsans/Unity_SDF_Terrain
+
+## 11. Deviations recorded during planning
+
+1. `composite.frag.glsl` is not edited: `transparency_composite` samples the marcher's
+   march-resolution front targets directly, nearest-sampled like composite.frag's geometry.
+2. The opaque-lattice pass always runs (identity without transparent labels); the shell
+   passes early-out on the job's bit instead of the CPU skipping dispatches.
+3. Shell quads share their chunk's pages after the skirts and are told apart by material;
+   the opaque and shadow vertex shaders collapse them. No new arena range or quad bit.
+4. The shell list is the CPU walk's pages holding shell quads, not HiZ-culled.
+5. Grass and leaf sun marches always see through transparency; only the raymarcher's march
+   honours `enabled`.
+6. With `enabled` off, far-field ice still casts no sun-map shadow.
+7. The composite reads one or two texels per pixel whenever enabled; its measured cost is
+   the Step 2 steady-leg delta, "B − mean(A1, A2) = +0.65 ms p50" on a 52 ms frame
+   (interleaved A/B/A, `--ice=3` on every leg, 300 sampled frames each, V-Sync disabled,
+   `render_scale=0.65`, `near_field_scale=0.40`; p50 ms: A1 52.38, B 53.03, A2 52.38 — and
+   the two A legs agree to 0.00 ms, so p50 separates the feature from the noise). The p99
+   delta is **not** a measurement worth quoting: B's p99 is 62.50 ms against a mean A of
+   58.38 ms, i.e. +4.13 ms, but the two A legs already differ by 1.89 ms p99 and a second
+   run of the same three legs put the same figure at +0.55 ms. No pass-level GPU numbers
+   exist at all: this machine reports `valid_samples=0`, so the `transparency` and
+   `transparent_raster` stages were never timed (memory:
+   gpu-timings-invalid-on-this-machine).
+8. §9's automated seam-probe check became a rendered-frame check, not a hook
+   (`tools/transparency_capture.gd`): the existing seam probe marks terrain ownership, not
+   front ownership, and a hook that re-derived front ownership would test a copy of the
+   logic rather than the shipping pass. What was actually inspected, through
+   `demo/main.tscn`:
+   - `seam` — one continuous ridge of overlapping ice balls, placed every 6 m along the
+     ground from 20 m to 144 m out, which is about 45 m to 150 m of true range from a lens
+     45 m up: it crosses this world's fade band (64–80 m) with marched ice in front of it and
+     shell ice behind. Read at 1× and at 5×. The ice reads as ice on both sides of the band,
+     the ground shows through it, the dither rim is the ordinary near/far cross-fade, and no
+     double-dark or missing-pixel line was visible.
+   - `foliage` — a 4 m ice ball 14 m ahead of a low camera with the shipped grass scatter
+     (18 096 blades). The blades draw over the ice untinted, which is §7 step 1's
+     G-buffer-depth rule.
+   Both PNGs are under `reports/transparency-B/`, which is git-ignored, so they are not in
+   the tree; the tool regenerates them. What was **not** done: nobody played the demo with
+   the mouse-driven edit tool, and no frame was judged at native resolution in a live
+   window. These are rendered stills, inspected by eye at 1× and magnified, and a still
+   cannot show a seam that only appears while the camera moves through the band.
