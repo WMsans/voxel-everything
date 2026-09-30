@@ -32,6 +32,7 @@
 #include "render/ssr_pass.h"
 #include "render/sun_shadow_pass.h"
 #include "render/transparent_raster_pass.h"
+#include "render/transparency_composite_pass.h"
 #include "render/sun_ubo.h"
 #include "render/world_streamer.h"
 #include "shade/beauty_settings.h"
@@ -476,7 +477,6 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		else cancel_stage(kStageTransparentRaster);
 		far_front = shell_ok && shell->drew();
 	}
-	(void)far_front; // Task 8's composite reads the far front layer.
 
 	SsgiPass *ssgi = render_.passes().ssgi;
 	if (ssgi) ssgi->clear_result();
@@ -536,6 +536,30 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		return false;
 	}
 	end_stage(rd, kStageDeferred);
+	// Transparency, shading (spec §7): fronts over what deferred lit behind them. Failure
+	// cancels the marker and leaves deferred's image -- never aborts the frame.
+	if (TransparencyCompositePass *tc = render_.passes().transparency_composite;
+			tc && transparency.enabled) {
+		TransparencyCompositePass::Params tp;
+		for (int k = 0; k < 3; k++) {
+			tp.right[k] = cp.cam_right[k];
+			tp.up[k] = cp.cam_up[k];
+			tp.ambient[k] = beauty.ambient[k];
+		}
+		tp.tan_x = cp.params[0];
+		tp.tan_y = cp.params[1];
+		tp.fade_start = fade_start;
+		tp.fade_end = fade_end;
+		tp.flags = beauty_flags;
+		TransparentRasterPass *shell_pass = render_.passes().transparent_raster;
+		timings->begin(rd, "transparency");
+		const bool tc_ok = tc->render(rd, *gb, *materials, rmp->front_texture(),
+				rmp->trans_texture(), shell_pass ? shell_pass->front() : RID(),
+				shell_pass ? shell_pass->trans() : RID(), far_front,
+				use_sun ? sun->map() : RID(), deferred->sun_cascade_ubo(), ubo->buffer(), tp);
+		if (tc_ok) end_stage(rd, kStageTransparency);
+		else cancel_stage(kStageTransparency);
+	}
 	timings->begin(rd, "inject");
 	if (!inject->draw(rd, in.scene_color, in.scene_depth, gb->lit(), gb->depth())) {
 		cancel_stage(kStageInject);
@@ -614,7 +638,7 @@ bool VoxelFrame::render_post_opaque(RenderingDevice *rd, const FrameInputs &in) 
 const char *godot::frame_stage_name(FrameStage stage) {
 	static const char *const kNames[kStageCount] = {"stream", "raymarch", "composite", "lod",
 			"sun_shadow", "grass", "ssgi", "deferred", "ssao", "inject", "contact", "ssr",
-			"outlines", "history", "transparent_raster"};
+			"outlines", "history", "transparent_raster", "transparency"};
 	return stage < kStageCount ? kNames[stage] : "";
 }
 

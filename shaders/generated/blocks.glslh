@@ -137,6 +137,13 @@
 	ivec4 region_origin; \
 	ivec4 atlas_bricks;
 
+#define TRANSPARENCY_COMPOSITE_PUSH_FIELDS \
+	vec4 right_tanx; \
+	vec4 up_tany; \
+	vec4 sky; \
+	vec4 fade; \
+	uvec4 flags;
+
 #define DOWNSAMPLE_PUSH_FIELDS \
 	ivec4 dims;
 

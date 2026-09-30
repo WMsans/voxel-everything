@@ -233,3 +233,58 @@ func test_removing_far_ice_drops_its_shell() -> void:
 			break
 	assert_int(int(d["transparent_pages"])).override_failure_message(
 		"the shell outlived the ice: released pages were never forgotten").is_equal(0)
+
+# --- the composite (spec §7) -------------------------------------------------------------
+
+func dist(a: Color, b: Color) -> float:
+	return Vector3(a.r - b.r, a.g - b.g, a.b - b.b).length()
+
+func test_a_scene_without_transparency_is_bit_identical_with_the_feature_on_and_off() -> void:
+	var w := make_world()
+	w.set_transparency_value("enabled", 1.0)
+	var on := frame(w)
+	w.set_transparency_value("enabled", 0.0)
+	var off := frame(w)
+	assert_int(int(on["lit_checksum"])).override_failure_message(
+		"transparency changed a frame with no transparent material in it").is_equal(
+		int(off["lit_checksum"]))
+
+func test_clear_ice_shows_the_ground_through_it() -> void:
+	var w := make_world()
+	var ground := centre_hit(w)
+	var bare: Color = frame(w)["center_lit"]
+	w.hooks().debug_apply_sphere_add(ground, 1.0, material_id(w, "ice"))
+	settle(w)
+	w.set_transparency_value("enabled", 0.0)
+	var opaque: Color = frame(w)["center_lit"]
+	w.set_transparency_value("enabled", 1.0)
+	var d := frame(w)
+	var clear: Color = d["center_lit"]
+	var ok: PackedStringArray = d["stages_ok"]
+	assert_bool(ok.has("transparency")).is_true()
+	assert_float(dist(clear, opaque)).override_failure_message(
+		"the composite left the pixel as opaque ice: %s vs %s" % [clear, opaque]).is_greater(0.01)
+	assert_float(dist(clear, bare)).override_failure_message(
+		"clear ice should sit nearer the bare ground than opaque ice does").is_less(dist(opaque, bare))
+
+func test_thicker_ice_moves_the_pixel_further_from_the_ground() -> void:
+	var thin_w := make_world()
+	var g := centre_hit(thin_w)
+	var bare: Color = frame(thin_w)["center_lit"]
+	thin_w.hooks().debug_apply_sphere_add(g, 0.6, material_id(thin_w, "ice"))
+	settle(thin_w)
+	var thin: Color = frame(thin_w)["center_lit"]
+	var thick_w := make_world()
+	thick_w.hooks().debug_apply_sphere_add(centre_hit(thick_w), 1.6, material_id(thick_w, "ice"))
+	settle(thick_w)
+	var thick: Color = frame(thick_w)["center_lit"]
+	assert_float(dist(thick, bare)).is_greater(dist(thin, bare))
+
+func test_ice_frames_are_finite_and_deterministic() -> void:
+	var w := make_world()
+	w.hooks().debug_apply_sphere_add(centre_hit(w), 1.0, material_id(w, "ice"))
+	settle(w)
+	var a := frame(w)
+	var b := frame(w)
+	assert_bool(finite(a["center_lit"])).is_true()
+	assert_int(int(a["lit_checksum"])).is_equal(int(b["lit_checksum"]))
