@@ -849,6 +849,8 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 		ve::lod_contour(reduced_sdf.data(), reduced_mat.data(), &shell, true);
 	ve::lod_append_shell(&ref.quads, &ref.normals, shell.quads, shell.normals);
 	int shell_quads = 0;
+	// Exact, not an over-count: on a transparent-free chunk no terrain quad's solid side can
+	// be transparent, and lod_skirt.cpp copies the parent's fields, so no skirt can either.
 	for (const ve::LodQuad &q : result.quads)
 		if (ve::lod_quads_have_transparent(&q, 1)) shell_quads++;
 	d["shell_quads"] = shell_quads;

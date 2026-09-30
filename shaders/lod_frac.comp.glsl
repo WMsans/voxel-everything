@@ -13,6 +13,9 @@ layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 
 layout(set = 0, binding = 0, r8) readonly uniform image3D lattice;
 layout(set = 0, binding = 1, std430) writeonly buffer Frac { uint v[]; } frac;
+// Four uints per job (LodBuildPass): [3] bit 0 is the job's has-transparent flag. Read only
+// in shell mode, the same bit lod_quads.comp.glsl early-outs on.
+layout(set = 0, binding = 2, std430) readonly buffer Counts { uint v[]; } counts;
 
 const ivec3 CORNER[8] = ivec3[8](ivec3(0, 0, 0), ivec3(1, 0, 0), ivec3(0, 1, 0), ivec3(1, 1, 0),
 		ivec3(0, 0, 1), ivec3(1, 0, 1), ivec3(0, 1, 1), ivec3(1, 1, 1));
@@ -33,6 +36,11 @@ vec3 trilinear_gradient(float d[8], vec3 f) {
 void main() {
 	ivec3 m = ivec3(gl_GlobalInvocationID);
 	if (any(greaterThanEqual(m, ivec3(LOD_CHUNK_MESH_CELLS)))) return;
+	// Shell mode (lpc.params.w == 1): a job whose reduce raised no transparent bit grows no
+	// shell, so every thread leaves before the eight image loads. The terrain pass below
+	// runs at mode 0 and rewrites this buffer whole for the same job, so an unwritten cell
+	// never reaches the quads pass.
+	if (lpc.params.w == 1 && (counts.v[uint(lpc.job.w) * 4u + 3u] & 1u) == 0u) return;
 	int ci = m.x + m.y * LOD_CHUNK_MESH_CELLS +
 			m.z * LOD_CHUNK_MESH_CELLS * LOD_CHUNK_MESH_CELLS;
 
