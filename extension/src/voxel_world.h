@@ -169,6 +169,8 @@ public:
 	float get_grass_value(const String &name) const;
 	bool set_leaf_value(const String &name, float v);
 	float get_leaf_value(const String &name) const;
+	bool set_transparency_value(const String &name, float v);
+	float get_transparency_value(const String &name) const;
 	// The shipping canopy pass, or null when the GPU graph refused it (fail-soft).
 	// Read-only: the orchestrator owns its lifetime, like every other pass pointer.
 	LeafScatterPass *leaf_scatter_pass() const;

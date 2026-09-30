@@ -32,6 +32,7 @@
 #include "render/gpu/gpu.h"
 #include "grass/grass_settings_store.h"
 #include "leaves/leaf_settings_store.h"
+#include "transparency/transparency_settings_store.h"
 #include "render/frame.h"
 #include "render/gpu_timings.h"
 #include "render/island_handoff.h"
@@ -247,6 +248,9 @@ public:
 	ve::LeafSettings leaf_settings() const { return leaf_settings_.get(); }
 	bool set_leaf_value(const char *n, float v) { return leaf_settings_.set_value(n, v); }
 	float leaf_value(const char *n) const { return leaf_settings_.value(n); }
+	ve::TransparencySettings transparency_settings() const { return transparency_settings_.get(); }
+	bool set_transparency_value(const char *n, float v) { return transparency_settings_.set_value(n, v); }
+	float transparency_value(const char *n) const { return transparency_settings_.value(n); }
 	GpuTimings *gpu_timings() { return &gpu_timings_; }
 
 	// --- history/beauty frame state (moved with the pass graph) ---
@@ -315,6 +319,7 @@ private:
 	// are their own module with their own store, exactly as grass is.
 	ve::GrassSettingsStore grass_settings_;
 	ve::LeafSettingsStore leaf_settings_;
+	ve::TransparencySettingsStore transparency_settings_;
 	GpuTimings gpu_timings_;
 	IslandHandoff handoff_;
 	WorldStreamer *streamer_ = nullptr; // created inside ensure_gpu_graph(), deleted in teardown_gpu()
