@@ -51,6 +51,7 @@ enum FrameStage : uint32_t {
 	kStageSsr,
 	kStageOutlines,
 	kStageHistory,
+	kStageTransparentRaster,
 	kStageCount
 };
 

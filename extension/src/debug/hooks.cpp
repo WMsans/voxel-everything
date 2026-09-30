@@ -23,6 +23,7 @@
 #include "render/ssao_pass.h"
 #include "render/ssr_pass.h"
 #include "render/outline_pass.h"
+#include "render/transparent_raster_pass.h"
 #include "beauty_compositor.h"
 #include "render/region_pass.h"
 #include "render/brick_gen_pass.h"
@@ -402,6 +403,18 @@ Dictionary VoxelDebugHooks::debug_render_frame(Vector3 pos, Vector3 fwd, int w, 
 			if (sf.size() >= (mc + 1) * 8)
 				d["center_material"] = static_cast<int>(half_to_float(
 						reinterpret_cast<const uint16_t *>(sf.ptr())[mc * 4 + 2]) + 0.5f);
+		}
+		// The far field's shell layer, at FULL resolution (spec §5): how many pages carried
+		// shell quads this frame, and what the nearest one wrote at the centre pixel.
+		TransparentRasterPass *shell = world_->context().render->passes().transparent_raster;
+		d["transparent_pages"] = shell ? shell->draw_page_count() : 0;
+		d["far_center_front"] = Color();
+		if (shell && shell->drew()) {
+			const PackedByteArray ff = device->texture_get_data(shell->front(), 0);
+			if (ff.size() >= (c + 1) * 16) {
+				const float *f = reinterpret_cast<const float *>(ff.ptr()) + c * 4;
+				d["far_center_front"] = Color(f[0], f[1], f[2], f[3]);
+			}
 		}
 	}
 	return d;

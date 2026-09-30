@@ -172,3 +172,64 @@ func test_painted_ice_shows_the_ground_below_the_lens() -> void:
 	assert_int(int((d["center_front"] as Color).a + 0.5)).is_equal(ice)
 	assert_int(int(d["center_material"])).is_not_equal(ice)
 	assert_float((d["center_trans"] as Color).r).is_greater(0.0)
+
+# --- the far field (spec §5) -------------------------------------------------------------
+
+# Frames until the LoD has built and published the shell, or gives up. Builds are async on
+# the mesh worker; each frame collects what finished.
+func frame_until_shell(w: VoxelWorld, cam: Vector3, fwd: Vector3) -> Dictionary:
+	var d := {}
+	for i in range(600):
+		w.hooks().debug_stream_frame(cam)
+		d = frame(w, cam, fwd)
+		if int(d.get("transparent_pages", 0)) > 0:
+			break
+	return d
+
+func far_setup(w: VoxelWorld) -> Array:
+	# The far field's LoD needs two things a near-field-only world never asks for, and both
+	# are what every other LoD suite in this repo already does. The builds run on the
+	# MeshService that debug_init_physics() creates, and the frame's far-field block is
+	# gated on the LoD pool, which only a LoD query creates. Without either, the walk asks
+	# for 32 chunks and nothing ever builds them: transparent_pages stays 0 forever.
+	assert_bool(w.hooks().debug_init_physics()).is_true()
+	w.hooks().debug_lod_stats()
+	# An ice ball on the ground ~200 m out: well past the near field's fade band.
+	var down: Dictionary = w.raycast(Vector3(CAM.x + 200.0, 200.0, CAM.z), Vector3.DOWN, 300.0)
+	assert_bool(down["hit"]).is_true()
+	var target: Vector3 = down["pos"]
+	var cam := Vector3(CAM.x, target.y + 60.0, CAM.z)
+	var fwd := (target - cam).normalized()
+	var seen: Dictionary = w.raycast(cam, fwd, 400.0)
+	assert_bool(seen["hit"] and float(seen["distance"]) > 150.0).override_failure_message(
+		"terrain hides the far ice from this camera; raise it").is_true()
+	return [cam, fwd, target]
+
+func test_far_ice_is_drawn_by_the_shell() -> void:
+	var w := make_world()
+	var s := far_setup(w)
+	w.hooks().debug_apply_sphere_add(s[2], 10.0, material_id(w, "ice"))
+	settle(w, s[0])
+	var d := frame_until_shell(w, s[0], s[1])
+	assert_int(int(d["transparent_pages"])).override_failure_message(
+		"no shell pages were ever published: %s" % d).is_greater(0)
+	var ok: PackedStringArray = d["stages_ok"]
+	assert_bool(ok.has("transparent_raster")).is_true()
+	assert_int(int((d["far_center_front"] as Color).a + 0.5)).is_equal(material_id(w, "ice"))
+
+func test_removing_far_ice_drops_its_shell() -> void:
+	var w := make_world()
+	var s := far_setup(w)
+	w.hooks().debug_apply_sphere_add(s[2], 10.0, material_id(w, "ice"))
+	settle(w, s[0])
+	assert_int(int(frame_until_shell(w, s[0], s[1])["transparent_pages"])).is_greater(0)
+	w.hooks().debug_apply_sphere_subtract(s[2], 12.0)
+	settle(w, s[0])
+	var d := {}
+	for i in range(600):
+		w.hooks().debug_stream_frame(s[0])
+		d = frame(w, s[0], s[1])
+		if int(d["transparent_pages"]) == 0:
+			break
+	assert_int(int(d["transparent_pages"])).override_failure_message(
+		"the shell outlived the ice: released pages were never forgotten").is_equal(0)

@@ -31,6 +31,7 @@
 #include "render/ssgi_pass.h"
 #include "render/ssr_pass.h"
 #include "render/sun_shadow_pass.h"
+#include "render/transparent_raster_pass.h"
 #include "render/sun_ubo.h"
 #include "render/world_streamer.h"
 #include "shade/beauty_settings.h"
@@ -457,6 +458,26 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		else timings->cancel("leaves");
 	}
 
+	// Transparency, far half (spec §5): the shell's front faces into the far front layer,
+	// after every producer of G-buffer depth, so grass and leaves in front of ice hide it.
+	// A failure cancels the marker and skips the far layer -- never aborts the frame.
+	bool far_front = false;
+	TransparentRasterPass *shell = render_.passes().transparent_raster;
+	if (shell) shell->set_draw_pages({});
+	if (shell && transparency.enabled && !in.debug.skip_far_field && lod_.pool() && lod_raster) {
+		std::vector<LodRasterPass::PageDraw> shell_pages;
+		for (const ve::LodPageDraw &pd : lod_.transparent_draw_pages())
+			shell_pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});
+		shell->set_draw_pages(shell_pages);
+		timings->begin(rd, "transparent_raster");
+		const bool shell_ok = shell->draw(rd, *lod_.pool(), lod_raster->index_array(), *gb,
+				ubo->buffer(), fade_start, fade_end, lod_raster->front_face_clockwise());
+		if (shell_ok) end_stage(rd, kStageTransparentRaster);
+		else cancel_stage(kStageTransparentRaster);
+		far_front = shell_ok && shell->drew();
+	}
+	(void)far_front; // Task 8's composite reads the far front layer.
+
 	SsgiPass *ssgi = render_.passes().ssgi;
 	if (ssgi) ssgi->clear_result();
 	bool ssgi_ok = false;
@@ -593,7 +614,7 @@ bool VoxelFrame::render_post_opaque(RenderingDevice *rd, const FrameInputs &in) 
 const char *godot::frame_stage_name(FrameStage stage) {
 	static const char *const kNames[kStageCount] = {"stream", "raymarch", "composite", "lod",
 			"sun_shadow", "grass", "ssgi", "deferred", "ssao", "inject", "contact", "ssr",
-			"outlines", "history"};
+			"outlines", "history", "transparent_raster"};
 	return stage < kStageCount ? kNames[stage] : "";
 }
 

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://5p1o1verb7dm"
+path="res://.godot/imported/transparent.vert.glsl-6a974f1391030c8067d5f04d1533e9e8.res"
+
+[deps]
+
+source_file="res://shaders/transparent.vert.glsl"
+dest_files=["res://.godot/imported/transparent.vert.glsl-6a974f1391030c8067d5f04d1533e9e8.res"]
+
+[params]
+

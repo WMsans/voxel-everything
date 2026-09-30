@@ -86,6 +86,10 @@ struct LodRasterPush {
 	float fade[4];  // x = fade end, y = 1 when transparency is on (shell quads skipped), zw unused
 };
 
+struct TransparentRasterPush {
+	float fade[4];  // x = fade start, y = fade end (metres), zw unused
+};
+
 struct CompositePush {
 	float view_proj[16];
 	float cam[4];         // xyz = camera position, w = fade start
@@ -229,6 +233,9 @@ inline constexpr Field kLodRasterPushFields[] = {
 	VE_LAYOUT_FIELD(LodRasterPush, cam, Vec4, 0),
 	VE_LAYOUT_FIELD(LodRasterPush, fade, Vec4, 0),
 };
+inline constexpr Field kTransparentRasterPushFields[] = {
+	VE_LAYOUT_FIELD(TransparentRasterPush, fade, Vec4, 0),
+};
 inline constexpr Field kCompositePushFields[] = {
 	VE_LAYOUT_FIELD(CompositePush, view_proj, Mat4, 0),
 	VE_LAYOUT_FIELD(CompositePush, cam, Vec4, 0),
@@ -358,6 +365,7 @@ inline constexpr Block kBlocks[] = {
 	VE_LAYOUT_BLOCK(BeautyCamBlock, "BEAUTY_CAM_FIELDS", kBeautyCamBlockFields),
 	VE_LAYOUT_BLOCK(SunLightBlock, "SUN_LIGHT_FIELDS", kSunLightBlockFields),
 	VE_LAYOUT_BLOCK(LodRasterPush, "LOD_RASTER_PUSH_FIELDS", kLodRasterPushFields),
+	VE_LAYOUT_BLOCK(TransparentRasterPush, "TRANSPARENT_RASTER_PUSH_FIELDS", kTransparentRasterPushFields),
 	VE_LAYOUT_BLOCK(CompositePush, "COMPOSITE_PUSH_FIELDS", kCompositePushFields),
 	VE_LAYOUT_BLOCK(GrassRasterPush, "GRASS_RASTER_PUSH_FIELDS", kGrassRasterPushFields),
 	VE_LAYOUT_BLOCK(SunShadowPush, "SUN_SHADOW_PUSH_FIELDS", kSunShadowPushFields),
