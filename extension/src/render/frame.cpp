@@ -250,6 +250,9 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		return false;
 	}
 	const int islands = render_.island_slot_count();
+	// One read per frame, shared by the near field's marcher and the far field's shell skip:
+	// both key off the same switch, and reading it twice invites one of them to be stale.
+	const ve::TransparencySettings transparency = render_.transparency_settings();
 	IslandCullPass *cull = render_.passes().island_cull;
 	RID mask;
 	timings->begin(rd, "raymarch");
@@ -296,6 +299,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	const int cascade_count = ve::sun_cascades(store_.config().stream_radius_m,
 			SunShadowPass::kSize, cascades);
 	const bool clamp_levels = settings.sun_cascade_min_level;
+	if (lod_raster) lod_raster->set_skip_transparent(transparency.enabled);
 	if (!in.debug.skip_far_field && lod_.pool() && lod_raster && render_.passes().materials) {
 		ve::LodCamera lod_cam;
 		for (int c = 0; c < 4; c++)
