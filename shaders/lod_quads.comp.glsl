@@ -16,7 +16,8 @@ layout(set = 0, binding = 1, r16ui) readonly uniform uimage3D material;
 layout(set = 0, binding = 2, std430) readonly buffer Frac { uint v[]; } frac;
 // Three uints per quad: ve::LodQuad.
 layout(set = 0, binding = 3, std430) writeonly buffer Quads { uint v[]; } quads;
-// Four uints per job: quad count, overflow flag, shell quad count, flags (bit 0 has transparent, bit 1 shell overflow).
+// Four uints per job: quad count, overflow flag, shell quad count, and flags
+// (bit 0 has transparent, bit 1 shell overflow).
 layout(set = 0, binding = 4, std430) buffer Counts { uint v[]; } counts;
 // Four octahedral snorm8 corner normals per quad, packed two per uint.
 layout(set = 0, binding = 5, std430) writeonly buffer Normals { uint v[]; } normals;

@@ -166,10 +166,12 @@ bool LodBuildPass::initialize(RenderingDevice *rd, const LodBuildConfig &cfg) {
 		teardown();
 		return false;
 	}
+	// Both sets bind counts_ because the shader declares it; only the shell set runs at mode
+	// 1, and only that mode reads the has-transparent bit.
 	frac_set_ = gpu::uniform_set(rd, group_, frac_program_.shader, 0,
-			{gpu::image(0, opq_sdf_), gpu::storage(1, frac_)});
+			{gpu::image(0, opq_sdf_), gpu::storage(1, frac_), gpu::storage(2, counts_)});
 	frac_shell_set_ = gpu::uniform_set(rd, group_, frac_program_.shader, 0,
-			{gpu::image(0, lat_sdf_), gpu::storage(1, frac_)});
+			{gpu::image(0, lat_sdf_), gpu::storage(1, frac_), gpu::storage(2, counts_)});
 	if (!frac_set_.is_valid() || !frac_shell_set_.is_valid()) {
 		UtilityFunctions::printerr("LodBuildPass: frac uniform set creation failed");
 		teardown();
@@ -269,10 +271,11 @@ void LodBuildPass::record_opaque(int64_t list, const LodBuildJob &job, int job_i
 	rd_->compute_list_dispatch(list, g, g, g);
 }
 
-void LodBuildPass::record_frac(int64_t list, const LodBuildJob &job, int job_index, RID set) {
+void LodBuildPass::record_frac(int64_t list, const LodBuildJob &job, int job_index, RID set,
+		int mode) {
 	rd_->compute_list_bind_compute_pipeline(list, frac_program_.pipeline);
 	rd_->compute_list_bind_uniform_set(list, set, 0);
-	push(list, job, job_index);
+	push(list, job, job_index, mode);
 	const int g = groups(ve::kLodChunkMeshCells);
 	rd_->compute_list_dispatch(list, g, g, g);
 }
@@ -288,8 +291,8 @@ void LodBuildPass::record_quads(int64_t list, const LodBuildJob &job, int job_in
 
 // Spec §5. The opaque lattice ALWAYS runs: it is the identity on a chunk with no transparent
 // label, so the terrain mesh below is the one this chunk always had. The shell pair runs
-// first, on the original lattice, and its quads pass leaves at once when the reduce raised
-// no transparent bit. frac_ holds one slice, so the two pairs run strictly in turn.
+// first, on the original lattice, and BOTH its passes leave at once when the reduce raised no
+// transparent bit. frac_ holds one slice, so the two pairs run strictly in turn.
 void LodBuildPass::record_job(int64_t list, const LodBuildJob &job, int job_index) {
 	record_field(list, job, job_index);
 	rd_->compute_list_add_barrier(list);
@@ -297,11 +300,11 @@ void LodBuildPass::record_job(int64_t list, const LodBuildJob &job, int job_inde
 	rd_->compute_list_add_barrier(list);
 	record_opaque(list, job, job_index);
 	rd_->compute_list_add_barrier(list);
-	record_frac(list, job, job_index, frac_shell_set_);
+	record_frac(list, job, job_index, frac_shell_set_, 1);
 	rd_->compute_list_add_barrier(list);
 	record_quads(list, job, job_index, quads_shell_set_, 1);
 	rd_->compute_list_add_barrier(list);
-	record_frac(list, job, job_index, frac_set_);
+	record_frac(list, job, job_index, frac_set_, 0);
 	rd_->compute_list_add_barrier(list);
 	record_quads(list, job, job_index, quads_set_, 0);
 	rd_->compute_list_add_barrier(list);

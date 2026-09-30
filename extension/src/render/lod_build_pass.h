@@ -86,7 +86,7 @@ private:
 	void record_field(int64_t list, const LodBuildJob &job, int job_index);
 	void record_reduce(int64_t list, const LodBuildJob &job, int job_index);
 	void record_opaque(int64_t list, const LodBuildJob &job, int job_index);
-	void record_frac(int64_t list, const LodBuildJob &job, int job_index, RID set);
+	void record_frac(int64_t list, const LodBuildJob &job, int job_index, RID set, int mode);
 	void record_quads(int64_t list, const LodBuildJob &job, int job_index, RID set, int mode);
 	void record_job(int64_t list, const LodBuildJob &job, int job_index);
 	void read_job(int job_index, LodBuildResult *out);
@@ -99,7 +99,7 @@ private:
 	RID lat_sdf_;      // R8_UNORM 3D, 34^3 encoded sdf
 	RID lat_mat_;      // R16_UINT 3D, 34^3 material
 	RID opq_sdf_;      // R8_UNORM 3D, 34^3: the opaque lattice (spec §5)
-	RID frac_;         // uint per mesh cell, max_jobs * 33^3 (first slice is the live one)
+	RID frac_;         // uint per mesh cell, max_jobs * 33^3 (the terrain write is the live one)
 	RID quads_;        // 3 uint per quad, max_jobs * kLodMaxQuadsPerChunk
 	RID normals_;      // 2 uint per quad, aligned with quads_
 	RID shell_quads_;   // 3 uint per quad, max_jobs * kLodMaxQuadsPerChunk
