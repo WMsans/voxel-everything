@@ -279,15 +279,24 @@ Characterization first:
 5. Grass and leaf sun marches always see through transparency; only the raymarcher's march
    honours `enabled`.
 6. With `enabled` off, far-field ice still casts no sun-map shadow.
-7. The composite reads one or two texels per pixel whenever enabled; its measured cost is
-   the Step 2 steady-leg delta, "B − mean(A1, A2) = +0.65 ms p50" on a 52 ms frame
+7. With a front present the composite fetches three texels per pixel — `near_front`,
+   `far_front` (conditional, on the far field's bit), and `gb_depth`; it returns without
+   shading when the G-buffer depth is nearer than the front. Its measured cost is the
+   Step 2 steady-leg delta, "B − mean(A1, A2) = +0.65 ms p50" on a 52 ms frame
    (interleaved A/B/A, `--ice=3` on every leg, 300 sampled frames each, V-Sync disabled,
-   `render_scale=0.65`, `near_field_scale=0.40`; p50 ms: A1 52.38, B 53.03, A2 52.38 — and
-   the two A legs agree to 0.00 ms, so p50 separates the feature from the noise). The p99
-   delta is **not** a measurement worth quoting: B's p99 is 62.50 ms against a mean A of
-   58.38 ms, i.e. +4.13 ms, but the two A legs already differ by 1.89 ms p99 and a second
-   run of the same three legs put the same figure at +0.55 ms. No pass-level GPU numbers
-   exist at all: this machine reports `valid_samples=0`, so the `transparency` and
+   `render_scale=0.65`, `near_field_scale=0.40`, and this world's fade band
+   `38.40–48.00 m`; p50 ms: A1 52.38, B 53.03, A2 52.38). Two A legs agree exactly
+   (0.00 ms p50), but n=2 establishes no noise floor however well the two agree, so the
+   +0.65 ms is one measurement plus a replicate, not a demonstrated separation. A prior
+   run of the same three legs put the p50 delta at +0.67 ms — consistent, but that run
+   is unsourced for a reason: it was invalidated by a bug that orphaned the edit tool
+   (`_tool == null`) and so broke the edit / edit-bounded / island legs. Its *steady* leg
+   never touches `_tool` and was genuinely unaffected, so its numbers stand for this leg;
+   they are named here so a reader does not assume two fully clean runs. The p99 delta
+   is **not** a measurement worth quoting: B's p99 is 62.50 ms against a mean A of
+   58.38 ms, i.e. +4.13 ms, but the two A legs already differ by 1.89 ms p99 and that
+   prior run put the same figure at +0.55 ms. No pass-level GPU numbers exist at all:
+   this machine reports `valid_samples=0`, so the `transparency` and
    `transparent_raster` stages were never timed (memory:
    gpu-timings-invalid-on-this-machine).
 8. §9's automated seam-probe check became a rendered-frame check, not a hook
@@ -295,15 +304,21 @@ Characterization first:
    front ownership, and a hook that re-derived front ownership would test a copy of the
    logic rather than the shipping pass. What was actually inspected, through
    `demo/main.tscn`:
-   - `seam` — one continuous ridge of overlapping ice balls, placed every 6 m along the
-     ground from 20 m to 144 m out, which is about 45 m to 150 m of true range from a lens
-     45 m up: it crosses this world's fade band (64–80 m) with marched ice in front of it and
-     shell ice behind. Read at 1× and at 5×. The ice reads as ice on both sides of the band,
-     the ground shows through it, the dither rim is the ordinary near/far cross-fade, and no
+   - `seam` — a chain of 22 overlapping r=5 m ice balls placed every 6 m along the ground
+     from 20 m to 144 m out (about 45 m to 150 m of true range from a lens 45 m up), plus
+     three separate r=7 m probe balls at roughly 0.7×, the midpoint and 1.6× the band
+     (printed ranges 45 m / 72 m / 128 m). The chain is what crosses the band — marched
+     ice in front of it, shell ice behind. The capture world's fade band is
+     **64–80 m, not the 38–48 m** band of item 7's benchmark leg (different display
+     settings), so "the band" in this frame is not the band that was measured for cost.
+     Read at 1× and at 5×. The ice reads as ice on both sides of the band, the ground
+     shows through it, the dither rim is the ordinary near/far cross-fade, and no
      double-dark or missing-pixel line was visible.
    - `foliage` — a 4 m ice ball 14 m ahead of a low camera with the shipped grass scatter
      (18 096 blades). The blades draw over the ice untinted, which is §7 step 1's
-     G-buffer-depth rule.
+     G-buffer-depth rule. That rule has **no automated coverage**: the 15 cases in
+     `tests/test_transparency.gd` never place ice in front of grass or leaves, and the
+     fixture only zeroes grass wind. This frame is the only evidence for it.
    Both PNGs are under `reports/transparency-B/`, which is git-ignored, so they are not in
    the tree; the tool regenerates them. What was **not** done: nobody played the demo with
    the mouse-driven edit tool, and no frame was judged at native resolution in a live

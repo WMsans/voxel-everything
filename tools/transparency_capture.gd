@@ -4,10 +4,12 @@ extends SceneTree
 #   godot --path . --resolution 1600x900 -s res://tools/transparency_capture.gd -- --out=reports/transparency-B --case=seam
 #   godot --path . --resolution 1600x900 -s res://tools/transparency_capture.gd -- --out=reports/transparency-B --case=foliage
 #
-# --case=seam     three ice patches strung out along one sight line -- one inside the near
-#                 field, one in the fade band, one past it -- so a single frame holds the
-#                 walker's ice and the shell's ice with the dithered cross-fade between
-#                 them. What to look for: a line of double-dark or missing pixels along the
+# --case=seam     three r=7 ice probe balls strung out along one sight line -- one inside
+#                 the near field, one in the fade band, one past it -- PLUS a chain of
+#                 overlapping r=5 balls every 6 m from 20 m to 144 m, so a single frame
+#                 holds one continuous ice ridge crossing the band (walker's ice in front
+#                 of it, shell's ice behind) with the dithered cross-fade between them.
+#                 What to look for: a line of double-dark or missing pixels along the
 #                 band, or ice that changes brightness abruptly at it.
 # --case=foliage  an ice patch ahead of a low camera with the shipped grass scatter on, so
 #                 grass blades stand between the lens and the ice. Spec §7 step 1: a raster
@@ -97,7 +99,8 @@ func capture() -> void:
 		# height is searched rather than fixed: too low and a ridge hides the near patch, too
 		# high and the frame is a plan view with no seam in it.
 		var ranges := [band.x * 0.7, (band.x + band.y) * 0.5, band.y * 1.6]
-		for high in [45.0, 70.0, 100.0, 140.0]:
+		var heights := [45.0, 70.0, 100.0, 140.0]
+		for high in heights:
 			var eye := home + Vector3(0.0, high, 0.0)
 			var spots := PackedVector3Array()
 			for d: float in ranges:
@@ -137,7 +140,11 @@ func capture() -> void:
 			placed.append("chain r=5 every 6m from 20m to 144m")
 			break
 		if placed.is_empty():
-			placed.append("no camera height sees all three patches")
+			# A capture with no ice in it proves nothing, so this is a failure like the rest of
+			# the file's, not a note in the log: no PNG, non-zero exit.
+			push_error("transparency capture: no camera height of %s sees all three patches" % str(heights))
+			quit(1)
+			return
 	else:
 		var p := ground_under(world, cam.x + dir.x * 14.0, cam.z + dir.z * 14.0)
 		world.hooks().debug_apply_sphere_add(p, 4.0, ice)
