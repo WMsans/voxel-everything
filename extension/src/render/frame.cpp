@@ -465,7 +465,10 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	bool far_front = false;
 	TransparentRasterPass *shell = render_.passes().transparent_raster;
 	if (shell) shell->set_draw_pages({});
-	if (shell && transparency.enabled && !in.debug.skip_far_field && lod_.pool() && lod_raster) {
+	// render_.passes().materials, as the LoD block's guard has: transparent_draw_pages() is
+	// built and read only inside that block, and the atlas is the block's precondition.
+	if (shell && transparency.enabled && !in.debug.skip_far_field && lod_.pool() && lod_raster &&
+			render_.passes().materials) {
 		std::vector<LodRasterPass::PageDraw> shell_pages;
 		for (const ve::LodPageDraw &pd : lod_.transparent_draw_pages())
 			shell_pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});

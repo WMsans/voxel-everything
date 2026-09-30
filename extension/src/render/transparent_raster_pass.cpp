@@ -37,6 +37,7 @@ void TransparentRasterPass::teardown() {
 }
 
 bool TransparentRasterPass::ensure_targets(RenderingDevice *rd, Vector2i size) {
+	if (size.x <= 0 || size.y <= 0) return false; // gpu::Target::ensure's guard.
 	if (size == size_ && front_.is_valid() && trans_.is_valid() && depth_.is_valid()) return true;
 	framebuffer_.release(rd, group_);
 	gpu::RdDevice device{rd};

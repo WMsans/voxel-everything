@@ -29,7 +29,9 @@ public:
 	// drew() reports false -- the composite then never reads the layer.
 	bool draw(RenderingDevice *rd, LodPool &pool, RID index_array, GBuffer &gb,
 			RID beauty_cam_ubo, float fade_start, float fade_end, bool front_face_clockwise);
-	bool drew() const { return drew_; }
+	// The pages_ term, not just drew_: a frame that skips draw() entirely never clears drew_,
+	// and a stale true next to an empty page list would report a far front nobody wrote.
+	bool drew() const { return pages_.empty() ? false : drew_; }
 	RID front() const { return front_; }
 	RID trans() const { return trans_; }
 

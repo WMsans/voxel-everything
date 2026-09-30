@@ -65,6 +65,10 @@ void RaymarchPass::teardown() {
 	material_albedo_ = RID();
 	material_surface_ = RID();
 	material_sampler_ = RID();
+	// Without this the freed front_/trans_ RIDs leave target_size() reporting the old size and
+	// the debug readouts calling texture_get_data on a freed RID.
+	width_ = 0;
+	height_ = 0;
 	rd_ = nullptr;
 }
 

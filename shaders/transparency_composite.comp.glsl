@@ -46,6 +46,10 @@ void main() {
 	// the dither the far shell was drawn with (transparent.frag.glsl), tested on the FRONT's
 	// distance, so the two layers split the fade band exactly as terrain does. The near
 	// targets are nearest-sampled, as composite.frag.glsl samples geometry.
+	// This silently assumes t_near <= t_far: if the marched front were FARTHER than the shell,
+	// the far layer would already have discarded on `ff.z < front.z` and the farther near front
+	// would win un-tinted. That needs a front and a shell on one pixel, which the dither
+	// splits -- so the rule holds, but it is a dependency, not an accident.
 	vec4 front = vec4(0.0);
 	vec4 trans = vec4(0.0);
 	vec4 nf = texture(near_front, uv);
