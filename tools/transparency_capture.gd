@@ -6,9 +6,10 @@ extends SceneTree
 #
 # --case=seam     three r=7 ice probe balls strung out along one sight line -- one inside
 #                 the near field, one in the fade band, one past it -- PLUS a chain of
-#                 overlapping r=5 balls every 6 m from 20 m to 144 m, so a single frame
-#                 holds one continuous ice ridge crossing the band (walker's ice in front
-#                 of it, shell's ice behind) with the dithered cross-fade between them.
+#                 overlapping r=5 balls every 6 m from 20 m to 146 m (range(20, 150, 6)),
+#                 so a single frame holds one continuous ice ridge crossing the band
+#                 (walker's ice in front of it, shell's ice behind) with the dithered
+#                 cross-fade between them.
 #                 What to look for: a line of double-dark or missing pixels along the
 #                 band, or ice that changes brightness abruptly at it.
 # --case=foliage  an ice patch ahead of a low camera with the shipped grass scatter on, so
@@ -137,7 +138,7 @@ func capture() -> void:
 			for x in range(20, 150, 6):
 				var p := ground_under(world, cam.x + dir.x * x, cam.z + dir.z * x)
 				world.hooks().debug_apply_sphere_add(p, 5.0, ice)
-			placed.append("chain r=5 every 6m from 20m to 144m")
+			placed.append("chain r=5 every 6m from 20m to 146m")
 			break
 		if placed.is_empty():
 			# A capture with no ice in it proves nothing, so this is a failure like the rest of
@@ -145,10 +146,17 @@ func capture() -> void:
 			push_error("transparency capture: no camera height of %s sees all three patches" % str(heights))
 			quit(1)
 			return
-	else:
+	elif case_name == "foliage":
 		var p := ground_under(world, cam.x + dir.x * 14.0, cam.z + dir.z * 14.0)
 		world.hooks().debug_apply_sphere_add(p, 4.0, ice)
 		placed.append("14m@%s" % p)
+	else:
+		# A typo'd --case= must not fall through to the foliage frame: it would save a
+		# perfectly good PNG of the wrong thing and exit 0. Same standard as every other
+		# failure in this file.
+		push_error("transparency capture: unknown --case=%s (seam or foliage)" % case_name)
+		quit(1)
+		return
 	print("TRANSPARENCY_CAPTURE case=%s cam=%s dir=%s fade_band=%.1f..%.1f ice=%s" % [
 		case_name, cam, dir, band.x, band.y, str(placed)])
 
