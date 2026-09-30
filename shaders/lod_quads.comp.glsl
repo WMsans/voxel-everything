@@ -16,7 +16,7 @@ layout(set = 0, binding = 1, r16ui) readonly uniform uimage3D material;
 layout(set = 0, binding = 2, std430) readonly buffer Frac { uint v[]; } frac;
 // Three uints per quad: ve::LodQuad.
 layout(set = 0, binding = 3, std430) writeonly buffer Quads { uint v[]; } quads;
-// Two uints per job: quad count, overflow flag.
+// Four uints per job: quad count, overflow flag, shell quad count, flags (bit 0 has transparent, bit 1 shell overflow).
 layout(set = 0, binding = 4, std430) buffer Counts { uint v[]; } counts;
 // Four octahedral snorm8 corner normals per quad, packed two per uint.
 layout(set = 0, binding = 5, std430) writeonly buffer Normals { uint v[]; } normals;
@@ -44,6 +44,11 @@ void main() {
 	if (any(greaterThanEqual(u, ivec3(LOD_CHUNK_CELLS)))) return;
 	ivec3 L = u + 1;
 	uint job = uint(lpc.job.w);
+	// Shell mode (lpc.params.w == 1, spec §5): only quads whose SOLID side is transparent,
+	// counted in slot 2 and written to the shell streams this mode's uniform set binds. A job
+	// whose reduce raised no transparent bit has none, so every thread leaves at once.
+	bool shell = lpc.params.w == 1;
+	if (shell && (counts.v[job * 4u + 3u] & 1u) == 0u) return;
 	float da = decode_sdf(imageLoad(lattice, L).r);
 
 	for (int axis = 0; axis < 3; axis++) {
@@ -64,8 +69,15 @@ void main() {
 		}
 		if (!ok) continue;
 
-		uint t = atomicAdd(counts.v[job * 2u + 0u], 1u);
-		if (t >= uint(lpc.params.y)) { atomicOr(counts.v[job * 2u + 1u], 1u); return; }
+		ivec3 ms = sa ? L : (L + e);
+		uint solid_material = imageLoad(material, ms).r;
+		if (shell && !mat_transparent(solid_material)) continue;
+		uint t = atomicAdd(counts.v[job * 4u + (shell ? 2u : 0u)], 1u);
+		if (t >= uint(lpc.params.y)) {
+			if (shell) atomicOr(counts.v[job * 4u + 3u], 2u);
+			else atomicOr(counts.v[job * 4u + 1u], 1u);
+			return;
+		}
 
 		uvec3 w = uvec3(0u);
 		bits_set(w, 0, 5, uint(u.x));
@@ -82,8 +94,7 @@ void main() {
 			for (int a = 0; a < 3; a++)
 				bits_set(w, 18 + (k * 3 + a) * 5, 5, (p >> uint(a * 5)) & 31u);
 		}
-		ivec3 ms = sa ? L : (L + e);
-		bits_set(w, 78, 16, imageLoad(material, ms).r);
+		bits_set(w, 78, 16, solid_material);
 		// bit 94 (double-sided) stays 0: skirts are appended on the CPU.
 
 		uint base = (job * uint(lpc.params.y) + t) * 3u;
