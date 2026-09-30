@@ -26,6 +26,13 @@ void ground(std::vector<uint8_t> *sdf, std::vector<uint16_t> *mat, int ice_from)
 			}
 }
 
+// Relabel every air sample (SDF > 0) with `material`: the stale label a tent-averaged reduce can
+// leave on a sample whose SDF rounded positive while its solid taps were ice.
+void label_air(const std::vector<uint8_t> &sdf, std::vector<uint16_t> *mat, uint16_t material) {
+	for (int i = 0; i < kCount; i++)
+		if (ve::decode_sdf(sdf[i]) > 0.0f) (*mat)[i] = material;
+}
+
 bool all_axis_y_at(const ve::LodContourResult &r, int u_y, uint16_t material) {
 	for (const ve::LodQuad &q : r.quads) {
 		ve::LodQuadFields f{};
@@ -52,6 +59,20 @@ TEST_CASE("the outside byte decodes as just outside at every level") {
 		CHECK(d > 0.0f);
 		CHECK(d <= ve::kSdfRange);
 	}
+}
+
+TEST_CASE("an air sample with a stale transparent label neither raises the flag nor changes the lattice") {
+	std::vector<uint8_t> sdf, out(kCount);
+	std::vector<uint16_t> mat;
+	ground(&sdf, &mat, 999); // every solid sample is rock
+	label_air(sdf, &mat, ve::material_id("ice")); // ... but the air above it says ice
+	CHECK_FALSE(ve::lod_has_transparent(sdf.data(), mat.data()));
+	ve::lod_opaque_lattice(sdf.data(), mat.data(), 0.4f, out.data());
+	CHECK(out == sdf);
+}
+
+TEST_CASE("the outside byte is half a cell in, so the GPU mirror is a byte-for-byte diff") {
+	CHECK(ve::lod_outside_byte(0.4f) == ve::encode_sdf(0.2f));
 }
 
 TEST_CASE("an ice slab on rock: opaque mesh at the rock top, shell at the ice top") {
