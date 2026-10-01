@@ -309,6 +309,32 @@ TEST_CASE("the bounding capsule never rejects a point the skeleton would claim")
 	}
 }
 
+TEST_CASE("the tight bound never rejects a point the skeleton would claim, on any tree") {
+	const ts::TreeParams tp = params();
+	uint32_t s = 777u;
+	auto next = [&s](float lo, float hi) {
+		s = s * 1664525u + 1013904223u;
+		return lo + (hi - lo) * (float((s >> 8) & 0xFFFFFFu) / 16777216.0f);
+	};
+	float worst = 1.0e30f;
+	int culled_under_crown = 0;
+	// 400 cells so height, radius and lean all vary; points packed around each tree.
+	for (int c = 0; c < 400; c++) {
+		const ts::Tree t = ts::tree_at({c % 20 - 10, c / 20 - 10}, tp, kFlatGround, 2.0f, 0.0f);
+		for (int i = 0; i < 2000; i++) {
+			const ts::vec3 p(t.base.x + next(-9.0f, 9.0f),
+					next(kFlatGround - 3.0f, kFlatGround + 22.0f), t.base.z + next(-9.0f, 9.0f));
+			const float slack = ts::tree_skeleton_sdf(p, t, tp) - ts::tree_bound_tight(p, t, tp);
+			worst = std::min(worst, slack);
+			if (ts::tree_bound(p, t) < 0.0f && ts::tree_bound_tight(p, t, tp) > 0.0f)
+				culled_under_crown++;
+		}
+	}
+	CHECK(worst >= 0.0f);
+	// And it has to be worth having: it must clear points the capsule could not.
+	CHECK(culled_under_crown > 10000);
+}
+
 // --- trunk shape (2026-09-19) -------------------------------------------------------
 // The old skeleton was a plumb-straight pole that fanned ten identical branches out of ONE
 // point at 0.55 height -- a broom, not a tree. These four pin the structure that replaced

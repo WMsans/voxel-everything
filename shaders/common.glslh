@@ -190,3 +190,9 @@ vec2 material_props(uint mat, vec3 p, vec3 n, vec3 ddx, vec3 ddy) {
 // shaders/deferred.comp.glsl via cel_shade() in shade.glslh. Do not add a second one.
 
 #endif
+
+// The gradient-tap shortcut for union-only detail stages; base_field_gradient in
+// field_ops.glslh owns the protocol and the derivation of the margin.
+#define FIELD_DETAIL_MARGIN 0.06
+bool g_field_detail_near = false;
+bool g_field_skip_detail = false;

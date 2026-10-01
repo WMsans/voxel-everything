@@ -55,17 +55,32 @@ void op_box_sdf_gradient(vec3 lo, vec3 hi, vec3 p, out vec3 g) {
 // which is what island_extract packs and what raymarch's terrain_source_normal shades
 // with. At a crease it is an average of the two sides -- the old analytic body had a
 // hard switch there instead -- and no consumer treats a crease normal as ground truth.
+//
+// The six offset taps repeat every stage for a point 1 cm away, and for a union-only detail
+// stage (trees) that is nearly always six repeats of "nothing here". Such a stage may opt
+// out of them: at the centre tap it raises g_field_detail_near unless it can prove it is a
+// no-op everywhere within FIELD_DETAIL_MARGIN of p, and returns at once while
+// g_field_skip_detail is set. The result is bit-identical -- the skipped calls are exactly
+// the ones proven to change nothing. A stage that ignores both globals is unaffected.
+// The margin covers one tap (e = 0.01) on both sides of the comparison: the detail may come
+// 0.01 closer and the running field, Lipschitz <= 2, may rise 0.02.
+// FIELD_DETAIL_MARGIN and the two globals live in common.glslh: the generated field emits
+// stage bodies BEFORE this prelude, so they must already be declared there.
+
 void base_field_gradient(vec3 p, out float sdf, out uint mat, out vec3 grad, out bool exact) {
 	uint m;
 	float sx0, sx1, sy0, sy1, sz0, sz1;
 	const float e = 0.01;
+	g_field_detail_near = false;
 	eval_base_field(p, sdf, mat);
+	g_field_skip_detail = !g_field_detail_near;
 	eval_base_field(p - vec3(e, 0.0, 0.0), sx0, m);
 	eval_base_field(p + vec3(e, 0.0, 0.0), sx1, m);
 	eval_base_field(p - vec3(0.0, e, 0.0), sy0, m);
 	eval_base_field(p + vec3(0.0, e, 0.0), sy1, m);
 	eval_base_field(p - vec3(0.0, 0.0, e), sz0, m);
 	eval_base_field(p + vec3(0.0, 0.0, e), sz1, m);
+	g_field_skip_detail = false;
 	grad = vec3(sx1 - sx0, sy1 - sy0, sz1 - sz0) / (2.0 * e);
 	exact = true;
 }

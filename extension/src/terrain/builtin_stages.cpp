@@ -125,14 +125,18 @@ inline void cell_xz(int cx, int cz, const Tp &tp, float *ox, float *oz) {
 // `h` is the terrain height there above kSurfaceY, both supplied by the caller -- this mirror
 // stays terrain-free. Low-frequency lattice noise on the cell grid gives groves and clearings
 // rather than an orchard: neighbouring cells share a gate value, so trees arrive in clumps.
-inline bool present(int cx, int cz, const Tp &tp, float h, float slope) {
-	if (slope > tp.max_slope) return false;
+//
+// Split in three, mirroring shaders/tree.glslh, so the stage can run the tests cheapest-first.
+inline bool height_ok(float h) {
 	// SPEC §4 HEIGHT BAND: trees grow on grass and nowhere else. The window mirrors
 	// stage_height_bands (shaders/stages/height_bands.field.glslh: rock above 4, grass above
 	// 1, dirt below), whose gates are stage text rather than pipeline params, so copying the
 	// literals cannot diverge from an author's edit. Kept IDENTICAL to shaders/tree.glslh;
 	// test_field_diff.gd pins the two together.
-	if (h <= 1.0f || h > 4.0f) return false;
+	return !(h <= 1.0f || h > 4.0f);
+}
+
+inline bool gate(int cx, int cz, const Tp &tp) {
 	const float qx = std::floor(float(cx) * 0.25f), qz = std::floor(float(cz) * 0.25f);
 	const int gx = int(qx), gz = int(qz);
 	float fx = float(cx) * 0.25f - qx, fz = float(cz) * 0.25f - qz;
@@ -144,6 +148,10 @@ inline bool present(int cx, int cz, const Tp &tp, float h, float slope) {
 	const float d = unit(hash2(gx + 1, gz + 1, 0x1A2Bu));
 	const float grove = mixf(mixf(a, b, fx), mixf(c, d, fx), fz);
 	return unit(hash2(cx, cz, 0x2F1Du)) < tp.density * (0.35f + 1.3f * grove);
+}
+
+inline bool present(int cx, int cz, const Tp &tp, float h, float slope) {
+	return !(slope > tp.max_slope) && height_ok(h) && gate(cx, cz, tp);
 }
 
 struct Tree { V3 base; float height, radius; V3 crown; float crown_r; uint32_t h; bool present; };
@@ -264,6 +272,16 @@ inline float bound(float px, float py, float pz, const Tree &t) {
 	return round_cone(px, py, pz, t.base, t.crown, t.crown_r, t.crown_r);
 }
 
+// Mirror of tree_bound_tight() in shaders/tree.glslh -- the argument lives there.
+inline float bound_tight(float px, float py, float pz, const Tree &t, const Tp &tp) {
+	const float bx = px - t.base.x, bz = pz - t.base.z;
+	const float lx = t.crown.x - t.base.x, lz = t.crown.z - t.base.z;
+	const float trunk = sqrtf(bx * bx + bz * bz) - sqrtf(lx * lx + lz * lz) - 1.55f * t.radius;
+	const float limb_floor = t.base.y + 0.29f * t.height
+			- fmaxf(0.5f * t.radius, 1.25f * tp.branch_radius_min);
+	return fminf(trunk, fmaxf(bound(px, py, pz, t), limb_floor - py)) - 0.05f;
+}
+
 inline float d_safe(const Tp &tp) {
 	// The lean term, mirroring tree_d_safe() in shaders/tree.glslh: a leaning crown centre
 	// reaches kMaxLean * height further from the cell centre, and height runs to 1.25x.
@@ -312,17 +330,38 @@ void stage_trees(FieldCtx &ctx, const TreesSlots &s, const TreesParams &p,
 	const int bx = int(std::floor(px / tp.cell));
 	const int bz = int(std::floor(pz / tp.cell));
 	float d = tm::d_safe(tp);
-	for (int dz = -1; dz <= 1; dz++) {
-		for (int dx = -1; dx <= 1; dx++) {
+	// 0.05 m of slack so float rounding can only make EARLY-OUT 0 skip less than the exact
+	// bound. Must stay IDENTICAL to the GLSL twin in shaders/stages/trees.field.glslh.
+	const float reach = tp.crown_radius + tm::kMaxLean * tp.trunk_height * 1.25f + 0.05f;
+	// Which neighbours to visit at all -- see the GLSL twin for the argument.
+	// `near_d` mirrors the GLSL twin's ctx.sdf + FIELD_DETAIL_MARGIN so the two reject the same
+	// cells; the gradient-tap skip that margin exists for is a GPU-only shortcut.
+	const float near_d = ctx.f(s.sdf) + 0.06f;
+	const float sweep = reach + fminf(d, near_d) + 0.05f;
+	const float gap = (0.5f - tm::kJitter) * tp.cell;
+	const float fx = px - float(bx) * tp.cell;
+	const float fz = pz - float(bz) * tp.cell;
+	const int dx_lo = (fx + gap < sweep) ? -1 : 0;
+	const int dx_hi = (tp.cell - fx + gap < sweep) ? 1 : 0;
+	const int dz_lo = (fz + gap < sweep) ? -1 : 0;
+	const int dz_hi = (tp.cell - fz + gap < sweep) ? 1 : 0;
+	for (int dz = dz_lo; dz <= dz_hi; dz++) {
+		for (int dx = dx_lo; dx <= dx_hi; dx++) {
 			const int cx = bx + dx, cz = bz + dz;
 			float tx, tz;
 			tm::cell_xz(cx, cz, tp, &tx, &tz);
+			// EARLY-OUT 0, the horizontal reach -- see the GLSL twin for the argument.
+			if (sqrtf((px - tx) * (px - tx) + (pz - tz) * (pz - tz)) - reach >=
+					fminf(d, near_d))
+				continue;
+			// EARLY-OUT 2, the forest gate, cheapest test first: hashes, then the height band
+			// (the rejection spec §4 asks for), and only then the analytic slope.
+			if (!tm::gate(cx, cz, tp)) continue;
 			const float gh = ground_h(tx, tz);
-			// EARLY-OUT 2, the forest gate: one integer hash plus the analytic slope and
-			// height band (the rejection spec §4 asks for, inside present()).
+			if (!tm::height_ok(gh)) continue;
 			const tm::Tree t = tm::at(cx, cz, tp, kSurfaceY + gh, gh, ground_slope(tx, tz));
 			if (!t.present) continue;
-			if (tm::bound(px, py, pz, t) >= d) continue;
+			if (tm::bound_tight(px, py, pz, t, tp) >= fminf(d, near_d)) continue;
 			d = fminf(d, tm::skeleton(px, py, pz, t, tp));
 		}
 	}

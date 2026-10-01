@@ -80,6 +80,8 @@ TreeParams trees_params() {
 }
 
 void stage_trees(inout FieldCtx ctx) {
+	// A gradient's offset tap whose centre proved the trees irrelevant (field_ops.glslh).
+	if (g_field_skip_detail) return;
 	TreeParams tp = trees_params();
 
 	// EARLY-OUT 1, the vertical band. ctx.height is the terrain height at THIS point's XZ,
@@ -91,26 +93,65 @@ void stage_trees(inout FieldCtx ctx) {
 	// running 1.99 bound lets f exceed 1.99 * d_tree, up to h ~= 2.0101 * H. Round that slab
 	// bound (x1.99) up to 2.05 for margin. Kept IDENTICAL to the CPU mirror in builtin_stages.cpp.
 	float band_top = ground_y + 2.05 * (tp.trunk_height * 1.25 + tp.crown_radius);
-	if (ctx.p.y < ground_y - 2.0 || ctx.p.y > band_top) return;
+	if (ctx.p.y < ground_y - 2.0 || ctx.p.y > band_top) {
+		// Within a tap of the band's edge a neighbouring tap may be inside it; ground_y moves
+		// with XZ too, so the allowance is the full FIELD_DETAIL_MARGIN.
+		if (ctx.p.y > ground_y - 2.0 - FIELD_DETAIL_MARGIN && ctx.p.y < band_top + FIELD_DETAIL_MARGIN)
+			g_field_detail_near = true;
+		return;
+	}
 
 	ivec2 base = ivec2(int(floor(ctx.p.x / tp.cell)), int(floor(ctx.p.z / tp.cell)));
 	float d = tree_d_safe(tp);
-	for (int dz = -1; dz <= 1; dz++) {
-		for (int dx = -1; dx <= 1; dx++) {
+	// 0.05 m of slack so float rounding can only make EARLY-OUT 0 skip less than the exact
+	// bound, never more. Kept IDENTICAL to the CPU mirror in builtin_stages.cpp.
+	float reach = tp.crown_radius + TREE_MAX_LEAN * tp.trunk_height * 1.25 + 0.05;
+	// Which neighbours to visit at all. Measured: the nine-cell sweep's hashes alone, run at
+	// seven gradient taps per near-field pixel, were a quarter of the frame. A tree's foot
+	// never leaves its cell's TREE_JITTER box, so a neighbour whose box is further than
+	// `sweep` from this point on either axis would fail EARLY-OUT 0 for every foot it could
+	// hold -- skip it without hashing. `sweep` uses d before the loop lowers it and another
+	// 0.05 m of slack, so this visits a superset of the cells EARLY-OUT 0 lets through, in
+	// the same order. Kept IDENTICAL to the CPU mirror.
+	// Every reject below compares against `near_d`, not ctx.sdf: a tree further than the
+	// terrain plus FIELD_DETAIL_MARGIN cannot win here, which is all the result needs, and
+	// cannot win one gradient tap away either, which is what g_field_detail_near reports.
+	float near_d = ctx.sdf + FIELD_DETAIL_MARGIN;
+	float sweep = reach + min(d, near_d) + 0.05;
+	float gap = (0.5 - TREE_JITTER) * tp.cell;
+	float fx = ctx.p.x - float(base.x) * tp.cell;
+	float fz = ctx.p.z - float(base.y) * tp.cell;
+	int dx_lo = (fx + gap < sweep) ? -1 : 0;
+	int dx_hi = (tp.cell - fx + gap < sweep) ? 1 : 0;
+	int dz_lo = (fz + gap < sweep) ? -1 : 0;
+	int dz_hi = (tp.cell - fz + gap < sweep) ? 1 : 0;
+	for (int dz = dz_lo; dz <= dz_hi; dz++) {
+		for (int dx = dx_lo; dx <= dx_hi; dx++) {
 			ivec2 cell = base + ivec2(dx, dz);
 			vec2 xz = tree_cell_xz(cell, tp);
+			// EARLY-OUT 0, the horizontal reach: hashes only, before any trig. A tree's
+			// geometry stays within `reach` of its foot in XZ (crown radius plus the lean
+			// cap tree_d_safe() also subtracts), so its distance is at least this, and a
+			// tree no closer than the terrain (`near_d`) or the running d cannot change the
+			// result below. This matters most where the field is sampled most: surface hit
+			// points, where ctx.sdf ~ 0 and nearly every cell dies here.
+			if (distance(ctx.p.xz, xz) - reach >= min(d, near_d)) continue;
+			// EARLY-OUT 2, the forest gate, cheapest test first: hashes, then the height band
+			// (the rejection spec §4 asks for), and only then the analytic slope, which
+			// tree_cell_present checks inside tree_at.
+			if (!tree_cell_gate(cell, tp)) continue;
 			float gh = trees_ground_h(xz);
-			// EARLY-OUT 2, the forest gate: one integer hash plus the analytic slope and
-			// height band (the rejection spec §4 asks for, inside tree_cell_present).
+			if (!tree_height_ok(gh)) continue;
 			Tree t = tree_at(cell, tp, SURFACE_Y + gh, gh, trees_ground_slope(xz));
 			if (!t.present) continue;
-			// EARLY-OUT 3, the bounding capsule. Never greater than the skeleton distance, so
+			// EARLY-OUT 3, the bound (tree_bound_tight in tree.glslh). Never greater than the skeleton distance, so
 			// this cannot drop a cell the skeleton would have claimed.
-			if (tree_bound(ctx.p, t) >= d) continue;
+			if (tree_bound_tight(ctx.p, t, tp) >= min(d, near_d)) continue;
 			d = min(d, tree_skeleton_sdf(ctx.p, t, tp));
 		}
 	}
 
+	if (d < near_d) g_field_detail_near = true;
 	if (d < ctx.sdf) {
 		ctx.sdf = d;
 		if (d <= 0.0) ctx.material = MAT_BARK;
