@@ -47,6 +47,9 @@ public:
 	bool is_valid() const { return program_.valid(); }
 	bool render(RenderingDevice *rd, GBuffer &gb, const MaterialAtlas &materials,
 			RID ssgi, RID ssao, RID sun_map, const Params &p);
+	// The cascade block render() fills every frame. TransparencyCompositePass binds it rather
+	// than keeping a second copy; it is valid once render() has run.
+	RID sun_cascade_ubo() const { return sun_ubo_; }
 	float last_ms() const { return last_ms_; }
 
 private:

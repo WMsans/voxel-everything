@@ -62,6 +62,9 @@
 	vec4 cam; \
 	vec4 fade;
 
+#define TRANSPARENT_RASTER_PUSH_FIELDS \
+	vec4 fade;
+
 #define COMPOSITE_PUSH_FIELDS \
 	mat4 view_proj; \
 	vec4 cam; \
@@ -88,6 +91,9 @@
 
 #define EDITS_BLOCK_FIELDS \
 	vec4 center; \
+	vec4 params;
+
+#define TRANSPARENCY_BLOCK_FIELDS \
 	vec4 params;
 
 #define LOD_CULL_PUSH_FIELDS \
@@ -130,6 +136,13 @@
 	ivec4 dims; \
 	ivec4 region_origin; \
 	ivec4 atlas_bricks;
+
+#define TRANSPARENCY_COMPOSITE_PUSH_FIELDS \
+	vec4 right_tanx; \
+	vec4 up_tany; \
+	vec4 sky; \
+	vec4 fade; \
+	uvec4 flags;
 
 #define DOWNSAMPLE_PUSH_FIELDS \
 	ivec4 dims;

@@ -25,6 +25,11 @@ void RaymarchPass::initialize(RenderingDevice *rd) {
 	zero.fill(0);
 	edits_ubo_ = group_.add(gpu::Kind::Buffer,
 		rd->uniform_buffer_create(sizeof(ve::EditsBlock), zero));
+	PackedByteArray tr_zero;
+	tr_zero.resize(sizeof(ve::TransparencyBlock));
+	tr_zero.fill(0);
+	tr_ubo_ = group_.add(gpu::Kind::Buffer,
+		rd->uniform_buffer_create(sizeof(ve::TransparencyBlock), tr_zero));
 }
 
 void RaymarchPass::set_materials(const MaterialAtlas &materials) {
@@ -39,6 +44,11 @@ void RaymarchPass::set_sun_ubo(RID buffer) {
 	sun_ubo_ = buffer;
 }
 
+void RaymarchPass::set_transparency(const ve::TransparencySettings &s) {
+	tr_block_ = ve::TransparencyBlock{{s.min_step_m, s.min_transmit,
+			static_cast<float>(s.max_steps), s.enabled ? 1.0f : 0.0f}};
+}
+
 void RaymarchPass::teardown() {
 	if (!rd_) return;
 	// uset_mask_ is only a cache key for an externally owned tile-mask RID (usually the
@@ -48,12 +58,17 @@ void RaymarchPass::teardown() {
 	program_ = gpu::Program();
 	sampler_ = sampler_linear_ = edits_ubo_ = RID();
 	albedo_ = surface_ = hitpos_ = cost_buf_ = RID();
+	front_ = trans_ = tr_ubo_ = RID();
 	set_ = sun_set_ = gpu::SetCache();
 	uset_mask_ = RID();
 	sun_ubo_ = RID();
 	material_albedo_ = RID();
 	material_surface_ = RID();
 	material_sampler_ = RID();
+	// Without this the freed front_/trans_ RIDs leave target_size() reporting the old size and
+	// the debug readouts calling texture_get_data on a freed RID.
+	width_ = 0;
+	height_ = 0;
 	rd_ = nullptr;
 }
 
@@ -61,7 +76,7 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, int w, int h) {
 	// The old targets and cost buffer take set 0 with them (device cascade); its cache
 	// rebuilds on the new RIDs.
 	gpu::RdDevice device{rd};
-	for (RID *r : {&albedo_, &surface_, &hitpos_, &cost_buf_}) {
+	for (RID *r : {&albedo_, &surface_, &hitpos_, &cost_buf_, &front_, &trans_}) {
 		group_.free(device, *r);
 		*r = RID();
 	}
@@ -73,6 +88,8 @@ void RaymarchPass::rebuild_targets(RenderingDevice *rd, int w, int h) {
 	hitpos_ = gpu::texture(rd, group_, RenderingDevice::DATA_FORMAT_R32G32B32A32_SFLOAT, Vector2i(w, h), usage);
 	cost_buf_ = group_.add(gpu::Kind::Buffer,
 			rd->storage_buffer_create(static_cast<uint32_t>(w) * h * 2u * sizeof(uint32_t)));
+	front_ = gpu::texture(rd, group_, RenderingDevice::DATA_FORMAT_R32G32B32A32_SFLOAT, Vector2i(w, h), usage);
+	trans_ = gpu::texture(rd, group_, RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT, Vector2i(w, h), usage);
 	width_ = w;
 	height_ = h;
 }
@@ -120,6 +137,11 @@ std::vector<gpu::Uniform> RaymarchPass::uniforms(const GpuAtlas &atlas, const Is
 		gpu::storage(28, atlas.overrides().mat_buffer()),
 		gpu::storage(29, atlas.overrides().tables()),
 		gpu::storage(30, atlas.overrides().region_table_map()),
+		// 31-33: the transparent front and its accumulated transmittance, plus the walk's
+		// knobs (spec §4).
+		gpu::image(31, front_),
+		gpu::image(32, trans_),
+		gpu::ubo(33, tr_ubo_),
 	};
 }
 
@@ -144,7 +166,8 @@ bool RaymarchPass::render(RenderingDevice *rd, const GpuAtlas &atlas,
 	const RID set = set_.get(device, group_, program_.shader, 0, uniforms(atlas, *islands, mask));
 	const RID sun_set = sun_set_.get(device, group_, program_.shader, 2, {gpu::ubo(24, sun_ubo_)});
 	if (!set.is_valid() || !sun_set.is_valid() || !albedo_.is_valid() || !surface_.is_valid() ||
-			!edits_ubo_.is_valid()) return false;
+			!edits_ubo_.is_valid() || !front_.is_valid() || !trans_.is_valid() ||
+			!tr_ubo_.is_valid()) return false;
 
 	// Recorded before the compute list: buffer_update errors while a list is open, and the
 	// deferred update still lands before the dispatch at submit.
@@ -153,6 +176,7 @@ bool RaymarchPass::render(RenderingDevice *rd, const GpuAtlas &atlas,
 				{edit_state[3] /* radius */, edit_state[4] /* type */, edit_state[5] /* material */,
 						edit_state[3] > 0.0f ? 1.0f : 0.0f}};
 		rd->buffer_update(edits_ubo_, 0, sizeof(edits), gpu::push_bytes(edits));
+		rd->buffer_update(tr_ubo_, 0, sizeof(tr_block_), gpu::push_bytes(tr_block_));
 	}
 
 	const PackedByteArray pc = gpu::push_bytes(cam);

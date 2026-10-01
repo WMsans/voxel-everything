@@ -83,7 +83,11 @@ struct SunLightBlock {
 struct LodRasterPush {
 	float view_proj[16];
 	float cam[4];   // xyz = camera position, w = fade start
-	float fade[4];  // x = fade end, yzw unused
+	float fade[4];  // x = fade end, y = 1 when transparency is on (shell quads skipped), zw unused
+};
+
+struct TransparentRasterPush {
+	float fade[4];  // x = fade start, y = fade end (metres), zw unused
 };
 
 struct CompositePush {
@@ -99,6 +103,14 @@ struct GrassRasterPush {
 	float cam[4];  // xyz = camera position, w unused
 };
 
+struct TransparencyCompositePush {
+	float right_tanx[4];  // xyz = camera right, w = tan(fov_x / 2)
+	float up_tany[4];     // xyz = camera up,    w = tan(fov_y / 2)
+	float sky[4];         // xyz = ambient, w unused
+	float fade[4];        // x = fade start, y = fade end (metres), zw unused
+	uint32_t flags[4];    // x = beauty flags, y = 1 when the far front layer was drawn
+};
+
 struct SunShadowPush {
 	float sun_view_proj[16];
 };
@@ -106,6 +118,10 @@ struct SunShadowPush {
 struct EditsBlock {
 	float center[4];  // xyz = brush centre
 	float params[4];  // x = radius, y = type, z = material, w = 1 while a brush is shown
+};
+
+struct TransparencyBlock {
+	float params[4];  // x = min step (m), y = min transmit, z = max steps, w = 1 when enabled
 };
 
 struct LodCullPush {
@@ -225,6 +241,9 @@ inline constexpr Field kLodRasterPushFields[] = {
 	VE_LAYOUT_FIELD(LodRasterPush, cam, Vec4, 0),
 	VE_LAYOUT_FIELD(LodRasterPush, fade, Vec4, 0),
 };
+inline constexpr Field kTransparentRasterPushFields[] = {
+	VE_LAYOUT_FIELD(TransparentRasterPush, fade, Vec4, 0),
+};
 inline constexpr Field kCompositePushFields[] = {
 	VE_LAYOUT_FIELD(CompositePush, view_proj, Mat4, 0),
 	VE_LAYOUT_FIELD(CompositePush, cam, Vec4, 0),
@@ -235,6 +254,13 @@ inline constexpr Field kCompositePushFields[] = {
 inline constexpr Field kGrassRasterPushFields[] = {
 	VE_LAYOUT_FIELD(GrassRasterPush, view_proj, Mat4, 0),
 	VE_LAYOUT_FIELD(GrassRasterPush, cam, Vec4, 0),
+};
+inline constexpr Field kTransparencyCompositePushFields[] = {
+	VE_LAYOUT_FIELD(TransparencyCompositePush, right_tanx, Vec4, 0),
+	VE_LAYOUT_FIELD(TransparencyCompositePush, up_tany, Vec4, 0),
+	VE_LAYOUT_FIELD(TransparencyCompositePush, sky, Vec4, 0),
+	VE_LAYOUT_FIELD(TransparencyCompositePush, fade, Vec4, 0),
+	VE_LAYOUT_FIELD(TransparencyCompositePush, flags, UVec4, 0),
 };
 inline constexpr Field kSunShadowPushFields[] = {
 	VE_LAYOUT_FIELD(SunShadowPush, sun_view_proj, Mat4, 0),
@@ -252,6 +278,9 @@ inline constexpr Field kCameraParamsFields[] = {
 inline constexpr Field kEditsBlockFields[] = {
 	VE_LAYOUT_FIELD(EditsBlock, center, Vec4, 0),
 	VE_LAYOUT_FIELD(EditsBlock, params, Vec4, 0),
+};
+inline constexpr Field kTransparencyBlockFields[] = {
+	VE_LAYOUT_FIELD(TransparencyBlock, params, Vec4, 0),
 };
 inline constexpr Field kLodCullPushFields[] = {
 	VE_LAYOUT_FIELD(LodCullPush, view_proj, Mat4, 0),
@@ -351,16 +380,20 @@ inline constexpr Block kBlocks[] = {
 	VE_LAYOUT_BLOCK(BeautyCamBlock, "BEAUTY_CAM_FIELDS", kBeautyCamBlockFields),
 	VE_LAYOUT_BLOCK(SunLightBlock, "SUN_LIGHT_FIELDS", kSunLightBlockFields),
 	VE_LAYOUT_BLOCK(LodRasterPush, "LOD_RASTER_PUSH_FIELDS", kLodRasterPushFields),
+	VE_LAYOUT_BLOCK(TransparentRasterPush, "TRANSPARENT_RASTER_PUSH_FIELDS", kTransparentRasterPushFields),
 	VE_LAYOUT_BLOCK(CompositePush, "COMPOSITE_PUSH_FIELDS", kCompositePushFields),
 	VE_LAYOUT_BLOCK(GrassRasterPush, "GRASS_RASTER_PUSH_FIELDS", kGrassRasterPushFields),
 	VE_LAYOUT_BLOCK(SunShadowPush, "SUN_SHADOW_PUSH_FIELDS", kSunShadowPushFields),
 	VE_LAYOUT_BLOCK(CameraParams, "CAMERA_PARAMS_FIELDS", kCameraParamsFields),
 	VE_LAYOUT_BLOCK(EditsBlock, "EDITS_BLOCK_FIELDS", kEditsBlockFields),
+	VE_LAYOUT_BLOCK(TransparencyBlock, "TRANSPARENCY_BLOCK_FIELDS", kTransparencyBlockFields),
 	VE_LAYOUT_BLOCK(LodCullPush, "LOD_CULL_PUSH_FIELDS", kLodCullPushFields),
 	VE_LAYOUT_BLOCK(GrassParams, "GRASS_PARAMS_FIELDS", kGrassParamsFields),
 	VE_LAYOUT_BLOCK(GrassRegionBlock, "GRASS_REGION_FIELDS", kGrassRegionBlockFields),
 	VE_LAYOUT_BLOCK(LeafParams, "LEAF_PARAMS_FIELDS", kLeafParamsFields),
 	VE_LAYOUT_BLOCK(GrassRegionBlock, "LEAF_REGION_FIELDS", kLeafRegionBlockFields),
+	VE_LAYOUT_BLOCK(TransparencyCompositePush, "TRANSPARENCY_COMPOSITE_PUSH_FIELDS",
+			kTransparencyCompositePushFields),
 	VE_LAYOUT_BLOCK(DownsamplePush, "DOWNSAMPLE_PUSH_FIELDS", kDownsamplePushFields),
 	VE_LAYOUT_BLOCK(BrickGenPush, "BRICK_GEN_PUSH_FIELDS", kBrickGenPushFields),
 	VE_LAYOUT_BLOCK(ConsolidatePush, "CONSOLIDATE_PUSH_FIELDS", kConsolidatePushFields),

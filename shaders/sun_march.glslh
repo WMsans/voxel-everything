@@ -18,6 +18,24 @@
 // prerequisite for a shadow result: if the ray leaves the resident/probed region field,
 // return fully lit rather than treating the accumulated darkness as known data.
 // ---------------------------------------------------------------------------------------
+#include "transparent_walk.glslh"
+
+// Transparent solids (spec §4): the sun walks through them with the primary ray's walker and
+// multiplies what they let through, so ground under ice is lit through a tint, not black. The
+// scalar sun term takes the brightest channel. An includer that must treat them as opaque
+// (the raymarcher with transparency off) defines SUN_WALK_ENABLED to a false expression
+// before including this file; grass and leaves always walk.
+#ifndef SUN_WALK_ENABLED
+#define SUN_WALK_ENABLED true
+#endif
+const float SUN_WALK_STEP = 0.1;
+const float SUN_WALK_MIN_TRANSMIT = 0.01;
+const int SUN_WALK_STEPS = 48;
+// Within this of a surface the penumbra term is dominated by that surface. When the surface
+// turns out to be transparent, the dip it caused is undone, and the ray leaving the medium
+// does not count its own exit face as an occluder.
+const float SUN_WALK_CLEAR = 0.1;
+
 const float RAY_SHADOW_DIST = 60.0;
 const int RAY_SHADOW_STEPS = 96;
 const float RAY_SHADOW_K = 12.0;
@@ -40,6 +58,9 @@ const float RAY_SHADOW_PENUMBRA_DIST = RAY_SHADOW_K * SDF_RANGE; // 7.68 m
 
 float terrain_sun_visibility(vec3 ro, float max_shadow_dist) {
 	float res = 1.0;
+	float res_clear = 1.0; // res as it stood before the ray closed on the current surface
+	float through = 1.0;   // what transparent media along the ray let through
+	bool leaving = false;  // just walked out of a medium: its exit face is not an occluder
 	float t = 0.05;
 	for (int i = 0; i < RAY_SHADOW_STEPS; i++) {
 		if (t > max_shadow_dist) break;
@@ -62,9 +83,26 @@ float terrain_sun_visibility(vec3 ro, float max_shadow_dist) {
 			continue;
 		}
 		float d = world_sdf(q);
-		if (d < 0.004) return 0.0;
-		if (t <= RAY_SHADOW_PENUMBRA_DIST) res = min(res, RAY_SHADOW_K * d / t);
+		if (d < 0.004) {
+			// Half a voxel along the ray is inside whatever was hit.
+			vec3 inside = q + sun_light.dir.xyz * (VOXEL_SIZE * 0.5);
+			if (!(SUN_WALK_ENABLED) || !mat_transparent(world_material(inside))) return 0.0;
+			int walk_budget = SUN_WALK_STEPS;
+			TransparentWalk w = walk_transparent(ro, sun_light.dir.xyz, t + VOXEL_SIZE * 0.5,
+					SUN_WALK_STEP, 0.0, SUN_WALK_MIN_TRANSMIT, SUN_WALK_STEPS, walk_budget);
+			if (w.end != WALK_AIR) return 0.0;
+			through *= max(w.T.r, max(w.T.g, w.T.b));
+			res = res_clear;
+			leaving = true;
+			t = w.t + 0.02;
+			continue;
+		}
+		if (!leaving && t <= RAY_SHADOW_PENUMBRA_DIST) res = min(res, RAY_SHADOW_K * d / t);
+		if (d >= SUN_WALK_CLEAR) {
+			res_clear = res;
+			leaving = false;
+		}
 		t += clamp(d, 0.02, 1.0);
 	}
-	return clamp(res, 0.0, 1.0);
+	return clamp(res, 0.0, 1.0) * through;
 }

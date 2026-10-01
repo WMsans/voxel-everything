@@ -1,0 +1,102 @@
+// The walk through a transparent medium
+// (docs/superpowers/specs/2026-09-29-transparent-materials-design.md §4). Transparency is a
+// material LABEL on the one union SDF, so inside ice the field is negative all the way
+// through: there is no surface between the ice and whatever is behind it, only a change of
+// label. This file steps the labels. Shared by the primary ray (raymarch.comp.glsl) and the
+// sun march (sun_march.glslh), so a pixel and its shadow read the same medium.
+//
+// The includer must include brick_atlas.glslh (and so declare everything it needs) first.
+//
+// NOTE: never put a literal include directive inside a comment in this file -- the loader
+// matches include tokens anywhere in a line and would self-include.
+
+const int WALK_AIR = 0;      // left the medium into air at `t`: march on from there
+const int WALK_OPAQUE = 1;   // reached an opaque solid at `t`; `mat` is its label
+const int WALK_ABSORBED = 2; // T fell under the cutoff, or the step cap ran out: T = 0
+
+struct TransparentWalk {
+	vec3 T;
+	float t;
+	int end;
+	uint mat;
+};
+
+// The label of the voxel holding p; air where no brick is resident.
+uint world_material(vec3 p) {
+	ivec3 brick = ivec3(floor(p / BRICK_SIZE));
+	int slot = slot_at(brick);
+	if (slot < 0) return 0u;
+	return material_at(p, brick, slot);
+}
+
+// Solid and not transparent: the one test the walk stops on.
+bool world_opaque(vec3 p) {
+	return world_sdf(p) <= 0.0 && !mat_transparent(world_material(p));
+}
+
+// The normal of the label boundary at p. The SDF has no surface there, so this is the
+// gradient of the OPAQUE OCCUPANCY -- 1 for an opaque solid voxel, 0 otherwise --
+// trilinearly interpolated over the eight voxel centres around p, negated to point out of
+// the opaque solid. A flat gradient (p deep inside one label) falls back to facing the ray.
+vec3 opaque_boundary_normal(vec3 p, vec3 rd) {
+	vec3 g = p / VOXEL_SIZE - 0.5;
+	vec3 base = floor(g);
+	vec3 f = g - base;
+	float o[8];
+	for (int k = 0; k < 8; k++) {
+		vec3 c = (base + vec3(ivec3(k & 1, (k >> 1) & 1, (k >> 2) & 1)) + 0.5) * VOXEL_SIZE;
+		o[k] = world_opaque(c) ? 1.0 : 0.0;
+	}
+	float gx = mix(mix(o[1] - o[0], o[3] - o[2], f.y), mix(o[5] - o[4], o[7] - o[6], f.y), f.z);
+	float gy = mix(mix(o[2] - o[0], o[3] - o[1], f.x), mix(o[6] - o[4], o[7] - o[5], f.x), f.z);
+	float gz = mix(mix(o[4] - o[0], o[5] - o[1], f.x), mix(o[6] - o[2], o[7] - o[3], f.x), f.y);
+	vec3 grad = vec3(gx, gy, gz);
+	float len = length(grad);
+	return len > 1e-6 ? -grad / len : -rd;
+}
+
+// Walks from t_begin (already inside the medium) along rd. Each step is
+// max(step_min, step_per_m * t) -- 5 cm near the camera, the pixel footprint further out --
+// and multiplies T by the label's per-metre transmittance to the step's length. The walk
+// ends absorbed once the brightest channel of T drops under min_transmit, or after
+// max_steps. Every step spends one of the caller's shared steps_left.
+TransparentWalk walk_transparent(vec3 ro, vec3 rd, float t_begin, float step_min,
+		float step_per_m, float min_transmit, int max_steps, inout int steps_left) {
+	TransparentWalk w;
+	w.T = vec3(1.0);
+	w.t = t_begin;
+	w.end = WALK_ABSORBED;
+	w.mat = 0u;
+	float t = t_begin;
+	for (int i = 0; i < max_steps && steps_left > 0; i++) {
+		steps_left--;
+		float step = max(step_min, step_per_m * t);
+		vec3 p = ro + rd * t;
+		if (world_sdf(p) > 0.0) {
+			w.end = WALK_AIR;
+			w.t = t;
+			return w;
+		}
+		uint m = world_material(p);
+		if (!mat_transparent(m)) {
+			// Bisect the label boundary inside the last step: the walk arrived by a whole
+			// step, and without this the seam would stair-step by one step length.
+			float lo = max(t - step, t_begin), hi = t;
+			for (int k = 0; k < 4; k++) {
+				float mid = 0.5 * (lo + hi);
+				if (world_opaque(ro + rd * mid)) hi = mid;
+				else lo = mid;
+			}
+			w.end = WALK_OPAQUE;
+			w.t = hi;
+			w.mat = m;
+			return w;
+		}
+		w.T *= pow(mat_transmit(m), vec3(step));
+		if (max(w.T.r, max(w.T.g, w.T.b)) < min_transmit) break;
+		t += step;
+	}
+	w.T = vec3(0.0);
+	w.t = t;
+	return w;
+}

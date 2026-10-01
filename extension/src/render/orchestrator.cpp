@@ -23,6 +23,8 @@
 #include "render/grass_scatter_pass.h"
 #include "render/leaf_scatter_pass.h"
 #include "render/leaf_raster_pass.h"
+#include "render/transparent_raster_pass.h"
+#include "render/transparency_composite_pass.h"
 #include "render/grass_raster_pass.h"
 #include "render/lod_raster_pass.h"
 #include "render/sun_shadow_pass.h"
@@ -285,6 +287,19 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 	// scatter still runs, so the chop contract holds and the canopy simply does not draw.
 	passes_.leaf_raster = new LeafRasterPass();
 	passes_.leaf_raster->initialize(device);
+	// Fail-soft like every raster above: a shader that will not compile leaves initialize()
+	// with no shader, draw() returns false, and the frame cancels the timing marker and skips
+	// the far front layer -- terrain and the near field are untouched.
+	passes_.transparent_raster = new TransparentRasterPass();
+	passes_.transparent_raster->initialize(device);
+	// Fail-soft like every raster above: a shader that will not compile leaves initialize()
+	// with no shader, render() returns false, and the frame cancels the timing marker and
+	// leaves deferred's image alone.
+	passes_.transparency_composite = new TransparencyCompositePass();
+	passes_.transparency_composite->initialize(device);
+	// The SunUbo was created above, so this is the one live set_sun_ubo() call: the pass is
+	// born after the sun-UBO block, and the uniform set keys on this RID anyway.
+	if (passes_.sun_ubo) passes_.transparency_composite->set_sun_ubo(passes_.sun_ubo->buffer());
 	passes_.hiz = new HizPass();
 	if (!passes_.hiz->initialize(device)) {
 		UtilityFunctions::printerr("VoxelWorld: HiZ initialization failed; continuing without "
@@ -311,6 +326,8 @@ void RenderOrchestrator::teardown_render_passes() {
 	if (passes_.grass_raster) { delete passes_.grass_raster; passes_.grass_raster = nullptr; }
 	if (passes_.grass_scatter) { delete passes_.grass_scatter; passes_.grass_scatter = nullptr; }
 	if (passes_.leaf_raster) { delete passes_.leaf_raster; passes_.leaf_raster = nullptr; }
+	if (passes_.transparent_raster) { delete passes_.transparent_raster; passes_.transparent_raster = nullptr; }
+	if (passes_.transparency_composite) { delete passes_.transparency_composite; passes_.transparency_composite = nullptr; }
 	if (passes_.leaf_scatter) { delete passes_.leaf_scatter; passes_.leaf_scatter = nullptr; }
 	if (passes_.ssgi) { delete passes_.ssgi; passes_.ssgi = nullptr; }
 	if (passes_.ssao) { delete passes_.ssao; passes_.ssao = nullptr; }
@@ -587,6 +604,7 @@ ve::SettingsGroup *RenderOrchestrator::settings_group(const char *name) {
 	if (std::strcmp(name, "beauty") == 0) return &beauty_;
 	if (std::strcmp(name, "grass") == 0) return &grass_settings_;
 	if (std::strcmp(name, "leaves") == 0) return &leaf_settings_;
+	if (std::strcmp(name, "transparency") == 0) return &transparency_settings_;
 	return nullptr;
 }
 

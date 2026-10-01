@@ -20,6 +20,12 @@ func after_test() -> void:
 #    of (u, axis) with their four corner offsets, so quad emission order (the GPU allocates
 #    with atomics, in no fixed order) does not enter but a wrong winding still shows up.
 
+func ice_id(w: VoxelWorld) -> int:
+	for m in w.material_table():
+		if m["name"] == "ice":
+			return m["id"]
+	return 0
+
 func make_world() -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
@@ -79,3 +85,26 @@ func test_an_edit_reaches_the_coarse_levels() -> void:
 	assert_int(after["reduced_hash"]).override_failure_message(
 		"a 5 m crater left the 6.4 m lattice bit-identical: the reduction is point sampling"
 		).is_not_equal(hash_before)
+
+# Spec §5: a chunk holding ice contours TWO meshes -- terrain from the opaque lattice and a
+# shell of transparent-sided quads -- and both must agree GPU-to-CPU exactly as the plain
+# mesh does. The shell is what makes the far field see-through; zero shell quads here means
+# the reduce never raised the job's transparent bit.
+func test_a_chunk_with_ice_agrees_on_both_meshes() -> void:
+	var w := make_world()
+	var hit: Dictionary = w.raycast(Vector3(25.6, 120.0, 25.6), Vector3.DOWN, 200.0)
+	assert_bool(hit["hit"]).is_true()
+	var ground: Vector3 = hit["pos"]
+	w.hooks().debug_apply_sphere_add(ground + Vector3(0.0, 1.0, 0.0), 3.0, ice_id(w))
+	var c := Vector3i(int(floor(ground.x / 12.8)), int(floor(ground.y / 12.8)),
+			int(floor(ground.z / 12.8)))
+	var d := w.hooks().debug_lod_diff(0, c)
+	check_diff(d, "L0 chunk with an ice sphere")
+	assert_int(int(d["shell_quads"])).override_failure_message(
+		"the ice chunk grew no shell: %s" % d).is_greater(0)
+
+func test_a_chunk_without_ice_grows_no_shell() -> void:
+	var w := make_world()
+	var d := w.hooks().debug_lod_diff(0, Vector3i(2, 4, 2))
+	check_diff(d, "L0 surface")
+	assert_int(int(d["shell_quads"])).is_equal(0)

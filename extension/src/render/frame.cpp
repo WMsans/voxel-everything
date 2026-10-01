@@ -31,6 +31,8 @@
 #include "render/ssgi_pass.h"
 #include "render/ssr_pass.h"
 #include "render/sun_shadow_pass.h"
+#include "render/transparent_raster_pass.h"
+#include "render/transparency_composite_pass.h"
 #include "render/sun_ubo.h"
 #include "render/world_streamer.h"
 #include "shade/beauty_settings.h"
@@ -250,6 +252,9 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		return false;
 	}
 	const int islands = render_.island_slot_count();
+	// One read per frame, shared by the near field's marcher and the far field's shell skip:
+	// both key off the same switch, and reading it twice invites one of them to be stale.
+	const ve::TransparencySettings transparency = render_.transparency_settings();
 	IslandCullPass *cull = render_.passes().island_cull;
 	RID mask;
 	timings->begin(rd, "raymarch");
@@ -264,6 +269,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	// textures. CompositePass's uniform set binds them and rebuilds itself on the new RIDs;
 	// its framebuffer is dropped here as it always was.
 	if (rmp->targets_need_rebuild(rw, rh, effective_mask)) cmp->release_targets();
+	rmp->set_transparency(transparency);
 	if (!rmp->render(rd, *atlas, render_.passes().islands, mask, cp, rw, rh, edit_state,
 			render_.passes().field_context)) {
 		cancel_stage(kStageRaymarch);
@@ -296,6 +302,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	const int cascade_count = ve::sun_cascades(store_.config().stream_radius_m,
 			SunShadowPass::kSize, cascades);
 	const bool clamp_levels = settings.sun_cascade_min_level;
+	if (lod_raster) lod_raster->set_skip_transparent(transparency.enabled);
 	if (!in.debug.skip_far_field && lod_.pool() && lod_raster && render_.passes().materials) {
 		ve::LodCamera lod_cam;
 		for (int c = 0; c < 4; c++)
@@ -452,6 +459,28 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		else timings->cancel("leaves");
 	}
 
+	// Transparency, far half (spec §5): the shell's front faces into the far front layer,
+	// after every producer of G-buffer depth, so grass and leaves in front of ice hide it.
+	// A failure cancels the marker and skips the far layer -- never aborts the frame.
+	bool far_front = false;
+	TransparentRasterPass *shell = render_.passes().transparent_raster;
+	if (shell) shell->set_draw_pages({});
+	// render_.passes().materials, as the LoD block's guard has: transparent_draw_pages() is
+	// built and read only inside that block, and the atlas is the block's precondition.
+	if (shell && transparency.enabled && !in.debug.skip_far_field && lod_.pool() && lod_raster &&
+			render_.passes().materials) {
+		std::vector<LodRasterPass::PageDraw> shell_pages;
+		for (const ve::LodPageDraw &pd : lod_.transparent_draw_pages())
+			shell_pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});
+		shell->set_draw_pages(shell_pages);
+		timings->begin(rd, "transparent_raster");
+		const bool shell_ok = shell->draw(rd, *lod_.pool(), lod_raster->index_array(), *gb,
+				ubo->buffer(), fade_start, fade_end, lod_raster->front_face_clockwise());
+		if (shell_ok) end_stage(rd, kStageTransparentRaster);
+		else cancel_stage(kStageTransparentRaster);
+		far_front = shell_ok && shell->drew();
+	}
+
 	SsgiPass *ssgi = render_.passes().ssgi;
 	if (ssgi) ssgi->clear_result();
 	bool ssgi_ok = false;
@@ -510,6 +539,30 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		return false;
 	}
 	end_stage(rd, kStageDeferred);
+	// Transparency, shading (spec §7): fronts over what deferred lit behind them. Failure
+	// cancels the marker and leaves deferred's image -- never aborts the frame.
+	if (TransparencyCompositePass *tc = render_.passes().transparency_composite;
+			tc && transparency.enabled) {
+		TransparencyCompositePass::Params tp;
+		for (int k = 0; k < 3; k++) {
+			tp.right[k] = cp.cam_right[k];
+			tp.up[k] = cp.cam_up[k];
+			tp.ambient[k] = beauty.ambient[k];
+		}
+		tp.tan_x = cp.params[0];
+		tp.tan_y = cp.params[1];
+		tp.fade_start = fade_start;
+		tp.fade_end = fade_end;
+		tp.flags = beauty_flags;
+		TransparentRasterPass *shell_pass = render_.passes().transparent_raster;
+		timings->begin(rd, "transparency");
+		const bool tc_ok = tc->render(rd, *gb, *materials, rmp->front_texture(),
+				rmp->trans_texture(), shell_pass ? shell_pass->front() : RID(),
+				shell_pass ? shell_pass->trans() : RID(), far_front,
+				use_sun ? sun->map() : RID(), deferred->sun_cascade_ubo(), ubo->buffer(), tp);
+		if (tc_ok) end_stage(rd, kStageTransparency);
+		else cancel_stage(kStageTransparency);
+	}
 	timings->begin(rd, "inject");
 	if (!inject->draw(rd, in.scene_color, in.scene_depth, gb->lit(), gb->depth())) {
 		cancel_stage(kStageInject);
@@ -588,7 +641,7 @@ bool VoxelFrame::render_post_opaque(RenderingDevice *rd, const FrameInputs &in) 
 const char *godot::frame_stage_name(FrameStage stage) {
 	static const char *const kNames[kStageCount] = {"stream", "raymarch", "composite", "lod",
 			"sun_shadow", "grass", "ssgi", "deferred", "ssao", "inject", "contact", "ssr",
-			"outlines", "history"};
+			"outlines", "history", "transparent_raster", "transparency"};
 	return stage < kStageCount ? kNames[stage] : "";
 }
 

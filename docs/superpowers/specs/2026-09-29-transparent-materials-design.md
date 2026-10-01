@@ -266,3 +266,151 @@ Characterization first:
   https://users.aalto.fi/~laines9/publications/laine2010i3d_paper.pdf
 - The author's surface-nets terrain this far-field approach extends:
   https://github.com/WMsans/Unity_SDF_Terrain
+
+## 11. Deviations recorded during planning
+
+1. `composite.frag.glsl` is not edited: `transparency_composite` samples the marcher's
+   march-resolution front targets directly, nearest-sampled like composite.frag's geometry.
+2. The opaque-lattice pass always runs (identity without transparent labels); the shell
+   passes early-out on the job's bit instead of the CPU skipping dispatches.
+3. Shell quads share their chunk's pages after the skirts and are told apart by material;
+   the opaque and shadow vertex shaders collapse them. No new arena range or quad bit.
+4. The shell list is the CPU walk's pages holding shell quads, not HiZ-culled.
+5. Grass and leaf sun marches always see through transparency; only the raymarcher's march
+   honours `enabled`.
+6. With `enabled` off, far-field ice still casts no sun-map shadow.
+7. With a front present the composite reads a minimum of four texels per pixel even in the
+   near-only case — `near_front`, `near_trans` (only on the dither the near layer kept),
+   `gb_depth`, and the `lit` image it rewrites — plus the two material array lookups
+   (`material_surface`, `material_props_normal`). Six texels when the far layer owns the
+   pixel: `far_front` and `far_trans` join, fetched only on the far field's bit, and a
+   far front inside the sun map's range adds a `sun_map_visibility` read on top. It returns
+   without shading when the G-buffer depth is nearer than the front. Its measured cost is the
+   Step 2 steady-leg delta, "B − mean(A1, A2) = +0.65 ms p50" on a 52 ms frame
+   (interleaved A/B/A, `--ice=3` on every leg, 300 sampled frames each, V-Sync disabled,
+   `render_scale=0.65`, `near_field_scale=0.40`, and this world's fade band
+   `38.40–48.00 m`; p50 ms: A1 52.38, B 53.03, A2 52.38). Two A legs agree exactly
+   (0.00 ms p50), but n=2 establishes no noise floor however well the two agree, so the
+   +0.65 ms is one measurement plus a replicate, not a demonstrated separation. A prior
+   run of the same three legs put the p50 delta at +0.67 ms — consistent, but that run
+   is unsourced for a reason: it was invalidated by a bug that orphaned the edit tool
+   (`_tool == null`) and so broke the edit / edit-bounded / island legs. Its *steady* leg
+   never touches `_tool` and was genuinely unaffected, so its numbers stand for this leg;
+   they are named here so a reader does not assume two fully clean runs. The p99 delta
+   is **not** a measurement worth quoting: B's p99 is 62.50 ms against a mean A of
+   58.38 ms, i.e. +4.13 ms, but the two A legs already differ by 1.89 ms p99 and that
+   prior run put the same figure at +0.55 ms. No pass-level GPU numbers exist at all:
+   this machine reports `valid_samples=0`, so the `transparency` and
+   `transparent_raster` stages were never timed (memory:
+   gpu-timings-invalid-on-this-machine).
+8. §9's automated seam-probe check became a rendered-frame check, not a hook
+   (`tools/transparency_capture.gd`): the existing seam probe marks terrain ownership, not
+   front ownership, and a hook that re-derived front ownership would test a copy of the
+   logic rather than the shipping pass. What was actually inspected, through
+   `demo/main.tscn`:
+   - `seam` — a chain of 22 overlapping r=5 m ice balls placed every 6 m along the ground
+     from 20 m to 146 m out (`range(20, 150, 6)`, whose last value is 146; about 45 m to
+     150 m of true range from a lens 45 m up), plus
+     three separate r=7 m probe balls at roughly 0.7×, the midpoint and 1.6× the band
+     (printed ranges 45 m / 72 m / 128 m). The chain is what crosses the band — marched
+     ice in front of it, shell ice behind. The capture world's fade band is
+     **64–80 m, not the 38–48 m** band of item 7's benchmark leg, because the band is
+     `residency()->complete_radius_m()` — the streaming reach measured at that run's camera
+     pose (`extension/src/lod/lod_system.cpp` → `lod_grid.cpp`) — and no display or
+     resolution term appears anywhere on that path. The capture world simply streams
+     further than the benchmark world does. So "the band" in this frame is not the band that
+     was measured for cost.
+     Read at 1× and at 5×. The ice reads as ice on both sides of the band, the ground
+     shows through it, the dither rim is the ordinary near/far cross-fade, and no
+     double-dark or missing-pixel line was visible.
+   - `foliage` — a 4 m ice ball 14 m ahead of a low camera with the shipped grass scatter
+     (18 096 blades). The blades draw over the ice untinted, which is §7 step 1's
+     G-buffer-depth rule. That rule has **no automated coverage**: the 16 cases in
+     `tests/test_transparency.gd` never place ice in front of grass or leaves, and the
+     fixture only zeroes grass wind. This frame is the only evidence for it.
+   Both PNGs are under `reports/transparency-B/`, which is git-ignored, so they are not in
+   the tree; the tool regenerates them. What was **not** done: nobody played the demo with
+   the mouse-driven edit tool, and no frame was judged at native resolution in a live
+   window. These are rendered stills, inspected by eye at 1× and magnified, and a still
+   cannot show a seam that only appears while the camera moves through the band.
+9. **Rulings that must outlive the session ledger.** The working record for this feature
+   lives in `.superpowers/sdd/2026-09-29-transparent-materials/`, which is git-ignored, so
+   four decisions of this branch are recorded here because a maintainer who merges it will
+   not have them.
+   - **The shipped-frame golden is NOT to be re-recorded.** `tests/test_frame_shipped_golden.gd`
+     guards this branch's most expensive invariant, and the temptation to re-record it is
+     exactly what would disarm it. The geometry is provably identical: `lod_opaque.comp.glsl`'s
+     outside constant is byte-for-byte the CPU `lod_outside_byte` (`kLodBaseCell=0.4f`,
+     `kSdfRange=0.64f`), the opaque lattice is the identity on a transparent-free chunk,
+     `reduced_hash` / `quads_gpu` match the parent commit at all 8 levels, `shell_quads == 0`
+     on the default world, and a controlled run with the opaque pass but not the shell pair
+     was bit-exact against the golden. A dispatch that writes nothing into any
+     rendering-consumed buffer cannot change a pixel; the only channel left is capture timing.
+     The live pins that DO gate the mesh are `test_lod_raster_golden.gd`,
+     `test_lod_cull_golden.gd` and `test_lod_mesh_diff.gd`, and they were green throughout.
+   - **`test_frame_shipped_golden.gd` is flaky, not red — treat it as informational.** It
+     failed on the clean-`main` baseline, passed 5/5 at one commit, and has been
+     intermittently red since: bimodal on one horizon tile, with a run-to-run spread equal
+     to its 0.004 tolerance and a byte-identical near field. It cannot gate this branch in
+     either direction. A failing run of it is not evidence of a regression here, and it is
+     not grounds for a re-record either.
+   - **`frame.cpp`'s `lod_.pool()` gate is a PRE-EXISTING lazy-init gap, deliberately not
+     fixed by this branch.** The LoD pool is created only via `LodSystem::stats()` or
+     `tick()`, and `frame.cpp` gates `tick()` on the pool already existing, so on a frame
+     where nothing has asked the LoD a question the whole far-field block is skipped. That
+     is why every far-field test fixture calls `debug_init_physics()` + `debug_lod_stats()`
+     before it can see a shell. Fixing it would change LoD behaviour on every production
+     frame and perturb the frame-contract goldens. **File it separately**; the fix belongs in
+     a commit whose own diff is the LoD behaviour change, with the goldens re-established
+     there on purpose.
+   - **`frame.cpp:305`'s gate is out of scope for this branch**, for the same reason. The
+     branch adds a guard to the shell block that matches the LoD block's (see the `lod_raster`
+     symmetry), and nothing else about the gate.
+10. **§1's "zero cost without transparency", measured with no transparent material in the
+    scene.** Item 7's +0.65 ms was measured `--ice=3` on all three legs, i.e. *with* ice, and
+    that ice sat ~9 m from the lens — inside the 38–48 m band, so the far-field shell
+    contributed nothing to it either. A second interleaved A/B/A, this time with no `--ice` on
+    any leg (`reports/transparency-noice-{A1,B,A2}/steady.txt`; no `benchmark: ice` line in
+    any of the three logs, and the same world in each: `draw_pages_p50=341`,
+    `chunks_resident=709`, `pages_used=2286`; 300 sampled frames per leg, V-Sync disabled,
+    `render_scale=0.65`, `near_field_scale=0.40`, fade band `38.40–48.00 m`):
+
+    | leg | `--transparency` | p50 ms | p95 ms | p99 ms | frame_avg ms |
+    |---|---|---|---|---|---|
+    | A1 | 0 | 45.00 | 48.22 | 50.00 | 45.28 |
+    | B  | 1 | 45.45 | 47.09 | 50.00 | 45.59 |
+    | A2 | 0 | 45.24 | 47.30 | 50.00 | 45.44 |
+
+    **B − mean(A1, A2) = +0.33 ms p50** (A/A spread 0.24 ms) on a 45 ms frame. The p99 delta
+    is **0.00 ms** with a 0.00 ms A/A spread — all three legs report exactly 50.00 — so unlike
+    item 7's p99 this one is quotable; it is a tie, not a resolution. The legs' maximums differ
+    (50.36 / 51.36 / 50.00), so they did not land on the same frame, but all three p99s fell in
+    one plateau and the measurement does not resolve the tail in either direction. The honest
+    caveat is the
+    p95: B is **0.67 ms faster** than the A mean there, the opposite sign to the p50. Two A
+    legs establish no noise floor however well they agree, so +0.33 ms p50 is a small
+    separation against a comparable A/A spread, not a demonstrated cost — the same standing
+    as item 7's +0.65 ms, and the two should be read as "a few tenths of a millisecond, if
+    anything". No pass-level GPU numbers exist for these legs either (`valid_samples=0`), so
+    the `transparency` and `transparent_raster` stages were not timed.
+
+    What the branch adds to a no-ice scene **unconditionally**, feature on, stated plainly
+    because the delta above does not decompose it: three extra per-chunk LoD dispatches (the
+    opaque lattice, the shell `frac`, the shell `quads`). The two shell passes each early out
+    per thread on the job's has-transparent bit before any load or atomic, so on a
+    transparent-free chunk they write nothing. The opaque lattice is the exception: it has no
+    early-out and `imageStore`s every sample, so it always runs, as item 2 says — it is simply
+    the identity on a chunk with no transparent labels. Also: two extra march-resolution targets
+    (`front` rgba32f, `trans` rgba16f) allocated beside the G-buffer's three and written
+    every frame, id 0 with T = 1 where there is no front; one extra full-resolution compute
+    dispatch, `transparency_composite`, which returns per pixel without storing where there
+    is no front; and, for the two of the four sun marches the raymarcher owns, one extra
+    `world_material()` per shadow-ray surface hit with the feature on (`raymarch.comp.glsl`
+    defines `SUN_WALK_ENABLED (tr.params.w > 0.5)`; behaviour unchanged where nothing is
+    transparent). The other two marches — `grass_scatter.comp.glsl` and
+    `leaf_scatter.comp.glsl` — include `sun_march.glslh` with its default
+    `SUN_WALK_ENABLED true`, so their extra `world_material()` is not gated on the feature at
+    all: it is present with `--transparency` 0 as well, and belongs to no leg of the A/B above.
+    The far field's `front_full` /
+    `trans_full` pair is **not** allocated on a no-ice scene: `TransparentRasterPass::draw`
+    returns at `pages_.empty()` before `ensure_targets`.

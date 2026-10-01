@@ -101,3 +101,34 @@ TEST_CASE("foliage ids sit above every terrain id and look up their own glow") {
 			doctest::Approx(0.0f));
 	CHECK(ve::material_glow(static_cast<uint16_t>(ve::kFoliageBase - 1)) == doctest::Approx(0.0f));
 }
+
+TEST_CASE("transparency is a table property: the ice rows are clear, everything else opaque") {
+	CHECK(ve::material_transparent(ve::material_id("ice")));
+	CHECK(ve::material_transparent(ve::material_id("ice_crack")));
+	CHECK_FALSE(ve::material_transparent(ve::material_id("rock")));
+	CHECK_FALSE(ve::material_transparent(ve::material_id("bark")));
+	CHECK_FALSE(ve::material_transparent(0));                   // air
+	CHECK_FALSE(ve::material_transparent(ve::kFoliageBase));    // foliage has no row
+	CHECK_FALSE(ve::material_transparent(9999));
+	float t[3];
+	ve::material_transmit(ve::material_id("ice"), t);
+	CHECK(t[0] == doctest::Approx(0.80f));
+	CHECK(t[1] == doctest::Approx(0.90f));
+	CHECK(t[2] == doctest::Approx(0.95f));
+	ve::material_transmit(0, t);
+	CHECK(t[0] == 0.0f);
+	CHECK(ve::material_ior(ve::material_id("ice")) == doctest::Approx(1.31f));
+	CHECK(ve::material_ior(0) == doctest::Approx(1.0f));
+}
+
+// A transmit of 1 would never attenuate, and the walk's cutoff (spec §4 case 3) would
+// never fire: the step cap would be the only thing ending a walk through it.
+TEST_CASE("every transmit is in [0, 1) and every ior at least 1") {
+	for (int i = 0; i < ve::kMaterialCount; i++) {
+		for (float t : ve::kMaterials[i].transmit) {
+			CHECK(t >= 0.0f);
+			CHECK(t < 1.0f);
+		}
+		CHECK(ve::kMaterials[i].ior >= 1.0f);
+	}
+}

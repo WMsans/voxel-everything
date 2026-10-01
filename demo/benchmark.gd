@@ -89,6 +89,8 @@ var _settled_at := -1
 var _horizon_quiet := 0
 var _horizon_at := -1
 var _screenshot_path := ""
+var _ice_radius := 0.0
+var _ice_pending := false
 # Optional fixed camera progression for A/B comparisons: faster rendering must
 # not send the camera through a different stretch of terrain. Frame timing still
 # uses the real delta; this is deliberately not Godot's --fixed-fps option.
@@ -173,6 +175,14 @@ func _ready() -> void:
 			# else leaves the shipped default. The grass flag's twin, and what lets every
 			# existing leg keep a control in the canopy A/B.
 			_world.set_leaf_value("enabled", float(arg.trim_prefix("--leaves=")))
+		elif arg.begins_with("--transparency="):
+			# Transparency on/off for A/B cost runs: 0 disables the walk, the shell and the
+			# composite. The leaves flag's twin.
+			_world.set_transparency_value("enabled", float(arg.trim_prefix("--transparency=")))
+		elif arg.begins_with("--ice="):
+			# An ice sphere of this radius where the camera first looks, so a transparency A/B
+			# has something to see through. Pair with --transparency=0/1.
+			_ice_radius = float(arg.trim_prefix("--ice="))
 		elif arg.begins_with("--grass-value="):
 			# name=value, repeatable -- the --effect-value shape, for the grass store. The
 			# far LoD rings are what this exists for: their cost has to be measurable by
@@ -212,10 +222,31 @@ func _ready() -> void:
 		_player.global_transform = Transform3D(Basis.IDENTITY, Vector3(24, 63.2, 24))
 		_cam.transform = Transform3D(Basis.looking_at(Vector3(6, -10, 6).normalized()),
 			Vector3(0, 0.7, 0))
+	# After the transforms above, not next to `_cam = ...`: "where the camera first looks"
+	# is a statement about the leg's start pose, and the raycast has to see that pose. The
+	# placement itself is deferred to _process: at _ready the regions around that pose are
+	# still streaming, so the CPU field ray hits nothing.
+	_ice_pending = _ice_radius > 0.0
 	if _mode == "--benchmark-edit" or _mode == "--benchmark-edit-bounded" \
 			or _mode == "--benchmark-island":
 		_tool = ClassDB.instantiate("VoxelEditTool")
 		_world.add_child(_tool)
+
+func _place_ice() -> bool:
+	# An ice sphere where the camera first looks, so a transparency A/B has something to see
+	# through. Returns false until the field under the camera is resident, so the caller can
+	# retry: the first frames of a leg are still streaming the world.
+	var hit: Dictionary = _world.raycast(_cam.global_position,
+			-_cam.global_transform.basis.z, 200.0)
+	var ice_id := 0
+	for m in _world.material_table():
+		if m["name"] == "ice":
+			ice_id = m["id"]
+	if not hit["hit"] or ice_id <= 0:
+		return false
+	_world.hooks().debug_apply_sphere_add(hit["pos"], _ice_radius, ice_id)
+	print("benchmark: ice r=%.1f at %s" % [_ice_radius, hit["pos"]])
+	return true
 
 func _record_vsync() -> void:
 	# Requesting DISABLED is not the same as getting it: a Wayland compositor can refuse,
@@ -249,6 +280,14 @@ func _vsync_actual_from_readback(display_name: String, mode: int) -> String:
 func _process(delta: float) -> void:
 	if _mode == "":
 		return
+	if _ice_pending and _frames <= _warmup:
+		# Retried through the warmup, which is also the window the far-field horizon needs to
+		# arrive: the shell quads for the new chunk are built after the ice lands, so the leg
+		# does not start sampling before the thing it is measuring exists.
+		_ice_pending = not _place_ice()
+		if _ice_pending and _frames == _warmup:
+			push_warning("benchmark: --ice found no ground ahead; running without ice")
+			_ice_pending = false
 	if _draining:
 		_capture_gpu_sample()
 		_drain_frames += 1

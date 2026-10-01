@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://0lu5dc58183h"
+path="res://.godot/imported/transparency_composite.comp.glsl-328ca02a06f4dca35afc9a76fbe5aab5.res"
+
+[deps]
+
+source_file="res://shaders/transparency_composite.comp.glsl"
+dest_files=["res://.godot/imported/transparency_composite.comp.glsl-328ca02a06f4dca35afc9a76fbe5aab5.res"]
+
+[params]
+

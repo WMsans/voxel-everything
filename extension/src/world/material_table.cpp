@@ -51,6 +51,24 @@ float material_glow(uint16_t id) {
 	return (j >= 0 && j < kFoliageCount) ? kFoliage[j].glow : 0.0f;
 }
 
+bool material_transparent(uint16_t id) {
+	const int i = static_cast<int>(id) - 1;
+	if (i < 0 || i >= kMaterialCount) return false;
+	const float *t = kMaterials[i].transmit;
+	return t[0] > 0.0f || t[1] > 0.0f || t[2] > 0.0f;
+}
+
+void material_transmit(uint16_t id, float out[3]) {
+	const int i = static_cast<int>(id) - 1;
+	for (int k = 0; k < 3; k++)
+		out[k] = (i >= 0 && i < kMaterialCount) ? kMaterials[i].transmit[k] : 0.0f;
+}
+
+float material_ior(uint16_t id) {
+	const int i = static_cast<int>(id) - 1;
+	return (i >= 0 && i < kMaterialCount) ? kMaterials[i].ior : 1.0f;
+}
+
 std::string material_table_glsl() {
 	std::ostringstream o;
 	o << "// GENERATED from extension/src/world/material_table.h (ve::kMaterials) by\n"
@@ -82,6 +100,18 @@ std::string material_table_glsl() {
 	o << "const vec3 MAT_FLAT_ALBEDO[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](\n";
 	for (int i = 0; i < kMaterialCount; i++)
 		o << "\t" << vec3(kMaterials[i].flat_albedo) << (i + 1 < kMaterialCount ? "," : "")
+		  << " // " << kMaterials[i].name << "\n";
+	o << ");\n\n";
+
+	o << "const vec3 MAT_TRANSMIT[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](\n";
+	for (int i = 0; i < kMaterialCount; i++)
+		o << "\t" << vec3(kMaterials[i].transmit) << (i + 1 < kMaterialCount ? "," : "")
+		  << " // " << kMaterials[i].name << "\n";
+	o << ");\n\n";
+
+	o << "const float MAT_IOR[MATERIAL_COUNT] = float[MATERIAL_COUNT](\n";
+	for (int i = 0; i < kMaterialCount; i++)
+		o << "\t" << f(kMaterials[i].ior) << (i + 1 < kMaterialCount ? "," : "")
 		  << " // " << kMaterials[i].name << "\n";
 	o << ");\n\n";
 
@@ -120,6 +150,20 @@ std::string material_table_glsl() {
 	     "\tif (i >= 0 && i < MATERIAL_COUNT) return MAT_GLOW_RGB[i];\n"
 	     "\tint j = int(id) - int(FOLIAGE_BASE);\n"
 	     "\treturn (j >= 0 && j < FOLIAGE_COUNT) ? FOLIAGE_GLOW_RGB[j] : vec3(0.0);\n"
+	     "}\n\n"
+	     "// Mirror of ve::material_transparent: air, foliage and any id with no table entry are\n"
+	     "// opaque. Transparent means any channel of the per-metre transmittance is above zero.\n"
+	     "bool mat_transparent(uint id) {\n"
+	     "\tint i = int(id) - 1;\n"
+	     "\treturn i >= 0 && i < MATERIAL_COUNT && any(greaterThan(MAT_TRANSMIT[i], vec3(0.0)));\n"
+	     "}\n\n"
+	     "vec3 mat_transmit(uint id) {\n"
+	     "\tint i = int(id) - 1;\n"
+	     "\treturn (i >= 0 && i < MATERIAL_COUNT) ? MAT_TRANSMIT[i] : vec3(0.0);\n"
+	     "}\n\n"
+	     "float mat_ior(uint id) {\n"
+	     "\tint i = int(id) - 1;\n"
+	     "\treturn (i >= 0 && i < MATERIAL_COUNT) ? MAT_IOR[i] : 1.0;\n"
 	     "}\n";
 	return o.str();
 }

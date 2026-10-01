@@ -82,7 +82,8 @@ func test_stand_in_tier_rebases_unoverridden_beauty_and_keeps_override() -> void
 
 func test_groups_are_listed_in_panel_order() -> void:
 	var settings: VoxelSettings = make_settings()[2]
-	assert_array(Array(settings.groups())).is_equal(["display", "render", "beauty", "grass", "leaves"])
+	assert_array(Array(settings.groups())).is_equal(
+		["display", "render", "beauty", "grass", "leaves", "transparency"])
 
 func test_describe_lists_every_row_with_its_value() -> void:
 	var settings: VoxelSettings = make_settings()[2]

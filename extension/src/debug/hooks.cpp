@@ -23,6 +23,7 @@
 #include "render/ssao_pass.h"
 #include "render/ssr_pass.h"
 #include "render/outline_pass.h"
+#include "render/transparent_raster_pass.h"
 #include "beauty_compositor.h"
 #include "render/region_pass.h"
 #include "render/brick_gen_pass.h"
@@ -373,6 +374,49 @@ Dictionary VoxelDebugHooks::debug_render_frame(Vector3 pos, Vector3 fwd, int w, 
 	}
 	d["mean_luma"] = luma / static_cast<double>(pixels);
 	d["lit_checksum"] = checksum;
+
+	// Centre-pixel readouts for tests/test_transparency.gd: what the marcher decided (march
+	// resolution) and what the frame finally showed (full resolution). Plain reads of the
+	// shipping targets -- nothing is re-rendered.
+	{
+		const int64_t c = static_cast<int64_t>(h / 2) * w + w / 2;
+		d["center_lit"] = Color(half_to_float(v[c * 4]), half_to_float(v[c * 4 + 1]),
+				half_to_float(v[c * 4 + 2]));
+		RaymarchPass *rmp = world_->context().render->passes().raymarch;
+		const Vector2i ms = rmp ? rmp->target_size() : Vector2i();
+		if (ms.x > 0 && ms.y > 0) {
+			const int64_t mc = static_cast<int64_t>(ms.y / 2) * ms.x + ms.x / 2;
+			const PackedByteArray fr = device->texture_get_data(rmp->front_texture(), 0);
+			if (fr.size() >= (mc + 1) * 16) {
+				const float *f = reinterpret_cast<const float *>(fr.ptr()) + mc * 4;
+				d["center_front"] = Color(f[0], f[1], f[2], f[3]);
+			}
+			const PackedByteArray tr = device->texture_get_data(rmp->trans_texture(), 0);
+			if (tr.size() >= (mc + 1) * 8) {
+				const uint16_t *t = reinterpret_cast<const uint16_t *>(tr.ptr()) + mc * 4;
+				d["center_trans"] = Color(half_to_float(t[0]), half_to_float(t[1]),
+						half_to_float(t[2]), half_to_float(t[3]));
+			}
+			const PackedByteArray al = device->texture_get_data(rmp->albedo_texture(), 0);
+			if (al.size() >= (mc + 1) * 4) d["center_sun"] = al[mc * 4 + 3] / 255.0;
+			const PackedByteArray sf = device->texture_get_data(rmp->surface_texture(), 0);
+			if (sf.size() >= (mc + 1) * 8)
+				d["center_material"] = static_cast<int>(half_to_float(
+						reinterpret_cast<const uint16_t *>(sf.ptr())[mc * 4 + 2]) + 0.5f);
+		}
+		// The far field's shell layer, at FULL resolution (spec §5): how many pages carried
+		// shell quads this frame, and what the nearest one wrote at the centre pixel.
+		TransparentRasterPass *shell = world_->context().render->passes().transparent_raster;
+		d["transparent_pages"] = shell ? shell->draw_page_count() : 0;
+		d["far_center_front"] = Color();
+		if (shell && shell->drew()) {
+			const PackedByteArray ff = device->texture_get_data(shell->front(), 0);
+			if (ff.size() >= (c + 1) * 16) {
+				const float *f = reinterpret_cast<const float *>(ff.ptr()) + c * 4;
+				d["far_center_front"] = Color(f[0], f[1], f[2], f[3]);
+			}
+		}
+	}
 	return d;
 }
 

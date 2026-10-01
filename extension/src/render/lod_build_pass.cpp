@@ -75,6 +75,7 @@ bool LodBuildPass::initialize(RenderingDevice *rd, const LodBuildConfig &cfg) {
 	make_3d(&fine_mat_, RenderingDevice::DATA_FORMAT_R16_UINT, ve::kLodFineLattice);
 	make_3d(&lat_sdf_, RenderingDevice::DATA_FORMAT_R8_UNORM, ve::kLodChunkLattice);
 	make_3d(&lat_mat_, RenderingDevice::DATA_FORMAT_R16_UINT, ve::kLodChunkLattice);
+	make_3d(&opq_sdf_, RenderingDevice::DATA_FORMAT_R8_UNORM, ve::kLodChunkLattice);
 
 	const int64_t frac_count =
 			static_cast<int64_t>(cfg_.max_jobs) * ve::kLodChunkMeshCells *
@@ -89,7 +90,11 @@ bool LodBuildPass::initialize(RenderingDevice *rd, const LodBuildConfig &cfg) {
 			static_cast<int64_t>(cfg_.max_jobs) * ve::kLodMaxQuadsPerChunk * sizeof(ve::LodQuadNormals);
 	normals_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(static_cast<uint32_t>(normals_bytes),
 			zeroed(normals_bytes)));
-	const int64_t counts_bytes = static_cast<int64_t>(cfg_.max_jobs) * 8;
+	shell_quads_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(static_cast<uint32_t>(quads_bytes),
+			zeroed(quads_bytes)));
+	shell_normals_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(static_cast<uint32_t>(normals_bytes),
+			zeroed(normals_bytes)));
+	const int64_t counts_bytes = static_cast<int64_t>(cfg_.max_jobs) * 16;
 	counts_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(static_cast<uint32_t>(counts_bytes),
 			zeroed(counts_bytes)));
 	const int64_t ops_bytes =
@@ -105,8 +110,9 @@ bool LodBuildPass::initialize(RenderingDevice *rd, const LodBuildConfig &cfg) {
 		return false;
 	}
 	if (!fine_sdf_.is_valid() || !fine_mat_.is_valid() || !lat_sdf_.is_valid() ||
-			!lat_mat_.is_valid() || !frac_.is_valid() || !quads_.is_valid() ||
-			!normals_.is_valid() || !counts_.is_valid() || !ops_.is_valid() || !volumes_.is_valid() || !overrides_->is_valid()) {
+			!lat_mat_.is_valid() || !opq_sdf_.is_valid() || !frac_.is_valid() || !quads_.is_valid() ||
+			!normals_.is_valid() || !shell_quads_.is_valid() || !shell_normals_.is_valid() ||
+			!counts_.is_valid() || !ops_.is_valid() || !volumes_.is_valid() || !overrides_->is_valid()) {
 		UtilityFunctions::printerr("LodBuildPass: buffer/texture creation failed");
 		teardown();
 		return false;
@@ -135,9 +141,22 @@ bool LodBuildPass::initialize(RenderingDevice *rd, const LodBuildConfig &cfg) {
 	}
 	reduce_set_ = gpu::uniform_set(rd, group_, reduce_program_.shader, 0, {
 			gpu::image(0, fine_sdf_), gpu::image(1, fine_mat_), gpu::image(2, lat_sdf_),
-			gpu::image(3, lat_mat_)});
+			gpu::image(3, lat_mat_), gpu::storage(4, counts_)});
 	if (!reduce_set_.is_valid()) {
 		UtilityFunctions::printerr("LodBuildPass: reduce uniform set creation failed");
+		teardown();
+		return false;
+	}
+
+	opaque_program_ = gpu::compile_compute(rd, group_, "LodBuildPass", "lod_opaque.comp.glsl");
+	if (!opaque_program_.valid()) {
+		teardown();
+		return false;
+	}
+	opaque_set_ = gpu::uniform_set(rd, group_, opaque_program_.shader, 0,
+			{gpu::image(0, lat_sdf_), gpu::image(1, lat_mat_), gpu::image(2, opq_sdf_)});
+	if (!opaque_set_.is_valid()) {
+		UtilityFunctions::printerr("LodBuildPass: opaque uniform set creation failed");
 		teardown();
 		return false;
 	}
@@ -147,9 +166,13 @@ bool LodBuildPass::initialize(RenderingDevice *rd, const LodBuildConfig &cfg) {
 		teardown();
 		return false;
 	}
+	// Both sets bind counts_ because the shader declares it; only the shell set runs at mode
+	// 1, and only that mode reads the has-transparent bit.
 	frac_set_ = gpu::uniform_set(rd, group_, frac_program_.shader, 0,
-			{gpu::image(0, lat_sdf_), gpu::storage(1, frac_)});
-	if (!frac_set_.is_valid()) {
+			{gpu::image(0, opq_sdf_), gpu::storage(1, frac_), gpu::storage(2, counts_)});
+	frac_shell_set_ = gpu::uniform_set(rd, group_, frac_program_.shader, 0,
+			{gpu::image(0, lat_sdf_), gpu::storage(1, frac_), gpu::storage(2, counts_)});
+	if (!frac_set_.is_valid() || !frac_shell_set_.is_valid()) {
 		UtilityFunctions::printerr("LodBuildPass: frac uniform set creation failed");
 		teardown();
 		return false;
@@ -161,9 +184,13 @@ bool LodBuildPass::initialize(RenderingDevice *rd, const LodBuildConfig &cfg) {
 		return false;
 	}
 	quads_set_ = gpu::uniform_set(rd, group_, quads_program_.shader, 0, {
-			gpu::image(0, lat_sdf_), gpu::image(1, lat_mat_), gpu::storage(2, frac_),
+			gpu::image(0, opq_sdf_), gpu::image(1, lat_mat_), gpu::storage(2, frac_),
 			gpu::storage(3, quads_), gpu::storage(4, counts_), gpu::storage(5, normals_)});
-	if (!quads_set_.is_valid()) {
+	quads_shell_set_ = gpu::uniform_set(rd, group_, quads_program_.shader, 0, {
+			gpu::image(0, lat_sdf_), gpu::image(1, lat_mat_), gpu::storage(2, frac_),
+			gpu::storage(3, shell_quads_), gpu::storage(4, counts_),
+			gpu::storage(5, shell_normals_)});
+	if (!quads_set_.is_valid() || !quads_shell_set_.is_valid()) {
 		UtilityFunctions::printerr("LodBuildPass: quads uniform set creation failed");
 		teardown();
 		return false;
@@ -185,16 +212,18 @@ void LodBuildPass::teardown() {
 	volumes_.teardown();
 	if (overrides_ == &owned_overrides_) owned_overrides_.teardown();
 	overrides_ = nullptr;
-	field_program_ = reduce_program_ = frac_program_ = quads_program_ = gpu::Program();
-	field_set_ = reduce_set_ = frac_set_ = quads_set_ = RID();
-	fine_sdf_ = fine_mat_ = lat_sdf_ = lat_mat_ = RID();
-	frac_ = quads_ = normals_ = counts_ = ops_ = RID();
+	field_program_ = reduce_program_ = opaque_program_ = frac_program_ = quads_program_ =
+			gpu::Program();
+	field_set_ = reduce_set_ = opaque_set_ = frac_set_ = frac_shell_set_ = quads_set_ =
+			quads_shell_set_ = RID();
+	fine_sdf_ = fine_mat_ = lat_sdf_ = lat_mat_ = opq_sdf_ = RID();
+	frac_ = quads_ = normals_ = shell_quads_ = shell_normals_ = counts_ = ops_ = RID();
 	rd_ = nullptr;
 }
 
 void LodBuildPass::reset_counts() {
-	rd_->buffer_update(counts_, 0, static_cast<uint32_t>(cfg_.max_jobs) * 8,
-			zeroed(static_cast<int64_t>(cfg_.max_jobs) * 8));
+	rd_->buffer_update(counts_, 0, static_cast<uint32_t>(cfg_.max_jobs) * 16,
+			zeroed(static_cast<int64_t>(cfg_.max_jobs) * 16));
 }
 
 void LodBuildPass::upload_ops(const LodBuildJob &job, int job_index) {
@@ -207,11 +236,11 @@ void LodBuildPass::upload_ops(const LodBuildJob &job, int job_index) {
 			static_cast<uint32_t>(b.size()), b);
 }
 
-void LodBuildPass::push(int64_t list, const LodBuildJob &job, int job_index) {
+void LodBuildPass::push(int64_t list, const LodBuildJob &job, int job_index, int mode) {
 	float origin[3];
 	ve::lod_chunk_origin(job.level, job.coord, origin);
 	const ve::LodBuildPush push{{job.coord.x, job.coord.y, job.coord.z, job_index},
-			{sanitized_op_count(job), ve::kLodMaxQuadsPerChunk, job.level, 0},
+			{sanitized_op_count(job), ve::kLodMaxQuadsPerChunk, job.level, mode},
 			{origin[0], origin[1], origin[2], ve::lod_cell_size(job.level)},
 			{job.override_table, -1, 0, 0}};
 	rd_->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
@@ -234,30 +263,50 @@ void LodBuildPass::record_reduce(int64_t list, const LodBuildJob &job, int job_i
 	rd_->compute_list_dispatch(list, g, g, g);
 }
 
-void LodBuildPass::record_frac(int64_t list, const LodBuildJob &job, int job_index) {
-	rd_->compute_list_bind_compute_pipeline(list, frac_program_.pipeline);
-	rd_->compute_list_bind_uniform_set(list, frac_set_, 0);
+void LodBuildPass::record_opaque(int64_t list, const LodBuildJob &job, int job_index) {
+	rd_->compute_list_bind_compute_pipeline(list, opaque_program_.pipeline);
+	rd_->compute_list_bind_uniform_set(list, opaque_set_, 0);
 	push(list, job, job_index);
+	const int g = groups(ve::kLodChunkLattice);
+	rd_->compute_list_dispatch(list, g, g, g);
+}
+
+void LodBuildPass::record_frac(int64_t list, const LodBuildJob &job, int job_index, RID set,
+		int mode) {
+	rd_->compute_list_bind_compute_pipeline(list, frac_program_.pipeline);
+	rd_->compute_list_bind_uniform_set(list, set, 0);
+	push(list, job, job_index, mode);
 	const int g = groups(ve::kLodChunkMeshCells);
 	rd_->compute_list_dispatch(list, g, g, g);
 }
 
-void LodBuildPass::record_quads(int64_t list, const LodBuildJob &job, int job_index) {
+void LodBuildPass::record_quads(int64_t list, const LodBuildJob &job, int job_index, RID set,
+		int mode) {
 	rd_->compute_list_bind_compute_pipeline(list, quads_program_.pipeline);
-	rd_->compute_list_bind_uniform_set(list, quads_set_, 0);
-	push(list, job, job_index);
+	rd_->compute_list_bind_uniform_set(list, set, 0);
+	push(list, job, job_index, mode);
 	const int g = groups(ve::kLodChunkCells);
 	rd_->compute_list_dispatch(list, g, g, g);
 }
 
+// Spec §5. The opaque lattice ALWAYS runs: it is the identity on a chunk with no transparent
+// label, so the terrain mesh below is the one this chunk always had. The shell pair runs
+// first, on the original lattice, and BOTH its passes leave at once when the reduce raised no
+// transparent bit. frac_ holds one slice, so the two pairs run strictly in turn.
 void LodBuildPass::record_job(int64_t list, const LodBuildJob &job, int job_index) {
 	record_field(list, job, job_index);
 	rd_->compute_list_add_barrier(list);
 	record_reduce(list, job, job_index);
 	rd_->compute_list_add_barrier(list);
-	record_frac(list, job, job_index);
+	record_opaque(list, job, job_index);
 	rd_->compute_list_add_barrier(list);
-	record_quads(list, job, job_index);
+	record_frac(list, job, job_index, frac_shell_set_, 1);
+	rd_->compute_list_add_barrier(list);
+	record_quads(list, job, job_index, quads_shell_set_, 1);
+	rd_->compute_list_add_barrier(list);
+	record_frac(list, job, job_index, frac_set_, 0);
+	rd_->compute_list_add_barrier(list);
+	record_quads(list, job, job_index, quads_set_, 0);
 	rd_->compute_list_add_barrier(list);
 }
 
@@ -292,14 +341,15 @@ void LodBuildPass::read_job(int job_index, LodBuildResult *out) {
 	out->overflow = false;
 	out->failed = false;
 	const PackedByteArray cb = rd_->buffer_get_data(counts_,
-			static_cast<uint32_t>(job_index) * 8, 8);
-	if (cb.size() < 8) {
+			static_cast<uint32_t>(job_index) * 16, 16);
+	if (cb.size() < 16) {
 		out->failed = true;
 		return;
 	}
 	const uint32_t *c = reinterpret_cast<const uint32_t *>(cb.ptr());
 	const int qcount = std::min<int>(static_cast<int>(c[0]), ve::kLodMaxQuadsPerChunk);
-	out->overflow = c[1] != 0u;
+	const int scount = std::min<int>(static_cast<int>(c[2]), ve::kLodMaxQuadsPerChunk);
+	out->overflow = c[1] != 0u || (c[3] & 2u) != 0u;
 	if (qcount > 0) {
 		const PackedByteArray qb = rd_->buffer_get_data(quads_,
 				static_cast<uint32_t>(job_index) * ve::kLodMaxQuadsPerChunk * 12,
@@ -324,6 +374,29 @@ void LodBuildPass::read_job(int job_index, LodBuildResult *out) {
 				static_cast<size_t>(qcount) * sizeof(ve::LodQuadNormals));
 	}
 	ve::lod_append_skirts(&out->quads, &out->normals);
+	if (scount > 0) {
+		const uint32_t qbytes = static_cast<uint32_t>(scount) * 12;
+		const uint32_t nbytes = static_cast<uint32_t>(scount) * sizeof(ve::LodQuadNormals);
+		const PackedByteArray sq = rd_->buffer_get_data(shell_quads_,
+				static_cast<uint32_t>(job_index) * ve::kLodMaxQuadsPerChunk * 12, qbytes);
+		const PackedByteArray sn = rd_->buffer_get_data(shell_normals_,
+				static_cast<uint32_t>(job_index) * ve::kLodMaxQuadsPerChunk * sizeof(ve::LodQuadNormals),
+				nbytes);
+		if (sq.size() < qbytes || sn.size() < nbytes) {
+			out->failed = true;
+			out->quads.clear();
+			out->normals.clear();
+			return;
+		}
+		std::vector<ve::LodQuad> shell(static_cast<size_t>(scount));
+		std::vector<ve::LodQuadNormals> shell_normals(static_cast<size_t>(scount));
+		std::memcpy(shell.data(), sq.ptr(), qbytes);
+		std::memcpy(shell_normals.data(), sn.ptr(), nbytes);
+		// Shell after skirts: skirts are boundary ribbons of the TERRAIN mesh, and a shell
+		// quad must never become a skirt's parent.
+		if (ve::lod_append_shell(&out->quads, &out->normals, shell, shell_normals))
+			out->overflow = true;
+	}
 }
 
 int LodBuildPass::collect(std::vector<LodBuildResult> *out) {
