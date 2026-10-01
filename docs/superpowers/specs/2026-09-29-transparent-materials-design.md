@@ -383,7 +383,10 @@ Characterization first:
 
     **B − mean(A1, A2) = +0.33 ms p50** (A/A spread 0.24 ms) on a 45 ms frame. The p99 delta
     is **0.00 ms** with a 0.00 ms A/A spread — all three legs report exactly 50.00 — so unlike
-    item 7's p99 this one is quotable, and it shows no tail cost. The honest caveat is the
+    item 7's p99 this one is quotable; it is a tie, not a resolution. The legs' maximums differ
+    (50.36 / 51.36 / 50.00), so they did not land on the same frame, but all three p99s fell in
+    one plateau and the measurement does not resolve the tail in either direction. The honest
+    caveat is the
     p95: B is **0.67 ms faster** than the A mean there, the opposite sign to the p50. Two A
     legs establish no noise floor however well they agree, so +0.33 ms p50 is a small
     separation against a comparable A/A spread, not a demonstrated cost — the same standing
@@ -393,12 +396,21 @@ Characterization first:
 
     What the branch adds to a no-ice scene **unconditionally**, feature on, stated plainly
     because the delta above does not decompose it: three extra per-chunk LoD dispatches (the
-    opaque lattice, the shell `frac`, the shell `quads` — each an early-out on the job's
-    has-transparent bit, so they write nothing); two extra march-resolution targets
+    opaque lattice, the shell `frac`, the shell `quads`). The two shell passes each early out
+    per thread on the job's has-transparent bit before any load or atomic, so on a
+    transparent-free chunk they write nothing. The opaque lattice is the exception: it has no
+    early-out and `imageStore`s every sample, so it always runs, as item 2 says — it is simply
+    the identity on a chunk with no transparent labels. Also: two extra march-resolution targets
     (`front` rgba32f, `trans` rgba16f) allocated beside the G-buffer's three and written
     every frame, id 0 with T = 1 where there is no front; one extra full-resolution compute
     dispatch, `transparency_composite`, which returns per pixel without storing where there
-    is no front; and one extra `world_material()` per shadow-ray surface hit in the four sun
-    marches (behaviour unchanged where nothing is transparent). The far field's `front_full` /
+    is no front; and, for the two of the four sun marches the raymarcher owns, one extra
+    `world_material()` per shadow-ray surface hit with the feature on (`raymarch.comp.glsl`
+    defines `SUN_WALK_ENABLED (tr.params.w > 0.5)`; behaviour unchanged where nothing is
+    transparent). The other two marches — `grass_scatter.comp.glsl` and
+    `leaf_scatter.comp.glsl` — include `sun_march.glslh` with its default
+    `SUN_WALK_ENABLED true`, so their extra `world_material()` is not gated on the feature at
+    all: it is present with `--transparency` 0 as well, and belongs to no leg of the A/B above.
+    The far field's `front_full` /
     `trans_full` pair is **not** allocated on a no-ice scene: `TransparentRasterPass::draw`
     returns at `pages_.empty()` before `ensure_targets`.

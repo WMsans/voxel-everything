@@ -225,9 +225,12 @@ func test_removing_far_ice_drops_its_shell() -> void:
 	assert_int(int(frame_until_shell(w, s[0], s[1])["transparent_pages"])).is_greater(0)
 	# The chunk must still be DRAWABLE: the shell went because the ice did, not because its
 	# page dropped out of the opaque list. The shell shares the terrain's pages, so the opaque
-	# draw list is the same list either way; this records it before the subtract and asserts it
-	# is still populated after.
-	var before: int = int((w.hooks().debug_lod_stats() as Dictionary)["draw_pages"])
+	# draw list is the same list either way; this records the actual page ids before the
+	# subtract and asserts those same ids are still in the list after -- not merely that
+	# draw_pages > 0, which a wholesale draw-list rotation would also satisfy.
+	var before_stats := w.hooks().debug_lod_stats() as Dictionary
+	var before_ids: PackedInt32Array = before_stats["draw_page_ids"]
+	var before: int = int(before_stats["draw_pages"])
 	w.hooks().debug_apply_sphere_subtract(s[2], 12.0)
 	settle(w, s[0])
 	var d := {}
@@ -238,7 +241,16 @@ func test_removing_far_ice_drops_its_shell() -> void:
 			break
 	assert_int(int(d["transparent_pages"])).override_failure_message(
 		"the shell outlived the ice: released pages were never forgotten").is_equal(0)
-	var after: int = int((w.hooks().debug_lod_stats() as Dictionary)["draw_pages"])
+	var stats := w.hooks().debug_lod_stats() as Dictionary
+	var after: int = int(stats["draw_pages"])
+	var after_ids: PackedInt32Array = stats["draw_page_ids"]
+	var surviving := 0
+	for id in before_ids:
+		if after_ids.has(id):
+			surviving += 1
+	assert_int(surviving).override_failure_message(
+		"the pages that held the shell left the opaque draw list: %d -> %d pages, none of " +
+		"the %d recorded before survived" % [before, after, before_ids.size()]).is_greater(0)
 	assert_int(after).override_failure_message(
 		"the chunk stopped being drawn opaque when its shell went: %d -> %d" % [
 			before, after]).is_greater(0)
@@ -321,27 +333,33 @@ func test_clear_ice_shows_the_ground_through_it() -> void:
 	assert_bool(ok.has("transparency")).is_true()
 	# The composite implements F*sky + (1-F)*(T*behind + (1-T)*body) (spec §7 step 4). On this
 	# pixel the front faces the lens (1 - n.v ~ 0.2, so F ~ 5e-4 and the sky term is a rounding
-	# error), which leaves the mix of two fixed colours: `bare` is the ground with no ice in
-	# it, `opaque` is this same ice shaded as ordinary terrain. The per-channel weight the
-	# composite puts on the body must therefore be proportional to (1 - T) -- the
-	# transmittance THIS frame reports, per channel, which is what makes this a check of the
-	# formula and not of "the stage ran".
+	# error), which leaves a mix of two fixed colours: `opaque` is this ice shaded as ordinary
+	# terrain, and `bare` -- the ground with no ice in the scene -- stands in for the composite's
+	# `behind`, which this test cannot sample (the ground UNDER the ice is lit by a sun ray that
+	# crosses the ice, so it is materially brighter: measured (0.3215, 0.3096, 0.1361) under
+	# ice against (0.1377, 0.2764, 0.0991) with no ice). The literal form therefore has no
+	# in-range solution against `bare`; the substitution is what the numbers admit, not the
+	# formula.
 	#
-	# The scale is not 1, and cannot be: the front's own cel-shaded body is BRIGHTER than the
-	# same ice shaded down the deferred path (it carries its own front sun term and no SSAO), so
-	# the weight measured against `opaque` runs above (1 - T). The measured run puts
-	# weight / (1 - T) at 1.75 / 1.39 / 1.78 -- three channels whose (1 - T) span a factor of
-	# four collapsing onto one number, and that collapse is the signature being pinned. Hence
-	# the band: [1.2, 2.0] leaves about half the observed 0.39 spread on each side, and every
-	# degenerate composite falls out of it by a wide margin -- a no-op or a T = 1 mix gives
-	# 0.0, a T = 0 mix gives 1 / (1 - T) = 3.5 / 6.8 / 13.5, and a channel-flat WRONG T scales
-	# the three ratios by 1/0.284, 1/0.146, 1/0.074, which leaves the band immediately.
+	# What is actually asserted is that the per-channel weight the composite puts on the body is
+	# proportional to (1 - T), using the transmittance THIS frame reports per channel -- which
+	# is what makes this a check of the formula rather than of "the stage ran".
+	# The scale is not 1, and cannot be: `behind` is lit through the ice and so is brighter than
+	# `bare`, which pushes the measured weight against `bare` above (1 - T) by that same factor.
+	# The measured run puts weight / (1 - T) at 1.75 / 1.39 / 1.78 -- three channels whose
+	# (1 - T) span a factor of four collapsing onto one number, and that collapse is the
+	# signature being pinned. Hence the band: [1.2, 2.0] leaves about half the observed 0.39
+	# spread on each side, and every degenerate composite falls out of it by a wide margin -- a
+	# no-op or a T = 1 mix gives 0.0, a T = 0 mix gives 1 / (1 - T) = 3.5 / 6.8 / 13.5, and a
+	# channel-flat WRONG T scales the three ratios by 1/0.284, 1/0.146, 1/0.074, which leaves the
+	# band immediately.
 	for i in range(3):
 		var weight: float = (ch(clear, i) - ch(bare, i)) / (ch(opaque, i) - ch(bare, i))
 		var scale: float = weight / (1.0 - ch(trans, i))
 		assert_float(scale).override_failure_message(
-			"channel %d: clear %s is not T*bare + (1-T)*body for bare %s, opaque %s, T %s" % [
-				i, clear, bare, opaque, trans]).is_between(1.2, 2.0)
+			"channel %d: weight/(1-T) = %.3f is outside [1.2, 2.0]; the composite's body term " +
+			"is not scaling with the reported T (bare %s standing in for behind, opaque %s, " +
+			"T %s, clear %s)" % [i, scale, bare, opaque, trans, clear]).is_between(1.2, 2.0)
 
 func test_thicker_ice_moves_the_pixel_further_from_the_ground() -> void:
 	var thin_w := make_world()
