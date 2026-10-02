@@ -838,6 +838,10 @@ void VoxelDebugHooks::debug_mark_region(Vector3i region, int region_slot, Vector
 				" out of range [0, ", world_->context().store->config().max_region_slots, ")");
 		return;
 	}
+	// Same reason as in debug_generate_pending: hi[3] is latched here, so the mark pass must
+	// see the same switch the generate pass will, or the residency probe disagrees with the
+	// lattice the atlas ends up storing.
+	apply_opaque_view(world_);
 	const int64_t list = device->compute_list_begin();
 	world_->context().render->passes().region->mark(device, list, {region.x, region.y, region.z}, region_slot,
 			{lo.x, lo.y, lo.z}, {hi.x, hi.y, hi.z}, op_count, force,
@@ -1201,7 +1205,8 @@ Dictionary VoxelDebugHooks::debug_occupancy_fallback_diff(Vector3i region) {
 				region.y * ve::kRegionBricks + ((bi >> 5) & (ve::kRegionBricks - 1)),
 				region.z * ve::kRegionBricks + (bi >> 10)};
 		if (ve::brick_has_surface(gen, ops.data(), static_cast<int>(ops.size()), brick,
-				&world_->context().store->volumes(), world_->context().store->overrides())) continue;
+				&world_->context().store->volumes(), world_->context().store->overrides(),
+				world_->context().render->transparency_settings().enabled)) continue;
 		fallback++;
 		const int got = ve::OccupancyGrid::read_packed(
 				reinterpret_cast<const uint8_t *>(gpu.ptr()), bi);
