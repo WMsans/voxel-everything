@@ -391,6 +391,10 @@ public:
 	// --- M5 Task 9 hooks ---
 	Dictionary debug_lod_diff(int level, Vector3i coord);
 
+	// Spec §5: one near-field shell chunk, built on its own at ve::kShellCell.
+	// { ok, quads, all_transparent }.
+	Dictionary debug_shell_build(Vector3i coord);
+
 	void debug_apply_sphere_subtract(Vector3 centre, float radius);
 
 	// Task 7 fixture hook: a sphere-ADD op so the artifact tests can exercise the

@@ -146,3 +146,24 @@ func test_a_scene_without_transparency_is_bit_identical_with_the_feature_on_and_
 	assert_int(int(on["lit_checksum"])).override_failure_message(
 		"transparency changed a frame with no transparent material in it").is_equal(
 		int(off["lit_checksum"]))
+
+# --- the near shell (spec §5) -------------------------------------------------------------
+
+func shell_chunk_of(p: Vector3) -> Vector3i:
+	return Vector3i(floori(p.x / 3.2), floori(p.y / 3.2), floori(p.z / 3.2))
+
+func test_a_shell_only_build_contours_just_the_ice() -> void:
+	var w := make_world()
+	assert_bool(w.hooks().debug_init_physics()).is_true()
+	var ground := centre_hit(w)
+	var c: Vector3 = ground["pos"] + Vector3(0, 0.5, 0)
+	# No ice yet: the chunk is ground and air, and a shell-only build returns nothing.
+	var none: Dictionary = w.hooks().debug_shell_build(shell_chunk_of(c))
+	assert_bool(none["ok"]).is_true()
+	assert_int(int(none["quads"])).is_equal(0)
+	w.hooks().debug_apply_sphere_add(c, 1.0, material_id(w, "ice"))
+	var d: Dictionary = w.hooks().debug_shell_build(shell_chunk_of(c))
+	assert_bool(d["ok"]).is_true()
+	# A 1 m ball at 0.1 m cells: 4*pi*r^2 / 0.01 ~ 1250 quads over the chunks it spans.
+	assert_int(int(d["quads"])).is_greater(100)
+	assert_bool(d["all_transparent"]).is_true()

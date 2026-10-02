@@ -166,6 +166,7 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_override_render_state", "brick"),
 			&VoxelDebugHooks::debug_override_render_state);
 	ClassDB::bind_method(D_METHOD("debug_lod_diff", "level", "coord"), &VoxelDebugHooks::debug_lod_diff);
+	ClassDB::bind_method(D_METHOD("debug_shell_build", "coord"), &VoxelDebugHooks::debug_shell_build);
 	ClassDB::bind_method(D_METHOD("debug_apply_sphere_subtract", "centre", "radius"),
 			&VoxelDebugHooks::debug_apply_sphere_subtract);
 	ClassDB::bind_method(D_METHOD("debug_apply_sphere_add", "centre", "radius", "material"),

@@ -238,10 +238,17 @@ void LodBuildPass::upload_ops(const LodBuildJob &job, int job_index) {
 
 void LodBuildPass::push(int64_t list, const LodBuildJob &job, int job_index, int mode) {
 	float origin[3];
-	ve::lod_chunk_origin(job.level, job.coord, origin);
+	float cell;
+	if (job.shell_only) {
+		ve::shell_chunk_origin(job.coord, origin);
+		cell = ve::kShellCell;
+	} else {
+		ve::lod_chunk_origin(job.level, job.coord, origin);
+		cell = ve::lod_cell_size(job.level);
+	}
 	const ve::LodBuildPush push{{job.coord.x, job.coord.y, job.coord.z, job_index},
-			{sanitized_op_count(job), ve::kLodMaxQuadsPerChunk, job.level, mode},
-			{origin[0], origin[1], origin[2], ve::lod_cell_size(job.level)},
+			{sanitized_op_count(job), ve::kLodMaxQuadsPerChunk, job.shell_only ? 0 : job.level, mode},
+			{origin[0], origin[1], origin[2], cell},
 			{job.override_table, -1, 0, 0}};
 	rd_->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
 }
@@ -298,6 +305,15 @@ void LodBuildPass::record_job(int64_t list, const LodBuildJob &job, int job_inde
 	rd_->compute_list_add_barrier(list);
 	record_reduce(list, job, job_index);
 	rd_->compute_list_add_barrier(list);
+	// A shell-only job (spec §5) has no terrain mesh: it stops after the shell pair, on
+	// the original lattice, and never needs the opaque one.
+	if (job.shell_only) {
+		record_frac(list, job, job_index, frac_shell_set_, 1);
+		rd_->compute_list_add_barrier(list);
+		record_quads(list, job, job_index, quads_shell_set_, 1);
+		rd_->compute_list_add_barrier(list);
+		return;
+	}
 	record_opaque(list, job, job_index);
 	rd_->compute_list_add_barrier(list);
 	record_frac(list, job, job_index, frac_shell_set_, 1);
@@ -340,6 +356,7 @@ void LodBuildPass::read_job(int job_index, LodBuildResult *out) {
 	out->normals.clear();
 	out->overflow = false;
 	out->failed = false;
+	out->shell_only = job.shell_only;
 	const PackedByteArray cb = rd_->buffer_get_data(counts_,
 			static_cast<uint32_t>(job_index) * 16, 16);
 	if (cb.size() < 16) {
@@ -349,8 +366,10 @@ void LodBuildPass::read_job(int job_index, LodBuildResult *out) {
 	const uint32_t *c = reinterpret_cast<const uint32_t *>(cb.ptr());
 	const int qcount = std::min<int>(static_cast<int>(c[0]), ve::kLodMaxQuadsPerChunk);
 	const int scount = std::min<int>(static_cast<int>(c[2]), ve::kLodMaxQuadsPerChunk);
-	out->overflow = c[1] != 0u || (c[3] & 2u) != 0u;
-	if (qcount > 0) {
+	// counts_[1] is the TERRAIN overflow, and a shell-only job never runs the terrain
+	// passes, so only the shell's own bit (in [3]) says anything about it.
+	out->overflow = job.shell_only ? (c[3] & 2u) != 0u : (c[1] != 0u || (c[3] & 2u) != 0u);
+	if (!job.shell_only && qcount > 0) {
 		const PackedByteArray qb = rd_->buffer_get_data(quads_,
 				static_cast<uint32_t>(job_index) * ve::kLodMaxQuadsPerChunk * 12,
 				static_cast<uint32_t>(qcount) * 12);
@@ -373,7 +392,7 @@ void LodBuildPass::read_job(int job_index, LodBuildResult *out) {
 		std::memcpy(out->normals.data(), nb.ptr(),
 				static_cast<size_t>(qcount) * sizeof(ve::LodQuadNormals));
 	}
-	ve::lod_append_skirts(&out->quads, &out->normals);
+	if (!job.shell_only) ve::lod_append_skirts(&out->quads, &out->normals);
 	if (scount > 0) {
 		const uint32_t qbytes = static_cast<uint32_t>(scount) * 12;
 		const uint32_t nbytes = static_cast<uint32_t>(scount) * sizeof(ve::LodQuadNormals);
@@ -393,9 +412,14 @@ void LodBuildPass::read_job(int job_index, LodBuildResult *out) {
 		std::memcpy(shell.data(), sq.ptr(), qbytes);
 		std::memcpy(shell_normals.data(), sn.ptr(), nbytes);
 		// Shell after skirts: skirts are boundary ribbons of the TERRAIN mesh, and a shell
-		// quad must never become a skirt's parent.
-		if (ve::lod_append_shell(&out->quads, &out->normals, shell, shell_normals))
+		// quad must never become a skirt's parent. A shell-only job has no terrain, so its
+		// shell IS the result.
+		if (job.shell_only) {
+			out->quads = std::move(shell);
+			out->normals = std::move(shell_normals);
+		} else if (ve::lod_append_shell(&out->quads, &out->normals, shell, shell_normals)) {
 			out->overflow = true;
+		}
 	}
 }
 

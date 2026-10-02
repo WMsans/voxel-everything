@@ -9,6 +9,7 @@
 #include "lod/lod_quad.h"
 #include "render/volume_pool.h"
 #include "render/override_pool.h"
+#include "transparency/shell_grid.h"
 #include "render/gpu/gpu.h"
 
 namespace godot {
@@ -24,6 +25,10 @@ struct LodBuildJob {
 	ve::IVec3 coord{};
 	std::vector<ve::EditOp> ops;
 	int override_table = -1;
+	// A near-field shell chunk (spec §5): sampled at ve::kShellCell from
+	// ve::shell_chunk_origin(coord), and only the shell is contoured. `level` is
+	// ve::kShellLevel and is identity only.
+	bool shell_only = false;
 };
 
 struct LodBuildResult {
@@ -33,6 +38,7 @@ struct LodBuildResult {
 	std::vector<ve::LodQuadNormals> normals;
 	bool overflow = false;
 	bool failed = false; // readback was short/invalid; treat as a failed build
+	bool shell_only = false; // `quads`/`normals` hold the shell stream alone, no skirts
 };
 
 // LoD chunk builder on the worker RenderingDevice. Per chunk: field, tent reduce, opaque
