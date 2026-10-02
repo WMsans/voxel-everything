@@ -77,13 +77,15 @@ void brick_probe(ivec3 brick, uint op_base, uint op_count, out float mn, out flo
 			for (int sx = 0; sx < 3; sx++) {
 				float sdf;
 				uint mat;
-				eval_field(bo + vec3(sx, sy, sz) * (float(BRICK_VOXELS) * 0.5 * VOXEL_SIZE),
-						op_base, op_count, sdf, mat);
+				float osdf;
+				uint omat;
+				eval_field_pair(bo + vec3(sx, sy, sz) * (float(BRICK_VOXELS) * 0.5 * VOXEL_SIZE),
+						op_base, op_count, sdf, mat, osdf, omat);
 				mn = min(mn, sdf);
 				mx = max(mx, sdf);
-				opaque_view(sdf, mat, OPAQUE_OUTSIDE);
-				omn = min(omn, sdf);
-				omx = max(omx, sdf);
+				opaque_view(osdf, omat, OPAQUE_OUTSIDE);
+				omn = min(omn, osdf);
+				omx = max(omx, osdf);
 			}
 }
 

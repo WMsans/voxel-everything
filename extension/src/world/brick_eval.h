@@ -24,6 +24,16 @@ Sample eval_field(const Generator &gen, const EditOp *ops, int op_count,
 		float x, float y, float z, const VolumeStore *volumes = nullptr,
 		const OverrideSource *overrides = nullptr);
 
+// The same point as eval_field, from ONE pass over the op stack, in BOTH views: `s` is the
+// union (bit for bit what eval_field returns) and `o` is the OPAQUE VIEW, in which a
+// transparent material is air. Bake sites that store the opaque view (the brick lattice, its
+// material projection and the residency probe) read `o`; everything else reads `s`. The
+// caller still applies ve::opaque_view to `o` last, for a transparent material the BASE
+// field itself named. GLSL mirror: eval_field_pair() in shaders/field_ops.glslh.
+void eval_field_pair(const Generator &gen, const EditOp *ops, int op_count,
+		float x, float y, float z, Sample *s, Sample *opaque,
+		const VolumeStore *volumes = nullptr, const OverrideSource *overrides = nullptr);
+
 FieldSample eval_field_gradient(const Generator &gen, const EditOp *ops, int op_count,
 		float x, float y, float z, const VolumeStore *volumes = nullptr,
 		const OverrideSource *overrides = nullptr);

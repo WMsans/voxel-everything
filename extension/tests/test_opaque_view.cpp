@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include "generator/edit_ops.h"
+#include <algorithm>
 #include "generator/generator.h"
 #include "world/brick_eval.h"
 #include "world/material_table.h"
@@ -49,7 +50,141 @@ ve::EditOp sphere(uint32_t type, uint16_t material, const float c[3], float r) {
 	return op;
 }
 
+// The lattice sample of `b`'s bare union bake that lies deepest in the solid: a point the
+// ground is unambiguously there, which is the point every "the ball swallowed the ground"
+// assertion below is measured at.
+struct SolidPoint {
+	ve::IVec3 brick;
+	int index;  // lattice coordinate of p inside brick
+	float p[3];
+	float depth;
+};
+
+SolidPoint deepest_solid(const ve::Generator &gen) {
+	const ve::IVec3 b = surface_brick(gen);
+	float bo[3];
+	ve::brick_world_origin(b, bo);
+	ve::BrickEval bare{};
+	ve::eval_brick(gen, nullptr, 0, b, &bare, nullptr, nullptr, false);
+	int best = 0;
+	for (int i = 1; i < ve::kBrickSdfCount; i++)
+		if (bare.brick.sdf[i] < bare.brick.sdf[best]) best = i;
+	const int vx = best % ve::kBrickSdfStride;
+	const int vy = (best / ve::kBrickSdfStride) % ve::kBrickSdfStride;
+	const int vz = best / (ve::kBrickSdfStride * ve::kBrickSdfStride);
+	SolidPoint out{b, best, {bo[0] + vx * ve::kVoxelSize, bo[1] + vy * ve::kVoxelSize,
+			bo[2] + vz * ve::kVoxelSize}, ve::decode_sdf(bare.brick.sdf[best])};
+	return out;
+}
+
 } // namespace
+
+// THE DEFECT. A transparent material is air, so a transparent ADD op must contribute NOTHING
+// to the opaque bake -- not be carved away after it has already won the min over the whole
+// op stack. Inside a 4 m ball its sdf beats the analytic ground's everywhere it reaches, so
+// the carve deleted the ground the ball merely overlapped and left a pit.
+//
+// Every assertion here is against the EXISTING API, so on the pre-fix tree this is a wrong
+// measured lattice rather than a build error.
+TEST_CASE("a transparent add op contributes nothing to the opaque view") {
+	ve::AnalyticGenerator gen;
+	const SolidPoint q = deepest_solid(gen);
+	const ve::EditOp add = sphere(ve::kOpSphereAdd, ve::material_id("ice"), q.p, 4.0f);
+
+	ve::BrickEval ice{}, bare{};
+	ve::eval_brick(gen, &add, 1, q.brick, &ice, nullptr, nullptr, true);
+	ve::eval_brick(gen, nullptr, 0, q.brick, &bare, nullptr, nullptr, true);
+
+	// The pit, named. Carving the ice winner leaves the brick with no ground in it at all;
+	// the ground's own depth must survive underneath.
+	float deepest_ice = 1e30f, deepest_bare = 1e30f;
+	int moved = 0;
+	for (int i = 0; i < ve::kBrickSdfCount; i++) {
+		deepest_ice = std::min(deepest_ice, ve::decode_sdf(ice.brick.sdf[i]));
+		deepest_bare = std::min(deepest_bare, ve::decode_sdf(bare.brick.sdf[i]));
+		if (ice.brick.sdf[i] != bare.brick.sdf[i]) moved++;
+	}
+	CHECK(deepest_ice == doctest::Approx(deepest_bare));
+	CHECK(deepest_ice < 0.0f);   // the ground really is solid here, not just unmodified
+	CHECK(moved == 0);          // and byte-identical, lattice and materials both
+	for (size_t i = 0; i < sizeof(ice.brick.mat); i++) CHECK(ice.brick.mat[i] == bare.brick.mat[i]);
+	for (int k = 0; k < ve::kBrickPaletteSize; k++) CHECK(ice.brick.palette[k] == bare.brick.palette[k]);
+
+	// The union is untouched by all of this: the ice is solid where the raycast puts it.
+	const ve::Sample u = ve::eval_field(gen, &add, 1, q.p[0], q.p[1], q.p[2]);
+	CHECK(u.material == ve::material_id("ice"));
+	CHECK(u.sdf < 0.0f);
+
+	// The `opaque` flag off stores the UNION -- the build the marcher sees with the feature
+	// off, where the ball is an ordinary solid surface. Guard: a bake site that selected the
+	// opaque pair unconditionally would store air here and silently delete the feature.
+	ve::BrickEval uni{};
+	ve::eval_brick(gen, &add, 1, q.brick, &uni, nullptr, nullptr, false);
+	CHECK(uni.brick.sdf[q.index] == ve::encode_sdf(-4.0f)); // the ball, solid (clamped)
+	CHECK(uni.brick.sdf[q.index] != bare.brick.sdf[q.index]);
+	CHECK(ve::decode_sdf(bare.brick.sdf[q.index]) == doctest::Approx(q.depth)); // the ground
+	CHECK(ve::cell_state_field(gen, &add, 1, q.brick) == ve::kCellFull);
+}
+
+TEST_CASE("a transparent paint op contributes nothing to the opaque view") {
+	ve::AnalyticGenerator gen;
+	const SolidPoint q = deepest_solid(gen);
+	const ve::EditOp paint = sphere(ve::kOpSpherePaint, ve::material_id("ice"), q.p, 4.0f);
+
+	ve::BrickEval ice{}, bare{};
+	ve::eval_brick(gen, &paint, 1, q.brick, &ice, nullptr, nullptr, true);
+	ve::eval_brick(gen, nullptr, 0, q.brick, &bare, nullptr, nullptr, true);
+	for (int i = 0; i < ve::kBrickSdfCount; i++) CHECK(ice.brick.sdf[i] == bare.brick.sdf[i]);
+	for (int k = 0; k < ve::kBrickPaletteSize; k++) CHECK(ice.brick.palette[k] == bare.brick.palette[k]);
+
+	const ve::Sample u = ve::eval_field(gen, &paint, 1, q.p[0], q.p[1], q.p[2]);
+	CHECK(u.material == ve::material_id("ice"));
+}
+
+TEST_CASE("a floating transparent ball leaves an all-air brick's opaque view untouched") {
+	ve::AnalyticGenerator gen;
+	const ve::IVec3 b{25, 100, 37};
+	const float c[3] = {b.x * ve::kBrickSize + 0.4f, b.y * ve::kBrickSize + 0.4f,
+			b.z * ve::kBrickSize + 0.4f};
+	const ve::EditOp add = sphere(ve::kOpSphereAdd, ve::material_id("ice"), c, 3.0f);
+	ve::BrickEval ice{}, bare{};
+	ve::eval_brick(gen, &add, 1, b, &ice, nullptr, nullptr, true);
+	ve::eval_brick(gen, nullptr, 0, b, &bare, nullptr, nullptr, true);
+	for (int i = 0; i < ve::kBrickSdfCount; i++) CHECK(ice.brick.sdf[i] == bare.brick.sdf[i]);
+	// Nothing for the marcher to find: every stored sample is air.
+	const uint8_t zero = ve::encode_sdf(0.0f);
+	for (int i = 0; i < ve::kBrickSdfCount; i++) CHECK(ice.brick.sdf[i] > zero);
+	// The union still holds it solid, which is what the collider and connectivity read.
+	ve::BrickEval uni{};
+	ve::eval_brick(gen, &add, 1, b, &uni, nullptr, nullptr, false);
+	for (int i = 0; i < ve::kBrickSdfCount; i++) CHECK(uni.brick.sdf[i] <= zero);
+}
+
+TEST_CASE("an opaque add and a subtract still reach the opaque view") {
+	ve::AnalyticGenerator gen;
+	const SolidPoint q = deepest_solid(gen);
+	const ve::EditOp rock = sphere(ve::kOpSphereAdd, ve::material_id("rock"), q.p, 1.0f);
+	// 1 m inside a 1 m sphere, so the op beats the ground by a wide margin.
+	const ve::Sample a = ve::eval_field(gen, &rock, 1, q.p[0], q.p[1], q.p[2]);
+	CHECK(a.sdf == doctest::Approx(-1.0f));
+	CHECK(a.material == ve::material_id("rock"));
+
+	const ve::EditOp sub = sphere(ve::kOpSphereSubtract, 0, q.p, 2.0f);
+	const ve::Sample b = ve::eval_field(gen, &sub, 1, q.p[0], q.p[1], q.p[2]);
+	CHECK(b.sdf == doctest::Approx(2.0f));
+	CHECK(b.material == 0);
+}
+
+TEST_CASE("the union field is byte-identical to the untouched apply_ops path") {
+	ve::AnalyticGenerator gen;
+	const SolidPoint q = deepest_solid(gen);
+	const ve::EditOp add = sphere(ve::kOpSphereAdd, ve::material_id("ice"), q.p, 4.0f);
+	const ve::Sample ref = ve::apply_ops(gen.sample(q.p[0], q.p[1], q.p[2]), &add, 1,
+			q.p[0], q.p[1], q.p[2]);
+	const ve::Sample got = ve::eval_field(gen, &add, 1, q.p[0], q.p[1], q.p[2]);
+	CHECK(got.sdf == ref.sdf);
+	CHECK(got.material == ref.material);
+}
 
 TEST_CASE("a brick buried in an ice ball has no opaque surface but is still solid for occupancy") {
 	ve::AnalyticGenerator gen;

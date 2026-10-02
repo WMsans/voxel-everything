@@ -88,17 +88,17 @@ func test_the_marcher_sees_the_ground_through_an_added_ice_ball() -> void:
 	var d := frame(w)
 	assert_int(int(d["center_material"])).override_failure_message(
 		"the G-buffer holds a transparent material: %s" % d).is_equal(int(before["center_material"]))
-	# The ball's own surface would be ~1 m NEARER than the bare ground (the opaque build
-	# measures 10.28 against 11.33). The hit moved the other way, so the ray went through the
-	# ice and stopped on the ground under it -- and only a little past the bare surface, so it
-	# is that ground and not the ball's underside several metres down.
+	# A transparent material is air, so the ball contributes NOTHING to the opaque bake and
+	# the ground must come out where the bare frame found it: measured delta +0.000 m, the
+	# same lattice either way. (Before the opaque accumulator this moved +0.43 m: the ball
+	# won the min over the ground and the carve deleted the top half metre of it, leaving a
+	# pit the marcher stopped in.) The ball's own surface is ~1 m NEARER than the ground --
+	# the feature-off build measures 10.28 against 11.33 -- so a hit that moved at all would
+	# be a real regression, not a nudge.
 	var dist := float(d["center_distance"])
 	assert_float(dist).override_failure_message(
-		"the ray still stops at the ice's own surface, which is nearer: %s" % d).is_greater(
-		float(before["center_distance"]) + 0.1)
-	assert_float(dist).override_failure_message(
-		"the ray marched far past the ground the ice is sitting on: %s" % d).is_less(
-		float(before["center_distance"]) + 1.5)
+		"the ground under the ice moved: %s" % d).is_equal_approx(
+		float(before["center_distance"]), 0.05)
 
 # The prior attempt went solid past 2.4 m of ice. Ten metres must change nothing here.
 func test_ten_metres_of_ice_do_not_stop_the_marcher() -> void:
@@ -124,8 +124,12 @@ func test_painted_ice_exposes_the_bowl_under_the_lens() -> void:
 	var d := frame(w)
 	assert_int(int(d["center_material"])).is_not_equal(material_id(w, "ice"))
 	assert_int(int(d["center_material"])).is_not_equal(0)
-	# The bowl's bottom is about one radius further along the ray.
-	assert_float(float(d["center_distance"])).is_greater(float(before["center_distance"]) + 0.5)
+	# The label changed and the DISTANCE DID NOT. A painted lens is a relabel in place: the
+	# surface behind it is a label boundary, and a transparent label is air, so the ground
+	# stays exactly where it was -- measured delta +0.000 m (was +0.87 m, the same pit).
+	assert_float(float(d["center_distance"])).override_failure_message(
+		"painting the ground moved its surface: %s" % d).is_equal_approx(
+		float(before["center_distance"]), 0.05)
 	assert_bool(finite(d["center_lit"])).is_true()
 
 func test_with_the_feature_off_ice_is_an_opaque_surface() -> void:

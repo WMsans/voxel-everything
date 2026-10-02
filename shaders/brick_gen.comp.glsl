@@ -141,13 +141,19 @@ void main() {
 		ivec3 v = cell_coord(i);
 		float sdf;
 		uint mat;
-		eval_field(bo + vec3(v) * VOXEL_SIZE, op_base, s_op_n, sdf, mat);
+		float osdf;
+		uint omat;
+		eval_field_pair(bo + vec3(v) * VOXEL_SIZE, op_base, s_op_n, sdf, mat, osdf, omat);
 		uint ub = encode_sdf_byte(sdf);
 		atomicMin(s_umin, ub);
 		atomicMax(s_umax, ub);
-		if (pc.atlas_bricks.w != 0) opaque_view(sdf, mat, OPAQUE_OUTSIDE);
-		imageStore(sdf_atlas, sdf_base + v, vec4(quantise_sdf(sdf)));
-		s_mat[i] = mat;
+		// The atlas holds the OPAQUE VIEW with the feature on and the UNION with it off, so
+		// select one pair -- never both: the opaque pair has already skipped the transparent
+		// ops, and with the feature off they must be baked like any other material.
+		if (pc.atlas_bricks.w != 0) opaque_view(osdf, omat, OPAQUE_OUTSIDE);
+		else { osdf = sdf; omat = mat; }
+		imageStore(sdf_atlas, sdf_base + v, vec4(quantise_sdf(osdf)));
+		s_mat[i] = omat;
 	}
 	memoryBarrierShared();
 	barrier();
@@ -163,16 +169,19 @@ void main() {
 		if (v.x < BRICK_VOXELS && v.y < BRICK_VOXELS && v.z < BRICK_VOXELS) continue;
 		float sdf;
 		uint mat;
-		eval_field(bo + vec3(v) * VOXEL_SIZE, op_base, s_op_n, sdf, mat);
+		float osdf;
+		uint omat;
+		eval_field_pair(bo + vec3(v) * VOXEL_SIZE, op_base, s_op_n, sdf, mat, osdf, omat);
 		uint ub = encode_sdf_byte(sdf);
 		atomicMin(s_umin, ub);
 		atomicMax(s_umax, ub);
-		if (pc.atlas_bricks.w != 0) opaque_view(sdf, mat, OPAQUE_OUTSIDE);
-		imageStore(sdf_atlas, sdf_base + v, vec4(quantise_sdf(sdf)));
-		if (mat == 0u) continue;
+		if (pc.atlas_bricks.w != 0) opaque_view(osdf, omat, OPAQUE_OUTSIDE);
+		else { osdf = sdf; omat = mat; }
+		imageStore(sdf_atlas, sdf_base + v, vec4(quantise_sdf(osdf)));
+		if (omat == 0u) continue;
 		ivec3 c = min(v, ivec3(BRICK_VOXELS - 1));
 		atomicCompSwap(s_mat[c.x + c.y * BRICK_VOXELS + c.z * BRICK_VOXELS * BRICK_VOXELS],
-				0u, mat);
+				0u, omat);
 	}
 	memoryBarrierImage();
 	memoryBarrierShared();
@@ -197,9 +206,13 @@ void main() {
 			float sdf2;
 			// mat2 is a GLSL reserved word (the 2x2 matrix type), so the plan's variable
 			// name is rejected by glslang; renamed to matB, no semantic change.
+			uint matU;
+			float osdf;
 			uint matB;
-			eval_field(bo + vec3(v) * VOXEL_SIZE - g / len * t, op_base, s_op_n, sdf2, matB);
-			if (pc.atlas_bricks.w != 0) opaque_view(sdf2, matB, OPAQUE_OUTSIDE);
+			eval_field_pair(bo + vec3(v) * VOXEL_SIZE - g / len * t, op_base, s_op_n, sdf2,
+					matU, osdf, matB);
+			if (pc.atlas_bricks.w != 0) opaque_view(osdf, matB, OPAQUE_OUTSIDE);
+			else matB = matU;
 			s_mat[i] = matB;
 		}
 	}

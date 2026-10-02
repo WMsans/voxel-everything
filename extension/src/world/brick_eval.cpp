@@ -75,13 +75,14 @@ void spread_materials(uint16_t *mat, const Brick &b, const Generator &gen,
 				// step can still fall short; lengthen it and retry.
 				for (float over = 0.5f; over <= 2.5f && mat[i] == 0; over += 1.0f) {
 					const float t = d + over * kVoxelSize;
-					Sample s = eval_field(gen, ops, op_count,
+					Sample s{}, o{};
+					eval_field_pair(gen, ops, op_count,
 							bo[0] + x * kVoxelSize - gx / len * t,
 							bo[1] + y * kVoxelSize - gy / len * t,
-							bo[2] + z * kVoxelSize - gz / len * t, volumes, overrides);
+							bo[2] + z * kVoxelSize - gz / len * t, &s, &o, volumes, overrides);
 					// The projection can land in a transparent solid; that is not the
 					// surface a ray will shade here, so keep looking deeper.
-					if (opaque) opaque_view(&s.sdf, &s.material);
+					if (opaque) { opaque_view(&o.sdf, &o.material); s = o; }
 					mat[i] = s.material;
 				}
 			}
@@ -108,16 +109,17 @@ void brick_probe(const Generator &gen, const EditOp *ops, int op_count, IVec3 br
 	for (int sz = 0; sz < 3; sz++)
 		for (int sy = 0; sy < 3; sy++)
 			for (int sx = 0; sx < 3; sx++) {
-				Sample s = eval_field(gen, filtered, filtered_count,
+				Sample s{}, o{};
+				eval_field_pair(gen, filtered, filtered_count,
 						bo[0] + sx * (kBrickVoxels / 2) * kVoxelSize,
 						bo[1] + sy * (kBrickVoxels / 2) * kVoxelSize,
-						bo[2] + sz * (kBrickVoxels / 2) * kVoxelSize, volumes, overrides);
+						bo[2] + sz * (kBrickVoxels / 2) * kVoxelSize, &s, &o, volumes, overrides);
 				*mn = std::min(*mn, s.sdf);
 				*mx = std::max(*mx, s.sdf);
 				if (!omn || !omx) continue;
-				opaque_view(&s.sdf, &s.material);
-				*omn = std::min(*omn, s.sdf);
-				*omx = std::max(*omx, s.sdf);
+				opaque_view(&o.sdf, &o.material);
+				*omn = std::min(*omn, o.sdf);
+				*omx = std::max(*omx, o.sdf);
 			}
 }
 
@@ -125,9 +127,17 @@ void brick_probe(const Generator &gen, const EditOp *ops, int op_count, IVec3 br
 
 Sample eval_field(const Generator &gen, const EditOp *ops, int op_count,
 		float x, float y, float z, const VolumeStore *volumes, const OverrideSource *overrides) {
-	Sample s{};
-	if (!overrides || !overrides->sample(x, y, z, &s)) s = gen.sample(x, y, z);
-	return apply_ops(s, ops, op_count, x, y, z, volumes);
+	Sample s{}, o{};
+	eval_field_pair(gen, ops, op_count, x, y, z, &s, &o, volumes, overrides);
+	return s;
+}
+
+void eval_field_pair(const Generator &gen, const EditOp *ops, int op_count,
+		float x, float y, float z, Sample *s, Sample *opaque,
+		const VolumeStore *volumes, const OverrideSource *overrides) {
+	if (!overrides || !overrides->sample(x, y, z, s)) *s = gen.sample(x, y, z);
+	*opaque = *s;
+	apply_ops_pair(s, opaque, ops, op_count, x, y, z, volumes);
 }
 
 FieldSample eval_field_gradient(const Generator &gen, const EditOp *ops, int op_count,
@@ -189,9 +199,12 @@ void eval_brick(const Generator &gen, const EditOp *ops, int op_count, IVec3 bri
 	for (int vz = 0; vz < kBrickSdfStride; vz++)
 		for (int vy = 0; vy < kBrickSdfStride; vy++)
 			for (int vx = 0; vx < kBrickSdfStride; vx++) {
-				Sample s = eval_field(gen, filtered, filtered_count, bo[0] + vx * kVoxelSize,
-						bo[1] + vy * kVoxelSize, bo[2] + vz * kVoxelSize, volumes, overrides);
-				if (opaque) opaque_view(&s.sdf, &s.material);
+				Sample s{}, o{};
+				eval_field_pair(gen, filtered, filtered_count, bo[0] + vx * kVoxelSize,
+						bo[1] + vy * kVoxelSize, bo[2] + vz * kVoxelSize, &s, &o, volumes, overrides);
+				// `opaque` false stores the UNION, which is what WorldData walks for the
+				// colliders and what the occupancy cross-check compares against.
+				if (opaque) { opaque_view(&o.sdf, &o.material); s = o; }
 				b.sdf[sdf_index(vx, vy, vz)] = encode_sdf(s.sdf);
 				if (s.material == 0) continue;
 				// An apron sample seeds the cell the shader's coordinate clamp folds it

@@ -1,5 +1,6 @@
 #pragma once
 #include "generator/generator.h"
+#include "world/material_table.h"
 #include "world/region.h"
 #include <cstdint>
 
@@ -70,6 +71,19 @@ Sample apply_op(Sample s, const EditOp &op, float x, float y, float z,
 		const VolumeStore *volumes = nullptr);
 Sample apply_ops(Sample s, const EditOp *ops, int count, float x, float y, float z,
 		const VolumeStore *volumes = nullptr);
+
+// The union sample `s` and the OPAQUE VIEW `opaque` of the same point, from ONE pass over
+// the op stack. A transparent material is air (world/opaque_view.h), so a transparent ADD or
+// PAINT op -- and a volume-add that samples a transparent material -- contributes NOTHING to
+// `opaque`. It must not be skipped by carving the winner after the fact: `s.material` is the
+// material of whichever op won the min over the whole stack, so inside an added transparent
+// ball the ball's own sdf beats the analytic ground's over a region LARGER than the ball,
+// wins the min, and the carve then deletes the ground the ball merely overlapped. Both
+// accumulators start from the same sample (see ve::eval_field_pair); the caller applies
+// ve::opaque_view to `opaque` last, for a transparent material the BASE field itself named.
+// GLSL mirror: eval_field_pair() in shaders/field_ops.glslh.
+void apply_ops_pair(Sample *s, Sample *opaque, const EditOp *ops, int count, float x, float y,
+		float z, const VolumeStore *volumes = nullptr);
 
 FieldSample apply_op_gradient(FieldSample s, const EditOp &op, float x, float y, float z,
 		const VolumeStore *volumes = nullptr);
