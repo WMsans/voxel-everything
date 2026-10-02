@@ -56,7 +56,8 @@ void BrickGenPass::teardown() {
 void BrickGenPass::dispatch(RenderingDevice *rd, int64_t list, const GpuAtlas &atlas,
 		const FieldContextSet *field_context) {
 	if (!program_.pipeline.is_valid()) return;
-	const ve::BrickGenPush push{{atlas_bricks_.x, atlas_bricks_.y, atlas_bricks_.z, 0}};
+	const ve::BrickGenPush push{{atlas_bricks_.x, atlas_bricks_.y, atlas_bricks_.z,
+			opaque_view_ ? 1 : 0}};
 	rd->compute_list_bind_compute_pipeline(list, program_.pipeline);
 	rd->compute_list_bind_uniform_set(list, set_, 0);
 	if (field_context != nullptr) field_context->bind(rd, list);

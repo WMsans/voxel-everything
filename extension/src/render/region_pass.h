@@ -30,9 +30,14 @@ public:
 	void release_region(RenderingDevice *rd, int64_t list, int region_slot);
 	void write_dispatch_args(RenderingDevice *rd, int64_t list);
 
+	// 1 makes the activation probe also accept a surface that exists only in the OPAQUE VIEW
+	// (world/opaque_view.h), so ground under a transparent material is still generated.
+	void set_opaque_view(bool on) { opaque_view_ = on; }
+
 private:
 	RenderingDevice *rd_ = nullptr;
 	int max_brick_jobs_ = 0;
+	bool opaque_view_ = true;
 	gpu::Group group_;
 	gpu::Program mark_, free_, args_;
 	RID mark_set_, free_set_, args_set_;

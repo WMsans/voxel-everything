@@ -192,3 +192,43 @@ func test_sharp_volume_step_bricks_match_the_cpu_reference() -> void:
 		if (Vector3(brick) + Vector3(0.5, 0.5, 0.5) - centre_brick).length() <= 2.5:
 			seam_bricks.append(brick)
 	check_bricks(w, seam_bricks, SLOT, ops, 2, "sharp volume step")
+
+func ice_id(w: VoxelWorld) -> int:
+	for m in w.material_table():
+		if m["name"] == "ice":
+			return m["id"]
+	return 0
+
+# The opaque view (spec §3): GPU brick_gen and ve::eval_brick must agree on a region that
+# holds an added transparent ball and a painted transparent lens, byte for byte like any
+# other brick. The added ball buries its brick's air half in a transparent solid, which is
+# exactly the case the stored lattice now reads as air.
+func test_bricks_holding_transparent_material_match_the_cpu_reference() -> void:
+	var w := make_world()
+	var origin := Vector3(REGION) * 25.6
+	var ice := ice_id(w)
+	assert_int(ice).override_failure_message("no 'ice' material in the table").is_greater(0)
+	# Both centres are nudged off the 5 cm lattice. A round centre puts a lattice sample
+	# EXACTLY on the sphere, where the two evaluators' last-ulp disagreement in
+	# length(p - c) - r flips the op's material tie-break -- harmless for the SDF, but the
+	# opaque view turns a 0.025 m label difference into a 132-byte lattice difference.
+	var ops := make_op(1, ice, origin + Vector3(6.013, 3.017, 6.013), 2.0) # add
+	ops.append_array(make_op(2, ice, origin + Vector3(14.011, 1.007, 14.023), 1.5)) # paint
+	w.hooks().debug_upload_region_ops(SLOT, ops, 2)
+	generate_region(w, REGION, SLOT, 2)
+	# The job list's ORDER comes from an atomicAdd, so active_bricks() samples a different
+	# subset every run; a sweep that only sometimes covers an ice brick is a test that only
+	# sometimes tests anything. Collect the bricks around the two balls instead, from the
+	# job list, so the ice is always in the sample.
+	var bricks := []
+	var want := [origin + Vector3(6.0, 3.0, 6.0), origin + Vector3(14.0, 1.0, 14.0)]
+	var jobs: PackedInt32Array = w.hooks().debug_jobs()
+	for j in range(jobs.size() / 8):
+		var centre := (Vector3(jobs[j * 8 + 0], jobs[j * 8 + 1], jobs[j * 8 + 2]) + Vector3(0.5, 0.5, 0.5)) * 0.8
+		for wnt in want:
+			if (centre - wnt).length() <= 2.5:
+				bricks.append(Vector3i(jobs[j * 8 + 0], jobs[j * 8 + 1], jobs[j * 8 + 2]))
+				break
+	assert_int(bricks.size()).override_failure_message(
+		"no ice brick to compare -- the ops did not activate one").is_greater(0)
+	check_bricks(w, bricks, SLOT, ops, 2, "transparent")

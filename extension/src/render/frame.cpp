@@ -5,6 +5,7 @@
 #include "lod/lod_system.h"
 #include "lod/lod_tree.h"
 #include "render/beauty_camera.h"
+#include "render/brick_gen_pass.h"
 #include "render/camera_params.h"
 #include "render/composite_pass.h"
 #include "render/contact_shadow_pass.h"
@@ -27,6 +28,7 @@
 #include "render/orchestrator.h"
 #include "render/outline_pass.h"
 #include "render/raymarch_pass.h"
+#include "render/region_pass.h"
 #include "render/ssao_pass.h"
 #include "render/ssgi_pass.h"
 #include "render/ssr_pass.h"
@@ -184,6 +186,13 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	// in this callback with no timing label, and in the edit leg it is the largest single
 	// contributor to a frame (M6 errata 3's 26.8 ms p99). Scope it before optimising it.
 	timings->begin(rd, "stream");
+	// One read per frame, shared by everything transparency touches this frame: reading it
+	// twice invites one consumer to be stale.
+	const ve::TransparencySettings transparency = render_.transparency_settings();
+	// The baker decides what the raymarcher will find, so the switch has to reach it before
+	// the very first brick of this frame is generated.
+	if (BrickGenPass *bg = render_.passes().gen) bg->set_opaque_view(transparency.enabled);
+	if (RegionPass *rp = render_.passes().region) rp->set_opaque_view(transparency.enabled);
 	render_.drain_island_uploads(rd);
 	WorldStreamer *st = render_.streamer();
 	if (st) st->run_frame(rd, cam.origin.x, cam.origin.y, cam.origin.z);
@@ -250,9 +259,6 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		return false;
 	}
 	const int islands = render_.island_slot_count();
-	// One read per frame, shared by the near field's marcher and the far field's shell skip:
-	// both key off the same switch, and reading it twice invites one of them to be stale.
-	const ve::TransparencySettings transparency = render_.transparency_settings();
 	IslandCullPass *cull = render_.passes().island_cull;
 	RID mask;
 	timings->begin(rd, "raymarch");
