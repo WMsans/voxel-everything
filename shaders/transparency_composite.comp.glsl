@@ -1,6 +1,5 @@
 #[compute]
 #version 460
-#include "generated/gbuffer.glslh"
 #include "generated/blocks.glslh"
 
 #define SUN_LIGHT_SET 0
@@ -59,7 +58,9 @@ void main() {
 	if (thickness <= 0.0 && !has_front) return;
 
 	uint mat = has_front ? uint(front.w + 0.5) : inside;
-	vec3 T = max(pow(mat_transmit(mat), vec3(thickness)), vec3(pc.params.x));
+	// pow(0, 0) is undefined in GLSL and thickness == 0 is reachable (the camera inside a
+	// matched front/back pair), and a material table row may zero a transmit channel.
+	vec3 T = max(pow(max(mat_transmit(mat), vec3(1e-5)), vec3(thickness)), vec3(pc.params.x));
 	vec3 behind = imageLoad(lit, px).rgb;
 
 	if (!has_front) {
@@ -90,6 +91,10 @@ void main() {
 	// Gate on the same bayer/fade test deferred.comp.glsl's far_field_owns() uses if a lit
 	// front is ever seen to go dark under open sky.
 	float shadow = (pc.flags.x & BEAUTY_SUN_MAP) != 0u ? sun_map_visibility(p, ndl, front.z) : 1.0;
+	// ponytail: ao = 1 and ndv = 1, so the body has no rim, no SSAO/SSGI and no emission --
+	// deferred earns its rim with silhouette_gate plus 12 taps and this pass does not. Ceiling:
+	// a thick block reads flat where a thin one reads glassy. Add the silhouette gate and the
+	// deferred term reuse here if a rim ever matters more than the dispatch it costs.
 	// ndv = 1 is cel_shade's "no rim" (see deferred.comp.glsl).
 	vec3 body = cel_shade(surf.rgb * mix(1.0, props.y, 0.65), pc.sky.rgb, ndl, 1.0, ndh, shadow,
 			1.0, 1.0 - props.x, sun_light.rgb.xyz);

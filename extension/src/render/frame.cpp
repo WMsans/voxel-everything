@@ -561,8 +561,9 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	end_stage(rd, kStageDeferred);
 	// Transparency, shading (spec §6): fronts over what deferred lit behind them. Failure
 	// cancels the marker and leaves deferred's image -- never aborts the frame.
-	// shell_drawn IS `shell_ok && shell->drew()`: the shell leaves its targets stale on a
-	// frame it drew nothing, so front()/thickness() are only ever taken on a fresh one.
+	// shell_drawn IS `shell_ok && shell->drew()`. Belt to the accessors' braces: shell->front()
+	// and shell->thickness() are RID() unless the shell drew, so this gate is an optimisation
+	// rather than the thing standing between a stale frame and a stale tint.
 	if (TransparencyCompositePass *tc = render_.passes().transparency_composite;
 			tc && shell_drawn) {
 		ShellRasterPass *shell = render_.passes().shell_raster;

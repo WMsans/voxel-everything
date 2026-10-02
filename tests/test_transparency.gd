@@ -389,6 +389,11 @@ func test_toggling_transparency_off_stops_the_shell_reading_stale_targets() -> v
 		"the shell read last frame's front: %s" % off).is_equal(0.0)
 	assert_vector((off["center_thick"] as Vector2)).override_failure_message(
 		"the shell read last frame's thickness: %s" % off).is_equal(Vector2.ZERO)
+	# The shell-side asserts above all go through hooks.cpp's own drew() gate, so they would
+	# pass even if the composite were still reading the targets -- this one cannot: the
+	# composite only reports "transparency" when its render() dispatched.
+	assert_bool((off["stages_ok"] as PackedStringArray).has("transparency")).override_failure_message(
+		"the composite ran on last frame's shell targets: %s" % off).is_false()
 
 # --- the composite (spec §6) --------------------------------------------------------------
 
@@ -412,31 +417,44 @@ func test_ice_tints_the_ground_and_never_hides_it() -> void:
 
 # THE regression test for the prior attempt: ten metres of ice is darker than one, and the
 # ground behind it still contributes at least the floor.
+# ONE world, ONE camera, three states: the ice grows in place, so bare/thin/thick are three
+# pixels of one streamed world and the ordering comparison is world-local.
 func test_ten_metres_of_ice_is_darker_than_one_but_still_shows_the_ground() -> void:
-	var thin_w := shell_world()
-	var bare: Color = frame(thin_w)["center_lit"]
-	thin_w.hooks().debug_apply_sphere_add(centre_hit(thin_w)["pos"], 1.0, material_id(thin_w, "ice"))
-	settle(thin_w)
-	var thin: Color = frame_until_front(thin_w)["center_lit"]
+	var w := shell_world()
+	var bare: Color = frame(w)["center_lit"]
+	# The block the centre ray crosses, grown in place. The 1 m ball sits ON the ground: the
+	# shell has a front but no back face there, so the measured path is front-to-opaque,
+	# about a metre. The 5 m ball then swallows it (4 m up, tangent) and the same ray crosses
+	# ~9 m of the material before reaching the ground.
+	var ground: Vector3 = centre_hit(w)["pos"]
+	w.hooks().debug_apply_sphere_add(ground, 1.0, material_id(w, "ice"))
+	settle(w)
+	var thin: Color = frame_until_front(w)["center_lit"]
 
-	var thick_w := shell_world()
-	var cam := CAM + Vector3(0, 12.0, 0)
-	settle(thick_w, cam)
-	thick_w.hooks().debug_apply_sphere_add(
-		centre_hit(thick_w)["pos"] + Vector3(0, 4.0, 0), 5.0, material_id(thick_w, "ice"))
-	settle(thick_w, cam)
-	var d := frame_until_front(thick_w, cam)
+	w.hooks().debug_apply_sphere_add(ground + Vector3(0, 4.0, 0), 5.0, material_id(w, "ice"))
+	# NOT frame_until_front(): the 1 m ball's front is still sitting in the targets, so "there
+	# is a front" goes true again the instant the edit lands and the helper returns the block
+	# it replaced. Wait for the front to move NEARER instead -- the grown block's surface is
+	# ~8 m in front of the small ball's, and nothing else writes this pixel.
+	var d := {}
+	for i in range(600):
+		w.hooks().debug_stream_frame(CAM)
+		d = frame(w)
+		var grown: Color = d["center_front"]
+		if grown.a > 0.5 and grown.b < 5.0:
+			break
 	var thick: Color = d["center_lit"]
 	var t: Vector2 = d["center_thick"]
 	assert_float(t.x + t.y * float(d["center_distance"])).override_failure_message(
 		"the path through the block is not ~9 m: %s" % d).is_greater(7.0)
-	assert_float(dist(thick, bare)).is_greater(dist(thin, bare))
-	# Two frames, floor 0.35 and floor 0.05: with the floor raised more of the ground shows,
-	# which is only possible if the ground behind 9 m of ice reached the pixel at all.
-	thick_w.set_transparency_value("min_transmit", 0.05)
-	var low: Color = frame(thick_w, cam)["center_lit"]
-	thick_w.set_transparency_value("min_transmit", 0.9)
-	var high: Color = frame(thick_w, cam)["center_lit"]
+	assert_float(dist(thick, bare)).override_failure_message(
+		"thicker is not darker than bare: %s vs %s" % [thick, bare]).is_greater(dist(thin, bare))
+	# Two frames, floor 0.05 then floor 0.9: with the floor raised more of the ground shows,
+	# which is only possible if the ground behind the ice reached the pixel at all.
+	w.set_transparency_value("min_transmit", 0.05)
+	var low: Color = frame(w)["center_lit"]
+	w.set_transparency_value("min_transmit", 0.9)
+	var high: Color = frame(w)["center_lit"]
 	assert_float(dist(high, low)).override_failure_message(
 		"the transmittance floor changes nothing: the ground behind the ice is not in the pixel"
 		).is_greater(0.02)
@@ -474,6 +492,10 @@ func test_a_camera_inside_ice_sees_a_tinted_world() -> void:
 		"two metres of ice around the camera tinted nothing").is_greater(0.01)
 	# Only the back face is in view: G = +1 from the clear, -1 from the back = 0.
 	assert_float((d["center_thick"] as Vector2).y).is_equal_approx(0.0, 0.01)
+	# ...and no front was written, which is what puts this pixel on the !has_front branch
+	# rather than the front-body branch. G == 0 alone would also fit a front/back pair.
+	assert_float((d["center_front"] as Color).a).override_failure_message(
+		"the camera-inside frame wrote a front: %s" % d).is_equal(0.0)
 
 func test_ice_frames_are_finite_and_deterministic() -> void:
 	var w := shell_world()

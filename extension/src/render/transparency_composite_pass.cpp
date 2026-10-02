@@ -21,9 +21,13 @@ void TransparencyCompositePass::initialize(RenderingDevice *rd) {
 	sampler_nearest_ = gpu::sampler(rd, group_, RenderingDevice::SAMPLER_FILTER_NEAREST);
 	sampler_linear_ = gpu::sampler(rd, group_, RenderingDevice::SAMPLER_FILTER_LINEAR);
 	// A 1x1 stand-in sun map for frames with none, exactly as DeferredPass keeps one (its
-	// make_1x1, verbatim); the shader never reads it because BEAUTY_SUN_MAP is cleared with
-	// it. A plain 2D texture DOES satisfy the sampler2DArray descriptor on this backend --
-	// DeferredPass binds exactly this one to deferred.comp.glsl's `sampler2DArray sun_map`.
+	// make_1x1, verbatim). It is never SAMPLED: render() clears BEAUTY_SUN_MAP whenever
+	// sun_map is invalid, so the shadow term takes its 1.0 branch and this RID only has to be
+	// a valid texture to keep the set bindable. It is a plain 2D texture bound to a
+	// sampler2DArray, which is the same shape DeferredPass ships -- not a claim that a 2D
+	// image satisfies an array descriptor in Vulkan, just the backend's tolerance. Make it
+	// TEXTURE_TYPE_2D_ARRAY with one layer if that tolerance ever stops holding; gpu::texture()
+	// takes no layer count, so it would need a direct texture_create.
 	PackedByteArray far;
 	far.resize(4);
 	far.fill(0);

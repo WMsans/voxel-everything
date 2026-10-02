@@ -42,9 +42,13 @@ public:
 			RID beauty_cam_ubo, RID island_desc, float fade_start, float fade_end,
 			bool front_face_clockwise, bool camera_inside);
 	bool drew() const { return drew_; }
-	RID thickness() const { return thick_; }
-	RID front() const { return front_; }
-	RID front_depth() const { return depth_; }
+	// The targets are deliberately left STALE on a frame that drew nothing, so these report
+	// RID() rather than last frame's texture. That is the enforcement, not a convention every
+	// reader has to remember: every consumer (the composite, inject, the debug hooks) is
+	// already gated on validity, so a stale frame is refused at the one place they all reach.
+	RID thickness() const { return drew_ ? thick_ : RID(); }
+	RID front() const { return drew_ ? front_ : RID(); }
+	RID front_depth() const { return drew_ ? depth_ : RID(); }
 
 private:
 	bool ensure_targets(RenderingDevice *rd, Vector2i size);

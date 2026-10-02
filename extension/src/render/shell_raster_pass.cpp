@@ -86,8 +86,9 @@ bool ShellRasterPass::draw(RenderingDevice *rd, LodPool &pool, RID index_array, 
 	drew_ = false;
 	if (!rd_ || rd != rd_ || !thick_shader_.is_valid() || !front_shader_.is_valid() || !gb.is_valid())
 		return false;
-	// ponytail: an ice-free frame leaves the targets stale and drew() false, and the composite
-	// skips them, so no clear is paid for. Clear here instead if anything ever reads them stale.
+	// ponytail: an ice-free frame leaves the targets stale, and front()/thickness() report
+	// RID() while drew() is false, so nothing can read them and no clear is paid for. Clear
+	// here instead if a caller ever needs the last frame's medium back.
 	if (pages_.empty() && !camera_inside) return true;
 	if (!index_array.is_valid() || !beauty_cam_ubo.is_valid() || !island_desc.is_valid()) return false;
 	if (!ensure_targets(rd, gb.size()) ||
