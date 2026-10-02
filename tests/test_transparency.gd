@@ -389,3 +389,102 @@ func test_toggling_transparency_off_stops_the_shell_reading_stale_targets() -> v
 		"the shell read last frame's front: %s" % off).is_equal(0.0)
 	assert_vector((off["center_thick"] as Vector2)).override_failure_message(
 		"the shell read last frame's thickness: %s" % off).is_equal(Vector2.ZERO)
+
+# --- the composite (spec §6) --------------------------------------------------------------
+
+func dist(a: Color, b: Color) -> float:
+	return Vector3(a.r - b.r, a.g - b.g, a.b - b.b).length()
+
+func test_ice_tints_the_ground_and_never_hides_it() -> void:
+	var w := shell_world()
+	var bare: Color = frame(w)["center_lit"]
+	w.hooks().debug_apply_sphere_add(centre_hit(w)["pos"], 1.0, material_id(w, "ice"))
+	settle(w)
+	var d := frame_until_front(w)
+	var lit: Color = d["center_lit"]
+	assert_bool(finite(lit)).is_true()
+	var ok: PackedStringArray = d["stages_ok"]
+	assert_bool(ok.has("transparency")).is_true()
+	assert_float(dist(lit, bare)).override_failure_message(
+		"the ice left the pixel untouched: %s vs %s" % [lit, bare]).is_greater(0.01)
+	# Blue survives ice better than red: the tint is the table's, not a grey fade.
+	assert_float(lit.b / max(bare.b, 1e-4)).is_greater(lit.r / max(bare.r, 1e-4))
+
+# THE regression test for the prior attempt: ten metres of ice is darker than one, and the
+# ground behind it still contributes at least the floor.
+func test_ten_metres_of_ice_is_darker_than_one_but_still_shows_the_ground() -> void:
+	var thin_w := shell_world()
+	var bare: Color = frame(thin_w)["center_lit"]
+	thin_w.hooks().debug_apply_sphere_add(centre_hit(thin_w)["pos"], 1.0, material_id(thin_w, "ice"))
+	settle(thin_w)
+	var thin: Color = frame_until_front(thin_w)["center_lit"]
+
+	var thick_w := shell_world()
+	var cam := CAM + Vector3(0, 12.0, 0)
+	settle(thick_w, cam)
+	thick_w.hooks().debug_apply_sphere_add(
+		centre_hit(thick_w)["pos"] + Vector3(0, 4.0, 0), 5.0, material_id(thick_w, "ice"))
+	settle(thick_w, cam)
+	var d := frame_until_front(thick_w, cam)
+	var thick: Color = d["center_lit"]
+	var t: Vector2 = d["center_thick"]
+	assert_float(t.x + t.y * float(d["center_distance"])).override_failure_message(
+		"the path through the block is not ~9 m: %s" % d).is_greater(7.0)
+	assert_float(dist(thick, bare)).is_greater(dist(thin, bare))
+	# Two frames, floor 0.35 and floor 0.05: with the floor raised more of the ground shows,
+	# which is only possible if the ground behind 9 m of ice reached the pixel at all.
+	thick_w.set_transparency_value("min_transmit", 0.05)
+	var low: Color = frame(thick_w, cam)["center_lit"]
+	thick_w.set_transparency_value("min_transmit", 0.9)
+	var high: Color = frame(thick_w, cam)["center_lit"]
+	assert_float(dist(high, low)).override_failure_message(
+		"the transmittance floor changes nothing: the ground behind the ice is not in the pixel"
+		).is_greater(0.02)
+
+func test_sky_behind_a_floating_ice_ball_is_tinted_not_holed() -> void:
+	var w := shell_world()
+	var cam := CAM + Vector3(0, 30.0, 0)
+	var fwd := Vector3(0.3, 1.0, 0.2) # up at the sky
+	settle(w, cam)
+	var sky: Color = frame(w, cam, fwd)["center_lit"]
+	w.hooks().debug_apply_sphere_add(cam + fwd.normalized() * 6.0, 1.5, material_id(w, "ice"))
+	settle(w, cam)
+	var d := frame_until_front(w, cam, fwd)
+	var lit: Color = d["center_lit"]
+	assert_bool(finite(lit)).is_true()
+	assert_float(dist(lit, sky)).is_greater(0.005)
+	assert_float(lit.r + lit.g + lit.b).is_greater(0.05) # not a black hole
+
+func test_a_camera_inside_ice_sees_a_tinted_world() -> void:
+	var w := shell_world()
+	var bare: Color = frame(w)["center_lit"]
+	# A ball around the camera itself.
+	w.hooks().debug_apply_sphere_add(CAM, 2.0, material_id(w, "ice"))
+	settle(w)
+	var d := {}
+	for i in range(600):
+		w.hooks().debug_stream_frame(CAM)
+		d = frame(w)
+		if int(d["shell_pages"]) > 0:
+			break
+	var lit: Color = d["center_lit"]
+	assert_bool(finite(lit)).is_true()
+	assert_float(lit.r + lit.g + lit.b).is_greater(0.05)
+	assert_float(dist(lit, bare)).override_failure_message(
+		"two metres of ice around the camera tinted nothing").is_greater(0.01)
+	# Only the back face is in view: G = +1 from the clear, -1 from the back = 0.
+	assert_float((d["center_thick"] as Vector2).y).is_equal_approx(0.0, 0.01)
+
+func test_ice_frames_are_finite_and_deterministic() -> void:
+	var w := shell_world()
+	w.hooks().debug_apply_sphere_add(centre_hit(w)["pos"], 1.0, material_id(w, "ice"))
+	settle(w)
+	frame_until_front(w)
+	# Let the worker go quiet, then two back-to-back frames must be one image.
+	for i in range(30):
+		w.hooks().debug_stream_frame(CAM)
+		frame(w)
+	var a := frame(w)
+	var b := frame(w)
+	assert_int(int(a["lit_checksum"])).is_equal(int(b["lit_checksum"]))
+	assert_bool(finite(a["center_lit"])).is_true()

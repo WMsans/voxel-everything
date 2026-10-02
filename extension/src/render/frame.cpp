@@ -31,6 +31,7 @@
 #include "render/outline_pass.h"
 #include "render/raymarch_pass.h"
 #include "render/shell_raster_pass.h"
+#include "render/transparency_composite_pass.h"
 #include "render/region_pass.h"
 #include "render/ssao_pass.h"
 #include "render/ssgi_pass.h"
@@ -499,8 +500,6 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		else cancel_stage(kStageShell);
 		shell_drawn = shell_ok && shell->drew();
 	}
-	(void)shell_drawn;
-	(void)inside_material;
 
 	SsgiPass *ssgi = render_.passes().ssgi;
 	if (ssgi) ssgi->clear_result();
@@ -560,6 +559,31 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		return false;
 	}
 	end_stage(rd, kStageDeferred);
+	// Transparency, shading (spec §6): fronts over what deferred lit behind them. Failure
+	// cancels the marker and leaves deferred's image -- never aborts the frame.
+	// shell_drawn IS `shell_ok && shell->drew()`: the shell leaves its targets stale on a
+	// frame it drew nothing, so front()/thickness() are only ever taken on a fresh one.
+	if (TransparencyCompositePass *tc = render_.passes().transparency_composite;
+			tc && shell_drawn) {
+		ShellRasterPass *shell = render_.passes().shell_raster;
+		TransparencyCompositePass::Params tp;
+		for (int k = 0; k < 3; k++) {
+			tp.right[k] = cp.cam_right[k];
+			tp.up[k] = cp.cam_up[k];
+			tp.ambient[k] = beauty.ambient[k];
+		}
+		tp.tan_x = cp.params[0];
+		tp.tan_y = cp.params[1];
+		tp.min_transmit = transparency.min_transmit;
+		tp.sky_thickness_m = transparency.sky_thickness_m;
+		tp.flags = beauty_flags;
+		tp.inside_material = inside_material;
+		timings->begin(rd, "transparency");
+		const bool tc_ok = tc->render(rd, *gb, *materials, shell->front(), shell->thickness(),
+				use_sun ? sun->map() : RID(), deferred->sun_cascade_ubo(), ubo->buffer(), tp);
+		if (tc_ok) end_stage(rd, kStageTransparency);
+		else cancel_stage(kStageTransparency);
+	}
 	timings->begin(rd, "inject");
 	if (!inject->draw(rd, in.scene_color, in.scene_depth, gb->lit(), gb->depth())) {
 		cancel_stage(kStageInject);
@@ -638,7 +662,7 @@ bool VoxelFrame::render_post_opaque(RenderingDevice *rd, const FrameInputs &in) 
 const char *godot::frame_stage_name(FrameStage stage) {
 	static const char *const kNames[kStageCount] = {"stream", "raymarch", "composite", "lod",
 			"sun_shadow", "grass", "ssgi", "deferred", "ssao", "inject", "contact", "ssr",
-			"outlines", "history", "shell"};
+			"outlines", "history", "shell", "transparency"};
 	return stage < kStageCount ? kNames[stage] : "";
 }
 

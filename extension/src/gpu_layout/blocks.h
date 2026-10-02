@@ -98,6 +98,14 @@ struct CompositePush {
 	float up_tany[4];     // xyz = camera up,    w = tan(fov_y / 2)
 };
 
+struct TransparencyCompositePush {
+	float right_tanx[4];  // xyz = camera right, w = tan(fov_x / 2)
+	float up_tany[4];     // xyz = camera up,    w = tan(fov_y / 2)
+	float sky[4];         // xyz = ambient, w unused
+	float params[4];      // x = min transmit, y = sky thickness (m), zw unused
+	uint32_t flags[4];    // x = beauty flags, y = material the camera is inside (0 = outside)
+};
+
 struct GrassRasterPush {
 	float view_proj[16];
 	float cam[4];  // xyz = camera position, w unused
@@ -232,6 +240,14 @@ inline constexpr Field kLodRasterPushFields[] = {
 inline constexpr Field kShellRasterPushFields[] = {
 	VE_LAYOUT_FIELD(ShellRasterPush, fade, Vec4, 0),
 };
+inline constexpr Field kTransparencyCompositePushFields[] = {
+	VE_LAYOUT_FIELD(TransparencyCompositePush, right_tanx, Vec4, 0),
+	VE_LAYOUT_FIELD(TransparencyCompositePush, up_tany, Vec4, 0),
+	VE_LAYOUT_FIELD(TransparencyCompositePush, sky, Vec4, 0),
+	VE_LAYOUT_FIELD(TransparencyCompositePush, params, Vec4, 0),
+	VE_LAYOUT_FIELD(TransparencyCompositePush, flags, UVec4, 0),
+};
+
 inline constexpr Field kCompositePushFields[] = {
 	VE_LAYOUT_FIELD(CompositePush, view_proj, Mat4, 0),
 	VE_LAYOUT_FIELD(CompositePush, cam, Vec4, 0),
@@ -360,6 +376,8 @@ inline constexpr Block kBlocks[] = {
 	VE_LAYOUT_BLOCK(LodRasterPush, "LOD_RASTER_PUSH_FIELDS", kLodRasterPushFields),
 	VE_LAYOUT_BLOCK(ShellRasterPush, "SHELL_RASTER_PUSH_FIELDS", kShellRasterPushFields),
 	VE_LAYOUT_BLOCK(CompositePush, "COMPOSITE_PUSH_FIELDS", kCompositePushFields),
+	VE_LAYOUT_BLOCK(TransparencyCompositePush, "TRANSPARENCY_COMPOSITE_PUSH_FIELDS",
+			kTransparencyCompositePushFields),
 	VE_LAYOUT_BLOCK(GrassRasterPush, "GRASS_RASTER_PUSH_FIELDS", kGrassRasterPushFields),
 	VE_LAYOUT_BLOCK(SunShadowPush, "SUN_SHADOW_PUSH_FIELDS", kSunShadowPushFields),
 	VE_LAYOUT_BLOCK(CameraParams, "CAMERA_PARAMS_FIELDS", kCameraParamsFields),
