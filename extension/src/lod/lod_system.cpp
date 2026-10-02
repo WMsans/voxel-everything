@@ -423,16 +423,20 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 	// flags back.
 	std::vector<ve::LodBuildRequest> batch_requests;
 	std::vector<ve::IVec3> shell_requests;
-	if (mesh() && !mesh()->lod_busy() && render()->transparency_settings().enabled) {
+	if (mesh() && !mesh()->lod_busy()) {
 		const int cap = std::min<int>(lod_builds_per_frame_, mesh()->lod_max_jobs());
 		// Shell chunks first: a missing shell is transparent solid that is not there at all, a
-		// missing far chunk is a coarser horizon.
-		shell_grid_.requests(cam.pos, cap, &shell_requests);
-		// note_building clears the dirty flag, so an edit landing between requests() and here
-		// is swallowed. Safe ONLY because the build samples world state AFTER that edit: the
-		// shell it produces already contains it.
-		for (ve::IVec3 c : shell_requests) {
-			shell_grid_.note_building(c);
+		// missing far chunk is a coarser horizon. Skipped entirely while transparency is off --
+		// refresh_shell_candidates already empties the candidate set on the toggle, so this is
+		// defence in depth, and it must not gate the far-field submissions below.
+		if (render()->transparency_settings().enabled) {
+			shell_grid_.requests(cam.pos, cap, &shell_requests);
+			// note_building clears the dirty flag, so an edit landing between requests() and here
+			// is swallowed. Safe ONLY because the build samples world state AFTER that edit: the
+			// shell it produces already contains it.
+			for (ve::IVec3 c : shell_requests) {
+				shell_grid_.note_building(c);
+			}
 		}
 		const int take = std::min<int>(cap - int(shell_requests.size()),
 				int(lod_walk_.requests.size()));
