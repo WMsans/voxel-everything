@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://b0b7faiji0yy7"
+path="res://.godot/imported/shell_front.frag.glsl-157a3a16a7832841cea4d5a18d02e2a2.res"
+
+[deps]
+
+source_file="res://shaders/shell_front.frag.glsl"
+dest_files=["res://.godot/imported/shell_front.frag.glsl-157a3a16a7832841cea4d5a18d02e2a2.res"]
+
+[params]
+

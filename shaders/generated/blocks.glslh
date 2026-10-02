@@ -62,6 +62,9 @@
 	vec4 cam; \
 	vec4 fade;
 
+#define SHELL_RASTER_PUSH_FIELDS \
+	vec4 fade;
+
 #define COMPOSITE_PUSH_FIELDS \
 	mat4 view_proj; \
 	vec4 cam; \

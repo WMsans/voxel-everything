@@ -1,6 +1,8 @@
 #include "render/frame.h"
 #include "render/frame_params.h"
 #include "core/world_store.h"
+#include "world/material_table.h"
+#include "world/world_field.h"
 #include "lod/lod_grid.h"
 #include "lod/lod_system.h"
 #include "lod/lod_tree.h"
@@ -28,6 +30,7 @@
 #include "render/orchestrator.h"
 #include "render/outline_pass.h"
 #include "render/raymarch_pass.h"
+#include "render/shell_raster_pass.h"
 #include "render/region_pass.h"
 #include "render/ssao_pass.h"
 #include "render/ssgi_pass.h"
@@ -462,6 +465,37 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		else timings->cancel("leaves");
 	}
 
+	// The transparent shell (spec §6): thickness and the nearest front, after every opaque
+	// producer has written G-buffer depth. One gated pair like grass and leaves: a failure
+	// cancels the marker and the frame goes on without transparent materials.
+	bool shell_drawn = false;
+	uint16_t inside_material = 0;
+	if (ShellRasterPass *shell = render_.passes().shell_raster;
+			shell && transparency.enabled && lod_.pool() && lod_raster) {
+		// Is the camera inside a transparent solid? One CPU field sample a frame.
+		{
+			const ve::FieldView view = store_.field().lock();
+			if (view.valid()) {
+				const ve::Sample s = view.sample(cam.origin.x, cam.origin.y, cam.origin.z);
+				if (s.sdf <= 0.0f && ve::material_transparent(s.material)) inside_material = s.material;
+			}
+		}
+		std::vector<LodRasterPass::PageDraw> shell_pages;
+		for (const ve::LodPageDraw &pd : lod_.shell_draw_pages())
+			shell_pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});
+		shell->set_draw_pages(shell_pages);
+		timings->begin(rd, "shell");
+		const bool shell_ok = lod_raster->prepare_index_array(rd, *lod_.pool()) &&
+				shell->draw(rd, *lod_.pool(), lod_raster->index_array(), *gb, ubo->buffer(),
+						render_.passes().islands->desc_buffer(), fade_start, fade_end,
+						lod_raster->front_face_clockwise(), inside_material != 0);
+		if (shell_ok) end_stage(rd, kStageShell);
+		else cancel_stage(kStageShell);
+		shell_drawn = shell_ok && shell->drew();
+	}
+	(void)shell_drawn;
+	(void)inside_material;
+
 	SsgiPass *ssgi = render_.passes().ssgi;
 	if (ssgi) ssgi->clear_result();
 	bool ssgi_ok = false;
@@ -598,7 +632,7 @@ bool VoxelFrame::render_post_opaque(RenderingDevice *rd, const FrameInputs &in) 
 const char *godot::frame_stage_name(FrameStage stage) {
 	static const char *const kNames[kStageCount] = {"stream", "raymarch", "composite", "lod",
 			"sun_shadow", "grass", "ssgi", "deferred", "ssao", "inject", "contact", "ssr",
-			"outlines", "history"};
+			"outlines", "history", "shell"};
 	return stage < kStageCount ? kNames[stage] : "";
 }
 
@@ -659,6 +693,7 @@ FrameInputs VoxelFrame::prepare_headless(RenderingDevice *rd, const FrameInputs 
 		if (LodRasterPass *lod_raster = render_.passes().lod_raster) lod_raster->release_targets();
 		if (GrassRasterPass *grass_raster = render_.passes().grass_raster) grass_raster->release_targets();
 		if (LeafRasterPass *leaf_raster = render_.passes().leaf_raster) leaf_raster->release_targets();
+		if (ShellRasterPass *shell = render_.passes().shell_raster) shell->release_targets();
 	}
 	if (!headless_.ensure(rd, in.size) || !headless_.clear(rd)) return out;
 	out.scene_color = headless_.color();

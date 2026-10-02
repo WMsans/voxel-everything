@@ -23,6 +23,7 @@
 #include "render/grass_scatter_pass.h"
 #include "render/leaf_scatter_pass.h"
 #include "render/leaf_raster_pass.h"
+#include "render/shell_raster_pass.h"
 #include "render/grass_raster_pass.h"
 #include "render/lod_raster_pass.h"
 #include "render/sun_shadow_pass.h"
@@ -285,6 +286,11 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 	// scatter still runs, so the chop contract holds and the canopy simply does not draw.
 	passes_.leaf_raster = new LeafRasterPass();
 	passes_.leaf_raster->initialize(device);
+	// Fail-soft like leaf_raster: a shader that will not compile leaves the pass with no
+	// shader, draw() returns false, the stage is cancelled and transparent materials are
+	// simply not drawn that frame.
+	passes_.shell_raster = new ShellRasterPass();
+	passes_.shell_raster->initialize(device);
 	passes_.hiz = new HizPass();
 	if (!passes_.hiz->initialize(device)) {
 		UtilityFunctions::printerr("VoxelWorld: HiZ initialization failed; continuing without "
@@ -314,6 +320,7 @@ void RenderOrchestrator::teardown_render_passes() {
 	if (passes_.leaf_scatter) { delete passes_.leaf_scatter; passes_.leaf_scatter = nullptr; }
 	if (passes_.ssgi) { delete passes_.ssgi; passes_.ssgi = nullptr; }
 	if (passes_.ssao) { delete passes_.ssao; passes_.ssao = nullptr; }
+	if (passes_.shell_raster) { delete passes_.shell_raster; passes_.shell_raster = nullptr; }
 	if (passes_.lod_raster) { delete passes_.lod_raster; passes_.lod_raster = nullptr; }
 	if (passes_.beauty_camera) { passes_.beauty_camera->teardown(); delete passes_.beauty_camera; passes_.beauty_camera = nullptr; }
 	if (passes_.gbuffer) { delete passes_.gbuffer; passes_.gbuffer = nullptr; }

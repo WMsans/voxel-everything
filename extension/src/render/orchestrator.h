@@ -80,6 +80,7 @@ class GrassScatterPass;
 class GrassRasterPass;
 class LeafScatterPass;
 class LeafRasterPass;
+class ShellRasterPass;
 class Object;
 
 // Every GPU object of the pass graph. The orchestrator creates them in ensure_gpu_graph() and
@@ -114,6 +115,7 @@ struct RenderPasses {
 	GrassRasterPass *grass_raster = nullptr;
 	LeafScatterPass *leaf_scatter = nullptr;
 	LeafRasterPass *leaf_raster = nullptr;
+	ShellRasterPass *shell_raster = nullptr;
 };
 
 class RenderOrchestrator {

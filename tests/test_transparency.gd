@@ -292,3 +292,74 @@ func test_with_the_near_field_off_no_shell_is_built() -> void:
 	assert_int(int(w.hooks().debug_lod_stats()["shell_pages"])).override_failure_message(
 		"the near shell was built with no near field: %s" % w.hooks().debug_lod_stats()
 		).is_equal(0)
+
+# --- the shell raster (spec §6) -----------------------------------------------------------
+
+# Frames until the shell raster has drawn a front at the centre pixel.
+func frame_until_front(w: VoxelWorld, cam := CAM, fwd := FWD) -> Dictionary:
+	var d := {}
+	for i in range(600):
+		w.hooks().debug_stream_frame(cam)
+		d = frame(w, cam, fwd)
+		if int(d.get("shell_pages", 0)) > 0 and (d["center_front"] as Color).a > 0.5:
+			break
+	return d
+
+func test_the_front_layer_holds_the_ice_and_the_thickness_is_the_path_through_it() -> void:
+	var w := shell_world()
+	var ground := centre_hit(w)
+	var ice := material_id(w, "ice")
+	w.hooks().debug_apply_sphere_add(ground["pos"], 1.0, ice)
+	settle(w)
+	var d := frame_until_front(w)
+	var front: Color = d["center_front"]
+	assert_int(int(front.a + 0.5)).override_failure_message(
+		"no transparent front at the centre: %s" % d).is_equal(ice)
+	var ok: PackedStringArray = d["stages_ok"]
+	assert_bool(ok.has("shell")).is_true()
+	# The ball is centred on the ground: the ray enters its top and ends on the ground
+	# inside it. One front, no back: G = 1, and thickness = R + G * z_ground ~ the radius.
+	var t: Vector2 = d["center_thick"]
+	assert_float(t.y).is_equal_approx(1.0, 0.01)
+	var thickness: float = t.x + t.y * float(d["center_distance"])
+	assert_float(thickness).override_failure_message(
+		"thickness %f from %s at ground distance %s" % [thickness, t, d["center_distance"]]
+		).is_between(0.6, 1.3)
+	# The front is nearer than the ground by that thickness.
+	assert_float(front.b).is_equal_approx(float(d["center_distance"]) - thickness, 0.05)
+
+func test_a_floating_ball_has_a_matched_front_and_back() -> void:
+	var w := shell_world()
+	var ground := centre_hit(w)
+	w.hooks().debug_apply_sphere_add(ground["pos"] + Vector3(0, 2.0, 0), 0.8, material_id(w, "ice"))
+	settle(w)
+	var d := frame_until_front(w)
+	var t: Vector2 = d["center_thick"]
+	assert_float(t.y).override_failure_message("fronts != backs: %s" % d).is_equal_approx(0.0, 0.01)
+	# The centre ray passes near the ball's middle: about a diameter of ice.
+	assert_float(t.x).is_between(1.0, 1.7)
+
+# Far field: an ice ball ~200 m out, well past the fade band, is drawn by the LoD shell.
+func test_far_ice_has_a_front_from_the_lod_shell() -> void:
+	var w := shell_world()
+	var down: Dictionary = w.raycast(Vector3(CAM.x + 200.0, 200.0, CAM.z), Vector3.DOWN, 300.0)
+	assert_bool(down["hit"]).is_true()
+	var target: Vector3 = down["pos"]
+	var cam := Vector3(CAM.x, target.y + 60.0, CAM.z)
+	var fwd := (target - cam).normalized()
+	var seen: Dictionary = w.raycast(cam, fwd, 400.0)
+	assert_bool(seen["hit"] and float(seen["distance"]) > 150.0).override_failure_message(
+		"terrain hides the far ice from this camera; raise it").is_true()
+	w.hooks().debug_apply_sphere_add(target, 10.0, material_id(w, "ice"))
+	settle(w, cam)
+	var d := frame_until_front(w, cam, fwd)
+	assert_int(int((d["center_front"] as Color).a + 0.5)).override_failure_message(
+		"no far shell front: %s" % d).is_equal(material_id(w, "ice"))
+	# No near-shell chunk exists out there: the page came from the far field.
+	assert_int(int(w.hooks().debug_lod_stats()["shell_pages"])).is_equal(0)
+
+func test_a_frame_with_no_ice_draws_no_shell_and_is_unchanged() -> void:
+	var w := shell_world()
+	var d := frame(w)
+	assert_int(int(d["shell_pages"])).is_equal(0)
+	assert_float((d["center_front"] as Color).a).is_equal(0.0)

@@ -22,6 +22,7 @@
 #include "render/ssgi_pass.h"
 #include "render/ssao_pass.h"
 #include "render/ssr_pass.h"
+#include "render/shell_raster_pass.h"
 #include "render/outline_pass.h"
 #include "beauty_compositor.h"
 #include "render/region_pass.h"
@@ -401,6 +402,23 @@ Dictionary VoxelDebugHooks::debug_render_frame(Vector3 pos, Vector3 fwd, int w, 
 				const float *p = reinterpret_cast<const float *>(hp.ptr()) + mc * 4;
 				const Vector3 hit(p[0], p[1], p[2]);
 				if (p[3] > 0.0f) d["center_distance"] = hit.distance_to(pos);
+			}
+		}
+		// The shell's own targets, FULL resolution (spec §6).
+		ShellRasterPass *shell = world_->context().render->passes().shell_raster;
+		d["shell_pages"] = shell ? shell->draw_page_count() : 0;
+		d["center_front"] = Color(0.0f, 0.0f, 0.0f, 0.0f);
+		d["center_thick"] = Vector2();
+		if (shell && shell->drew()) {
+			const PackedByteArray ff = device->texture_get_data(shell->front(), 0);
+			if (ff.size() >= (c + 1) * 16) {
+				const float *f = reinterpret_cast<const float *>(ff.ptr()) + c * 4;
+				d["center_front"] = Color(f[0], f[1], f[2], f[3]);
+			}
+			const PackedByteArray tk = device->texture_get_data(shell->thickness(), 0);
+			if (tk.size() >= (c + 1) * 8) {
+				const float *t = reinterpret_cast<const float *>(tk.ptr()) + c * 2;
+				d["center_thick"] = Vector2(t[0], t[1]);
 			}
 		}
 	}
