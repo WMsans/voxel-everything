@@ -30,12 +30,21 @@ public:
 	// Number of slots whose descriptor currently says live. This is a population count, not
 	// a high-water mark; VoxelWorld::island_slot_count() is the latter.
 	int live_count() const { return live_count_; }
+	// Whether this slot's descriptor currently says live. Read by RenderOrchestrator's
+	// island_live_mask(), which must agree with upload_descriptors/clear_slot exactly -- so
+	// it is asked of the same array they write rather than tracked a second time.
+	bool slot_live(int slot) const {
+		return slot >= 0 && slot < kMaxIslands && slot_live_[slot];
+	}
 
 	// Device-level: record before compute_list_begin. Builds/uploads ONLY the slot's
 	// min-max mip; the SDF/material/normal bytes are uploaded by the caller into the
-	// shared GpuAtlas pools exactly once.
-	bool upload_mip(RenderingDevice *rd, int slot, const ve::VolumeData &data);
-	void upload_descriptors(RenderingDevice *rd, const IslandSlotDesc *descs, int count);
+	// shared GpuAtlas pools exactly once. `opaque` builds the mip of the OPAQUE VIEW, which
+	// is what the marcher must skip by -- the surface under a transparent material is a label
+	// boundary the union lattice has no min/max for.
+	bool upload_mip(RenderingDevice *rd, int slot, const ve::VolumeData &data, bool opaque);
+	void upload_descriptors(RenderingDevice *rd, const IslandSlotDesc *descs, int count,
+			bool transparency_enabled);
 	// Marks the slot dead in the descriptor array. The bytes are left as they are: nothing
 	// reads a slot whose descriptor says it is not live.
 	void clear_slot(RenderingDevice *rd, int slot);

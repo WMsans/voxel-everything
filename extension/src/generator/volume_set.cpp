@@ -2,6 +2,7 @@
 #include "connectivity/components.h"
 #include "shade/oct.h"
 #include "world/brick_eval.h"
+#include "world/opaque_view.h"
 #include <algorithm>
 #include <cmath>
 
@@ -449,9 +450,15 @@ void extract_island_volume(const Generator &gen, const EditOp *ops, int op_count
 			}
 }
 
-void build_volume_mip(const VolumeData &v, std::vector<uint8_t> *out) {
+void build_volume_mip(const VolumeData &v, std::vector<uint8_t> *out, bool opaque) {
 	const int dim = v.dim;
 	const int cells = dim / kVolumeMipStride;
+	// The opaque view's "just outside", in the same encoded units the chain compares. The
+	// constant is taken from world/opaque_view.h, not restated: generator/ already includes
+	// world/ (edit_ops.cpp's material_table.h, this header's brick.h), so the layering allows
+	// it, and a second spelling of kOpaqueOutside here could drift from the shader's.
+	const uint8_t encode_zero = encode_sdf(0.0f);
+	const uint8_t outside = encode_sdf(kOpaqueOutside);
 	out->assign(static_cast<size_t>(cells) * cells * cells * 2, 0);
 	for (int cz = 0; cz < cells; cz++)
 		for (int cy = 0; cy < cells; cy++)
@@ -467,7 +474,10 @@ void build_volume_mip(const VolumeData &v, std::vector<uint8_t> *out) {
 							const int sx = std::min(cx * kVolumeMipStride + x, dim - 1);
 							const int sy = std::min(cy * kVolumeMipStride + y, dim - 1);
 							const int sz = std::min(cz * kVolumeMipStride + z, dim - 1);
-							const uint8_t s = v.sdf[VolumeSet::voxel_index(dim, sx, sy, sz)];
+							const int si = VolumeSet::voxel_index(dim, sx, sy, sz);
+							uint8_t s = v.sdf[static_cast<size_t>(si)];
+							if (opaque && s <= encode_zero && material_transparent(v.mat[static_cast<size_t>(si)]))
+								s = outside;
 							mn = std::min(mn, s);
 							mx = std::max(mx, s);
 						}

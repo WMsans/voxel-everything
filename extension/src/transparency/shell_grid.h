@@ -72,6 +72,16 @@ bool volume_has_transparent(const VolumeData &v);
 void island_shell_blocks(const VolumeData &v, const float lattice_origin[3], float voxel,
 		std::vector<IslandShellBlock> *out);
 
+// The chunk-record FLAGS word of an island shell page, exactly as shaders/shell.vert.glsl
+// decodes it: `uint flags = floatBitsToUint(chunks.v[ci * 2u + 1u].y)`, then
+// `v_near = flags != 0u ? 1u : 0u` and `uint island = flags >> 8` with `i = int(island) - 1`.
+// Bit 0 is the near/shell bit; bits 8.. carry atlas_slot + 1, so 0 there means "not an island"
+// -- which is why the slot is stored plus one. Named rather than written at the call site
+// because its only reader is a shader: nothing else could catch a change to this layout.
+inline uint32_t island_shell_flags(int atlas_slot) {
+	return 1u | (static_cast<uint32_t>(atlas_slot + 1) << 8);
+}
+
 // CPU reference for the thickness the shell passes measure (spec §6). r = sum of back-face
 // distances minus front-face distances; g = fronts minus backs; z_opaque <= 0 means sky.
 float shell_thickness(float r, float g, float z_opaque, float z_front, float sky_thickness_m);

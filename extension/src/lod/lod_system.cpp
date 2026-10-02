@@ -126,6 +126,48 @@ void LodSystem::release_shell_pages_locked(ve::IVec3 coord) {
 	shell_pages_of_.erase(it);
 }
 
+// An island's transparent shell becomes ordinary LoD pool pages: chunk-record flag bits 8..
+// carry `atlas_slot + 1`, which is what shaders/shell.vert.glsl reads to place the quads in
+// the island's LOCAL space through its descriptor. So an island costs no draw call of its own,
+// and the pages are released the moment the slot leaves the live mask -- which is read from the
+// descriptor array itself, so a slot killed by clear_slot() drops its pages with it.
+void LodSystem::apply_island_shells(std::vector<IslandShell> shells, uint32_t live_mask) {
+	std::lock_guard<std::mutex> lock(lod_mutex_);
+	if (!lod_pool_ || lod_pool_->page_count() == 0) return;
+	const auto release_slot = [this](int slot) {
+		const auto it = island_shell_pages_.find(slot);
+		if (it == island_shell_pages_.end()) return;
+		for (int p : it->second) lod_page_quads_.erase(p);
+		lod_pool_->release(it->second);
+		island_shell_pages_.erase(it);
+	};
+	for (auto it = island_shell_pages_.begin(); it != island_shell_pages_.end();) {
+		const int slot = (it++)->first;
+		if (slot < 0 || slot >= 32 || (live_mask & (1u << slot)) == 0u) release_slot(slot);
+	}
+	for (IslandShell &s : shells) {
+		if (s.atlas_slot < 0 || s.atlas_slot >= 32) continue;
+		release_slot(s.atlas_slot); // a re-extracted island replaces its shell
+		std::vector<int> all;
+		// ponytail: a refused upload (pool/record exhaustion) silently drops this block of
+		// the island's medium. Count it per island if that ever shows up as invisible ice.
+		const uint32_t flags = ve::island_shell_flags(s.atlas_slot);
+		for (const ve::IslandShellBlock &b : s.blocks) {
+			std::vector<int> pages;
+			if (!lod_pool_->upload_at(b.origin_local, s.voxel, 0u, flags, b.quads, b.normals,
+						&pages))
+				continue; // pool full: this block of the island's medium is not drawn
+			for (size_t i = 0; i < pages.size(); i++) {
+				const int first = static_cast<int>(i) * ve::kLodQuadsPerPage;
+				lod_page_quads_[pages[i]] = std::min(ve::kLodQuadsPerPage,
+						static_cast<int>(b.quads.size()) - first);
+			}
+			all.insert(all.end(), pages.begin(), pages.end());
+		}
+		if (!all.empty()) island_shell_pages_[s.atlas_slot] = std::move(all);
+	}
+}
+
 // Called with lod_mutex_ held through `lock`; releases it across the edit-lock section
 // (lock order: edit_mutex -> lod mutex) and re-takes it before returning. Leaves `lock` HELD
 // on every path, which is what tick() continues on.
@@ -563,6 +605,13 @@ void LodSystem::prepare_raster_locked() {
 			const auto q = lod_page_quads_.find(p);
 			if (q != lod_page_quads_.end()) shell_draw_pages_.push_back(ve::LodPageDraw{p, q->second});
 		}
+	// The island shells: pages whose chunk record names an island, so the shell's vertex
+	// shader places them through that island's descriptor. No per-island draw call.
+	for (const auto &entry : island_shell_pages_)
+		for (int p : entry.second) {
+			const auto q = lod_page_quads_.find(p);
+			if (q != lod_page_quads_.end()) shell_draw_pages_.push_back(ve::LodPageDraw{p, q->second});
+		}
 }
 
 std::vector<ve::LodPageDraw> LodSystem::transparent_draw_pages() const {
@@ -625,6 +674,7 @@ void LodSystem::teardown() {
 	transparent_draw_pages_.clear();
 	shell_grid_.clear();
 	shell_pages_of_.clear();
+	island_shell_pages_.clear();
 	shell_draw_pages_.clear();
 	shell_cam_chunk_ = ve::IVec3{INT32_MAX, 0, 0};
 	shell_enabled_ = false;
@@ -644,6 +694,7 @@ void LodSystem::release_gpu() {
 	transparent_draw_pages_.clear();
 	shell_grid_.clear();
 	shell_pages_of_.clear();
+	island_shell_pages_.clear();
 	shell_draw_pages_.clear();
 	shell_cam_chunk_ = ve::IVec3{INT32_MAX, 0, 0};
 	shell_enabled_ = false;

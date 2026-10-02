@@ -198,6 +198,10 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	if (BrickGenPass *bg = render_.passes().gen) bg->set_opaque_view(transparency.enabled);
 	if (RegionPass *rp = render_.passes().region) rp->set_opaque_view(transparency.enabled);
 	render_.drain_island_uploads(rd);
+	// The island shells contoured by that drain, uploaded as local-space LoD pages before
+	// the walk: prepare_raster_locked() only reads them while holding lod_mutex_, and the
+	// pages must exist before the shell raster asks for this frame's draw list.
+	if (lod_.pool()) lod_.apply_island_shells(render_.take_island_shells(), render_.island_live_mask());
 	WorldStreamer *st = render_.streamer();
 	if (st) st->run_frame(rd, cam.origin.x, cam.origin.y, cam.origin.z);
 	end_stage(rd, kStageStream);
@@ -476,6 +480,10 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	// last frame's ice still sitting in the targets.
 	ShellRasterPass *shell_raster = render_.passes().shell_raster;
 	if (shell_raster) {
+		// prepare_raster_locked() runs inside lod_.tick(), which the far-field gate above can
+		// skip entirely -- and island shell pages live outside the walk, so with the far
+		// field off they would never reach the draw list. Ask for it directly in that case.
+		if (in.debug.skip_far_field && lod_.pool()) lod_.prepare_raster();
 		std::vector<LodRasterPass::PageDraw> shell_pages;
 		for (const ve::LodPageDraw &pd : lod_.shell_draw_pages())
 			shell_pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});

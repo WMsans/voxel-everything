@@ -180,3 +180,31 @@ TEST_CASE("an island's shell is split into 32-cell blocks and only holds transpa
 	ve::island_shell_blocks(v, origin, voxel, &blocks);
 	CHECK(blocks.empty());
 }
+
+// Carried from Task 6 and Task 8 reviews: the chunk record meta[1] carries the island slot
+// and NOTHING else reads it -- its only consumer is shell.vert.glsl. Pin the layout that
+// shader decodes, because a mis-decode does not fail loudly: the pages are still valid quads,
+// they are just placed in the wrong space, so every island shell vanishes or lands metres away.
+TEST_CASE("an island shell page's chunk flags decode to its slot and the near bit") {
+	for (const int slot : {0, 1, 7, 31}) {
+		const uint32_t flags = ve::island_shell_flags(slot);
+		// shell.vert.glsl: v_near = flags != 0u ? 1u : 0u;
+		CHECK(flags != 0u);
+		CHECK((flags & 1u) == 1u);
+		// shell.vert.glsl: uint island = flags >> 8; int i = int(island) - 1;
+		const int island = int(flags >> 8);
+		const int back = island - 1;
+		CHECK(island == slot + 1);
+		CHECK(back == slot);
+		// The two fields are disjoint, so the near bit can never be read as part of the slot.
+		CHECK(island <= 32);
+	}
+	// A terrain page is uploaded with flags 0 (LodPool::upload), and that is the whole of the
+	// shader's "not an island" test -- so no slot may encode to a word a terrain page produces,
+	// and no slot may encode to bits 8.. == 0, which the shader reads as "terrain".
+	const uint32_t terrain = 0u;
+	CHECK(terrain != ve::island_shell_flags(0));
+	CHECK(terrain != ve::island_shell_flags(31));
+	const uint32_t first = ve::island_shell_flags(0) >> 8;
+	CHECK(first == 1u);
+}

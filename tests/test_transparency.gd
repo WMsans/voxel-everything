@@ -510,3 +510,50 @@ func test_ice_frames_are_finite_and_deterministic() -> void:
 	var b := frame(w)
 	assert_int(int(a["lit_checksum"])).is_equal(int(b["lit_checksum"]))
 	assert_bool(finite(a["center_lit"])).is_true()
+
+# --- islands (spec §5, §7) ----------------------------------------------------------------
+
+# An island lifted out of a patch of ground whose top 0.8 m is a transparent material, so it
+# is a ROCK lump with an ice cap. That is the case the design rule exists for: the island's
+# stored bytes are the SHARED authoritative volume (physics, merge back and the editor read
+# them) and stay the union, so the surface the marcher must find -- the ice/rock boundary --
+# is a LABEL boundary the union lattice has no min/max for. It is applied per sample, by
+# island_lattice, only for islands whose descriptor asks for it; the shell is what draws the
+# ice the marcher no longer sees.
+func test_a_floating_island_with_an_ice_cap_is_see_through_and_its_shell_draws_the_ice() -> void:
+	var w := shell_world()
+	var p: Vector3 = centre_hit(w)["pos"]
+	var ice := material_id(w, "ice")
+	w.hooks().debug_apply_sphere_paint(p, 0.8, ice)
+	settle(w)
+	# Exactly the occupancy cells (0.8 m) the painted lens touches. Derived from the lens, not
+	# from one cell: a range that clipped it would leave the remainder painted in the terrain.
+	var lo := Vector3i(floori((p.x - 0.8) / 0.8), floori((p.y - 0.8) / 0.8),
+		floori((p.z - 0.8) / 0.8))
+	var hi := Vector3i(floori((p.x + 0.8) / 0.8), floori((p.y + 0.8) / 0.8),
+		floori((p.z + 0.8) / 0.8))
+	var placed: Dictionary = w.hooks().debug_place_test_island(0, lo, hi, Vector3(0, 1.5, 0))
+	assert_bool(placed.get("ok", false)).override_failure_message(str(placed)).is_true()
+	# The fixture extracts the island but never carves the terrain -- the real pipeline carves
+	# on the main thread -- so the painted lens is still lying in the ground, and a near-field
+	# shell would draw THAT ice at the surface, in front of the island, which is a different
+	# system entirely. Take it back out before the island is measured.
+	w.hooks().debug_apply_sphere_subtract(p, 1.2)
+	settle(w)
+	var d := frame_until_front(w)
+	assert_int(int((d["center_front"] as Color).a + 0.5)).override_failure_message(
+		"the island's ice cap has no shell front: %s" % d).is_equal(ice)
+	# The marcher found the island's ROCK, not its ice: the opaque view erased the cap per
+	# sample, so the ray crossed it and stopped on the lump under it. Without that rule the
+	# first hit is the cap's own surface and this reads ice.
+	assert_int(int(d["center_material"])).override_failure_message(
+		"the marcher stopped on the island's own surface: %s" % d).is_not_equal(ice)
+	assert_int(int(d["center_material"])).is_not_equal(0)
+	assert_bool(finite(d["center_lit"])).is_true()
+	# Clearing the island releases its shell pages: nothing else in this world holds ice.
+	w.hooks().debug_clear_test_island(0)
+	for i in range(60):
+		w.hooks().debug_stream_frame(CAM)
+		d = frame(w)
+	assert_float((d["center_front"] as Color).a).override_failure_message(
+		"the island's shell outlived it: %s" % d).is_equal(0.0)

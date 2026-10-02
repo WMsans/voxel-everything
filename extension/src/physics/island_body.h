@@ -20,6 +20,9 @@ struct IslandSpawn {
 	float voxel = ve::kIslandVoxelFine;
 	int dim = ve::kIslandDim;
 	int solid_voxels = 0;
+	// The volume this body renders from holds a transparent label (spec §5): the marcher
+	// applies the opaque view to it and its shell draws the medium. Computed once, at spawn.
+	bool transparent = false;
 	float impulse[3] = {0, 0, 0}; // spec §6's "explosions apply radial impulses"
 	bool debris = false;
 };

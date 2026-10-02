@@ -26,6 +26,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <vector>
 
@@ -33,6 +34,7 @@
 #include "grass/grass_settings_store.h"
 #include "leaves/leaf_settings_store.h"
 #include "transparency/transparency_settings_store.h"
+#include "transparency/shell_grid.h"
 #include "render/frame.h"
 #include "render/gpu_timings.h"
 #include "render/island_handoff.h"
@@ -42,6 +44,15 @@
 #include "world/region.h"
 
 namespace godot {
+
+// One island's transparent shell (spec §5), contoured on the CPU at upload from the island's
+// own volume and handed to LodSystem, which publishes it as ordinary local-space LoD pool
+// pages whose chunk record names the island -- no per-island draw call.
+struct IslandShell {
+	int atlas_slot = -1;
+	float voxel = 0.0f;
+	std::vector<ve::IslandShellBlock> blocks; // empty = the island has no shell
+};
 
 // Shared name of the ClassDB method binding (voxel_world.cpp -- the Callable must
 // target the bound node) and of the render-thread teardown Callable dispatched here.
@@ -214,6 +225,19 @@ public:
 	}
 	// Render thread, before the streamer runs. Returns how many uploads landed.
 	int drain_island_uploads(RenderingDevice *device);
+	// The shells contoured since the last take, empty = nothing new.
+	std::vector<IslandShell> take_island_shells() {
+		return std::move(pending_island_shells_);
+	}
+	// Bit i = island i's descriptor currently says live. Asked of the atlas array itself, so
+	// it cannot drift from upload_descriptors()/clear_slot(): the mask that releases an
+	// island's shell pages is exactly the array that killed the island.
+	uint32_t island_live_mask() const;
+	// The debug island fixture owns its own upload (it does not queue through the handoff), so
+	// it hands its shell over the same door the drain uses.
+	void queue_island_shell(IslandShell shell) {
+		pending_island_shells_.push_back(std::move(shell));
+	}
 
 	// --- render lifetime state and per-frame knobs (moved from VoxelWorld, spec 2026-09-14
 	// §3.1). Guards unchanged: plain fields stay plain, atomics stay atomic, the sun keeps
@@ -315,6 +339,8 @@ public:
 	bool preflight_shaders(RenderingDevice *rd, String *out_error);
 
 private:
+	void contour_island_shell(int slot, const ve::VolumeData &data, const IslandSlotDesc &d);
+
 	Collaborators handles_;
 	std::vector<const char *> teardown_trace_;
 
@@ -326,6 +352,16 @@ private:
 	ve::TransparencySettingsStore transparency_settings_;
 	GpuTimings gpu_timings_;
 	IslandHandoff handoff_;
+	std::vector<IslandShell> pending_island_shells_;
+	// Islands whose volume is on the GPU but whose descriptor has not gone live yet, keyed by
+	// atlas slot and tagged with the volume slot that must still be named by the descriptor
+	// before the wait resolves. IslandManager publishes descriptors BEFORE it spawns the
+	// bodies it just extracted, so an island's upload and its first live descriptor really do
+	// land in different drains; without this the shell would be contoured in the default
+	// lattice frame and never corrected.
+	// ponytail: one held VolumeData per slot, so 32 * 256 kB is the ceiling; an entry only
+	// waits while a descriptor for its slot is still expected, and every other case erases it.
+	std::map<int, std::pair<int, ve::VolumeData>> island_shell_wait_;
 	WorldStreamer *streamer_ = nullptr; // created inside ensure_gpu_graph(), deleted in teardown_gpu()
 	bool initialized_ = false;
 	uint32_t normal_pool_bytes_ = 0;

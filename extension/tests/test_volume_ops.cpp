@@ -4,6 +4,7 @@
 #include "generator/volume_set.h"
 #include "analytic_oracle.h"
 #include "world/brick_eval.h"
+#include "world/material_table.h"
 #include "world/raycast.h"
 #include <doctest/doctest.h>
 #include <algorithm>
@@ -840,4 +841,36 @@ TEST_CASE("every air sample beside the island's surface carries a material") {
 			}
 	CHECK(crossings > 0);
 	CHECK(blank == 0);
+}
+
+// Spec §3/§5: an island's stored bytes are the SHARED authoritative volume (physics, merge
+// back and the editor read them), so the opaque view is never baked in. Only the min-max mip
+// is derived from it, because the marcher skips cells by this chain and under a transparent
+// material the surface it must find is a label boundary the union lattice has no min/max for.
+TEST_CASE("the opaque island mip sees a transparent solid as outside") {
+	ve::VolumeData v;
+	v.dim = ve::kIslandDim;
+	// Solid everywhere; the lower half rock, the upper half a transparent material.
+	v.sdf.assign(size_t(v.voxel_count()), ve::encode_sdf(-0.3f));
+	v.mat.assign(size_t(v.voxel_count()), uint8_t(ve::material_id("rock")));
+	for (int z = 0; z < v.dim; z++)
+		for (int y = 32; y < v.dim; y++)
+			for (int x = 0; x < v.dim; x++)
+				v.mat[size_t(ve::VolumeSet::voxel_index(v.dim, x, y, z))] =
+						uint8_t(ve::material_id("ice"));
+	std::vector<uint8_t> plain, opaque;
+	ve::build_volume_mip(v, &plain);
+	ve::build_volume_mip(v, &opaque, true);
+	REQUIRE(plain.size() == opaque.size());
+	const uint8_t zero = ve::encode_sdf(0.0f);
+	const int cells = v.dim / ve::kVolumeMipStride;
+	// The union has no surface anywhere: every cell is all-solid.
+	for (size_t i = 0; i < plain.size(); i += 2) CHECK(plain[i + 1] <= zero);
+	// The opaque view has one: the cells straddling y = 32 hold both sides.
+	const int ci = (2 + 3 * cells + 2 * cells * cells) * 2; // cell y = 3 covers samples 24..32
+	CHECK(opaque[size_t(ci)] <= zero);
+	CHECK(opaque[size_t(ci) + 1] > zero);
+	// A cell wholly in the transparent half is all-outside.
+	const int ti = (2 + 6 * cells + 2 * cells * cells) * 2;
+	CHECK(opaque[size_t(ti)] > zero);
 }

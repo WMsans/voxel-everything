@@ -39,6 +39,7 @@ class LodPool;
 class RenderOrchestrator;
 class RenderingDevice;
 class WorldStore;
+struct IslandShell;
 
 // What the debug facade reports about the LoD runtime, copied in ONE hold of the lod mutex
 // (the hold debug_lod_stats used to take itself, through friendship). Plain data.
@@ -107,6 +108,10 @@ public:
 	// Every page the shell raster draws this frame: the far field's pages that hold a shell
 	// quad, every near-shell page, every island shell page. Refreshed by prepare_raster().
 	std::vector<ve::LodPageDraw> shell_draw_pages() const;
+	// Island shells (spec §5): uploads the freshly contoured ones as local-space pages whose
+	// chunk record names the island, and releases the pages of every slot not in `live_mask`.
+	// Render thread, before tick().
+	void apply_island_shells(std::vector<IslandShell> shells, uint32_t live_mask);
 	// False when the chunk's ops exceed kMaxRegionOps: the shell build is refused.
 	bool gather_shell_ops(ve::IVec3 coord, std::vector<ve::EditOp> *out);
 	// One cascade's shadow cut, pushed into the raster pass. Radius and min_level come from
@@ -180,6 +185,8 @@ private:
 	// record() sets under the edit lock and tick() reads and clears under it.
 	ve::ShellGrid shell_grid_;
 	std::map<ve::LodKey, std::vector<int>> shell_pages_of_; // key.level == ve::kShellLevel
+	// atlas slot -> the pages holding its shell. Released when the slot leaves the live mask.
+	std::map<int, std::vector<int>> island_shell_pages_;
 	std::vector<ve::LodPageDraw> shell_draw_pages_;
 	ve::IVec3 shell_cam_chunk_{INT32_MAX, 0, 0};
 	// The `enabled` the candidate set was last built under. A runtime toggle (a bound
