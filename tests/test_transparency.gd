@@ -167,3 +167,63 @@ func test_a_shell_only_build_contours_just_the_ice() -> void:
 	# A 1 m ball at 0.1 m cells: 4*pi*r^2 / 0.01 ~ 1250 quads over the chunks it spans.
 	assert_int(int(d["quads"])).is_greater(100)
 	assert_bool(d["all_transparent"]).is_true()
+
+# Frames until the near shell has pages, or gives up. Builds are async on the mesh worker.
+func frame_until_shell(w: VoxelWorld, cam := CAM, fwd := FWD) -> Dictionary:
+	var stats := {}
+	for i in range(600):
+		w.hooks().debug_stream_frame(cam)
+		frame(w, cam, fwd)
+		stats = w.hooks().debug_lod_stats()
+		if int(stats.get("shell_pages", 0)) > 0:
+			break
+	return stats
+
+# The shell needs the MeshService (debug_init_physics) and the LoD pool (a LoD query), the
+# same two preconditions every far-field suite sets up.
+func shell_world(enabled := true) -> VoxelWorld:
+	var w := make_world(enabled)
+	assert_bool(w.hooks().debug_init_physics()).is_true()
+	w.hooks().debug_lod_stats()
+	return w
+
+func test_adding_ice_near_the_camera_publishes_shell_pages() -> void:
+	var w := shell_world()
+	assert_int(int(w.hooks().debug_lod_stats()["shell_pages"])).is_equal(0)
+	w.hooks().debug_apply_sphere_add(centre_hit(w)["pos"], 1.0, material_id(w, "ice"))
+	settle(w)
+	var stats := frame_until_shell(w)
+	assert_int(int(stats["shell_pages"])).override_failure_message(
+		"no near-shell page was ever published: %s" % stats).is_greater(0)
+	assert_int(int(stats["shell_chunks"])).is_greater(0)
+
+func test_removing_the_ice_releases_its_shell_pages() -> void:
+	var w := shell_world()
+	var free_before := int(w.hooks().debug_lod_stats()["pages_free"])
+	var p: Vector3 = centre_hit(w)["pos"]
+	w.hooks().debug_apply_sphere_add(p, 1.0, material_id(w, "ice"))
+	settle(w)
+	assert_int(int(frame_until_shell(w)["shell_pages"])).is_greater(0)
+	w.hooks().debug_apply_sphere_subtract(p, 2.5)
+	settle(w)
+	var stats := {}
+	for i in range(600):
+		w.hooks().debug_stream_frame(CAM)
+		frame(w)
+		stats = w.hooks().debug_lod_stats()
+		if int(stats["shell_pages"]) == 0:
+			break
+	assert_int(int(stats["shell_pages"])).override_failure_message(
+		"the shell outlived the ice: %s" % stats).is_equal(0)
+	# Nothing leaked: the pool has at least as many free pages as before the ice (far-field
+	# builds running meanwhile may only have taken pages, so compare the shell's share).
+	assert_int(int(stats["pages_free"])).is_less_equal(free_before)
+
+func test_with_the_feature_off_no_shell_is_built() -> void:
+	var w := shell_world(false)
+	w.hooks().debug_apply_sphere_add(centre_hit(w)["pos"], 1.0, material_id(w, "ice"))
+	settle(w)
+	for i in range(60):
+		w.hooks().debug_stream_frame(CAM)
+		frame(w)
+	assert_int(int(w.hooks().debug_lod_stats()["shell_pages"])).is_equal(0)

@@ -59,6 +59,14 @@ LodStats LodSystem::stats() {
 			}
 		}
 	}
+	s.shell_chunks = shell_grid_.size();
+	// Shell pages are owned by a shell chunk exactly as terrain pages are owned by a tree
+	// chunk, so they count here too: without this the unowned-pages term below would report
+	// every shell page as a leak.
+	for (const auto &kv : shell_pages_of_) {
+		owned_pages += kv.second.size();
+		s.shell_pages += static_cast<int>(kv.second.size());
+	}
 	const int unowned = (s.pages_total - s.pages_free) - static_cast<int>(owned_pages);
 	s.partial_allocations = partial + (unowned > 0 ? unowned : 0);
 	s.op_overflow = lod_op_overflow_;
@@ -84,6 +92,87 @@ bool LodSystem::gather_ops(int level, ve::IVec3 coord, std::vector<ve::EditOp> *
 	// edits. Ops this level cannot represent go first; if the rest still does not fit, the
 	// build is refused and the chunk keeps its last good pages.
 	return ve::lod_cut_ops(level, out);
+}
+
+// Task 7: the near shell's op gather. gather_ops() with the shell's origin/cell and the raw
+// cap -- there is no per-level cut for a chunk that is not on the LoD grid.
+bool LodSystem::gather_shell_ops(ve::IVec3 coord, std::vector<ve::EditOp> *out) {
+	if (!out) return false;
+	out->clear();
+	std::lock_guard<std::mutex> lock(store()->edit_mutex());
+	if (!store()->edit_log()) return true;
+	float lo[3], hi[3];
+	ve::shell_chunk_aabb(coord, lo, hi);
+	// ve::transparent_boxes() does NOT pad the override bricks it is handed, and the build
+	// samples world state at kLatticeFilterPad outside the chunk, so an op just past the face
+	// still tints a lattice cell inside it. Pad exactly as gather_ops() pads.
+	const float pad = std::max(2.0f * ve::kShellCell, ve::kLatticeFilterPad);
+	for (int a = 0; a < 3; a++) {
+		lo[a] -= pad;
+		hi[a] += pad;
+	}
+	ve::collect_ops_for_aabb(*store()->edit_log(), lo, hi, out);
+	return out->size() <= static_cast<size_t>(ve::kMaxRegionOps);
+}
+
+// Assumes lod_mutex_ is held. The shell's page bookkeeping, split out of tick()'s result loop
+// so a rebuild and an eviction both release through ONE path.
+void LodSystem::release_shell_pages_locked(ve::IVec3 coord) {
+	const ve::LodKey key{ve::kShellLevel, coord.x, coord.y, coord.z};
+	const auto it = shell_pages_of_.find(key);
+	if (it == shell_pages_of_.end()) return;
+	for (int p : it->second) lod_page_quads_.erase(p);
+	lod_pool_->release(it->second);
+	shell_pages_of_.erase(it);
+}
+
+// Called with lod_mutex_ held through `lock`; releases it across the edit-lock section
+// (lock order: edit_mutex -> lod mutex) and re-takes it before returning. Leaves `lock` HELD
+// on every path, which is what tick() continues on.
+void LodSystem::refresh_shell_candidates(const ve::LodCamera &cam,
+		std::unique_lock<std::mutex> &lock) {
+	const bool enabled = render()->transparency_settings().enabled;
+	const ve::IVec3 cam_chunk = ve::shell_chunk_of_point(cam.pos[0], cam.pos[1], cam.pos[2]);
+	const bool moved = cam_chunk.x != shell_cam_chunk_.x || cam_chunk.y != shell_cam_chunk_.y ||
+			cam_chunk.z != shell_cam_chunk_.z;
+	float fade_start = ve::kLodFadeStartM, fade_end = ve::kLodFadeEndM;
+	fade_band(&fade_start, &fade_end);
+	// One shell chunk of reach past the far field's edge: a quad straddling the seam has
+	// half its cells in the chunk the camera-adjacent grid would not otherwise cover.
+	const float radius = fade_end + ve::kShellChunkSize;
+	lock.unlock();
+	std::vector<ve::ShellBox> boxes;
+	bool recompute = moved;
+	{
+		std::lock_guard<std::mutex> edit_lock(store()->edit_mutex());
+		recompute = recompute || shell_dirty_;
+		shell_dirty_ = false;
+		if (recompute && enabled && store()->edit_log()) {
+			// Padded like gather_shell_ops(), for the same reason: ve::transparent_boxes()
+			// applies [lo, hi] to the override bricks WITHOUT padding and trusts the caller
+			// for the ops. An op sitting just outside the nominal radius still tints a
+			// lattice cell inside it, so it must reach the collector.
+			const float pad = ve::kLatticeFilterPad;
+			float lo[3], hi[3];
+			for (int a = 0; a < 3; a++) {
+				lo[a] = cam.pos[a] - radius - pad;
+				hi[a] = cam.pos[a] + radius + pad;
+			}
+			std::vector<ve::EditOp> ops;
+			ve::collect_ops_for_aabb(*store()->edit_log(), lo, hi, &ops);
+			ve::transparent_boxes(ops.data(), static_cast<int>(ops.size()), &store()->volumes(),
+					store()->overrides(), lo, hi, &boxes);
+		}
+	}
+	lock.lock();
+	if (!recompute) return;
+	shell_cam_chunk_ = cam_chunk;
+	std::vector<ve::IVec3> chunks, evicted;
+	// Off: the candidate set is empty, so set_candidates evicts everything and no shell job
+	// is ever requested.
+	if (enabled) ve::shell_candidates(boxes, cam.pos, radius, &chunks);
+	shell_grid_.set_candidates(chunks, &evicted);
+	for (ve::IVec3 c : evicted) release_shell_pages_locked(c);
 }
 
 void LodSystem::ensure_lod() {
@@ -148,6 +237,39 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 	std::vector<LodBuildResult> done;
 	if (mesh() && mesh()->collect_lod(&done) > 0) {
 		for (LodBuildResult &r : done) {
+			// Task 7: a shell result NEVER touches the tree -- it has no node there. First
+			// statement in the loop, so no shell chunk can leak into a far-field node's
+			// page list or its dirty bookkeeping.
+			if (r.shell_only) {
+				if (r.failed) {
+					shell_grid_.note_failed(r.coord);
+					continue;
+				}
+				if (r.quads.empty()) {
+					release_shell_pages_locked(r.coord);
+					shell_grid_.note_result(r.coord, false);
+					continue;
+				}
+				float origin[3];
+				ve::shell_chunk_origin(r.coord, origin);
+				std::vector<int> pages;
+				if (!lod_pool_->upload_at(origin, ve::kShellCell, 0u, 1u, r.quads, r.normals, &pages)) {
+					// Refused: the old pages (if any) keep drawing and the chunk is asked for
+					// again -- stale beats missing, as for terrain chunks.
+					shell_grid_.note_failed(r.coord);
+					continue;
+				}
+				release_shell_pages_locked(r.coord);
+				for (int i = 0; i < int(pages.size()); i++) {
+					const int first = i * ve::kLodQuadsPerPage;
+					lod_page_quads_[pages[static_cast<size_t>(i)]] = std::min(ve::kLodQuadsPerPage,
+							static_cast<int>(r.quads.size()) - first);
+				}
+				shell_pages_of_[ve::LodKey{ve::kShellLevel, r.coord.x, r.coord.y, r.coord.z}] =
+						std::move(pages);
+				shell_grid_.note_result(r.coord, true);
+				continue;
+			}
 			if (r.failed) {
 				const LodKey key{r.level, r.coord.x, r.coord.y, r.coord.z};
 				const auto old_it = lod_pages_of_.find(key);
@@ -268,6 +390,11 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 		lod_pages_of_.erase(it);
 	}
 
+	// Then the shell's candidate set: recomputed only when an edit landed or the camera
+	// entered another shell chunk, and only under the edit lock -- released from `lock`
+	// first, exactly like gather_ops() below.
+	refresh_shell_candidates(cam, lock);
+
 	// Then this frame's builds, priority order, one batch. Mark the nodes building while
 	// still holding lod_mutex_ so note_building's dirty-clear happens at submission time.
 	// gather_ops takes edit_mutex_, so it must run AFTER releasing lod_mutex_ (lock
@@ -275,21 +402,42 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 	// from re-requesting these nodes during that window, and a refused submit rolls the
 	// flags back.
 	std::vector<ve::LodBuildRequest> batch_requests;
+	std::vector<ve::IVec3> shell_requests;
 	if (mesh() && !mesh()->lod_busy()) {
-		// The batch cap is the MESHER's, read from it rather than copied: a literal here
-		// silently defeats any change to LodBuildConfig::max_jobs.
-		const int take = std::min<int>({lod_builds_per_frame_,
-				int(lod_walk_.requests.size()), mesh()->lod_max_jobs()});
+		const int cap = std::min<int>(lod_builds_per_frame_, mesh()->lod_max_jobs());
+		// Shell chunks first: a missing shell is transparent solid that is not there at all, a
+		// missing far chunk is a coarser horizon.
+		shell_grid_.requests(cam.pos, cap, &shell_requests);
+		for (ve::IVec3 c : shell_requests)
+			// note_building clears the dirty flag, so an edit landing between requests() and
+			// here is swallowed. Safe ONLY because the build samples world state AFTER that
+			// edit: the shell it produces already contains it.
+			shell_grid_.note_building(c);
+		const int take = std::min<int>(cap - int(shell_requests.size()),
+				int(lod_walk_.requests.size()));
 		batch_requests.assign(lod_walk_.requests.begin(), lod_walk_.requests.begin() + take);
 		for (const ve::LodBuildRequest &q : batch_requests)
 			lod_tree_->note_building(q.level, q.coord);
 	}
 	lock.unlock();
 
-	if (!batch_requests.empty()) {
+	if (!batch_requests.empty() || !shell_requests.empty()) {
 		std::vector<LodBuildJob> batch;
 		std::vector<ve::LodBuildRequest> submitted, refused;
-		batch.reserve(batch_requests.size());
+		std::vector<ve::IVec3> shell_submitted, shell_refused;
+		batch.reserve(batch_requests.size() + shell_requests.size());
+		for (ve::IVec3 c : shell_requests) {
+			LodBuildJob j;
+			j.level = ve::kShellLevel;
+			j.coord = c;
+			j.shell_only = true;
+			if (!gather_shell_ops(c, &j.ops)) {
+				shell_refused.push_back(c);
+				continue;
+			}
+			shell_submitted.push_back(c);
+			batch.push_back(std::move(j));
+		}
 		for (const ve::LodBuildRequest &q : batch_requests) {
 			LodBuildJob j;
 			j.level = q.level;
@@ -301,10 +449,13 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 			submitted.push_back(q);
 			batch.push_back(std::move(j));
 		}
-		if (!refused.empty()) {
+		if (!refused.empty() || !shell_refused.empty()) {
 			lock.lock();
 			for (const ve::LodBuildRequest &q : refused) lod_tree_->note_refused(q.level, q.coord);
 			lod_op_overflow_ += static_cast<int>(refused.size());
+			// ponytail: a shell chunk over the op cap is simply not drawn; it never retries
+			// until something dirties it. Consolidation brings the region back under the cap.
+			for (ve::IVec3 c : shell_refused) shell_grid_.note_result(c, false);
 			lock.unlock();
 		}
 		if (!batch.empty() && !mesh()->submit_lod(std::move(batch))) {
@@ -317,6 +468,7 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 					lod_tree_->note_failed(q.level, q.coord);
 				}
 			}
+			for (ve::IVec3 c : shell_submitted) shell_grid_.note_failed(c);
 			lock.unlock();
 		}
 	}
@@ -377,11 +529,25 @@ void LodSystem::prepare_raster_locked() {
 	transparent_draw_pages_.clear();
 	for (const ve::LodPageDraw &pd : page_draws)
 		if (lod_transparent_pages_.count(pd.page)) transparent_draw_pages_.push_back(pd);
+	// Task 7: the shell's own cut -- the far field's shell pages first (they are the ones
+	// inside the camera frustum, and the shell raster has no HiZ of its own), then every
+	// resident near-shell page. Task 10 appends the island group.
+	shell_draw_pages_ = transparent_draw_pages_;
+	for (const auto &[key, pages] : shell_pages_of_)
+		for (int p : pages) {
+			const auto q = lod_page_quads_.find(p);
+			if (q != lod_page_quads_.end()) shell_draw_pages_.push_back(ve::LodPageDraw{p, q->second});
+		}
 }
 
 std::vector<ve::LodPageDraw> LodSystem::transparent_draw_pages() const {
 	std::lock_guard<std::mutex> lock(lod_mutex_);
 	return transparent_draw_pages_;
+}
+
+std::vector<ve::LodPageDraw> LodSystem::shell_draw_pages() const {
+	std::lock_guard<std::mutex> lock(lod_mutex_);
+	return shell_draw_pages_;
 }
 
 // The LoD half of the edit fan-out. Edit lock held: queue only, never the lod mutex
@@ -390,6 +556,9 @@ void LodSystem::record(const ve::Invalidation &inv) {
 	if (inv.reason == ve::InvalidationReason::kRejected) return;
 	ve::merge_or_cap(&pending_marks_,
 			ve::Box3<float>{{inv.lo[0], inv.lo[1], inv.lo[2]}, {inv.hi[0], inv.hi[1], inv.hi[2]}});
+	// Edit lock held, so this write is safe without the lod mutex: tick() reads and clears
+	// it under this same lock.
+	shell_dirty_ = true;
 }
 
 void LodSystem::drain_invalidations() {
@@ -400,6 +569,9 @@ void LodSystem::drain_invalidations() {
 	}
 	if (marks.empty()) return;
 	std::lock_guard<std::mutex> lock(lod_mutex_);
+	// The shell's chunks overlap the edit's own box plus two cells of margin (Task 5's
+	// mark_dirty), and they are NOT on the LoD grid, so LodTree::mark_dirty would miss them.
+	for (const ve::Box3<float> &m : marks) shell_grid_.mark_dirty(m.lo, m.hi);
 	// No tree yet: the marks predate it and the tree this tick builds reads the current world
 	// anyway, exactly as the synchronous mark's `if (!lod_tree_) return` dropped them.
 	if (!lod_tree_) return;
@@ -426,6 +598,10 @@ void LodSystem::teardown() {
 	lod_page_quads_.clear();
 	lod_transparent_pages_.clear();
 	transparent_draw_pages_.clear();
+	shell_grid_.clear();
+	shell_pages_of_.clear();
+	shell_draw_pages_.clear();
+	shell_cam_chunk_ = ve::IVec3{INT32_MAX, 0, 0};
 	lod_op_overflow_ = 0;
 }
 
@@ -440,6 +616,10 @@ void LodSystem::release_gpu() {
 	lod_page_quads_.clear();
 	lod_transparent_pages_.clear();
 	transparent_draw_pages_.clear();
+	shell_grid_.clear();
+	shell_pages_of_.clear();
+	shell_draw_pages_.clear();
+	shell_cam_chunk_ = ve::IVec3{INT32_MAX, 0, 0};
 	lod_overflow_logged_.clear();
 	lod_op_overflow_ = 0;
 }
