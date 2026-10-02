@@ -66,6 +66,8 @@ bool ShellRasterPass::ensure_targets(RenderingDevice *rd, Vector2i size) {
 }
 
 bool ShellRasterPass::ensure_args(RenderingDevice *rd, int pages) {
+	// ponytail: the indirect arg buffer only ever grows; a smaller page count just uploads
+	// fewer draws into it. Shrink to size if a scene's peak page count turns out to be large.
 	if (pages <= args_capacity_ && args_.is_valid()) return true;
 	gpu::RdDevice device{rd};
 	group_.free(device, args_);
@@ -84,6 +86,8 @@ bool ShellRasterPass::draw(RenderingDevice *rd, LodPool &pool, RID index_array, 
 	drew_ = false;
 	if (!rd_ || rd != rd_ || !thick_shader_.is_valid() || !front_shader_.is_valid() || !gb.is_valid())
 		return false;
+	// ponytail: an ice-free frame leaves the targets stale and drew() false, and the composite
+	// skips them, so no clear is paid for. Clear here instead if anything ever reads them stale.
 	if (pages_.empty() && !camera_inside) return true;
 	if (!index_array.is_valid() || !beauty_cam_ubo.is_valid() || !island_desc.is_valid()) return false;
 	if (!ensure_targets(rd, gb.size()) ||

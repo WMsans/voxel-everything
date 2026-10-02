@@ -470,7 +470,17 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	// cancels the marker and the frame goes on without transparent materials.
 	bool shell_drawn = false;
 	uint16_t inside_material = 0;
-	if (ShellRasterPass *shell = render_.passes().shell_raster;
+	// Outside the gate below on purpose: set_draw_pages() clears drew(), so a frame that never
+	// reaches draw() -- the toggle off mid-session, no pool -- reports drew() false instead of
+	// last frame's ice still sitting in the targets.
+	ShellRasterPass *shell_raster = render_.passes().shell_raster;
+	if (shell_raster) {
+		std::vector<LodRasterPass::PageDraw> shell_pages;
+		for (const ve::LodPageDraw &pd : lod_.shell_draw_pages())
+			shell_pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});
+		shell_raster->set_draw_pages(shell_pages);
+	}
+	if (ShellRasterPass *shell = shell_raster;
 			shell && transparency.enabled && lod_.pool() && lod_raster) {
 		// Is the camera inside a transparent solid? One CPU field sample a frame.
 		{
@@ -480,10 +490,6 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 				if (s.sdf <= 0.0f && ve::material_transparent(s.material)) inside_material = s.material;
 			}
 		}
-		std::vector<LodRasterPass::PageDraw> shell_pages;
-		for (const ve::LodPageDraw &pd : lod_.shell_draw_pages())
-			shell_pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});
-		shell->set_draw_pages(shell_pages);
 		timings->begin(rd, "shell");
 		const bool shell_ok = lod_raster->prepare_index_array(rd, *lod_.pool()) &&
 				shell->draw(rd, *lod_.pool(), lod_raster->index_array(), *gb, ubo->buffer(),

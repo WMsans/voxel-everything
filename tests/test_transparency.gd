@@ -301,7 +301,7 @@ func frame_until_front(w: VoxelWorld, cam := CAM, fwd := FWD) -> Dictionary:
 	for i in range(600):
 		w.hooks().debug_stream_frame(cam)
 		d = frame(w, cam, fwd)
-		if int(d.get("shell_pages", 0)) > 0 and (d["center_front"] as Color).a > 0.5:
+		if int(d["shell_pages"]) > 0 and (d["center_front"] as Color).a > 0.5:
 			break
 	return d
 
@@ -334,6 +334,9 @@ func test_a_floating_ball_has_a_matched_front_and_back() -> void:
 	w.hooks().debug_apply_sphere_add(ground["pos"] + Vector3(0, 2.0, 0), 0.8, material_id(w, "ice"))
 	settle(w)
 	var d := frame_until_front(w)
+	# A pass that silently stopped drawing leaves (0, 0), and t.y ~= 0 below would pass vacuously.
+	assert_bool((d["center_front"] as Color).a > 0.5).override_failure_message(
+		"the floating ball wrote no front: %s" % d).is_true()
 	var t: Vector2 = d["center_thick"]
 	assert_float(t.y).override_failure_message("fronts != backs: %s" % d).is_equal_approx(0.0, 0.01)
 	# The centre ray passes near the ball's middle: about a diameter of ice.
@@ -358,8 +361,31 @@ func test_far_ice_has_a_front_from_the_lod_shell() -> void:
 	# No near-shell chunk exists out there: the page came from the far field.
 	assert_int(int(w.hooks().debug_lod_stats()["shell_pages"])).is_equal(0)
 
-func test_a_frame_with_no_ice_draws_no_shell_and_is_unchanged() -> void:
+# The lit-bit identity of an ice-free frame lives in
+# test_a_scene_without_transparency_is_bit_identical_with_the_feature_on_and_off, which needs two
+# worlds to compare; this one only pins the shell's own silence.
+func test_a_frame_with_no_ice_draws_no_shell() -> void:
 	var w := shell_world()
 	var d := frame(w)
 	assert_int(int(d["shell_pages"])).is_equal(0)
 	assert_float((d["center_front"] as Color).a).is_equal(0.0)
+
+# The gate in frame.cpp is skipped on a frame the feature is off, so the pass is never asked
+# to draw -- but the targets still hold last frame's ice. drew() must go false with the gate,
+# or the composite reads a front that is no longer there.
+func test_toggling_transparency_off_stops_the_shell_reading_stale_targets() -> void:
+	var w := shell_world()
+	var ice := material_id(w, "ice")
+	w.hooks().debug_apply_sphere_add(centre_hit(w)["pos"], 1.0, ice)
+	settle(w)
+	var on := frame_until_front(w)
+	assert_bool((on["center_front"] as Color).a > 0.5).override_failure_message(
+		"no front while the feature is on: %s" % on).is_true()
+	w.set_transparency_value("enabled", 0.0)
+	var off := frame(w)
+	assert_int(int(off["shell_pages"])).is_equal(0)
+	assert_bool((off["stages_ok"] as PackedStringArray).has("shell")).is_false()
+	assert_float((off["center_front"] as Color).a).override_failure_message(
+		"the shell read last frame's front: %s" % off).is_equal(0.0)
+	assert_vector((off["center_thick"] as Vector2)).override_failure_message(
+		"the shell read last frame's thickness: %s" % off).is_equal(Vector2.ZERO)

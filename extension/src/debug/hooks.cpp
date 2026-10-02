@@ -351,6 +351,11 @@ Dictionary VoxelDebugHooks::debug_render_frame(Vector3 pos, Vector3 fwd, int w, 
 	d["center_lit"] = Color(0, 0, 0);
 	d["center_material"] = 0;
 	d["center_distance"] = 0.0;
+	d["shell_pages"] = 0;
+	// Explicit alpha: Godot's default Color() is (0, 0, 0, 1), and a == 0 is this suite's
+	// "no front" sentinel.
+	d["center_front"] = Color(0.0f, 0.0f, 0.0f, 0.0f);
+	d["center_thick"] = Vector2();
 	if (w <= 0 || h <= 0 || !world_->get_use_local_device()) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
@@ -406,9 +411,7 @@ Dictionary VoxelDebugHooks::debug_render_frame(Vector3 pos, Vector3 fwd, int w, 
 		}
 		// The shell's own targets, FULL resolution (spec §6).
 		ShellRasterPass *shell = world_->context().render->passes().shell_raster;
-		d["shell_pages"] = shell ? shell->draw_page_count() : 0;
-		d["center_front"] = Color(0.0f, 0.0f, 0.0f, 0.0f);
-		d["center_thick"] = Vector2();
+		if (shell) d["shell_pages"] = shell->draw_page_count();
 		if (shell && shell->drew()) {
 			const PackedByteArray ff = device->texture_get_data(shell->front(), 0);
 			if (ff.size() >= (c + 1) * 16) {

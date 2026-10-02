@@ -26,7 +26,12 @@ public:
 	// Drops the framebuffers that reference the G-buffer depth (headless reallocation).
 	void release_targets();
 
-	void set_draw_pages(const std::vector<LodRasterPass::PageDraw> &pages) { pages_ = pages; }
+	// Every frame the pass is offered its pages, drawn or not: drew() means "these targets are
+	// this frame's", so a frame that never reaches draw() must not keep the last frame's true.
+	void set_draw_pages(const std::vector<LodRasterPass::PageDraw> &pages) {
+		pages_ = pages;
+		drew_ = false;
+	}
 	int draw_page_count() const { return static_cast<int>(pages_.size()); }
 
 	// False only on failure. With no pages and the camera outside it draws nothing, returns
