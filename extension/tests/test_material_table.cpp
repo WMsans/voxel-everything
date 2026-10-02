@@ -121,8 +121,7 @@ TEST_CASE("transparency is a table property: the ice rows are clear, everything 
 	CHECK(ve::material_ior(0) == doctest::Approx(1.0f));
 }
 
-// A transmit of 1 would never attenuate, and the walk's cutoff (spec §4 case 3) would
-// never fire: the step cap would be the only thing ending a walk through it.
+// A transmit of 1 would never tint however thick the material: thickness would be invisible.
 TEST_CASE("every transmit is in [0, 1) and every ior at least 1") {
 	for (int i = 0; i < ve::kMaterialCount; i++) {
 		for (float t : ve::kMaterials[i].transmit) {

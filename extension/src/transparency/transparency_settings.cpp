@@ -5,13 +5,11 @@ namespace {
 
 const SettingRow<TransparencySettings> kTransparencyRows[] = {
 	bool_row("enabled", "Transparency", &TransparencySettings::enabled),
-	// Floored above zero: a zero step never advances, and the walk would spend its whole
-	// cap on one sample.
-	float_row("min_step_m", "Min step (m)", &TransparencySettings::min_step_m, 0.01f, 1.0f,
-			0.01f, 0.5f, 0.01f),
-	int_row("max_steps", "Max steps", &TransparencySettings::max_steps, 1, 256, 1, 128),
-	float_row("min_transmit", "Min transmit", &TransparencySettings::min_transmit, 0.0f, 0.5f,
-			0.0f, 0.1f, 0.001f),
+	// Capped below 1: at 1 the medium never tints and thickness is invisible.
+	float_row("min_transmit", "Min transmit", &TransparencySettings::min_transmit, 0.0f, 0.95f,
+			0.0f, 0.95f, 0.01f),
+	float_row("sky_thickness_m", "Sky thickness (m)", &TransparencySettings::sky_thickness_m,
+			0.0f, 50.0f, 0.0f, 20.0f, 0.1f),
 };
 
 } // namespace
