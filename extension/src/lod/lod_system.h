@@ -182,6 +182,10 @@ private:
 	std::map<ve::LodKey, std::vector<int>> shell_pages_of_; // key.level == ve::kShellLevel
 	std::vector<ve::LodPageDraw> shell_draw_pages_;
 	ve::IVec3 shell_cam_chunk_{INT32_MAX, 0, 0};
+	// The `enabled` the candidate set was last built under. A runtime toggle (a bound
+	// set_transparency_value) must force a recompute: with a parked camera the chunk test
+	// alone sees no change, so the stale candidate set would survive.
+	bool shell_enabled_ = false;
 	bool shell_dirty_ = true; // guarded by WorldStore::edit_mutex()
 	void release_shell_pages_locked(ve::IVec3 coord);
 	void refresh_shell_candidates(const ve::LodCamera &cam, std::unique_lock<std::mutex> &lock);

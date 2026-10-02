@@ -131,18 +131,33 @@ void LodSystem::release_shell_pages_locked(ve::IVec3 coord) {
 // on every path, which is what tick() continues on.
 void LodSystem::refresh_shell_candidates(const ve::LodCamera &cam,
 		std::unique_lock<std::mutex> &lock) {
-	const bool enabled = render()->transparency_settings().enabled;
+	// With the near field off there is no near shell to draw at all -- the far field draws
+	// transparent solid itself -- and fade_band()'s near-field-off branch reports fade_end
+	// = 1e9 m. Keeping that as the radius is a landmine: collect_ops_for_aabb caps its region
+	// span at 128, so it would silently return NO ops (measured: no shell at all, and no
+	// error), while transparent_boxes still walks every override brick in the store on every
+	// recompute. Gate the shell on the near field rather than feed it a clamped radius.
+	const bool enabled = render()->transparency_settings().enabled &&
+			render()->near_field_enabled();
 	const ve::IVec3 cam_chunk = ve::shell_chunk_of_point(cam.pos[0], cam.pos[1], cam.pos[2]);
 	const bool moved = cam_chunk.x != shell_cam_chunk_.x || cam_chunk.y != shell_cam_chunk_.y ||
 			cam_chunk.z != shell_cam_chunk_.z;
-	float fade_start = ve::kLodFadeStartM, fade_end = ve::kLodFadeEndM;
-	fade_band(&fade_start, &fade_end);
+	// A runtime toggle with a parked camera and no edit changes neither chunk nor dirty, so
+	// without this the toggle would not be observed at all: off would keep the candidate set
+	// and its Unknown chunks, on would wait for the camera to walk into another shell chunk.
+	const bool toggled = enabled != shell_enabled_;
+	float fade_end = ve::kLodFadeEndM;
+	fade_band(nullptr, &fade_end);
 	// One shell chunk of reach past the far field's edge: a quad straddling the seam has
 	// half its cells in the chunk the camera-adjacent grid would not otherwise cover.
 	const float radius = fade_end + ve::kShellChunkSize;
+	// ponytail: a recompute rescans the whole edit log and every override brick in range, and
+	// it now runs on the TICK path -- once per dirty tick and once per 3.2 m camera crossing.
+	// Cache the box set per brick (or recompute over only the delta's dirty regions) if a
+	// profile shows it; the correct-by-construction full scan is what buys the goldens.
 	lock.unlock();
 	std::vector<ve::ShellBox> boxes;
-	bool recompute = moved;
+	bool recompute = moved || toggled;
 	{
 		std::lock_guard<std::mutex> edit_lock(store()->edit_mutex());
 		recompute = recompute || shell_dirty_;
@@ -167,6 +182,7 @@ void LodSystem::refresh_shell_candidates(const ve::LodCamera &cam,
 	lock.lock();
 	if (!recompute) return;
 	shell_cam_chunk_ = cam_chunk;
+	shell_enabled_ = enabled;
 	std::vector<ve::IVec3> chunks, evicted;
 	// Off: the candidate set is empty, so set_candidates evicts everything and no shell job
 	// is ever requested.
@@ -257,6 +273,10 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 					// Refused: the old pages (if any) keep drawing and the chunk is asked for
 					// again -- stale beats missing, as for terrain chunks.
 					shell_grid_.note_failed(r.coord);
+					// As for a refused terrain upload: the pages this build wanted are pressure.
+					// Without it a permanently unfundable shell chunk burns a build slot every
+					// frame forever, and shell jobs take the cap first, so the far field starves.
+					lod_pressure_ += ve::lod_pages_for_quads(int(r.quads.size()));
 					continue;
 				}
 				release_shell_pages_locked(r.coord);
@@ -390,9 +410,9 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 		lod_pages_of_.erase(it);
 	}
 
-	// Then the shell's candidate set: recomputed only when an edit landed or the camera
-	// entered another shell chunk, and only under the edit lock -- released from `lock`
-	// first, exactly like gather_ops() below.
+	// Then the shell's candidate set: recomputed only when an edit landed, the enabled flag
+	// toggled, or the camera entered another shell chunk, and only under the edit lock --
+	// released from `lock` first, exactly like gather_ops() below.
 	refresh_shell_candidates(cam, lock);
 
 	// Then this frame's builds, priority order, one batch. Mark the nodes building while
@@ -403,16 +423,17 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 	// flags back.
 	std::vector<ve::LodBuildRequest> batch_requests;
 	std::vector<ve::IVec3> shell_requests;
-	if (mesh() && !mesh()->lod_busy()) {
+	if (mesh() && !mesh()->lod_busy() && render()->transparency_settings().enabled) {
 		const int cap = std::min<int>(lod_builds_per_frame_, mesh()->lod_max_jobs());
 		// Shell chunks first: a missing shell is transparent solid that is not there at all, a
 		// missing far chunk is a coarser horizon.
 		shell_grid_.requests(cam.pos, cap, &shell_requests);
-		for (ve::IVec3 c : shell_requests)
-			// note_building clears the dirty flag, so an edit landing between requests() and
-			// here is swallowed. Safe ONLY because the build samples world state AFTER that
-			// edit: the shell it produces already contains it.
+		// note_building clears the dirty flag, so an edit landing between requests() and here
+		// is swallowed. Safe ONLY because the build samples world state AFTER that edit: the
+		// shell it produces already contains it.
+		for (ve::IVec3 c : shell_requests) {
 			shell_grid_.note_building(c);
+		}
 		const int take = std::min<int>(cap - int(shell_requests.size()),
 				int(lod_walk_.requests.size()));
 		batch_requests.assign(lod_walk_.requests.begin(), lod_walk_.requests.begin() + take);
@@ -533,8 +554,8 @@ void LodSystem::prepare_raster_locked() {
 	// inside the camera frustum, and the shell raster has no HiZ of its own), then every
 	// resident near-shell page. Task 10 appends the island group.
 	shell_draw_pages_ = transparent_draw_pages_;
-	for (const auto &[key, pages] : shell_pages_of_)
-		for (int p : pages) {
+	for (const auto &entry : shell_pages_of_)
+		for (int p : entry.second) {
 			const auto q = lod_page_quads_.find(p);
 			if (q != lod_page_quads_.end()) shell_draw_pages_.push_back(ve::LodPageDraw{p, q->second});
 		}
@@ -602,6 +623,7 @@ void LodSystem::teardown() {
 	shell_pages_of_.clear();
 	shell_draw_pages_.clear();
 	shell_cam_chunk_ = ve::IVec3{INT32_MAX, 0, 0};
+	shell_enabled_ = false;
 	lod_op_overflow_ = 0;
 }
 
@@ -620,6 +642,7 @@ void LodSystem::release_gpu() {
 	shell_pages_of_.clear();
 	shell_draw_pages_.clear();
 	shell_cam_chunk_ = ve::IVec3{INT32_MAX, 0, 0};
+	shell_enabled_ = false;
 	lod_overflow_logged_.clear();
 	lod_op_overflow_ = 0;
 }

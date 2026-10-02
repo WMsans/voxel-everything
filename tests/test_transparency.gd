@@ -199,7 +199,6 @@ func test_adding_ice_near_the_camera_publishes_shell_pages() -> void:
 
 func test_removing_the_ice_releases_its_shell_pages() -> void:
 	var w := shell_world()
-	var free_before := int(w.hooks().debug_lod_stats()["pages_free"])
 	var p: Vector3 = centre_hit(w)["pos"]
 	w.hooks().debug_apply_sphere_add(p, 1.0, material_id(w, "ice"))
 	settle(w)
@@ -215,9 +214,58 @@ func test_removing_the_ice_releases_its_shell_pages() -> void:
 			break
 	assert_int(int(stats["shell_pages"])).override_failure_message(
 		"the shell outlived the ice: %s" % stats).is_equal(0)
-	# Nothing leaked: the pool has at least as many free pages as before the ice (far-field
-	# builds running meanwhile may only have taken pages, so compare the shell's share).
-	assert_int(int(stats["pages_free"])).is_less_equal(free_before)
+	# Nothing leaked: partial_allocations IS the leak detector here -- arena pages that no
+	# resident chunk owns (a shell chunk owns its pages, and stats() counts them). A leak
+	# makes it go UP; the old pages_free <= free_before form was one-sided and could not see
+	# a leak at all, because a leak drives pages_free DOWN, which that form accepts.
+	assert_int(int(stats["partial_allocations"])).override_failure_message(
+		"the shell leaked pool pages: %s" % stats).is_equal(0)
+
+# The other release path: the ice is still in the edit log, so its chunks are still CANDIDATES
+# and their build comes back empty -- the pages come back only when the chunk leaves the
+# candidate set and set_candidates hands it to `evicted`.
+func test_moving_the_camera_out_of_the_radius_releases_the_shell_pages() -> void:
+	var w := shell_world()
+	w.hooks().debug_apply_sphere_add(centre_hit(w)["pos"], 1.0, material_id(w, "ice"))
+	settle(w)
+	assert_int(int(frame_until_shell(w)["shell_pages"])).is_greater(0)
+	# Past kLodFadeEndM (150 m) plus one shell chunk, with the camera parked out there: no
+	# edit, no toggle -- the candidate set is dropped by radius alone.
+	var away := CAM + Vector3(220.0, 0.0, 0.0)
+	var stats := {}
+	for i in range(600):
+		w.hooks().debug_stream_frame(away)
+		frame(w, away)
+		stats = w.hooks().debug_lod_stats()
+		if int(stats["shell_pages"]) == 0:
+			break
+	assert_int(int(stats["shell_pages"])).override_failure_message(
+		"the shell outlived the radius it was culled by: %s" % stats).is_equal(0)
+	assert_int(int(stats["partial_allocations"])).override_failure_message(
+		"the eviction released no pages: %s" % stats).is_equal(0)
+
+# enabled is a bound property, so this toggle is live-reachable with the camera parked and no
+# edit: neither direction is observable from the camera chunk or the dirty flag alone.
+func test_toggling_the_feature_off_and_on_drops_and_restores_the_shell() -> void:
+	var w := shell_world()
+	w.hooks().debug_apply_sphere_add(centre_hit(w)["pos"], 1.0, material_id(w, "ice"))
+	settle(w)
+	assert_int(int(frame_until_shell(w)["shell_pages"])).is_greater(0)
+	w.set_transparency_value("enabled", 0.0)
+	settle(w)
+	var off := {}
+	for i in range(120):
+		w.hooks().debug_stream_frame(CAM)
+		frame(w)
+		off = w.hooks().debug_lod_stats()
+		if int(off["shell_pages"]) == 0:
+			break
+	assert_int(int(off["shell_pages"])).override_failure_message(
+		"turning the feature off left the shell built: %s" % off).is_equal(0)
+	w.set_transparency_value("enabled", 1.0)
+	var on := frame_until_shell(w)
+	assert_int(int(on["shell_pages"])).override_failure_message(
+		"turning the feature back on never rebuilt the shell: %s" % on).is_greater(0)
 
 func test_with_the_feature_off_no_shell_is_built() -> void:
 	var w := shell_world(false)
@@ -227,3 +275,20 @@ func test_with_the_feature_off_no_shell_is_built() -> void:
 		w.hooks().debug_stream_frame(CAM)
 		frame(w)
 	assert_int(int(w.hooks().debug_lod_stats()["shell_pages"])).is_equal(0)
+
+# With the near field off the far field draws transparent solid itself, so there is no near
+# shell to build. This passes with or without the near-field gate (the 1e9 m radius is
+# refused by collect_ops_for_aabb's 128-region span cap, so the op list comes back empty
+# anyway); what the gate buys is skipping that world-wide scan, and this pins the intent so a
+# later span-cap change cannot quietly make it a world-wide candidate set.
+func test_with_the_near_field_off_no_shell_is_built() -> void:
+	var w := shell_world()
+	w.set_effect_enabled("near_field", false)
+	w.hooks().debug_apply_sphere_add(centre_hit(w)["pos"], 1.0, material_id(w, "ice"))
+	settle(w)
+	for i in range(60):
+		w.hooks().debug_stream_frame(CAM)
+		frame(w)
+	assert_int(int(w.hooks().debug_lod_stats()["shell_pages"])).override_failure_message(
+		"the near shell was built with no near field: %s" % w.hooks().debug_lod_stats()
+		).is_equal(0)
