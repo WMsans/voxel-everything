@@ -29,17 +29,24 @@ func make_world(enabled := true, cam := CAM) -> VoxelWorld:
 	_worlds.append(w)
 	w.set_transparency_value("enabled", 1.0 if enabled else 0.0)
 	assert_bool(w.hooks().debug_init_atlas()).is_true()
-	# Hold every temporal input still, so two frames of one view are one image. SSAO, grass
-	# and leaves are in that list because each one is NONDETERMINISTIC in the image (SSAO's
-	# rotation and grass's scatter order differ between two worlds that never touched each
-	# other), which would make the bit-identical pin below a coin flip. Nothing asserted here
-	# needs any of the three.
+	# Hold every temporal input still, so two frames of one view are one image. That is the
+	# wind: ssgi is off and the grass and canopy wind speeds are zero (leaves STAY in the
+	# scene -- only their motion is frozen). SSAO is off too, but NOT because it is stochastic:
+	# shaders/ssao.comp.glsl is a pure function of the G-buffer -- a fixed 4x4 bayer4(px)
+	# rotation, no frame counter, no history read -- and 8 back-to-back renders of one world
+	# are bit-identical with it on. What varies is the WORLD: with ssao on, two identically
+	# built and identically streamed worlds flip between exactly two lit_checksums (~50% of
+	# pairs), and it does so with grass off AND with leaves removed entirely. That input is
+	# still unidentified; see the Task 4 report. Grass is the other known one, because it
+	# scatters blades with an atomicAdd, so blade ORDER -- not blade content -- depends on how
+	# two dispatches happen to land, which changes the blend and so the checksum.
 	w.set_effect_enabled("ssgi", false)
 	w.set_effect_enabled("ssao", false)
-	w.set_effect_enabled("leaves", false)
 	w.set_grass_value("enabled", 0.0)
 	w.set_grass_value("wind_strength", 0.0)
 	w.set_grass_value("wind_speed", 0.0)
+	w.set_leaf_value("wind_strength", 0.0)
+	w.set_leaf_value("wind_speed", 0.0)
 	settle(w, cam)
 	return w
 

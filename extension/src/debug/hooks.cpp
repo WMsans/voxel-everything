@@ -344,6 +344,11 @@ Dictionary VoxelDebugHooks::debug_render_frame(Vector3 pos, Vector3 fwd, int w, 
 	d["had_history"] = false;
 	d["mean_luma"] = 0.0;
 	d["lit_checksum"] = 0;
+	// Present on every return path, including the early ones below: the GDScript helper
+	// asserts on "ok" first, and reads these.
+	d["center_lit"] = Color(0, 0, 0);
+	d["center_material"] = 0;
+	d["center_distance"] = 0.0;
 	if (w <= 0 || h <= 0 || !world_->get_use_local_device()) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
@@ -380,8 +385,6 @@ Dictionary VoxelDebugHooks::debug_render_frame(Vector3 pos, Vector3 fwd, int w, 
 		const int64_t c = static_cast<int64_t>(h / 2) * w + w / 2;
 		d["center_lit"] = Color(half_to_float(v[c * 4]), half_to_float(v[c * 4 + 1]),
 				half_to_float(v[c * 4 + 2]));
-		d["center_material"] = 0;
-		d["center_distance"] = 0.0;
 		RaymarchPass *rmp = world_->context().render->passes().raymarch;
 		const Vector2i ms = rmp ? rmp->target_size() : Vector2i();
 		if (ms.x > 0 && ms.y > 0) {
