@@ -1,5 +1,6 @@
 #include "generator/edit_ops.h"
 #include "connectivity/occupancy.h"
+#include "world/material_table.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -91,7 +92,7 @@ static void apply_op_pair(Sample *s, Sample *o, const EditOp &op, float x, float
 				s->sdf = sp;
 				if (s->sdf <= 0.0f) s->material = static_cast<uint16_t>(op.material);
 			}
-			if (!material_transparent(static_cast<uint16_t>(op.material)) && sp < o->sdf) {
+			if (sp < o->sdf && !material_transparent(static_cast<uint16_t>(op.material))) {
 				o->sdf = sp;
 				if (o->sdf <= 0.0f) o->material = static_cast<uint16_t>(op.material);
 			}
@@ -100,8 +101,8 @@ static void apply_op_pair(Sample *s, Sample *o, const EditOp &op, float x, float
 		case kOpSpherePaint: {
 			const float sp = sphere_sdf(op, x, y, z);
 			if (sp <= 0.0f && s->sdf <= 0.0f) s->material = static_cast<uint16_t>(op.material);
-			if (!material_transparent(static_cast<uint16_t>(op.material)) && sp <= 0.0f &&
-					o->sdf <= 0.0f)
+			if (sp <= 0.0f && o->sdf <= 0.0f &&
+					!material_transparent(static_cast<uint16_t>(op.material)))
 				o->material = static_cast<uint16_t>(op.material);
 			return;
 		}
@@ -138,7 +139,7 @@ static void apply_op_pair(Sample *s, Sample *o, const EditOp &op, float x, float
 				s->sdf = vs.sdf;
 				if (s->sdf <= 0.0f && vs.material != 0) s->material = vs.material;
 			}
-			if (!material_transparent(vs.material) && vs.sdf < o->sdf) {
+			if (vs.sdf < o->sdf && !material_transparent(vs.material)) {
 				o->sdf = vs.sdf;
 				if (o->sdf <= 0.0f && vs.material != 0) o->material = vs.material;
 			}

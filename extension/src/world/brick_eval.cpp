@@ -202,8 +202,10 @@ void eval_brick(const Generator &gen, const EditOp *ops, int op_count, IVec3 bri
 				Sample s{}, o{};
 				eval_field_pair(gen, filtered, filtered_count, bo[0] + vx * kVoxelSize,
 						bo[1] + vy * kVoxelSize, bo[2] + vz * kVoxelSize, &s, &o, volumes, overrides);
-				// `opaque` false stores the UNION, which is what WorldData walks for the
-				// colliders and what the occupancy cross-check compares against.
+				// `opaque` false stores the UNION. That is the build the occupancy
+				// cross-check reduces (cell_state_field), and the build the debug reference
+				// bake makes when the transparency feature is off -- where the ball is an
+				// ordinary solid surface.
 				if (opaque) { opaque_view(&o.sdf, &o.material); s = o; }
 				b.sdf[sdf_index(vx, vy, vz)] = encode_sdf(s.sdf);
 				if (s.material == 0) continue;

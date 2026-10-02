@@ -77,6 +77,19 @@ SolidPoint deepest_solid(const ve::Generator &gen) {
 	return out;
 }
 
+// Brick::mat is a PACKED 2-bit palette index array (see world/brick.h), not one byte per
+// cell, so a material assertion has to go through it.
+uint16_t cell_material(const ve::Brick &b, int index) {
+	return b.palette[(b.mat[index >> 2] >> ((index & 3) * 2)) & 3];
+}
+
+int count_cells(const ve::Brick &b, uint16_t material) {
+	int n = 0;
+	for (int i = 0; i < ve::kBrickVoxelCount; i++)
+		if (cell_material(b, i) == material) n++;
+	return n;
+}
+
 } // namespace
 
 // THE DEFECT. A transparent material is air, so a transparent ADD op must contribute NOTHING
@@ -160,19 +173,82 @@ TEST_CASE("a floating transparent ball leaves an all-air brick's opaque view unt
 	for (int i = 0; i < ve::kBrickSdfCount; i++) CHECK(uni.brick.sdf[i] <= zero);
 }
 
+// The guard against a blanket "skip the op" reading of the opaque accumulator, read on the
+// OPAQUE pair itself -- the union is asserted byte-identical to apply_ops elsewhere, so
+// asserting only the union here could never fail.
 TEST_CASE("an opaque add and a subtract still reach the opaque view") {
 	ve::AnalyticGenerator gen;
 	const SolidPoint q = deepest_solid(gen);
-	const ve::EditOp rock = sphere(ve::kOpSphereAdd, ve::material_id("rock"), q.p, 1.0f);
+	ve::Sample s{}, o{};
+
 	// 1 m inside a 1 m sphere, so the op beats the ground by a wide margin.
-	const ve::Sample a = ve::eval_field(gen, &rock, 1, q.p[0], q.p[1], q.p[2]);
-	CHECK(a.sdf == doctest::Approx(-1.0f));
-	CHECK(a.material == ve::material_id("rock"));
+	const ve::EditOp rock = sphere(ve::kOpSphereAdd, ve::material_id("rock"), q.p, 1.0f);
+	ve::eval_field_pair(gen, &rock, 1, q.p[0], q.p[1], q.p[2], &s, &o);
+	CHECK(s.sdf == doctest::Approx(-1.0f));
+	CHECK(s.material == ve::material_id("rock"));
+	CHECK(o.sdf == doctest::Approx(-1.0f));
+	CHECK(o.material == ve::material_id("rock"));
 
 	const ve::EditOp sub = sphere(ve::kOpSphereSubtract, 0, q.p, 2.0f);
-	const ve::Sample b = ve::eval_field(gen, &sub, 1, q.p[0], q.p[1], q.p[2]);
-	CHECK(b.sdf == doctest::Approx(2.0f));
-	CHECK(b.material == 0);
+	ve::eval_field_pair(gen, &sub, 1, q.p[0], q.p[1], q.p[2], &s, &o);
+	CHECK(s.sdf == doctest::Approx(2.0f));
+	CHECK(s.material == 0);
+	CHECK(o.sdf == doctest::Approx(2.0f));
+	CHECK(o.material == 0);
+}
+
+// The same rule for PAINT, and the half nothing pinned: the skip is keyed on the PAINTED
+// material, not on the op type, so painting an opaque material onto opaque solid must
+// relabel it in the opaque bake too. (test_brick_diff.gd:113 pins the opaque ADD half.)
+TEST_CASE("an opaque paint op still reaches the opaque bake") {
+	ve::AnalyticGenerator gen;
+	const SolidPoint q = deepest_solid(gen);
+	// `bark` is tree-trunk material and never appears in the bare ground brick, so a cell
+	// count of 0 against > 0 is unambiguous.
+	const uint16_t bark = ve::material_id("bark");
+	const ve::EditOp paint = sphere(ve::kOpSpherePaint, bark, q.p, 1.0f);
+
+	ve::Sample s{}, o{};
+	ve::eval_field_pair(gen, &paint, 1, q.p[0], q.p[1], q.p[2], &s, &o);
+	CHECK(s.material == bark);
+	CHECK(o.material == bark);      // the opaque accumulator applied it
+	CHECK(o.sdf == doctest::Approx(s.sdf));  // and a paint moves no surface
+
+	ve::BrickEval out{}, bare{};
+	ve::eval_brick(gen, &paint, 1, q.brick, &out, nullptr, nullptr, true);
+	ve::eval_brick(gen, nullptr, 0, q.brick, &bare, nullptr, nullptr, true);
+	CHECK(count_cells(bare.brick, bark) == 0);
+	CHECK(count_cells(out.brick, bark) > 0);
+	for (int i = 0; i < ve::kBrickSdfCount; i++) CHECK(out.brick.sdf[i] == bare.brick.sdf[i]);
+}
+
+// DELIBERATE, not an accident. A paint relabels EXISTING solid, so inside a transparent ADD
+// op -- where the opaque view is air, because a transparent material is air -- there is
+// nothing left to relabel and the opaque bake stays air. An ADD brings its own geometry and
+// does reach the opaque view (the case above); that asymmetry is the whole point of pairing
+// the accumulators. If this assertion ever has to flip, the rule changed with it.
+TEST_CASE("an opaque paint inside a transparent add op relabels the union only") {
+	ve::AnalyticGenerator gen;
+	const ve::IVec3 b{25, 100, 37};  // an all-air brick, so the ADD is the only solid
+	float bo[3];
+	ve::brick_world_origin(b, bo);
+	const float c[3] = {bo[0] + 0.4f, bo[1] + 0.4f, bo[2] + 0.4f};
+	const ve::EditOp ops[2] = {sphere(ve::kOpSphereAdd, ve::material_id("ice"), c, 3.0f),
+			sphere(ve::kOpSpherePaint, ve::material_id("rock"), c, 0.5f)};
+
+	ve::Sample s{}, o{};
+	ve::eval_field_pair(gen, ops, 2, c[0], c[1], c[2], &s, &o);
+	CHECK(s.material == ve::material_id("rock"));
+	CHECK(s.sdf < 0.0f);
+	CHECK(o.material != ve::material_id("rock"));
+	CHECK(o.sdf > 0.0f);
+
+	ve::BrickEval opaque{}, uni{};
+	ve::eval_brick(gen, ops, 2, b, &opaque, nullptr, nullptr, true);
+	ve::eval_brick(gen, ops, 2, b, &uni, nullptr, nullptr, false);
+	const uint8_t zero = ve::encode_sdf(0.0f);
+	for (int i = 0; i < ve::kBrickSdfCount; i++) CHECK(opaque.brick.sdf[i] > zero);
+	for (int i = 0; i < ve::kBrickSdfCount; i++) CHECK(uni.brick.sdf[i] <= zero);
 }
 
 TEST_CASE("the union field is byte-identical to the untouched apply_ops path") {

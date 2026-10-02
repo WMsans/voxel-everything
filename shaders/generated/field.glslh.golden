@@ -661,6 +661,9 @@ bool op_touches_aabb(uint index, vec3 lo, vec3 hi, float pad) {
 // inside an added transparent ball the ball's own sdf beats the analytic ground's over a
 // region LARGER than the ball, wins the min, and carving the winner then deletes the ground
 // the ball merely overlapped. Mirror of ve::apply_op_pair (extension/src/generator/edit_ops.cpp).
+// Every OPAQUE conjunct below is written cheapest-first: the geometric test guards the
+// out-of-line `mat_transparent` lookup, which would otherwise run for every op at every sample
+// whether or not the op wins the min.
 void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat,
 		inout float osdf, inout uint omat) {
 	uvec4 a = field_op_pool.v[index * 2u + 0u];
@@ -693,7 +696,7 @@ void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat,
 		uint vm;
 		sample_field_volume(int(b.z), c, radius, int(b.w), p, vd, vm);
 		if (vd < sdf) { sdf = vd; if (sdf <= 0.0 && vm != 0u) mat = vm; }
-		if (!mat_transparent(vm) && vd < osdf) {
+		if (vd < osdf && !mat_transparent(vm)) {
 			osdf = vd;
 			if (osdf <= 0.0 && vm != 0u) omat = vm;
 		}
@@ -712,13 +715,13 @@ void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat,
 		if (-sp > osdf) { osdf = -sp; if (osdf > 0.0) omat = 0u; }
 	} else if (type == OP_SPHERE_ADD) {
 		if (sp < sdf) { sdf = sp; if (sdf <= 0.0) mat = material; }
-		if (!mat_transparent(material) && sp < osdf) {
+		if (sp < osdf && !mat_transparent(material)) {
 			osdf = sp;
 			if (osdf <= 0.0) omat = material;
 		}
 	} else if (type == OP_SPHERE_PAINT) {
 		if (sp <= 0.0 && sdf <= 0.0) mat = material;
-		if (!mat_transparent(material) && sp <= 0.0 && osdf <= 0.0) omat = material;
+		if (sp <= 0.0 && osdf <= 0.0 && !mat_transparent(material)) omat = material;
 	}
 }
 

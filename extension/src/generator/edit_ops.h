@@ -1,6 +1,5 @@
 #pragma once
 #include "generator/generator.h"
-#include "world/material_table.h"
 #include "world/region.h"
 #include <cstdint>
 

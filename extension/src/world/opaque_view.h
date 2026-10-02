@@ -8,8 +8,8 @@ namespace ve {
 // The OPAQUE VIEW (docs/superpowers/specs/2026-10-01-transparent-voxels-design.md §3): the
 // world as the raymarcher sees it, in which a transparent material is air. One rule, applied
 // wherever a lattice the marcher reads is baked: a SOLID sample whose material is
-// transparent becomes "just outside" with no material. The field evaluator is never edited;
-// physics, edits and connectivity keep seeing the union.
+// transparent becomes "just outside" with no material. Physics, edits and connectivity keep
+// seeing the union: they read eval_field / apply_op, never this.
 //
 // Half a sample pitch, not a true distance: the label boundary has no distance field. It is
 // positive, so the surface the marcher finds sits within one voxel of the true boundary,

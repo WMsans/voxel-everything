@@ -115,7 +115,7 @@ func test_ten_metres_of_ice_do_not_stop_the_marcher() -> void:
 		float(before["center_distance"]) + 10.0)
 
 # Painted ice relabels ground in place: the surface behind it is a LABEL boundary.
-func test_painted_ice_exposes_the_bowl_under_the_lens() -> void:
+func test_painted_ice_does_not_move_the_ground_it_labels() -> void:
 	var w := make_world()
 	var ground := centre_hit(w)
 	var before := frame(w)
