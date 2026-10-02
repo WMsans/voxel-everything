@@ -373,6 +373,33 @@ Dictionary VoxelDebugHooks::debug_render_frame(Vector3 pos, Vector3 fwd, int w, 
 	}
 	d["mean_luma"] = luma / static_cast<double>(pixels);
 	d["lit_checksum"] = checksum;
+
+	// Centre-pixel readouts for tests/test_transparency.gd. Plain reads of the shipping
+	// targets -- nothing is re-rendered.
+	{
+		const int64_t c = static_cast<int64_t>(h / 2) * w + w / 2;
+		d["center_lit"] = Color(half_to_float(v[c * 4]), half_to_float(v[c * 4 + 1]),
+				half_to_float(v[c * 4 + 2]));
+		d["center_material"] = 0;
+		d["center_distance"] = 0.0;
+		RaymarchPass *rmp = world_->context().render->passes().raymarch;
+		const Vector2i ms = rmp ? rmp->target_size() : Vector2i();
+		if (ms.x > 0 && ms.y > 0) {
+			const int64_t mc = static_cast<int64_t>(ms.y / 2) * ms.x + ms.x / 2;
+			const PackedByteArray sf = device->texture_get_data(rmp->surface_texture(), 0);
+			// out_surface is rgba16f: z carries the G-buffer material id at that pixel.
+			if (sf.size() >= (mc + 1) * 8)
+				d["center_material"] = static_cast<int>(half_to_float(
+						reinterpret_cast<const uint16_t *>(sf.ptr())[mc * 4 + 2]) + 0.5f);
+			// out_hitpos is rgba32f: xyz is the world hit position, w > 0 on a hit.
+			const PackedByteArray hp = device->texture_get_data(rmp->hitpos_texture(), 0);
+			if (hp.size() >= (mc + 1) * 16) {
+				const float *p = reinterpret_cast<const float *>(hp.ptr()) + mc * 4;
+				const Vector3 hit(p[0], p[1], p[2]);
+				if (p[3] > 0.0f) d["center_distance"] = hit.distance_to(pos);
+			}
+		}
+	}
 	return d;
 }
 

@@ -119,6 +119,21 @@ vec3 terrain_source_normal(vec3 p, ivec3 brick, int anchor_slot, inout int steps
 	eval_field_gradient(p, uint(rs) * MAX_REGION_OPS, uint(max(op_counts.n[rs], 0)),
 			sdf, mat, gradient, exact_gradient);
 	float len = length(gradient);
+	// The opaque view (shaders/opaque_view.glslh): under a transparent material the atlas
+	// surface is a LABEL boundary, and the union field's gradient here belongs to the medium,
+	// not to the surface that was hit. A hit clearly inside the union solid, with a
+	// transparent solid at the hit or one voxel out along the stored-lattice normal, shades
+	// with that normal instead. The second clause keeps a scene with no transparent material
+	// on the analytic path bit for bit.
+	if (sdf < -0.02) {
+		int scratch = 6;
+		vec3 n_fb = terrain_r8_fallback_normal(p, brick, anchor_slot, scratch);
+		float sdf_out;
+		uint mat_out;
+		eval_field(p + n_fb * VOXEL_SIZE, uint(rs) * MAX_REGION_OPS,
+				uint(max(op_counts.n[rs], 0)), sdf_out, mat_out);
+		if (mat_transparent(mat) || (sdf_out <= 0.0 && mat_transparent(mat_out))) return n_fb;
+	}
 	if (exact_gradient && len > 1e-8) return gradient / len;
 	return terrain_r8_fallback_normal(p, brick, anchor_slot, steps_left);
 }
