@@ -225,8 +225,9 @@ public:
 	}
 	// Render thread, before the streamer runs. Returns how many uploads landed.
 	int drain_island_uploads(RenderingDevice *device);
-	// The shells contoured since the last take, empty = nothing new.
+	// The shells contoured since the last take, empty = nothing new. Render thread.
 	std::vector<IslandShell> take_island_shells() {
+		std::lock_guard<std::mutex> lock(island_shell_mutex_);
 		return std::move(pending_island_shells_);
 	}
 	// Bit i = island i's descriptor currently says live. Asked of the atlas array itself, so
@@ -236,6 +237,7 @@ public:
 	// The debug island fixture owns its own upload (it does not queue through the handoff), so
 	// it hands its shell over the same door the drain uses.
 	void queue_island_shell(IslandShell shell) {
+		std::lock_guard<std::mutex> lock(island_shell_mutex_);
 		pending_island_shells_.push_back(std::move(shell));
 	}
 
@@ -352,6 +354,16 @@ private:
 	ve::TransparencySettingsStore transparency_settings_;
 	GpuTimings gpu_timings_;
 	IslandHandoff handoff_;
+	// Guards pending_island_shells_ ONLY. The producer side is split across threads: the
+	// render thread fills it in drain_island_uploads() and the MAIN thread fills it in
+	// queue_island_shell() (the debug island fixture does not queue through the handoff),
+	// while the render thread moves the whole vector out in take_island_shells(). A
+	// push_back racing that move can reallocate into memory the reader is walking.
+	// Lock order: a LEAF. Nobody takes lod_mutex_ or the store's edit_mutex while holding it
+	// -- take_island_shells() releases it before apply_island_shells() takes lod_mutex_,
+	// and queue_island_shell() takes nothing else. island_shell_wait_ needs no lock: only
+	// drain_island_uploads() and teardown_gpu() touch it, both on the render thread.
+	mutable std::mutex island_shell_mutex_;
 	std::vector<IslandShell> pending_island_shells_;
 	// Islands whose volume is on the GPU but whose descriptor has not gone live yet, keyed by
 	// atlas slot and tagged with the volume slot that must still be named by the descriptor
@@ -359,8 +371,10 @@ private:
 	// bodies it just extracted, so an island's upload and its first live descriptor really do
 	// land in different drains; without this the shell would be contoured in the default
 	// lattice frame and never corrected.
-	// ponytail: one held VolumeData per slot, so 32 * 256 kB is the ceiling; an entry only
-	// waits while a descriptor for its slot is still expected, and every other case erases it.
+	// ponytail: one held VolumeData per slot -- sdf + mat + normal_oct is 4 bytes per sample
+	// at 64^3, so 1 MB each and ~32 MB at the 32 slots. An entry waits only while a descriptor
+	// for its slot is still expected; a slot that never goes live again keeps its entry for
+	// the session, since the !d->live branch only advances the iterator.
 	std::map<int, std::pair<int, ve::VolumeData>> island_shell_wait_;
 	WorldStreamer *streamer_ = nullptr; // created inside ensure_gpu_graph(), deleted in teardown_gpu()
 	bool initialized_ = false;

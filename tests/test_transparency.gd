@@ -550,6 +550,15 @@ func test_a_floating_island_with_an_ice_cap_is_see_through_and_its_shell_draws_t
 		"the marcher stopped on the island's own surface: %s" % d).is_not_equal(ice)
 	assert_int(int(d["center_material"])).is_not_equal(0)
 	assert_bool(finite(d["center_lit"])).is_true()
+	# The island's shell pages count as OWNED: stats() sums island_shell_pages_ into
+	# owned_pages, the same way shell_pages_of_ is summed. Without that sum the unowned-pages
+	# term reports every island shell page as a leak, which silently disables the leak
+	# detector the near-shell tests lean on -- in exactly the sessions that have transparent
+	# islands. Checked here with the island live and its shell measurably drawing (the front
+	# assertion above), so a zero is not read as "no pages, nothing to leak".
+	var stats := w.hooks().debug_lod_stats()
+	assert_int(int(stats["partial_allocations"])).override_failure_message(
+		"the island's shell pages read as unowned: %s" % stats).is_equal(0)
 	# Clearing the island releases its shell pages: nothing else in this world holds ice.
 	w.hooks().debug_clear_test_island(0)
 	for i in range(60):

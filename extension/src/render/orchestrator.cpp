@@ -154,7 +154,7 @@ void RenderOrchestrator::contour_island_shell(int slot, const ve::VolumeData &da
 	shell.atlas_slot = slot;
 	shell.voxel = d.voxel;
 	ve::island_shell_blocks(data, d.lattice_origin, d.voxel, &shell.blocks);
-	pending_island_shells_.push_back(std::move(shell));
+	queue_island_shell(std::move(shell)); // the same locked door the main thread uses
 }
 
 uint32_t RenderOrchestrator::island_live_mask() const {
@@ -481,8 +481,13 @@ void RenderOrchestrator::teardown_gpu() {
 	teardown_trace_.push_back("island_graph");
 	// island_slot_count() can still be on the render thread during teardown; the mark is atomic.
 	handoff_.reset_debug_slots();
-	// The shells in flight name islands and buffers that are about to die.
-	pending_island_shells_.clear();
+	// The shells in flight name islands and buffers that are about to die. The lock is the
+	// producer side's; island_shell_wait_ is render-thread-only (both here and in
+	// drain_island_uploads) so it needs none.
+	{
+		std::lock_guard<std::mutex> lock(island_shell_mutex_);
+		pending_island_shells_.clear();
+	}
 	island_shell_wait_.clear();
 	teardown_trace_.push_back("island_slots");
 	teardown_atlas_pool();

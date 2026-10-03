@@ -67,6 +67,9 @@ LodStats LodSystem::stats() {
 		owned_pages += kv.second.size();
 		s.shell_pages += static_cast<int>(kv.second.size());
 	}
+	// Island shell pages are owned by an atlas slot exactly as terrain pages are owned by a
+	// tree chunk, so they count here for the same reason.
+	for (const auto &kv : island_shell_pages_) owned_pages += kv.second.size();
 	const int unowned = (s.pages_total - s.pages_free) - static_cast<int>(owned_pages);
 	s.partial_allocations = partial + (unowned > 0 ? unowned : 0);
 	s.op_overflow = lod_op_overflow_;
@@ -150,7 +153,8 @@ void LodSystem::apply_island_shells(std::vector<IslandShell> shells, uint32_t li
 		release_slot(s.atlas_slot); // a re-extracted island replaces its shell
 		std::vector<int> all;
 		// ponytail: a refused upload (pool/record exhaustion) silently drops this block of
-		// the island's medium. Count it per island if that ever shows up as invisible ice.
+		// the island's medium. Count it per island if that ever shows up as an island
+		// whose medium is invisible.
 		const uint32_t flags = ve::island_shell_flags(s.atlas_slot);
 		for (const ve::IslandShellBlock &b : s.blocks) {
 			std::vector<int> pages;

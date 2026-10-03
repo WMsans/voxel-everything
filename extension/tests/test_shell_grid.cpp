@@ -185,6 +185,11 @@ TEST_CASE("an island's shell is split into 32-cell blocks and only holds transpa
 // and NOTHING else reads it -- its only consumer is shell.vert.glsl. Pin the layout that
 // shader decodes, because a mis-decode does not fail loudly: the pages are still valid quads,
 // they are just placed in the wrong space, so every island shell vanishes or lands metres away.
+// NOT a full pin: these assertions restate shell.vert.glsl's own expressions in C++, against
+// the same ve::island_shell_flags() the production path calls, so changing the SHADER (e.g.
+// `>> 8` to `>> 7`) would leave this test green. What it does hold is the C++ side: the
+// encode, the disjointness of the two fields, and the terrain-page word. The decode itself is
+// pinned by the GPU test, which draws an island's shell in the right place.
 TEST_CASE("an island shell page's chunk flags decode to its slot and the near bit") {
 	for (const int slot : {0, 1, 7, 31}) {
 		const uint32_t flags = ve::island_shell_flags(slot);

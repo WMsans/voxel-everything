@@ -407,6 +407,11 @@ void march_island(int slot, vec3 ro, vec3 rd, inout Hit best, inout int steps_le
 			// sample is on the AIR side of the boundary the opaque view just made, so step
 			// back inside the solid along the normal before rounding to a sample.
 			vec3 q_mat = isl.opaque_view ? q - n_local * (0.75 * isl.voxel) : q;
+			// ponytail: a fixed 0.75-voxel step instead of marching the gradient. Ceiling:
+			// when island_r8_fallback_normal exhausts its 6 taps it returns a degenerate
+			// vec3(0, 1, 0), so the step goes along +y regardless of the real boundary and
+			// can report the transparent label -- a wrong material LABEL, not a tunnel or
+			// a NaN. Upgrade path: march the SDF gradient inward until the sign flips.
 			best.mat = island_material_at(isl, q_mat);
 			return;
 		}
