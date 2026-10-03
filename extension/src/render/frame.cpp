@@ -590,7 +590,11 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		timings->begin(rd, "transparency");
 		const bool tc_ok = tc->render(rd, *gb, *materials, shell->front(), shell->thickness(),
 				use_sun ? sun->map() : RID(), deferred->sun_cascade_ubo(), ubo->buffer(), tp);
-		if (tc_ok) end_stage(rd, kStageTransparency);
+		// Resolve (spec §6 step 5): the front becomes the G-buffer's surface and depth, so
+		// inject, contact shadows, SSR and outlines see the front. Only after a good composite:
+		// resolving an unshaded front would outline a front the lit image does not show.
+		const bool resolved = tc_ok && shell->resolve(rd, *gb);
+		if (resolved) end_stage(rd, kStageTransparency);
 		else cancel_stage(kStageTransparency);
 	}
 	timings->begin(rd, "inject");

@@ -566,3 +566,49 @@ func test_a_floating_island_with_an_ice_cap_is_see_through_and_its_shell_draws_t
 		d = frame(w)
 	assert_float((d["center_front"] as Color).a).override_failure_message(
 		"the island's shell outlived it: %s" % d).is_equal(0.0)
+
+# --- the G-buffer resolve (spec §6 step 5) ------------------------------------------------
+
+# The finished scene colour as an Image: the hook hands back the half-float bytes of the
+# frame's own scene colour attachment, which is exactly Image.FORMAT_RGBAH's layout.
+func scene_image(d: Dictionary) -> Image:
+	var bytes: PackedByteArray = d["scene_rgba"]
+	assert_int(bytes.size()).override_failure_message(
+		"no scene colour readout: %s" % d).is_equal(W * H * 8)
+	return Image.create_from_data(W, H, false, Image.FORMAT_RGBAH, bytes)
+
+func test_after_the_frame_the_gbuffer_holds_the_ice_front() -> void:
+	var w := shell_world()
+	var ice := material_id(w, "ice")
+	w.hooks().debug_apply_sphere_add(centre_hit(w)["pos"], 1.0, ice)
+	settle(w)
+	var d := frame_until_front(w)
+	assert_int(int(d["center_gb_material"])).override_failure_message(
+		"outlines and SSR would still see the ground behind the ice: %s" % d).is_equal(ice)
+
+# A floating ball is a depth break in the G-buffer the outline pass reads ONLY because the
+# resolve put the ball's front there. Same scene, same world, two frames that differ in one
+# setting: nothing else moves, so any pixel the outline pass darkened is its doing.
+func test_the_ice_silhouette_gets_an_outline() -> void:
+	var w := shell_world()
+	# SSR carries its own history, which would differ between the pair and hide the outline's
+	# signal in it. Contact shadows are a pure function of the frame and stay on.
+	w.set_effect_enabled("ssr", false)
+	w.hooks().debug_apply_sphere_add(centre_hit(w)["pos"] + Vector3(0, 2.0, 0), 0.6,
+			material_id(w, "ice"))
+	settle(w)
+	w.set_effect_enabled("outlines", false)
+	frame_until_front(w)
+	var plain: Image = scene_image(frame(w))
+	w.set_effect_enabled("outlines", true)
+	var outlined: Image = scene_image(frame(w))
+	var darkened := 0
+	var row := H / 2
+	for x in range(W):
+		if plain.get_pixel(x, row).get_luminance() > 0.02 and \
+				outlined.get_pixel(x, row).get_luminance() < \
+				plain.get_pixel(x, row).get_luminance() * 0.5:
+			darkened += 1
+	assert_int(darkened).override_failure_message(
+		"no pixel on the ball's row is outline-dark: the ball is not in the depth the outline "
+		+ "pass reads").is_greater(0)

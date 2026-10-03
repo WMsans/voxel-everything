@@ -20,6 +20,10 @@ void ShellRasterPass::initialize(RenderingDevice *rd) {
 			"shell_thickness.frag.glsl");
 	front_shader_ = gpu::compile_raster(rd, group_, "ShellRasterPass", "shell.vert.glsl",
 			"shell_front.frag.glsl");
+	// The resolve is a separate shader, and failing it must not tear the pass down: resolve()
+	// just returns false and the frame keeps the opaque G-buffer it already has.
+	resolve_shader_ = gpu::compile_raster(rd, group_, "ShellRasterPass", "inject.vert.glsl",
+			"shell_resolve.frag.glsl");
 	sampler_ = gpu::sampler(rd, group_, RenderingDevice::SAMPLER_FILTER_NEAREST);
 	if (!thick_shader_.is_valid() || !front_shader_.is_valid()) teardown();
 }
@@ -28,6 +32,7 @@ void ShellRasterPass::release_targets() {
 	if (!rd_) return;
 	thick_fb_.release(rd_, group_);
 	front_fb_.release(rd_, group_);
+	resolve_fb_.release(rd_, group_);
 }
 
 void ShellRasterPass::teardown() {
@@ -35,9 +40,10 @@ void ShellRasterPass::teardown() {
 	gpu::RdDevice device{rd_};
 	group_.release(device);
 	thick_shader_ = front_shader_ = thick_pipeline_ = front_pipeline_ = sampler_ = RID();
+	resolve_shader_ = resolve_pipeline_ = RID();
 	thick_ = front_ = depth_ = args_ = RID();
-	thick_set_ = front_set_ = gpu::SetCache();
-	thick_fb_ = front_fb_ = gpu::FramebufferCache();
+	thick_set_ = front_set_ = resolve_set_ = gpu::SetCache();
+	thick_fb_ = front_fb_ = resolve_fb_ = gpu::FramebufferCache();
 	size_ = Vector2i(0, 0);
 	args_capacity_ = 0;
 	drew_ = false;
@@ -49,6 +55,10 @@ bool ShellRasterPass::ensure_targets(RenderingDevice *rd, Vector2i size) {
 	if (size == size_ && thick_.is_valid() && front_.is_valid() && depth_.is_valid()) return true;
 	thick_fb_.release(rd, group_);
 	front_fb_.release(rd, group_);
+	// The resolve's framebuffer is over the G-buffer's own attachments, which is exactly the
+	// pair ensure_targets() is about to be stale on. The pipeline survives: it is a function
+	// of the format, which a size change does not move.
+	resolve_fb_.release(rd, group_);
 	gpu::RdDevice device{rd};
 	for (RID *r : {&thick_, &front_, &depth_}) {
 		group_.free(device, *r);
@@ -187,5 +197,33 @@ bool ShellRasterPass::draw(RenderingDevice *rd, LodPool &pool, RID index_array, 
 	}
 	rd->draw_list_end();
 	drew_ = true;
+	return true;
+}
+
+bool ShellRasterPass::resolve(RenderingDevice *rd, GBuffer &gb) {
+	// The GATED accessors are correct here: drew_ is already required, so front_ and depth_
+	// are this frame's targets rather than last frame's stale ones.
+	if (!rd_ || rd != rd_ || !drew_ || !resolve_shader_.is_valid() || !gb.is_valid()) return false;
+	if (!resolve_fb_.get(rd, group_, {gb.surface(), gb.depth()}).is_valid()) return false;
+	if (!resolve_pipeline_.is_valid()) {
+		gpu::RasterState state;
+		state.color_attachments = 1;
+		// Every pixel that reaches the fragment stage has a front in front of the opaque
+		// surface (the front pass discarded the rest), so the depth is simply replaced.
+		state.compare = RenderingDevice::COMPARE_OP_ALWAYS;
+		resolve_pipeline_ = gpu::raster_pipeline(rd, group_, resolve_shader_, resolve_fb_.format(), state);
+	}
+	if (!resolve_pipeline_.is_valid()) return false;
+	gpu::RdDevice device{rd};
+	const RID set = resolve_set_.get(device, group_, resolve_shader_, 0, {
+			gpu::sampled(0, sampler_, front_),
+			gpu::sampled(1, sampler_, depth_)});
+	if (!set.is_valid()) return false;
+	const int64_t dl = rd->draw_list_begin(resolve_fb_.rid(), RenderingDevice::DRAW_DEFAULT_ALL);
+	if (dl < 0) return false;
+	rd->draw_list_bind_render_pipeline(dl, resolve_pipeline_);
+	rd->draw_list_bind_uniform_set(dl, set, 0);
+	rd->draw_list_draw(dl, false, 1, 3);
+	rd->draw_list_end();
 	return true;
 }

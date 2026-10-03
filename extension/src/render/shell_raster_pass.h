@@ -17,7 +17,8 @@ class LodPool;
 //   front      RGBA32F  xy oct normal, z distance, w material id (0 = none)
 //   depth      D32      the front pass's own depth; sampled by the G-buffer resolve
 // The thickness pass depth-tests against the G-buffer's depth without writing it; the front
-// pass only SAMPLES the G-buffer depth. Neither writes the G-buffer.
+// pass only SAMPLES the G-buffer depth. Neither writes the G-buffer; resolve() does, after the
+// transparency composite has shaded the front's pixels.
 class ShellRasterPass {
 public:
 	~ShellRasterPass();
@@ -42,6 +43,12 @@ public:
 			RID beauty_cam_ubo, RID island_desc, float fade_start, float fade_end,
 			bool front_face_clockwise, bool camera_inside);
 	bool drew() const { return drew_; }
+	// Spec §6 step 5: every pixel with a transparent front takes that front as its
+	// G-buffer surface (normal, material id, gloss) and depth, so contact shadows, SSR and
+	// outlines see it with no edits of their own. Runs after the transparency composite, so
+	// only a good composite resolves -- outlining an unshaded front would outline a front the
+	// lit image does not show. False on any failure; a frame with no front never gets here.
+	bool resolve(RenderingDevice *rd, GBuffer &gb);
 	// The targets are deliberately left STALE on a frame that drew nothing, so these report
 	// RID() rather than last frame's texture. That is the enforcement, not a convention every
 	// reader has to remember: every consumer (the composite, inject, the debug hooks) is
@@ -58,9 +65,9 @@ private:
 	gpu::Group group_;
 	RID thick_shader_, front_shader_, thick_pipeline_, front_pipeline_, sampler_;
 	bool pipeline_clockwise_ = false;
-	gpu::SetCache thick_set_, front_set_;
-	gpu::FramebufferCache thick_fb_, front_fb_;
-	RID thick_, front_, depth_, args_;
+	gpu::SetCache thick_set_, front_set_, resolve_set_;
+	gpu::FramebufferCache thick_fb_, front_fb_, resolve_fb_;
+	RID thick_, front_, depth_, args_, resolve_shader_, resolve_pipeline_;
 	Vector2i size_{0, 0};
 	int args_capacity_ = 0;
 	std::vector<LodRasterPass::PageDraw> pages_;
