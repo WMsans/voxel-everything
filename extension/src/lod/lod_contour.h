@@ -25,7 +25,7 @@ struct LodContourResult {
 // diffed against, and the source of the skirt pass's input. Solid is decode_sdf(byte) <= 0,
 // matching the generator's own rule. `shell_only` keeps only the quads whose SOLID endpoint
 // is a transparent material -- the far field's transparent shell
-// (docs/superpowers/specs/2026-09-29-transparent-materials-design.md §5). The default emits
+// (docs/superpowers/specs/2026-10-01-transparent-voxels-design.md §5). The default emits
 // every quad, exactly as before.
 void lod_contour(const uint8_t *lattice, const uint16_t *material, LodContourResult *out,
 		bool shell_only = false);

@@ -8,10 +8,14 @@ namespace ve {
 // §8). DELIBERATELY its own module and store, like grass and leaves: nothing here joins
 // BeautySettings. What a material lets through is a material-table column, not a knob here.
 struct TransparencySettings {
-	// Read where lattices are BAKED (brick generation, island upload) and where shells are
-	// built, so it takes effect for data produced afterwards: a startup and benchmark A/B
-	// switch, not a live toggle. Off: opaque_view is the identity, no shell is built or
-	// drawn, and transparent materials render opaque.
+	// A STARTUP switch for the opaque-view bake, observed LIVE for the near shell. Lattices
+	// are baked where data is generated -- brick generation and island upload -- and are NOT
+	// re-baked on a toggle, so turning this off mid-session leaves existing bricks and
+	// islands marching as solids (and turning it back on leaves them marching as air). The
+	// near shell's candidate set and pages DO follow a toggle: LodSystem::refresh_shell_
+	// candidates forces a recompute, so the shell is torn down and rebuilt immediately. Off
+	// from a cold start: opaque_view is the identity, no shell is built or drawn, and
+	// transparent materials render opaque.
 	bool enabled = true;
 	// The transmittance floor, per channel: however thick the medium, at least this much of
 	// what is behind shows through.

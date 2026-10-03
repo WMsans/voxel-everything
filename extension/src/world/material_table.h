@@ -20,7 +20,7 @@ struct MaterialDef {
 	float glow;            // emissive strength; 0.0 = not emissive
 	float glow_rgb[3];
 	float flat_albedo[3];  // far-field and unknown-layer fallback
-	// Transparency (docs/superpowers/specs/2026-09-29-transparent-materials-design.md §3).
+	// Transparency (docs/superpowers/specs/2026-10-01-transparent-voxels-design.md §4).
 	// The fraction of light per channel left after one metre of the material; {0,0,0} is
 	// opaque, and that is what "transparent" means everywhere: any channel above zero.
 	float transmit[3] = {0.0f, 0.0f, 0.0f};

@@ -5,7 +5,7 @@
 #include "lod_common.glslh"
 
 // The OPAQUE lattice the far field's terrain mesh is contoured from
-// (docs/superpowers/specs/2026-09-29-transparent-materials-design.md §5). Every solid sample
+// (docs/superpowers/specs/2026-10-01-transparent-voxels-design.md §3). Every solid sample
 // whose material is transparent is rewritten to "just outside" -- half a cell in this level's
 // scaled-distance space -- and every other sample is copied. On a chunk with no transparent
 // label the copy is byte for byte, so its mesh is exactly the one it always was. Mirror of

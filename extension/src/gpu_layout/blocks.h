@@ -172,7 +172,7 @@ struct MeshPush {
 
 struct LodBuildPush {
 	int32_t job[4];            // xyz = chunk coordinates, w = job index in this batch
-	int32_t params[4];         // x = op count, y = max quads per job, z = level, w = unused
+	int32_t params[4];         // x = op count, y = max quads per job, z = level, w = mode (1 = shell)
 	float grid[4];             // xyz = the chunk's world origin, w = the level's cell size
 	int32_t override_data[4];  // x = override table, y = region slot
 };

@@ -296,10 +296,11 @@ void LodBuildPass::record_quads(int64_t list, const LodBuildJob &job, int job_in
 	rd_->compute_list_dispatch(list, g, g, g);
 }
 
-// Spec §5. The opaque lattice ALWAYS runs: it is the identity on a chunk with no transparent
-// label, so the terrain mesh below is the one this chunk always had. The shell pair runs
-// first, on the original lattice, and BOTH its passes leave at once when the reduce raised no
-// transparent bit. frac_ holds one slice, so the two pairs run strictly in turn.
+// Spec §5. The opaque lattice runs for a TERRAIN job: it is the identity on a chunk with no
+// transparent label, so the terrain mesh below is the one this chunk always had. A shell-only
+// job returns before it (below). The shell pair runs first, on the original lattice, and BOTH
+// its passes leave at once when the reduce raised no transparent bit. frac_ holds one slice, so
+// the two pairs run strictly in turn.
 void LodBuildPass::record_job(int64_t list, const LodBuildJob &job, int job_index) {
 	record_field(list, job, job_index);
 	rd_->compute_list_add_barrier(list);

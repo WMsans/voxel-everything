@@ -11,6 +11,7 @@ layout(location = 0) in vec3 v_wpos;
 layout(location = 1) in vec3 v_normal;
 layout(location = 2) in flat uint v_material;
 layout(location = 3) in flat uint v_near;
+layout(location = 4) in flat uint v_island;
 
 // Additive. R = sum of back-face distances minus front-face distances; G = fronts minus
 // backs. thickness = R + G * z_opaque (ve::shell_thickness): G counts the entries with no
@@ -24,9 +25,13 @@ void main() {
 	float d = distance(v_wpos, bcam.cam.xyz);
 	float t_fade = clamp((d - pc.fade.x) / max(pc.fade.y - pc.fade.x, 1e-3), 0.0, 1.0);
 	// lod.frag.glsl keeps the far field where bayer < t; the near shell keeps the complement.
-	// Every face therefore survives in exactly one shell, which keeps the counts exact.
+	// Every face therefore survives in exactly one shell, which keeps the counts exact --
+	// EXCEPT an island page, which has no far-field twin: past the fade band the marcher still
+	// draws the island's solid part (and sees air where the ice is), so the shell must keep its
+	// faces there too or the band punches a hole in the island. Same test as shell_front's.
 	bool far_keeps = bayer4(ivec2(gl_FragCoord.xy)) < t_fade;
-	if ((v_near != 0u) == far_keeps) discard;
+	bool island_keeps = v_island != 0u && d >= pc.fade.y;
+	if (!island_keeps && (v_near != 0u) == far_keeps) discard;
 	float s = gl_FrontFacing ? -1.0 : 1.0;
 	out_thick = vec4(s * d, -s, 0.0, 0.0);
 }

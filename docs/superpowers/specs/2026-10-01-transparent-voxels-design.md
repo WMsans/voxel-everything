@@ -333,7 +333,9 @@ and File Structure are both wrong about them.
    only while a descriptor for its slot has not been published.
 6. **The G-buffer's depth is never cleared in the shipping path.**
    `LodRasterPass::clear_targets` is called from `hooks_render.cpp` and `hooks_lod.cpp` and
-   from nowhere else; no shipping frame clears `gb.depth`. Consequence measured during
+   from nowhere else; no shipping frame clears `gb.depth`. If this is ever fixed, the fix is
+   NOT a `DRAW_CLEAR_DEPTH` in the resolve's draw list — §11.4 ceiling 1 records why that is
+   wrong and what the correct pass is. Consequence measured during
    implementation: with SSAO on, two identically built and identically streamed worlds flip
    between exactly two `lit_checksums` (~50% of pairs), and the flip survives with grass
    disabled and with the canopy removed entirely, so grass scatter is not the cause. The
@@ -480,19 +482,44 @@ statement about a still, at 1600×900, with a fixed camera.
    also removed, leaves one. That needs frames this tool does not take, and it is still a
    latent defect — the SSAO two-checksum flip in §11.2 item 6 is the same missing clear seen
    from the other side.
+
+   **The mitigation recorded for this ceiling earlier in this section was WRONG, and is
+   retracted: do NOT put a `DRAW_CLEAR_DEPTH` in the resolve's own draw list.** That draw
+   list's depth attachment is `gb.depth` itself, so the clear would set EVERY pixel to
+   reverse-Z far before the resolve wrote back the handful of ice fronts. `inject`, contact
+   shadows and SSR all read `gb.depth()` / `gb.surface()` after the resolve, so every
+   Godot-drawn scene object, outline and reflection would draw over the ice, SSR and outlines
+   would lose all opaque depth, and contact shadows would disappear entirely. It trades one
+   latent one-pixel staleness for a total loss of the G-buffer's depth. The correct shape, if
+   this is ever picked up, is a SECOND fullscreen pass that writes far depth ONLY where last
+   frame's `front.w > 0.5` and this frame's is `< 0.5` — `COMPARE_OP_ALWAYS`,
+   `gl_FragDepth = 0.0`, colour writes off — so the pixels that lost their ice are returned
+   to far and every other pixel is left exactly as the frame left it. That pass is **not**
+   implemented here; it is separate work.
 2. **Hi-Z never sees the resolved depth, so gloss-0.9 ice is SSR-eligible against a depth
    that has no ice in it.** **Not visible in any capture, and honestly not decidable by one.**
    The only bright reflection in any frame is the Fresnel cap on the `sky` ball, and that ball
    is ringed by sky in every direction, so "the ray passed through the ice" and "the ray hit
    the sky behind it" produce the same pixels. Separating them needs a reflective surface
    placed *behind* the ice, which is a scene this tool does not build.
-3. **Island shell pages sit unconditionally on the NEAR side of the fade dither, so an island
-   beyond the shell fade distance renders with no medium at all.** **Not shown.** There is no
-   island in any of these six worlds; the capture tool does not place one. The island path has
-   automated coverage only — `test_transparency.gd`'s
-   `test_a_floating_island_with_an_ice_cap_is_see_through_and_its_shell_draws_the_ice` — and
-   that fixture's camera is fixed and close, which is the same blind spot as every other test
-   camera. This ceiling is **unverified in either direction.**
+3. **Island shell pages sat unconditionally on the NEAR side of the fade dither, so an island
+   beyond the shell fade distance rendered with no medium at all.** **Fixed.** The ceiling was
+   recorded as unverified because there is no island in any of the six captured worlds; it is
+   now decided by code review plus an automated case.
+   `test_a_floating_island_with_an_ice_cap_is_see_through_and_its_shell_draws_the_ice` uses
+   the camera pose every test camera uses — close — so the far case was uncovered. The defect:
+   `island_shell_flags` sets chunk flag bit 0, `shell.vert.glsl` turned that into `v_near = 1`,
+   and both shell fragment shaders then kept the island page only where `bayer4 >= t_fade`.
+   Past `fade_end` `t_fade` is 1 and `bayer4` tops out at 15/16, so the cap discarded
+   everywhere. It is a HOLE, not a missing tint: `march_island` is bounded by its own AABB and
+   `best.t`, never by the camera's `max_dist`, and `island_lattice` applies the opaque view
+   unconditionally, so the marcher still drew the lump's opaque part at full opacity and saw
+   air where the ice is — nothing was left to fill the gap. Fix: an island page gets its own
+   partition, keeping every fragment at `d >= fade_end` (`shell_front.frag.glsl`,
+   `shell_thickness.frag.glsl`, via a `v_island` varying). Inside the band it is unchanged, so
+   the complementary partition with the far field still holds and the counts stay exact.
+   `test_an_island_past_the_fade_band_still_draws_its_ice_cap` places the same fixture 38 m
+   from the camera in a world whose fade band ends at 32 m.
 4. **The seam.** See the `seam` row: reads as ice on both sides of the band, no double-dark
    band, no missing-pixel line, at 1× and 5×. **A still cannot show a seam that only appears
    in motion**, and this branch's seam is a dither cross-fade between two fragments of the

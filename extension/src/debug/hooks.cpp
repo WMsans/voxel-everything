@@ -356,10 +356,8 @@ Dictionary VoxelDebugHooks::debug_render_frame(Vector3 pos, Vector3 fwd, int w, 
 	// "no front" sentinel.
 	d["center_front"] = Color(0.0f, 0.0f, 0.0f, 0.0f);
 	d["center_thick"] = Vector2();
-	// Spec §6 step 5's readout: the G-buffer material the resolve left at the centre, and the
-	// finished scene colour there (after outlines), which is what a pixel comparison reads.
+	// Spec §6 step 5's readout: the G-buffer material the resolve left at the centre.
 	d["center_gb_material"] = 0;
-	d["center_scene"] = Color(0, 0, 0);
 	d["scene_rgba"] = PackedByteArray();
 	if (w <= 0 || h <= 0 || !world_->get_use_local_device()) return d;
 	world_->ensure_initialized();
@@ -401,12 +399,8 @@ Dictionary VoxelDebugHooks::debug_render_frame(Vector3 pos, Vector3 fwd, int w, 
 		// scene_rgba is exactly what Image.create_from_data(FORMAT_RGBAH) wants, so a test can
 		// scan pixels without this hook knowing anything about images.
 		const PackedByteArray sc = device->texture_get_data(in.scene_color, 0);
-		if (sc.size() >= pixels * 8) {
+		if (sc.size() >= pixels * 8)
 			d["scene_rgba"] = sc;
-			const uint16_t *sv = reinterpret_cast<const uint16_t *>(sc.ptr());
-			d["center_scene"] = Color(half_to_float(sv[c * 4]), half_to_float(sv[c * 4 + 1]),
-					half_to_float(sv[c * 4 + 2]));
-		}
 		// The G-buffer the resolve wrote: out_surface is rgba16f, z is the material id.
 		const PackedByteArray gs = device->texture_get_data(
 				world_->context().render->passes().gbuffer->surface(), 0);

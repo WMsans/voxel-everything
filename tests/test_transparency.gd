@@ -21,10 +21,14 @@ func after_test() -> void:
 	_worlds.clear()
 
 # `enabled` is read where lattices are baked, so it is set BEFORE anything streams.
-func make_world(enabled := true, cam := CAM) -> VoxelWorld:
+# `residency_m` shrinks the fade band with it (ve::lod_fade_band), which is how a test gets a
+# deterministic seam instead of the measured streaming reach of whatever world it built.
+func make_world(enabled := true, cam := CAM, residency_m := 0.0) -> VoxelWorld:
 	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	w.use_local_device = true
 	w.physics_enabled = false
+	if residency_m > 0.0:
+		w.residency_radius_m = residency_m
 	add_child(w)
 	_worlds.append(w)
 	w.set_transparency_value("enabled", 1.0 if enabled else 0.0)
@@ -181,8 +185,8 @@ func frame_until_shell(w: VoxelWorld, cam := CAM, fwd := FWD) -> Dictionary:
 
 # The shell needs the MeshService (debug_init_physics) and the LoD pool (a LoD query), the
 # same two preconditions every far-field suite sets up.
-func shell_world(enabled := true) -> VoxelWorld:
-	var w := make_world(enabled)
+func shell_world(enabled := true, residency_m := 0.0) -> VoxelWorld:
+	var w := make_world(enabled, CAM, residency_m)
 	assert_bool(w.hooks().debug_init_physics()).is_true()
 	w.hooks().debug_lod_stats()
 	return w
@@ -246,6 +250,19 @@ func test_moving_the_camera_out_of_the_radius_releases_the_shell_pages() -> void
 
 # enabled is a bound property, so this toggle is live-reachable with the camera parked and no
 # edit: neither direction is observable from the camera chunk or the dirty flag alone.
+#
+# WHAT THIS PINS: the shell's CANDIDATE SET and its pages are dropped and restored. That is
+# what refresh_shell_candidates' `toggled` term is for -- without it, off would leave the
+# candidates (and their Unknown chunks, rebuilt every frame) alive and on would wait for the
+# camera to walk into another shell chunk.
+#
+# WHAT THIS DOES NOT PIN: that the near field stays CONSISTENT across a live toggle. It does
+# not, and it cannot: brick and island lattices are baked where data is generated and are not
+# re-baked on a toggle, so off leaves existing bricks marching as solids (a hole where the ice
+# was) and on leaves them marching as air (the shell front lands at the same depth as the
+# baked surface). enabled is a startup switch for that bake -- transparency_settings.h says so
+# now -- and the A/B it exists for is applied before the world streams, which is what
+# demo/benchmark.gd does in _ready.
 func test_toggling_the_feature_off_and_on_drops_and_restores_the_shell() -> void:
 	var w := shell_world()
 	w.hooks().debug_apply_sphere_add(centre_hit(w)["pos"], 1.0, material_id(w, "ice"))
@@ -261,7 +278,8 @@ func test_toggling_the_feature_off_and_on_drops_and_restores_the_shell() -> void
 		if int(off["shell_pages"]) == 0:
 			break
 	assert_int(int(off["shell_pages"])).override_failure_message(
-		"turning the feature off left the shell built: %s" % off).is_equal(0)
+		"turning the feature off left the candidate set and its pages alive: %s" % off
+		).is_equal(0)
 	w.set_transparency_value("enabled", 1.0)
 	var on := frame_until_shell(w)
 	assert_int(int(on["shell_pages"])).override_failure_message(
@@ -566,6 +584,64 @@ func test_a_floating_island_with_an_ice_cap_is_see_through_and_its_shell_draws_t
 		d = frame(w)
 	assert_float((d["center_front"] as Color).a).override_failure_message(
 		"the island's shell outlived it: %s" % d).is_equal(0.0)
+
+# The same fixture with the camera PAST the fade band. This is the one that used to punch a
+# hole rather than lose a tint: an island's shell pages carry chunk flag bit 0
+# (ve::island_shell_flags), which the vertex shader reads as v_near == 1, so they take the
+# NEAR side of the dither -- and past fade_end t_fade == 1 while bayer4 tops out at 15/16, so
+# every fragment of the cap was discarded. Nothing filled the gap, because march_island is
+# bounded by its own AABB and NOT by the camera's max_dist, and island_lattice applies the
+# opaque view unconditionally: the marcher still drew the lump's opaque part at full opacity
+# and saw AIR where the ice is. A solid island with a transparent hole in its cap.
+#
+# residency_radius_m = 40 puts the band's end at exactly 32 m (ve::lod_fade_band: min(150,
+# floor(reach * 0.9 / 8) * 8) floored at kLodFadeMinEndM), so 38 m is past it by construction
+# rather than by whatever reach this world happened to stream.
+func test_an_island_past_the_fade_band_still_draws_its_ice_cap() -> void:
+	var w := shell_world(true, 40.0)
+	var p: Vector3 = centre_hit(w)["pos"]
+	var ice := material_id(w, "ice")
+	w.hooks().debug_apply_sphere_paint(p, 0.8, ice)
+	settle(w)
+	# Exactly the occupancy cells (0.8 m) the painted lens touches, as in the fixture above.
+	var lo := Vector3i(floori((p.x - 0.8) / 0.8), floori((p.y - 0.8) / 0.8),
+		floori((p.z - 0.8) / 0.8))
+	var hi := Vector3i(floori((p.x + 0.8) / 0.8), floori((p.y + 0.8) / 0.8),
+		floori((p.z + 0.8) / 0.8))
+	var placed: Dictionary = w.hooks().debug_place_test_island(0, lo, hi, Vector3(0, 1.5, 0))
+	assert_bool(placed.get("ok", false)).override_failure_message(str(placed)).is_true()
+	# The fixture never carves the terrain, so take the painted lens back out of the world
+	# before the island is measured -- otherwise a near-field shell draws THAT ice instead.
+	w.hooks().debug_apply_sphere_subtract(p, 1.2)
+	settle(w)
+	var centre: Vector3 = placed["world_center"]
+	var cam := centre + Vector3(0.0, 38.0, 0.0)
+	var fwd := Vector3(0.0, -1.0, 0.0)
+	var d := frame_until_front(w, cam, fwd)
+	# Past the band the FRAME reports, not a constant: the same seam the shader divides on.
+	assert_float(cam.distance_to(centre)).override_failure_message(
+		"the fixture camera is not past the band this frame used: %s" % d
+		).is_greater(float(d["fade_end"]))
+	assert_int(int((d["center_front"] as Color).a + 0.5)).override_failure_message(
+		"the island's ice cap has no shell front past the fade band -- the cap was dithered "
+		+ "away and nothing is left in front of the island: %s" % d).is_equal(ice)
+	# The marcher never stopped on the cap itself -- the opaque view erased it, so it found
+	# the ground under the island.
+	assert_int(int(d["center_material"])).override_failure_message(
+		"the marcher stopped on the island's own surface: %s" % d).is_not_equal(ice)
+	# ...and that opaque surface really is there, which is what makes the missing front a HOLE
+	# rather than a missing tint: a 1x1 march from this exact camera and direction stops on
+	# solid ground at the island's distance, so without the shell the pixel would show bare
+	# ground where the cap is. (Probed, not read off the frame: the frame's raymarch runs at
+	# render scale, and its centre texel is up to a texel off this axis.)
+	var probe: Dictionary = w.hooks().debug_raymarch_probe(cam, fwd)
+	assert_bool(probe["hit"]).override_failure_message(
+		"nothing opaque at all behind the island from this camera: %s" % probe).is_true()
+	assert_float(float(probe["pos"].distance_to(cam))).override_failure_message(
+		"the opaque hit is not at the island's distance: %s" % probe
+		).is_equal_approx(cam.distance_to(centre), 6.0)
+	assert_int(int(probe["material"])).is_not_equal(ice)
+	assert_bool(finite(d["center_lit"])).is_true()
 
 # --- the G-buffer resolve (spec §6 step 5) ------------------------------------------------
 

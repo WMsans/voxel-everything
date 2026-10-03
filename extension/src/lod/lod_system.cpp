@@ -194,8 +194,15 @@ void LodSystem::refresh_shell_candidates(const ve::LodCamera &cam,
 	const bool toggled = enabled != shell_enabled_;
 	float fade_end = ve::kLodFadeEndM;
 	fade_band(nullptr, &fade_end);
-	// One shell chunk of reach past the far field's edge: a quad straddling the seam has
-	// half its cells in the chunk the camera-adjacent grid would not otherwise cover.
+	// One shell chunk of reach past the far field's edge -- margin, NOT seam reach.
+	// shell_candidates culls on the NEAREST point of a chunk's AABB, so a chunk straddling
+	// fade_end is already a candidate at radius = fade_end and the extra chunk buys no seam
+	// coverage. What it does buy is one shell chunk of build slots and pool pages that are
+	// never rasterised: past fade_end every fragment of a near page is dithered away (the
+	// fragment test is per-pixel, not per-chunk). Kept because the fade boundary is evaluated
+	// per fragment in float on the GPU and candidacy on the CPU, so a margin is cheap
+	// insurance against the two disagreeing; drop it to fade_end if a profile ever charges
+	// for the wasted pages.
 	const float radius = fade_end + ve::kShellChunkSize;
 	// ponytail: a recompute rescans the whole edit log and every override brick in range, and
 	// it now runs on the TICK path -- once per dirty tick and once per 3.2 m camera crossing.

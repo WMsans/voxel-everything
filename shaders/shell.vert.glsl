@@ -29,6 +29,7 @@ layout(location = 0) out vec3 v_wpos;
 layout(location = 1) out vec3 v_normal;
 layout(location = 2) out flat uint v_material;
 layout(location = 3) out flat uint v_near; // 1 = keep on the near field's side of the dither
+layout(location = 4) out flat uint v_island; // non-zero = an island page (flags bits 8.. name it)
 
 void main() {
 	uint vi = uint(gl_VertexIndex);
@@ -41,6 +42,8 @@ void main() {
 	uvec3 w = uvec3(quads.v[quad * 3u + 0u], quads.v[quad * 3u + 1u], quads.v[quad * 3u + 2u]);
 	v_material = lod_bits_get(w, 78, 16);
 	v_near = flags != 0u ? 1u : 0u;
+	uint island = flags >> 8;
+	v_island = island;
 	if (!mat_transparent(v_material)) {
 		gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
 		return;
@@ -48,7 +51,6 @@ void main() {
 	vec3 p = lod_corner_pos(w, int(corner), c0.xyz, c0.w);
 	uint normal_pair = normals.v[quad * 2u + (corner >> 1u)];
 	vec3 n = oct_decode_snorm8((normal_pair >> ((corner & 1u) * 16u)) & 0xFFFFu);
-	uint island = flags >> 8;
 	if (island != 0u) {
 		int i = int(island) - 1;
 		vec4 r0 = island_desc.v[i * 8 + 0];

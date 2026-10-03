@@ -31,7 +31,7 @@ void lod_reduce_lattice(const uint8_t *fine_sdf, const uint16_t *fine_mat, uint8
 
 // True when any SOLID sample of a reduced lattice (kLodChunkLattice^3) carries a transparent
 // material: the per-job bit lod_reduce.comp.glsl raises, and the only chunks that grow a
-// shell (docs/superpowers/specs/2026-09-29-transparent-materials-design.md §5).
+// shell (docs/superpowers/specs/2026-10-01-transparent-voxels-design.md §5).
 bool lod_has_transparent(const uint8_t *lattice, const uint16_t *material);
 
 // The encoded "just outside" value a transparent sample becomes in the opaque lattice: half

@@ -201,8 +201,9 @@ bool ShellRasterPass::draw(RenderingDevice *rd, LodPool &pool, RID index_array, 
 }
 
 bool ShellRasterPass::resolve(RenderingDevice *rd, GBuffer &gb) {
-	// The GATED accessors are correct here: drew_ is already required, so front_ and depth_
-	// are this frame's targets rather than last frame's stale ones.
+	// The RAW members are correct here, not the gated accessors: drew_ is already required
+	// above, so front_ and depth_ are this frame's targets rather than last frame's stale
+	// ones, and the resolve is the one caller that wants them without the extra brace.
 	if (!rd_ || rd != rd_ || !drew_ || !resolve_shader_.is_valid() || !gb.is_valid()) return false;
 	if (!resolve_fb_.get(rd, group_, {gb.surface(), gb.depth()}).is_valid()) return false;
 	if (!resolve_pipeline_.is_valid()) {
