@@ -36,6 +36,10 @@ layout(set = 0, binding = 19) uniform sampler2DArray material_surface_tex;
 #define FIELD_NORMAL_OVERRIDE_BINDING 26
 #define FIELD_OVERRIDE_TABLE(base) (field_override_region_map.table[int((base) / MAX_REGION_OPS)])
 #include "field.glslh"
+// The opaque view (world/opaque_view.h): where a lattice the marcher reads is baked, a solid
+// sample carrying a transparent material IS air. Island volumes are never baked -- their
+// bytes are the shared authoritative volume -- so island_lattice applies it per sample.
+#include "opaque_view.glslh"
 
 // MUST match ve kRaymarchGroupX/Y in render/raymarch_pass.h -- see the note there on why
 // this is one wide row rather than a square tile.
@@ -119,6 +123,21 @@ vec3 terrain_source_normal(vec3 p, ivec3 brick, int anchor_slot, inout int steps
 	eval_field_gradient(p, uint(rs) * MAX_REGION_OPS, uint(max(op_counts.n[rs], 0)),
 			sdf, mat, gradient, exact_gradient);
 	float len = length(gradient);
+	// The opaque view (shaders/opaque_view.glslh): under a transparent material the atlas
+	// surface is a LABEL boundary, and the union field's gradient here belongs to the medium,
+	// not to the surface that was hit. A hit clearly inside the union solid, with a
+	// transparent solid at the hit or one voxel out along the stored-lattice normal, shades
+	// with that normal instead. The second clause keeps a scene with no transparent material
+	// on the analytic path bit for bit.
+	if (sdf < -0.02) {
+		int scratch = 6;
+		vec3 n_fb = terrain_r8_fallback_normal(p, brick, anchor_slot, scratch);
+		float sdf_out;
+		uint mat_out;
+		eval_field(p + n_fb * VOXEL_SIZE, uint(rs) * MAX_REGION_OPS,
+				uint(max(op_counts.n[rs], 0)), sdf_out, mat_out);
+		if (mat_transparent(mat) || (sdf_out <= 0.0 && mat_transparent(mat_out))) return n_fb;
+	}
 	if (exact_gradient && len > 1e-8) return gradient / len;
 	return terrain_r8_fallback_normal(p, brick, anchor_slot, steps_left);
 }
@@ -159,6 +178,7 @@ struct Island {
 	float voxel;
 	int dim;
 	int volume_slot; // shared authoritative volume/normal pool index (descriptor int lane 17)
+	bool opaque_view; // descriptor int lane 18: read this lattice through the opaque view
 };
 
 bool island_load(int i, out Island isl) {
@@ -182,6 +202,10 @@ bool island_load(int i, out Island isl) {
 	// in that pool at all: treat it as a dead slot rather than read out of range.
 	isl.volume_slot = floatBitsToInt(island_desc.v[i * 8 + 4].y);
 	if (isl.volume_slot < 0 || isl.volume_slot >= MAX_VOLUME_SLOTS) return false;
+	// The island's volume holds a transparent label and the feature is on, so its lattice is
+	// read through the opaque view. Published as an int lane, not a float, so no value is
+	// ever read as a bit pattern it was not written as.
+	isl.opaque_view = floatBitsToInt(island_desc.v[i * 8 + 4].z) != 0;
 	return true;
 }
 
@@ -195,9 +219,14 @@ uint island_byte_mip(int i) {
 	return (island_mip.w[i >> 2] >> ((uint(i) & 3u) * 8u)) & 0xFFu;
 }
 
-float island_lattice(int volume_slot, int dim, ivec3 v) {
+// The island's bytes are the SHARED authoritative volume (physics and merge-back read them),
+// so the opaque view cannot be baked in: it is applied per sample, and only for islands
+// whose descriptor asks for it.
+float island_lattice(int volume_slot, int dim, ivec3 v, bool opaque) {
 	int i = volume_slot * ISLAND_VOXELS + v.x + v.y * dim + v.z * dim * dim;
-	return decode_sdf(float(island_byte_sdf(i)) / 255.0);
+	float d = decode_sdf(float(island_byte_sdf(i)) / 255.0);
+	if (opaque && d <= 0.0 && mat_transparent(island_byte_mat(i))) d = OPAQUE_OUTSIDE;
+	return d;
 }
 
 // Trilinear reconstruction in LOCAL space, mirroring ve::sample_volume_lattice's inside
@@ -207,14 +236,14 @@ float island_sdf_at(Island isl, vec3 q) {
 	ivec3 i0 = ivec3(l);
 	ivec3 i1 = min(i0 + 1, ivec3(isl.dim - 1));
 	vec3 f = l - vec3(i0);
-	float c000 = island_lattice(isl.volume_slot, isl.dim, ivec3(i0.x, i0.y, i0.z));
-	float c100 = island_lattice(isl.volume_slot, isl.dim, ivec3(i1.x, i0.y, i0.z));
-	float c010 = island_lattice(isl.volume_slot, isl.dim, ivec3(i0.x, i1.y, i0.z));
-	float c110 = island_lattice(isl.volume_slot, isl.dim, ivec3(i1.x, i1.y, i0.z));
-	float c001 = island_lattice(isl.volume_slot, isl.dim, ivec3(i0.x, i0.y, i1.z));
-	float c101 = island_lattice(isl.volume_slot, isl.dim, ivec3(i1.x, i0.y, i1.z));
-	float c011 = island_lattice(isl.volume_slot, isl.dim, ivec3(i0.x, i1.y, i1.z));
-	float c111 = island_lattice(isl.volume_slot, isl.dim, ivec3(i1.x, i1.y, i1.z));
+	float c000 = island_lattice(isl.volume_slot, isl.dim, ivec3(i0.x, i0.y, i0.z), isl.opaque_view);
+	float c100 = island_lattice(isl.volume_slot, isl.dim, ivec3(i1.x, i0.y, i0.z), isl.opaque_view);
+	float c010 = island_lattice(isl.volume_slot, isl.dim, ivec3(i0.x, i1.y, i0.z), isl.opaque_view);
+	float c110 = island_lattice(isl.volume_slot, isl.dim, ivec3(i1.x, i1.y, i0.z), isl.opaque_view);
+	float c001 = island_lattice(isl.volume_slot, isl.dim, ivec3(i0.x, i0.y, i1.z), isl.opaque_view);
+	float c101 = island_lattice(isl.volume_slot, isl.dim, ivec3(i1.x, i0.y, i1.z), isl.opaque_view);
+	float c011 = island_lattice(isl.volume_slot, isl.dim, ivec3(i0.x, i1.y, i1.z), isl.opaque_view);
+	float c111 = island_lattice(isl.volume_slot, isl.dim, ivec3(i1.x, i1.y, i1.z), isl.opaque_view);
 	return mix(mix(mix(c000, c100, f.x), mix(c010, c110, f.x), f.y),
 	           mix(mix(c001, c101, f.x), mix(c011, c111, f.x), f.y), f.z);
 }
@@ -368,9 +397,22 @@ void march_island(int slot, vec3 ro, vec3 rd, inout Hit best, inout int steps_le
 			best.hit = true;
 			best.t = t;
 			best.p = ro + rd * t;
-			best.n = normalize(isl.basis *
-					island_source_normal(isl, q, steps_left));
-			best.mat = island_material_at(isl, q);
+			// Under a transparent material the source normal belongs to the union surface;
+			// the opaque view's own lattice is what was hit.
+			vec3 n_local = isl.opaque_view
+					? island_r8_fallback_normal(isl, q, steps_left)
+					: island_source_normal(isl, q, steps_left);
+			best.n = normalize(isl.basis * n_local);
+			// The material lookup must skip the transparent label too: at the hit the nearest
+			// sample is on the AIR side of the boundary the opaque view just made, so step
+			// back inside the solid along the normal before rounding to a sample.
+			vec3 q_mat = isl.opaque_view ? q - n_local * (0.75 * isl.voxel) : q;
+			// ponytail: a fixed 0.75-voxel step instead of marching the gradient. Ceiling:
+			// when island_r8_fallback_normal exhausts its 6 taps it returns a degenerate
+			// vec3(0, 1, 0), so the step goes along +y regardless of the real boundary and
+			// can report the transparent label -- a wrong material LABEL, not a tunnel or
+			// a NaN. Upgrade path: march the SDF gradient inward until the sign flips.
+			best.mat = island_material_at(isl, q_mat);
 			return;
 		}
 		t += max(d * 0.9, 0.005);

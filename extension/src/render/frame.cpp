@@ -1,10 +1,13 @@
 #include "render/frame.h"
 #include "render/frame_params.h"
 #include "core/world_store.h"
+#include "world/material_table.h"
+#include "world/world_field.h"
 #include "lod/lod_grid.h"
 #include "lod/lod_system.h"
 #include "lod/lod_tree.h"
 #include "render/beauty_camera.h"
+#include "render/brick_gen_pass.h"
 #include "render/camera_params.h"
 #include "render/composite_pass.h"
 #include "render/contact_shadow_pass.h"
@@ -27,6 +30,9 @@
 #include "render/orchestrator.h"
 #include "render/outline_pass.h"
 #include "render/raymarch_pass.h"
+#include "render/shell_raster_pass.h"
+#include "render/transparency_composite_pass.h"
+#include "render/region_pass.h"
 #include "render/ssao_pass.h"
 #include "render/ssgi_pass.h"
 #include "render/ssr_pass.h"
@@ -184,7 +190,18 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	// in this callback with no timing label, and in the edit leg it is the largest single
 	// contributor to a frame (M6 errata 3's 26.8 ms p99). Scope it before optimising it.
 	timings->begin(rd, "stream");
+	// One read per frame, shared by everything transparency touches this frame: reading it
+	// twice invites one consumer to be stale.
+	const ve::TransparencySettings transparency = render_.transparency_settings();
+	// The baker decides what the raymarcher will find, so the switch has to reach it before
+	// the very first brick of this frame is generated.
+	if (BrickGenPass *bg = render_.passes().gen) bg->set_opaque_view(transparency.enabled);
+	if (RegionPass *rp = render_.passes().region) rp->set_opaque_view(transparency.enabled);
 	render_.drain_island_uploads(rd);
+	// The island shells contoured by that drain, uploaded as local-space LoD pages before
+	// the walk: prepare_raster_locked() only reads them while holding lod_mutex_, and the
+	// pages must exist before the shell raster asks for this frame's draw list.
+	if (lod_.pool()) lod_.apply_island_shells(render_.take_island_shells(), render_.island_live_mask());
 	WorldStreamer *st = render_.streamer();
 	if (st) st->run_frame(rd, cam.origin.x, cam.origin.y, cam.origin.z);
 	end_stage(rd, kStageStream);
@@ -296,6 +313,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	const int cascade_count = ve::sun_cascades(store_.config().stream_radius_m,
 			SunShadowPass::kSize, cascades);
 	const bool clamp_levels = settings.sun_cascade_min_level;
+	if (lod_raster) lod_raster->set_skip_transparent(transparency.enabled);
 	if (!in.debug.skip_far_field && lod_.pool() && lod_raster && render_.passes().materials) {
 		ve::LodCamera lod_cam;
 		for (int c = 0; c < 4; c++)
@@ -452,6 +470,45 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		else timings->cancel("leaves");
 	}
 
+	// The transparent shell (spec §6): thickness and the nearest front, after every opaque
+	// producer has written G-buffer depth. One gated pair like grass and leaves: a failure
+	// cancels the marker and the frame goes on without transparent materials.
+	bool shell_drawn = false;
+	uint16_t inside_material = 0;
+	// Outside the gate below on purpose: set_draw_pages() clears drew(), so a frame that never
+	// reaches draw() -- the toggle off mid-session, no pool -- reports drew() false instead of
+	// last frame's ice still sitting in the targets.
+	ShellRasterPass *shell_raster = render_.passes().shell_raster;
+	if (shell_raster) {
+		// prepare_raster_locked() runs inside lod_.tick(), which the far-field gate above can
+		// skip entirely -- and island shell pages live outside the walk, so with the far
+		// field off they would never reach the draw list. Ask for it directly in that case.
+		if (in.debug.skip_far_field && lod_.pool()) lod_.prepare_raster();
+		std::vector<LodRasterPass::PageDraw> shell_pages;
+		for (const ve::LodPageDraw &pd : lod_.shell_draw_pages())
+			shell_pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});
+		shell_raster->set_draw_pages(shell_pages);
+	}
+	if (ShellRasterPass *shell = shell_raster;
+			shell && transparency.enabled && lod_.pool() && lod_raster) {
+		// Is the camera inside a transparent solid? One CPU field sample a frame.
+		{
+			const ve::FieldView view = store_.field().lock();
+			if (view.valid()) {
+				const ve::Sample s = view.sample(cam.origin.x, cam.origin.y, cam.origin.z);
+				if (s.sdf <= 0.0f && ve::material_transparent(s.material)) inside_material = s.material;
+			}
+		}
+		timings->begin(rd, "shell");
+		const bool shell_ok = lod_raster->prepare_index_array(rd, *lod_.pool()) &&
+				shell->draw(rd, *lod_.pool(), lod_raster->index_array(), *gb, ubo->buffer(),
+						render_.passes().islands->desc_buffer(), fade_start, fade_end,
+						lod_raster->front_face_clockwise(), inside_material != 0);
+		if (shell_ok) end_stage(rd, kStageShell);
+		else cancel_stage(kStageShell);
+		shell_drawn = shell_ok && shell->drew();
+	}
+
 	SsgiPass *ssgi = render_.passes().ssgi;
 	if (ssgi) ssgi->clear_result();
 	bool ssgi_ok = false;
@@ -510,6 +567,36 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		return false;
 	}
 	end_stage(rd, kStageDeferred);
+	// Transparency, shading (spec §6): fronts over what deferred lit behind them. Failure
+	// cancels the marker and leaves deferred's image -- never aborts the frame.
+	// shell_drawn IS `shell_ok && shell->drew()`. Belt to the accessors' braces: shell->front()
+	// and shell->thickness() are RID() unless the shell drew, so this gate is an optimisation
+	// rather than the thing standing between a stale frame and a stale tint.
+	if (TransparencyCompositePass *tc = render_.passes().transparency_composite;
+			tc && shell_drawn) {
+		ShellRasterPass *shell = render_.passes().shell_raster;
+		TransparencyCompositePass::Params tp;
+		for (int k = 0; k < 3; k++) {
+			tp.right[k] = cp.cam_right[k];
+			tp.up[k] = cp.cam_up[k];
+			tp.ambient[k] = beauty.ambient[k];
+		}
+		tp.tan_x = cp.params[0];
+		tp.tan_y = cp.params[1];
+		tp.min_transmit = transparency.min_transmit;
+		tp.sky_thickness_m = transparency.sky_thickness_m;
+		tp.flags = beauty_flags;
+		tp.inside_material = inside_material;
+		timings->begin(rd, "transparency");
+		const bool tc_ok = tc->render(rd, *gb, *materials, shell->front(), shell->thickness(),
+				use_sun ? sun->map() : RID(), deferred->sun_cascade_ubo(), ubo->buffer(), tp);
+		// Resolve (spec §6 step 5): the front becomes the G-buffer's surface and depth, so
+		// inject, contact shadows, SSR and outlines see the front. Only after a good composite:
+		// resolving an unshaded front would outline a front the lit image does not show.
+		const bool resolved = tc_ok && shell->resolve(rd, *gb);
+		if (resolved) end_stage(rd, kStageTransparency);
+		else cancel_stage(kStageTransparency);
+	}
 	timings->begin(rd, "inject");
 	if (!inject->draw(rd, in.scene_color, in.scene_depth, gb->lit(), gb->depth())) {
 		cancel_stage(kStageInject);
@@ -588,7 +675,7 @@ bool VoxelFrame::render_post_opaque(RenderingDevice *rd, const FrameInputs &in) 
 const char *godot::frame_stage_name(FrameStage stage) {
 	static const char *const kNames[kStageCount] = {"stream", "raymarch", "composite", "lod",
 			"sun_shadow", "grass", "ssgi", "deferred", "ssao", "inject", "contact", "ssr",
-			"outlines", "history"};
+			"outlines", "history", "shell", "transparency"};
 	return stage < kStageCount ? kNames[stage] : "";
 }
 
@@ -649,6 +736,7 @@ FrameInputs VoxelFrame::prepare_headless(RenderingDevice *rd, const FrameInputs 
 		if (LodRasterPass *lod_raster = render_.passes().lod_raster) lod_raster->release_targets();
 		if (GrassRasterPass *grass_raster = render_.passes().grass_raster) grass_raster->release_targets();
 		if (LeafRasterPass *leaf_raster = render_.passes().leaf_raster) leaf_raster->release_targets();
+		if (ShellRasterPass *shell = render_.passes().shell_raster) shell->release_targets();
 	}
 	if (!headless_.ensure(rd, in.size) || !headless_.clear(rd)) return out;
 	out.scene_color = headless_.color();

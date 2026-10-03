@@ -62,12 +62,22 @@
 	vec4 cam; \
 	vec4 fade;
 
+#define SHELL_RASTER_PUSH_FIELDS \
+	vec4 fade;
+
 #define COMPOSITE_PUSH_FIELDS \
 	mat4 view_proj; \
 	vec4 cam; \
 	vec4 fade; \
 	vec4 right_tanx; \
 	vec4 up_tany;
+
+#define TRANSPARENCY_COMPOSITE_PUSH_FIELDS \
+	vec4 right_tanx; \
+	vec4 up_tany; \
+	vec4 sky; \
+	vec4 params; \
+	uvec4 flags;
 
 #define GRASS_RASTER_PUSH_FIELDS \
 	mat4 view_proj; \

@@ -652,7 +652,20 @@ bool op_touches_aabb(uint index, vec3 lo, vec3 hi, float pad) {
 	return true;
 }
 
-void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat) {
+// One op applied to BOTH accumulators in one pass. `sdf`/`mat` are the union every existing
+// consumer reads, and that half of every branch below is byte for byte what it always was.
+// `osdf`/`omat` are the same op under the OPAQUE VIEW, in which a transparent material is
+// air, so a transparent ADD or PAINT op -- and a volume-add that samples a transparent
+// material -- contributes NOTHING to it. It must not be done by carving the winner after
+// the fact: `mat` is the material of whichever op won the min over the whole stack, so
+// inside an added transparent ball the ball's own sdf beats the analytic ground's over a
+// region LARGER than the ball, wins the min, and carving the winner then deletes the ground
+// the ball merely overlapped. Mirror of ve::apply_op_pair (extension/src/generator/edit_ops.cpp).
+// Every OPAQUE conjunct below is written cheapest-first: the geometric test guards the
+// out-of-line `mat_transparent` lookup, which would otherwise run for every op at every sample
+// whether or not the op wins the min.
+void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat,
+		inout float osdf, inout uint omat) {
 	uvec4 a = field_op_pool.v[index * 2u + 0u];
 	uvec4 b = field_op_pool.v[index * 2u + 1u];
 	uint type = a.x;
@@ -666,12 +679,14 @@ void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat) {
 		// evaluator only, so the cell-aligned faces of an island carve read as air instead
 		// of the exact SDF == 0 a cell-boundary CSG difference leaves behind -- which the
 		// cell-aligned lattices (brick, mesh, occupancy) would otherwise mesh as phantom
-		// walls inside the carved region. Mirror of ve::apply_op's kOpBoxSubtract.
+		// walls inside the carved region. Mirror of ve::apply_op's kOpBoxSubtract. A carve
+		// is a carve: it applies to both views.
 		vec3 n = vec3(float(b.z & 0x3FFu), float((b.z >> 10) & 0x3FFu),
 		              float((b.z >> 20) & 0x3FFu));
 		float m = max(radius, 0.0);
 		float bd = op_box_sdf(c - vec3(m), c + n * OCCUPANCY_CELL_SIZE + vec3(m), p);
 		if (-bd > sdf) { sdf = -bd; if (sdf > 0.0) mat = 0u; }
+		if (-bd > osdf) { osdf = -bd; if (osdf > 0.0) omat = 0u; }
 		return;
 	}
 	if (type == OP_VOLUME_ADD) {
@@ -681,6 +696,10 @@ void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat) {
 		uint vm;
 		sample_field_volume(int(b.z), c, radius, int(b.w), p, vd, vm);
 		if (vd < sdf) { sdf = vd; if (sdf <= 0.0 && vm != 0u) mat = vm; }
+		if (vd < osdf && !mat_transparent(vm)) {
+			osdf = vd;
+			if (osdf <= 0.0 && vm != 0u) omat = vm;
+		}
 #endif
 		return;
 	}
@@ -693,10 +712,16 @@ void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat) {
 	float sp = length(p - c) - radius;
 	if (type == OP_SPHERE_SUBTRACT) {
 		if (-sp > sdf) { sdf = -sp; if (sdf > 0.0) mat = 0u; }
+		if (-sp > osdf) { osdf = -sp; if (osdf > 0.0) omat = 0u; }
 	} else if (type == OP_SPHERE_ADD) {
 		if (sp < sdf) { sdf = sp; if (sdf <= 0.0) mat = material; }
+		if (sp < osdf && !mat_transparent(material)) {
+			osdf = sp;
+			if (osdf <= 0.0) omat = material;
+		}
 	} else if (type == OP_SPHERE_PAINT) {
 		if (sp <= 0.0 && sdf <= 0.0) mat = material;
+		if (sp <= 0.0 && osdf <= 0.0 && !mat_transparent(material)) omat = material;
 	}
 }
 
@@ -707,15 +732,28 @@ void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat) {
 #define FIELD_OP_INDEX(base, i) ((base) + (i))
 #endif
 
+// The union AND the opaque view of the same point, from ONE pass over the op stack. The bake
+// sites that store the opaque view (the brick lattice, its material projection and the
+// residency probe) read osdf/omat; every other consumer reads sdf/mat and is unaffected.
 // op_base is the index of the region's first op in the pool (region_slot * MAX_REGION_OPS).
-void eval_field(vec3 p, uint op_base, uint op_count, out float sdf, out uint mat) {
+void eval_field_pair(vec3 p, uint op_base, uint op_count, out float sdf, out uint mat,
+		out float osdf, out uint omat) {
 #ifdef FIELD_OVERRIDE_SDF_BINDING
 	if (!sample_field_override(p, op_base, sdf, mat)) eval_base_field(p, sdf, mat);
 #else
 	eval_base_field(p, sdf, mat);
 #endif
+	osdf = sdf;
+	omat = mat;
 	for (uint i = 0u; i < op_count; i++)
-		apply_field_op(FIELD_OP_INDEX(op_base, i), p, sdf, mat);
+		apply_field_op(FIELD_OP_INDEX(op_base, i), p, sdf, mat, osdf, omat);
+}
+
+// The union alone. Byte for byte what this returned before the opaque accumulator existed.
+void eval_field(vec3 p, uint op_base, uint op_count, out float sdf, out uint mat) {
+	float osdf;
+	uint omat;
+	eval_field_pair(p, op_base, op_count, sdf, mat, osdf, omat);
 }
 
 void apply_field_op_gradient(uint index, vec3 p, inout float sdf, inout uint mat, inout vec3 grad, inout bool exact) {

@@ -60,10 +60,11 @@ void IslandAtlas::teardown() {
 	for (bool &live : slot_live_) live = false;
 }
 
-bool IslandAtlas::upload_mip(RenderingDevice *rd, int slot, const ve::VolumeData &data) {
+bool IslandAtlas::upload_mip(RenderingDevice *rd, int slot, const ve::VolumeData &data,
+		bool opaque) {
 	if (!rd || !is_valid() || slot < 0 || slot >= kMaxIslands) return false;
 	std::vector<uint8_t> mip;
-	ve::build_volume_mip(data, &mip);
+	ve::build_volume_mip(data, &mip, opaque);
 	if (static_cast<int>(mip.size()) != kMipPerSlot * 2) return false;
 	PackedByteArray b;
 	b.resize(static_cast<int64_t>(mip.size()));
@@ -74,7 +75,7 @@ bool IslandAtlas::upload_mip(RenderingDevice *rd, int slot, const ve::VolumeData
 }
 
 void IslandAtlas::upload_descriptors(RenderingDevice *rd, const IslandSlotDesc *descs,
-		int count) {
+		int count, bool transparency_enabled) {
 	if (!rd || !is_valid() || !descs) return;
 	PackedByteArray b;
 	b.resize(kMaxIslands * kDescBytes);
@@ -99,7 +100,7 @@ void IslandAtlas::upload_descriptors(RenderingDevice *rd, const IslandSlotDesc *
 		f[base + 15] = d.voxel;
 		i[base + 16] = d.live ? d.dim : 0; // dim 0 == dead, tested by the shader
 		i[base + 17] = d.volume_slot; // the shared volume buffer's stride index
-		i[base + 18] = 0;
+		i[base + 18] = (d.live && d.transparent && transparency_enabled) ? 1 : 0; // opaque view
 		i[base + 19] = 0;
 		slot_live_[s] = d.live;
 		if (d.live) live_count_++;

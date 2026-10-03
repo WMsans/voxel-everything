@@ -766,6 +766,10 @@ Dictionary VoxelDebugHooks::debug_place_test_island_rotated(int slot, Vector3i l
 			// SDF/material/normal buffers with. Dropping it here parked a preserved island
 			// on the "no volume" path and made it vanish from the next placement onward.
 			d.volume_slot = i[17];
+			// Lane 18 is the opaque-view flag. Preserved for the same reason lane 17 is: a
+			// second placement that dropped it would leave a preserved transparent island
+			// marching as if it were opaque.
+			d.transparent = i[18] != 0;
 			d.voxel = f[15];
 			for (int a = 0; a < 3; a++) {
 				d.basis[a * 3 + 0] = f[a * 4 + 0];
@@ -792,7 +796,10 @@ Dictionary VoxelDebugHooks::debug_place_test_island_rotated(int slot, Vector3i l
 	// Task 6: compact normals share the pool; the test fixture's radial lattice is real
 	// render-reachable payload, not a fallback source.
 	world_->context().render->passes().atlas->stored_normals().upload_volume(device, vslot, volume);
-	if (!world_->context().render->passes().islands->upload_mip(device, slot, volume)) return d;
+	if (!world_->context().render->passes().islands->upload_mip(device, slot, volume,
+				world_->context().render->transparency_settings().enabled &&
+						ve::volume_has_transparent(volume)))
+		return d;
 
 	// The body's local frame is the birth world frame shifted so the body origin is the
 	// lattice's centre -- the same convention IslandManager uses (Task 13), so the rotation
@@ -817,9 +824,22 @@ Dictionary VoxelDebugHooks::debug_place_test_island_rotated(int slot, Vector3i l
 	desc.origin[2] += offset.z;
 	desc.recompute_world_aabb();
 	desc.volume_slot = vslot;
+	// Task 10: an island holding a transparent label renders through the opaque view and
+	// its shell draws the medium.
+	desc.transparent = ve::volume_has_transparent(volume);
 
 	all[slot] = desc;
-	world_->context().render->passes().islands->upload_descriptors(device, all, kMaxIslands);
+	world_->context().render->passes().islands->upload_descriptors(device, all, kMaxIslands,
+			world_->context().render->transparency_settings().enabled);
+	// This fixture uploads the island itself rather than queueing it, so it contours the
+	// shell here and hands it to the orchestrator the way drain_island_uploads() would.
+	if (desc.transparent && world_->context().render->transparency_settings().enabled) {
+		godot::IslandShell shell;
+		shell.atlas_slot = slot;
+		shell.voxel = desc.voxel;
+		ve::island_shell_blocks(volume, desc.lattice_origin, desc.voxel, &shell.blocks);
+		world_->context().render->queue_island_shell(std::move(shell));
+	}
 	world_->context().render->handoff().note_debug_slot(slot);
 	device->submit();
 	device->sync();

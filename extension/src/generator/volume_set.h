@@ -89,7 +89,11 @@ void extract_island_volume(const Generator &gen, const EditOp *ops, int op_count
 // Spec §3's "own min-max mip". Two bytes (min, max) per kVolumeMipStride^3 cell, INCLUSIVE
 // over the cell's corner range so a "no surface" verdict is a sound skip for the trilinear
 // reconstruction inside it -- the same soundness argument ve::build_brick_mips rests on.
-void build_volume_mip(const VolumeData &v, std::vector<uint8_t> *out);
+//
+// `opaque` builds the mip of the OPAQUE VIEW (world/opaque_view.h): the island marcher skips
+// cells by this chain, and under a transparent material the surface it must find is a label
+// boundary the union lattice does not have.
+void build_volume_mip(const VolumeData &v, std::vector<uint8_t> *out, bool opaque = false);
 
 // Trilinear SDF and nearest material from a dim^3 lattice placed at `origin` with pitch
 // `voxel`. Mirrored exactly by sample_field_volume() in shaders/field.glslh.

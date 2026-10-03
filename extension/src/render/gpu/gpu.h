@@ -115,6 +115,7 @@ struct RasterState {
 	RenderingDevice::CompareOperator compare = RenderingDevice::COMPARE_OP_GREATER_OR_EQUAL;
 	int color_attachments = 0; // each opaque (blend disabled)
 	bool logic_or = false;     // colour logic op OR (the seam-marker probe)
+	bool additive = false;     // every colour attachment adds (ONE, ONE): accumulation passes
 };
 
 // Pull-only triangles: no vertex format.

@@ -90,6 +90,8 @@
 #include <godot_cpp/core/memory.hpp>
 
 #include "debug/hooks_common.h"
+#include "transparency/shell_grid.h"
+#include "world/edit_log.h"
 
 namespace godot {
 
@@ -133,6 +135,8 @@ Dictionary VoxelDebugHooks::debug_lod_stats() {
 	}
 	d["pending_request_ids"] = pending_request_ids;
 	d["op_overflow"] = s.op_overflow;
+	d["shell_chunks"] = s.shell_chunks;
+	d["shell_pages"] = s.shell_pages;
 	d["partial_allocations"] = s.partial_allocations;
 	d["builds_in_flight"] = world_->mesh_service() && world_->mesh_service()->lod_busy() ? 1 : 0;
 	// The benchmark's horizon tracker reads this name; same count as requests_pending.
@@ -645,66 +649,61 @@ Dictionary VoxelDebugHooks::debug_lod_cull_debug() {
 	return d;
 }
 
-Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
-	Dictionary d;
-	world_->ensure_physics_initialized();
-	if (!world_->physics_ready() || !world_->mesh_service()) return d;
-	constexpr int kFineCount = ve::kLodFineLattice * ve::kLodFineLattice * ve::kLodFineLattice;
-	constexpr int kReducedCount =
-			ve::kLodChunkLattice * ve::kLodChunkLattice * ve::kLodChunkLattice;
-	const ve::IVec3 c{coord.x, coord.y, coord.z};
-	std::vector<ve::EditOp> ops;
-	if (!world_->context().lod->gather_ops(level, c, &ops)) {
-		d["op_overflow"] = true;
-		return d;
-	}
+namespace {
 
-	std::vector<uint8_t> fine_sdf, reduced_sdf;
-	std::vector<uint16_t> fine_mat, reduced_mat;
-	LodBuildResult result;
-	bool ok = false;
-	float origin[3];
-	ve::lod_chunk_origin(level, c, origin);
-	const ve::IVec3 region = ve::region_of_point(origin[0], origin[1], origin[2]);
-	// Mirror the shipped worker: MeshService publishes EVERY consolidated region's bricks and
-	// table into its one pool, and the job carries the origin region's table. Copied under the
-	// edit lock so the upload below never reads the live store from the worker thread.
-	struct TableCopy {
-		int table = -1;
-		std::vector<std::pair<int, int>> entries;
-	};
-	int override_table = -1;
-	std::vector<TableCopy> table_copies;
-	std::vector<std::pair<std::tuple<int, int, int>, int>> table_regions;
-	std::vector<std::pair<int, ve::OverrideBrick>> brick_copies;
-	{
-		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
-		override_table = world_->context().store->override_table_for_region(region);
-		const ve::OverrideStore *store_overrides = world_->context().store->overrides();
-		if (store_overrides) {
-			for (const auto &it : world_->context().store->override_tables()) {
-				const ve::IVec3 base{std::get<0>(it.first) * ve::kRegionBricks,
-						std::get<1>(it.first) * ve::kRegionBricks,
-						std::get<2>(it.first) * ve::kRegionBricks};
-				TableCopy copy;
-				copy.table = it.second;
-				for (int z = 0; z < ve::kRegionBricks; z++)
-					for (int y = 0; y < ve::kRegionBricks; y++)
-						for (int x = 0; x < ve::kRegionBricks; x++) {
-							const ve::IVec3 b{base.x + x, base.y + y, base.z + z};
-							const int slot = store_overrides->slot_of(b);
-							if (slot < 0) continue;
-							const ve::OverrideBrick *data = store_overrides->data(slot);
-							if (!data) continue;
-							brick_copies.emplace_back(slot, *data);
-							copy.entries.emplace_back(ve::brick_index_in_region(b), slot);
-						}
-				table_copies.push_back(std::move(copy));
-				table_regions.emplace_back(it.first, it.second);
-			}
-		}
+// What a per-call diagnostic LodBuildPass has to be fed to see the same world the shipped
+// worker sees: MeshService publishes EVERY consolidated region's bricks and table into its
+// one pool, and the job carries the origin region's table.
+struct DiagTable {
+	int table = -1;
+	std::vector<std::pair<int, int>> entries; // brick index in region -> pool slot
+};
+
+struct DiagTables {
+	int origin_table = -1;
+	std::vector<DiagTable> tables;
+	std::vector<std::pair<int, ve::OverrideBrick>> bricks; // pool slot -> brick
+	std::vector<std::pair<std::tuple<int, int, int>, int>> regions;
+};
+
+// Copied under the edit lock so the upload below never reads the live store from the
+// worker thread.
+void snapshot_diag_tables(VoxelWorld *world, ve::IVec3 region, DiagTables *out) {
+	std::lock_guard<std::mutex> lock(world->context().store->edit_mutex());
+	out->origin_table = world->context().store->override_table_for_region(region);
+	const ve::OverrideStore *store_overrides = world->context().store->overrides();
+	if (!store_overrides) return;
+	for (const auto &it : world->context().store->override_tables()) {
+		const ve::IVec3 base{std::get<0>(it.first) * ve::kRegionBricks,
+				std::get<1>(it.first) * ve::kRegionBricks,
+				std::get<2>(it.first) * ve::kRegionBricks};
+		DiagTable copy;
+		copy.table = it.second;
+		for (int z = 0; z < ve::kRegionBricks; z++)
+			for (int y = 0; y < ve::kRegionBricks; y++)
+				for (int x = 0; x < ve::kRegionBricks; x++) {
+					const ve::IVec3 b{base.x + x, base.y + y, base.z + z};
+					const int slot = store_overrides->slot_of(b);
+					if (slot < 0) continue;
+					const ve::OverrideBrick *data = store_overrides->data(slot);
+					if (!data) continue;
+					out->bricks.emplace_back(slot, *data);
+					copy.entries.emplace_back(ve::brick_index_in_region(b), slot);
+				}
+		out->tables.push_back(std::move(copy));
+		out->regions.emplace_back(it.first, it.second);
 	}
-	world_->mesh_service()->run_sync([&](MeshPass &pass) {
+}
+
+// One diagnostic build on a per-call local device. The `fine_*`/`reduced_*` out-params
+// receive the lattices debug_lod_diff compares against; nullptr for what a caller does not
+// need. `job`'s override_table is taken from `tables`, not from the caller.
+bool run_diag_lod_build(VoxelWorld *world, const DiagTables &tables, const LodBuildJob &job,
+		LodBuildResult *out, std::vector<uint8_t> *fine_sdf, std::vector<uint16_t> *fine_mat,
+		std::vector<uint8_t> *reduced_sdf, std::vector<uint16_t> *reduced_mat) {
+	constexpr int kFineCount = ve::kLodFineLattice * ve::kLodFineLattice * ve::kLodFineLattice;
+	bool ok = false;
+	world->mesh_service()->run_sync([&](MeshPass &pass) {
 		(void)pass;
 		// The worker thread owns this device for the duration of the diagnostic. Task 10
 		// moves LodBuildPass into MeshService itself; until then a per-call local device is
@@ -726,14 +725,14 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 		// no set, as elsewhere.
 		FieldContextSet lod_context;
 		if (lod_context.initialize(rd, lod.field_shader(),
-				world_->context().store->terrain_pipeline())) {
+				world->context().store->terrain_pipeline())) {
 			lod.set_field_context(&lod_context);
 		}
 		for (int slot = 0; slot < ve::kMaxVolumes; slot++) {
-			const ve::VolumeData *v = world_->context().store->volumes().get(slot);
+			const ve::VolumeData *v = world->context().store->volumes().get(slot);
 			if (v) lod.volumes().upload(rd, slot, *v);
 		}
-		for (const auto &brick : brick_copies) {
+		for (const auto &brick : tables.bricks) {
 			if (!lod.upload_override(brick.first, brick.second)) {
 				lod.set_field_context(nullptr);
 				lod_context.teardown();
@@ -744,25 +743,24 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 		}
 		// Region slots are only the region map's index on this private device; the LoD
 		// shader reads the table from the job's push constant.
-		for (size_t i = 0; i < table_copies.size(); i++)
-			lod.set_override_table(static_cast<int>(i), table_copies[i].table, table_copies[i].entries);
+		for (size_t i = 0; i < tables.tables.size(); i++)
+			lod.set_override_table(static_cast<int>(i), tables.tables[i].table,
+					tables.tables[i].entries);
 		std::map<std::tuple<int, int, int>, int> tagged;
-		for (const auto &region_table : table_regions) tagged[region_table.first] = region_table.second;
+		for (const auto &region_table : tables.regions)
+			tagged[region_table.first] = region_table.second;
 		lod.overrides().set_table_tags(rd, ve::override_table_tags(tagged));
-		LodBuildJob job;
-		job.level = level;
-		job.coord = c;
-		job.ops = ops;
-		job.override_table = override_table;
-		ok = lod.build_sync(job, &result, &reduced_sdf, &reduced_mat);
-		if (ok) {
+		LodBuildJob j = job;
+		j.override_table = tables.origin_table;
+		ok = lod.build_sync(j, out, reduced_sdf, reduced_mat);
+		if (ok && fine_sdf && fine_mat) {
 			const PackedByteArray fs = rd->texture_get_data(lod.fine_sdf(), 0);
 			const PackedByteArray fm = rd->texture_get_data(lod.fine_mat(), 0);
 			if (fs.size() >= kFineCount)
-				fine_sdf.assign(fs.ptr(), fs.ptr() + kFineCount);
+				fine_sdf->assign(fs.ptr(), fs.ptr() + kFineCount);
 			if (fm.size() >= static_cast<int64_t>(kFineCount) * 2) {
-				fine_mat.resize(kFineCount);
-				std::memcpy(fine_mat.data(), fm.ptr(), static_cast<size_t>(kFineCount) * 2);
+				fine_mat->resize(kFineCount);
+				std::memcpy(fine_mat->data(), fm.ptr(), static_cast<size_t>(kFineCount) * 2);
 			}
 		}
 		// The borrowed set must die before its device does (stack destruction runs after
@@ -772,6 +770,39 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 		lod.teardown();
 		memdelete(rd);
 	});
+	return ok;
+}
+
+} // namespace
+
+Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
+	Dictionary d;
+	world_->ensure_physics_initialized();
+	if (!world_->physics_ready() || !world_->mesh_service()) return d;
+	constexpr int kReducedCount =
+			ve::kLodChunkLattice * ve::kLodChunkLattice * ve::kLodChunkLattice;
+	const ve::IVec3 c{coord.x, coord.y, coord.z};
+	std::vector<ve::EditOp> ops;
+	if (!world_->context().lod->gather_ops(level, c, &ops)) {
+		d["op_overflow"] = true;
+		return d;
+	}
+
+	std::vector<uint8_t> fine_sdf, reduced_sdf;
+	std::vector<uint16_t> fine_mat, reduced_mat;
+	LodBuildResult result;
+	float origin[3];
+	ve::lod_chunk_origin(level, c, origin);
+	const ve::IVec3 region = ve::region_of_point(origin[0], origin[1], origin[2]);
+	DiagTables tables;
+	snapshot_diag_tables(world_, region, &tables);
+	LodBuildJob job;
+	job.level = level;
+	job.coord = c;
+	job.ops = ops;
+	const bool ok = run_diag_lod_build(world_, tables, job, &result, &fine_sdf, &fine_mat,
+			&reduced_sdf, &reduced_mat);
+	const int kFineCount = ve::kLodFineLattice * ve::kLodFineLattice * ve::kLodFineLattice;
 	if (!ok || result.failed || static_cast<int>(fine_sdf.size()) != kFineCount ||
 			static_cast<int>(fine_mat.size()) != kFineCount ||
 			static_cast<int>(reduced_sdf.size()) != kReducedCount ||
@@ -837,9 +868,23 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 	// 3. The quads against ve::lod_contour on the GPU's own reduced bytes. The CPU side gets
 	// skirts appended exactly as LodBuildPass::build_sync does, so the two sets cover the
 	// same final records.
+	// Spec §5: the GPU contours the OPAQUE lattice for terrain and the original lattice for
+	// the shell, appending the shell after the skirts. The reference does exactly that.
+	std::vector<uint8_t> opaque_sdf(kReducedCount);
+	ve::lod_opaque_lattice(reduced_sdf.data(), reduced_mat.data(), cell, opaque_sdf.data());
 	ve::LodContourResult ref;
-	ve::lod_contour(reduced_sdf.data(), reduced_mat.data(), &ref);
+	ve::lod_contour(opaque_sdf.data(), reduced_mat.data(), &ref);
 	ve::lod_append_skirts(&ref.quads, &ref.normals);
+	ve::LodContourResult shell;
+	if (ve::lod_has_transparent(reduced_sdf.data(), reduced_mat.data()))
+		ve::lod_contour(reduced_sdf.data(), reduced_mat.data(), &shell, true);
+	ve::lod_append_shell(&ref.quads, &ref.normals, shell.quads, shell.normals);
+	int shell_quads = 0;
+	// Exact, not an over-count: on a transparent-free chunk no terrain quad's solid side can
+	// be transparent, and lod_skirt.cpp copies the parent's fields, so no skirt can either.
+	for (const ve::LodQuad &q : result.quads)
+		if (ve::lod_quads_have_transparent(&q, 1)) shell_quads++;
+	d["shell_quads"] = shell_quads;
 
 	using QuadKey = std::array<int, 10>; // u xyz, axis, sign, ribbon tag/face/edge/reverse, material
 	using Offsets = std::array<int, 12>;
@@ -936,6 +981,45 @@ Dictionary VoxelDebugHooks::debug_lod_diff(int level, Vector3i coord) {
 	}
 	d["reduced_hash"] = static_cast<int64_t>(hash);
 	d["op_count"] = static_cast<int>(ops.size());
+	return d;
+}
+
+// Spec §5: one near-field shell chunk, built on its own at ve::kShellCell. Diagnostic only
+// -- the driver that feeds the near shell is Task 7.
+Dictionary VoxelDebugHooks::debug_shell_build(Vector3i coord) {
+	Dictionary d;
+	world_->ensure_physics_initialized();
+	if (!world_->physics_ready() || !world_->mesh_service()) return d;
+	LodBuildJob job;
+	job.level = ve::kShellLevel;
+	job.coord = ve::IVec3{coord.x, coord.y, coord.z};
+	job.shell_only = true;
+	{
+		float lo[3], hi[3];
+		ve::shell_chunk_aabb(job.coord, lo, hi);
+		// Padded exactly as the far field pads, so an op just outside the chunk still
+		// reaches the field: the lattice filter needs ve::kLatticeFilterPad around it.
+		const float pad = std::max(2.0f * ve::kShellCell, ve::kLatticeFilterPad);
+		for (int a = 0; a < 3; a++) { lo[a] -= pad; hi[a] += pad; }
+		std::lock_guard<std::mutex> lock(world_->context().store->edit_mutex());
+		if (world_->context().store->edit_log())
+			ve::collect_ops_for_aabb(*world_->context().store->edit_log(), lo, hi, &job.ops);
+	}
+	float origin[3];
+	ve::shell_chunk_origin(job.coord, origin);
+	DiagTables tables;
+	snapshot_diag_tables(world_, ve::region_of_point(origin[0], origin[1], origin[2]), &tables);
+	LodBuildResult r;
+	d["ok"] = run_diag_lod_build(world_, tables, job, &r, nullptr, nullptr, nullptr, nullptr) &&
+			!r.failed;
+	d["quads"] = static_cast<int>(r.quads.size());
+	bool all = true;
+	for (const ve::LodQuad &q : r.quads) {
+		ve::LodQuadFields f{};
+		ve::lod_quad_unpack(q, &f);
+		all = all && ve::material_transparent(static_cast<uint16_t>(f.material));
+	}
+	d["all_transparent"] = all;
 	return d;
 }
 

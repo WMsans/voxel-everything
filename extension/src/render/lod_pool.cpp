@@ -119,6 +119,15 @@ void LodPool::release_chunk_slot(int slot) {
 
 bool LodPool::upload(int level, ve::IVec3 coord, const std::vector<ve::LodQuad> &quads,
 		const std::vector<ve::LodQuadNormals> &normals, std::vector<int> *pages_out) {
+	float origin[3];
+	ve::lod_chunk_origin(level, coord, origin);
+	return upload_at(origin, ve::lod_cell_size(level), static_cast<uint32_t>(level), 0u, quads,
+			normals, pages_out);
+}
+
+bool LodPool::upload_at(const float origin[3], float cell, uint32_t level, uint32_t flags,
+		const std::vector<ve::LodQuad> &quads, const std::vector<ve::LodQuadNormals> &normals,
+		std::vector<int> *pages_out) {
 	if (!rd_ || !quads_.is_valid() || !normals_.is_valid() || quads.empty() || !pages_out ||
 			normals.size() != quads.size()) return false;
 	const int pages_needed = ve::lod_pages_for_quads(static_cast<int>(quads.size()));
@@ -155,10 +164,6 @@ bool LodPool::upload(int level, ve::IVec3 coord, const std::vector<ve::LodQuad> 
 		return false;
 	}
 
-	float origin[3];
-	ve::lod_chunk_origin(level, coord, origin);
-	const float cell = ve::lod_cell_size(level);
-
 	// Chunk record: two vec4 = (origin.xyz, cell), (uint level, uint flags, uint pad, uint pad).
 	PackedByteArray chunk_bytes;
 	chunk_bytes.resize(32);
@@ -170,8 +175,8 @@ bool LodPool::upload(int level, ve::IVec3 coord, const std::vector<ve::LodQuad> 
 	// The second vec4 is integer data; write it through a uint32 view so the shader's
 	// `uint level` reads the actual level, not a float bit pattern.
 	uint32_t *meta = reinterpret_cast<uint32_t *>(chunk_bytes.ptrw()) + 4;
-	meta[0] = static_cast<uint32_t>(level);
-	meta[1] = 0u; // flags
+	meta[0] = level;
+	meta[1] = flags;
 	meta[2] = 0u; // pad
 	meta[3] = 0u; // pad
 	rd_->buffer_update(chunks_, static_cast<uint32_t>(chunk_slot) * 32, 32, chunk_bytes);

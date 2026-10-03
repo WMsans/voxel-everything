@@ -1,0 +1,11 @@
+// The OPAQUE VIEW: the world as the raymarcher sees it, in which a transparent material is
+// air. Mirror of ve::opaque_view (extension/src/world/opaque_view.h). Pull common.glslh in
+// first: mat_transparent comes from the material table it includes.
+const float OPAQUE_OUTSIDE = 0.5 * VOXEL_SIZE;
+
+void opaque_view(inout float sdf, inout uint mat, float outside) {
+	if (sdf <= 0.0 && mat_transparent(mat)) {
+		sdf = outside;
+		mat = 0u;
+	}
+}

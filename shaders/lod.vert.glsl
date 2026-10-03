@@ -45,5 +45,13 @@ void main() {
 	uint packed_normal = (normal_pair >> ((corner & 1u) * 16u)) & 0xFFFFu;
 	v_normal = oct_decode_snorm8(packed_normal);
 	v_material = lod_bits_get(w, 78, 16);
+	// Spec §5: with transparency on, a shell quad belongs to transparent.vert.glsl, not to the
+	// terrain. Collapse it outside the clip volume so it rasterizes nothing. pc.fade.y is 1
+	// exactly when transparency is enabled; off, the shell draws here as the opaque surface
+	// the material used to be.
+	if (pc.fade.y > 0.5 && mat_transparent(v_material)) {
+		gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+		return;
+	}
 	gl_Position = pc.view_proj * vec4(v_wpos, 1.0);
 }

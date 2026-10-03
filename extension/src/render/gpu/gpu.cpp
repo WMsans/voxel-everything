@@ -248,7 +248,15 @@ RID raster_pipeline(RenderingDevice *rd, Group &group, const RID &shader, int64_
 	for (int i = 0; i < state.color_attachments; i++) {
 		Ref<RDPipelineColorBlendStateAttachment> a;
 		a.instantiate();
-		a->set_enable_blend(false);
+		a->set_enable_blend(state.additive);
+		if (state.additive) {
+			a->set_src_color_blend_factor(RenderingDevice::BLEND_FACTOR_ONE);
+			a->set_dst_color_blend_factor(RenderingDevice::BLEND_FACTOR_ONE);
+			a->set_color_blend_op(RenderingDevice::BLEND_OP_ADD);
+			a->set_src_alpha_blend_factor(RenderingDevice::BLEND_FACTOR_ONE);
+			a->set_dst_alpha_blend_factor(RenderingDevice::BLEND_FACTOR_ONE);
+			a->set_alpha_blend_op(RenderingDevice::BLEND_OP_ADD);
+		}
 		attachments.push_back(a);
 	}
 	Ref<RDPipelineColorBlendState> cb;

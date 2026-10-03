@@ -9,6 +9,7 @@
 #include "lod/lod_quad.h"
 #include "render/volume_pool.h"
 #include "render/override_pool.h"
+#include "transparency/shell_grid.h"
 #include "render/gpu/gpu.h"
 
 namespace godot {
@@ -24,6 +25,10 @@ struct LodBuildJob {
 	ve::IVec3 coord{};
 	std::vector<ve::EditOp> ops;
 	int override_table = -1;
+	// A near-field shell chunk (spec §5): sampled at ve::kShellCell from
+	// ve::shell_chunk_origin(coord), and only the shell is contoured. `level` is
+	// ve::kShellLevel and is identity only.
+	bool shell_only = false;
 };
 
 struct LodBuildResult {
@@ -33,10 +38,12 @@ struct LodBuildResult {
 	std::vector<ve::LodQuadNormals> normals;
 	bool overflow = false;
 	bool failed = false; // readback was short/invalid; treat as a failed build
+	bool shell_only = false; // `quads`/`normals` hold the shell stream alone, no skirts
 };
 
-// LoD chunk builder on the worker RenderingDevice. Four dispatches per chunk:
-// field (half-cell samples), tent reduce, cell fractions, packed quads.
+// LoD chunk builder on the worker RenderingDevice. Per chunk: field, tent reduce, opaque
+// lattice, then cell fractions + packed quads twice -- the shell (original lattice,
+// transparent quads only) and the terrain mesh (opaque lattice).
 class LodBuildPass {
 public:
 	~LodBuildPass();
@@ -81,11 +88,12 @@ public:
 private:
 	void reset_counts();
 	void upload_ops(const LodBuildJob &job, int job_index);
-	void push(int64_t list, const LodBuildJob &job, int job_index);
+	void push(int64_t list, const LodBuildJob &job, int job_index, int mode = 0);
 	void record_field(int64_t list, const LodBuildJob &job, int job_index);
 	void record_reduce(int64_t list, const LodBuildJob &job, int job_index);
-	void record_frac(int64_t list, const LodBuildJob &job, int job_index);
-	void record_quads(int64_t list, const LodBuildJob &job, int job_index);
+	void record_opaque(int64_t list, const LodBuildJob &job, int job_index);
+	void record_frac(int64_t list, const LodBuildJob &job, int job_index, RID set, int mode);
+	void record_quads(int64_t list, const LodBuildJob &job, int job_index, RID set, int mode);
 	void record_job(int64_t list, const LodBuildJob &job, int job_index);
 	void read_job(int job_index, LodBuildResult *out);
 
@@ -96,17 +104,21 @@ private:
 	RID fine_mat_;     // R16_UINT 3D, 69^3 material
 	RID lat_sdf_;      // R8_UNORM 3D, 34^3 encoded sdf
 	RID lat_mat_;      // R16_UINT 3D, 34^3 material
-	RID frac_;         // uint per mesh cell, max_jobs * 33^3 (first slice is the live one)
+	RID opq_sdf_;      // R8_UNORM 3D, 34^3: the opaque lattice (spec §5)
+	RID frac_;         // uint per mesh cell, max_jobs * 33^3 (the terrain write is the live one)
 	RID quads_;        // 3 uint per quad, max_jobs * kLodMaxQuadsPerChunk
 	RID normals_;      // 2 uint per quad, aligned with quads_
-	RID counts_;       // 2 uint per job: quad count, overflow flag
+	RID shell_quads_;   // 3 uint per quad, max_jobs * kLodMaxQuadsPerChunk
+	RID shell_normals_; // 2 uint per quad, aligned with shell_quads_
+	RID counts_;       // 4 uint per job: quad count, overflow, shell count, flags
 	RID ops_;          // max_jobs * kMaxRegionOps EditOps
 	VolumePool volumes_;
 	OverridePool owned_overrides_;
 	OverridePool *overrides_ = nullptr;
 	gpu::Group group_;
-	gpu::Program field_program_, reduce_program_, frac_program_, quads_program_;
-	RID field_set_, reduce_set_, frac_set_, quads_set_;
+	gpu::Program field_program_, reduce_program_, opaque_program_, frac_program_, quads_program_;
+	RID field_set_, reduce_set_, opaque_set_, frac_set_, frac_shell_set_, quads_set_,
+			quads_shell_set_;
 
 	bool in_flight_ = false;
 	std::vector<LodBuildJob> batch_; // the jobs in flight, in job order

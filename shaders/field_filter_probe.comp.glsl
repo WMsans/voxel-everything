@@ -28,9 +28,13 @@ void main() {
 	float sdf;
 	uint mat;
 	eval_base_field(p, sdf, mat);
+	// The opaque accumulator this oracle does not read: apply_field_op updates both in one
+	// pass, and seeded equal here it is simply discarded.
+	float osdf = sdf;
+	uint omat = mat;
 	for (uint op = 0u; op < pc.cfg.y; op++) {
 		if (op_touches_aabb(op, p, p, LATTICE_FILTER_PAD))
-			apply_field_op(op, p, sdf, mat);
+			apply_field_op(op, p, sdf, mat, osdf, omat);
 	}
 	results.v[i] = vec4(sdf, float(mat), 0.0, 0.0);
 }

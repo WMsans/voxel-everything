@@ -40,6 +40,9 @@ struct IslandSlotDesc {
 	float lattice_origin[3] = {0, 0, 0}; // the lattice's minimum corner in LOCAL space
 	float voxel = ve::kIslandVoxelFine;
 	int dim = ve::kIslandDim;
+	// The island's volume holds a transparent label: the marcher applies the opaque view to
+	// it and the transparent shell draws its medium. Set by whoever queues the volume.
+	bool transparent = false;
 	float aabb_lo[3] = {0, 0, 0}; // world AABB of the rotated lattice box (Task 11's cull)
 	float aabb_hi[3] = {0, 0, 0};
 

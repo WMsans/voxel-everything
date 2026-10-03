@@ -1,5 +1,6 @@
 #include "generator/edit_ops.h"
 #include "connectivity/occupancy.h"
+#include "world/material_table.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -55,6 +56,104 @@ void padded_range(const EditOp &op, float pitch, float pad, IVec3 *lo, IVec3 *hi
 }
 
 } // namespace
+
+// One op applied to BOTH accumulators in one pass. The `s` branch of every case is
+// verbatim what apply_op has always done -- the union is unchanged, byte for byte -- and the
+// `o` branch is the same op under the opaque rule, where a transparent material is air and
+// therefore contributes nothing at all. GLSL mirror: apply_field_op in
+// shaders/field_ops.glslh.
+static void apply_op_pair(Sample *s, Sample *o, const EditOp &op, float x, float y, float z,
+		const VolumeStore *volumes) {
+	switch (op.type) {
+		case kOpSphereSubtract: {
+			// CSG subtract: max(s, -sphere). A point that becomes air carries no material,
+			// matching the generator's own convention (Sample::material == 0 above ground).
+			// op.radius is already the EFFECTIVE radius: ve::removal_radius resolved the
+			// struck material's hardness once, when the op was built. Scaling per sample
+			// here instead kept the sign right but broke the magnitude as a distance bound
+			// at a material seam, and the near-field marcher stepped through the lip.
+			// Mirrored in shaders/field.glslh. A carve is a carve: it applies to both views.
+			const float sp = sphere_sdf(op, x, y, z);
+			if (-sp > s->sdf) {
+				s->sdf = -sp;
+				if (s->sdf > 0.0f) s->material = 0;
+			}
+			if (-sp > o->sdf) {
+				o->sdf = -sp;
+				if (o->sdf > 0.0f) o->material = 0;
+			}
+			return;
+		}
+		case kOpSphereAdd: {
+			// CSG union: min(s, sphere). The material changes only where the sphere is the
+			// winning term and the result is solid -- filling air, not recolouring rock.
+			const float sp = sphere_sdf(op, x, y, z);
+			if (sp < s->sdf) {
+				s->sdf = sp;
+				if (s->sdf <= 0.0f) s->material = static_cast<uint16_t>(op.material);
+			}
+			if (sp < o->sdf && !material_transparent(static_cast<uint16_t>(op.material))) {
+				o->sdf = sp;
+				if (o->sdf <= 0.0f) o->material = static_cast<uint16_t>(op.material);
+			}
+			return;
+		}
+		case kOpSpherePaint: {
+			const float sp = sphere_sdf(op, x, y, z);
+			if (sp <= 0.0f && s->sdf <= 0.0f) s->material = static_cast<uint16_t>(op.material);
+			if (sp <= 0.0f && o->sdf <= 0.0f &&
+					!material_transparent(static_cast<uint16_t>(op.material)))
+				o->material = static_cast<uint16_t>(op.material);
+			return;
+		}
+		case kOpBoxSubtract: {
+			float lo[3], hi[3];
+			op_world_aabb(op, lo, hi);
+			// The clearance margin expands the carved box inside the evaluator only: without
+			// it the cell-aligned faces of an island carve read as the exact SDF == 0, which
+			// cell-aligned samplers (mesh lattice, brick lattice, occupancy probe) turn into
+			// phantom walls inside the carved region. Mirrored in shaders/field.glslh.
+			const float m = op.radius > 0.0f ? op.radius : 0.0f;
+			for (int a = 0; a < 3; a++) {
+				lo[a] -= m;
+				hi[a] += m;
+			}
+			const float bd = box_sdf(lo, hi, x, y, z);
+			if (-bd > s->sdf) {
+				s->sdf = -bd;
+				if (s->sdf > 0.0f) s->material = 0;
+			}
+			if (-bd > o->sdf) {
+				o->sdf = -bd;
+				if (o->sdf > 0.0f) o->material = 0;
+			}
+			return;
+		}
+		case kOpVolumeAdd: {
+			VolumeSample vs{};
+			// Fail-soft (spec §8): an op whose volume is gone contributes nothing at all,
+			// rather than stamping undefined bytes into the terrain.
+			if (!volumes || !volumes->sample(static_cast<int>(op.aux[0]), x, y, z, op, &vs))
+				return;
+			if (vs.sdf < s->sdf) {
+				s->sdf = vs.sdf;
+				if (s->sdf <= 0.0f && vs.material != 0) s->material = vs.material;
+			}
+			if (vs.sdf < o->sdf && !material_transparent(vs.material)) {
+				o->sdf = vs.sdf;
+				if (o->sdf <= 0.0f && vs.material != 0) o->material = vs.material;
+			}
+			return;
+		}
+		default:
+			return;
+	}
+}
+
+void apply_ops_pair(Sample *s, Sample *opaque, const EditOp *ops, int count, float x, float y,
+		float z, const VolumeStore *volumes) {
+	for (int i = 0; i < count; i++) apply_op_pair(s, opaque, ops[i], x, y, z, volumes);
+}
 
 bool edit_op_is_well_formed(const EditOp &op) {
 	for (float p : op.pos)
@@ -212,76 +311,15 @@ void box_sdf_gradient(const float lo[3], const float hi[3], float x, float y, fl
 
 Sample apply_op(Sample s, const EditOp &op, float x, float y, float z,
 		const VolumeStore *volumes) {
-	switch (op.type) {
-		case kOpSphereSubtract: {
-			// CSG subtract: max(s, -sphere). A point that becomes air carries no material,
-			// matching the generator's own convention (Sample::material == 0 above ground).
-			// op.radius is already the EFFECTIVE radius: ve::removal_radius resolved the
-			// struck material's hardness once, when the op was built. Scaling per sample
-			// here instead kept the sign right but broke the magnitude as a distance bound
-			// at a material seam, and the near-field marcher stepped through the lip.
-			// Mirrored in shaders/field.glslh.
-			const float sp = sphere_sdf(op, x, y, z);
-			if (-sp > s.sdf) {
-				s.sdf = -sp;
-				if (s.sdf > 0.0f) s.material = 0;
-			}
-			return s;
-		}
-		case kOpSphereAdd: {
-			// CSG union: min(s, sphere). The material changes only where the sphere is the
-			// winning term and the result is solid — filling air, not recolouring rock.
-			const float sp = sphere_sdf(op, x, y, z);
-			if (sp < s.sdf) {
-				s.sdf = sp;
-				if (s.sdf <= 0.0f) s.material = static_cast<uint16_t>(op.material);
-			}
-			return s;
-		}
-		case kOpSpherePaint: {
-			const float sp = sphere_sdf(op, x, y, z);
-			if (sp <= 0.0f && s.sdf <= 0.0f) s.material = static_cast<uint16_t>(op.material);
-			return s;
-		}
-		case kOpBoxSubtract: {
-			float lo[3], hi[3];
-			op_world_aabb(op, lo, hi);
-			// The clearance margin expands the carved box inside the evaluator only: without
-			// it the cell-aligned faces of an island carve read as the exact SDF == 0, which
-			// cell-aligned samplers (mesh lattice, brick lattice, occupancy probe) turn into
-			// phantom walls inside the carved region. Mirrored in shaders/field.glslh.
-			const float m = op.radius > 0.0f ? op.radius : 0.0f;
-			for (int a = 0; a < 3; a++) {
-				lo[a] -= m;
-				hi[a] += m;
-			}
-			const float bd = box_sdf(lo, hi, x, y, z);
-			if (-bd > s.sdf) {
-				s.sdf = -bd;
-				if (s.sdf > 0.0f) s.material = 0;
-			}
-			return s;
-		}
-		case kOpVolumeAdd: {
-			VolumeSample vs{};
-			// Fail-soft (spec §8): an op whose volume is gone contributes nothing at all,
-			// rather than stamping undefined bytes into the terrain.
-			if (!volumes || !volumes->sample(static_cast<int>(op.aux[0]), x, y, z, op, &vs))
-				return s;
-			if (vs.sdf < s.sdf) {
-				s.sdf = vs.sdf;
-				if (s.sdf <= 0.0f && vs.material != 0) s.material = vs.material;
-			}
-			return s;
-		}
-		default:
-			return s;
-	}
+	Sample o = s;
+	apply_op_pair(&s, &o, op, x, y, z, volumes);
+	return s;
 }
 
 Sample apply_ops(Sample s, const EditOp *ops, int count, float x, float y, float z,
 		const VolumeStore *volumes) {
-	for (int i = 0; i < count; i++) s = apply_op(s, ops[i], x, y, z, volumes);
+	Sample o = s;
+	apply_ops_pair(&s, &o, ops, count, x, y, z, volumes);
 	return s;
 }
 

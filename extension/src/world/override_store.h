@@ -52,6 +52,14 @@ public:
 	OverrideBrick *data(int slot);
 	const OverrideBrick *data(int slot) const;
 
+	// Visits every stored brick as fn(IVec3 brick, const OverrideBrick &). Order is the
+	// index's (z, y, x). The caller holds whatever lock guards the store.
+	template <class F>
+	void for_each(F &&fn) const {
+		for (const auto &[key, slot] : index_)
+			fn(IVec3{key.x, key.y, key.z}, bricks_[static_cast<size_t>(slot)]);
+	}
+
 	// Trilinear SDF reconstruction over the stored lattice, with the containing cell's
 	// material. False when the point is in no override brick.
 	bool sample(float x, float y, float z, Sample *out) const override;

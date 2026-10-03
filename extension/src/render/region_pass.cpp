@@ -77,6 +77,9 @@ void RegionPass::mark(RenderingDevice *rd, int64_t list, ve::IVec3 region, int r
 	push.region[3] = region_slot;
 	push.lo[0] = lo.x; push.lo[1] = lo.y; push.lo[2] = lo.z;
 	push.hi[0] = hi.x; push.hi[1] = hi.y; push.hi[2] = hi.z;
+	// hi.w reaches brick_mark.comp.glsl as pc.hi.w: 1 = the activation probe also accepts an
+	// opaque-view surface. Left 0 otherwise, the mark shader is byte-for-byte as it was.
+	push.hi[3] = opaque_view_ ? 1 : 0;
 	push.cfg[0] = op_count;
 	push.cfg[2] = max_brick_jobs_;
 	// 0 = plain stream-in, 1 = force resident regeneration, 2 = edit: generate every

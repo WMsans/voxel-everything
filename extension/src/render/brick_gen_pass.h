@@ -26,9 +26,15 @@ public:
 	void dispatch(RenderingDevice *rd, int64_t list, const GpuAtlas &atlas,
 			const FieldContextSet *field_context);
 
+	// 1 bakes the OPAQUE VIEW (world/opaque_view.h) into the lattice: a transparent solid
+	// becomes "just outside", so the raymarcher sees air where only ice stands. 0 stores the
+	// union, which is what the world must be when transparency is off.
+	void set_opaque_view(bool on) { opaque_view_ = on; }
+
 private:
 	RenderingDevice *rd_ = nullptr;
 	ve::IVec3 atlas_bricks_{};
+	bool opaque_view_ = true;
 	gpu::Group group_;
 	gpu::Program program_;
 	RID set_;

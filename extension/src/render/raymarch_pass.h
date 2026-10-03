@@ -48,6 +48,10 @@ public:
 	RID albedo_texture() const { return albedo_; }
 	RID surface_texture() const { return surface_; }
 	RID hitpos_texture() const { return hitpos_; }
+	// The size the targets were last allocated at: the render resolution (the march
+	// resolution, which is its own scale). Callers that read a texture need the dimensions
+	// to index it -- targets_need_rebuild() compares the same two ints.
+	Vector2i target_size() const { return Vector2i(width_, height_); }
 	RID cost_buffer() const { return cost_buf_; }
 
 private:

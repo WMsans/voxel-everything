@@ -20,13 +20,16 @@
 // passes (godot-cpp + RenderingDevice headers), so it cannot compile without godot-cpp.
 
 #include <atomic>
+#include <cstdint>
 #include <map>
 #include <mutex>
 #include <set>
+#include <unordered_set>
 #include <vector>
 
 #include "core/edit_pipeline.h"
 #include "lod/lod_tree.h" // ve::LodKey / ve::LodWalkResult / ve::LodCamera / ve::LodOcclusion
+#include "transparency/shell_grid.h" // ve::ShellGrid / ve::shell_chunk_* (spec §5)
 #include "world/edit_log.h"
 
 namespace godot {
@@ -36,6 +39,7 @@ class LodPool;
 class RenderOrchestrator;
 class RenderingDevice;
 class WorldStore;
+struct IslandShell;
 
 // What the debug facade reports about the LoD runtime, copied in ONE hold of the lod mutex
 // (the hold debug_lod_stats used to take itself, through friendship). Plain data.
@@ -56,6 +60,8 @@ struct LodStats {
 	std::vector<ve::LodBuildRequest> requests; // what the last walk still wants built
 	int partial_allocations = 0;
 	int op_overflow = 0; // LoD builds refused because their visible ops exceed the cap
+	int shell_chunks = 0; // near-shell chunks in the grid (spec §5)
+	int shell_pages = 0;  // near-shell pages resident
 };
 
 class LodSystem : public ve::InvalidationSink {
@@ -79,7 +85,8 @@ public:
 	explicit LodSystem(Collaborators handles);
 
 	// THE lod mutex; guards lod_tree_, lod_walk_, lod_pages_of_, lod_page_quads_,
-	// lod_overflow_logged_ and lod_pool_ state between the render thread (tick) and
+	// lod_transparent_pages_, transparent_draw_pages_, lod_overflow_logged_ and lod_pool_ state
+	// between the render thread (tick) and
 	// main/tool threads (mark-dirty fan-out, debug stats). See core/edit_pipeline.h.
 	// (tick never holds mutex() across gather_ops; deferred edit marks are applied after
 	// releasing edit_mutex()).
@@ -95,6 +102,18 @@ public:
 	bool last_camera(float out[3]) const;
 	// Push the current walk's page list (with per-page quad counts) into the raster pass.
 	void prepare_raster();
+	// Spec §5: this walk's drawable pages that hold a transparent shell quad, for
+	// TransparentRasterPass. Refreshed by prepare_raster().
+	std::vector<ve::LodPageDraw> transparent_draw_pages() const;
+	// Every page the shell raster draws this frame: the far field's pages that hold a shell
+	// quad, every near-shell page, every island shell page. Refreshed by prepare_raster().
+	std::vector<ve::LodPageDraw> shell_draw_pages() const;
+	// Island shells (spec §5): uploads the freshly contoured ones as local-space pages whose
+	// chunk record names the island, and releases the pages of every slot not in `live_mask`.
+	// Render thread, before tick().
+	void apply_island_shells(std::vector<IslandShell> shells, uint32_t live_mask);
+	// False when the chunk's ops exceed kMaxRegionOps: the shell build is refused.
+	bool gather_shell_ops(ve::IVec3 coord, std::vector<ve::EditOp> *out);
 	// One cascade's shadow cut, pushed into the raster pass. Radius and min_level come from
 	// ve::sun_cascades(); the caller skips this entirely for a cascade that will not
 	// rebuild, which for cascade 2 is most frames.
@@ -160,6 +179,23 @@ private:
 	ve::LodWalkResult lod_walk_;
 	std::map<ve::LodKey, std::vector<int>> lod_pages_of_;
 	std::map<int, int> lod_page_quads_; // page -> number of quads stored in that page
+	std::unordered_set<int> lod_transparent_pages_; // pages holding at least one shell quad
+	std::vector<ve::LodPageDraw> transparent_draw_pages_; // this walk's, see below
+	// The near-field shell (spec §5). All guarded by lod_mutex_ except shell_dirty_, which
+	// record() sets under the edit lock and tick() reads and clears under it.
+	ve::ShellGrid shell_grid_;
+	std::map<ve::LodKey, std::vector<int>> shell_pages_of_; // key.level == ve::kShellLevel
+	// atlas slot -> the pages holding its shell. Released when the slot leaves the live mask.
+	std::map<int, std::vector<int>> island_shell_pages_;
+	std::vector<ve::LodPageDraw> shell_draw_pages_;
+	ve::IVec3 shell_cam_chunk_{INT32_MAX, 0, 0};
+	// The `enabled` the candidate set was last built under. A runtime toggle (a bound
+	// set_transparency_value) must force a recompute: with a parked camera the chunk test
+	// alone sees no change, so the stale candidate set would survive.
+	bool shell_enabled_ = false;
+	bool shell_dirty_ = true; // guarded by WorldStore::edit_mutex()
+	void release_shell_pages_locked(ve::IVec3 coord);
+	void refresh_shell_candidates(const ve::LodCamera &cam, std::unique_lock<std::mutex> &lock);
 	std::set<ve::LodKey> lod_overflow_logged_; // once-per-chunk overflow diagnostics
 	int lod_op_overflow_ = 0; // guarded by lod_mutex_
 	// Marks queued by record(), guarded by WorldStore::edit_mutex(); drained by

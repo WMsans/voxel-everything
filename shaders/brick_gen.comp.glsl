@@ -19,6 +19,7 @@ shared uint s_keep[256];
 #define FIELD_OP_INDEX(base, i) ((base) + s_ops[i])
 #include "field.glslh"
 #include "brick_layout.glslh"
+#include "opaque_view.glslh"
 
 // One workgroup per brick; 256 threads stride over the brick's 4096 cells and 4913 lattice
 // samples. Mirror of ve::eval_brick (extension/src/world/brick_eval.cpp).
@@ -49,6 +50,11 @@ shared uint s_cnt[4];                 // cells charged to each insertion-order s
 shared uint s_inv[4];                 // insertion-order slot -> final packed index
 shared uint s_mip8[512];              // (min << 8) | max
 shared uint s_mip4[64];
+// Encoded min / max of the UNION lattice. The occupancy grid is classified from these, not
+// from the stored (opaque-view) lattice: connectivity must keep seeing a transparent solid
+// as solid. With no transparent sample they equal the stored lattice's own range.
+shared uint s_umin;
+shared uint s_umax;
 
 float lat(ivec3 base, ivec3 v) {
 	return decode_sdf(imageLoad(sdf_atlas, base + v).r);
@@ -126,15 +132,28 @@ void main() {
 	vec3 bo = vec3(brick) * BRICK_SIZE;
 
 	if (tid < 4u) { s_pal[tid] = 0u; s_cnt[tid] = 0u; s_inv[tid] = tid; }
+	if (tid == 0u) { s_umin = 255u; s_umax = 0u; }
+	memoryBarrierShared();
+	barrier();
 
 	// Phase 1a: the 16^3 cell lattice — SDF plus each cell's own material sample.
 	for (uint i = tid; i < uint(BRICK_VOXEL_COUNT); i += 256u) {
 		ivec3 v = cell_coord(i);
 		float sdf;
 		uint mat;
-		eval_field(bo + vec3(v) * VOXEL_SIZE, op_base, s_op_n, sdf, mat);
-		imageStore(sdf_atlas, sdf_base + v, vec4(quantise_sdf(sdf)));
-		s_mat[i] = mat;
+		float osdf;
+		uint omat;
+		eval_field_pair(bo + vec3(v) * VOXEL_SIZE, op_base, s_op_n, sdf, mat, osdf, omat);
+		uint ub = encode_sdf_byte(sdf);
+		atomicMin(s_umin, ub);
+		atomicMax(s_umax, ub);
+		// The atlas holds the OPAQUE VIEW with the feature on and the UNION with it off, so
+		// select one pair -- never both: the opaque pair has already skipped the transparent
+		// ops, and with the feature off they must be baked like any other material.
+		if (pc.atlas_bricks.w != 0) opaque_view(osdf, omat, OPAQUE_OUTSIDE);
+		else { osdf = sdf; omat = mat; }
+		imageStore(sdf_atlas, sdf_base + v, vec4(quantise_sdf(osdf)));
+		s_mat[i] = omat;
 	}
 	memoryBarrierShared();
 	barrier();
@@ -150,12 +169,19 @@ void main() {
 		if (v.x < BRICK_VOXELS && v.y < BRICK_VOXELS && v.z < BRICK_VOXELS) continue;
 		float sdf;
 		uint mat;
-		eval_field(bo + vec3(v) * VOXEL_SIZE, op_base, s_op_n, sdf, mat);
-		imageStore(sdf_atlas, sdf_base + v, vec4(quantise_sdf(sdf)));
-		if (mat == 0u) continue;
+		float osdf;
+		uint omat;
+		eval_field_pair(bo + vec3(v) * VOXEL_SIZE, op_base, s_op_n, sdf, mat, osdf, omat);
+		uint ub = encode_sdf_byte(sdf);
+		atomicMin(s_umin, ub);
+		atomicMax(s_umax, ub);
+		if (pc.atlas_bricks.w != 0) opaque_view(osdf, omat, OPAQUE_OUTSIDE);
+		else { osdf = sdf; omat = mat; }
+		imageStore(sdf_atlas, sdf_base + v, vec4(quantise_sdf(osdf)));
+		if (omat == 0u) continue;
 		ivec3 c = min(v, ivec3(BRICK_VOXELS - 1));
 		atomicCompSwap(s_mat[c.x + c.y * BRICK_VOXELS + c.z * BRICK_VOXELS * BRICK_VOXELS],
-				0u, mat);
+				0u, omat);
 	}
 	memoryBarrierImage();
 	memoryBarrierShared();
@@ -180,8 +206,13 @@ void main() {
 			float sdf2;
 			// mat2 is a GLSL reserved word (the 2x2 matrix type), so the plan's variable
 			// name is rejected by glslang; renamed to matB, no semantic change.
+			uint matU;
+			float osdf;
 			uint matB;
-			eval_field(bo + vec3(v) * VOXEL_SIZE - g / len * t, op_base, s_op_n, sdf2, matB);
+			eval_field_pair(bo + vec3(v) * VOXEL_SIZE - g / len * t, op_base, s_op_n, sdf2,
+					matU, osdf, matB);
+			if (pc.atlas_bricks.w != 0) opaque_view(osdf, matB, OPAQUE_OUTSIDE);
+			else matB = matU;
 			s_mat[i] = matB;
 		}
 	}
@@ -322,8 +353,8 @@ void main() {
 		// The occupancy grid is classified from the exact lattice this dispatch generated,
 		// not brick_mark's conservative 3x3x3 probe. The job already carries the region slot
 		// in j1.x, while the brick coordinate determines the stable index within that region.
-		uint state = mn > ENCODED_ZERO ? CELL_AIR :
-				(mx <= ENCODED_ZERO ? CELL_FULL : CELL_SOLID);
+		uint state = s_umin > ENCODED_ZERO ? CELL_AIR :
+				(s_umax <= ENCODED_ZERO ? CELL_FULL : CELL_SOLID);
 		int rslot = j1.x;
 		int bi = (brick.x & (REGION_BRICKS - 1)) +
 				(brick.y & (REGION_BRICKS - 1)) * REGION_BRICKS +

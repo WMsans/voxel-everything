@@ -27,6 +27,12 @@ public:
 	// uploaded, or nothing happens and `pages_out` is left untouched.
 	bool upload(int level, ve::IVec3 coord, const std::vector<ve::LodQuad> &quads,
 			const std::vector<ve::LodQuadNormals> &normals, std::vector<int> *pages_out);
+	// The same all-or-nothing upload for a chunk that is not on the LoD grid: a near-field
+	// shell chunk or an island shell block. `flags` lands in the chunk record's second word:
+	// bit 0 = near shell, bits 8.. = island atlas slot + 1.
+	bool upload_at(const float origin[3], float cell, uint32_t level, uint32_t flags,
+			const std::vector<ve::LodQuad> &quads, const std::vector<ve::LodQuadNormals> &normals,
+			std::vector<int> *pages_out);
 	void release(const std::vector<int> &pages);
 
 	// Uploads the indirect args for the given drawable pages. Task 15 moved this out of

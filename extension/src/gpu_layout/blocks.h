@@ -83,7 +83,11 @@ struct SunLightBlock {
 struct LodRasterPush {
 	float view_proj[16];
 	float cam[4];   // xyz = camera position, w = fade start
-	float fade[4];  // x = fade end, yzw unused
+	float fade[4];  // x = fade end, y = 1 when transparency is on (shell quads skipped), zw unused
+};
+
+struct ShellRasterPush {
+	float fade[4];  // x = fade start, y = fade end (metres), zw unused
 };
 
 struct CompositePush {
@@ -92,6 +96,14 @@ struct CompositePush {
 	float fade[4];        // x = fade end, yzw = camera forward
 	float right_tanx[4];  // xyz = camera right, w = tan(fov_x / 2)
 	float up_tany[4];     // xyz = camera up,    w = tan(fov_y / 2)
+};
+
+struct TransparencyCompositePush {
+	float right_tanx[4];  // xyz = camera right, w = tan(fov_x / 2)
+	float up_tany[4];     // xyz = camera up,    w = tan(fov_y / 2)
+	float sky[4];         // xyz = ambient, w unused
+	float params[4];      // x = min transmit, y = sky thickness (m), zw unused
+	uint32_t flags[4];    // x = beauty flags, y = material the camera is inside (0 = outside)
 };
 
 struct GrassRasterPush {
@@ -160,7 +172,7 @@ struct MeshPush {
 
 struct LodBuildPush {
 	int32_t job[4];            // xyz = chunk coordinates, w = job index in this batch
-	int32_t params[4];         // x = op count, y = max quads per job, z = level, w = unused
+	int32_t params[4];         // x = op count, y = max quads per job, z = level, w = mode (1 = shell)
 	float grid[4];             // xyz = the chunk's world origin, w = the level's cell size
 	int32_t override_data[4];  // x = override table, y = region slot
 };
@@ -225,6 +237,17 @@ inline constexpr Field kLodRasterPushFields[] = {
 	VE_LAYOUT_FIELD(LodRasterPush, cam, Vec4, 0),
 	VE_LAYOUT_FIELD(LodRasterPush, fade, Vec4, 0),
 };
+inline constexpr Field kShellRasterPushFields[] = {
+	VE_LAYOUT_FIELD(ShellRasterPush, fade, Vec4, 0),
+};
+inline constexpr Field kTransparencyCompositePushFields[] = {
+	VE_LAYOUT_FIELD(TransparencyCompositePush, right_tanx, Vec4, 0),
+	VE_LAYOUT_FIELD(TransparencyCompositePush, up_tany, Vec4, 0),
+	VE_LAYOUT_FIELD(TransparencyCompositePush, sky, Vec4, 0),
+	VE_LAYOUT_FIELD(TransparencyCompositePush, params, Vec4, 0),
+	VE_LAYOUT_FIELD(TransparencyCompositePush, flags, UVec4, 0),
+};
+
 inline constexpr Field kCompositePushFields[] = {
 	VE_LAYOUT_FIELD(CompositePush, view_proj, Mat4, 0),
 	VE_LAYOUT_FIELD(CompositePush, cam, Vec4, 0),
@@ -351,7 +374,10 @@ inline constexpr Block kBlocks[] = {
 	VE_LAYOUT_BLOCK(BeautyCamBlock, "BEAUTY_CAM_FIELDS", kBeautyCamBlockFields),
 	VE_LAYOUT_BLOCK(SunLightBlock, "SUN_LIGHT_FIELDS", kSunLightBlockFields),
 	VE_LAYOUT_BLOCK(LodRasterPush, "LOD_RASTER_PUSH_FIELDS", kLodRasterPushFields),
+	VE_LAYOUT_BLOCK(ShellRasterPush, "SHELL_RASTER_PUSH_FIELDS", kShellRasterPushFields),
 	VE_LAYOUT_BLOCK(CompositePush, "COMPOSITE_PUSH_FIELDS", kCompositePushFields),
+	VE_LAYOUT_BLOCK(TransparencyCompositePush, "TRANSPARENCY_COMPOSITE_PUSH_FIELDS",
+			kTransparencyCompositePushFields),
 	VE_LAYOUT_BLOCK(GrassRasterPush, "GRASS_RASTER_PUSH_FIELDS", kGrassRasterPushFields),
 	VE_LAYOUT_BLOCK(SunShadowPush, "SUN_SHADOW_PUSH_FIELDS", kSunShadowPushFields),
 	VE_LAYOUT_BLOCK(CameraParams, "CAMERA_PARAMS_FIELDS", kCameraParamsFields),

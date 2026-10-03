@@ -20,6 +20,11 @@ struct MaterialDef {
 	float glow;            // emissive strength; 0.0 = not emissive
 	float glow_rgb[3];
 	float flat_albedo[3];  // far-field and unknown-layer fallback
+	// Transparency (docs/superpowers/specs/2026-10-01-transparent-voxels-design.md §4).
+	// The fraction of light per channel left after one metre of the material; {0,0,0} is
+	// opaque, and that is what "transparent" means everywhere: any channel above zero.
+	float transmit[3] = {0.0f, 0.0f, 0.0f};
+	float ior = 1.0f;      // index of refraction, for Fresnel reflectance; unused when opaque
 };
 
 // Order IS atlas layer order, and must match MATERIALS in tools/convert_materials.sh.
@@ -30,8 +35,10 @@ inline constexpr MaterialDef kMaterials[] = {
 	{"ground_01",    "02",  1.4f,    0.0f, {0.0f, 0.0f, 0.0f},   {0.50f, 0.35f, 0.20f}},
 	{"breakstone",   "03",  2.2f,    0.0f, {0.0f, 0.0f, 0.0f},   {0.62f, 0.60f, 0.66f}},
 	{"ground_crack_01", "04", 1.1f, 6.0f, {1.00f, 0.35f, 0.08f}, {0.35f, 0.12f, 0.06f}},
-	{"ice_crack",    "05",  1.8f,    0.0f, {0.0f, 0.0f, 0.0f},   {0.61f, 0.65f, 0.68f}},
-	{"ice",          "06",  1.8f,    0.0f, {0.0f, 0.0f, 0.0f},   {0.61f, 0.65f, 0.68f}},
+	{"ice_crack",    "05",  1.8f,    0.0f, {0.0f, 0.0f, 0.0f},   {0.61f, 0.65f, 0.68f},
+			{0.55f, 0.65f, 0.70f}, 1.31f},
+	{"ice",          "06",  1.8f,    0.0f, {0.0f, 0.0f, 0.0f},   {0.61f, 0.65f, 0.68f},
+			{0.80f, 0.90f, 0.95f}, 1.31f},
 	// Tree trunks and branches, written by shaders/stages/trees.field.glslh. Harder than
 	// ground, softer than rock: a trunk is meant to be choppable in a few swings.
 	{"bark",         "07",  1.6f,    0.0f, {0.0f, 0.0f, 0.0f},   {0.29f, 0.20f, 0.14f}},
@@ -92,6 +99,12 @@ static_assert(material_hardness_floor_holds(), "material hardness must be >= 1.0
 // material_glow also answers for foliage ids (kFoliageBase + k).
 float material_hardness(uint16_t id);
 float material_glow(uint16_t id);
+
+// Transparency lookups, failing soft like the rest: air, foliage and any id with no row are
+// opaque (transmit 0, ior 1). Mirrored in GLSL as mat_transparent / mat_transmit / mat_ior.
+bool material_transparent(uint16_t id);
+void material_transmit(uint16_t id, float out[3]);
+float material_ior(uint16_t id);
 
 // The effective size of a removal that a ray struck on `material`. Hardness is resolved
 // EXACTLY ONCE, here, before the op reaches any field evaluator: ve::apply_op and

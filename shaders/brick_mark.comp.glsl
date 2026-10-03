@@ -17,6 +17,7 @@ shared uint s_keep[256];
 #define FIELD_OP_INDEX(base, i) ((base) + s_ops[i])
 #define FIELD_OVERRIDE_TABLE(base) (field_override_region_map.table[int((base) / MAX_REGION_OPS)])
 #include "field.glslh"
+#include "opaque_view.glslh"
 
 layout(local_size_x = 256) in;
 
@@ -62,20 +63,29 @@ layout(push_constant, std430) uniform Push { BRICK_MARK_PUSH_FIELDS } pc;
 // ve::kActivationPad. The probe samples every 8 voxels, so the field can dip across zero
 // between samples; a brick counts as empty only when all 27 probes clear zero by this much.
 
-// Mirror of ve::brick_probe (extension/src/world/brick_eval.cpp).
-void brick_probe(ivec3 brick, uint op_base, uint op_count, out float mn, out float mx) {
+// Mirror of ve::brick_probe (extension/src/world/brick_eval.cpp): the union range, and the
+// range of the opaque view of the same 27 samples.
+void brick_probe(ivec3 brick, uint op_base, uint op_count, out float mn, out float mx,
+		out float omn, out float omx) {
 	vec3 bo = vec3(brick) * BRICK_SIZE;
 	mn = 1e30;
 	mx = -1e30;
+	omn = 1e30;
+	omx = -1e30;
 	for (int sz = 0; sz < 3; sz++)
 		for (int sy = 0; sy < 3; sy++)
 			for (int sx = 0; sx < 3; sx++) {
 				float sdf;
 				uint mat;
-				eval_field(bo + vec3(sx, sy, sz) * (float(BRICK_VOXELS) * 0.5 * VOXEL_SIZE),
-						op_base, op_count, sdf, mat);
+				float osdf;
+				uint omat;
+				eval_field_pair(bo + vec3(sx, sy, sz) * (float(BRICK_VOXELS) * 0.5 * VOXEL_SIZE),
+						op_base, op_count, sdf, mat, osdf, omat);
 				mn = min(mn, sdf);
 				mx = max(mx, sdf);
+				opaque_view(osdf, omat, OPAQUE_OUTSIDE);
+				omn = min(omn, osdf);
+				omx = max(omx, osdf);
 			}
 }
 
@@ -127,10 +137,12 @@ void main() {
 	int idx = rslot * REGION_BRICK_COUNT + bi;
 	int cur = region_tables.slot[idx];
 
-	float probe_mn, probe_mx;
-	brick_probe(brick, op_base, s_op_n, probe_mn, probe_mx);
-	// `active` is a GLSL reserved word (M2 errata 5); this local is has_surface.
-	bool has_surface = probe_mn < ACTIVATION_PAD && probe_mx > -ACTIVATION_PAD;
+	float probe_mn, probe_mx, opaque_mn, opaque_mx;
+	brick_probe(brick, op_base, s_op_n, probe_mn, probe_mx, opaque_mn, opaque_mx);
+	// `active` is a GLSL reserved word (M2 errata 5); this local is has_surface. pc.hi.w is 1
+	// when the opaque view is on: ground under a transparent material has no union surface.
+	bool has_surface = (probe_mn < ACTIVATION_PAD && probe_mx > -ACTIVATION_PAD) ||
+			(pc.hi.w != 0 && opaque_mn < ACTIVATION_PAD && opaque_mx > -ACTIVATION_PAD);
 	// A plain stream-in has no generated lattice for a no-surface brick, so publish only
 	// the unambiguous probe fallback there. An edit uses mark mode 2: every touched brick
 	// gets a generator job, including a thin surface between probe samples, and brick_gen

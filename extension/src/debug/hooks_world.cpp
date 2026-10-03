@@ -99,6 +99,16 @@ const ve::Generator *generator_or_null(VoxelWorld *world) {
 	return world->context().store->generator();
 }
 
+// The opaque-view switch, on both passes that read it. render/frame.cpp does this once per
+// presented frame; a hook-driven frame never runs it, so the debug paths must, or the GPU
+// would bake the union while the CPU reference bakes the opaque view.
+void apply_opaque_view(VoxelWorld *world) {
+	if (world == nullptr || world->context().render == nullptr) return;
+	const bool on = world->context().render->transparency_settings().enabled;
+	if (BrickGenPass *bg = world->context().render->passes().gen) bg->set_opaque_view(on);
+	if (RegionPass *rp = world->context().render->passes().region) rp->set_opaque_view(on);
+}
+
 } // namespace
 
 Dictionary VoxelDebugHooks::debug_perf_stats() {
@@ -828,6 +838,10 @@ void VoxelDebugHooks::debug_mark_region(Vector3i region, int region_slot, Vector
 				" out of range [0, ", world_->context().store->config().max_region_slots, ")");
 		return;
 	}
+	// Same reason as in debug_generate_pending: hi[3] is latched here, so the mark pass must
+	// see the same switch the generate pass will, or the residency probe disagrees with the
+	// lattice the atlas ends up storing.
+	apply_opaque_view(world_);
 	const int64_t list = device->compute_list_begin();
 	world_->context().render->passes().region->mark(device, list, {region.x, region.y, region.z}, region_slot,
 			{lo.x, lo.y, lo.z}, {hi.x, hi.y, hi.z}, op_count, force,
@@ -840,6 +854,10 @@ void VoxelDebugHooks::debug_mark_region(Vector3i region, int region_slot, Vector
 void VoxelDebugHooks::debug_generate_pending() {
 	RenderingDevice *device = world_->rd();
 	if (!device || !world_->context().render->passes().atlas || !world_->context().render->passes().region || !world_->context().render->passes().gen) return;
+	// The flag the frame path sets in render/frame.cpp: a hook-driven frame never runs it,
+	// so without this the GPU would bake the union while the CPU reference bakes the opaque
+	// view and the differential test would report differences it did not cause.
+	apply_opaque_view(world_);
 	const int64_t list = device->compute_list_begin();
 	world_->context().render->passes().region->write_dispatch_args(device, list);
 	device->compute_list_add_barrier(list);
@@ -871,7 +889,7 @@ Dictionary VoxelDebugHooks::debug_brick_diff(Vector3i brick, int region_slot,
 	if (gen_ptr == nullptr) return d;
 	const ve::Generator &gen = *gen_ptr;
 	ve::BrickEval ref{};
-	ve::eval_brick(gen, ptr, op_count, b, &ref, &world_->context().store->volumes(), world_->context().store->overrides());
+	ve::eval_brick(gen, ptr, op_count, b, &ref, &world_->context().store->volumes(), world_->context().store->overrides(), world_->context().render->transparency_settings().enabled);
 
 	const ve::IVec3 ab = world_->context().render->passes().atlas->config().atlas_bricks;
 	const ve::IVec3 cell{slot % ab.x, (slot / ab.x) % ab.y, slot / (ab.x * ab.y)};
@@ -1018,7 +1036,7 @@ Dictionary VoxelDebugHooks::debug_brick_flags(Vector3i region) {
 		const ve::IVec3 brick{region.x * ve::kRegionBricks + x,
 				region.y * ve::kRegionBricks + y, region.z * ve::kRegionBricks + z};
 		ve::BrickEval ref{};
-		ve::eval_brick(gen, ops.data(), static_cast<int>(ops.size()), brick, &ref, &world_->context().store->volumes(), world_->context().store->overrides());
+		ve::eval_brick(gen, ops.data(), static_cast<int>(ops.size()), brick, &ref, &world_->context().store->volumes(), world_->context().store->overrides(), world_->context().render->transparency_settings().enabled);
 		const uint32_t want = ve::brick_flags_from_mips(ref.mips, ref.brick.palette[0]);
 		const uint32_t got = gpu_flags[slot];
 		compared++;
@@ -1187,7 +1205,8 @@ Dictionary VoxelDebugHooks::debug_occupancy_fallback_diff(Vector3i region) {
 				region.y * ve::kRegionBricks + ((bi >> 5) & (ve::kRegionBricks - 1)),
 				region.z * ve::kRegionBricks + (bi >> 10)};
 		if (ve::brick_has_surface(gen, ops.data(), static_cast<int>(ops.size()), brick,
-				&world_->context().store->volumes(), world_->context().store->overrides())) continue;
+				&world_->context().store->volumes(), world_->context().store->overrides(),
+				world_->context().render->transparency_settings().enabled)) continue;
 		fallback++;
 		const int got = ve::OccupancyGrid::read_packed(
 				reinterpret_cast<const uint8_t *>(gpu.ptr()), bi);
@@ -1317,6 +1336,7 @@ int VoxelDebugHooks::debug_stream_frame(Vector3 cam) {
 	// so the streamer camera is the only correct centre here; without it, observing
 	// beyond 256 m of the origin would evict the very blocks under test.
 	world_->context().store->set_center(cam.x, cam.y, cam.z);
+	apply_opaque_view(world_);
 	const int actions = world_->context().render->streamer()->run_frame(device, cam.x, cam.y, cam.z);
 	device->submit();
 	device->sync();

@@ -23,6 +23,8 @@
 #include "render/grass_scatter_pass.h"
 #include "render/leaf_scatter_pass.h"
 #include "render/leaf_raster_pass.h"
+#include "render/shell_raster_pass.h"
+#include "render/transparency_composite_pass.h"
 #include "render/grass_raster_pass.h"
 #include "render/lod_raster_pass.h"
 #include "render/sun_shadow_pass.h"
@@ -79,6 +81,9 @@ void RenderOrchestrator::release_devices() {
 int RenderOrchestrator::drain_island_uploads(RenderingDevice *device) {
 	if (!device) return 0;
 	IslandHandoff::Batch batch = handoff_.take();
+	// Read ONCE: where lattices are baked, so the mip below and the descriptor's opaque-view
+	// lane must not disagree about whether the feature is on.
+	const bool transparency = transparency_settings_.get().enabled;
 	for (const int slot : batch.normal_releases) {
 		if (passes_.atlas) passes_.atlas->stored_normals().release_volume(device, slot);
 	}
@@ -98,14 +103,66 @@ int RenderOrchestrator::drain_island_uploads(RenderingDevice *device) {
 					u.volume_slot);
 		}
 		if (u.to_island_atlas && passes_.islands && u.atlas_slot >= 0 &&
-				!passes_.islands->upload_mip(device, u.atlas_slot, u.data))
+				!passes_.islands->upload_mip(device, u.atlas_slot, u.data,
+						transparency && ve::volume_has_transparent(u.data)))
 			UtilityFunctions::printerr("VoxelWorld: island mip upload failed for slot ",
 					u.atlas_slot);
+		// The island's shell is contoured HERE, from the same bytes, because this is the one
+		// place both are in hand: the volume carries the medium and the descriptor carries the
+		// local frame the pages are placed in.
+		if (u.to_island_atlas && u.atlas_slot >= 0 && transparency &&
+				ve::volume_has_transparent(u.data)) {
+			const IslandSlotDesc *d = u.atlas_slot < static_cast<int>(batch.descs.size())
+					? &batch.descs[static_cast<size_t>(u.atlas_slot)]
+					: nullptr;
+			if (d && d->live && d->volume_slot == u.volume_slot) {
+				contour_island_shell(u.atlas_slot, u.data, *d);
+			} else {
+				island_shell_wait_[static_cast<size_t>(u.atlas_slot)] = {u.volume_slot, u.data};
+			}
+		}
 		if (!u.to_island_atlas) handoff_.note_field_volume_uploaded();
 	}
 	if (batch.descs_dirty && passes_.islands)
-		passes_.islands->upload_descriptors(device, batch.descs.data(), static_cast<int>(batch.descs.size()));
+		passes_.islands->upload_descriptors(device, batch.descs.data(),
+				static_cast<int>(batch.descs.size()), transparency);
+	// Whatever this drain published is now current, so every island still waiting for its
+	// FIRST live descriptor is contoured -- with the volume-slot tag as the identity check, so
+	// a slot re-used by a different body drops the stale volume instead of drawing it.
+	for (auto it = island_shell_wait_.begin(); it != island_shell_wait_.end();) {
+		const size_t slot = static_cast<size_t>(it->first);
+		const IslandSlotDesc *d = it->first < static_cast<int>(batch.descs.size())
+				? &batch.descs[slot]
+				: nullptr;
+		if (!d) {
+			it = island_shell_wait_.erase(it); // no descriptor will ever name this slot
+		} else if (d->live && d->volume_slot != it->second.first) {
+			it = island_shell_wait_.erase(it); // the slot was re-used: this body is gone
+		} else if (d->live) {
+			contour_island_shell(it->first, it->second.second, *d);
+			it = island_shell_wait_.erase(it);
+		} else {
+			++it;
+		}
+	}
 	return static_cast<int>(batch.uploads.size());
+}
+
+void RenderOrchestrator::contour_island_shell(int slot, const ve::VolumeData &data,
+		const IslandSlotDesc &d) {
+	IslandShell shell;
+	shell.atlas_slot = slot;
+	shell.voxel = d.voxel;
+	ve::island_shell_blocks(data, d.lattice_origin, d.voxel, &shell.blocks);
+	queue_island_shell(std::move(shell)); // the same locked door the main thread uses
+}
+
+uint32_t RenderOrchestrator::island_live_mask() const {
+	uint32_t mask = 0;
+	if (!passes_.islands) return 0;
+	for (int s = 0; s < kMaxIslands && s < 32; s++)
+		if (passes_.islands->slot_live(s)) mask |= 1u << s;
+	return mask;
 }
 
 bool RenderOrchestrator::initialize_downsample(RenderingDevice *rd) {
@@ -285,6 +342,14 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 	// scatter still runs, so the chop contract holds and the canopy simply does not draw.
 	passes_.leaf_raster = new LeafRasterPass();
 	passes_.leaf_raster->initialize(device);
+	// Fail-soft like leaf_raster: a shader that will not compile leaves the pass with no
+	// shader, draw() returns false, the stage is cancelled and transparent materials are
+	// simply not drawn that frame.
+	passes_.shell_raster = new ShellRasterPass();
+	passes_.shell_raster->initialize(device);
+	passes_.transparency_composite = new TransparencyCompositePass();
+	passes_.transparency_composite->initialize(device);
+	if (passes_.sun_ubo) passes_.transparency_composite->set_sun_ubo(passes_.sun_ubo->buffer());
 	passes_.hiz = new HizPass();
 	if (!passes_.hiz->initialize(device)) {
 		UtilityFunctions::printerr("VoxelWorld: HiZ initialization failed; continuing without "
@@ -314,6 +379,8 @@ void RenderOrchestrator::teardown_render_passes() {
 	if (passes_.leaf_scatter) { delete passes_.leaf_scatter; passes_.leaf_scatter = nullptr; }
 	if (passes_.ssgi) { delete passes_.ssgi; passes_.ssgi = nullptr; }
 	if (passes_.ssao) { delete passes_.ssao; passes_.ssao = nullptr; }
+	if (passes_.transparency_composite) { delete passes_.transparency_composite; passes_.transparency_composite = nullptr; }
+	if (passes_.shell_raster) { delete passes_.shell_raster; passes_.shell_raster = nullptr; }
 	if (passes_.lod_raster) { delete passes_.lod_raster; passes_.lod_raster = nullptr; }
 	if (passes_.beauty_camera) { passes_.beauty_camera->teardown(); delete passes_.beauty_camera; passes_.beauty_camera = nullptr; }
 	if (passes_.gbuffer) { delete passes_.gbuffer; passes_.gbuffer = nullptr; }
@@ -414,6 +481,14 @@ void RenderOrchestrator::teardown_gpu() {
 	teardown_trace_.push_back("island_graph");
 	// island_slot_count() can still be on the render thread during teardown; the mark is atomic.
 	handoff_.reset_debug_slots();
+	// The shells in flight name islands and buffers that are about to die. The lock is the
+	// producer side's; island_shell_wait_ is render-thread-only (both here and in
+	// drain_island_uploads) so it needs none.
+	{
+		std::lock_guard<std::mutex> lock(island_shell_mutex_);
+		pending_island_shells_.clear();
+	}
+	island_shell_wait_.clear();
 	teardown_trace_.push_back("island_slots");
 	teardown_atlas_pool();
 	teardown_trace_.push_back("atlas");
@@ -587,6 +662,7 @@ ve::SettingsGroup *RenderOrchestrator::settings_group(const char *name) {
 	if (std::strcmp(name, "beauty") == 0) return &beauty_;
 	if (std::strcmp(name, "grass") == 0) return &grass_settings_;
 	if (std::strcmp(name, "leaves") == 0) return &leaf_settings_;
+	if (std::strcmp(name, "transparency") == 0) return &transparency_settings_;
 	return nullptr;
 }
 

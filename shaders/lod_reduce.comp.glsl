@@ -14,6 +14,9 @@ layout(set = 0, binding = 0, r8) readonly uniform image3D fine_sdf;
 layout(set = 0, binding = 1, r16ui) readonly uniform uimage3D fine_mat;
 layout(set = 0, binding = 2, r8) writeonly uniform image3D out_sdf;
 layout(set = 0, binding = 3, r16ui) writeonly uniform uimage3D out_mat;
+// Four uints per job (LodBuildPass): [3] bit 0 is raised here when the chunk holds a solid
+// transparent sample -- the bit the shell passes early-out on. Mirror of ve::lod_has_transparent.
+layout(set = 0, binding = 4, std430) buffer Counts { uint v[]; } counts;
 
 void main() {
 	ivec3 i = ivec3(gl_GlobalInvocationID);
@@ -51,6 +54,11 @@ void main() {
 			if (ids[s] == centre_mat && votes[s] >= best_v) { best = centre_mat; break; }
 		}
 	}
-	imageStore(out_sdf, i, vec4(quantise_sdf(acc)));
+	float stored = quantise_sdf(acc);
+	imageStore(out_sdf, i, vec4(stored));
 	imageStore(out_mat, i, uvec4(best, 0u, 0u, 0u));
+	// Decided on the STORED value, as the CPU mirror sees it, so a sample the byte rounds to
+	// air never raises the bit on one side only.
+	if (decode_sdf(stored) <= 0.0 && mat_transparent(best))
+		atomicOr(counts.v[uint(lpc.job.w) * 4u + 3u], 1u);
 }

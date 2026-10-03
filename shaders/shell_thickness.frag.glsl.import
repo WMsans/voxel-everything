@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://jfkbn5m8g242"
+path="res://.godot/imported/shell_thickness.frag.glsl-c7e997d270a12567f2ff7e342d75db7d.res"
+
+[deps]
+
+source_file="res://shaders/shell_thickness.frag.glsl"
+dest_files=["res://.godot/imported/shell_thickness.frag.glsl-c7e997d270a12567f2ff7e342d75db7d.res"]
+
+[params]
+

@@ -4,6 +4,7 @@
 #include <godot_cpp/classes/node3d.hpp>
 #include "mesh/box_merge.h"
 #include "render/mesh_service.h"
+#include "transparency/shell_grid.h"
 #include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/classes/physics_test_motion_parameters3d.hpp>
 #include <godot_cpp/classes/physics_test_motion_result3d.hpp>
@@ -715,6 +716,9 @@ void IslandManager::land_extraction(const IslandExtractResult &r) {
 		info.voxel = f.voxel;
 		info.dim = f.dim;
 		info.solid_voxels = r.data.solid_voxels;
+		// Once, here: the descriptor publishes it every frame and the shell is contoured from
+		// the same volume at upload, so this is the only place that has to know.
+		info.transparent = ve::volume_has_transparent(r.data);
 		for (int a = 0; a < 3; a++) info.impulse[a] = f.impulse[a];
 		info.debris = debris;
 
@@ -1077,6 +1081,9 @@ void IslandManager::publish_descriptors() {
 		// Task 6: the raymarcher strides the shared authoritative volume buffers with THIS
 		// slot, not the atlas slot.
 		d.volume_slot = b->info().volume_slot;
+		// Task 10: the island holds a transparent label, so its lattice is read through the
+		// opaque view and its shell draws the medium. Not recomputed per frame.
+		d.transparent = b->info().transparent;
 		// COLUMN major: basis[a] is the world direction of local +a, which is what
 		// Basis::get_column returns and what the shader's mat3(c0, c1, c2) expects.
 		for (int a = 0; a < 3; a++) {

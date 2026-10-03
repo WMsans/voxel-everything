@@ -32,6 +32,9 @@ public:
 	void set_draw_pages(const std::vector<PageDraw> &pages);
 	const std::vector<PageDraw> &draw_pages() const { return draw_pages_; }
 	void set_cull_enabled(bool enabled) { cull_enabled_ = enabled; }
+	// Spec §5: skip shell quads (transparent material) in the terrain draw; the transparent
+	// raster draws them. VoxelFrame sets this from TransparencySettings::enabled every frame.
+	void set_skip_transparent(bool skip) { skip_transparent_ = skip; }
 	// Drops the cached framebuffer. Used by the debug probe before it frees its throwaway
 	// colour/depth targets, so the pass never holds a framebuffer pointing at freed textures.
 	void release_targets();
@@ -85,6 +88,7 @@ private:
 	std::vector<PageDraw> draw_pages_;
 	float last_ms_ = 0.0f;
 	bool cull_enabled_ = true;
+	bool skip_transparent_ = false;
 	// The scene projection's Y flip was measured with the actual LoD quads: visible front
 	// faces are COUNTER-clockwise in the raster pipeline. SunShadowPass inherits this flag;
 	// it must not derive a second winding convention. Covered by the culling regression.

@@ -99,6 +99,23 @@ func test_a_far_edit_is_visible_in_the_far_field(timeout := 180000) -> void:
 # teardown/reinit), each measured at ~2519 ticks with trees in the default pipeline --
 # the 40 s ceiling was tuned for two ~400-tick pre-trees settles. The siblings in this
 # file already run under 180 s.
+# Regression: the transparency toggle gates ONLY the shell half of a batch. With it off the
+# far field must still stream -- the toggle empties the shell candidate set, so nothing in
+# this convergence depends on a shell build. Under the outer-gate regression the walk's
+# requests were never drained, requests_pending never reached zero and this settle fails.
+func test_the_far_field_streams_with_transparency_off(timeout := 180000) -> void:
+	var w := make_world()
+	var pos := Vector3(400.0, 90.0, 400.0)
+	var fwd := Vector3(0.0, -0.35, -1.0).normalized()
+	w.set_transparency_value("enabled", 0.0)
+	assert_bool(await settle(w, pos, fwd)).is_true()
+	var d := w.hooks().debug_lod_stats()
+	assert_int(d["draw_pages"]).override_failure_message(
+		"the far field never streamed with transparency off").is_greater(0)
+	assert_int(d["dirty_chunks"]).override_failure_message(
+		"%d chunks never finished rebuilding with transparency off" % d["dirty_chunks"]
+		).is_equal(0)
+
 func test_teardown_and_reinit_leave_no_pages_behind(timeout := 180000) -> void:
 	var w := make_world()
 	var pos := Vector3(400.0, 90.0, 400.0)
