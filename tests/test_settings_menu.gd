@@ -146,6 +146,16 @@ func test_islands_toggle_is_a_real_render_effect() -> void:
 	assert_bool(world.get_effect_enabled("islands")).is_false()
 	assert_bool(world.hooks().debug_beauty_settings()["islands"]).is_false()
 
+func test_raymarching_toggle_is_a_real_render_effect() -> void:
+	var parts := make_menu()
+	await get_tree().process_frame
+	var world: VoxelWorld = parts[0]
+	assert_bool(world.get_effect_enabled("raymarch")).is_true()
+	parts[3].control("render", "raymarch").emit_signal("toggled", false)
+	assert_bool(world.get_effect_enabled("raymarch")).is_false()
+	# Its own switch: turning raymarching off does not rewrite the near-field setting.
+	assert_bool(world.get_effect_enabled("near_field")).is_true()
+
 # S6 through the panel: choosing a tier moves the untweaked knobs and keeps the tweaked one.
 func test_quality_selection_replaces_the_world_settings() -> void:
 	var parts := make_menu()

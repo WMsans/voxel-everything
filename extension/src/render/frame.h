@@ -32,6 +32,7 @@ struct FrameSettings {
 	ve::SunState sun;
 	float near_field_scale = 0.66f;
 	bool near_field_enabled = true;
+	bool raster_mode = false;
 	bool sun_cascade_min_level = true;
 };
 

@@ -650,6 +650,7 @@ void RenderOrchestrator::on_render_resolved(const ve::RenderSettings &s, void *c
 	auto *self = static_cast<RenderOrchestrator *>(ctx);
 	self->islands_enabled_.store(s.islands, std::memory_order_relaxed);
 	self->near_field_enabled_.store(s.near_field, std::memory_order_relaxed);
+	self->raymarch_enabled_.store(s.raymarch, std::memory_order_relaxed);
 	self->near_field_scale_.store(s.near_field_scale, std::memory_order_relaxed);
 	// Rebase: the tier is the base, per-knob overrides layer on top and survive (S6).
 	if (self->quality_tier_.exchange(s.quality_tier, std::memory_order_relaxed) != s.quality_tier)
@@ -677,7 +678,7 @@ int RenderOrchestrator::quality_tier() const {
 void RenderOrchestrator::set_effect_enabled(const String &name, bool on) {
 	const CharString n = name.utf8();
 	const ve::SettingValue v = ve::SettingValue::of_bool(on);
-	// Render switches (islands, near_field), then beauty switches; fail-soft for anything else.
+	// Render switches (islands, near_field, raymarch), then beauty switches; fail-soft for anything else.
 	if (!render_settings_.set(n.get_data(), v)) beauty_.set(n.get_data(), v);
 }
 
@@ -730,6 +731,7 @@ FrameSettings RenderOrchestrator::frame_settings() const {
 	s.sun = sun_state();
 	s.near_field_scale = near_field_scale();
 	s.near_field_enabled = near_field_enabled();
+	s.raster_mode = raster_mode();
 	s.sun_cascade_min_level = sun_cascade_min_level_;
 	return s;
 }

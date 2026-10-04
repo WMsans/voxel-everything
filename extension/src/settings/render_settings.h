@@ -12,6 +12,8 @@ struct RenderSettings {
 	float near_field_scale = 0.66f; // fraction of the internal resolution the near-field marcher runs at
 	bool near_field = true;
 	bool islands = true;
+	// Off = raster mode (spec 2026-10-04): nothing is marched, every surface is a mesh.
+	bool raymarch = true;
 };
 
 std::span<const SettingRow<RenderSettings>> render_rows();
