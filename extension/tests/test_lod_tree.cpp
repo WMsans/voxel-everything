@@ -1246,3 +1246,71 @@ TEST_CASE("a fresh refused node is skipped until its chunk is dirtied") {
 	t.walk(c, &occ, 3u, &dirtied);
 	CHECK(has_target(dirtied));
 }
+
+namespace {
+
+// FNV-1a over the cut's (level, x, y, z), sorted first so the hash does not depend on order.
+uint64_t cut_hash(std::vector<ve::LodDrawItem> draws) {
+	std::sort(draws.begin(), draws.end(), [](const ve::LodDrawItem &a, const ve::LodDrawItem &b) {
+		if (a.level != b.level) return a.level < b.level;
+		if (a.coord.z != b.coord.z) return a.coord.z < b.coord.z;
+		if (a.coord.y != b.coord.y) return a.coord.y < b.coord.y;
+		return a.coord.x < b.coord.x;
+	});
+	uint64_t h = 1469598103934665603ull;
+	const auto mix = [&h](int v) {
+		for (int i = 0; i < 4; i++) {
+			h ^= uint64_t((uint32_t(v) >> (8 * i)) & 0xFFu);
+			h *= 1099511628211ull;
+		}
+	};
+	for (const ve::LodDrawItem &d : draws) {
+		mix(d.level);
+		mix(d.coord.x);
+		mix(d.coord.y);
+		mix(d.coord.z);
+	}
+	return h;
+}
+
+ve::LodCamera cam_looking(const float p[3], const float f[3]) {
+	// Any up not parallel to the view; the straight-down shot uses -Z.
+	const bool vertical = std::fabs(f[1]) > 0.99f;
+	const float up[3] = {0.0f, vertical ? 0.0f : 1.0f, vertical ? -1.0f : 0.0f};
+	return ve::lod_camera_perspective(p, f, up, 1.2217f, 16.0f / 9.0f, 0.1f, 8000.0f, 2560, 1440);
+}
+
+} // namespace
+
+// Raster mode adds levels BELOW 0 and a min_level floor. The default config must keep
+// choosing exactly the cut it chose before either existed. Pinned on the code before the
+// change; the expected values are the hashes that code printed.
+TEST_CASE("characterization: the settled default cut is pinned at three cameras") {
+	struct Shot {
+		float p[3];
+		float f[3];
+		uint64_t expected;
+	};
+	const Shot shots[] = {
+		{{800.0f, 60.0f, 800.0f}, {0.0f, 0.0f, -1.0f},
+				7366100078025556419ull}, // level, along the ground
+		{{800.0f, 140.0f, 800.0f}, {0.6f, -0.5f, -0.6f},
+				266758349124011340ull}, // pitched down over a ridge
+		{{800.0f, 90.0f, 800.0f}, {0.0f, -1.0f, 0.0f},
+				9178775522565948259ull}, // straight down
+	};
+	for (const Shot &s : shots) {
+		ve::LodTreeConfig cfg;
+		cfg.stream_radius_m = 1638.4f;
+		cfg.max_requests_per_walk = kSettleRequestCap;
+		ve::LodTree t(cfg);
+		NoOcclusion occ;
+		const ve::LodCamera c = cam_looking(s.p, s.f);
+		settle(&t, c, &occ, 30);
+		ve::LodWalkResult r;
+		t.walk(c, &occ, 20000u, &r);
+		const uint64_t h = cut_hash(r.draws);
+		INFO("pin this shot: " << h << "ull");
+		CHECK(h == s.expected);
+	}
+}
