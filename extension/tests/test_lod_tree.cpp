@@ -1247,6 +1247,96 @@ TEST_CASE("a fresh refused node is skipped until its chunk is dirtied") {
 	CHECK(has_target(dirtied));
 }
 
+// settle_solid, not settle: the surface world is a zero-thickness plane at y = 51.2, and
+// 51.2 is an exact multiple of EVERY level's chunk size, so no chunk at level 2 or finer
+// straddles it and the whole near field reads empty -- the cut would stop at level 3 and
+// this would assert nothing. A solid world makes the descent itself the subject.
+TEST_CASE("raster mode refines the ground under the camera to 0.1 m") {
+	ve::LodTreeConfig cfg;
+	cfg.stream_radius_m = 1638.4f;
+	cfg.max_requests_per_walk = kSettleRequestCap;
+	cfg.fade_start_m = 0.0f; // raster mode: the far field owns every distance
+	cfg.min_level = ve::kLodMinLevel;
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 53.0f, 800.0f);
+	settle_solid(&t, c, &occ, 30);
+	ve::LodWalkResult r;
+	t.walk(c, &occ, 20000u, &r);
+	int finest = ve::kLodLevels;
+	for (const ve::LodDrawItem &d : r.draws) finest = std::min(finest, d.level);
+	CHECK(finest == ve::kLodMinLevel);
+}
+
+// settle_solid for the same reason as the case above: a surface plane on a chunk boundary
+// leaves nothing below level 3 at all, so the floor would never be exercised.
+TEST_CASE("the default config never draws or requests below level 0") {
+	ve::LodTreeConfig cfg;
+	cfg.stream_radius_m = 1638.4f;
+	cfg.max_requests_per_walk = kSettleRequestCap;
+	cfg.fade_start_m = 0.0f; // build up to the camera, so the floor is what stops the descent
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 53.0f, 800.0f);
+	settle_solid(&t, c, &occ, 30);
+	ve::LodWalkResult r;
+	t.walk(c, &occ, 20000u, &r);
+	REQUIRE(!r.draws.empty());
+	for (const ve::LodDrawItem &d : r.draws) CHECK(d.level >= 0);
+	for (const ve::LodBuildRequest &q : r.requests) CHECK(q.level >= 0);
+}
+
+// The near-dense rule exists for the seam with the marched near field: it keeps level 0
+// dense out to 300 m. It must not push raster mode below 0 there -- that would be 0.1 m
+// chunks over a 300 m disc. Below level 0, screen-space error alone decides.
+TEST_CASE("the near-dense radius never forces a level below 0") {
+	ve::LodTreeConfig cfg;
+	cfg.stream_radius_m = 1638.4f;
+	cfg.min_level = ve::kLodMinLevel;
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	// 300 m out: inside the near-dense radius, far too small on screen to want 0.2 m.
+	const ve::IVec3 l1 = ve::lod_chunk_of_point(1, 800.0f, 51.0f, 500.0f);
+	make_ready_full_level0(&t, 1638.4f, l1);
+	const ve::IVec3 l0_base = ve::lod_child_base(l1);
+	for (int k0 = 0; k0 < 8; k0++) {
+		const ve::IVec3 l0{l0_base.x + (k0 & 1), l0_base.y + ((k0 >> 1) & 1),
+				l0_base.z + ((k0 >> 2) & 1)};
+		const ve::IVec3 base = ve::lod_child_base(l0);
+		for (int k = 0; k < 8; k++)
+			t.note_ready(-1, {base.x + (k & 1), base.y + ((k >> 1) & 1), base.z + ((k >> 2) & 1)},
+					1, 1);
+	}
+	ve::LodWalkResult r;
+	t.walk(c, &occ, 1u, &r);
+	int l0_drawn = 0;
+	int below = 0;
+	for (const ve::LodDrawItem &d : r.draws) {
+		if (d.level == 0) l0_drawn++;
+		if (d.level < 0) below++;
+	}
+	CHECK(l0_drawn == 8);
+	CHECK(below == 0);
+}
+
+TEST_CASE("an edit dirties the raster levels too") {
+	ve::LodTreeConfig cfg;
+	cfg.min_level = ve::kLodMinLevel;
+	ve::LodTree t(cfg);
+	const ve::IVec3 c = ve::lod_chunk_of_point(-2, 10.0f, 51.0f, 10.0f);
+	t.note_ready(-2, c, 1, 1);
+	float lo[3], hi[3];
+	ve::lod_chunk_aabb(-2, c, lo, hi);
+	t.mark_dirty(lo, hi);
+	CHECK(t.is_dirty(-2, c));
+	int chunks = 0;
+	int levels = 0;
+	t.dirty_stats(&chunks, &levels);
+	CHECK(chunks == 1);
+	CHECK(levels == 1);
+}
+
 namespace {
 
 // FNV-1a over the cut's (level, x, y, z), sorted first so the hash does not depend on order.

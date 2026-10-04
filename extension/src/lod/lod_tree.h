@@ -101,6 +101,9 @@ struct LodTreeConfig {
 	uint32_t occluded_frames = kLodOccludedFrames;
 	int max_requests_per_walk = 32;
 	float fade_start_m = kLodFadeStartM;
+	// The finest level the walk may descend to: 0 in raymarched mode, kLodMinLevel in raster
+	// mode (spec 2026-10-04 §3). Nothing below it is requested, drawn or waited for.
+	int min_level = 0;
 };
 
 // Spec section 6. Residency is what the walk touched, not what is near.
@@ -165,6 +168,7 @@ public:
 	// The seam follows the near field's measured reach (ve::lod_fade_band), so the build
 	// gate has to move with it: chunks the fragment shader would now keep must be built.
 	void set_fade_start_m(float v) { cfg_.fade_start_m = v; }
+	void set_min_level(int v) { cfg_.min_level = v; }
 
 private:
 	struct Key {

@@ -17,7 +17,10 @@ namespace ve {
 
 inline constexpr float kShellCell = 0.1f;
 inline constexpr float kShellChunkSize = kShellCell * kLodChunkCells; // 3.2 m
-inline constexpr int kShellLevel = -1; // LodBuildJob/Result::level of a near-shell build
+// A near-shell chunk is exactly a finest-level LoD chunk (32 cells of 0.1 m), so a shell job
+// carries that level: MeshService places its override-table lookup with lod_chunk_origin().
+inline constexpr int kShellLevel = kLodMinLevel; // LodBuildJob/Result::level of a near-shell build
+static_assert(kShellCell == kLodBaseCell * 0.25f, "the shell grid is LoD level kLodMinLevel");
 
 void shell_chunk_origin(IVec3 c, float out[3]);
 void shell_chunk_aabb(IVec3 c, float lo[3], float hi[3]);

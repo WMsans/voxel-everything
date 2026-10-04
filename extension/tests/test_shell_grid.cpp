@@ -29,6 +29,18 @@ TEST_CASE("shell chunks are 3.2 m and tile negative space") {
 	CHECK(o[1] == doctest::Approx(3.2f));
 }
 
+// A near-shell chunk IS a finest-level LoD chunk: same 32 cells of 0.1 m, same origin. The
+// shell job's level is therefore a real level, and lod_chunk_origin() places it correctly.
+TEST_CASE("a shell chunk is the finest LoD level's chunk") {
+	CHECK(ve::kShellLevel == ve::kLodMinLevel);
+	for (const ve::IVec3 c : {ve::IVec3{0, 0, 0}, ve::IVec3{-3, 17, 5}}) {
+		float a[3], b[3];
+		ve::shell_chunk_origin(c, a);
+		ve::lod_chunk_origin(ve::kShellLevel, c, b);
+		for (int i = 0; i < 3; i++) CHECK(a[i] == doctest::Approx(b[i]));
+	}
+}
+
 TEST_CASE("only transparent ops make boxes") {
 	const float lo[3] = {-100, -100, -100}, hi[3] = {100, 100, 100};
 	const ve::EditOp ops[] = {

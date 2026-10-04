@@ -24,6 +24,21 @@ TEST_CASE("the level table matches spec section 2") {
 		CHECK(ve::lod_cell_size(l) == doctest::Approx(2.0f * ve::lod_cell_size(l - 1)));
 }
 
+// Raster mode's near field (spec 2026-10-04): two levels below 0, still ratio 2. Negative so
+// every existing level number keeps its meaning.
+TEST_CASE("the raster levels sit below level 0 at 0.2 m and 0.1 m") {
+	CHECK(ve::kLodMinLevel == -2);
+	CHECK(ve::lod_cell_size(-1) == doctest::Approx(0.2f));
+	CHECK(ve::lod_cell_size(-2) == doctest::Approx(0.1f));
+	CHECK(ve::lod_cell_size(-3) == doctest::Approx(0.1f)); // clamped like the top
+	CHECK(ve::lod_chunk_size(-2) == doctest::Approx(3.2f));
+	CHECK(ve::lod_cell_size(0) == 0.4f); // exact: level 0 is untouched
+	for (int l = ve::kLodMinLevel + 1; l < ve::kLodLevels; l++)
+		CHECK(ve::lod_cell_size(l) == 2.0f * ve::lod_cell_size(l - 1));
+	const ve::IVec3 fine = ve::lod_chunk_of_point(-2, 5.0f, 51.0f, -7.0f);
+	CHECK(ve::lod_parent(fine) == ve::lod_chunk_of_point(-1, 5.0f, 51.0f, -7.0f));
+}
+
 // The descend threshold is stated once, in terms of the per-cell pixel error, so section 2's
 // distance column and section 6.1's walk can never disagree about what "3 px" means.
 TEST_CASE("the descend threshold is the per-cell error squared over a chunk") {
