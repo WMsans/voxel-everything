@@ -163,7 +163,8 @@ void main() {
 	// (The RAY_SHADOW_DIST argument is this call's one deviation from the plan snippet:
 	// sun_march.glslh's terrain_sun_visibility takes a march distance, as grass_scatter's
 	// per-blade call passes; a clump marches the same 60 m a blade does.)
-	float sun = terrain_sun_visibility(p, RAY_SHADOW_DIST);
+	// Raster mode (leaf.limits.w != 0): no march, as grass_scatter; the sun map shadows it.
+	float sun = leaf.limits.w != 0 ? 1.0 : terrain_sun_visibility(p, RAY_SHADOW_DIST);
 
 	// Crown depth: 0 at the bottom of the crown sphere, 1 at the top. Drives both the
 	// interior self-shade here and the ambient-occlusion gradient the fragment bakes in.

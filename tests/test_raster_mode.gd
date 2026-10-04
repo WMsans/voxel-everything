@@ -121,3 +121,51 @@ func test_an_edit_in_raster_mode_requests_the_fine_chunks() -> void:
 		"the crater requested no 0.1 m rebuild: %s" % [ids]).is_greater(0)
 	settle_ticks(w)
 	assert_int(int(w.hooks().debug_lod_stats()["dirty_chunks"])).is_equal(0)
+func material_id(w: VoxelWorld, name: String) -> int:
+	for m in w.material_table():
+		if m["name"] == name:
+			return m["id"]
+	return 0
+
+func test_a_raster_frame_runs_without_the_marcher() -> void:
+	var w := make_world()
+	w.set_effect_enabled("raymarch", false)
+	var d := settle_frames(w)
+	var ok: PackedStringArray = d["stages_ok"]
+	for stage in ["stream", "composite", "lod", "deferred", "inject"]:
+		assert_bool(ok.has(stage)).override_failure_message(
+			"stage %s did not complete: %s" % [stage, ok]).is_true()
+	assert_bool(ok.has("raymarch")).override_failure_message(
+		"the marcher ran in raster mode: %s" % [ok]).is_false()
+	assert_float(float(d["gb_ground_fraction"])).is_greater(0.95)
+	assert_float(float(d["mean_luma"])).override_failure_message(
+		"the lit image is black").is_greater(0.01)
+
+# Review focus 4: nothing draws the sky in raster mode except the composite's sky fill.
+func test_looking_up_in_raster_mode_shows_the_sky() -> void:
+	var w := make_world()
+	w.set_effect_enabled("raymarch", false)
+	var up := Vector3(0.2, 1.0, 0.2)
+	var d := settle_frames(w, CAM, up)
+	assert_float(float(d["gb_ground_fraction"])).is_less(0.05)
+	var c: Color = d["center_lit"]
+	assert_bool(c.b > c.r and c.b > 0.05).override_failure_message(
+		"the centre is not sky: %s" % c).is_true()
+
+# Review focus 5: the near shell grid is off in raster mode, so the fine LoD chunks' own
+# shell quads are what draw ice.
+func test_ice_renders_in_raster_mode() -> void:
+	var w := make_world()
+	w.set_effect_enabled("raymarch", false)
+	var ice := material_id(w, "ice")
+	var hit: Dictionary = w.raycast(CAM, FWD.normalized(), 400.0)
+	assert_bool(hit["hit"]).is_true()
+	w.hooks().debug_apply_sphere_add(hit["pos"], 1.0, ice)
+	var d := {}
+	for i in range(600):
+		w.hooks().debug_stream_frame(CAM)
+		d = frame(w)
+		if int((d["center_front"] as Color).a + 0.5) == ice:
+			break
+	assert_int(int((d["center_front"] as Color).a + 0.5)).override_failure_message(
+		"no ice front in raster mode: %s" % d).is_equal(ice)

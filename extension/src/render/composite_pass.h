@@ -17,6 +17,8 @@ public:
 	void teardown();
 	void release_targets();
 	bool last_draw_ok() const { return last_draw_ok_; }
+	// Raster mode: draw() writes sky to every pixel and reads none of its source textures.
+	void set_sky_only(bool v) { sky_only_ = v; }
 	// `cam` is the SAME block the raymarch pass was dispatched with. This pass resolves the
 	// material per full-resolution pixel, so it must rebuild each pixel's primary ray -- which
 	// needs the basis and the half-angle tangents, not just the position. Passing the marcher's
@@ -31,11 +33,13 @@ private:
 
 	RenderingDevice *rd_ = nullptr;
 	gpu::Group group_;
-	RID shader_, shader_marker_;
+	RID shader_, shader_marker_, shader_sky_;
 	RID pipeline_;
 	RID sampler_linear_, sampler_nearest_;
 	gpu::SetCache set_;
 	bool pipeline_marker_ = false;
+	bool pipeline_sky_ = false;
+	bool sky_only_ = false;
 	gpu::FramebufferCache framebuffer_;
 	bool last_draw_ok_ = false;
 };

@@ -182,8 +182,11 @@ void main() {
 	// the ground it grew from.
 	float clump = grass_clump(p);
 	float height = grass_height(h, clump);
-	float sun = terrain_sun_visibility(p + n * 0.05 + vec3(0.0, height * 0.35, 0.0),
-			RAY_SHADOW_DIST);
+	// Raster mode (grass.limits.z != 0) marches nothing: full sun here, and the deferred
+	// pass shadows the blade from the sun map, which owns every pixel in that mode.
+	float sun = grass.limits.z != 0 ? 1.0
+			: terrain_sun_visibility(p + n * 0.05 + vec3(0.0, height * 0.35, 0.0),
+					RAY_SHADOW_DIST);
 	emit_blade(p, n, h, clump, height, sun);
 
 	// brick_atlas.glslh declares brick_flags for the flag-word helpers this stage never

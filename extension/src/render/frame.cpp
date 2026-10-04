@@ -269,30 +269,35 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		abort_frame();
 		return false;
 	}
-	const int islands = render_.island_slot_count();
-	IslandCullPass *cull = render_.passes().island_cull;
-	RID mask;
-	timings->begin(rd, "raymarch");
-	if (cull && islands > 0 && cull->render(rd, *render_.passes().islands, cp, rw, rh, islands)) {
-		mask = cull->mask_buffer();
-		cp.region_origin[3] = cull->tiles_x();
-		cp.atlas_bricks[3] = cull->tiles_y();
+	// Raster mode (spec 2026-10-04 §4): nothing is marched, islands included. The composite
+	// below fills the G-buffer with sky and the LoD raster draws every surface.
+	if (!settings.raster_mode) {
+		const int islands = render_.island_slot_count();
+		IslandCullPass *cull = render_.passes().island_cull;
+		RID mask;
+		timings->begin(rd, "raymarch");
+		if (cull && islands > 0 && cull->render(rd, *render_.passes().islands, cp, rw, rh, islands)) {
+			mask = cull->mask_buffer();
+			cp.region_origin[3] = cull->tiles_x();
+			cp.atlas_bricks[3] = cull->tiles_y();
+		}
+		cp.dims[3] = islands;
+		const RID effective_mask = mask.is_valid() ? mask : render_.passes().islands->fallback_mask();
+		// If the island cull mask/target size changes, RaymarchPass releases its old target
+		// textures. CompositePass's uniform set binds them and rebuilds itself on the new RIDs;
+		// its framebuffer is dropped here as it always was.
+		if (rmp->targets_need_rebuild(rw, rh, effective_mask)) cmp->release_targets();
+		if (!rmp->render(rd, *atlas, render_.passes().islands, mask, cp, rw, rh, edit_state,
+				render_.passes().field_context)) {
+			cancel_stage(kStageRaymarch);
+			abort_frame();
+			return false;
+		}
+		end_stage(rd, kStageRaymarch);
 	}
-	cp.dims[3] = islands;
-	const RID effective_mask = mask.is_valid() ? mask : render_.passes().islands->fallback_mask();
-	// If the island cull mask/target size changes, RaymarchPass releases its old target
-	// textures. CompositePass's uniform set binds them and rebuilds itself on the new RIDs;
-	// its framebuffer is dropped here as it always was.
-	if (rmp->targets_need_rebuild(rw, rh, effective_mask)) cmp->release_targets();
-	if (!rmp->render(rd, *atlas, render_.passes().islands, mask, cp, rw, rh, edit_state,
-			render_.passes().field_context)) {
-		cancel_stage(kStageRaymarch);
-		abort_frame();
-		return false;
-	}
-	end_stage(rd, kStageRaymarch);
 
 	timings->begin(rd, "composite");
+	cmp->set_sky_only(settings.raster_mode);
 	cmp->draw(rd, *gb, rmp->albedo_texture(), rmp->surface_texture(), rmp->hitpos_texture(),
 			view_proj, *materials, cp, fade_start, fade_end, in.debug.marker);
 	if (!cmp->last_draw_ok()) {
@@ -437,7 +442,10 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		float grass_vp[16];
 		for (int c = 0; c < 4; c++)
 			for (int r = 0; r < 4; r++) grass_vp[c * 4 + r] = view_proj.columns[c][r];
-		const ve::GrassLayout gl = grass_layout(grass_cam, grass_vp);
+		ve::GrassLayout gl = grass_layout(grass_cam, grass_vp);
+		// Raster mode marches nothing: a blade writes full sun and deferred shadows it from the
+		// sun map, which owns every pixel there (spec 2026-10-04 §4). A spare lane, no layout change.
+		gl.params.limits[2] = settings.raster_mode ? 1 : 0;
 		GrassRasterPass *grass_raster = render_.passes().grass_raster;
 		SunUbo *grass_sun = render_.passes().sun_ubo;
 		const bool grass_ok = grass_sun && grass->run(rd, *atlas, gl, store_.region_window(),
@@ -458,7 +466,8 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		float leaf_vp[16];
 		for (int c = 0; c < 4; c++)
 			for (int r = 0; r < 4; r++) leaf_vp[c * 4 + r] = view_proj.columns[c][r];
-		const ve::LeafLayout ll = leaf_layout(leaf_cam, leaf_vp);
+		ve::LeafLayout ll = leaf_layout(leaf_cam, leaf_vp);
+		ll.params.limits[3] = settings.raster_mode ? 1 : 0; // as grass: no sun march in raster mode
 		SunUbo *leaf_sun = render_.passes().sun_ubo;
 		LeafRasterPass *leaf_raster = render_.passes().leaf_raster;
 		// Stage 1 never reads the SunUbo (stage 2's march does); an absent one is no reason
