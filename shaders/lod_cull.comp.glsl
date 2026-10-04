@@ -49,6 +49,13 @@ void main() {
 	uint page = args.v[base + 3u] / uint(LOD_QUADS_PER_PAGE * 4);
 	uint ci = page_chunk.v[page];
 	vec4 c0 = chunks.v[ci * 2u + 0u];
+	// An island page's c0.xyz is its LOCAL origin -- lod.vert.glsl places it into the world
+	// through the island descriptor (island_xform.glslh) -- so the box below would test a
+	// coordinate that means nothing in world space and cull every island. A per-page world box
+	// would mean plumbing the descriptor into this pass, for a handful of pages per island:
+	// keep them all. The flags word names the island as slot + 1, and is 0 for a world-space
+	// terrain page, which falls through to the cull below.
+	if ((floatBitsToUint(chunks.v[ci * 2u + 1u].y) >> 8) != 0u) { atomicAdd(stats.v[0], 1u); return; }
 	// Mirror lod_chunk_render_aabb: the apron and ribbons are visible geometry too.
 	vec3 lo = c0.xyz - vec3(c0.w * (1.0 + LOD_SKIRT_MAX_EXTENSION));
 	vec3 hi = c0.xyz + vec3(c0.w * (float(LOD_CHUNK_CELLS) + LOD_SKIRT_MAX_EXTENSION));
