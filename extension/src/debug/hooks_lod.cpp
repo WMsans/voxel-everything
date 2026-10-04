@@ -137,6 +137,8 @@ Dictionary VoxelDebugHooks::debug_lod_stats() {
 	d["op_overflow"] = s.op_overflow;
 	d["shell_chunks"] = s.shell_chunks;
 	d["shell_pages"] = s.shell_pages;
+	d["draw_min_level"] = s.draw_min_level;
+	d["fine_pages"] = s.fine_pages;
 	d["partial_allocations"] = s.partial_allocations;
 	d["builds_in_flight"] = world_->mesh_service() && world_->mesh_service()->lod_busy() ? 1 : 0;
 	// The benchmark's horizon tracker reads this name; same count as requests_pending.

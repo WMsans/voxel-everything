@@ -62,6 +62,8 @@ struct LodStats {
 	int op_overflow = 0; // LoD builds refused because their visible ops exceed the cap
 	int shell_chunks = 0; // near-shell chunks in the grid (spec §5)
 	int shell_pages = 0;  // near-shell pages resident
+	int draw_min_level = 0; // finest level in the current cut; ve::kLodLevels when empty
+	int fine_pages = 0;     // pages owned by chunks below level 0 (raster mode)
 };
 
 class LodSystem : public ve::InvalidationSink {

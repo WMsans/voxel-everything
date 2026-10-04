@@ -73,3 +73,51 @@ func test_with_the_near_field_off_the_far_field_covers_the_ground() -> void:
 	assert_float(float(d["gb_ground_fraction"])).override_failure_message(
 		"the far field covered %s of a view of nothing but ground" % d["gb_ground_fraction"]
 		).is_greater(0.95)
+
+func test_raster_mode_refines_the_near_field_to_ten_centimetres() -> void:
+	var w := make_world()
+	w.set_effect_enabled("raymarch", false)
+	settle_ticks(w)
+	var s: Dictionary = w.hooks().debug_lod_stats()
+	assert_int(int(s["draw_min_level"])).override_failure_message(str(s)).is_equal(-2)
+	assert_int(int(s["partial_allocations"])).is_equal(0)
+
+func test_raymarched_mode_never_draws_below_level_zero() -> void:
+	var w := make_world()
+	settle_ticks(w)
+	var s: Dictionary = w.hooks().debug_lod_stats()
+	assert_int(int(s["draw_min_level"])).override_failure_message(str(s)).is_greater_equal(0)
+	assert_int(int(s["fine_pages"])).is_equal(0)
+
+# Review focus 1: a live switch back must give the fine pages back. They are not freed
+# eagerly; they age out like any chunk the walk stops touching (kLodEvictFrames).
+func test_switching_back_to_raymarching_frees_the_fine_pages() -> void:
+	var w := make_world()
+	w.set_effect_enabled("raymarch", false)
+	settle_ticks(w)
+	assert_int(int(w.hooks().debug_lod_stats()["fine_pages"])).is_greater(0)
+	w.set_effect_enabled("raymarch", true)
+	var s := {}
+	for i in range(2000):
+		w.hooks().debug_lod_tick(CAM, FWD.normalized())
+		s = w.hooks().debug_lod_stats()
+		if int(s["fine_pages"]) == 0 and int(s["builds_in_flight"]) == 0:
+			break
+	assert_int(int(s["fine_pages"])).override_failure_message(str(s)).is_equal(0)
+	assert_int(int(s["partial_allocations"])).is_equal(0)
+
+# Review focus 3: an edit in raster mode must reach the 0.1 m chunks, not stop at level 0.
+func test_an_edit_in_raster_mode_requests_the_fine_chunks() -> void:
+	var w := make_world()
+	w.set_effect_enabled("raymarch", false)
+	settle_ticks(w)
+	var hit: Dictionary = w.raycast(CAM, FWD.normalized(), 400.0)
+	assert_bool(hit["hit"]).is_true()
+	w.hooks().debug_apply_sphere_subtract(hit["pos"], 2.0)
+	w.hooks().debug_lod_tick(CAM, FWD.normalized())
+	var ids: Array = w.hooks().debug_lod_stats()["pending_request_ids"]
+	var fine := ids.filter(func(id): return String(id).begins_with("-2:"))
+	assert_int(fine.size()).override_failure_message(
+		"the crater requested no 0.1 m rebuild: %s" % [ids]).is_greater(0)
+	settle_ticks(w)
+	assert_int(int(w.hooks().debug_lod_stats()["dirty_chunks"])).is_equal(0)

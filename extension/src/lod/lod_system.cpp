@@ -36,6 +36,11 @@ LodStats LodSystem::stats() {
 	s.chunks_resident = static_cast<int>(lod_pages_of_.size());
 	if (lod_tree_) lod_tree_->dirty_stats(&s.dirty_chunks, &s.dirty_levels);
 	for (const ve::LodDrawItem &item : lod_walk_.draws) s.draw_pages += item.page_count;
+	s.draw_min_level = ve::kLodLevels;
+	for (const ve::LodDrawItem &item : lod_walk_.draws)
+		s.draw_min_level = std::min(s.draw_min_level, item.level);
+	for (const auto &kv : lod_pages_of_)
+		if (kv.first.level < 0) s.fine_pages += static_cast<int>(kv.second.size());
 	// The exact page identities of the current camera cut, not just their count: a bounded
 	// pool may keep a drawable coarse cut while refinement requests remain pending.
 	std::vector<ve::LodPageDraw> draw_page_list;
@@ -302,6 +307,9 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 		float fs = ve::kLodFadeStartM;
 		fade_band(&fs, nullptr);
 		lod_tree_->set_fade_start_m(fs);
+		// Raster mode lets the walk descend to 0.1 m (spec 2026-10-04 §3). Switching back
+		// leaves the fine nodes unvisited, so they age out through collect_evictions.
+		lod_tree_->set_min_level(render()->raster_mode() ? ve::kLodMinLevel : 0);
 	}
 	lod_tree_->walk(cam, occ, ++lod_frame_, &lod_walk_);
 
