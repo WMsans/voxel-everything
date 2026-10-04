@@ -358,6 +358,9 @@ Dictionary VoxelDebugHooks::debug_render_frame(Vector3 pos, Vector3 fwd, int w, 
 	d["center_thick"] = Vector2();
 	// Spec §6 step 5's readout: the G-buffer material the resolve left at the centre.
 	d["center_gb_material"] = 0;
+	// Fraction of pixels the G-buffer holds a surface for (material != 0). Raster mode's
+	// coverage check: sky and dithered-away fragments both read 0.
+	d["gb_ground_fraction"] = 0.0;
 	d["scene_rgba"] = PackedByteArray();
 	if (w <= 0 || h <= 0 || !world_->get_use_local_device()) return d;
 	world_->ensure_initialized();
@@ -407,6 +410,13 @@ Dictionary VoxelDebugHooks::debug_render_frame(Vector3 pos, Vector3 fwd, int w, 
 		if (gs.size() >= (c + 1) * 8)
 			d["center_gb_material"] = static_cast<int>(half_to_float(
 					reinterpret_cast<const uint16_t *>(gs.ptr())[c * 4 + 2]) + 0.5f);
+		if (gs.size() >= pixels * 8) {
+			const uint16_t *g = reinterpret_cast<const uint16_t *>(gs.ptr());
+			int64_t ground = 0;
+			for (int64_t i = 0; i < pixels; i++)
+				if (half_to_float(g[i * 4 + 2]) > 0.5f) ground++;
+			d["gb_ground_fraction"] = static_cast<double>(ground) / static_cast<double>(pixels);
+		}
 		RaymarchPass *rmp = world_->context().render->passes().raymarch;
 		const Vector2i ms = rmp ? rmp->target_size() : Vector2i();
 		if (ms.x > 0 && ms.y > 0) {

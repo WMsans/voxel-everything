@@ -100,7 +100,10 @@ ve::GrassLayout VoxelFrame::grass_layout(const float cam_pos[3], const float vie
 	float fade_start = ve::kLodFadeStartM;
 	float fade_end = ve::kLodFadeEndM;
 	lod_.fade_band(&fade_start, &fade_end);
-	gs.reach_m = std::min(gs.reach_m, std::min(fade_end, grass_reach_limit_m()));
+	// With the near field off there is no seam (fade_end is 0): residency alone bounds the
+	// near blades, which stand on the mesh the far field now draws up to the camera.
+	const float seam = render_.near_field_enabled() ? fade_end : grass_reach_limit_m();
+	gs.reach_m = std::min(gs.reach_m, std::min(seam, grass_reach_limit_m()));
 	return ve::grass_layout(gs, cam_pos, view_proj);
 }
 

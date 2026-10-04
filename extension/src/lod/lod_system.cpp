@@ -179,10 +179,11 @@ void LodSystem::refresh_shell_candidates(const ve::LodCamera &cam,
 		std::unique_lock<std::mutex> &lock) {
 	// With the near field off there is no near shell to draw at all -- the far field draws
 	// transparent solid itself -- and fade_band()'s near-field-off branch reports fade_end
-	// = 1e9 m. Keeping that as the radius is a landmine: collect_ops_for_aabb caps its region
-	// span at 128, so it would silently return NO ops (measured: no shell at all, and no
-	// error), while transparent_boxes still walks every override brick in the store on every
-	// recompute. Gate the shell on the near field rather than feed it a clamped radius.
+	// = 0. A radius derived from it is meaningless, and the 1e9 it used to be was a landmine:
+	// collect_ops_for_aabb caps its region span at 128, so it would silently return NO ops
+	// (measured: no shell at all, and no error), while transparent_boxes still walks every
+	// override brick in the store on every recompute. Gate the shell on the near field rather
+	// than feed it a clamped radius.
 	const bool enabled = render()->transparency_settings().enabled &&
 			render()->near_field_enabled();
 	const ve::IVec3 cam_chunk = ve::shell_chunk_of_point(cam.pos[0], cam.pos[1], cam.pos[2]);
@@ -261,12 +262,14 @@ void LodSystem::ensure_lod() {
 }
 
 void LodSystem::fade_band(float *fade_start, float *fade_end) const {
-	// With the near field forced off the far field owns every distance: move the seam to
-	// zero and make the fade span essentially infinite so the LoD build gate requests the
-	// near chunks and the fragment shader keeps every far-field fragment.
+	// With the near field off the far field owns every distance: start and end both at 0
+	// put every fragment at t = 1, past every bayer4 threshold, in lod.frag.glsl, the
+	// composite, the shell passes and deferred's far_field_owns alike. (0 / 1e9 put t at
+	// d / 1e9 instead, which kept one pixel in sixteen.) The LoD build gate reads the same 0,
+	// so it requests the near chunks.
 	if (!render()->near_field_enabled()) {
 		if (fade_start) *fade_start = 0.0f;
-		if (fade_end) *fade_end = 1.0e9f;
+		if (fade_end) *fade_end = 0.0f;
 		return;
 	}
 	// Until the streamer has run a frame there is nothing measured, and before the first
