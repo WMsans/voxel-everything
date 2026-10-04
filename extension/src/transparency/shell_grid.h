@@ -70,10 +70,15 @@ struct IslandShellBlock {
 	std::vector<LodQuadNormals> normals;
 };
 bool volume_has_transparent(const VolumeData &v);
-// Shell quads of an island lattice, split into 32-cell blocks. `lattice_origin` and `voxel`
-// are the island descriptor's. Blocks with no quads are omitted.
-void island_shell_blocks(const VolumeData &v, const float lattice_origin[3], float voxel,
-		std::vector<IslandShellBlock> *out);
+// Which mesh of an island lattice to contour. kShell: the transparent shell, only quads whose
+// solid side is transparent (empty when the volume holds no transparent label). kOpaque: the
+// opaque view (a transparent solid reads as outside), every quad -- raster mode draws the
+// island from it instead of marching it (spec 2026-10-04 §5).
+enum class IslandMeshKind { kShell, kOpaque };
+// That mesh, split into 32-cell blocks. `lattice_origin` and `voxel` are the island
+// descriptor's. Blocks with no quads are omitted.
+void island_blocks(const VolumeData &v, const float lattice_origin[3], float voxel,
+		IslandMeshKind kind, std::vector<IslandShellBlock> *out);
 
 // The chunk-record FLAGS word of an island shell page, exactly as shaders/shell.vert.glsl
 // decodes it: `uint flags = floatBitsToUint(chunks.v[ci * 2u + 1u].y)`, then
@@ -83,6 +88,13 @@ void island_shell_blocks(const VolumeData &v, const float lattice_origin[3], flo
 // because its only reader is a shader: nothing else could catch a change to this layout.
 inline uint32_t island_shell_flags(int atlas_slot) {
 	return 1u | (static_cast<uint32_t>(atlas_slot + 1) << 8);
+}
+
+// The chunk-record FLAGS word of an island's OPAQUE mesh page: the slot in bits 8.. exactly
+// as island_shell_flags, with bit 0 clear because it is not a shell page. lod.vert.glsl
+// places it through the island descriptor.
+inline uint32_t island_mesh_flags(int atlas_slot) {
+	return static_cast<uint32_t>(atlas_slot + 1) << 8;
 }
 
 // CPU reference for the thickness the shell passes measure (spec §6). r = sum of back-face

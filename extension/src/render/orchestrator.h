@@ -52,6 +52,7 @@ struct IslandShell {
 	int atlas_slot = -1;
 	float voxel = 0.0f;
 	std::vector<ve::IslandShellBlock> blocks; // empty = the island has no shell
+	std::vector<ve::IslandShellBlock> opaque; // the island's opaque mesh; raster mode draws it
 };
 
 // Shared name of the ClassDB method binding (voxel_world.cpp -- the Callable must
@@ -240,6 +241,11 @@ public:
 		std::lock_guard<std::mutex> lock(island_shell_mutex_);
 		pending_island_shells_.push_back(std::move(shell));
 	}
+	// Contours an island's meshes from its bytes and queues them: the transparent shell
+	// (transparency on and a transparent label present) and the opaque mesh raster mode
+	// draws (always, so a live switch to raster finds it). The upload drain and the debug
+	// island fixture both call this, so the fixture tests the shipping path.
+	void contour_island_meshes(int slot, const ve::VolumeData &data, const IslandSlotDesc &d);
 
 	// --- render lifetime state and per-frame knobs (moved from VoxelWorld, spec 2026-09-14
 	// §3.1). Guards unchanged: plain fields stay plain, atomics stay atomic, the sun keeps
@@ -346,8 +352,6 @@ public:
 	bool preflight_shaders(RenderingDevice *rd, String *out_error);
 
 private:
-	void contour_island_shell(int slot, const ve::VolumeData &data, const IslandSlotDesc &d);
-
 	Collaborators handles_;
 	std::vector<const char *> teardown_trace_;
 

@@ -107,16 +107,15 @@ int RenderOrchestrator::drain_island_uploads(RenderingDevice *device) {
 						transparency && ve::volume_has_transparent(u.data)))
 			UtilityFunctions::printerr("VoxelWorld: island mip upload failed for slot ",
 					u.atlas_slot);
-		// The island's shell is contoured HERE, from the same bytes, because this is the one
+		// The island's meshes are contoured HERE, from the same bytes, because this is the one
 		// place both are in hand: the volume carries the medium and the descriptor carries the
 		// local frame the pages are placed in.
-		if (u.to_island_atlas && u.atlas_slot >= 0 && transparency &&
-				ve::volume_has_transparent(u.data)) {
+		if (u.to_island_atlas && u.atlas_slot >= 0) {
 			const IslandSlotDesc *d = u.atlas_slot < static_cast<int>(batch.descs.size())
 					? &batch.descs[static_cast<size_t>(u.atlas_slot)]
 					: nullptr;
 			if (d && d->live && d->volume_slot == u.volume_slot) {
-				contour_island_shell(u.atlas_slot, u.data, *d);
+				contour_island_meshes(u.atlas_slot, u.data, *d);
 			} else {
 				island_shell_wait_[static_cast<size_t>(u.atlas_slot)] = {u.volume_slot, u.data};
 			}
@@ -139,7 +138,7 @@ int RenderOrchestrator::drain_island_uploads(RenderingDevice *device) {
 		} else if (d->live && d->volume_slot != it->second.first) {
 			it = island_shell_wait_.erase(it); // the slot was re-used: this body is gone
 		} else if (d->live) {
-			contour_island_shell(it->first, it->second.second, *d);
+			contour_island_meshes(it->first, it->second.second, *d);
 			it = island_shell_wait_.erase(it);
 		} else {
 			++it;
@@ -148,12 +147,14 @@ int RenderOrchestrator::drain_island_uploads(RenderingDevice *device) {
 	return static_cast<int>(batch.uploads.size());
 }
 
-void RenderOrchestrator::contour_island_shell(int slot, const ve::VolumeData &data,
+void RenderOrchestrator::contour_island_meshes(int slot, const ve::VolumeData &data,
 		const IslandSlotDesc &d) {
 	IslandShell shell;
 	shell.atlas_slot = slot;
 	shell.voxel = d.voxel;
-	ve::island_shell_blocks(data, d.lattice_origin, d.voxel, &shell.blocks);
+	if (transparency_settings().enabled)
+		ve::island_blocks(data, d.lattice_origin, d.voxel, ve::IslandMeshKind::kShell, &shell.blocks);
+	ve::island_blocks(data, d.lattice_origin, d.voxel, ve::IslandMeshKind::kOpaque, &shell.opaque);
 	queue_island_shell(std::move(shell)); // the same locked door the main thread uses
 }
 

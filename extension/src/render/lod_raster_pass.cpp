@@ -5,6 +5,7 @@
 #include "lod/lod_contour.h"
 #include "gpu_layout/blocks.h"
 #include "gpu_layout/gbuffer_layout.h"
+#include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_color_array.hpp>
 #include <chrono>
 #include <cstring>
@@ -23,6 +24,10 @@ void LodRasterPass::initialize(RenderingDevice *rd) {
 	// and match the scene framebuffer's color mask.
 	shader_marker_ = gpu::compile_raster(rd, group_, "LodRasterPass", "lod.vert.glsl",
 			"lod.frag.glsl", "#define SEAM_MARKER 1\n");
+	PackedByteArray dead;
+	dead.resize(128); // one island descriptor, eight vec4, all zero
+	dead.fill(0);
+	fallback_desc_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(128, dead));
 }
 
 void LodRasterPass::teardown() {
@@ -32,6 +37,7 @@ void LodRasterPass::teardown() {
 	shader_ = shader_marker_ = RID();
 	pipeline_cull_off_ = pipeline_cull_ccw_ = pipeline_cull_cw_ = RID();
 	index_array_ = index_array_buffer_ = RID();
+	island_desc_ = fallback_desc_ = RID();
 	set_ = gpu::SetCache();
 	framebuffer_ = gpu::FramebufferCache();
 	draw_pages_.clear();
@@ -91,7 +97,8 @@ bool LodRasterPass::ensure_uniform_set(RenderingDevice *rd, LodPool &pool, Mater
 			gpu::storage(2, pool.chunk_buffer()),
 			gpu::sampled(3, materials.sampler(), materials.albedo_array()),
 			gpu::sampled(4, materials.sampler(), materials.surface_array()),
-			gpu::storage(5, pool.normal_buffer())}).is_valid();
+			gpu::storage(5, pool.normal_buffer()),
+			gpu::storage(8, island_desc_.is_valid() ? island_desc_ : fallback_desc_)}).is_valid();
 }
 
 RID LodRasterPass::active_pipeline() const {

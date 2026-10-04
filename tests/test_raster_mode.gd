@@ -169,3 +169,59 @@ func test_ice_renders_in_raster_mode() -> void:
 			break
 	assert_int(int((d["center_front"] as Color).a + 0.5)).override_failure_message(
 		"no ice front in raster mode: %s" % d).is_equal(ice)
+
+
+# The island fixture's world (tests/test_island_render.gd): rows 58..59 are solid here.
+func make_island_world() -> VoxelWorld:
+	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	w.use_local_device = true
+	w.physics_enabled = false
+	w.residency_radius_m = 40.0
+	w.atlas_bricks = Vector3i(32, 16, 32)
+	w.max_region_slots = 64
+	add_child(w)
+	_worlds.append(w)
+	assert_bool(w.hooks().debug_init_physics()).is_true()
+	for i in range(60):
+		w.hooks().debug_stream_frame(Vector3(20.0, 56.0, 20.0))
+	w.hooks().debug_lod_tick(Vector3(20.0, 56.0, 20.0), FWD.normalized())
+	return w
+
+func place_island(w: VoxelWorld) -> Dictionary:
+	var placed: Dictionary = w.hooks().debug_place_test_island(0, Vector3i(25, 58, 25),
+		Vector3i(26, 59, 26), Vector3(0.0, 40.0, 0.0))
+	assert_bool(placed.get("ok", false)).override_failure_message(str(placed)).is_true()
+	return placed
+
+# Looking slightly UP at an island lifted 40 m: everything behind it is sky, so a non-zero
+# G-buffer material at the centre can only be the island.
+func island_cam(placed: Dictionary) -> Vector3:
+	return (placed["world_center"] as Vector3) - Vector3(8.0, 1.5, 0.0)
+
+func island_fwd(placed: Dictionary) -> Vector3:
+	return (placed["world_center"] as Vector3) - island_cam(placed)
+
+func test_an_island_renders_in_raster_mode() -> void:
+	var w := make_island_world()
+	w.set_effect_enabled("raymarch", false)
+	var placed := place_island(w)
+	var d := settle_frames(w, island_cam(placed), island_fwd(placed))
+	assert_int(int(d["center_gb_material"])).override_failure_message(
+		"the island was not drawn: %s" % d).is_not_equal(0)
+	w.hooks().debug_clear_test_island(0)
+	for i in range(5):
+		d = frame(w, island_cam(placed), island_fwd(placed))
+	assert_int(int(d["center_gb_material"])).override_failure_message(
+		"the island outlived its slot: %s" % d).is_equal(0)
+	assert_int(int(w.hooks().debug_lod_stats()["partial_allocations"])).is_equal(0)
+
+# Review focus 2: the mesh must already exist for an island extracted while raymarching.
+func test_an_island_extracted_while_raymarching_renders_after_the_switch() -> void:
+	var w := make_island_world()
+	var placed := place_island(w)
+	for i in range(3):
+		frame(w, island_cam(placed), island_fwd(placed))
+	w.set_effect_enabled("raymarch", false)
+	var d := settle_frames(w, island_cam(placed), island_fwd(placed))
+	assert_int(int(d["center_gb_material"])).override_failure_message(
+		"the island vanished at the switch: %s" % d).is_not_equal(0)

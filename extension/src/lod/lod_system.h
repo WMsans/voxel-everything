@@ -189,6 +189,7 @@ private:
 	std::map<ve::LodKey, std::vector<int>> shell_pages_of_; // key.level == ve::kShellLevel
 	// atlas slot -> the pages holding its shell. Released when the slot leaves the live mask.
 	std::map<int, std::vector<int>> island_shell_pages_;
+	std::map<int, std::vector<int>> island_mesh_pages_; // raster mode's island meshes, by atlas slot
 	std::vector<ve::LodPageDraw> shell_draw_pages_;
 	ve::IVec3 shell_cam_chunk_{INT32_MAX, 0, 0};
 	// The `enabled` the candidate set was last built under. A runtime toggle (a bound

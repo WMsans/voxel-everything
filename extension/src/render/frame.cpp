@@ -322,6 +322,8 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 			SunShadowPass::kSize, cascades);
 	const bool clamp_levels = settings.sun_cascade_min_level;
 	if (lod_raster) lod_raster->set_skip_transparent(transparency.enabled);
+	if (lod_raster && render_.passes().islands)
+		lod_raster->set_island_desc(render_.passes().islands->desc_buffer());
 	if (!in.debug.skip_far_field && lod_.pool() && lod_raster && render_.passes().materials) {
 		ve::LodCamera lod_cam;
 		for (int c = 0; c < 4; c++)

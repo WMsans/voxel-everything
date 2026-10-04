@@ -17,6 +17,26 @@ ve::EditOp sphere(uint32_t type, uint16_t material, float x, float y, float z, f
 	op.pos[0] = x; op.pos[1] = y; op.pos[2] = z; op.radius = r;
 	return op;
 }
+// A solid ball of radius 20 voxels in the middle of an island volume; its upper half is ice,
+// the lower half rock.
+ve::VolumeData ice_capped_ball() {
+	ve::VolumeData v;
+	v.dim = ve::kIslandDim;
+	v.sdf.assign(size_t(v.voxel_count()), ve::encode_sdf(0.3f));
+	v.mat.assign(size_t(v.voxel_count()), 0);
+	const float voxel = ve::kIslandVoxelFine;
+	for (int z = 0; z < v.dim; z++)
+		for (int y = 0; y < v.dim; y++)
+			for (int x = 0; x < v.dim; x++) {
+				const float dx = x - 32.0f, dy = y - 32.0f, dz = z - 32.0f;
+				const float d = (std::sqrt(dx * dx + dy * dy + dz * dz) - 20.0f) * voxel;
+				const int i = ve::VolumeSet::voxel_index(v.dim, x, y, z);
+				v.sdf[size_t(i)] = ve::encode_sdf(d);
+				if (d <= 0.0f)
+					v.mat[size_t(i)] = uint8_t(ve::material_id(y >= 32 ? "ice" : "rock"));
+			}
+	return v;
+}
 } // namespace
 
 TEST_CASE("shell chunks are 3.2 m and tile negative space") {
@@ -171,7 +191,7 @@ TEST_CASE("an island's shell is split into 32-cell blocks and only holds transpa
 	CHECK(ve::volume_has_transparent(v));
 	const float origin[3] = {-1.6f, -1.6f, -1.6f};
 	std::vector<ve::IslandShellBlock> blocks;
-	ve::island_shell_blocks(v, origin, voxel, &blocks);
+	ve::island_blocks(v, origin, voxel, ve::IslandMeshKind::kShell, &blocks);
 	REQUIRE(!blocks.empty());
 	CHECK(blocks.size() <= 8);
 	size_t quads = 0;
@@ -189,8 +209,44 @@ TEST_CASE("an island's shell is split into 32-cell blocks and only holds transpa
 
 	std::fill(v.mat.begin(), v.mat.end(), uint8_t(ve::material_id("rock")));
 	CHECK_FALSE(ve::volume_has_transparent(v));
-	ve::island_shell_blocks(v, origin, voxel, &blocks);
+	ve::island_blocks(v, origin, voxel, ve::IslandMeshKind::kShell, &blocks);
 	CHECK(blocks.empty());
+}
+
+// Raster mode draws an island from this mesh instead of marching it: the opaque view of the
+// island (a transparent solid reads as outside), so the ice is left to the shell.
+TEST_CASE("an island's opaque mesh drops its transparent part and keeps the rest") {
+	ve::VolumeData v = ice_capped_ball();
+	const float origin[3] = {-1.6f, -1.6f, -1.6f};
+	std::vector<ve::IslandShellBlock> blocks;
+	ve::island_blocks(v, origin, ve::kIslandVoxelFine, ve::IslandMeshKind::kOpaque, &blocks);
+	REQUIRE(!blocks.empty());
+	size_t quads = 0;
+	for (const ve::IslandShellBlock &b : blocks) {
+		CHECK(b.quads.size() == b.normals.size());
+		for (const ve::LodQuad &q : b.quads) {
+			ve::LodQuadFields f{};
+			ve::lod_quad_unpack(q, &f);
+			CHECK(f.material != 0);
+			CHECK_FALSE(ve::material_transparent(uint16_t(f.material)));
+		}
+		quads += b.quads.size();
+	}
+	CHECK(quads > 100);
+
+	// All ice: nothing opaque is left to draw.
+	for (uint8_t &m : v.mat)
+		if (m != 0) m = uint8_t(ve::material_id("ice"));
+	ve::island_blocks(v, origin, ve::kIslandVoxelFine, ve::IslandMeshKind::kOpaque, &blocks);
+	CHECK(blocks.empty());
+}
+
+TEST_CASE("an island's opaque mesh page flags carry the slot and no shell bit") {
+	for (const int slot : {0, 1, 7, 31}) {
+		const uint32_t flags = ve::island_mesh_flags(slot);
+		CHECK((flags & 1u) == 0u);
+		CHECK(int(flags >> 8) == slot + 1);
+	}
 }
 
 // Carried from Task 6 and Task 8 reviews: the chunk record meta[1] carries the island slot

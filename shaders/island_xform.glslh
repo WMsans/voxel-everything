@@ -1,0 +1,14 @@
+// Places an island page's LOCAL-space vertex in the world. `island` is the chunk record's
+// flags >> 8: atlas slot + 1, and 0 for a world-space page, which is left untouched. The
+// descriptor is eight vec4 per island, as raymarch.comp.glsl reads it: basis rows 0-2 with
+// the translation in .w. The includer declares the island_desc buffer.
+void island_place(uint island, inout vec3 p, inout vec3 n) {
+	if (island == 0u) return;
+	int i = int(island) - 1;
+	vec4 r0 = island_desc.v[i * 8 + 0];
+	vec4 r1 = island_desc.v[i * 8 + 1];
+	vec4 r2 = island_desc.v[i * 8 + 2];
+	mat3 basis = mat3(r0.xyz, r1.xyz, r2.xyz);
+	p = basis * p + vec3(r0.w, r1.w, r2.w);
+	n = basis * n;
+}
