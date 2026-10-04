@@ -1375,28 +1375,39 @@ ve::LodCamera cam_looking(const float p[3], const float f[3]) {
 // Raster mode adds levels BELOW 0 and a min_level floor. The default config must keep
 // choosing exactly the cut it chose before either existed. Pinned on the code before the
 // change; the expected values are the hashes that code printed.
-TEST_CASE("characterization: the settled default cut is pinned at three cameras") {
+//
+// Three shots settle the SURFACE world, in which kGroundY = 51.2 is an exact multiple of
+// every chunk size, so nothing below level 3 is ever marked ready and the cut cannot
+// descend past level 3 -- the part of the walk the change touches. The fourth shot settles
+// a SOLID world with the fade started at zero, so the descent to the floor is the subject.
+TEST_CASE("characterization: the settled default cut is pinned at four cameras") {
 	struct Shot {
 		float p[3];
 		float f[3];
+		bool solid; // true: every requested chunk ready; false: the ground plane only
+		float fade_start_m;
 		uint64_t expected;
 	};
 	const Shot shots[] = {
-		{{800.0f, 60.0f, 800.0f}, {0.0f, 0.0f, -1.0f},
+		{{800.0f, 60.0f, 800.0f}, {0.0f, 0.0f, -1.0f}, false, ve::kLodFadeStartM,
 				7366100078025556419ull}, // level, along the ground
-		{{800.0f, 140.0f, 800.0f}, {0.6f, -0.5f, -0.6f},
+		{{800.0f, 140.0f, 800.0f}, {0.6f, -0.5f, -0.6f}, false, ve::kLodFadeStartM,
 				266758349124011340ull}, // pitched down over a ridge
-		{{800.0f, 90.0f, 800.0f}, {0.0f, -1.0f, 0.0f},
+		{{800.0f, 90.0f, 800.0f}, {0.0f, -1.0f, 0.0f}, false, ve::kLodFadeStartM,
 				9178775522565948259ull}, // straight down
+		{{800.0f, 53.0f, 800.0f}, {0.0f, 0.0f, -1.0f}, true, 0.0f,
+				15572169387688817416ull}, // solid world: descends below level 3, down to the floor
 	};
 	for (const Shot &s : shots) {
 		ve::LodTreeConfig cfg;
 		cfg.stream_radius_m = 1638.4f;
 		cfg.max_requests_per_walk = kSettleRequestCap;
+		cfg.fade_start_m = s.fade_start_m;
 		ve::LodTree t(cfg);
 		NoOcclusion occ;
 		const ve::LodCamera c = cam_looking(s.p, s.f);
-		settle(&t, c, &occ, 30);
+		if (s.solid) settle_solid(&t, c, &occ, 30);
+		else settle(&t, c, &occ, 30);
 		ve::LodWalkResult r;
 		t.walk(c, &occ, 20000u, &r);
 		const uint64_t h = cut_hash(r.draws);
