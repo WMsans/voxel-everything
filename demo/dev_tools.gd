@@ -1,7 +1,9 @@
 extends Node
 # Spec §8's two dev-build affordances: a shader hot-reload keybind, and a differential
 # self-check that runs the CPU and GPU paths and diffs them. Also owns the F12 screenshot
-# and the F3 cost-view toggle so every key in the help overlay has a handler.
+# and the F3 cost-view toggle so every key in the help overlay has a handler. F7 prints the
+# camera pose in benchmark.gd's --pose=x,y,z,yaw,pitch form, so a view seen in game can be
+# measured as a benchmark leg.
 
 @export var world_path: NodePath
 
@@ -29,6 +31,16 @@ func _unhandled_input(event: InputEvent) -> void:
 				str(d["ok"]), d["field_mismatches"], d["brick_mismatches"],
 				d["mesh_mismatches"], d["lod_mismatches"], d["occupancy_mismatches"],
 				d["elapsed_ms"]])
+			get_viewport().set_input_as_handled()
+		KEY_F7:
+			var cam := get_viewport().get_camera_3d()
+			if cam:
+				var p := cam.global_position
+				var r := cam.global_rotation
+				var pose := "--pose=%.2f,%.2f,%.2f,%.1f,%.1f" % [p.x, p.y, p.z,
+					rad_to_deg(r.y), rad_to_deg(r.x)]
+				DisplayServer.clipboard_set(pose)
+				print("camera pose (copied): %s" % pose)
 			get_viewport().set_input_as_handled()
 		KEY_F12:
 			var image := get_viewport().get_texture().get_image()

@@ -45,6 +45,17 @@ func test_stream_scope_is_a_known_pass()->void:
 	assert_bool(d["valid"]).is_true()
 	assert_float(d["stream_gpu_ms"]).is_equal_approx(2.0,.0001)
 
+func test_grass_and_leaves_scopes_are_known_passes()->void:
+	# frame.cpp has opened both scopes since they landed; the parser used to drop them, so
+	# their cost hid in "unattributed" and no benchmark could tell the two apart.
+	var d: Dictionary = world().hooks().debug_ingest_gpu_timings(PackedStringArray([
+		"ve:23:frame:0:b","ve:23:grass:0:b","ve:23:grass:0:e",
+		"ve:23:leaves:0:b","ve:23:leaves:0:e","ve:23:frame:0:e"]),
+		PackedInt64Array([1000,1000,2500,2500,5500,9000]),62)
+	assert_float(d["grass_gpu_ms"]).is_equal_approx(1.5,.0001)
+	assert_float(d["leaves_gpu_ms"]).is_equal_approx(3.0,.0001)
+	assert_float(d["unattributed_gpu_ms"]).is_equal_approx(3.5,.0001)
+
 func test_unattributed_is_the_frame_minus_every_labelled_pass()->void:
 	# frame = 8 ms, raymarch = 3 ms, stream = 2 ms -> 3 ms carries no label.
 	var d: Dictionary = world().hooks().debug_ingest_gpu_timings(PackedStringArray([

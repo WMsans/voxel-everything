@@ -18,6 +18,7 @@ const CONTROLS := [
 	["HUD detail", "F4"],
 	["Reload shaders", "F5"],
 	["Run self-check", "F6"],
+	["Copy camera pose (benchmark --pose)", "F7"],
 	["Screenshot", "F12"],
 	["Pause", "P"],
 	["Release mouse", "Esc"],

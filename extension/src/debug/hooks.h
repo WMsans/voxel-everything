@@ -503,6 +503,13 @@ public:
 	// Keys: ran, capacity, trees, clumps, high_water.
 	Dictionary debug_leaf_stats();
 
+	// Scatter reuse: drives the shipping grass and leaf passes through five runs on a
+	// local-device world -- (epoch 1, camera A), the same again at a later time, (epoch 2,
+	// A), (epoch 2, A moved 1 m), and (kAlwaysScatter, moved) -- and reports each pass's
+	// scatter_runs() delta per step as "grass" / "leaves" PackedInt32Arrays. Expected
+	// [1, 0, 1, 1, 1]: only an unchanged world AND camera reuses the last scatter.
+	Dictionary debug_scatter_reuse_probe();
+
 	// --- Task 8 hooks ---
 	Dictionary debug_sun_shadow_stats(int cascade);
 

@@ -2,6 +2,11 @@ extends Node
 # Frame-time harness. Runs only when a --benchmark* flag is passed after `--`.
 #
 #   --benchmark        steady state: the player is frozen, nothing streams after warmup.
+#   --benchmark-spawn  steady state at the scene's spawn, standing on the ground and
+#                      looking along its default heading (-Z) at the horizon: the view a
+#                      player sees on launch, where the foliage cost was reported.
+#                      --pose=x,y,z,yaw,pitch (degrees; F7 in game copies it) replaces that
+#                      pose with the camera's exact one, and skips the ground search.
 #   --benchmark-move   the player flies forward continuously, so regions and collision
 #                      chunks stream in for the whole run.
 #   --benchmark-ridge  the second flythrough leg: low along a valley floor with a ridge
@@ -27,6 +32,7 @@ const SETTLE_CAP := 1500
 const SETTLE_QUIET_FRAMES := 10
 const HORIZON_QUIET_FRAMES := 30
 const FRAMES := 300
+const SPAWN := Vector3(8, 62, 8) # main.tscn's Player transform
 const ISLAND_FRAMES := 900
 const EDIT_BOUNDED_FRAMES := 900
 const TARGET_MS := 16.6
@@ -41,6 +47,7 @@ var _gpu_samples := {
 	"raymarch": PackedFloat32Array(), "stream": PackedFloat32Array(), "lod": PackedFloat32Array(),
 	"ssgi": PackedFloat32Array(), "ssr": PackedFloat32Array(),
 	"ssao": PackedFloat32Array(), "shadows": PackedFloat32Array(), "outlines": PackedFloat32Array(),
+	"grass": PackedFloat32Array(), "leaves": PackedFloat32Array(),
 	"unattributed": PackedFloat32Array(),
 	"custom_frame": PackedFloat32Array(),
 }
@@ -91,6 +98,11 @@ var _horizon_at := -1
 var _screenshot_path := ""
 var _ice_radius := 0.0
 var _ice_pending := false
+# The spawn leg stands on the RESIDENT ground under main.tscn's spawn, found by a ray once
+# the regions there have streamed -- the analytic _terrain_height() is not the voxel surface
+# the player lands on in game, and a wrong height put the camera into a hillside.
+var _ground_pending := false
+var _pose := PackedFloat64Array() # --pose: camera x,y,z, yaw, pitch (degrees)
 # Optional fixed camera progression for A/B comparisons: faster rendering must
 # not send the camera through a different stretch of terrain. Frame timing still
 # uses the real delta; this is deliberately not Godot's --fixed-fps option.
@@ -112,7 +124,7 @@ func _effects_off_from_args(args: PackedStringArray) -> PackedStringArray:
 
 func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
-	for m in ["--benchmark-move", "--benchmark-ridge", "--benchmark-edit",
+	for m in ["--benchmark-spawn", "--benchmark-move", "--benchmark-ridge", "--benchmark-edit",
 			"--benchmark-edit-bounded", "--benchmark-island", "--benchmark"]:
 		if m in args:
 			_mode = m
@@ -140,7 +152,7 @@ func _ready() -> void:
 	# waiting for quiet there would just run their edit loop for the length of the cap before
 	# sampling ever began -- which is a different measurement, and on the edit leg ran the
 	# region op lists to overflow.
-	_settle = _mode == "--benchmark"
+	_settle = _mode == "--benchmark" or _mode == "--benchmark-spawn"
 
 	_player = get_parent().get_node("Player")
 	_world = get_parent().get_node("VoxelWorld")
@@ -162,6 +174,12 @@ func _ready() -> void:
 			var kv := arg.trim_prefix("--effect-value=").split("=", false)
 			if kv.size() == 2:
 				_world.set_effect_value(String(kv[0]).strip_edges(), float(kv[1]))
+		elif arg.begins_with("--pose="):
+			var v := arg.trim_prefix("--pose=").split_floats(",", false)
+			if v.size() == 5:
+				_pose = v
+			else:
+				push_warning("benchmark: --pose wants x,y,z,yaw,pitch; ignored")
 		elif arg.begins_with("--render-scale="):
 			# Through VoxelSettings, so the display store the panel reads is never stale.
 			get_parent().get_node("VoxelSettings").set_setting("display", "render_scale",
@@ -220,6 +238,22 @@ func _ready() -> void:
 		_player.global_transform = Transform3D(Basis.IDENTITY, start)
 		_cam.transform = Transform3D(Basis.looking_at(Vector3(2.0, 0.0, 1.0).normalized(),
 			Vector3(0.0, 1.0, 0.0)), Vector3(0.0, 0.7, 0.0))
+	elif _mode == "--benchmark-spawn":
+		# main.tscn spawns the player at (8, 62, 8) and lets it fall; physics is off here, so
+		# _stand_on_ground() drops it onto the surface once that is resident. The camera
+		# keeps the scene's pose: eye 0.7 m up, identity basis.
+		_player.global_transform = Transform3D(Basis.IDENTITY, SPAWN)
+		_cam.transform = Transform3D(Basis.IDENTITY, Vector3(0, 0.7, 0))
+		_ground_pending = true
+		if _pose.size() == 5:
+			# The player yaws, the camera pitches (player.gd); F7 printed the camera's
+			# global position, so the body sits one eye height below it.
+			_player.global_transform = Transform3D(
+				Basis(Vector3.UP, deg_to_rad(_pose[3])),
+				Vector3(_pose[0], _pose[1] - 0.7, _pose[2]))
+			_cam.transform = Transform3D(Basis(Vector3.RIGHT, deg_to_rad(_pose[4])),
+				Vector3(0, 0.7, 0))
+			_ground_pending = false
 	else:
 		_player.global_transform = Transform3D(Basis.IDENTITY, Vector3(24, 63.2, 24))
 		_cam.transform = Transform3D(Basis.looking_at(Vector3(6, -10, 6).normalized()),
@@ -233,6 +267,15 @@ func _ready() -> void:
 			or _mode == "--benchmark-island":
 		_tool = ClassDB.instantiate("VoxelEditTool")
 		_world.add_child(_tool)
+
+func _stand_on_ground() -> bool:
+	var hit: Dictionary = _world.raycast(SPAWN, Vector3.DOWN, 200.0)
+	if not hit["hit"]:
+		return false
+	# Capsule half-height 0.9: where the CharacterBody3D comes to rest.
+	_player.global_position = hit["pos"] + Vector3(0, 0.9, 0)
+	print("benchmark: spawn ground at %s" % [hit["pos"]])
+	return true
 
 func _place_ice() -> bool:
 	# An ice sphere where the camera first looks, so a transparency A/B has something to see
@@ -282,6 +325,10 @@ func _vsync_actual_from_readback(display_name: String, mode: int) -> String:
 func _process(delta: float) -> void:
 	if _mode == "":
 		return
+	if _ground_pending:
+		# Retried until it lands; the settle wait that follows warmup is what lets the
+		# regions under the spawn arrive, so sampling cannot start before this succeeds.
+		_ground_pending = not _stand_on_ground()
 	if _ice_pending and _frames <= _warmup:
 		# Retried through the warmup, which is also the window the far-field horizon needs to
 		# arrive: the shell quads for the new chunk are built after the ice lands, so the leg
@@ -333,7 +380,7 @@ func _process(delta: float) -> void:
 		# few frames so a momentary pause in the queue is not mistaken for the end of it.
 		var ph: Dictionary = _world.hooks().debug_physics_stats()
 		_settle_quiet = _settle_quiet + 1 if int(ph.get("chunks_pending", 0)) == 0 else 0
-		if _settle_quiet < SETTLE_QUIET_FRAMES and _frames < SETTLE_CAP:
+		if (_settle_quiet < SETTLE_QUIET_FRAMES or _ground_pending) and _frames < SETTLE_CAP:
 			return
 		_settle = false
 		_settled_at = _frames
@@ -472,7 +519,8 @@ func _capture_gpu_sample() -> void:
 		return
 	_last_gpu_sample_id = sample_id
 	_gpu_dropped_pairs = max(_gpu_dropped_pairs, int(d.get("dropped_pairs", 0)))
-	for key in ["raymarch", "stream", "lod", "ssgi", "ssr", "ssao", "outlines", "unattributed"]:
+	for key in ["raymarch", "stream", "lod", "ssgi", "ssr", "ssao", "outlines", "grass", "leaves",
+			"unattributed"]:
 		var value := float(d.get(key + "_gpu_ms", -1.0))
 		if value >= 0.0:
 			_append_gpu(key, value)
@@ -573,7 +621,7 @@ func _report() -> void:
 		worstparts.append("%s=%.2f" % [k, float(_worst.get(k, 0.0))])
 	print("BENCH worst_frame(%.2fms) " % _worst_ms + " ".join(worstparts))
 	for key in ["raymarch", "stream", "lod", "ssgi", "ssr", "ssao", "shadows", "outlines",
-			"unattributed", "custom_frame"]:
+			"grass", "leaves", "unattributed", "custom_frame"]:
 		var values: PackedFloat32Array = _gpu_samples[key]
 		var sorted_gpu := values.duplicate()
 		sorted_gpu.sort()

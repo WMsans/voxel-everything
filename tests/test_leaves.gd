@@ -288,3 +288,13 @@ func test_a_known_tree_shows_bark_in_the_gbuffer_and_a_known_clearing_shows_none
 	assert_int(air["material"]).override_failure_message(
 		"a known clearing cell reported MAT_BARK in the G-buffer: %s" % str(air) \
 		).is_not_equal(MAT_BARK)
+
+func test_grass_and_leaves_reuse_their_scatter_only_while_nothing_changes() -> void:
+	# Standing still, both passes keep last frame's instances instead of re-running their
+	# compute stages; a new world epoch, a moved camera, or a caller that cannot vouch for
+	# the world (the debug hooks) must rescatter. One entry per probe step: how many full
+	# scatters that step ran.
+	var w := make_world()
+	var d: Dictionary = w.hooks().debug_scatter_reuse_probe()
+	assert_array(d["grass"]).is_equal(PackedInt32Array([1, 0, 1, 1, 1]))
+	assert_array(d["leaves"]).is_equal(PackedInt32Array([1, 0, 1, 1, 1]))

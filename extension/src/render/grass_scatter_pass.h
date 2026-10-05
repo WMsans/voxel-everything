@@ -2,7 +2,10 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include "grass/grass_layout.h"
+#include "render/async_readback.h"
 #include "render/gpu/gpu.h"
+#include "gpu_layout/blocks.h"
+#include "render/scatter_reuse.h"
 #include "world/region_window.h"
 
 namespace godot {
@@ -29,9 +32,15 @@ public:
 	// field is the terrain pipeline's set-1 context; stage 1 evaluates the field directly for
 	// the far LoD rings, which live past the brick atlas's residency radius. A null `field`
 	// (no pipeline) keeps the near rings and skips the far ones.
+	// world_epoch: anything that changes the atlas or the sun (streaming, edits) must change
+	// it. When it, the region window and the params (ve::same_scatter_inputs) all match the
+	// last full run, both compute stages are skipped and the raster redraws last frame's
+	// blades -- only the time in the params block is refreshed, for the wind.
 	bool run(RenderingDevice *rd, GpuAtlas &atlas, const ve::GrassLayout &layout,
 			const ve::RegionWindow &region_win, float time_seconds, RID sun_ubo,
-			const FieldContextSet *field);
+			const FieldContextSet *field, uint64_t world_epoch = ve::kAlwaysScatter);
+	// Full scatters run since initialize(); reused frames do not count.
+	int64_t scatter_runs() const { return scatter_runs_; }
 
 	RID instance_buffer() const { return instances_; }
 	RID draw_args_buffer() const { return draw_args_; }
@@ -47,10 +56,11 @@ public:
 	int blade_high_water() const { return blade_high_water_; }
 	int capacity() const { return capacity_; }
 
-	// Hook re-read: run()'s internal readback lands before the dispatch executes, and the
-	// compositor's frame-end submit+sync makes it valid there. The debug hook has no frame,
-	// so after its own submit+sync it refreshes the same counters through this entry point
-	// before reporting. No logic change -- this is the private read, made callable.
+	// Synchronous re-read for the debug hook, after its own submit+sync. run() never calls
+	// this: a blocking buffer_get_data on the main device stalls the frame until the GPU
+	// drains, so the shipping path reads the counters asynchronously instead and the
+	// getters above lag the GPU by the frame queue. Drains that read first, so a late
+	// arrival can never overwrite what this returns.
 	void read_back_counters(RenderingDevice *rd);
 
 	// Placement-contract sample: reduces at most the first 4096 instances on the CPU to
@@ -66,6 +76,7 @@ public:
 	float sample_mean_sun() const { return sample_mean_sun_; }
 
 private:
+	void apply_counters(const PackedByteArray &data);
 	bool ensure_buffers(RenderingDevice *rd, int max_blades, int max_bricks);
 	bool ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas, RID sun_ubo);
 
@@ -85,6 +96,15 @@ private:
 	// 7-8); mirrors RaymarchPass's sampler pair, linear for the SDF, nearest for ints.
 	RID sampler_linear_, sampler_nearest_;
 	gpu::SetCache bricks_set_, scatter_set_;
+	// The counters run() asks for, arriving a few frames later (see AsyncBufferRead).
+	Ref<AsyncBufferRead> counters_read_;
+	// What the instances in instances_ were scattered from; see run().
+	bool scattered_ = false;
+	uint64_t scattered_epoch_ = 0;
+	ve::GrassParams scattered_params_{};
+	ve::GrassRegionBlock scattered_region_{};
+	RID scattered_sets_[2];
+	int64_t scatter_runs_ = 0;
 	int capacity_ = 0;
 	int brick_capacity_ = 0;
 	int last_brick_count_ = 0;

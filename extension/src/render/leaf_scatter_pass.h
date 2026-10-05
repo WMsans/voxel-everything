@@ -2,7 +2,10 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include "leaves/leaf_layout.h"
+#include "render/async_readback.h"
 #include "render/gpu/gpu.h"
+#include "gpu_layout/blocks.h"
+#include "render/scatter_reuse.h"
 #include "world/region_window.h"
 
 namespace godot {
@@ -35,7 +38,10 @@ public:
 	// generated field source, so a missing set 1 fails the run, not the frame.
 	bool run(RenderingDevice *rd, GpuAtlas &atlas, const ve::LeafLayout &layout,
 			const ve::RegionWindow &region_win, float time_seconds, RID sun_ubo,
-			const FieldContextSet *field);
+			const FieldContextSet *field, uint64_t world_epoch = ve::kAlwaysScatter);
+	// Full scatters run since initialize(); reused frames do not count. world_epoch and the
+	// reuse rule are GrassScatterPass::run's.
+	int64_t scatter_runs() const { return scatter_runs_; }
 
 	RID tree_list_buffer() const { return tree_list_; }
 	RID instance_buffer() const { return instances_; }
@@ -54,10 +60,10 @@ public:
 	int clump_high_water() const { return clump_high_water_; }
 	int capacity() const { return capacity_; }
 
-	// Hook re-read: run()'s internal readback lands before the dispatch executes, and the
-	// compositor's frame-end submit+sync makes it valid there. The debug hook has no frame,
-	// so after its own submit+sync it refreshes the same counters through this entry point
-	// before reporting. No logic change -- this is the private read, made callable.
+	// Synchronous re-read for the debug hook, after its own submit+sync. run() never calls
+	// this -- see GrassScatterPass::read_back_counters: the shipping path reads the counters
+	// asynchronously, so the getters above lag the GPU by the frame queue. Drains that read
+	// first, so a late arrival can never overwrite what this returns.
 	void read_back_counters(RenderingDevice *rd);
 
 	// Sample readback, mirroring the grass pass's contract (read after read_back_counters):
@@ -76,6 +82,7 @@ public:
 	const ve::LeafParams &last_params() const { return last_params_; }
 
 private:
+	void apply_counters(const PackedByteArray &data);
 	bool ensure_buffers(RenderingDevice *rd, int max_clumps, int max_trees);
 	bool ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas, RID sun_ubo);
 
@@ -95,6 +102,15 @@ private:
 	RID sampler_linear_, sampler_nearest_;
 	gpu::SetCache trees_set_;
 	gpu::SetCache scatter_set_;
+	// The counters run() asks for, arriving a few frames later (see AsyncBufferRead).
+	Ref<AsyncBufferRead> counters_read_;
+	// What the instances in instances_ were scattered from; see GrassScatterPass::run().
+	bool scattered_ = false;
+	uint64_t scattered_epoch_ = 0;
+	ve::LeafParams scattered_params_{};
+	ve::GrassRegionBlock scattered_region_{};
+	RID scattered_sets_[2];
+	int64_t scatter_runs_ = 0;
 	int capacity_ = 0;      // clump instances the buffer holds
 	int tree_capacity_ = 0; // entries in tree_list_
 	int last_tree_count_ = 0;

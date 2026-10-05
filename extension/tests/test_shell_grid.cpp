@@ -5,6 +5,7 @@
 #include "world/material_table.h"
 #include "world/override_store.h"
 #include <algorithm>
+#include <cmath>
 
 namespace {
 bool has(const std::vector<ve::IVec3> &v, ve::IVec3 c) {
