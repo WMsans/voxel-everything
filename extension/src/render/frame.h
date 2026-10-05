@@ -139,8 +139,17 @@ private:
 	void end_stage(RenderingDevice *rd, FrameStage stage);
 	void cancel_stage(FrameStage stage);
 	void reset_stages();
+	// Advances scatter_epoch_ while the atlas or the sun is changing: the frame streaming
+	// recorded loads/evicts/edit jobs, edit_seq moved, or the sun turned -- and for two
+	// frames after, for work that lands a frame late. Grass and leaves skip their scatter
+	// while it holds still (GrassScatterPass::run).
+	void note_scatter_world(int stream_actions, const ve::SunState &sun);
 
 	HeadlessTargets headless_;
+	uint64_t scatter_epoch_ = 0;
+	int64_t scatter_edit_seq_ = -1;
+	float scatter_sun_[3] = {};
+	int scatter_settle_ = 0;
 
 	RenderOrchestrator &render_;
 	LodSystem &lod_;

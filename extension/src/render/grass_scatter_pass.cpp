@@ -6,6 +6,7 @@
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <algorithm>
+#include <cstring>
 
 using namespace godot;
 
@@ -31,7 +32,8 @@ bool GrassScatterPass::initialize(RenderingDevice *rd) {
 	// must stay nearest.
 	sampler_nearest_ = gpu::sampler(rd, group_, RenderingDevice::SAMPLER_FILTER_NEAREST);
 	sampler_linear_ = gpu::sampler(rd, group_, RenderingDevice::SAMPLER_FILTER_LINEAR, true);
-	if (!sampler_linear_.is_valid() || !sampler_nearest_.is_valid()) {
+	counters_read_.instantiate();
+	if (!sampler_linear_.is_valid() || !sampler_nearest_.is_valid() || counters_read_.is_null()) {
 		teardown();
 		return false;
 	}
@@ -52,6 +54,12 @@ bool GrassScatterPass::initialize(RenderingDevice *rd) {
 
 void GrassScatterPass::teardown() {
 	if (!rd_) return;
+	// Complete the pending read while counters_ and its RefCounted target are still alive;
+	// RenderingDevice has no cancellation operation.
+	if (counters_read_.is_valid()) counters_read_->drain(rd_);
+	counters_read_ = Ref<AsyncBufferRead>();
+	scattered_ = false;
+	scatter_runs_ = 0;
 	gpu::RdDevice device{rd_};
 	group_.release(device);
 	bricks_ = scatter_ = gpu::Program();
@@ -78,6 +86,9 @@ bool GrassScatterPass::ensure_buffers(RenderingDevice *rd, int max_blades, int m
 	if (instances_.is_valid() && capacity_ == max_blades && brick_capacity_ >= max_bricks)
 		return true;
 	// Freeing a buffer takes the uniform sets that bind it; both caches rebuild on new RIDs.
+	// A read still in flight on counters_ must land before that buffer goes.
+	if (counters_read_.is_valid()) counters_read_->drain(rd);
+	scattered_ = false; // the instances go with the buffer
 	gpu::RdDevice device{rd};
 	for (RID *r : {&instances_, &brick_list_, &counters_, &dispatch_args_, &draw_args_,
 			&params_ubo_, &region_ubo_, &field_ops_}) {
@@ -163,11 +174,17 @@ bool GrassScatterPass::ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas,
 
 bool GrassScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas,
 		const ve::GrassLayout &layout, const ve::RegionWindow &region_win,
-		float time_seconds, RID sun_ubo, const FieldContextSet *field) {
-	last_brick_count_ = 0;
-	last_blade_count_ = 0;
+		float time_seconds, RID sun_ubo, const FieldContextSet *field, uint64_t world_epoch) {
+	// The counts are not zeroed on entry: they arrive asynchronously (see the end of this
+	// function), so between arrivals they hold the last frame that reported.
 	if (!rd_ || rd != rd_ || !bricks_.valid()) return false;
 	if (layout.max_bricks <= 0 || layout.params.limits[0] <= 0) {
+		last_brick_count_ = 0;
+		last_blade_count_ = 0;
+		scattered_ = false; // the draw args are zeroed below
+		// A read issued while still enabled may land after this; it describes blades that
+		// are no longer drawn, so it is discarded rather than reported.
+		if (counters_read_.is_valid()) counters_read_->take_fresh();
 		// Disabled: clear the GPU counters AND the indirect draw args, not just the CPU
 		// mirrors zeroed above. debug_grass_stats() re-reads the GPU counters after its own
 		// submit+sync, so stale counters would report the previous frame's counts;
@@ -192,6 +209,7 @@ bool GrassScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas,
 	const bool far_ok = field && field->is_valid();
 	if (!far_ok) { params.far[0] = params.far[2] = params.far[3] = 0; }
 	const int dispatch_threads = far_ok ? layout.dispatch_threads : layout.near_columns;
+	// Always uploaded, reused frame or not: the raster reads this block's time for the wind.
 	rd->buffer_update(params_ubo_, 0, sizeof(params), gpu::push_bytes(params));
 
 	// Refresh the pass-owned region window from the LIVE residency-backed window the
@@ -199,13 +217,23 @@ bool GrassScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas,
 	// uses): atlas.config().region_window is init-centred/stale, so grass would vanish
 	// away from the origin. The UBO RID is stable, so the cached uniform set survives;
 	// only contents change.
-	{
-		const ve::RegionWindow &win = region_win;
-		const ve::IVec3 ab = atlas.config().atlas_bricks;
-		const ve::GrassRegionBlock region{{win.dim, win.dim, win.dim, 0},
-				{win.origin.x, win.origin.y, win.origin.z, 0}, {ab.x, ab.y, ab.z, 0}};
-		rd->buffer_update(region_ubo_, 0, sizeof(region), gpu::push_bytes(region));
+	const ve::IVec3 ab = atlas.config().atlas_bricks;
+	const ve::GrassRegionBlock region{{region_win.dim, region_win.dim, region_win.dim, 0},
+			{region_win.origin.x, region_win.origin.y, region_win.origin.z, 0},
+			{ab.x, ab.y, ab.z, 0}};
+
+	// Nothing the scatter reads has changed since the last full run: keep its blades. The
+	// uniform sets are compared too -- a rebuilt set means a buffer it binds was replaced.
+	const RID sets[2] = {bricks_set_.id(), scatter_set_.id()};
+	if (world_epoch != ve::kAlwaysScatter && scattered_ && world_epoch == scattered_epoch_ &&
+			sets[0] == scattered_sets_[0] && sets[1] == scattered_sets_[1] &&
+			std::memcmp(&region, &scattered_region_, sizeof(region)) == 0 &&
+			ve::same_scatter_inputs(params, scattered_params_)) {
+		if (counters_read_.is_valid() && counters_read_->take_fresh())
+			apply_counters(counters_read_->data());
+		return true;
 	}
+	rd->buffer_update(region_ubo_, 0, sizeof(region), gpu::push_bytes(region));
 
 	// Clear the counters explicitly. A fresh RD buffer reads back as zero on this machine,
 	// so "the count was zero" must mean the pass wrote zero -- never that nobody wrote.
@@ -240,12 +268,33 @@ bool GrassScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas,
 		rd->compute_list_dispatch_indirect(list, dispatch_args_, 0);
 	}
 	rd->compute_list_end();
-	read_back_counters(rd);
+	scatter_runs_++;
+	// Reusable only if stage 2 ran: a cull-only frame leaves no blades to keep.
+	scattered_ = scatter_.valid();
+	scattered_epoch_ = world_epoch;
+	scattered_params_ = params;
+	scattered_region_ = region;
+	scattered_sets_[0] = sets[0];
+	scattered_sets_[1] = sets[1];
+	// Never buffer_get_data here: on the main device it stalls the frame until the GPU has
+	// drained. Take whatever an earlier frame's read returned, then ask for this one's;
+	// recorded after the dispatch, so it carries these counts.
+	if (counters_read_.is_valid()) {
+		if (counters_read_->take_fresh()) apply_counters(counters_read_->data());
+		counters_read_->request(rd, counters_, 0, 16);
+	}
 	return true;
 }
 
 void GrassScatterPass::read_back_counters(RenderingDevice *rd) {
-	const PackedByteArray data = rd->buffer_get_data(counters_, 0, 16);
+	if (counters_read_.is_valid()) {
+		counters_read_->drain(rd);
+		counters_read_->take_fresh();
+	}
+	apply_counters(rd->buffer_get_data(counters_, 0, 16));
+}
+
+void GrassScatterPass::apply_counters(const PackedByteArray &data) {
 	if (data.size() < 16) return;
 	const uint32_t *c = reinterpret_cast<const uint32_t *>(data.ptr());
 	last_brick_count_ = static_cast<int>(c[0]);

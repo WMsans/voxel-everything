@@ -206,8 +206,9 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	// pages must exist before the shell raster asks for this frame's draw list.
 	if (lod_.pool()) lod_.apply_island_shells(render_.take_island_shells(), render_.island_live_mask());
 	WorldStreamer *st = render_.streamer();
-	if (st) st->run_frame(rd, cam.origin.x, cam.origin.y, cam.origin.z);
+	const int stream_actions = st ? st->run_frame(rd, cam.origin.x, cam.origin.y, cam.origin.z) : 0;
 	end_stage(rd, kStageStream);
+	note_scatter_world(stream_actions, sun_state);
 	// run_frame() recentres the toroidal region window. Refresh the already-built camera
 	// push data for that published window; do not run streaming a second time just to obtain
 	// constants that the existing run has already made current.
@@ -452,7 +453,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		SunUbo *grass_sun = render_.passes().sun_ubo;
 		const bool grass_ok = grass_sun && grass->run(rd, *atlas, gl, store_.region_window(),
 				static_cast<float>(render_.beauty_frame()) / 60.0f, grass_sun->buffer(),
-				render_.passes().field_context) &&
+				render_.passes().field_context, scatter_epoch_) &&
 				grass_raster && grass_raster->draw(rd, *grass, *gb, view_proj, cam_pos);
 		if (grass_ok) end_stage(rd, kStageGrass);
 		else cancel_stage(kStageGrass);
@@ -478,7 +479,8 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		// vertices -- true with no draw, not a failure.
 		const bool leaf_ok = leaf->run(rd, *atlas, ll, store_.region_window(),
 				static_cast<float>(render_.beauty_frame()) / 60.0f,
-				leaf_sun ? leaf_sun->buffer() : RID(), render_.passes().field_context)
+				leaf_sun ? leaf_sun->buffer() : RID(), render_.passes().field_context,
+				scatter_epoch_)
 				&& leaf_raster && leaf_raster->draw(rd, *leaf, *gb, view_proj, cam_pos);
 		if (leaf_ok) timings->end(rd, "leaves");
 		else timings->cancel("leaves");
@@ -703,6 +705,22 @@ void VoxelFrame::cancel_stage(FrameStage stage) {
 	render_.gpu_timings()->cancel(frame_stage_name(stage));
 	std::lock_guard<std::mutex> lock(record_mutex_);
 	record_.stages_cancelled |= 1u << stage;
+}
+
+void VoxelFrame::note_scatter_world(int stream_actions, const ve::SunState &sun) {
+	// The frame of the change plus two: brick generation and edit marks are recorded this
+	// frame, but nothing promises every consumer's view of them is complete before the next.
+	constexpr int kSettleFrames = 3;
+	const int64_t seq = store_.edit_seq();
+	const bool sun_moved = std::memcmp(sun.dir, scatter_sun_, sizeof(scatter_sun_)) != 0;
+	if (stream_actions > 0 || seq != scatter_edit_seq_ || sun_moved)
+		scatter_settle_ = kSettleFrames;
+	if (scatter_settle_ > 0) {
+		scatter_epoch_++;
+		scatter_settle_--;
+	}
+	scatter_edit_seq_ = seq;
+	std::memcpy(scatter_sun_, sun.dir, sizeof(scatter_sun_));
 }
 
 void VoxelFrame::reset_stages() {

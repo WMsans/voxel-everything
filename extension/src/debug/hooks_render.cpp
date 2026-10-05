@@ -2839,4 +2839,54 @@ void VoxelDebugHooks::debug_set_normal_pool_budget(int bytes) {
 RenderingDevice *VoxelDebugHooks::debug_local_rd() const {
 	return world_->context().render->local_rd();
 }
+
+Dictionary VoxelDebugHooks::debug_scatter_reuse_probe() {
+	Dictionary d;
+	d["grass"] = PackedInt32Array();
+	d["leaves"] = PackedInt32Array();
+	VoxelWorld *w = world_;
+	if (!w || !w->get_use_local_device()) return d;
+	w->ensure_initialized();
+	RenderingDevice *device = w->rd();
+	GpuAtlas *atlas = w->context().render->passes().atlas;
+	GrassScatterPass *g = w->context().render->passes().grass_scatter;
+	LeafScatterPass *l = w->context().render->passes().leaf_scatter;
+	SunUbo *sun = w->context().render->passes().sun_ubo;
+	if (!w->is_initialized() || !device || !atlas || !atlas->is_valid() || !g || !l || !sun ||
+			!sun->ensure(device))
+		return d;
+	// debug_leaf_stats' camera: above the streamed centre, looking down, so both passes
+	// have instances to keep.
+	const float *c = w->context().store->center_;
+	struct Step {
+		uint64_t epoch;
+		float shift; // metres added to x: "moved"
+		float time;
+	};
+	const Step steps[] = {{1, 0.0f, 1.0f}, {1, 0.0f, 2.0f}, {2, 0.0f, 3.0f}, {2, 1.0f, 4.0f},
+			{ve::kAlwaysScatter, 1.0f, 5.0f}};
+	PackedInt32Array grass_runs, leaf_runs;
+	for (const Step &s : steps) {
+		const float p[3] = {c[0] + s.shift, c[1] + 40.0f, c[2]};
+		const float f[3] = {0.0f, -1.0f, 0.0f};
+		const ve::ProbeCamera pc = ve::probe_camera(p, f, 64, 64, 1.5707963268f, 0.1f, 4000.0f);
+		float vp[16];
+		for (int k = 0; k < 16; k++) vp[k] = pc.lod.view_proj[k];
+		const int64_t g0 = g->scatter_runs(), l0 = l->scatter_runs();
+		const ve::GrassLayout gl = w->context().render->frame().grass_layout(p, vp);
+		const ve::LeafLayout ll = w->context().render->frame().leaf_layout(p, vp);
+		g->run(device, *atlas, gl, w->context().store->region_window(), s.time, sun->buffer(),
+				w->context().render->passes().field_context, s.epoch);
+		l->run(device, *atlas, ll, w->context().store->region_window(), s.time, sun->buffer(),
+				w->context().render->passes().field_context, s.epoch);
+		device->submit();
+		device->sync();
+		grass_runs.push_back(static_cast<int32_t>(g->scatter_runs() - g0));
+		leaf_runs.push_back(static_cast<int32_t>(l->scatter_runs() - l0));
+	}
+	d["grass"] = grass_runs;
+	d["leaves"] = leaf_runs;
+	return d;
+}
+
 } // namespace godot
