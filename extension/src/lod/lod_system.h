@@ -62,6 +62,10 @@ struct LodStats {
 	int op_overflow = 0; // LoD builds refused because their visible ops exceed the cap
 	int shell_chunks = 0; // near-shell chunks in the grid (spec §5)
 	int shell_pages = 0;  // near-shell pages resident
+	// stats() overwrites this every frame; the default matches the empty cut its comment
+	// describes, so a reader that forgot to call stats() still gets the honest answer.
+	int draw_min_level = ve::kLodLevels; // finest level in the current cut
+	int fine_pages = 0;     // pages owned by chunks below level 0 (raster mode)
 };
 
 class LodSystem : public ve::InvalidationSink {
@@ -187,6 +191,7 @@ private:
 	std::map<ve::LodKey, std::vector<int>> shell_pages_of_; // key.level == ve::kShellLevel
 	// atlas slot -> the pages holding its shell. Released when the slot leaves the live mask.
 	std::map<int, std::vector<int>> island_shell_pages_;
+	std::map<int, std::vector<int>> island_mesh_pages_; // raster mode's island meshes, by atlas slot
 	std::vector<ve::LodPageDraw> shell_draw_pages_;
 	ve::IVec3 shell_cam_chunk_{INT32_MAX, 0, 0};
 	// The `enabled` the candidate set was last built under. A runtime toggle (a bound

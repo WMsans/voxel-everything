@@ -14,6 +14,7 @@ TEST_CASE("render defaults are the dials the orchestrator shipped with") {
 	CHECK(s.near_field_scale == doctest::Approx(0.66f));
 	CHECK(s.near_field);
 	CHECK(s.islands);
+	CHECK(s.raymarch);
 }
 
 TEST_CASE("the render dials clamp as the orchestrator's setters did") {

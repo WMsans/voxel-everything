@@ -107,16 +107,15 @@ int RenderOrchestrator::drain_island_uploads(RenderingDevice *device) {
 						transparency && ve::volume_has_transparent(u.data)))
 			UtilityFunctions::printerr("VoxelWorld: island mip upload failed for slot ",
 					u.atlas_slot);
-		// The island's shell is contoured HERE, from the same bytes, because this is the one
+		// The island's meshes are contoured HERE, from the same bytes, because this is the one
 		// place both are in hand: the volume carries the medium and the descriptor carries the
 		// local frame the pages are placed in.
-		if (u.to_island_atlas && u.atlas_slot >= 0 && transparency &&
-				ve::volume_has_transparent(u.data)) {
+		if (u.to_island_atlas && u.atlas_slot >= 0) {
 			const IslandSlotDesc *d = u.atlas_slot < static_cast<int>(batch.descs.size())
 					? &batch.descs[static_cast<size_t>(u.atlas_slot)]
 					: nullptr;
 			if (d && d->live && d->volume_slot == u.volume_slot) {
-				contour_island_shell(u.atlas_slot, u.data, *d);
+				contour_island_meshes(u.atlas_slot, u.data, *d);
 			} else {
 				island_shell_wait_[static_cast<size_t>(u.atlas_slot)] = {u.volume_slot, u.data};
 			}
@@ -139,7 +138,7 @@ int RenderOrchestrator::drain_island_uploads(RenderingDevice *device) {
 		} else if (d->live && d->volume_slot != it->second.first) {
 			it = island_shell_wait_.erase(it); // the slot was re-used: this body is gone
 		} else if (d->live) {
-			contour_island_shell(it->first, it->second.second, *d);
+			contour_island_meshes(it->first, it->second.second, *d);
 			it = island_shell_wait_.erase(it);
 		} else {
 			++it;
@@ -148,12 +147,14 @@ int RenderOrchestrator::drain_island_uploads(RenderingDevice *device) {
 	return static_cast<int>(batch.uploads.size());
 }
 
-void RenderOrchestrator::contour_island_shell(int slot, const ve::VolumeData &data,
+void RenderOrchestrator::contour_island_meshes(int slot, const ve::VolumeData &data,
 		const IslandSlotDesc &d) {
 	IslandShell shell;
 	shell.atlas_slot = slot;
 	shell.voxel = d.voxel;
-	ve::island_shell_blocks(data, d.lattice_origin, d.voxel, &shell.blocks);
+	if (transparency_settings().enabled)
+		ve::island_blocks(data, d.lattice_origin, d.voxel, ve::IslandMeshKind::kShell, &shell.blocks);
+	ve::island_blocks(data, d.lattice_origin, d.voxel, ve::IslandMeshKind::kOpaque, &shell.opaque);
 	queue_island_shell(std::move(shell)); // the same locked door the main thread uses
 }
 
@@ -650,6 +651,7 @@ void RenderOrchestrator::on_render_resolved(const ve::RenderSettings &s, void *c
 	auto *self = static_cast<RenderOrchestrator *>(ctx);
 	self->islands_enabled_.store(s.islands, std::memory_order_relaxed);
 	self->near_field_enabled_.store(s.near_field, std::memory_order_relaxed);
+	self->raymarch_enabled_.store(s.raymarch, std::memory_order_relaxed);
 	self->near_field_scale_.store(s.near_field_scale, std::memory_order_relaxed);
 	// Rebase: the tier is the base, per-knob overrides layer on top and survive (S6).
 	if (self->quality_tier_.exchange(s.quality_tier, std::memory_order_relaxed) != s.quality_tier)
@@ -677,7 +679,7 @@ int RenderOrchestrator::quality_tier() const {
 void RenderOrchestrator::set_effect_enabled(const String &name, bool on) {
 	const CharString n = name.utf8();
 	const ve::SettingValue v = ve::SettingValue::of_bool(on);
-	// Render switches (islands, near_field), then beauty switches; fail-soft for anything else.
+	// Render switches (islands, near_field, raymarch), then beauty switches; fail-soft for anything else.
 	if (!render_settings_.set(n.get_data(), v)) beauty_.set(n.get_data(), v);
 }
 
@@ -730,6 +732,7 @@ FrameSettings RenderOrchestrator::frame_settings() const {
 	s.sun = sun_state();
 	s.near_field_scale = near_field_scale();
 	s.near_field_enabled = near_field_enabled();
+	s.raster_mode = raster_mode();
 	s.sun_cascade_min_level = sun_cascade_min_level_;
 	return s;
 }

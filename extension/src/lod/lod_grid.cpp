@@ -7,11 +7,13 @@
 namespace ve {
 
 namespace {
-int clamp_level(int level) { return std::max(0, std::min(level, kLodLevels - 1)); }
+int clamp_level(int level) { return std::max(kLodMinLevel, std::min(level, kLodLevels - 1)); }
 } // namespace
 
 float lod_cell_size(int level) {
-	return kLodBaseCell * static_cast<float>(1 << clamp_level(level));
+	// ldexp, not a shift: the level may be negative. Scaling by a power of two is exact, so
+	// levels 0..7 are the same floats as 0.4f * (1 << level).
+	return std::ldexp(kLodBaseCell, clamp_level(level));
 }
 
 float lod_chunk_size(int level) {

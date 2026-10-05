@@ -183,15 +183,17 @@ bool ShellGrid::dirty(IVec3 c) const {
 int ShellGrid::size() const { return static_cast<int>(nodes_.size()); }
 void ShellGrid::clear() { nodes_.clear(); }
 
-void island_shell_blocks(const VolumeData &v, const float lattice_origin[3], float voxel,
-		std::vector<IslandShellBlock> *out) {
+void island_blocks(const VolumeData &v, const float lattice_origin[3], float voxel,
+		IslandMeshKind kind, std::vector<IslandShellBlock> *out) {
 	if (!out) return;
 	out->clear();
-	if (!volume_has_transparent(v)) return;
+	const bool shell = kind == IslandMeshKind::kShell;
+	if (shell && !volume_has_transparent(v)) return;
 	const int n = kLodChunkLattice;
 	const int blocks = (v.dim + kLodChunkCells - 1) / kLodChunkCells;
 	std::vector<uint8_t> lat(static_cast<size_t>(n) * n * n);
 	std::vector<uint16_t> mat(lat.size());
+	std::vector<uint8_t> opaque(shell ? 0 : lat.size());
 	const uint8_t outside = encode_sdf(kSdfRange);
 	for (int bz = 0; bz < blocks; bz++)
 		for (int by = 0; by < blocks; by++)
@@ -214,11 +216,19 @@ void island_shell_blocks(const VolumeData &v, const float lattice_origin[3], flo
 							const int s = VolumeSet::voxel_index(v.dim, sx, sy, sz);
 							lat[static_cast<size_t>(i)] = v.sdf[static_cast<size_t>(s)];
 							mat[static_cast<size_t>(i)] = v.mat[static_cast<size_t>(s)];
-							any = any || material_transparent(v.mat[static_cast<size_t>(s)]);
+							const uint8_t m = v.mat[static_cast<size_t>(s)];
+							any = any || (shell ? material_transparent(m)
+								      : decode_sdf(v.sdf[static_cast<size_t>(s)]) <= 0.0f &&
+															     !material_transparent(m));
 						}
 				if (!any) continue;
 				LodContourResult r;
-				lod_contour(lat.data(), mat.data(), &r, true);
+				if (shell) {
+					lod_contour(lat.data(), mat.data(), &r, true);
+				} else {
+					lod_opaque_lattice(lat.data(), mat.data(), voxel, opaque.data());
+					lod_contour(opaque.data(), mat.data(), &r, false);
+				}
 				if (r.quads.empty()) continue;
 				IslandShellBlock b;
 				b.origin_local[0] = lattice_origin[0] + static_cast<float>(bx * kLodChunkCells) * voxel;

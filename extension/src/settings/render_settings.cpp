@@ -17,6 +17,7 @@ const SettingRow<RenderSettings> kRenderRows[] = {
 			"to lose the stepping, lower it to buy frame time."),
 	bool_row("near_field", "Near field", &RenderSettings::near_field),
 	bool_row("islands", "Islands", &RenderSettings::islands),
+	bool_row("raymarch", "Raymarching", &RenderSettings::raymarch),
 };
 
 } // namespace

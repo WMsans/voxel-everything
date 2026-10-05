@@ -24,6 +24,7 @@ layout(set = 0, binding = 5, std430) readonly buffer Normals { uint v[]; } norma
 // Eight vec4 per island, as raymarch.comp.glsl reads them: basis columns 0-2 with the body
 // translation in .w.
 layout(set = 0, binding = 8, std430) readonly buffer IslandDesc { vec4 v[]; } island_desc;
+#include "island_xform.glslh"
 
 layout(location = 0) out vec3 v_wpos;
 layout(location = 1) out vec3 v_normal;
@@ -51,15 +52,7 @@ void main() {
 	vec3 p = lod_corner_pos(w, int(corner), c0.xyz, c0.w);
 	uint normal_pair = normals.v[quad * 2u + (corner >> 1u)];
 	vec3 n = oct_decode_snorm8((normal_pair >> ((corner & 1u) * 16u)) & 0xFFFFu);
-	if (island != 0u) {
-		int i = int(island) - 1;
-		vec4 r0 = island_desc.v[i * 8 + 0];
-		vec4 r1 = island_desc.v[i * 8 + 1];
-		vec4 r2 = island_desc.v[i * 8 + 2];
-		mat3 basis = mat3(r0.xyz, r1.xyz, r2.xyz);
-		p = basis * p + vec3(r0.w, r1.w, r2.w);
-		n = basis * n;
-	}
+	island_place(island, p, n);
 	v_wpos = p;
 	v_normal = n;
 	gl_Position = bcam.view_proj * vec4(p, 1.0);

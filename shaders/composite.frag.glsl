@@ -2,9 +2,11 @@
 #version 460
 #include "generated/gbuffer.glslh"
 #include "generated/blocks.glslh"
+#ifndef SKY_ONLY
 #define VE_MATERIAL_ARRAYS
 layout(set = 0, binding = 2) uniform sampler2DArray material_albedo;
 layout(set = 0, binding = 3) uniform sampler2DArray material_surface_tex;
+#endif
 #include "common.glslh"
 #include "shade.glslh" // oct_decode: the normal arrives packed, and there is one unpacker
 layout(location = 0) in vec2 uv_in;
@@ -34,10 +36,30 @@ layout(location = 2) out uint marker;
 // surface -- the sky, a glossy reflection, the edit visualiser, the cost view -- as a single
 // colour and weight the marcher folded together. Mixing it over the resolved material here
 // reproduces the marcher's own compositing order exactly.
+// The SKY_ONLY variant below reads none of them, and an unused sampler still costs a uniform
+// set at draw time, so the three declarations are guarded with the material arrays.
+#ifndef SKY_ONLY
 layout(set = 0, binding = 0) uniform sampler2D src_overlay; // rgb overlay, a sun visibility
 layout(set = 0, binding = 1) uniform sampler2D src_hitpos;  // xyz world hit, w hit flag
 layout(set = 0, binding = 4) uniform sampler2D src_surface; // xy oct normal, z material, w overlay weight
+#endif
 layout(push_constant, std430) uniform Push { COMPOSITE_PUSH_FIELDS } pc;
+
+#ifdef SKY_ONLY
+// Raster mode (spec 2026-10-04 §4): no marcher ran, so every pixel starts as the marcher's
+// miss -- sky in the albedo at full sun, material 0, gloss 0, depth at the reverse-Z far
+// plane -- and the LoD raster draws over it with depth testing. No source textures and no
+// uniform set: this variant declares none. Clamped because the marcher's rgba8 overlay is.
+void main() {
+	vec2 ndc = vec2(uv_in.x * 2.0 - 1.0, 1.0 - uv_in.y * 2.0);
+	vec3 rd = normalize(pc.fade.yzw
+			+ pc.right_tanx.xyz * ndc.x * pc.right_tanx.w
+			+ pc.up_tany.xyz * ndc.y * pc.up_tany.w);
+	out_albedo = vec4(clamp(sky_color(rd), 0.0, 1.0), 1.0);
+	out_surface = GB_PACK_SURFACE_OCT(oct_encode(-rd), 0.0, 0.0);
+	gl_FragDepth = 0.0;
+}
+#else
 
 void main() {
 	vec4 hp = texture(src_hitpos, uv_in);
@@ -139,3 +161,4 @@ void main() {
 	vec4 clip = pc.view_proj * vec4(p, 1.0);
 	gl_FragDepth = clamp(clip.z / clip.w, 0.0, 1.0);
 }
+#endif

@@ -1624,6 +1624,9 @@ Dictionary VoxelDebugHooks::debug_ssr_probe(int fixture, int w, int h) {
 			no_edit, world_->context().render->passes().field_context)) return d;
 	float fade_start = ve::kLodFadeStartM, fade_end = ve::kLodFadeEndM;
 	world_->context().lod->fade_band(&fade_start, &fade_end);
+	// This probe bypasses VoxelFrame::render_pre_opaque, the only other site that sets the flag,
+	// so state the intent: it just marched, so it composites the marched image.
+	world_->context().render->passes().composite->set_sky_only(false);
 	world_->context().render->passes().composite->draw(device, *world_->context().render->passes().gbuffer, world_->context().render->passes().raymarch->albedo_texture(),
 			world_->context().render->passes().raymarch->surface_texture(), world_->context().render->passes().raymarch->hitpos_texture(), view_proj,
 			*world_->context().render->passes().materials, camera_params, fade_start, fade_end);
@@ -2488,6 +2491,9 @@ Dictionary VoxelDebugHooks::debug_near_field_detail(Vector3 pos, Vector3 fwd, in
 	float fade_start = ve::kLodFadeStartM;
 	float fade_end = ve::kLodFadeEndM;
 	world_->context().lod->fade_band(&fade_start, &fade_end);
+	// Same as above: this probe bypasses VoxelFrame::render_pre_opaque, so it must state that it
+	// wants the marched composite, not a latched raster-mode sky fill.
+	world_->context().render->passes().composite->set_sky_only(false);
 	world_->context().render->passes().composite->draw(device, *world_->context().render->passes().gbuffer, world_->context().render->passes().raymarch->albedo_texture(),
 			world_->context().render->passes().raymarch->surface_texture(), world_->context().render->passes().raymarch->hitpos_texture(),
 			view_proj, *world_->context().render->passes().materials, cp, fade_start, fade_end);

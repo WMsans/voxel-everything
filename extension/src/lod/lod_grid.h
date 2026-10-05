@@ -14,6 +14,11 @@ inline constexpr int kLodLevels = 8;
 inline constexpr int kLodChunkCells = 32;
 inline constexpr float kLodBaseCell = 0.4f;
 
+// Raster mode's near field (spec 2026-10-04 §3): two levels BELOW level 0, at 0.2 m and
+// 0.1 m. Negative so every level number above keeps its meaning; only
+// LodTreeConfig::min_level lets the walk reach them.
+inline constexpr int kLodMinLevel = -2;
+
 // M3's mesher convention, at LoD dimensions: mesh-cell array index m holds the cell at local
 // coordinate m - 1, lattice array index i holds the sample at local coordinate i - 1, and
 // cell m's corners are lattice m and m + 1. The one-cell overlap below the origin lets a

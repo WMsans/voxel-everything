@@ -264,7 +264,7 @@ void LodTree::note_refused(int level, IVec3 c) {
 }
 
 bool LodTree::children_ready(int level, IVec3 c) const {
-	if (level <= 0) return false;
+	if (level <= cfg_.min_level) return false;
 	const IVec3 base = lod_child_base(c);
 	for (int k = 0; k < 8; k++) {
 		const IVec3 ch{base.x + (k & 1), base.y + ((k >> 1) & 1), base.z + ((k >> 2) & 1)};
@@ -311,9 +311,12 @@ void LodTree::request(int level, IVec3 c, float area, LodWalkResult *out,
 // except the band where the near field hands over: there, the eye compares the two fields
 // directly, and the LoD side loses at any error the SSE test tolerates.
 bool LodTree::want_finer(int level, IVec3 c, float area) const {
-	if (level <= 0) return false;
+	if (level <= cfg_.min_level) return false;
 	const float chunk_distance_m = lod_chunk_distance(level, c, last_cam_pos_);
-	const bool near_dense = kLodNearDenseRadiusM > 0.0f &&
+	// Dense down to level 0 only: the seam this protects is the marched near field's, and
+	// below 0 (raster mode) screen-space error alone decides -- forcing 0.1 m over the whole
+	// 300 m disc would be tens of thousands of chunks.
+	const bool near_dense = level > 0 && kLodNearDenseRadiusM > 0.0f &&
 			chunk_distance_m < kLodNearDenseRadiusM;
 	return near_dense || area > cfg_.sse_area_thresh;
 }
@@ -465,7 +468,7 @@ void LodTree::mark_dirty(const float lo[3], const float hi[3]) {
 	for (int a = 0; a < 3; a++) probe.pos[a] = 0.5f * (lo[a] + hi[a]);
 	probe.radius = 0.5f * std::max(std::max(hi[0] - lo[0], hi[1] - lo[1]), hi[2] - lo[2]);
 	const float longest = std::max(std::max(hi[0] - lo[0], hi[1] - lo[1]), hi[2] - lo[2]);
-	for (int level = 0; level < kLodLevels; level++) {
+	for (int level = kLodMinLevel; level < kLodLevels; level++) {
 		// The reduced lattice samples every half cell, so an edit shorter than half a cell
 		// on every axis cannot move a sample at this level and needs no rebuild.
 		if (!lod_extent_visible(level, longest)) continue;
@@ -488,12 +491,13 @@ void LodTree::dirty_stats(int *chunks, int *levels) const {
 	if (!chunks || !levels) return;
 	*chunks = 0;
 	*levels = 0;
-	bool seen[kLodLevels] = {};
+	bool seen[kLodLevels - kLodMinLevel] = {};
 	for (const auto &kv : nodes_) {
 		if (!kv.second.dirty) continue;
 		(*chunks)++;
-		if (!seen[kv.first.level]) {
-			seen[kv.first.level] = true;
+		const int slot = kv.first.level - kLodMinLevel;
+		if (!seen[slot]) {
+			seen[slot] = true;
 			(*levels)++;
 		}
 	}

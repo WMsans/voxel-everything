@@ -16,6 +16,10 @@ layout(set = 0, binding = 1, std430) readonly buffer PageChunk { uint v[]; } pag
 // Two vec4 per chunk: (origin.xyz, cell size), (level, flags, pad, pad).
 layout(set = 0, binding = 2, std430) readonly buffer Chunks { vec4 v[]; } chunks;
 layout(set = 0, binding = 5, std430) readonly buffer Normals { uint v[]; } normals;
+// Island pages only (raster mode, spec 2026-10-04 §5). LodRasterPass binds a dead
+// descriptor when no island atlas exists.
+layout(set = 0, binding = 8, std430) readonly buffer IslandDesc { vec4 v[]; } island_desc;
+#include "island_xform.glslh"
 
 layout(push_constant, std430) uniform Push { LOD_RASTER_PUSH_FIELDS } pc;
 
@@ -40,10 +44,15 @@ void main() {
 	vec3 p2 = lod_corner_pos(w, 2, c0.xyz, c0.w);
 	vec3 p3 = lod_corner_pos(w, 3, c0.xyz, c0.w);
 
-	v_wpos = corner == 0u ? p0 : (corner == 1u ? p1 : (corner == 2u ? p2 : p3));
+	vec3 wpos = corner == 0u ? p0 : (corner == 1u ? p1 : (corner == 2u ? p2 : p3));
 	uint normal_pair = normals.v[quad * 2u + (corner >> 1u)];
 	uint packed_normal = (normal_pair >> ((corner & 1u) * 16u)) & 0xFFFFu;
-	v_normal = oct_decode_snorm8(packed_normal);
+	vec3 nrm = oct_decode_snorm8(packed_normal);
+	// An island page holds LOCAL-space quads; its flags (bits 8..) name the island. Terrain
+	// pages carry 0 there and are untouched.
+	island_place(floatBitsToUint(chunks.v[ci * 2u + 1u].y) >> 8, wpos, nrm);
+	v_wpos = wpos;
+	v_normal = nrm;
 	v_material = lod_bits_get(w, 78, 16);
 	// Spec §5: with transparency on, a shell quad belongs to transparent.vert.glsl, not to the
 	// terrain. Collapse it outside the clip volume so it rasterizes nothing. pc.fade.y is 1
@@ -53,5 +62,5 @@ void main() {
 		gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
 		return;
 	}
-	gl_Position = pc.view_proj * vec4(v_wpos, 1.0);
+	gl_Position = pc.view_proj * vec4(wpos, 1.0);
 }

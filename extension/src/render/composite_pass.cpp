@@ -18,6 +18,8 @@ void CompositePass::initialize(RenderingDevice *rd) {
 			"composite.frag.glsl");
 	shader_marker_ = gpu::compile_raster(rd, group_, "CompositePass", "composite.vert.glsl",
 			"composite.frag.glsl", "#define SEAM_MARKER 1\n");
+	shader_sky_ = gpu::compile_raster(rd, group_, "CompositePass", "composite.vert.glsl",
+			"composite.frag.glsl", "#define SKY_ONLY 1\n");
 	sampler_linear_ = gpu::sampler(rd, group_, RenderingDevice::SAMPLER_FILTER_LINEAR);
 	sampler_nearest_ = gpu::sampler(rd, group_, RenderingDevice::SAMPLER_FILTER_NEAREST);
 }
@@ -30,7 +32,7 @@ void CompositePass::teardown() {
 	if (!rd_) return;
 	gpu::RdDevice device{rd_};
 	group_.release(device);
-	shader_ = shader_marker_ = pipeline_ = sampler_linear_ = sampler_nearest_ = RID();
+	shader_ = shader_marker_ = shader_sky_ = pipeline_ = sampler_linear_ = sampler_nearest_ = RID();
 	set_ = gpu::SetCache();
 	framebuffer_ = gpu::FramebufferCache();
 	rd_ = nullptr;
@@ -38,19 +40,20 @@ void CompositePass::teardown() {
 
 bool CompositePass::ensure_pipeline(RenderingDevice *rd, RID albedo, RID surface, RID depth,
 		RID marker) {
-	const bool want_marker = marker.is_valid();
-	const RID shader = want_marker ? shader_marker_ : shader_;
+	const bool want_marker = marker.is_valid() && !sky_only_;
+	const RID shader = sky_only_ ? shader_sky_ : (want_marker ? shader_marker_ : shader_);
 	if (!shader.is_valid()) return false;
 	const std::vector<RID> attachments = want_marker
 			? std::vector<RID>{albedo, surface, marker, depth}
 			: std::vector<RID>{albedo, surface, depth};
 	if (!framebuffer_.get(rd, group_, attachments).is_valid()) return false;
-	if (!pipeline_.is_valid() || pipeline_marker_ != want_marker) {
+	if (!pipeline_.is_valid() || pipeline_marker_ != want_marker || pipeline_sky_ != sky_only_) {
 		gpu::RdDevice device{rd};
 		group_.free(device, pipeline_);
 		gpu::RasterState state;
 		state.color_attachments = ve::layout::kGbColorAttachments + (want_marker ? 1 : 0);
 		pipeline_marker_ = want_marker;
+		pipeline_sky_ = sky_only_;
 		pipeline_ = gpu::raster_pipeline(rd, group_, shader, framebuffer_.format(), state);
 	}
 	return pipeline_.is_valid();
@@ -60,18 +63,21 @@ void CompositePass::draw(RenderingDevice *rd, GBuffer &gb, RID src_overlay, RID 
 		RID src_hitpos, const Projection &view_proj, const MaterialAtlas &materials,
 		const ve::CameraParams &cam, float fade_start, float fade_end, RID marker) {
 	last_draw_ok_ = false;
-	const RID shader = marker.is_valid() ? shader_marker_ : shader_;
+	const RID shader = sky_only_ ? shader_sky_ : (marker.is_valid() ? shader_marker_ : shader_);
 	if (!shader.is_valid() || !gb.is_valid()) return;
 	if (!ensure_pipeline(rd, gb.albedo(), gb.surface(), gb.depth(), marker)) return;
 
-	gpu::RdDevice device{rd};
-	const RID set = set_.get(device, group_, shader, 0, {
-			gpu::sampled(0, sampler_linear_, src_overlay),
-			gpu::sampled(1, sampler_nearest_, src_hitpos),
-			gpu::sampled(2, materials.sampler(), materials.albedo_array()),
-			gpu::sampled(3, materials.sampler(), materials.surface_array()),
-			gpu::sampled(4, sampler_nearest_, src_surface)});
-	if (!set.is_valid()) return;
+	RID set;
+	if (!sky_only_) {
+		gpu::RdDevice device{rd};
+		set = set_.get(device, group_, shader, 0, {
+				gpu::sampled(0, sampler_linear_, src_overlay),
+				gpu::sampled(1, sampler_nearest_, src_hitpos),
+				gpu::sampled(2, materials.sampler(), materials.albedo_array()),
+				gpu::sampled(3, materials.sampler(), materials.surface_array()),
+				gpu::sampled(4, sampler_nearest_, src_surface)});
+		if (!set.is_valid()) return;
+	}
 
 	// Both stages declare the same block (Godot rejects differing reflections between stages
 	// of one pipeline); the vertex stage ignores everything but its shape.
@@ -100,13 +106,13 @@ void CompositePass::draw(RenderingDevice *rd, GBuffer &gb, RID src_overlay, RID 
 	PackedColorArray clears;
 	for (int i = 0; i < ve::layout::kGbColorAttachments; i++)
 		clears.push_back(Color(0, 0, 0, 0));
-	if (marker.is_valid()) clears.push_back(Color(0, 0, 0, 0));
+	if (marker.is_valid() && !sky_only_) clears.push_back(Color(0, 0, 0, 0));
 	const int64_t dl = rd->draw_list_begin(framebuffer_.rid(),
 			RenderingDevice::DRAW_CLEAR_COLOR_ALL | RenderingDevice::DRAW_CLEAR_DEPTH,
 			clears, 0.0f);
 	if (dl < 0) return;
 	rd->draw_list_bind_render_pipeline(dl, pipeline_);
-	rd->draw_list_bind_uniform_set(dl, set, 0);
+	if (!sky_only_) rd->draw_list_bind_uniform_set(dl, set, 0);
 	rd->draw_list_set_push_constant(dl, gpu::push_bytes(push), sizeof(push));
 	rd->draw_list_draw(dl, false, 1, 3);
 	rd->draw_list_end();

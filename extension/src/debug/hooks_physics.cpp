@@ -831,15 +831,8 @@ Dictionary VoxelDebugHooks::debug_place_test_island_rotated(int slot, Vector3i l
 	all[slot] = desc;
 	world_->context().render->passes().islands->upload_descriptors(device, all, kMaxIslands,
 			world_->context().render->transparency_settings().enabled);
-	// This fixture uploads the island itself rather than queueing it, so it contours the
-	// shell here and hands it to the orchestrator the way drain_island_uploads() would.
-	if (desc.transparent && world_->context().render->transparency_settings().enabled) {
-		godot::IslandShell shell;
-		shell.atlas_slot = slot;
-		shell.voxel = desc.voxel;
-		ve::island_shell_blocks(volume, desc.lattice_origin, desc.voxel, &shell.blocks);
-		world_->context().render->queue_island_shell(std::move(shell));
-	}
+	// This fixture uploads the island itself rather than queueing it, so it contours the island's meshes here through the same function drain_island_uploads() calls.
+	world_->context().render->contour_island_meshes(slot, volume, desc);
 	world_->context().render->handoff().note_debug_slot(slot);
 	device->submit();
 	device->sync();

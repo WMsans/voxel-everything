@@ -52,6 +52,7 @@ struct IslandShell {
 	int atlas_slot = -1;
 	float voxel = 0.0f;
 	std::vector<ve::IslandShellBlock> blocks; // empty = the island has no shell
+	std::vector<ve::IslandShellBlock> opaque; // the island's opaque mesh; raster mode draws it
 };
 
 // Shared name of the ClassDB method binding (voxel_world.cpp -- the Callable must
@@ -240,6 +241,11 @@ public:
 		std::lock_guard<std::mutex> lock(island_shell_mutex_);
 		pending_island_shells_.push_back(std::move(shell));
 	}
+	// Contours an island's meshes from its bytes and queues them: the transparent shell
+	// (transparency on and a transparent label present) and the opaque mesh raster mode
+	// draws (always, so a live switch to raster finds it). The upload drain and the debug
+	// island fixture both call this, so the fixture tests the shipping path.
+	void contour_island_meshes(int slot, const ve::VolumeData &data, const IslandSlotDesc &d);
 
 	// --- render lifetime state and per-frame knobs (moved from VoxelWorld, spec 2026-09-14
 	// §3.1). Guards unchanged: plain fields stay plain, atomics stay atomic, the sun keeps
@@ -256,7 +262,12 @@ public:
 	ve::SunState sun_state() const;
 	void set_near_field_scale(float v); // clamps to [0.1, 1]
 	float near_field_scale() const { return near_field_scale_.load(std::memory_order_relaxed); }
-	bool near_field_enabled() const { return near_field_enabled_.load(std::memory_order_relaxed); }
+	bool near_field_enabled() const {
+		return near_field_enabled_.load(std::memory_order_relaxed) &&
+				raymarch_enabled_.load(std::memory_order_relaxed);
+	}
+	// Spec 2026-10-04: the Raymarching switch is off. Gates only what raster mode adds.
+	bool raster_mode() const { return !raymarch_enabled_.load(std::memory_order_relaxed); }
 	void set_sun_cascade_min_level(bool v) { sun_cascade_min_level_ = v; }
 	bool sun_cascade_min_level() const { return sun_cascade_min_level_; }
 	// Everything VoxelFrame samples once per frame.
@@ -341,8 +352,6 @@ public:
 	bool preflight_shaders(RenderingDevice *rd, String *out_error);
 
 private:
-	void contour_island_shell(int slot, const ve::VolumeData &data, const IslandSlotDesc &d);
-
 	Collaborators handles_;
 	std::vector<const char *> teardown_trace_;
 
@@ -383,6 +392,7 @@ private:
 	bool last_hiz_readback_was_drained_ = true;
 	std::atomic<bool> islands_enabled_{true};
 	std::atomic<bool> near_field_enabled_{true};
+	std::atomic<bool> raymarch_enabled_{true};
 	std::atomic<float> near_field_scale_{0.66f};
 	bool sun_cascade_min_level_ = true;
 	mutable std::mutex sun_mutex_;

@@ -36,6 +36,11 @@ LodStats LodSystem::stats() {
 	s.chunks_resident = static_cast<int>(lod_pages_of_.size());
 	if (lod_tree_) lod_tree_->dirty_stats(&s.dirty_chunks, &s.dirty_levels);
 	for (const ve::LodDrawItem &item : lod_walk_.draws) s.draw_pages += item.page_count;
+	s.draw_min_level = ve::kLodLevels;
+	for (const ve::LodDrawItem &item : lod_walk_.draws)
+		s.draw_min_level = std::min(s.draw_min_level, item.level);
+	for (const auto &kv : lod_pages_of_)
+		if (kv.first.level < 0) s.fine_pages += static_cast<int>(kv.second.size());
 	// The exact page identities of the current camera cut, not just their count: a bounded
 	// pool may keep a drawable coarse cut while refinement requests remain pending.
 	std::vector<ve::LodPageDraw> draw_page_list;
@@ -70,6 +75,7 @@ LodStats LodSystem::stats() {
 	// Island shell pages are owned by an atlas slot exactly as terrain pages are owned by a
 	// tree chunk, so they count here for the same reason.
 	for (const auto &kv : island_shell_pages_) owned_pages += kv.second.size();
+	for (const auto &kv : island_mesh_pages_) owned_pages += kv.second.size();
 	const int unowned = (s.pages_total - s.pages_free) - static_cast<int>(owned_pages);
 	s.partial_allocations = partial + (unowned > 0 ? unowned : 0);
 	s.op_overflow = lod_op_overflow_;
@@ -137,30 +143,28 @@ void LodSystem::release_shell_pages_locked(ve::IVec3 coord) {
 void LodSystem::apply_island_shells(std::vector<IslandShell> shells, uint32_t live_mask) {
 	std::lock_guard<std::mutex> lock(lod_mutex_);
 	if (!lod_pool_ || lod_pool_->page_count() == 0) return;
-	const auto release_slot = [this](int slot) {
-		const auto it = island_shell_pages_.find(slot);
-		if (it == island_shell_pages_.end()) return;
+	const auto release = [this](std::map<int, std::vector<int>> &owner, int slot) {
+		const auto it = owner.find(slot);
+		if (it == owner.end()) return;
 		for (int p : it->second) lod_page_quads_.erase(p);
 		lod_pool_->release(it->second);
-		island_shell_pages_.erase(it);
+		owner.erase(it);
 	};
-	for (auto it = island_shell_pages_.begin(); it != island_shell_pages_.end();) {
-		const int slot = (it++)->first;
-		if (slot < 0 || slot >= 32 || (live_mask & (1u << slot)) == 0u) release_slot(slot);
-	}
-	for (IslandShell &s : shells) {
-		if (s.atlas_slot < 0 || s.atlas_slot >= 32) continue;
-		release_slot(s.atlas_slot); // a re-extracted island replaces its shell
+	for (std::map<int, std::vector<int>> *owner : {&island_shell_pages_, &island_mesh_pages_})
+		for (auto it = owner->begin(); it != owner->end();) {
+			const int slot = (it++)->first;
+			if (slot < 0 || slot >= 32 || (live_mask & (1u << slot)) == 0u) release(*owner, slot);
+		}
+	// ponytail: a refused upload (pool/record exhaustion) silently drops this block of the
+	// island. Count it per island if that ever shows up as an island with a missing piece.
+	const auto upload = [this](const IslandShell &s, const std::vector<ve::IslandShellBlock> &blocks,
+								uint32_t flags) {
 		std::vector<int> all;
-		// ponytail: a refused upload (pool/record exhaustion) silently drops this block of
-		// the island's medium. Count it per island if that ever shows up as an island
-		// whose medium is invisible.
-		const uint32_t flags = ve::island_shell_flags(s.atlas_slot);
-		for (const ve::IslandShellBlock &b : s.blocks) {
+		for (const ve::IslandShellBlock &b : blocks) {
 			std::vector<int> pages;
 			if (!lod_pool_->upload_at(b.origin_local, s.voxel, 0u, flags, b.quads, b.normals,
 						&pages))
-				continue; // pool full: this block of the island's medium is not drawn
+				continue; // pool full: this block of the island is not drawn
 			for (size_t i = 0; i < pages.size(); i++) {
 				const int first = static_cast<int>(i) * ve::kLodQuadsPerPage;
 				lod_page_quads_[pages[i]] = std::min(ve::kLodQuadsPerPage,
@@ -168,7 +172,17 @@ void LodSystem::apply_island_shells(std::vector<IslandShell> shells, uint32_t li
 			}
 			all.insert(all.end(), pages.begin(), pages.end());
 		}
-		if (!all.empty()) island_shell_pages_[s.atlas_slot] = std::move(all);
+		return all;
+	};
+	for (IslandShell &s : shells) {
+		if (s.atlas_slot < 0 || s.atlas_slot >= 32) continue;
+		// A re-extracted island replaces both of its meshes.
+		release(island_shell_pages_, s.atlas_slot);
+		release(island_mesh_pages_, s.atlas_slot);
+		std::vector<int> shell_pages = upload(s, s.blocks, ve::island_shell_flags(s.atlas_slot));
+		if (!shell_pages.empty()) island_shell_pages_[s.atlas_slot] = std::move(shell_pages);
+		std::vector<int> mesh_pages = upload(s, s.opaque, ve::island_mesh_flags(s.atlas_slot));
+		if (!mesh_pages.empty()) island_mesh_pages_[s.atlas_slot] = std::move(mesh_pages);
 	}
 }
 
@@ -179,10 +193,11 @@ void LodSystem::refresh_shell_candidates(const ve::LodCamera &cam,
 		std::unique_lock<std::mutex> &lock) {
 	// With the near field off there is no near shell to draw at all -- the far field draws
 	// transparent solid itself -- and fade_band()'s near-field-off branch reports fade_end
-	// = 1e9 m. Keeping that as the radius is a landmine: collect_ops_for_aabb caps its region
-	// span at 128, so it would silently return NO ops (measured: no shell at all, and no
-	// error), while transparent_boxes still walks every override brick in the store on every
-	// recompute. Gate the shell on the near field rather than feed it a clamped radius.
+	// = 0. A radius derived from it is meaningless, and the 1e9 it used to be was a landmine:
+	// collect_ops_for_aabb caps its region span at 128, so it would silently return NO ops
+	// (measured: no shell at all, and no error), while transparent_boxes still walks every
+	// override brick in the store on every recompute. Gate the shell on the near field rather
+	// than feed it a clamped radius.
 	const bool enabled = render()->transparency_settings().enabled &&
 			render()->near_field_enabled();
 	const ve::IVec3 cam_chunk = ve::shell_chunk_of_point(cam.pos[0], cam.pos[1], cam.pos[2]);
@@ -261,12 +276,14 @@ void LodSystem::ensure_lod() {
 }
 
 void LodSystem::fade_band(float *fade_start, float *fade_end) const {
-	// With the near field forced off the far field owns every distance: move the seam to
-	// zero and make the fade span essentially infinite so the LoD build gate requests the
-	// near chunks and the fragment shader keeps every far-field fragment.
+	// With the near field off the far field owns every distance: start and end both at 0
+	// put every fragment at t = 1, past every bayer4 threshold, in lod.frag.glsl, the
+	// composite, the shell passes and deferred's far_field_owns alike. (0 / 1e9 put t at
+	// d / 1e9 instead, which kept one pixel in sixteen.) The LoD build gate reads the same 0,
+	// so it requests the near chunks.
 	if (!render()->near_field_enabled()) {
 		if (fade_start) *fade_start = 0.0f;
-		if (fade_end) *fade_end = 1.0e9f;
+		if (fade_end) *fade_end = 0.0f;
 		return;
 	}
 	// Until the streamer has run a frame there is nothing measured, and before the first
@@ -299,6 +316,9 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 		float fs = ve::kLodFadeStartM;
 		fade_band(&fs, nullptr);
 		lod_tree_->set_fade_start_m(fs);
+		// Raster mode lets the walk descend to 0.1 m (spec 2026-10-04 §3). Switching back
+		// leaves the fine nodes unvisited, so they age out through collect_evictions.
+		lod_tree_->set_min_level(render()->raster_mode() ? ve::kLodMinLevel : 0);
 	}
 	lod_tree_->walk(cam, occ, ++lod_frame_, &lod_walk_);
 
@@ -601,6 +621,15 @@ void LodSystem::prepare_raster_locked() {
 	pages.reserve(page_draws.size());
 	for (const ve::LodPageDraw &pd : page_draws)
 		pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});
+	// Raster mode draws islands from their opaque meshes (spec 2026-10-04 §5): local-space
+	// pages lod.vert.glsl places through the island descriptor. Never part of the walk's cut.
+	if (render()->raster_mode())
+		for (const auto &entry : island_mesh_pages_)
+			for (int p : entry.second) {
+				const auto q = lod_page_quads_.find(p);
+				if (q != lod_page_quads_.end())
+					pages.push_back(LodRasterPass::PageDraw{p, q->second});
+			}
 	render()->passes().lod_raster->set_draw_pages(pages);
 	// ponytail: the shell list is the CPU walk's pages, not HiZ-culled; painted ice is rare.
 	// Cull it too if a scene ever holds much of it.
