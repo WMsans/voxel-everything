@@ -411,6 +411,15 @@ git commit -m "fix: with the near field off the far field owns every pixel, not 
 
 At the end of `extension/tests/test_lod_tree.cpp`:
 
+> **The snippet below is the as-written record of this step, not the committed test.** It pins
+> **three** shots and its `shots[]` has three entries with `expected` still `0ull`; the
+> committed case pins **four**. The fourth shot was added afterwards, in review round 1: a
+> SOLID world at camera `{800,53,800}` forward `{0,0,-1}` with `fade_start_m = 0.0f`, hash
+> `15572169387688817416ull`. It exists because the three surface shots cannot see the change —
+> `kGroundY = 51.2` is an exact multiple of every chunk size, so nothing below level 3 is ever
+> marked ready in the surface world and the cut never descends to the floor. Do not read the
+> three-shot block as an oversight and "fix" it to three.
+
 ```cpp
 namespace {
 
@@ -481,7 +490,7 @@ TEST_CASE("characterization: the settled default cut is pinned at four cameras")
 - [ ] **Step 2: Run it and record the pins**
 
 Run: `cd extension && scons -Q test 2>&1 | grep -A2 "pin this shot"`
-Expected: four FAILs, each printing `pin this shot: <N>ull`. Paste the four values into `expected`, in shot order, then run `./build/tests/ve_tests -tc="characterization: the settled default cut is pinned at four cameras"`.
+Expected: **three** FAILs from the block as written above, each printing `pin this shot: <N>ull`. Paste the three values into `expected`, in shot order. (The committed case then runs **four** shots and fails **four** times: the fourth — solid world, camera `{800,53,800}` forward `{0,0,-1}`, `fade_start_m = 0.0f` — was added in review round 1, after this step, because the three surface shots never descend below level 3. Its `expected` is `15572169387688817416ull`.) Then run `./build/tests/ve_tests -tc="characterization: the settled default cut is pinned at four cameras"`.
 Expected: PASS. The pins are recorded on the code before any level change.
 
 - [ ] **Step 3: Commit the pin**

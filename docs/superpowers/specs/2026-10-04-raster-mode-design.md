@@ -330,9 +330,11 @@ fixture settles it. Three legs, timed on `debug_place_test_island` only:
 - **raymarched** — `raymarch` on, transparency on: shell + opaque, and the mesh is never
   drawn.
 - **opaque only** — `raymarch` on, `transparency.enabled = 0`, which skips the `kShell`
-  call and leaves the `kOpaque` one: the marginal cost of the shell contour, and by
-  symmetry of the code path (both halves run the same per-32-cell-block `lod_opaque_lattice`
-  + `lod_contour`) the same order of magnitude for the opaque half.
+  call and leaves the `kOpaque` one. That difference therefore measures the **shell**
+  contour alone: the `kShell` half of `island_blocks` runs `lod_contour(..., true)` and
+  nothing else, and only the `kOpaque` half runs `lod_opaque_lattice` + `lod_contour`
+  (`shell_grid.cpp:225-231`). **The opaque half's own cost is not isolated by any leg in
+  this table** — see the third bullet below for the only bound on it.
 
 Two bodies: the fixture's 2x2x2-cell rock (**1** contour block) and a 7x7x7-cell body
 (**8** blocks) — 5.6 m, which is as large as a component gets at `kIslandDim = 64`'s coarse
@@ -351,24 +353,38 @@ pitch (59 usable samples x 0.1 m = 5.9 m, so 2 blocks per axis).
 
 Reading it:
 
-- **The switch does not move the island leg**: raster minus raymarched is +0.11 ms on the
-  fixture and +0.27 ms of median on the 8-block body, against per-sample sd of 0.3-0.7 ms.
-  That is the design (§5, both modes), not a coincidence.
-- **The contour's own margin is under a millisecond.** Shell+opaque minus opaque-only is
-  +0.29 ms (fixture) and +0.56 ms of median (8 blocks). The opaque half is the same code on
-  the same block count, so it is the same order: **at most ~0.5 ms, under 0.3% of the leg**.
-- **Block count does not show up at all.** 8 blocks cost no more than 1 (the 8-block body is
-  if anything 2 ms *faster* than the fixture, inside the spread), which puts the whole
-  `lod_opaque_lattice` + `lod_contour` per-block cost below this measurement's floor.
+- **The switch does not move the island leg**: raster minus raymarched is **+0.11 ms of mean**
+  on the fixture and **-0.27 ms of median** on the 8-block body — the two figures are one mean
+  and one median, not two means, and the 8-block median is the robust one because the
+  raymarched 8-block leg carries a single 211.26 ms outlier placement. Per-sample sd is
+  0.29-0.69 ms across the three fixture legs and 0.44-0.65 ms across the 8-block raster and
+  opaque-only legs; the 8-block raymarched leg is the exception at sd 4.33. Either way the
+  difference sits inside the spread. That is the design (§5, both modes), not a coincidence.
+- **The shell contour's own margin is sub-millisecond to ~0.75 ms.** Shell+opaque minus
+  opaque-only, read off the raymarched leg because that is the leg the shell margin is
+  payable on: **+0.30 ms of mean / +0.27 ms of median** on the fixture, and **+1.56 ms of
+  mean / +0.75 ms of median** on the 8-block body (the 8-block mean is inflated by that same
+  outlier placement; the median is the figure to quote). Those four numbers are the whole of
+  what this table supports — the throwaway timing script's per-round data was deleted, so any
+  finer per-round delta is not recoverable from the record and is not claimed here.
+- **The opaque contour is below this measurement's floor, not below a stated figure.** 8
+  blocks cost no more than 1: the 8-block body is if anything ~2 ms *faster* than the fixture
+  in every leg, inside the spread. Since the opaque half is the heavier of the two (it also
+  runs `lod_opaque_lattice`), that puts its per-block cost under the floor of this
+  measurement rather than under some measured millisecond value. Isolating it would need a
+  leg with the opaque contour off, which does not exist because it runs unconditionally.
 - Placement is ~187-189 ms either way, dominated by `extract_component`, the mip upload and
   the fixture's own `device->sync()`.
 
 **Verdict: no render-thread hitch, so §5's contingency (moving the contour to the worker)
-is not warranted at the current island size.** In raymarched mode the whole sub-millisecond
-figure is waste — a mesh that mode will never draw — and it is 0.3% of a leg that already
-costs 189 ms, on the render thread, once per island extraction. The ceiling that bounds
-this: `kIslandDim = 64` at `kIslandVoxelCoarse` caps a component at 5.9 m, so an island
-cannot exceed 8 contour blocks. If that cap is raised, or the per-block lattice cost grows,
+is not warranted at the current island size.** In raymarched mode the whole contour call —
+shell and opaque — is waste on a mesh that mode will never draw, and it is well under 1% of
+a leg that already costs ~189 ms on the render thread, once per island extraction. The
+reason the bound does not need to be tighter is structural rather than numerical: the leg is
+dominated by `extract_component`, the mip upload and the fixture's own `device->sync()`,
+so no sub-millisecond contour added to it can hitch it. The ceiling that bounds this:
+`kIslandDim = 64` at `kIslandVoxelCoarse` caps a component at 5.9 m, so an island cannot
+exceed 8 contour blocks. If that cap is raised, or the per-block lattice cost grows,
 re-measure before relying on this number.
 
 ### 8.6 Regression run
@@ -413,12 +429,15 @@ pass. No golden moved and no new case outside that suite failed.
 §1's promise is that raymarched mode is bit-identical to `main`. After this branch that
 holds for some of the frame and is **unverified** for one thing.
 
-**Pinned** — by a fail-then-pin written before the change and unchanged across it:
+**Pinned by a fail-then-pin**, written before the change and unchanged across it:
 
 - the terrain LoD cut in raymarched mode: the `test_lod_tree.cpp` characterization
   (four fixed cameras, hashes recorded on a pre-change commit);
 - the four gdUnit goldens: `test_lod_raster_golden`, `test_frame_shipped_golden`,
-  `test_lod_seam`, `test_sun_shadow`, byte-identical, never re-recorded;
+  `test_lod_seam`, `test_sun_shadow`, byte-identical, never re-recorded.
+
+**Pinned by inspection only** — no test fails-then-pins this; it rests on reading the code:
+
 - HiZ and the composite, by inspection of every consumer of the changed inputs (the review
   in this branch's ledger enumerates them).
 
