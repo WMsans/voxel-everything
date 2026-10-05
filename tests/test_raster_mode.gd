@@ -41,7 +41,11 @@ func lod_quiet(w: VoxelWorld) -> bool:
 	var s: Dictionary = w.hooks().debug_lod_stats()
 	return int(s["requests_pending"]) == 0 and int(s["builds_in_flight"]) == 0
 
-# Frames until the walk this 64x64 frame asks for has nothing left to build.
+# Frames until the walk this 64x64 frame asks for has nothing left to build -- or until the
+# 600 cap, whichever comes first. In raster mode it is ALWAYS the cap: the walk fills its
+# request list to max_requests_per_walk (32) and truncates, so requests_pending never falls
+# to 0, lod_quiet() is never true, and this is a fixed iteration count, not a
+# convergence test.
 func settle_frames(w: VoxelWorld, cam := CAM, fwd := FWD) -> Dictionary:
 	var d := {}
 	var quiet := 0
@@ -53,7 +57,12 @@ func settle_frames(w: VoxelWorld, cam := CAM, fwd := FWD) -> Dictionary:
 			break
 	return d
 
-# Ticks at 2560x1440 until the walk has nothing left to build.
+# Ticks at 2560x1440 until the walk has nothing left to build -- or until the 2000 cap.
+# Same caveat as settle_frames, for the same reason: in raster mode requests_pending sits at
+# max_requests_per_walk (32) because the walk TRUNCATES its requests, so this never converges
+# and runs its full budget. The early break is real in raymarched mode, where the walk does
+# drain to 0; a fixed iteration count is a lower bound on the work done, never less settled
+# than a converging loop would be.
 func settle_ticks(w: VoxelWorld, cam := CAM, fwd := FWD) -> void:
 	var quiet := 0
 	for i in range(2000):
@@ -122,6 +131,8 @@ func test_an_edit_in_raster_mode_requests_the_fine_chunks() -> void:
 	settle_ticks(w)
 	assert_int(int(w.hooks().debug_lod_stats()["dirty_chunks"])).is_equal(0)
 func material_id(w: VoxelWorld, name: String) -> int:
+	# 0 is air, so an unknown name is indistinguishable from "air" to every caller. Every use
+	# asserts the id it got is non-zero before comparing against it.
 	for m in w.material_table():
 		if m["name"] == name:
 			return m["id"]
@@ -158,6 +169,8 @@ func test_ice_renders_in_raster_mode() -> void:
 	var w := make_world()
 	w.set_effect_enabled("raymarch", false)
 	var ice := material_id(w, "ice")
+	assert_int(ice).override_failure_message(
+		"no material named 'ice'; the assertions below would compare against air").is_not_equal(0)
 	var hit: Dictionary = w.raycast(CAM, FWD.normalized(), 400.0)
 	assert_bool(hit["hit"]).is_true()
 	w.hooks().debug_apply_sphere_add(hit["pos"], 1.0, ice)

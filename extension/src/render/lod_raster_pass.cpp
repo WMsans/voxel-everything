@@ -5,7 +5,6 @@
 #include "lod/lod_contour.h"
 #include "gpu_layout/blocks.h"
 #include "gpu_layout/gbuffer_layout.h"
-#include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_color_array.hpp>
 #include <chrono>
 #include <cstring>
@@ -25,8 +24,7 @@ void LodRasterPass::initialize(RenderingDevice *rd) {
 	shader_marker_ = gpu::compile_raster(rd, group_, "LodRasterPass", "lod.vert.glsl",
 			"lod.frag.glsl", "#define SEAM_MARKER 1\n");
 	PackedByteArray dead;
-	dead.resize(128); // one island descriptor, eight vec4, all zero
-	dead.fill(0);
+	dead.resize(128); // one island descriptor, eight vec4; resize already zero-fills
 	fallback_desc_ = group_.add(gpu::Kind::Buffer, rd->storage_buffer_create(128, dead));
 }
 

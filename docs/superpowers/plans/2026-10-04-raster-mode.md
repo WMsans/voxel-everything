@@ -450,7 +450,7 @@ ve::LodCamera cam_looking(const float p[3], const float f[3]) {
 // Raster mode adds levels BELOW 0 and a min_level floor. The default config must keep
 // choosing exactly the cut it chose before either existed. Pinned on the code before the
 // change; the expected values are the hashes that code printed.
-TEST_CASE("characterization: the settled default cut is pinned at three cameras") {
+TEST_CASE("characterization: the settled default cut is pinned at four cameras") {
 	struct Shot {
 		float p[3];
 		float f[3];
@@ -481,7 +481,7 @@ TEST_CASE("characterization: the settled default cut is pinned at three cameras"
 - [ ] **Step 2: Run it and record the pins**
 
 Run: `cd extension && scons -Q test 2>&1 | grep -A2 "pin this shot"`
-Expected: three FAILs, each printing `pin this shot: <N>ull`. Paste the three values into `expected`, in shot order, then run `./build/tests/ve_tests -tc="characterization: the settled default cut is pinned at three cameras"`.
+Expected: four FAILs, each printing `pin this shot: <N>ull`. Paste the four values into `expected`, in shot order, then run `./build/tests/ve_tests -tc="characterization: the settled default cut is pinned at four cameras"`.
 Expected: PASS. The pins are recorded on the code before any level change.
 
 - [ ] **Step 3: Commit the pin**
