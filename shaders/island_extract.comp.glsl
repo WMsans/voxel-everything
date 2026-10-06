@@ -28,17 +28,30 @@ layout(set = 0, binding = 0, std430) writeonly buffer Out { uint v[]; } out_vol;
 layout(set = 0, binding = 4, std430) readonly buffer Boxes { vec4 v[]; } boxes;
 layout(set = 0, binding = 5, std430) buffer Counts { uint solid; uint pad0, pad1, pad2; } counts;
 
-// Mirror of ve::extract_island_volume's `masked` lambda: the island IS the solid field
-// intersected with the union of its 0.8 m cells, which is max(field, min over boxes). A
-// component with no boxes extracts to nothing, which is the correct answer and not a
-// special case.
-float masked_field(vec3 p, out uint mat) {
-	float sdf;
-	eval_field(p, 0u, uint(pc.params.y), sdf, mat);
+float box_union(vec3 p) {
 	float bu = 1e30;
 	for (int i = 0; i < pc.params.z; i++)
 		bu = min(bu, op_box_sdf(boxes.v[i * 2 + 0].xyz, boxes.v[i * 2 + 1].xyz, p));
-	return max(sdf, bu);
+	return bu;
+}
+
+// Mirror of ve::extract_island_volume's `masked` lambda: the island IS the solid field
+// intersected with the union of its 0.8 m cells, which is max(field, min over boxes). The
+// field is the SOLID view (water spec §3): an island never carries liquid. A component with
+// no boxes extracts to nothing, which is the correct answer and not a special case.
+float masked_field(vec3 p, out uint mat) {
+	float sdf;
+	eval_field_solid(p, 0u, uint(pc.params.y), sdf, mat);
+	return max(sdf, box_union(p));
+}
+
+// The same mask over the UNION. Where it differs from masked_field there was liquid at or
+// beside the voxel. Mirror of extract_island_volume's `masked_union`.
+float masked_union(vec3 p) {
+	float sdf;
+	uint mat;
+	eval_field(p, 0u, uint(pc.params.y), sdf, mat);
+	return max(sdf, box_union(p));
 }
 
 void masked_field_gradient(vec3 p, out float sdf, out uint mat, out vec3 gradient, out bool exact_gradient) {
@@ -113,7 +126,7 @@ void main() {
 		for (float over = 0.5; over <= 2.5 && mat == 0u && len > 0.0; over += 1.0) {
 			float t = sdf + over * voxel;
 			float ignored_sdf;
-			eval_field(p - g / len * t, 0u, uint(pc.params.y), ignored_sdf, mat);
+			eval_field_solid(p - g / len * t, 0u, uint(pc.params.y), ignored_sdf, mat);
 		}
 	}
 
@@ -122,6 +135,9 @@ void main() {
 	float grad_sdf;
 	uint grad_mat;
 	masked_field_gradient(p, grad_sdf, grad_mat, gradient, exact_gradient);
+	// The union gradient belongs to the liquid where the union and the solid view disagree;
+	// store "no normal" and let the R8 lattice shade the voxel (water spec §3).
+	if (masked_union(p) != sdf) exact_gradient = false;
 	float gradient_len = length(gradient);
 	uint packed_normal = exact_gradient && gradient_len > 1e-8
 			? oct_encode_snorm8(gradient / gradient_len)

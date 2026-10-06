@@ -14,6 +14,7 @@
 shared uint s_ops[256];
 shared uint s_op_n;
 shared uint s_keep[256];
+shared uint s_liquid;
 #define FIELD_OP_INDEX(base, i) ((base) + s_ops[i])
 #define FIELD_OVERRIDE_TABLE(base) (field_override_region_map.table[int((base) / MAX_REGION_OPS)])
 #include "field.glslh"
@@ -63,26 +64,32 @@ layout(push_constant, std430) uniform Push { BRICK_MARK_PUSH_FIELDS } pc;
 // ve::kActivationPad. The probe samples every 8 voxels, so the field can dip across zero
 // between samples; a brick counts as empty only when all 27 probes clear zero by this much.
 
-// Mirror of ve::brick_probe (extension/src/world/brick_eval.cpp): the union range, and the
-// range of the opaque view of the same 27 samples.
+// Mirror of ve::brick_probe (extension/src/world/brick_eval.cpp): the union range, the range
+// of the opaque view of the same 27 samples, and the SOLID view's minimum (occupancy's input).
 void brick_probe(ivec3 brick, uint op_base, uint op_count, out float mn, out float mx,
-		out float omn, out float omx) {
+		out float omn, out float omx, out float smn) {
 	vec3 bo = vec3(brick) * BRICK_SIZE;
 	mn = 1e30;
 	mx = -1e30;
 	omn = 1e30;
 	omx = -1e30;
+	smn = 1e30;
 	for (int sz = 0; sz < 3; sz++)
 		for (int sy = 0; sy < 3; sy++)
 			for (int sx = 0; sx < 3; sx++) {
+				vec3 p = bo + vec3(sx, sy, sz) * (float(BRICK_VOXELS) * 0.5 * VOXEL_SIZE);
 				float sdf;
 				uint mat;
 				float osdf;
 				uint omat;
-				eval_field_pair(bo + vec3(sx, sy, sz) * (float(BRICK_VOXELS) * 0.5 * VOXEL_SIZE),
-						op_base, op_count, sdf, mat, osdf, omat);
+				eval_field_pair(p, op_base, op_count, sdf, mat, osdf, omat);
 				mn = min(mn, sdf);
 				mx = max(mx, sdf);
+				float ssdf = sdf;
+				uint smat = mat;
+				if (s_liquid != 0u) eval_field_solid(p, op_base, op_count, ssdf, smat);
+				else solid_view(ssdf, smat);
+				smn = min(smn, ssdf);
 				opaque_view(osdf, omat, OPAQUE_OUTSIDE);
 				omn = min(omn, osdf);
 				omx = max(omx, osdf);
@@ -121,9 +128,14 @@ void main() {
 	barrier();
 	if (gl_LocalInvocationID.x == 0u) {
 		uint n = 0u;
+		uint liquid = 0u;
 		for (uint oi = 0u; oi < op_count; oi++)
-			if (s_keep[oi] != 0u) s_ops[n++] = oi;
+			if (s_keep[oi] != 0u) {
+				s_ops[n++] = oi;
+				if (op_may_hold_liquid(op_base + oi)) liquid = 1u;
+			}
 		s_op_n = n;
+		s_liquid = liquid;
 	}
 	barrier();
 
@@ -137,8 +149,8 @@ void main() {
 	int idx = rslot * REGION_BRICK_COUNT + bi;
 	int cur = region_tables.slot[idx];
 
-	float probe_mn, probe_mx, opaque_mn, opaque_mx;
-	brick_probe(brick, op_base, s_op_n, probe_mn, probe_mx, opaque_mn, opaque_mx);
+	float probe_mn, probe_mx, opaque_mn, opaque_mx, solid_mn;
+	brick_probe(brick, op_base, s_op_n, probe_mn, probe_mx, opaque_mn, opaque_mx, solid_mn);
 	// `active` is a GLSL reserved word (M2 errata 5); this local is has_surface. pc.hi.w is 1
 	// when the opaque view is on: ground under a transparent material has no union surface.
 	bool has_surface = (probe_mn < ACTIVATION_PAD && probe_mx > -ACTIVATION_PAD) ||
@@ -149,7 +161,7 @@ void main() {
 	// publishes the exact lattice answer instead.
 	const bool exact_edit = pc.cfg.w == 2;
 	if (pc.cfg.y == 1 && !has_surface && !exact_edit)
-		write_occupancy(rslot, bi, probe_mn > 0.0 ? CELL_AIR : CELL_FULL);
+		write_occupancy(rslot, bi, solid_mn > 0.0 ? CELL_AIR : CELL_FULL);
 
 	if (pc.cfg.y == 0) {
 		// Release phase. Kept in its own dispatch: a push at index free_count and a pop at

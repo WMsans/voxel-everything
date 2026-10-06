@@ -652,6 +652,17 @@ bool op_touches_aabb(uint index, vec3 lo, vec3 hi, float pad) {
 	return true;
 }
 
+// Which materials the SECOND accumulator treats as air. AIR_TRANSPARENT is the opaque view
+// (the marcher's world, transparent-voxels spec §3); AIR_LIQUID is the SOLID view
+// (colliders, occupancy, contact refinement, island extraction: water spec §3), in which ice
+// stays solid and a liquid is air. Mirror of ve::AirRule.
+const uint AIR_TRANSPARENT = 0u;
+const uint AIR_LIQUID = 1u;
+
+bool counts_as_air(uint m, uint rule) {
+	return rule == AIR_LIQUID ? mat_liquid(m) != LIQUID_NONE : mat_transparent(m);
+}
+
 // One op applied to BOTH accumulators in one pass. `sdf`/`mat` are the union every existing
 // consumer reads, and that half of every branch below is byte for byte what it always was.
 // `osdf`/`omat` are the same op under the OPAQUE VIEW, in which a transparent material is
@@ -664,8 +675,8 @@ bool op_touches_aabb(uint index, vec3 lo, vec3 hi, float pad) {
 // Every OPAQUE conjunct below is written cheapest-first: the geometric test guards the
 // out-of-line `mat_transparent` lookup, which would otherwise run for every op at every sample
 // whether or not the op wins the min.
-void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat,
-		inout float osdf, inout uint omat) {
+void apply_field_op_rule(uint index, vec3 p, inout float sdf, inout uint mat,
+		inout float osdf, inout uint omat, uint rule) {
 	uvec4 a = field_op_pool.v[index * 2u + 0u];
 	uvec4 b = field_op_pool.v[index * 2u + 1u];
 	uint type = a.x;
@@ -696,7 +707,7 @@ void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat,
 		uint vm;
 		sample_field_volume(int(b.z), c, radius, int(b.w), p, vd, vm);
 		if (vd < sdf) { sdf = vd; if (sdf <= 0.0 && vm != 0u) mat = vm; }
-		if (vd < osdf && !mat_transparent(vm)) {
+		if (vd < osdf && !counts_as_air(vm, rule)) {
 			osdf = vd;
 			if (osdf <= 0.0 && vm != 0u) omat = vm;
 		}
@@ -715,14 +726,20 @@ void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat,
 		if (-sp > osdf) { osdf = -sp; if (osdf > 0.0) omat = 0u; }
 	} else if (type == OP_SPHERE_ADD) {
 		if (sp < sdf) { sdf = sp; if (sdf <= 0.0) mat = material; }
-		if (sp < osdf && !mat_transparent(material)) {
+		if (sp < osdf && !counts_as_air(material, rule)) {
 			osdf = sp;
 			if (osdf <= 0.0) omat = material;
 		}
 	} else if (type == OP_SPHERE_PAINT) {
 		if (sp <= 0.0 && sdf <= 0.0) mat = material;
-		if (sp <= 0.0 && osdf <= 0.0 && !mat_transparent(material)) omat = material;
+		if (sp <= 0.0 && osdf <= 0.0 && !counts_as_air(material, rule)) omat = material;
 	}
+}
+
+// The opaque view's op, unchanged for every caller that names no rule.
+void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat,
+		inout float osdf, inout uint omat) {
+	apply_field_op_rule(index, p, sdf, mat, osdf, omat, AIR_TRANSPARENT);
 }
 
 // How a caller names the pool index of its i-th op. The default is the region's list in
@@ -754,6 +771,42 @@ void eval_field(vec3 p, uint op_base, uint op_count, out float sdf, out uint mat
 	float osdf;
 	uint omat;
 	eval_field_pair(p, op_base, op_count, sdf, mat, osdf, omat);
+}
+
+// Mirror of ve::solid_view: a solid sample whose material is a liquid becomes just outside.
+void solid_view(inout float sdf, inout uint mat) {
+	if (sdf <= 0.0 && mat_liquid(mat) != LIQUID_NONE) {
+		sdf = 0.5 * VOXEL_SIZE;
+		mat = 0u;
+	}
+}
+
+// The SOLID VIEW of a point (water spec §3): the union with every liquid ADD/PAINT op and
+// every liquid volume sample contributing nothing, then the label rule for a liquid the base
+// or an override named. Mirror of ve::eval_field_solid. The union half of the loop is dead
+// and the compiler drops it.
+void eval_field_solid(vec3 p, uint op_base, uint op_count, out float sdf, out uint mat) {
+	float usdf;
+	uint umat;
+#ifdef FIELD_OVERRIDE_SDF_BINDING
+	if (!sample_field_override(p, op_base, usdf, umat)) eval_base_field(p, usdf, umat);
+#else
+	eval_base_field(p, usdf, umat);
+#endif
+	sdf = usdf;
+	mat = umat;
+	for (uint i = 0u; i < op_count; i++)
+		apply_field_op_rule(FIELD_OP_INDEX(op_base, i), p, usdf, umat, sdf, mat, AIR_LIQUID);
+	solid_view(sdf, mat);
+}
+
+// True when op `index` can put a liquid into a sample: a liquid ADD or PAINT, or any volume
+// (whose bytes are only known per sample). A bake site that reduces the solid view skips the
+// second evaluation when none of its ops can make it differ from the union.
+bool op_may_hold_liquid(uint index) {
+	uvec4 a = field_op_pool.v[index * 2u + 0u];
+	if (a.x == OP_VOLUME_ADD) return true;
+	return (a.x == OP_SPHERE_ADD || a.x == OP_SPHERE_PAINT) && mat_liquid(a.y) != LIQUID_NONE;
 }
 
 void apply_field_op_gradient(uint index, vec3 p, inout float sdf, inout uint mat, inout vec3 grad, inout bool exact) {
