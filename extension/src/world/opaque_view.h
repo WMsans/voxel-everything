@@ -24,4 +24,15 @@ inline void opaque_view(float *sdf, uint16_t *material, float outside = kOpaqueO
 	}
 }
 
+// The SOLID VIEW's label rule (docs/superpowers/specs/2026-10-06-water-voxels-design.md §3):
+// a solid sample whose material is a LIQUID becomes just outside. Applied last, for a liquid
+// that the base field or an override brick named; ops are handled inside the accumulator
+// (ve::eval_field_solid). Mirror of solid_view() in shaders/field_ops.glslh.
+inline void solid_view(float *sdf, uint16_t *material, float outside = kOpaqueOutside) {
+	if (*sdf <= 0.0f && material_liquid(*material) != Liquid::none) {
+		*sdf = outside;
+		*material = 0;
+	}
+}
+
 } // namespace ve

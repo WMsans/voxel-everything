@@ -94,9 +94,10 @@ namespace {
 
 // The 3^3 activation probe, reduced. brick_has_surface and cell_state_probe read it,
 // and shaders/brick_mark.comp.glsl computes exactly this once per brick and uses it twice.
+// `smn`/`smx` are the SOLID view's range of the same 27 points (occupancy's input).
 void brick_probe(const Generator &gen, const EditOp *ops, int op_count, IVec3 brick,
 		const VolumeStore *volumes, const OverrideSource *overrides, float *mn, float *mx,
-		float *omn = nullptr, float *omx = nullptr) {
+		float *omn = nullptr, float *omx = nullptr, float *smn = nullptr, float *smx = nullptr) {
 	const std::vector<EditOp> kept = ops_for_brick(ops, op_count, brick);
 	const EditOp *filtered = kept.data();
 	const int filtered_count = static_cast<int>(kept.size());
@@ -106,16 +107,25 @@ void brick_probe(const Generator &gen, const EditOp *ops, int op_count, IVec3 br
 	*mx = -1e30f;
 	if (omn) *omn = 1e30f;
 	if (omx) *omx = -1e30f;
+	if (smn) *smn = 1e30f;
+	if (smx) *smx = -1e30f;
 	for (int sz = 0; sz < 3; sz++)
 		for (int sy = 0; sy < 3; sy++)
 			for (int sx = 0; sx < 3; sx++) {
-				Sample s{}, o{};
-				eval_field_pair(gen, filtered, filtered_count,
-						bo[0] + sx * (kBrickVoxels / 2) * kVoxelSize,
+				const float p[3] = {bo[0] + sx * (kBrickVoxels / 2) * kVoxelSize,
 						bo[1] + sy * (kBrickVoxels / 2) * kVoxelSize,
-						bo[2] + sz * (kBrickVoxels / 2) * kVoxelSize, &s, &o, volumes, overrides);
+						bo[2] + sz * (kBrickVoxels / 2) * kVoxelSize};
+				Sample s{}, o{};
+				eval_field_pair(gen, filtered, filtered_count, p[0], p[1], p[2], &s, &o, volumes,
+						overrides);
 				*mn = std::min(*mn, s.sdf);
 				*mx = std::max(*mx, s.sdf);
+				if (smn && smx) {
+					const Sample q = eval_field_solid(gen, filtered, filtered_count, p[0], p[1],
+							p[2], volumes, overrides);
+					*smn = std::min(*smn, q.sdf);
+					*smx = std::max(*smx, q.sdf);
+				}
 				if (!omn || !omx) continue;
 				opaque_view(&o.sdf, &o.material);
 				*omn = std::min(*omn, o.sdf);
@@ -140,6 +150,16 @@ void eval_field_pair(const Generator &gen, const EditOp *ops, int op_count,
 	apply_ops_pair(s, opaque, ops, op_count, x, y, z, volumes);
 }
 
+Sample eval_field_solid(const Generator &gen, const EditOp *ops, int op_count,
+		float x, float y, float z, const VolumeStore *volumes, const OverrideSource *overrides) {
+	Sample s{};
+	if (!overrides || !overrides->sample(x, y, z, &s)) s = gen.sample(x, y, z);
+	Sample solid = s;
+	apply_ops_pair(&s, &solid, ops, op_count, x, y, z, volumes, AirRule::liquid);
+	solid_view(&solid.sdf, &solid.material);
+	return solid;
+}
+
 FieldSample eval_field_gradient(const Generator &gen, const EditOp *ops, int op_count,
 		float x, float y, float z, const VolumeStore *volumes, const OverrideSource *overrides) {
 	FieldSample s{};
@@ -161,21 +181,31 @@ bool brick_has_surface(const Generator &gen, const EditOp *ops, int op_count, IV
 
 CellState cell_state_probe(const Generator &gen, const EditOp *ops, int op_count, IVec3 cell,
 		const VolumeStore *volumes, const OverrideSource *overrides) {
-	float mn = 0.0f, mx = 0.0f;
-	brick_probe(gen, ops, op_count, cell, volumes, overrides, &mn, &mx);
-	if (mn > 0.0f) return kCellAir;
-	return mx <= 0.0f ? kCellFull : kCellSolid;
+	float mn = 0.0f, mx = 0.0f, smn = 0.0f, smx = 0.0f;
+	brick_probe(gen, ops, op_count, cell, volumes, overrides, &mn, &mx, nullptr, nullptr, &smn,
+			&smx);
+	if (smn > 0.0f) return kCellAir;
+	return smx <= 0.0f ? kCellFull : kCellSolid;
 }
 
+// Mirror of brick_gen.comp.glsl's classification: the encoded SOLID-view lattice over the
+// brick's 17^3 samples, with the brick's filtered ops. With no liquid this is exactly the
+// union lattice eval_brick(..., false) stores, byte for byte.
 CellState cell_state_field(const Generator &gen, const EditOp *ops, int op_count, IVec3 cell,
 		const VolumeStore *volumes, const OverrideSource *overrides) {
-	BrickEval eval{};
-	eval_brick(gen, ops, op_count, cell, &eval, volumes, overrides, false);
+	float bo[3];
+	brick_world_origin(cell, bo);
+	const std::vector<EditOp> kept = ops_for_brick(ops, op_count, cell);
 	uint8_t mn = 255u, mx = 0u;
-	for (int i = 0; i < kBrickSdfCount; i++) {
-		mn = std::min(mn, eval.brick.sdf[i]);
-		mx = std::max(mx, eval.brick.sdf[i]);
-	}
+	for (int vz = 0; vz < kBrickSdfStride; vz++)
+		for (int vy = 0; vy < kBrickSdfStride; vy++)
+			for (int vx = 0; vx < kBrickSdfStride; vx++) {
+				const uint8_t e = encode_sdf(eval_field_solid(gen, kept.data(),
+						static_cast<int>(kept.size()), bo[0] + vx * kVoxelSize,
+						bo[1] + vy * kVoxelSize, bo[2] + vz * kVoxelSize, volumes, overrides).sdf);
+				mn = std::min(mn, e);
+				mx = std::max(mx, e);
+			}
 	const uint8_t zero = encode_sdf(0.0f);
 	if (mn > zero) return kCellAir;
 	return mx <= zero ? kCellFull : kCellSolid;

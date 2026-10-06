@@ -134,7 +134,10 @@ int contact_samples_field(const Generator &gen, const EditOp *ops, int op_count,
 			float p[3] = {base[0], base[1], base[2]};
 			p[u] += (static_cast<float>(i) + 0.5f) * step_m;
 			p[v] += (static_cast<float>(j) + 0.5f) * step_m;
-			if (eval_field(gen, ops, op_count, p[0], p[1], p[2], volumes, overrides).sdf <= 0.0f) solid++;
+			// The solid view: liquid is air to connectivity (water spec §3), so a face held up
+			// only by water is no contact at all.
+			if (eval_field_solid(gen, ops, op_count, p[0], p[1], p[2], volumes, overrides).sdf <= 0.0f)
+				solid++;
 		}
 	return solid;
 }

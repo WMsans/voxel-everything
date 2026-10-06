@@ -57,13 +57,18 @@ void padded_range(const EditOp &op, float pitch, float pad, IVec3 *lo, IVec3 *hi
 
 } // namespace
 
+static bool counts_as_air(uint16_t material, AirRule rule) {
+	return rule == AirRule::liquid ? material_liquid(material) != Liquid::none
+			: material_transparent(material);
+}
+
 // One op applied to BOTH accumulators in one pass. The `s` branch of every case is
 // verbatim what apply_op has always done -- the union is unchanged, byte for byte -- and the
 // `o` branch is the same op under the opaque rule, where a transparent material is air and
 // therefore contributes nothing at all. GLSL mirror: apply_field_op in
 // shaders/field_ops.glslh.
 static void apply_op_pair(Sample *s, Sample *o, const EditOp &op, float x, float y, float z,
-		const VolumeStore *volumes) {
+		const VolumeStore *volumes, AirRule rule) {
 	switch (op.type) {
 		case kOpSphereSubtract: {
 			// CSG subtract: max(s, -sphere). A point that becomes air carries no material,
@@ -92,7 +97,7 @@ static void apply_op_pair(Sample *s, Sample *o, const EditOp &op, float x, float
 				s->sdf = sp;
 				if (s->sdf <= 0.0f) s->material = static_cast<uint16_t>(op.material);
 			}
-			if (sp < o->sdf && !material_transparent(static_cast<uint16_t>(op.material))) {
+			if (sp < o->sdf && !counts_as_air(static_cast<uint16_t>(op.material), rule)) {
 				o->sdf = sp;
 				if (o->sdf <= 0.0f) o->material = static_cast<uint16_t>(op.material);
 			}
@@ -102,7 +107,7 @@ static void apply_op_pair(Sample *s, Sample *o, const EditOp &op, float x, float
 			const float sp = sphere_sdf(op, x, y, z);
 			if (sp <= 0.0f && s->sdf <= 0.0f) s->material = static_cast<uint16_t>(op.material);
 			if (sp <= 0.0f && o->sdf <= 0.0f &&
-					!material_transparent(static_cast<uint16_t>(op.material)))
+					!counts_as_air(static_cast<uint16_t>(op.material), rule))
 				o->material = static_cast<uint16_t>(op.material);
 			return;
 		}
@@ -139,7 +144,7 @@ static void apply_op_pair(Sample *s, Sample *o, const EditOp &op, float x, float
 				s->sdf = vs.sdf;
 				if (s->sdf <= 0.0f && vs.material != 0) s->material = vs.material;
 			}
-			if (vs.sdf < o->sdf && !material_transparent(vs.material)) {
+			if (vs.sdf < o->sdf && !counts_as_air(vs.material, rule)) {
 				o->sdf = vs.sdf;
 				if (o->sdf <= 0.0f && vs.material != 0) o->material = vs.material;
 			}
@@ -151,8 +156,8 @@ static void apply_op_pair(Sample *s, Sample *o, const EditOp &op, float x, float
 }
 
 void apply_ops_pair(Sample *s, Sample *opaque, const EditOp *ops, int count, float x, float y,
-		float z, const VolumeStore *volumes) {
-	for (int i = 0; i < count; i++) apply_op_pair(s, opaque, ops[i], x, y, z, volumes);
+		float z, const VolumeStore *volumes, AirRule rule) {
+	for (int i = 0; i < count; i++) apply_op_pair(s, opaque, ops[i], x, y, z, volumes, rule);
 }
 
 bool edit_op_is_well_formed(const EditOp &op) {
@@ -312,14 +317,14 @@ void box_sdf_gradient(const float lo[3], const float hi[3], float x, float y, fl
 Sample apply_op(Sample s, const EditOp &op, float x, float y, float z,
 		const VolumeStore *volumes) {
 	Sample o = s;
-	apply_op_pair(&s, &o, op, x, y, z, volumes);
+	apply_op_pair(&s, &o, op, x, y, z, volumes, AirRule::transparent);
 	return s;
 }
 
 Sample apply_ops(Sample s, const EditOp *ops, int count, float x, float y, float z,
 		const VolumeStore *volumes) {
 	Sample o = s;
-	apply_ops_pair(&s, &o, ops, count, x, y, z, volumes);
+	apply_ops_pair(&s, &o, ops, count, x, y, z, volumes, AirRule::transparent);
 	return s;
 }
 
