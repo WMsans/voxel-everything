@@ -6,7 +6,7 @@
 // NOTE: never put a literal include directive inside a comment in this file -- the
 // loader matches include tokens anywhere in a line and would self-include.
 
-const int MATERIAL_COUNT = 8;
+const int MATERIAL_COUNT = 9;
 const uint MAT_GRASS_01 = 1u;
 const uint MAT_ROCK = 2u;
 const uint MAT_GROUND_01 = 3u;
@@ -15,6 +15,7 @@ const uint MAT_GROUND_CRACK_01 = 5u;
 const uint MAT_ICE_CRACK = 6u;
 const uint MAT_ICE = 7u;
 const uint MAT_BARK = 8u;
+const uint MAT_WATER = 9u;
 
 const float MAT_GLOW[MATERIAL_COUNT] = float[MATERIAL_COUNT](
 	0.000000, // grass_01
@@ -24,7 +25,8 @@ const float MAT_GLOW[MATERIAL_COUNT] = float[MATERIAL_COUNT](
 	6.000000, // ground_crack_01
 	0.000000, // ice_crack
 	0.000000, // ice
-	0.000000 // bark
+	0.000000, // bark
+	0.000000 // water
 );
 
 const vec3 MAT_GLOW_RGB[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](
@@ -35,7 +37,8 @@ const vec3 MAT_GLOW_RGB[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](
 	vec3(1.000000, 0.350000, 0.080000), // ground_crack_01
 	vec3(0.000000, 0.000000, 0.000000), // ice_crack
 	vec3(0.000000, 0.000000, 0.000000), // ice
-	vec3(0.000000, 0.000000, 0.000000) // bark
+	vec3(0.000000, 0.000000, 0.000000), // bark
+	vec3(0.000000, 0.000000, 0.000000) // water
 );
 
 const vec3 MAT_FLAT_ALBEDO[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](
@@ -46,7 +49,8 @@ const vec3 MAT_FLAT_ALBEDO[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](
 	vec3(0.350000, 0.120000, 0.060000), // ground_crack_01
 	vec3(0.610000, 0.650000, 0.680000), // ice_crack
 	vec3(0.610000, 0.650000, 0.680000), // ice
-	vec3(0.290000, 0.200000, 0.140000) // bark
+	vec3(0.290000, 0.200000, 0.140000), // bark
+	vec3(0.030000, 0.160000, 0.200000) // water
 );
 
 const vec3 MAT_TRANSMIT[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](
@@ -57,7 +61,8 @@ const vec3 MAT_TRANSMIT[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](
 	vec3(0.000000, 0.000000, 0.000000), // ground_crack_01
 	vec3(0.550000, 0.650000, 0.700000), // ice_crack
 	vec3(0.800000, 0.900000, 0.950000), // ice
-	vec3(0.000000, 0.000000, 0.000000) // bark
+	vec3(0.000000, 0.000000, 0.000000), // bark
+	vec3(0.500000, 0.820000, 0.880000) // water
 );
 
 const float MAT_IOR[MATERIAL_COUNT] = float[MATERIAL_COUNT](
@@ -68,7 +73,25 @@ const float MAT_IOR[MATERIAL_COUNT] = float[MATERIAL_COUNT](
 	1.000000, // ground_crack_01
 	1.310000, // ice_crack
 	1.310000, // ice
-	1.000000 // bark
+	1.000000, // bark
+	1.330000 // water
+);
+
+// Liquids (ve::Liquid). A liquid is transparent AND a ghost: the solid view treats it
+// as air. Only the transparency composite asks WHICH liquid.
+const uint LIQUID_NONE = 0u;
+const uint LIQUID_WATER = 1u;
+
+const uint MAT_LIQUID[MATERIAL_COUNT] = uint[MATERIAL_COUNT](
+	0u, // grass_01
+	0u, // rock
+	0u, // ground_01
+	0u, // breakstone
+	0u, // ground_crack_01
+	0u, // ice_crack
+	0u, // ice
+	0u, // bark
+	1u // water
 );
 
 // Foliage (ve::kFoliage): ids FOLIAGE_BASE + k. No atlas layer and no flat albedo -- a
@@ -121,4 +144,10 @@ vec3 mat_transmit(uint id) {
 float mat_ior(uint id) {
 	int i = int(id) - 1;
 	return (i >= 0 && i < MATERIAL_COUNT) ? MAT_IOR[i] : 1.0;
+}
+
+// Mirror of ve::material_liquid: air, foliage and any id with no row are not liquids.
+uint mat_liquid(uint id) {
+	int i = int(id) - 1;
+	return (i >= 0 && i < MATERIAL_COUNT) ? MAT_LIQUID[i] : LIQUID_NONE;
 }

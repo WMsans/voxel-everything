@@ -131,3 +131,28 @@ TEST_CASE("every transmit is in [0, 1) and every ior at least 1") {
 		CHECK(ve::kMaterials[i].ior >= 1.0f);
 	}
 }
+
+// Water spec §2: a liquid is a KIND, not a flag, and the lookup fails soft like the rest.
+TEST_CASE("liquid is a table property: water is a liquid, ice and everything else are not") {
+	CHECK(ve::material_liquid(ve::material_id("water")) == ve::Liquid::water);
+	CHECK(ve::material_liquid(ve::material_id("ice")) == ve::Liquid::none);
+	CHECK(ve::material_liquid(ve::material_id("rock")) == ve::Liquid::none);
+	CHECK(ve::material_liquid(0) == ve::Liquid::none);                // air
+	CHECK(ve::material_liquid(ve::kFoliageBase) == ve::Liquid::none); // foliage has no row
+	CHECK(ve::material_liquid(9999) == ve::Liquid::none);
+	// A liquid is also transparent: the shell, thickness and composite are what draw it.
+	CHECK(ve::material_transparent(ve::material_id("water")));
+	float t[3];
+	ve::material_transmit(ve::material_id("water"), t);
+	CHECK(t[0] == doctest::Approx(0.50f));
+	CHECK(t[1] == doctest::Approx(0.82f));
+	CHECK(t[2] == doctest::Approx(0.88f));
+	CHECK(ve::material_ior(ve::material_id("water")) == doctest::Approx(1.33f));
+}
+
+TEST_CASE("every liquid row is transparent") {
+	for (int i = 0; i < ve::kMaterialCount; i++) {
+		if (ve::kMaterials[i].liquid == ve::Liquid::none) continue;
+		CHECK(ve::material_transparent(static_cast<uint16_t>(i + 1)));
+	}
+}

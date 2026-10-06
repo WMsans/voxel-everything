@@ -13,6 +13,19 @@ namespace ve {
 // `asset` is the two-digit prefix of this material's PNGs under assets/materials/, e.g.
 // "01" for 01_basecolor.png. It is a string rather than an index because the layer order
 // and the on-disk numbering are allowed to be read independently by tools/convert_materials.sh.
+// Which liquid a material is (docs/superpowers/specs/2026-10-06-water-voxels-design.md §2).
+// A liquid is also transparent (transmit > 0), so the shell, thickness and composite draw it;
+// on top of that it is a GHOST: colliders, occupancy, contact refinement and island
+// extraction treat it as air (the solid view, world/opaque_view.h). Only the transparency
+// composite's shading branch asks WHICH liquid. A new liquid is one enum value, one name
+// below, and its shading.
+enum class Liquid : uint8_t { none = 0, water = 1 };
+
+// GLSL constant names, indexed by the enum's value: LIQUID_<NAME>.
+inline constexpr const char *kLiquidNames[] = {"none", "water"};
+inline constexpr int kLiquidCount = static_cast<int>(sizeof(kLiquidNames) / sizeof(kLiquidNames[0]));
+static_assert(kLiquidCount == static_cast<int>(Liquid::water) + 1, "a Liquid value has no name");
+
 struct MaterialDef {
 	const char *name;      // picker label
 	const char *asset;     // "04" -> assets/materials/04_basecolor.png, ...
@@ -25,6 +38,7 @@ struct MaterialDef {
 	// opaque, and that is what "transparent" means everywhere: any channel above zero.
 	float transmit[3] = {0.0f, 0.0f, 0.0f};
 	float ior = 1.0f;      // index of refraction, for Fresnel reflectance; unused when opaque
+	Liquid liquid = Liquid::none; // which liquid shading and ghost rule apply; none = not a liquid
 };
 
 // Order IS atlas layer order, and must match MATERIALS in tools/convert_materials.sh.
@@ -42,6 +56,11 @@ inline constexpr MaterialDef kMaterials[] = {
 	// Tree trunks and branches, written by shaders/stages/trees.field.glslh. Harder than
 	// ground, softer than rock: a trunk is meant to be choppable in a few swings.
 	{"bark",         "07",  1.6f,    0.0f, {0.0f, 0.0f, 0.0f},   {0.29f, 0.20f, 0.14f}},
+	// Water (docs/superpowers/specs/2026-10-06-water-voxels-design.md §2). flat_albedo doubles
+	// as the SCATTER colour, the body colour deep water fades to; it is also what water looks
+	// like with transparency off. Red dies first: ~0.25 left after 2 m, blue ~0.77.
+	{"water",        "08",  1.0f,    0.0f, {0.0f, 0.0f, 0.0f},   {0.03f, 0.16f, 0.20f},
+			{0.50f, 0.82f, 0.88f}, 1.33f, Liquid::water},
 };
 
 inline constexpr int kMaterialCount = static_cast<int>(sizeof(kMaterials) / sizeof(kMaterials[0]));
@@ -105,6 +124,10 @@ float material_glow(uint16_t id);
 bool material_transparent(uint16_t id);
 void material_transmit(uint16_t id, float out[3]);
 float material_ior(uint16_t id);
+
+// Fails soft like the rest: air, foliage and any id with no row are not liquids. Mirrored in
+// GLSL as mat_liquid.
+Liquid material_liquid(uint16_t id);
 
 // The effective size of a removal that a ray struck on `material`. Hardness is resolved
 // EXACTLY ONCE, here, before the op reaches any field evaluator: ve::apply_op and

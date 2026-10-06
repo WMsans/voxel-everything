@@ -68,3 +68,16 @@ TEST_CASE("the emitter carries transparency and names no material after its tabl
 		CHECK(upper != "IOR");
 	}
 }
+
+TEST_CASE("the emitter carries the liquid kind and names every liquid") {
+	const std::string s = ve::material_table_glsl();
+	CHECK(s.find("const uint LIQUID_NONE = 0u;") != std::string::npos);
+	CHECK(s.find("const uint LIQUID_WATER = 1u;") != std::string::npos);
+	CHECK(s.find("const uint MAT_LIQUID[MATERIAL_COUNT]") != std::string::npos);
+	CHECK(s.find("uint mat_liquid(uint id)") != std::string::npos);
+	for (int i = 0; i < ve::kMaterialCount; i++) {
+		std::string upper = ve::kMaterials[i].name;
+		for (char &c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+		CHECK(upper != "LIQUID");
+	}
+}
