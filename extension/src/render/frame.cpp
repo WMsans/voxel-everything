@@ -603,6 +603,8 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		tp.sky_thickness_m = transparency.sky_thickness_m;
 		tp.flags = beauty_flags;
 		tp.inside_material = inside_material;
+		tp.time_seconds = static_cast<float>(render_.beauty_frame()) / 60.0f;
+		tp.water = render_.water_settings();
 		timings->begin(rd, "transparency");
 		const bool tc_ok = tc->render(rd, *gb, *materials, shell->front(), shell->thickness(),
 				use_sun ? sun->map() : RID(), deferred->sun_cascade_ubo(), ubo->buffer(), tp);

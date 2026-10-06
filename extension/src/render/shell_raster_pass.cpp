@@ -67,7 +67,10 @@ bool ShellRasterPass::ensure_targets(RenderingDevice *rd, Vector2i size) {
 	const uint32_t colour = RenderingDevice::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT |
 			RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT;
 	thick_ = gpu::texture(rd, group_, RenderingDevice::DATA_FORMAT_R32G32_SFLOAT, size, colour);
-	front_ = gpu::texture(rd, group_, RenderingDevice::DATA_FORMAT_R32G32B32A32_SFLOAT, size, colour);
+	// Storage too: the transparency composite writes a liquid front's SHADING normal back into
+	// xy, and the G-buffer resolve copies xy into the surface (water spec §5, plan deviation 2).
+	front_ = gpu::texture(rd, group_, RenderingDevice::DATA_FORMAT_R32G32B32A32_SFLOAT, size,
+			colour | RenderingDevice::TEXTURE_USAGE_STORAGE_BIT);
 	depth_ = gpu::texture(rd, group_, RenderingDevice::DATA_FORMAT_D32_SFLOAT, size,
 			RenderingDevice::TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
 			RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT);

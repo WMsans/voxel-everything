@@ -102,8 +102,9 @@ struct TransparencyCompositePush {
 	float right_tanx[4];  // xyz = camera right, w = tan(fov_x / 2)
 	float up_tany[4];     // xyz = camera up,    w = tan(fov_y / 2)
 	float sky[4];         // xyz = ambient, w unused
-	float params[4];      // x = min transmit, y = sky thickness (m), zw unused
+	float params[4];      // x = min transmit, y = sky thickness (m), z = time (s), w unused
 	uint32_t flags[4];    // x = beauty flags, y = material the camera is inside (0 = outside)
+	float water[4];       // x = wave strength, y = flow speed (m/s), z = refraction, w = foam width (m)
 };
 
 struct GrassRasterPush {
@@ -246,6 +247,7 @@ inline constexpr Field kTransparencyCompositePushFields[] = {
 	VE_LAYOUT_FIELD(TransparencyCompositePush, sky, Vec4, 0),
 	VE_LAYOUT_FIELD(TransparencyCompositePush, params, Vec4, 0),
 	VE_LAYOUT_FIELD(TransparencyCompositePush, flags, UVec4, 0),
+	VE_LAYOUT_FIELD(TransparencyCompositePush, water, Vec4, 0),
 };
 
 inline constexpr Field kCompositePushFields[] = {

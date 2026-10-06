@@ -77,7 +77,8 @@
 	vec4 up_tany; \
 	vec4 sky; \
 	vec4 params; \
-	uvec4 flags;
+	uvec4 flags; \
+	vec4 water;
 
 #define GRASS_RASTER_PUSH_FIELDS \
 	mat4 view_proj; \
