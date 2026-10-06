@@ -39,7 +39,7 @@ void ShellRasterPass::teardown() {
 	if (!rd_) return;
 	gpu::RdDevice device{rd_};
 	group_.release(device);
-	thick_shader_ = front_shader_ = thick_pipeline_ = front_pipeline_ = sampler_ = RID();
+	thick_shader_ = front_shader_ = thick_pipeline_ = front_pipeline_ = exit_pipeline_ = sampler_ = RID();
 	resolve_shader_ = resolve_pipeline_ = RID();
 	thick_ = front_ = depth_ = args_ = RID();
 	thick_set_ = front_set_ = resolve_set_ = gpu::SetCache();
@@ -95,7 +95,7 @@ bool ShellRasterPass::ensure_args(RenderingDevice *rd, int pages) {
 
 bool ShellRasterPass::draw(RenderingDevice *rd, LodPool &pool, RID index_array, GBuffer &gb,
 		RID beauty_cam_ubo, RID island_desc, float fade_start, float fade_end,
-		bool front_face_clockwise, bool camera_inside) {
+		bool front_face_clockwise, bool camera_inside, bool exit_faces) {
 	drew_ = false;
 	if (!rd_ || rd != rd_ || !thick_shader_.is_valid() || !front_shader_.is_valid() || !gb.is_valid())
 		return false;
@@ -109,11 +109,12 @@ bool ShellRasterPass::draw(RenderingDevice *rd, LodPool &pool, RID index_array, 
 		return false;
 	if (!thick_fb_.get(rd, group_, {thick_, gb.depth()}).is_valid()) return false;
 	if (!front_fb_.get(rd, group_, {front_, depth_}).is_valid()) return false;
-	if (!thick_pipeline_.is_valid() || !front_pipeline_.is_valid() ||
+	if (!thick_pipeline_.is_valid() || !front_pipeline_.is_valid() || !exit_pipeline_.is_valid() ||
 			pipeline_clockwise_ != front_face_clockwise) {
 		gpu::RdDevice device{rd};
 		group_.free(device, thick_pipeline_);
 		group_.free(device, front_pipeline_);
+		group_.free(device, exit_pipeline_);
 		// The winding LodRasterPass MEASURED (M5 errata 2) decides gl_FrontFacing in the
 		// thickness pass and the culled side in the front pass.
 		const RenderingDevice::PolygonFrontFace winding = front_face_clockwise
@@ -131,9 +132,12 @@ bool ShellRasterPass::draw(RenderingDevice *rd, LodPool &pool, RID index_array, 
 		front.front = winding;
 		front.color_attachments = 1;
 		front_pipeline_ = gpu::raster_pipeline(rd, group_, front_shader_, front_fb_.format(), front);
+		gpu::RasterState exit = front;
+		exit.cull = RenderingDevice::POLYGON_CULL_DISABLED;
+		exit_pipeline_ = gpu::raster_pipeline(rd, group_, front_shader_, front_fb_.format(), exit);
 		pipeline_clockwise_ = front_face_clockwise;
 	}
-	if (!thick_pipeline_.is_valid() || !front_pipeline_.is_valid()) return false;
+	if (!thick_pipeline_.is_valid() || !front_pipeline_.is_valid() || !exit_pipeline_.is_valid()) return false;
 	gpu::RdDevice device{rd};
 	const RID thick_set = thick_set_.get(device, group_, thick_shader_, 0, {
 			gpu::storage(0, pool.quad_buffer()),
@@ -192,7 +196,7 @@ bool ShellRasterPass::draw(RenderingDevice *rd, LodPool &pool, RID index_array, 
 			RenderingDevice::DRAW_CLEAR_COLOR_ALL | RenderingDevice::DRAW_CLEAR_DEPTH, front_clear, 0.0f);
 	if (dl < 0) return false;
 	if (count > 0) {
-		rd->draw_list_bind_render_pipeline(dl, front_pipeline_);
+		rd->draw_list_bind_render_pipeline(dl, exit_faces ? exit_pipeline_ : front_pipeline_);
 		rd->draw_list_bind_uniform_set(dl, front_set, 0);
 		rd->draw_list_bind_index_array(dl, index_array);
 		rd->draw_list_set_push_constant(dl, gpu::push_bytes(push), sizeof(push));

@@ -519,7 +519,8 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		const bool shell_ok = lod_raster->prepare_index_array(rd, *lod_.pool()) &&
 				shell->draw(rd, *lod_.pool(), lod_raster->index_array(), *gb, ubo->buffer(),
 						render_.passes().islands->desc_buffer(), fade_start, fade_end,
-						lod_raster->front_face_clockwise(), inside_material != 0);
+						lod_raster->front_face_clockwise(), inside_material != 0,
+					ve::material_liquid(inside_material) != ve::Liquid::none);
 		if (shell_ok) end_stage(rd, kStageShell);
 		else cancel_stage(kStageShell);
 		shell_drawn = shell_ok && shell->drew();

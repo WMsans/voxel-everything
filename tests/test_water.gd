@@ -260,3 +260,69 @@ func test_with_transparency_off_water_draws_as_an_opaque_surface() -> void:
 	assert_int(int(d["center_material"])).is_equal(material_id(w, "water"))
 	assert_float((d["center_front"] as Color).a).is_equal(0.0)
 	assert_bool(finite(d["center_lit"])).is_true()
+
+# --- §6: the underwater view ---------------------------------------------------------------
+
+func luma(c: Color) -> float:
+	return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+
+func frame_with_pages(w: VoxelWorld, cam: Vector3, fwd: Vector3) -> Dictionary:
+	var d := {}
+	for i in range(600):
+		w.hooks().debug_stream_frame(cam)
+		d = frame(w, cam, fwd)
+		if int(d["shell_pages"]) > 0:
+			break
+	return d
+
+func test_a_camera_inside_water_sees_fog_not_black() -> void:
+	var w := make_world()
+	var bare: Color = frame(w)["center_lit"]
+	w.hooks().debug_apply_sphere_add(CAM, 3.0, material_id(w, "water"))
+	settle(w)
+	var d := frame_with_pages(w, CAM, FWD)
+	var lit: Color = d["center_lit"]
+	assert_bool(finite(lit)).is_true()
+	assert_float(lit.r + lit.g + lit.b).is_greater(0.05)
+	assert_float(dist(lit, bare)).override_failure_message(
+		"three metres of water around the camera changed nothing").is_greater(0.01)
+
+func test_the_surface_above_an_underwater_camera_is_a_front() -> void:
+	var w := make_world()
+	w.hooks().debug_apply_sphere_add(CAM, 3.0, material_id(w, "water"))
+	settle(w)
+	var up := Vector3(0.1, 1.0, 0.1)
+	var d := frame_with_pages(w, CAM, up)
+	# Seen from inside, the surface overhead is a BACK face; the exit-face pipeline records it.
+	assert_int(int((d["center_front"] as Color).a + 0.5)).override_failure_message(
+		"no front for the surface overhead: %s" % d).is_equal(material_id(w, "water"))
+	assert_float((d["center_front"] as Color).b).is_between(2.0, 4.0)
+
+# A big ball whose top sits 1 m above the camera: locally an almost flat surface overhead.
+# Straight up is inside Snell's window (sky through the surface); 15 degrees above the
+# horizon is past the critical angle (the water's own dark body colour).
+func test_snells_window_is_brighter_than_total_internal_reflection() -> void:
+	var w := make_world()
+	w.hooks().debug_apply_sphere_add(CAM - Vector3(0, 19.0, 0), 20.0, material_id(w, "water"))
+	settle(w)
+	var up := frame_with_pages(w, CAM, Vector3(0.02, 1.0, 0.0))
+	var graze := frame(w, CAM, Vector3(1.0, 0.27, 0.0))
+	assert_int(int((up["center_front"] as Color).a + 0.5)).is_equal(material_id(w, "water"))
+	assert_int(int((graze["center_front"] as Color).a + 0.5)).is_equal(material_id(w, "water"))
+	assert_float(luma(up["center_lit"])).override_failure_message(
+		"straight up %s is not brighter than grazing %s" % [up["center_lit"], graze["center_lit"]]
+		).is_greater(luma(graze["center_lit"]))
+
+# Review Focus 3: a camera a few centimetres under a small ball's top, nudged up and down
+# through the surface, flips `inside` frame to frame. Every frame must stay finite and lit.
+func test_a_camera_crossing_a_small_surface_stays_finite() -> void:
+	var w := make_world()
+	var c := CAM - Vector3(0, 0.55, 0)
+	w.hooks().debug_apply_sphere_add(c, 0.6, material_id(w, "water"))
+	settle(w)
+	frame_with_pages(w, CAM, FWD)
+	for dy in [-0.08, -0.03, 0.02, 0.07, -0.05]:
+		var d := frame(w, CAM + Vector3(0, dy, 0), FWD)
+		var lit: Color = d["center_lit"]
+		assert_bool(finite(lit)).override_failure_message("dy=%s gave %s" % [dy, lit]).is_true()
+		assert_float(lit.r + lit.g + lit.b).is_greater(0.02)

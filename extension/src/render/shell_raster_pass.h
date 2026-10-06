@@ -39,9 +39,10 @@ public:
 	// true, and drew() reports false -- the composite then never reads the targets.
 	// camera_inside: the camera sits in a transparent solid, so the thickness target is
 	// cleared to a virtual front at distance 0.
+	// exit_faces: the camera sits in a LIQUID, so the front pass culls nothing and the nearest face of either orientation wins -- the surface overhead is a back face from below (water spec §6). Outside a liquid, and inside ice, the back-face-culling pipeline runs unchanged.
 	bool draw(RenderingDevice *rd, LodPool &pool, RID index_array, GBuffer &gb,
 			RID beauty_cam_ubo, RID island_desc, float fade_start, float fade_end,
-			bool front_face_clockwise, bool camera_inside);
+			bool front_face_clockwise, bool camera_inside, bool exit_faces);
 	bool drew() const { return drew_; }
 	// Spec §6 step 5: every pixel with a transparent front takes that front as its
 	// G-buffer surface (normal, material id, gloss) and depth, so contact shadows, SSR and
@@ -63,7 +64,7 @@ private:
 
 	RenderingDevice *rd_ = nullptr;
 	gpu::Group group_;
-	RID thick_shader_, front_shader_, thick_pipeline_, front_pipeline_, sampler_;
+	RID thick_shader_, front_shader_, thick_pipeline_, front_pipeline_, exit_pipeline_, sampler_;
 	bool pipeline_clockwise_ = false;
 	gpu::SetCache thick_set_, front_set_, resolve_set_;
 	gpu::FramebufferCache thick_fb_, front_fb_, resolve_fb_;
