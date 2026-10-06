@@ -34,6 +34,7 @@
 #include "grass/grass_settings_store.h"
 #include "leaves/leaf_settings_store.h"
 #include "transparency/transparency_settings_store.h"
+#include "water/water_settings_store.h"
 #include "transparency/shell_grid.h"
 #include "render/frame.h"
 #include "render/gpu_timings.h"
@@ -292,6 +293,9 @@ public:
 	ve::TransparencySettings transparency_settings() const { return transparency_settings_.get(); }
 	bool set_transparency_value(const char *n, float v) { return transparency_settings_.set_value(n, v); }
 	float transparency_value(const char *n) const { return transparency_settings_.value(n); }
+	ve::WaterSettings water_settings() const { return water_settings_.get(); }
+	bool set_water_value(const char *n, float v) { return water_settings_.set_value(n, v); }
+	float water_value(const char *n) const { return water_settings_.value(n); }
 	GpuTimings *gpu_timings() { return &gpu_timings_; }
 
 	// --- history/beauty frame state (moved with the pass graph) ---
@@ -361,6 +365,7 @@ private:
 	ve::GrassSettingsStore grass_settings_;
 	ve::LeafSettingsStore leaf_settings_;
 	ve::TransparencySettingsStore transparency_settings_;
+	ve::WaterSettingsStore water_settings_;
 	GpuTimings gpu_timings_;
 	IslandHandoff handoff_;
 	// Guards pending_island_shells_ ONLY. The producer side is split across threads: the

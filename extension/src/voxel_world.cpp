@@ -228,6 +228,8 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_leaf_value", "name"), &VoxelWorld::get_leaf_value);
 	ClassDB::bind_method(D_METHOD("set_transparency_value", "name", "value"), &VoxelWorld::set_transparency_value);
 	ClassDB::bind_method(D_METHOD("get_transparency_value", "name"), &VoxelWorld::get_transparency_value);
+	ClassDB::bind_method(D_METHOD("set_water_value", "name", "value"), &VoxelWorld::set_water_value);
+	ClassDB::bind_method(D_METHOD("get_water_value", "name"), &VoxelWorld::get_water_value);
 	ClassDB::bind_method(D_METHOD("ensure_initialized"), &VoxelWorld::ensure_initialized);
 	// Task 10 contract smoke test: the WorldStore spine's edit sequence, and an
 	// AppendResult-free way to push one encoded op through the spine from GDScript.
@@ -348,6 +350,14 @@ bool VoxelWorld::set_transparency_value(const String &name, float v) {
 
 float VoxelWorld::get_transparency_value(const String &name) const {
 	return context_.render->transparency_value(name.utf8().get_data());
+}
+
+bool VoxelWorld::set_water_value(const String &name, float v) {
+	return context_.render->set_water_value(name.utf8().get_data(), v);
+}
+
+float VoxelWorld::get_water_value(const String &name) const {
+	return context_.render->water_value(name.utf8().get_data());
 }
 
 LeafScatterPass *VoxelWorld::leaf_scatter_pass() const {
