@@ -1,7 +1,7 @@
 # Voxel Everything — Water Voxels
 
 **Date:** 2026-10-06
-**Status:** design approved, not implemented
+**Status:** implemented
 **Start commit:** `40260c3` (`main`)
 **Prior specs:** `2026-10-01-transparent-voxels-design.md` (the shell, thickness, front,
 composite and resolve this builds on; read it first); `2026-08-23-material-system-design.md`
@@ -331,3 +331,60 @@ Characterization first.
 - Toksvig-style specular anti-aliasing: https://blog.selfshadow.com/page/13
 - Cinevva, *Open World Browser Part 26: Water* (per-channel extinction, Fresnel blend):
   https://app.cinevva.com/blog/2026-05-12-open-world-browser-part-26-water
+
+## 12. Deviations and measurements recorded during implementation
+
+### 12.1 The plan's deviations, decided while planning
+
+1. **The flow rule is tested by executing `shaders/water_flow.glslh` natively**, through a small C++ shim, as `extension/tests/test_grass_tilt_shader.cpp` does for the blade tilt. There is no `ve::water_flow_uv` C++ mirror: a mirror can drift, the executed shader cannot. The pure uv math lives in `water_flow.glslh`; the texture sampling lives in `water_waves.glslh`.
+2. **The resolve is not edited.** The composite writes the camera-facing shading normal into `front.xy` (the front target gains storage usage), and the existing resolve already copies `front.xy` into the G-buffer surface. Spec §7's "resolve evaluates the waves" would sample the waves twice per pixel.
+3. **The triplanar blend reuses `triplanar_normal()` from `shaders/common.glslh`**, the whiteout blend the terrain already uses, which carries the geometric sign per projection. A negative face's ripple texture is mirrored, exactly as terrain textures are; for a ripple map this is invisible.
+4. **Brick generation and brick marking gate the second evaluation.** They evaluate the solid view only when the brick's filtered op list holds a liquid ADD/PAINT or any volume op (`op_may_hold_liquid`); otherwise they apply the label rule to the union sample. Without such an op the two are equal by construction, so the CPU mirror (which always evaluates) matches exactly.
+5. **Island normals at a liquid boundary.** Where the masked union and the masked solid view disagree, the island voxel stores `0x8080`, the existing "no stored normal" marker, and the marcher shades it from the R8 lattice. The union gradient there belongs to the water.
+6. **`mesh/mesh_chunk.cpp`'s `chunk_has_surface` keeps the union.** It is a conservative residency probe for collider chunks; a chunk holding only water is built and meshes zero triangles.
+7. **Snell's window shows the lit pixel**, which already holds deferred's sky, rather than `sky_color(r)`.
+8. **Shading constants pinned here:** scatter picks up `0.35` of the sun; the glint is capped at `64`; foam albedo `0.9`, foam opacity `0.85`.
+9. **Two §9 GPU tests take a more direct form.** "A physics ray passes through water" is tested on the collision lattice itself (`debug_mesh_lattice_diff` reports no surface for a water ball, and a surface for the same ball in rock), because the gdUnit fixtures run with physics off. "A severed floating water blob does not become an island" is tested at its cause: the blob's cell is `kCellAir` in the GPU occupancy grid and in `cell_state_field`, so it can never be a component.
+
+### 12.2 Deviations the plan did not foresee
+
+1. Task 6 (controller-accepted): `tests/test_water.gd`'s frames test uses a stream+render
+   settle fixture rather than the brief's literal loop, and the determinism sub-check pins
+   `foam_width_m = 0.0` — the brief's literal code was flaky by construction (water_foam
+   keys noise to time). The spec's Review Focus 4 (finite, deterministic frames) is what the
+   changed code tests.
+
+### 12.3 Cost
+
+Interleaved A/B/A legs, `--near-scale=0.40`, sphere `r=3` placed at the same spot in all
+three legs ((28.51491, 56.37516, 28.51491)). Steady leg (`--benchmark`) numbers, ms:
+
+| leg | p50 | p95 | p99 | frame_avg | max |
+|---|---|---|---|---|---|
+| A1 (ice) | 31.94 | 33.33 | 33.49 | 32.26 | 38.48 |
+| B (water) | 32.10 | 33.33 | 33.33 | 32.47 | 34.54 |
+| A2 (ice) | 31.94 | 33.33 | 33.33 | 32.33 | 37.90 |
+
+Delta (B − mean(A1, A2)): p50 +0.16, p95 +0.00, p99 −0.08, frame_avg +0.18, max −3.65.
+A/A spread (|A1 − A2|): p50 0.00, p95 0.00, p99 0.16, frame_avg 0.07, max 0.58.
+Quotable where |delta| > A/A spread: p50, p99, frame_avg, and max nominally; in practice
+the A/A spread on max is a single-frame outlier, so the honest summary is that water's
+shading cost is +0.2 ms frame time at this size and resolution — within display-quantised
+(1/60s-grid) noise of an M1 — and no quotable regression. GPU pass timings were invalid on
+this machine (Metal does not surface per-pass timestamps to Godot), so frame time only.
+
+### 12.4 What the visual check actually inspected
+
+All of `reports/water/` was opened and looked at, full size and as nearest-neighbour crops.
+
+| capture | what was seen |
+|---|---|
+| pond.png | A wide crater: the water reads teal and deepens toward the centre, the far edge shows the dark terrain through clearer water, a white foam rim lines the shore, ripple normals texture the surface, and several small sun glints sit on it. |
+| wall.png | A floating r=3 ball that reads as water: a glassy top with calmer ripples, sides with faint vertical streaks, tint from the terrain seen through it. Streak direction needs the flow frames. |
+| underwater.png | Uniform blue fog: the water column tints the world (not black, not the bare scene). No distinct Snell's window or TIR ring is visible as a gradient in this still; that effect is covered by the gdUnit luminance test, which a still of this framing does not isolate. |
+| water_seam.png | One continuous water ridge running from the near field across the 64–80 m fade band to the horizon; each ball reads as water on both sides of the band, with no double-dark line or missing-pixel seam visible. |
+| flow_00..flow_07 | Consecutive frames of the wall case 8 frames apart. The vertical streaks on the ball's sides, the glint cluster overhead, and the dithering at the silhouette all translate between frames; a followed streak moves DOWNWARD from one frame to the next, matching spec §4's flow direction. The amplified difference between flow_00 and flow_07 shows exactly vertical streak structure changing, i.e. vertical motion. |
+
+What a still cannot establish: motion-only seam flicker (the water_seam case is a single
+frame; a flickering band would need a live run), and whether the water shading holds up when
+driven — nobody drove the live demo for these captures; the world was settled and still.
