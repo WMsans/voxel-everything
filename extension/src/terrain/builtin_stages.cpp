@@ -82,6 +82,14 @@ void stage_mesas(FieldCtx &ctx, const MesasSlots &s, const MesasParams &p,
 	if (mask > p.plateau && ctx.f(s.sdf) <= 0.0f) ctx.f(s.material) = float(kBandRock);
 }
 
+VE_STAGE_SLOTS(Flat, p, sdf, height);
+VE_STAGE_PARAMS(Flat, level);
+
+void stage_flat(FieldCtx &ctx, const FlatSlots &s, const FlatParams &p, const FieldResources &) {
+	ctx.f(s.height) = p.level;
+	ctx.f(s.sdf) = ctx.v(s.p)[1] - kSurfaceY - ctx.f(s.height);
+}
+
 VE_STAGE_SLOTS(Trees, p, sdf, height, material);
 VE_STAGE_PARAMS(Trees, cell, density, trunk_height, trunk_radius, branch_radius_min,
 		crown_radius, max_slope, hills_amp_a, hills_amp_b, hills_amp_c, relief_amp_a,
@@ -377,6 +385,7 @@ VE_REGISTER_STAGE("ve::stage_cave", Cave, stage_cave);
 VE_REGISTER_STAGE("ve::stage_height_bands", HeightBands, stage_height_bands);
 VE_REGISTER_STAGE("ve::stage_relief", Relief, stage_relief);
 VE_REGISTER_STAGE("ve::stage_mesas", Mesas, stage_mesas);
+VE_REGISTER_STAGE("ve::stage_flat", Flat, stage_flat);
 VE_REGISTER_STAGE("ve::stage_trees", Trees, stage_trees);
 
 } // namespace ve
