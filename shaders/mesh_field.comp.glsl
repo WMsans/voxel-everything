@@ -24,8 +24,8 @@ void main() {
 	ivec3 l = ivec3(gl_GlobalInvocationID);
 	if (any(greaterThanEqual(l, ivec3(chunk_lattice())))) return;
 	float sdf;
-	uint mat; // the mesher has no use for materials; collision carries none
-	eval_field(lattice_world_pos(l), uint(pc.chunk.w) * MAX_REGION_OPS,
+	uint mat; // the mesher has no use for materials; collision carries none. The SOLID view: a liquid is no collider (water spec §3).
+	eval_field_solid(lattice_world_pos(l), uint(pc.chunk.w) * MAX_REGION_OPS,
 			uint(pc.params.x), sdf, mat);
 	imageStore(lattice, l, vec4(quantise_sdf(sdf)));
 }

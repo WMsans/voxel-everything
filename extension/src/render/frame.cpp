@@ -519,7 +519,8 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		const bool shell_ok = lod_raster->prepare_index_array(rd, *lod_.pool()) &&
 				shell->draw(rd, *lod_.pool(), lod_raster->index_array(), *gb, ubo->buffer(),
 						render_.passes().islands->desc_buffer(), fade_start, fade_end,
-						lod_raster->front_face_clockwise(), inside_material != 0);
+						lod_raster->front_face_clockwise(), inside_material != 0,
+					ve::material_liquid(inside_material) != ve::Liquid::none);
 		if (shell_ok) end_stage(rd, kStageShell);
 		else cancel_stage(kStageShell);
 		shell_drawn = shell_ok && shell->drew();
@@ -603,6 +604,8 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		tp.sky_thickness_m = transparency.sky_thickness_m;
 		tp.flags = beauty_flags;
 		tp.inside_material = inside_material;
+		tp.time_seconds = static_cast<float>(render_.beauty_frame()) / 60.0f;
+		tp.water = render_.water_settings();
 		timings->begin(rd, "transparency");
 		const bool tc_ok = tc->render(rd, *gb, *materials, shell->front(), shell->thickness(),
 				use_sun ? sun->map() : RID(), deferred->sun_cascade_ubo(), ubo->buffer(), tp);

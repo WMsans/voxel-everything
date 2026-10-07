@@ -400,7 +400,7 @@ Dictionary VoxelDebugHooks::debug_mesh_lattice_diff(Vector3i chunk) {
 				const float p[3] = {g.origin[0] + (x - 1) * g.cell_size,
 						g.origin[1] + (y - 1) * g.cell_size,
 						g.origin[2] + (z - 1) * g.cell_size};
-				const float s = ve::eval_field(gen, snap.ops.data(), static_cast<int>(snap.ops.size()),
+				const float s = ve::eval_field_solid(gen, snap.ops.data(), static_cast<int>(snap.ops.size()),
 						p[0], p[1], p[2], &sources.volumes, &sources.overrides).sdf;
 				if (s <= 0.0f) neg = true; else pos = true;
 				const int want = ve::encode_sdf(s);
@@ -466,7 +466,7 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	for (int z = 0; z < g.lattice; z++)
 		for (int y = 0; y < g.lattice; y++)
 			for (int x = 0; x < g.lattice; x++) {
-				const float s = ve::eval_field(gen, snap.ops.data(), static_cast<int>(snap.ops.size()),
+				const float s = ve::eval_field_solid(gen, snap.ops.data(), static_cast<int>(snap.ops.size()),
 						g.origin[0] + (x - 1) * g.cell_size, g.origin[1] + (y - 1) * g.cell_size,
 						g.origin[2] + (z - 1) * g.cell_size, &sources.volumes, &sources.overrides).sdf;
 				const int diff = std::abs(static_cast<int>(lattice[ve::dc_lattice_index(g, x, y, z)]) -

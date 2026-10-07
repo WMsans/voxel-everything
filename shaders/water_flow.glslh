@@ -1,0 +1,63 @@
+// The water flow rule (docs/superpowers/specs/2026-10-06-water-voxels-design.md §4). Pure
+// arithmetic, no texture and no includes: extension/tests/test_water_flow.cpp executes this
+// file natively, so keep it to scalar/vec2/vec3 operations its shim provides.
+//
+// Three projections. The TOP (xz) drifts slowly in two detuned layers: a pond stays calm. The
+// two SIDES (zy and xy) scroll DOWN in world y in two layers: every sloped or vertical face
+// reads as water sliding downhill. Each projection is a constant scroll, so there is no
+// flow-map phase reset and no pulsing.
+
+// Metres per texture repeat. 5.0 / 1.35 is about 3.7, not a whole number, so the two layers'
+// periods never line up and the tiling hides.
+const float WATER_TOP_TILE_A = 5.0;
+const float WATER_TOP_TILE_B = 1.35;
+const float WATER_SIDE_TILE_A = 3.0;
+const float WATER_SIDE_TILE_B = 0.85;
+// Side ripples are stretched along the fall so they read as streaks.
+const float WATER_SIDE_STRETCH = 2.5;
+// Top drift, metres per second along water_top_dir.
+const float WATER_TOP_SPEED_A = 0.04;
+const float WATER_TOP_SPEED_B = 0.09;
+// Side layer B falls this much faster than flow_speed.
+const float WATER_SIDE_SPEED_B = 1.6;
+
+// The top layers' drift directions: unit vectors about 110 degrees apart.
+vec2 water_top_dir(int layer) {
+	return layer == 0 ? vec2(0.8, 0.6) : vec2(-0.8377, 0.5461);
+}
+
+// uv of top layer `layer` at world xz, time t. A feature at a fixed uv sits at
+// xz = uv * tile + dir * speed * t: it drifts along dir.
+vec2 water_top_uv(vec2 xz, float t, int layer) {
+	float tile = layer == 0 ? WATER_TOP_TILE_A : WATER_TOP_TILE_B;
+	float speed = layer == 0 ? WATER_TOP_SPEED_A : WATER_TOP_SPEED_B;
+	return (xz - water_top_dir(layer) * (speed * t)) / tile;
+}
+
+// uv of side layer `layer` at (horizontal, world y), time t. A feature at a fixed uv.y sits at
+// y = uv.y * tile * stretch - speed * t, which DEcreases with t: it slides down. This is the
+// "always flows downward" rule.
+vec2 water_side_uv(vec2 hy, float t, float flow_speed, int layer) {
+	float tile = layer == 0 ? WATER_SIDE_TILE_A : WATER_SIDE_TILE_B;
+	float speed = flow_speed * (layer == 0 ? 1.0 : WATER_SIDE_SPEED_B);
+	return vec2(hy.x / tile, (hy.y + speed * t) / (tile * WATER_SIDE_STRETCH));
+}
+
+// d(uv)/d(world), for textureGrad: both maps are affine in world position.
+vec2 water_top_scale(int layer) {
+	return vec2(1.0 / (layer == 0 ? WATER_TOP_TILE_A : WATER_TOP_TILE_B));
+}
+
+vec2 water_side_scale(int layer) {
+	float tile = layer == 0 ? WATER_SIDE_TILE_A : WATER_SIDE_TILE_B;
+	return vec2(1.0 / tile, 1.0 / (tile * WATER_SIDE_STRETCH));
+}
+
+// Triplanar weights, |n|^4 normalised: sharper than the terrain's linear weights, so a slope
+// hands over from drift to fall over a narrower band.
+vec3 water_weights(vec3 n) {
+	vec3 a = abs(n);
+	a *= a;
+	a *= a;
+	return a / max(a.x + a.y + a.z, 1e-5);
+}

@@ -378,15 +378,25 @@ void extract_island_volume(const Generator &gen, const EditOp *ops, int op_count
 	out->solid_voxels = 0;
 
 	// The island IS the solid field intersected with the union of its cells, so the mask is
-	// a CSG intersection: max(field, min over boxes).
-	const auto masked = [&](const float p[3], uint16_t *material) {
-		const Sample s = eval_field(gen, ops, op_count, p[0], p[1], p[2], volumes, overrides);
+	// a CSG intersection: max(field, min over boxes). The field is the SOLID view (water spec
+	// §3): an island never carries liquid.
+	const auto box_union = [&](const float p[3]) {
 		float bu = 1e30f;
 		for (int b = 0; b < box_count; b++)
 			bu = std::min(bu, box_sdf(&box_aabbs[static_cast<size_t>(b) * 6 + 0],
-							 &box_aabbs[static_cast<size_t>(b) * 6 + 3], p[0], p[1], p[2]));
+						 &box_aabbs[static_cast<size_t>(b) * 6 + 3], p[0], p[1], p[2]));
+		return bu;
+	};
+	const auto masked = [&](const float p[3], uint16_t *material) {
+		const Sample s = eval_field_solid(gen, ops, op_count, p[0], p[1], p[2], volumes, overrides);
 		if (material) *material = s.material;
-		return std::max(s.sdf, bu);
+		return std::max(s.sdf, box_union(p));
+	};
+	// The same mask over the UNION. Where it differs from `masked` there was liquid at or
+	// beside the voxel, and the union gradient below belongs to the liquid.
+	const auto masked_union = [&](const float p[3]) {
+		return std::max(eval_field(gen, ops, op_count, p[0], p[1], p[2], volumes, overrides).sdf,
+				box_union(p));
 	};
 
 	// The same rule ve::spread_materials applies to a brick, applied to a lattice: an AIR
@@ -423,7 +433,7 @@ void extract_island_volume(const Generator &gen, const EditOp *ops, int op_count
 					for (float over = 0.5f; over <= 2.5f && material == 0 && len > 0.0f;
 							over += 1.0f) {
 						const float t = d + over * voxel;
-						material = eval_field(gen, ops, op_count, p[0] - g[0] / len * t,
+						material = eval_field_solid(gen, ops, op_count, p[0] - g[0] / len * t,
 								p[1] - g[1] / len * t, p[2] - g[2] / len * t, volumes, overrides)
 										   .material;
 					}
@@ -443,7 +453,11 @@ void extract_island_volume(const Generator &gen, const EditOp *ops, int op_count
 				float len = std::sqrt(grad[0]*grad[0] + grad[1]*grad[1] + grad[2]*grad[2]);
 				if (!(len > 1e-6f)) { grad[0]=0; grad[1]=1; grad[2]=0; len=1.0f; } else { grad[0]/=len; grad[1]/=len; grad[2]/=len; }
 				const int i = VolumeSet::voxel_index(dim, x, y, z);
-				out->normal_oct[static_cast<size_t>(i)] = oct_encode_snorm8(grad);
+				// 0x8080 is the "no stored normal" marker island_extract.comp.glsl writes for an
+				// inexact gradient; the marcher then shades from the R8 lattice. Mirror of the
+				// shader's union-versus-solid rule.
+				out->normal_oct[static_cast<size_t>(i)] = masked_union(p) != d
+						? static_cast<uint16_t>(0x8080u) : oct_encode_snorm8(grad);
 				out->sdf[i] = encode_sdf(d);
 				out->mat[i] = static_cast<uint8_t>(material > 255 ? 255 : material);
 				if (d <= 0.0f) out->solid_voxels++;

@@ -1,6 +1,7 @@
 #pragma once
 #include "render/gpu/gpu.h"
 #include "transparency/transparency_settings.h"
+#include "water/water_settings.h"
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <cstdint>
@@ -13,7 +14,7 @@ class MaterialAtlas;
 // Shades transparent fronts over the lit G-buffer (docs/superpowers/specs/2026-10-01-
 // transparent-voxels-design.md §6). Runs after deferred and before inject, rewriting
 // gb.lit() in place for the pixels that have a front (or, with the camera inside the medium,
-// a thickness) and leaving every other pixel alone.
+// a thickness), and writing a liquid front's shading normal back into the front target.
 class TransparencyCompositePass {
 public:
 	struct Params {
@@ -26,6 +27,8 @@ public:
 		float sky_thickness_m = ve::TransparencySettings{}.sky_thickness_m;
 		uint32_t flags = 0;           // beauty flags
 		uint32_t inside_material = 0; // material the camera sits inside; 0 = outside
+		float time_seconds = 0.0f; // the clock grass wind uses: beauty frames / 60
+		ve::WaterSettings water;
 	};
 
 	~TransparencyCompositePass();
@@ -41,6 +44,9 @@ public:
 			RID thickness, RID sun_map, RID sun_cascade_ubo, RID beauty_cam_ubo, const Params &p);
 
 private:
+	bool ensure_lit_copy(RenderingDevice *rd, Vector2i size);
+	RID lit_copy_; // lit as deferred left it: refraction reads neighbours while lit is rewritten
+	Vector2i lit_copy_size_{0, 0};
 	RenderingDevice *rd_ = nullptr;
 	gpu::Group group_;
 	gpu::Program program_;

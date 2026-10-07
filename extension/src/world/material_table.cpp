@@ -69,6 +69,11 @@ float material_ior(uint16_t id) {
 	return (i >= 0 && i < kMaterialCount) ? kMaterials[i].ior : 1.0f;
 }
 
+Liquid material_liquid(uint16_t id) {
+	const int i = static_cast<int>(id) - 1;
+	return (i >= 0 && i < kMaterialCount) ? kMaterials[i].liquid : Liquid::none;
+}
+
 std::string material_table_glsl() {
 	std::ostringstream o;
 	o << "// GENERATED from extension/src/world/material_table.h (ve::kMaterials) by\n"
@@ -113,6 +118,18 @@ std::string material_table_glsl() {
 	for (int i = 0; i < kMaterialCount; i++)
 		o << "\t" << f(kMaterials[i].ior) << (i + 1 < kMaterialCount ? "," : "")
 		  << " // " << kMaterials[i].name << "\n";
+	o << ");\n\n";
+
+	o << "// Liquids (ve::Liquid). A liquid is transparent AND a ghost: the solid view treats it\n"
+	     "// as air. Only the transparency composite asks WHICH liquid.\n";
+	for (int k = 0; k < kLiquidCount; k++)
+		o << "const uint LIQUID_" << upper(kLiquidNames[k]) << " = " << k << "u;\n";
+	o << "\n";
+
+	o << "const uint MAT_LIQUID[MATERIAL_COUNT] = uint[MATERIAL_COUNT](\n";
+	for (int i = 0; i < kMaterialCount; i++)
+		o << "\t" << static_cast<int>(kMaterials[i].liquid) << "u"
+		  << (i + 1 < kMaterialCount ? "," : "") << " // " << kMaterials[i].name << "\n";
 	o << ");\n\n";
 
 	o << "// Foliage (ve::kFoliage): ids FOLIAGE_BASE + k. No atlas layer and no flat albedo -- a\n"
@@ -164,6 +181,11 @@ std::string material_table_glsl() {
 	     "float mat_ior(uint id) {\n"
 	     "\tint i = int(id) - 1;\n"
 	     "\treturn (i >= 0 && i < MATERIAL_COUNT) ? MAT_IOR[i] : 1.0;\n"
+	     "}\n\n"
+	     "// Mirror of ve::material_liquid: air, foliage and any id with no row are not liquids.\n"
+	     "uint mat_liquid(uint id) {\n"
+	     "\tint i = int(id) - 1;\n"
+	     "\treturn (i >= 0 && i < MATERIAL_COUNT) ? MAT_LIQUID[i] : LIQUID_NONE;\n"
 	     "}\n";
 	return o.str();
 }

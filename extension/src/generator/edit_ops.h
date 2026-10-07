@@ -81,8 +81,15 @@ Sample apply_ops(Sample s, const EditOp *ops, int count, float x, float y, float
 // accumulators start from the same sample (see ve::eval_field_pair); the caller applies
 // ve::opaque_view to `opaque` last, for a transparent material the BASE field itself named.
 // GLSL mirror: eval_field_pair() in shaders/field_ops.glslh.
+// Which materials the SECOND accumulator of apply_ops_pair treats as air. `transparent` is
+// the OPAQUE VIEW, the world the marcher bakes (world/opaque_view.h). `liquid` is the SOLID
+// VIEW (docs/superpowers/specs/2026-10-06-water-voxels-design.md §3), the world colliders,
+// occupancy, contact refinement and island extraction see: ice stays solid, water is air.
+// GLSL mirror: AIR_TRANSPARENT / AIR_LIQUID in shaders/field_ops.glslh.
+enum class AirRule : uint8_t { transparent, liquid };
+
 void apply_ops_pair(Sample *s, Sample *opaque, const EditOp *ops, int count, float x, float y,
-		float z, const VolumeStore *volumes = nullptr);
+		float z, const VolumeStore *volumes = nullptr, AirRule rule = AirRule::transparent);
 
 FieldSample apply_op_gradient(FieldSample s, const EditOp &op, float x, float y, float z,
 		const VolumeStore *volumes = nullptr);

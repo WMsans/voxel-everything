@@ -29,6 +29,15 @@ extends SceneTree
 #                 frame after next will still be drawing. A fixed camera is the exposure: the
 #                 shipped test cameras are fixed too, which is why this is the one case here
 #                 that can be wrong in a still.
+# --case=pond        a 4 m crater under a water cap 12 m ahead: deep teal centre, clear edges,
+#                    shore foam at the rim, sun glint on the ripples.
+# --case=wall        a floating r=3 water ball 10 m ahead: every side face should read as water
+#                    sliding DOWN (spec §4); judge the direction with --case=flow.
+# --case=underwater  the lens inside an r=6 water ball looking up and out: distance fog, a bright
+#                    Snell's window overhead, the dark total-internal-reflection ring around it.
+# --case=water_seam  the seam case's chain in water: one water ridge across the fade band.
+# --case=flow        the wall case saved as eight frames, flow_00..flow_07, eight frames apart:
+#                    the streaks must move down from one to the next.
 #
 # The seam probe in tests/test_lod_seam.gd marks terrain ownership, not front ownership, so
 # it cannot answer either question. This writes a frame a person (or an agent) can look at.
@@ -96,6 +105,14 @@ func capture() -> void:
 			ice = m["id"]
 	if ice <= 0:
 		push_error("transparency capture: no ice material in the table")
+		quit(1)
+		return
+	var water := 0
+	for m in world.material_table():
+		if m["name"] == "water":
+			water = m["id"]
+	if water <= 0:
+		push_error("transparency capture: no water material in the table")
 		quit(1)
 		return
 	var camera: Camera3D = player.get_node("Camera3D")
@@ -193,11 +210,42 @@ func capture() -> void:
 			world.hooks().debug_apply_sphere_add(p, 6.0, ice)
 			_linger_spheres.append(p)
 		placed.append("chain r=6 every 8m from 14m to %dm" % (_linger_spheres.size() * 8 + 6))
+	elif case_name == "pond":
+		var p := ground_under(world, cam.x + dir.x * 12.0, cam.z + dir.z * 12.0)
+		world.hooks().debug_apply_sphere_subtract(p, 4.0)
+		world.hooks().debug_apply_sphere_add(p - Vector3(0.0, 19.6, 0.0), 20.0, water)
+		camera.look_at(p, Vector3.UP)
+		placed.append("pond r=4 @%s" % p)
+	elif case_name == "wall" or case_name == "flow":
+		var p := ground_under(world, cam.x + dir.x * 10.0, cam.z + dir.z * 10.0) \
+				+ Vector3(0.0, 3.5, 0.0)
+		world.hooks().debug_apply_sphere_add(p, 3.0, water)
+		camera.look_at(p, Vector3.UP)
+		placed.append("water ball r=3 @%s" % p)
+	elif case_name == "underwater":
+		var p := ground_under(world, cam.x + dir.x * 7.0, cam.z + dir.z * 7.0) + Vector3(0.0, 1.0, 0.0)
+		world.hooks().debug_apply_sphere_add(p, 6.0, water)
+		player.global_transform = Transform3D(Basis.IDENTITY, p - Vector3(0.0, 1.6, 0.0))
+		camera.transform = Transform3D(Basis.looking_at(dir + Vector3(0.0, 0.8, 0.0), Vector3.UP),
+				Vector3(0.0, 1.6, 0.0))
+		cam = p
+		placed.append("underwater r=6 @%s" % p)
+	elif case_name == "water_seam":
+		var eye := home + Vector3(0.0, 45.0, 0.0)
+		player.global_transform = Transform3D(Basis.IDENTITY, home)
+		camera.transform = Transform3D(Basis.looking_at(dir, Vector3.UP), Vector3(0.0, 45.0, 0.0))
+		var aim_point := ground_under(world, eye.x + dir.x * 90.0, eye.z + dir.z * 90.0)
+		camera.look_at(eye + (aim_point - eye).normalized())
+		cam = eye
+		for x in range(20, 150, 6):
+			world.hooks().debug_apply_sphere_add(
+					ground_under(world, cam.x + dir.x * x, cam.z + dir.z * x), 5.0, water)
+		placed.append("water chain r=5 every 6m from 20m to 146m")
 	else:
 		# A typo'd --case= must not fall through to the foliage frame: it would save a
 		# perfectly good PNG of the wrong thing and exit 0. Same standard as every other
 		# failure in this file.
-		push_error("transparency capture: unknown --case=%s (seam, foliage, inside, sky, linger)"
+		push_error("transparency capture: unknown --case=%s (seam, foliage, inside, sky, linger, pond, wall, underwater, water_seam, flow)"
 				% case_name)
 		quit(1)
 		return
@@ -208,7 +256,11 @@ func capture() -> void:
 		push_error("transparency capture did not settle: %s" % _stats)
 		quit(1)
 		return
-	await save_png(out, case_name)
+	if case_name == "flow":
+		for k in range(8):
+			await save_png(out, "flow_%02d" % k) # save_png itself waits 8 frames: 8/60 s apart
+	else:
+		await save_png(out, case_name)
 	if case_name == "linger":
 		for c in _linger_spheres:
 			world.hooks().debug_apply_sphere_subtract(c, 6.0)

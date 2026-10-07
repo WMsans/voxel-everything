@@ -16,6 +16,7 @@
 shared uint s_ops[256];
 shared uint s_op_n;
 shared uint s_keep[256];
+shared uint s_liquid;
 #define FIELD_OP_INDEX(base, i) ((base) + s_ops[i])
 #include "field.glslh"
 #include "brick_layout.glslh"
@@ -50,9 +51,9 @@ shared uint s_cnt[4];                 // cells charged to each insertion-order s
 shared uint s_inv[4];                 // insertion-order slot -> final packed index
 shared uint s_mip8[512];              // (min << 8) | max
 shared uint s_mip4[64];
-// Encoded min / max of the UNION lattice. The occupancy grid is classified from these, not
-// from the stored (opaque-view) lattice: connectivity must keep seeing a transparent solid
-// as solid. With no transparent sample they equal the stored lattice's own range.
+// Encoded min / max of the SOLID view (water spec §3): the occupancy grid is classified from
+// these, not from the stored (opaque-view) lattice -- connectivity keeps seeing ice as solid
+// and sees a liquid as air. With no liquid they are the union lattice's range.
 shared uint s_umin;
 shared uint s_umax;
 
@@ -101,6 +102,17 @@ ivec3 cell_coord(uint i) {
 			int(i) / (BRICK_VOXELS * BRICK_VOXELS));
 }
 
+// The solid view's distance at a lattice point whose union sample is (sdf, mat). Without a
+// liquid-capable op the solid view IS the union under the label rule, so only bricks such an
+// op reaches pay for a second evaluation. Mirror of ve::cell_state_field.
+float solid_sample(vec3 p, uint op_base, float sdf, uint mat) {
+	float ssdf = sdf;
+	uint smat = mat;
+	if (s_liquid != 0u) eval_field_solid(p, op_base, s_op_n, ssdf, smat);
+	else solid_view(ssdf, smat);
+	return ssdf;
+}
+
 void main() {
 	uint tid = gl_LocalInvocationID.x;
 	ivec4 j0 = jobs.v[int(gl_WorkGroupID.x) * 2 + 0];
@@ -121,9 +133,14 @@ void main() {
 	barrier();
 	if (tid == 0u) {
 		uint n = 0u;
+		uint liquid = 0u;
 		for (uint i = 0u; i < op_count; i++)
-			if (s_keep[i] != 0u) s_ops[n++] = i;
+			if (s_keep[i] != 0u) {
+				s_ops[n++] = i;
+				if (op_may_hold_liquid(op_base + i)) liquid = 1u;
+			}
 		s_op_n = n;
+		s_liquid = liquid;
 	}
 	barrier();
 
@@ -144,7 +161,7 @@ void main() {
 		float osdf;
 		uint omat;
 		eval_field_pair(bo + vec3(v) * VOXEL_SIZE, op_base, s_op_n, sdf, mat, osdf, omat);
-		uint ub = encode_sdf_byte(sdf);
+		uint ub = encode_sdf_byte(solid_sample(bo + vec3(v) * VOXEL_SIZE, op_base, sdf, mat));
 		atomicMin(s_umin, ub);
 		atomicMax(s_umax, ub);
 		// The atlas holds the OPAQUE VIEW with the feature on and the UNION with it off, so
@@ -172,7 +189,7 @@ void main() {
 		float osdf;
 		uint omat;
 		eval_field_pair(bo + vec3(v) * VOXEL_SIZE, op_base, s_op_n, sdf, mat, osdf, omat);
-		uint ub = encode_sdf_byte(sdf);
+		uint ub = encode_sdf_byte(solid_sample(bo + vec3(v) * VOXEL_SIZE, op_base, sdf, mat));
 		atomicMin(s_umin, ub);
 		atomicMax(s_umax, ub);
 		if (pc.atlas_bricks.w != 0) opaque_view(osdf, omat, OPAQUE_OUTSIDE);

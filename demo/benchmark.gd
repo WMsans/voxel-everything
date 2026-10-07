@@ -98,6 +98,7 @@ var _horizon_at := -1
 var _screenshot_path := ""
 var _ice_radius := 0.0
 var _ice_pending := false
+var _medium := "ice" # the material --ice / --water places
 # The spawn leg stands on the RESIDENT ground under main.tscn's spawn, found by a ray once
 # the regions there have streamed -- the analytic _terrain_height() is not the voxel surface
 # the player lands on in game, and a wrong height put the camera into a hillside.
@@ -203,6 +204,11 @@ func _ready() -> void:
 			# An ice sphere of this radius where the camera first looks, so a transparency A/B
 			# has something to see through. Pair with --transparency=0/1.
 			_ice_radius = float(arg.trim_prefix("--ice="))
+		elif arg.begins_with("--water="):
+			# The --ice twin: a water sphere of this radius where the camera first looks, so the
+			# water shading can be A/B'd against an ice ball of the same size and place.
+			_ice_radius = float(arg.trim_prefix("--water="))
+			_medium = "water"
 		elif arg.begins_with("--grass-value="):
 			# name=value, repeatable -- the --effect-value shape, for the grass store. The
 			# far LoD rings are what this exists for: their cost has to be measurable by
@@ -285,12 +291,12 @@ func _place_ice() -> bool:
 			-_cam.global_transform.basis.z, 200.0)
 	var ice_id := 0
 	for m in _world.material_table():
-		if m["name"] == "ice":
+		if m["name"] == _medium:
 			ice_id = m["id"]
 	if not hit["hit"] or ice_id <= 0:
 		return false
 	_world.hooks().debug_apply_sphere_add(hit["pos"], _ice_radius, ice_id)
-	print("benchmark: ice r=%.1f at %s" % [_ice_radius, hit["pos"]])
+	print("benchmark: %s r=%.1f at %s" % [_medium, _ice_radius, hit["pos"]])
 	return true
 
 func _record_vsync() -> void:

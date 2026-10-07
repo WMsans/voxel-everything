@@ -1,0 +1,79 @@
+// Water's wave normal, glint roughness and shore foam (docs/superpowers/specs/2026-10-06-
+// water-voxels-design.md §4, §5). The includer must define VE_MATERIAL_ARRAYS and include
+// common.glslh (material_surface_tex, triplanar_normal, MATERIAL_LAYERS) and water_flow.glslh
+// first.
+//
+// The ripple map is water's OWN atlas layer: assets/materials/08_normal.png, packed into the
+// surface array's RG by MaterialAtlas exactly like every terrain normal map. No texture or
+// binding exists for waves.
+
+vec3 water_unpack(vec2 texel) {
+	vec2 e = texel * 2.0 - 1.0;
+	return vec3(e, sqrt(max(1.0 - dot(e, e), 0.0)));
+}
+
+// Two taps of one projection, whiteout-blended, tilted by `strength`, and returned in texel
+// space (0.5 = flat) because that is what triplanar_normal takes.
+vec2 water_pair(int layer, vec2 uva, vec2 uvb, vec2 sa, vec2 sb, vec2 dx, vec2 dy,
+		float strength) {
+	vec3 a = water_unpack(textureGrad(material_surface_tex, vec3(uva, float(layer)),
+			dx * sa, dy * sa).rg);
+	vec3 b = water_unpack(textureGrad(material_surface_tex, vec3(uvb, float(layer)),
+			dx * sb, dy * sb).rg);
+	vec3 n = normalize(vec3(a.xy + b.xy, a.z * b.z));
+	return clamp(n.xy * strength, vec2(-1.0), vec2(1.0)) * 0.5 + 0.5;
+}
+
+// The shading normal of liquid material `mat` at world point p with geometric normal n.
+// ddx/ddy are the pixel's world footprint (compute shaders have no derivatives), so distant
+// ripples fall into the mips and calm down. A projection whose weight is under 0.01 is not
+// sampled: a flat pond pixel costs two taps, a slope at most six.
+vec3 water_wave_normal(uint mat, vec3 p, vec3 n, vec3 ddx, vec3 ddy, float t, float flow_speed,
+		float strength) {
+	int layer = int(mat) - 1;
+	if (layer < 0 || layer >= MATERIAL_LAYERS || strength <= 0.0) return n;
+	vec3 w = water_weights(n);
+	vec2 tx = vec2(0.5), ty = vec2(0.5), tz = vec2(0.5);
+	if (w.y > 0.01)
+		ty = water_pair(layer, water_top_uv(p.xz, t, 0), water_top_uv(p.xz, t, 1),
+				water_top_scale(0), water_top_scale(1), ddx.xz, ddy.xz, strength);
+	if (w.x > 0.01)
+		tx = water_pair(layer, water_side_uv(p.zy, t, flow_speed, 0),
+				water_side_uv(p.zy, t, flow_speed, 1), water_side_scale(0), water_side_scale(1),
+				ddx.zy, ddy.zy, strength);
+	if (w.z > 0.01)
+		tz = water_pair(layer, water_side_uv(p.xy, t, flow_speed, 0),
+				water_side_uv(p.xy, t, flow_speed, 1), water_side_scale(0), water_side_scale(1),
+				ddx.xy, ddy.xy, strength);
+	return triplanar_normal(tx, ty, tz, n, w);
+}
+
+// The glint's GGX roughness, widened as the finest ripples fall under a pixel so distant
+// sparkles do not strobe (a Toksvig-style trade of detail for gloss).
+float water_glint_roughness(vec3 ddx, vec3 ddy) {
+	float footprint = max(length(ddx), length(ddy));
+	return clamp(0.05 + footprint / WATER_TOP_TILE_B, 0.05, 0.5);
+}
+
+float water_hash(vec2 c) {
+	return fract(sin(dot(c, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float water_noise(vec2 x) {
+	vec2 i = floor(x);
+	vec2 f = fract(x);
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	return mix(mix(water_hash(i), water_hash(i + vec2(1.0, 0.0)), u.x),
+			mix(water_hash(i + vec2(0.0, 1.0)), water_hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+// Shore foam: solid where the water is shallowest, breaking up into drifting patches as it
+// deepens, gone past `width` metres. `depth` is the caller's estimate of vertical depth.
+float water_foam(vec3 p, float depth, float width, float t) {
+	if (width <= 0.0) return 0.0;
+	float shore = 1.0 - smoothstep(0.0, width, depth);
+	if (shore <= 0.0) return 0.0;
+	float nz = 0.65 * water_noise(p.xz * 3.0 + vec2(0.21, 0.13) * t)
+			+ 0.35 * water_noise(p.xz * 7.0 - vec2(0.17, -0.11) * t);
+	return smoothstep(1.0 - shore, 1.0 - shore + 0.25, nz) * 0.85;
+}
