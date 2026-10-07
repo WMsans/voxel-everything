@@ -62,6 +62,13 @@ func test_create_builds_the_chosen_world_before_it_enters_the_tree() -> void:
 	assert_int(w.world_seed).is_equal(4242)
 	assert_object(main.get_node_or_null("GroundSpawn")).is_not_null()
 
+func test_the_menu_background_texture_loads() -> void:
+	for path in ["res://demo/scenes/create_world.tscn", "res://demo/scenes/title.tscn"]:
+		var screen: Control = load(path).instantiate()
+		add_child(screen)
+		_nodes.append(screen)
+		assert_object(screen.get_node("Background").texture).is_not_null()
+
 func test_the_type_button_cycles_and_enter_creates() -> void:
 	var screen = load("res://demo/scenes/create_world.tscn").instantiate() # untyped: launch is a script member
 	var launched: Array = []

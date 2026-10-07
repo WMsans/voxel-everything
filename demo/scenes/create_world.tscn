@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" path="res://demo/scripts/create_world.gd" id="1"]
 [ext_resource type="Theme" path="res://demo/menu_theme.tres" id="2"]
-[ext_resource type="Texture2D" path="res://assets/materials/02_basecolor.png" id="3"]
+[ext_resource type="Script" path="res://demo/scripts/menu_background.gd" id="3"]
 
 [node name="CreateWorld" type="Control"]
 layout_mode = 3
@@ -23,7 +23,7 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
-texture = ExtResource("3")
+script = ExtResource("3")
 expand_mode = 1
 stretch_mode = 1
 
