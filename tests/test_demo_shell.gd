@@ -1,7 +1,7 @@
 extends GdUnitTestSuite
 
-const TOOL_SCRIPT := preload("res://demo/edit_tool.gd")
-const HELP_SCRIPT := preload("res://demo/help.gd")
+const TOOL_SCRIPT := preload("res://demo/scripts/edit_tool.gd")
+const HELP_SCRIPT := preload("res://demo/scripts/help.gd")
 var _roots: Array = []
 
 func after_test() -> void:
@@ -54,9 +54,9 @@ func test_wheel_changes_radius_within_bounds() -> void:
 # Emission above 1.0 only becomes visible bloom if the Environment asks for it. The engine
 # writes HDR into the colour buffer before Godot's glow stage; this is the other half.
 func test_the_demo_environment_has_glow_enabled() -> void:
-	var scene: PackedScene = load("res://demo/main.tscn")
+	var scene: PackedScene = load("res://demo/scenes/main.tscn")
 	var root: Node = scene.instantiate()
-	var we: WorldEnvironment = root.get_node("WorldEnvironment")
+	var we: WorldEnvironment = root.get_node("VoxelWorld/WorldEnvironment")
 	assert_bool(we.environment.glow_enabled).override_failure_message(
 		"main.tscn's Environment has glow disabled: emissive materials will not bloom"
 		).is_true()
@@ -64,7 +64,7 @@ func test_the_demo_environment_has_glow_enabled() -> void:
 	root.free()
 
 func test_the_demo_has_a_material_picker_wired_to_the_edit_tool() -> void:
-	var root: Node = load("res://demo/main.tscn").instantiate()
+	var root: Node = load("res://demo/scenes/main.tscn").instantiate()
 	# The scene's exports use absolute paths (/root/Main/...), so the instance only
 	# resolves its world_path/tool_path if it sits at exactly that spot in the tree.
 	root.name = "Main"

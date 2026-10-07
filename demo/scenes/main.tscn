@@ -1,39 +1,16 @@
 [gd_scene format=3 uid="uid://dx2akrpw2s62k"]
 
-[ext_resource type="Script" uid="uid://bt2v3wp8krqvr" path="res://demo/player.gd" id="1"]
-[ext_resource type="Script" uid="uid://qpk0hl8p6is1" path="res://demo/hud.gd" id="2"]
-[ext_resource type="Script" uid="uid://bbqt8juf6r03q" path="res://demo/benchmark.gd" id="3"]
-[ext_resource type="Script" uid="uid://ckh70w6lwfsu6" path="res://demo/edit_tool.gd" id="4"]
+[ext_resource type="Script" uid="uid://bt2v3wp8krqvr" path="res://demo/scripts/player.gd" id="1"]
+[ext_resource type="Script" uid="uid://qpk0hl8p6is1" path="res://demo/scripts/hud.gd" id="2"]
+[ext_resource type="Script" uid="uid://bbqt8juf6r03q" path="res://demo/scripts/benchmark.gd" id="3"]
+[ext_resource type="Script" uid="uid://ckh70w6lwfsu6" path="res://demo/scripts/edit_tool.gd" id="4"]
 [ext_resource type="Shader" uid="uid://dfrn1we3oknf4" path="res://shaders/cel_object.gdshader" id="5"]
-[ext_resource type="Script" uid="uid://c0gpopss4qh2v" path="res://demo/help.gd" id="7"]
-[ext_resource type="Script" uid="uid://5jhax4kvtcuf" path="res://demo/dev_tools.gd" id="8"]
-[ext_resource type="Script" uid="uid://c6bt8h3miy4v1" path="res://demo/capture.gd" id="9"]
-[ext_resource type="PackedScene" path="res://demo/settings_menu.tscn" id="10"]
-[ext_resource type="PackedScene" path="res://demo/material_picker.tscn" id="11"]
-
-[sub_resource type="Environment" id="3"]
-background_mode = 4
-ambient_light_source = 3
-ambient_light_energy = 0.4
-glow_enabled = true
-glow_levels/2 = 0.3
-glow_levels/3 = 0.9
-glow_levels/4 = 1.0
-glow_levels/5 = 1.0
-glow_levels/6 = 0.8
-glow_levels/7 = 0.5
-glow_intensity = 0.4
-glow_blend_mode = 0
-glow_hdr_threshold = 1.05
-
-[sub_resource type="RaymarchCompositor" id="1"]
-world_path = NodePath("/root/Main/VoxelWorld")
-
-[sub_resource type="BeautyCompositor" id="6"]
-world_path = NodePath("/root/Main/VoxelWorld")
-
-[sub_resource type="Compositor" id="2"]
-compositor_effects = Array[CompositorEffect]([SubResource("1"), SubResource("6")])
+[ext_resource type="Script" uid="uid://c0gpopss4qh2v" path="res://demo/scripts/help.gd" id="7"]
+[ext_resource type="Script" uid="uid://5jhax4kvtcuf" path="res://demo/scripts/dev_tools.gd" id="8"]
+[ext_resource type="Script" uid="uid://c6bt8h3miy4v1" path="res://demo/scripts/capture.gd" id="9"]
+[ext_resource type="PackedScene" path="res://demo/scenes/settings_menu.tscn" id="10"]
+[ext_resource type="PackedScene" path="res://demo/scenes/material_picker.tscn" id="11"]
+[ext_resource type="PackedScene" path="res://demo/scenes/voxel_world.tscn" id="12"]
 
 [sub_resource type="CapsuleShape3D" id="5"]
 radius = 0.4
@@ -61,18 +38,10 @@ size = Vector3(2, 2, 3.6114502)
 
 [node name="Main" type="Node3D" unique_id=152652419]
 
-[node name="VoxelWorld" type="VoxelWorld" parent="." unique_id=948119314]
+[node name="VoxelWorld" parent="." unique_id=948119314 instance=ExtResource("12")]
 near_field_scale = 0.4
 physics_center_path = NodePath("/root/Main/Player")
-sun_light_path = NodePath("/root/Main/DirectionalLight3D")
 process_mode = 3
-
-[node name="VoxelSettings" type="VoxelSettings" parent="."]
-world_path = NodePath("../VoxelWorld")
-
-[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1621412302]
-environment = SubResource("3")
-compositor = SubResource("2")
 
 [node name="Player" type="CharacterBody3D" parent="." unique_id=223784779]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 8, 62, 8)
@@ -83,9 +52,6 @@ shape = SubResource("5")
 
 [node name="Camera3D" type="Camera3D" parent="Player" unique_id=1232115908]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.7, 0)
-
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1631201804]
-transform = Transform3D(0.60042024, -0.79664165, -0.06969713, 0, -0.08715577, 0.9961947, -0.79968464, -0.5981355, -0.052330088, 0, 20, 0)
 
 [node name="TestCube" type="MeshInstance3D" parent="." unique_id=1199010470]
 transform = Transform3D(1, 0, 0, 0, 0.92332256, -0.38402534, 0, 0.38402534, 0.92332256, 24, 57.2, 24.805725)
@@ -123,7 +89,7 @@ script = ExtResource("7")
 
 [node name="SettingsMenu" parent="HUD" unique_id=292828256 instance=ExtResource("10")]
 layout_mode = 3
-settings_path = NodePath("/root/Main/VoxelSettings")
+settings_path = NodePath("/root/Main/VoxelWorld/VoxelSettings")
 
 [node name="MaterialPicker" parent="HUD" unique_id=902510277 instance=ExtResource("11")]
 layout_mode = 3

@@ -1,0 +1,17 @@
+//!stage     flat
+//!kind      field
+//!out       sdf : float
+//!out       height : float
+//!param     level : float = 2.0
+//!lipschitz add 1.0
+//!cpu       ve::stage_flat
+
+// The Flat world type: a level plane `level` metres above SURFACE_Y. `height` is published so
+// height_bands can paint it; 2 m sits in its grass band (1 m < h <= 4 m).
+//
+// Bound: sdf = y - SURFACE_Y - level, so |grad sdf| = 1 exactly. It establishes the field,
+// so it combines with `add`.
+void stage_flat(inout FieldCtx ctx) {
+	ctx.height = P.flat_level;
+	ctx.sdf = ctx.p.y - SURFACE_Y - ctx.height;
+}

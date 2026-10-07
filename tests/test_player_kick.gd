@@ -6,7 +6,7 @@ extends GdUnitTestSuite
 
 func test_walk_mode_kick_is_applied_once_before_move_and_slide() -> void:
 	var player := CharacterBody3D.new()
-	player.set_script(load("res://demo/player.gd"))
+	player.set_script(load("res://demo/scripts/player.gd"))
 	var cam := Camera3D.new()
 	cam.name = "Camera3D"
 	player.add_child(cam)

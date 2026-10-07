@@ -30,7 +30,9 @@ Clone with submodules (the engine links against `godot-cpp`):
 git clone --recurse-submodules https://github.com/WMsans/voxel-everything
 ```
 
-Build the GDExtension, then open the project in **Godot 4.x** and run the demo scene (`demo/main.tscn`):
+Build the GDExtension, then open the project in **Godot 4.x** and run it: the title screen's
+**Create New World** takes a seed and a world type (Default, Mesas, Flat). The benchmark and
+capture tools run `demo/scenes/main.tscn` directly, which always opens the Default world at seed 0:
 
 ```bash
 ./build.sh
@@ -42,11 +44,20 @@ Run the benchmark/test harness:
 ./gdunit_tests.sh
 ```
 
+### Using the world in another project
+
+Copy `extension/` (built), `voxel_everything.gdextension`, `shaders/` and `assets/`, plus
+`demo/scenes/voxel_world.tscn`, `demo/scripts/voxel_world_scene.gd`,
+`demo/scripts/world_type.gd` and the `demo/world_types/` you want. Instance
+`voxel_world.tscn`, set its `physics_center_path` to your player, and set `world_type` and
+`world_seed` before it enters the tree. Add a world type by adding a `WorldType` `.tres`
+pointing at a `.pipeline` file.
+
 ## Project layout
 
 - `extension/` — the C++ GDExtension source (meshing, streaming, CSG, physics glue)
 - `shaders/` — compute + render shaders (raymarch, surface nets, LoD, HiZ)
-- `demo/` — playable demo scene, benchmark legs, debug tooling
+- `demo/` — `scenes/` (title menu, the reusable `voxel_world.tscn`, the playable `main.tscn`), `scripts/`, `world_types/`
 - `docs/` — design notes and benchmark results (see `docs/PORTFOLIO.md` for measured numbers)
 
 ## Related

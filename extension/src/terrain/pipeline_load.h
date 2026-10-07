@@ -22,8 +22,9 @@ using TextReader = std::function<bool(const std::string &path, std::string *out)
 // `warnings` may be null. On success it receives ResolvedPipeline::warnings, so a caller
 // that has somewhere to put them (VoxelWorld pushes them through push_warning) does not
 // have to reach into the resolved pipeline for them.
+// `seed` is the WORLD seed (VoxelWorld.world_seed); see terrain/seed_offset.h.
 bool load_pipeline(const TextReader &reader, const std::string &pipeline_path,
 		const std::string &stage_root, ResolvedPipeline *out,
-		std::vector<std::string> *warnings, std::string *error);
+		std::vector<std::string> *warnings, std::string *error, uint32_t seed = 0);
 
 } // namespace ve

@@ -1,7 +1,7 @@
 # Voxel Everything — Title Menu, World Types and the Reusable World Scene
 
 **Date:** 2026-10-07
-**Status:** design approved; plan not yet written
+**Status:** implemented; see §10
 **Start commit:** `495f5dd` (`main`)
 **Prior specs:** `2026-09-03-terrain-pipeline-design.md` (pipelines, the generated
 `field.glslh`); `2026-09-17-stage-authoring-design.md` (stage manifests, the Lipschitz rule,
@@ -325,9 +325,85 @@ direct `main.tscn` is seed 0 with the same scene contents, which test 1 pins.
 - **Back to title.** "Save and Quit to Title" in the in-game Esc menu. The pipeline load
   installs `field.glslh` as a process-wide shader override (`set_shader_source_override`), so
   this needs a teardown → re-create test across two pipelines in one process, watching for
-  `RID was leaked` (RD leak counters read 0 on Metal).
+  `RID was leaked` (RD leak counters read 0 on Metal). The single-process teardown → re-create
+  evidence is recorded in §10 item 12.
 - **`addons/` packaging.** Move binaries, `shaders/`, `assets/` and the world scene under
   `addons/voxel_everything/`; replace the ~10 hardcoded `res://shaders/` / `res://assets/`
   constants in C++ with a root the extension resolves.
 - **`trees.pipeline`** is stage-identical to `default.pipeline` and a leftover of the trees
   rollout; delete it once nothing reads it.
+
+---
+
+## 10. Deviations recorded while planning and implementing
+
+### Recorded while planning
+
+1. **World type files carry an order prefix:** `00_default.tres`, `10_mesas.tres`, `20_flat.tres`. Sorted by plain name, Flat would come before Mesas; the spec's cycle is Default → Mesas → Flat.
+2. **The leaf pass is not created when the pipeline has no `trees` stage.** `leaf_trees.comp.glsl` calls `trees_ground_h`, which only exists when the trees stage is in the generated source, so on Mesas and Flat the shader fails to compile and the orchestrator prints `leaf initialization failed` (it already fails soft). A shader error on every Mesas or Flat world would read as a bug.
+3. **More node-name lookups move than spec §4.4 lists:** `tests/test_demo_shell.gd:59` and `tests/test_emissive_gi.gd:138` (`WorldEnvironment`), `demo/benchmark.gd:186` (`VoxelSettings`), `tools/grass_capture.gd:61` and `tools/leaf_capture.gd:90` (`DirectionalLight3D`). `test_cel_object.gd`, `test_deferred.gd` and `test_sun_shadow.gd` only construct their own `DirectionalLight3D` and do not change.
+4. **`VoxelWorld.field_offset() -> Vector3`** is bound, computed straight from `world_seed`. Tests use it to stream the same terrain under a seed; it needs no pipeline load.
+5. **The parser rejects `seed`** with a message naming `VoxelWorld.world_seed`, instead of the generic "unknown pipeline key".
+6. **The seeded leaf test checks for bark on a small grid**, not at a single point. Tree records carry the crown's XZ, and a leaning trunk at 0.33 height sits up to ~1.4 m from it. The existing `test_painting_trunks_away_empties_the_tree_list` covers the same offset with a 2 m paint sphere.
+7. **`load_pipeline` gains a trailing `uint32_t seed = 0` parameter** that it copies into the desc. `PipelineDesc::seed` stays as the carrier into `resolve_pipeline`, and its default changes from 1337 to 0.
+8. **Create World's scene switch is a `launch` Callable member**, so a test can catch the built world instead of replacing gdUnit's own scene.
+9. **The final visual check is scripted** (`tools/world_type_capture.gd`), the way every other look check in `tools/` is, so the screenshots can be reproduced.
+
+### Recorded while implementing
+
+10. **The `flat` stage's height parameter is named `level`, not `height` — spec erratum.** §5.3 above pins
+    `//!param height : float = 2.0` and the body's `P.flat_height`; the shipped stage is
+    `//!param level : float = 2.0` and `P.flat_level` (`shaders/stages/flat.field.glslh`, mirrored in
+    `extension/src/terrain/builtin_stages.cpp`). The value is identical (2.0). The name changed because
+    `height` is already an output channel of that stage, and a parameter and a channel of the same name
+    would collide. The code is right and §5.3's name is the erratum.
+11. **Task 6's ±8192 m offset range was NOT shrunk.** Review Focus 5 and Task 6 Step 4 allowed shrinking
+    `seed_offset`'s range if a far-offset seed failed the GPU/CPU diff. It did not: at seed 5 (offset
+    −7334, −4569) the worst disagreement was **0.116 of the 2.0 encoded SDF steps**. The shipped ±8192 m
+    range and `MAX_STEPS` are unchanged.
+12. **What the Task 10 capture showed.** `tools/world_type_capture.gd` at 1280×720, default seed text
+    `hello` → 261238937, one process, `--out=$TMPDIR/world-types`. **The multi-world single-process run
+    works:** one process built Default, freed it, built Mesas, freed it, built Flat, then quit 0, with no
+    `push_error` and no shader-orchestrator error — so §9's "Back to title" teardown → re-create path is
+    exercised end to end. The caveat §9 already names stands: on Metal the RID-leak counters read 0, so
+    this proves no error and no crash, not "no leak". No per-type fallback was needed.
+    - `title.png` — dark tiled dirt background, `VOXEL EVERYTHING`, one centred **Create New World** button.
+    - `create_world.png` — the heading, `Seed for the World Generator` with the placeholder
+      `Leave blank for a random seed` in an empty black field, `World Type: Default`, and the Create/Cancel row.
+    - `world_default.png` — terrain under the camera; HUD first line `seed 261238937 · Default`.
+      **No trees are in frame** at that seed's world position (8, 8): seed 261238937's offset lands there in a
+      bare sandy valley, and the `--seed=` and `--seed=0` frames are bare there too. Trees are machine-checked
+      by `tests/test_leaves.gd`'s seeded case; a separate `tools/leaf_capture.gd` run at its grove pose showed
+      canopy clumps on the mid-distance hillside, but no close trunk-with-canopy pair.
+    - `world_mesas.png` — HUD `seed 261238937 · Mesas`; mesas (lifted plateaus) are visible, but much of the
+      mid and far terrain renders **error magenta**. That is a pre-existing material bug in
+      `assets/pipelines/mesas.pipeline`, not a seed or branch regression: `height_bands` runs *before*
+      `mesas` and writes `material = 0u` for every voxel it still sees as air, then `mesas` lifts up to 45 m
+      of that air below the surface without giving it a material, so those voxels keep id 0, which
+      `common.glslh` shades as error magenta. The stage order and every mesas / height_bands / material file are
+      untouched since `495f5dd`, and `--seed=0` (a zero offset) shows the same magenta, so the rendered mesas
+      terrain is identical to `main`'s. This branch is what makes it visible: Mesas is user-selectable for the
+      first time. Not fixed here — outside this task's scope. The fix is for `stage_mesas` (GLSL and its C++
+      mirror) to assign a material to every voxel it buries, with a test; it touches no `sdf`, so no field,
+      bound or golden moves.
+    - `world_flat.png` — HUD `seed 261238937 · Flat`, a level grass plain with grass blades.
+    - Player spawn, 2 m above that world's ground: Default `(8, -83.9953, 8)`, Mesas `(8, -83.99414, 8)`,
+      Flat `(8, 55.20001, 8)` — Flat is the predicted 51.2 (`SURFACE_Y`) + 2.0 (`level`) + 2.0 (`GroundSpawn.lift_m`).
+    - `--seed=` (blank, `--type=Default`) printed a non-zero seed, `420773800`, and its `world_default.png`
+      first line read `seed 420773800 · Default`.
+    - A second full run at `--seed=0` confirms the offset is a no-op there: Default `(8, 57.45227, 8)`,
+      Mesas `(8, 58.55438, 8)`, Flat `(8, 55.20001, 8)`.
+13. **The per-instance compositor copies are `duplicate()`, not `resource_local_to_scene` — spec §4.1
+    erratum.** §4.1 says the Compositor and its effects are `resource_local_to_scene = true` so two
+    instances never share a `world_path`. The shipped mechanism is
+    `demo/scripts/voxel_world_scene.gd`'s `_enter_tree`, which rebuilds the effects with
+    `effect.duplicate()` and a fresh `Compositor`, then sets each copy's `world_path`. Functionally
+    equivalent (one `world_path` per instance), and it is the mechanism the code actually ships;
+    behavior is pinned by `tests/test_world_scene.gd`'s
+    `test_two_instances_never_share_a_compositor` and
+    `test_compositors_follow_the_instance_wherever_it_is_placed`.
+14. **`sun_light_path` is set by the scene file, not by `_enter_tree` — spec §4.2 erratum.** §4.2
+    says `_enter_tree()` sets both compositor effects' `world_path` and `sun_light_path` to the `Sun`
+    child. `_enter_tree` sets only `world_path` (on the duplicated effects); `sun_light_path` is a
+    serialized node path in `demo/scenes/voxel_world.tscn`, evaluated after the `Sun` child exists.
+    Behavior is pinned by `tests/test_world_scene.gd`'s `test_sun_and_settings_resolve_inside_the_instance`.

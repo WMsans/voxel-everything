@@ -43,7 +43,7 @@ func capture() -> void:
 			var r := arg.trim_prefix("--rock=").split(",")
 			rock = Vector2(float(r[0]), float(r[1]))
 	DirAccess.make_dir_recursive_absolute(out)
-	var scene: Node = load("res://demo/main.tscn").instantiate()
+	var scene: Node = load("res://demo/scenes/main.tscn").instantiate()
 	root.add_child(scene)
 	var world: VoxelWorld = scene.get_node("VoxelWorld")
 	var player: CharacterBody3D = scene.get_node("Player")
@@ -58,7 +58,7 @@ func capture() -> void:
 		return
 	if rock.x > 0.0:
 		# DirectionalLight3D emits along its local -Z, so +Z is toward the sun (ve::SunState).
-		var light: DirectionalLight3D = scene.get_node("DirectionalLight3D")
+		var light: DirectionalLight3D = scene.get_node("VoxelWorld/Sun")
 		var sun_dir := light.global_transform.basis.z.normalized()
 		world.hooks().debug_apply_sphere_add(at + sun_dir * rock.y, rock.x, 2)
 	var camera: Camera3D = player.get_node("Camera3D")

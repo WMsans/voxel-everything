@@ -83,7 +83,7 @@ Shipped defaults, chosen by sweeping the two dials against these legs:
 | Dial | Where | Value |
 |---|---|---|
 | 3D render scale | `project.godot` `rendering/scaling_3d/scale` | 0.65 (bilinear) |
-| Near-field scale | `demo/main.tscn` `VoxelWorld.near_field_scale` | 0.40 |
+| Near-field scale | `demo/scenes/main.tscn` `VoxelWorld.near_field_scale` | 0.40 |
 | Quality tier | default | High -- it costs ~0.2 ms here, so there is no reason to drop it |
 
 `near_field_scale` is the fraction of the internal 3D resolution the marcher runs at. It
@@ -187,7 +187,7 @@ above mean:
 
 ```bash
 ./build.sh -j$(nproc)          # macOS: -j$(sysctl -n hw.ncpu)
-godot --path . demo/main.tscn
+godot --path . demo/scenes/main.tscn
 tools/run_benchmarks.sh m7-final
 ```
 

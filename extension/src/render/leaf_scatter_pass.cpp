@@ -48,7 +48,7 @@ bool LeafScatterPass::initialize(RenderingDevice *rd) {
 	const float origin[3] = {0.0f, 0.0f, 0.0f};
 	static const float kIdentity[16] = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
 		0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f};
-	const ve::LeafLayout warm = ve::leaf_layout(defaults, origin, kIdentity);
+	const ve::LeafLayout warm = ve::leaf_layout(defaults, origin, kIdentity, 0.0f, 0.0f);
 	if (!ensure_buffers(rd, warm.params.limits[0], warm.params.limits[1])) {
 		teardown();
 		return false;

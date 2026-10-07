@@ -81,6 +81,14 @@ void main() {
 	Tree t = tree_at(cell, tp, leaf.shape.w + gh, gh, trees_ground_slope(xz));
 	if (!t.present) return;
 
+	// The cell lattice, tree_cell_xz and trees_ground_h above are all in the field's SHIFTED
+	// space (the world seed's VE_FIELD_OFFSET), exactly as the trees stage sees them. From
+	// here on everything touches the world -- the camera cull, the atlas trunk check, the
+	// record stage 2 reads -- so move the tree back once. Its lobes and limbs are all relative
+	// to base and crown, so nothing else needs shifting.
+	t.base -= VE_FIELD_OFFSET;
+	t.crown -= VE_FIELD_OFFSET;
+
 	float dist = length(t.crown - leaf.cam.xyz);
 	if (dist > leaf.cam.w + t.crown_r) return;
 	if (leaf_crown_culled(t.crown, t.crown_r)) return;

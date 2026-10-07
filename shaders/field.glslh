@@ -17,6 +17,9 @@
 // base_field_gradient) call it, so it is forward-declared before the include.
 void eval_base_field(vec3 p, out float sdf, out uint mat);
 
+// The generated source declares the world seed's domain shift; the stub has no seed.
+const vec3 VE_FIELD_OFFSET = vec3(0.0);
+
 // Empty-pipeline set 1: one zeroed vec4 of params (the generator emits `_unused` when a
 // pipeline declares no params) and one int sector map holding -1, "no sector resident".
 layout(set = 1, binding = 0, std140) uniform FieldParams {

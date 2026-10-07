@@ -53,6 +53,12 @@ std::string generate_field_glslh(const ResolvedPipeline &p, const std::string &p
 		o << "\t" << channel_glsl_type(c.type) << " " << c.name << ";\n";
 	o << "};\n\n";
 
+	// The world seed as a domain shift (terrain/seed_offset.h). Declared even at zero so every
+	// includer compiles against one shape: leaf_trees.comp.glsl moves its tree records back
+	// to world space by it.
+	o << "const vec3 VE_FIELD_OFFSET = vec3(" << float_text(float(p.field_offset_x)) << ", 0.0, "
+	  << float_text(float(p.field_offset_z)) << ");\n\n";
+
 	o << "layout(set = 1, binding = 0, std140) uniform FieldParams {\n";
 	if (p.params.empty()) {
 		o << "\tvec4 _unused;\n";
@@ -81,7 +87,7 @@ std::string generate_field_glslh(const ResolvedPipeline &p, const std::string &p
 	o << "void eval_base_field(vec3 p, out float sdf, out uint mat) {\n"
 	  << "\tFieldCtx ctx;\n";
 	for (const ResolvedChannel &c : p.channels) {
-		if (c.name == "p") { o << "\tctx.p = p;\n"; continue; }
+		if (c.name == "p") { o << "\tctx.p = p + VE_FIELD_OFFSET;\n"; continue; }
 		o << "\tctx." << c.name << " = " << channel_glsl_type(c.type) << "(0);\n";
 	}
 	for (const StageManifest &s : p.stages) o << "\tstage_" << s.name << "(ctx);\n";

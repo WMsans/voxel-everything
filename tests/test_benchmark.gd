@@ -1,6 +1,6 @@
 extends GdUnitTestSuite
 
-const BENCHMARK_SCRIPT := preload("res://demo/benchmark.gd")
+const BENCHMARK_SCRIPT := preload("res://demo/scripts/benchmark.gd")
 var _nodes: Array = []
 
 func after_test() -> void:

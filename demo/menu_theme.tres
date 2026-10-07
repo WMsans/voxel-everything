@@ -1,0 +1,92 @@
+[gd_resource type="Theme" format=3]
+
+[sub_resource type="StyleBoxFlat" id="button"]
+content_margin_left = 24.0
+content_margin_top = 12.0
+content_margin_right = 24.0
+content_margin_bottom = 12.0
+bg_color = Color(0.44, 0.44, 0.44, 1)
+border_width_left = 4
+border_width_top = 4
+border_width_right = 4
+border_width_bottom = 4
+border_color = Color(0.1, 0.1, 0.1, 1)
+
+[sub_resource type="StyleBoxFlat" id="button_hover"]
+content_margin_left = 24.0
+content_margin_top = 12.0
+content_margin_right = 24.0
+content_margin_bottom = 12.0
+bg_color = Color(0.45, 0.5, 0.68, 1)
+border_width_left = 4
+border_width_top = 4
+border_width_right = 4
+border_width_bottom = 4
+border_color = Color(1, 1, 1, 1)
+
+[sub_resource type="StyleBoxFlat" id="button_disabled"]
+content_margin_left = 24.0
+content_margin_top = 12.0
+content_margin_right = 24.0
+content_margin_bottom = 12.0
+bg_color = Color(0.2, 0.2, 0.2, 1)
+border_width_left = 4
+border_width_top = 4
+border_width_right = 4
+border_width_bottom = 4
+border_color = Color(0.06, 0.06, 0.06, 1)
+
+[sub_resource type="StyleBoxFlat" id="focus"]
+draw_center = false
+border_width_left = 4
+border_width_top = 4
+border_width_right = 4
+border_width_bottom = 4
+border_color = Color(1, 1, 1, 1)
+
+[sub_resource type="StyleBoxFlat" id="field"]
+content_margin_left = 16.0
+content_margin_top = 8.0
+content_margin_right = 16.0
+content_margin_bottom = 8.0
+bg_color = Color(0, 0, 0, 1)
+border_width_left = 4
+border_width_top = 4
+border_width_right = 4
+border_width_bottom = 4
+border_color = Color(0.63, 0.63, 0.63, 1)
+
+[sub_resource type="StyleBoxFlat" id="field_focus"]
+content_margin_left = 16.0
+content_margin_top = 8.0
+content_margin_right = 16.0
+content_margin_bottom = 8.0
+bg_color = Color(0, 0, 0, 1)
+border_width_left = 4
+border_width_top = 4
+border_width_right = 4
+border_width_bottom = 4
+border_color = Color(1, 1, 1, 1)
+
+[resource]
+default_font_size = 40
+Button/colors/font_color = Color(0.88, 0.88, 0.88, 1)
+Button/colors/font_hover_color = Color(1, 1, 0.63, 1)
+Button/colors/font_pressed_color = Color(1, 1, 0.63, 1)
+Button/colors/font_focus_color = Color(1, 1, 0.63, 1)
+Button/colors/font_disabled_color = Color(0.55, 0.55, 0.55, 1)
+Button/styles/normal = SubResource("button")
+Button/styles/hover = SubResource("button_hover")
+Button/styles/pressed = SubResource("button_hover")
+Button/styles/disabled = SubResource("button_disabled")
+Button/styles/focus = SubResource("focus")
+Label/colors/font_color = Color(1, 1, 1, 1)
+Label/colors/font_shadow_color = Color(0.24, 0.24, 0.24, 1)
+Label/constants/shadow_offset_x = 4
+Label/constants/shadow_offset_y = 4
+LineEdit/colors/font_color = Color(0.88, 0.88, 0.88, 1)
+LineEdit/colors/font_placeholder_color = Color(0.5, 0.5, 0.5, 1)
+LineEdit/styles/normal = SubResource("field")
+LineEdit/styles/focus = SubResource("field_focus")
+MenuTitle/base_type = &"Label"
+MenuTitle/font_sizes/font_size = 120

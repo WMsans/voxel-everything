@@ -22,7 +22,7 @@ func after_test() -> void:
 	_roots.clear()
 	remove_configs()
 
-# [world, viewport, settings]. near_field_scale and the viewport scale are what demo/main.tscn and
+# [world, viewport, settings]. near_field_scale and the viewport scale are what demo/scenes/main.tscn and
 # project.godot ship, so "shipped" has known values.
 func make_settings(config_path := CONFIG_PATH) -> Array:
 	var root := Node.new()

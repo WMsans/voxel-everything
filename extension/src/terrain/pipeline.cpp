@@ -1,4 +1,5 @@
 #include "terrain/pipeline.h"
+#include "terrain/seed_offset.h"
 #include <algorithm>
 #include <cstdlib>
 #include <sstream>
@@ -39,8 +40,12 @@ bool parse_pipeline_desc(const std::string &source, PipelineDesc *out, std::stri
 			out->stages.back().param_overrides.emplace_back(key, float(std::atof(rest.c_str())));
 			continue;
 		}
-		if (key == "seed") out->seed = uint32_t(std::strtoul(rest.c_str(), nullptr, 10));
-		else if (key == "lipschitz") out->lipschitz_ceiling = float(std::atof(rest.c_str()));
+		// A terrain is a recipe; the seed picks where in it you stand, so it belongs to the
+		// world, not the file. The key never reached a stage, which is why it was removed
+		// rather than wired up.
+		if (key == "seed")
+			return fail("the pipeline 'seed' key was removed; set VoxelWorld.world_seed instead");
+		if (key == "lipschitz") out->lipschitz_ceiling = float(std::atof(rest.c_str()));
 		else if (key == "allow_gpu_only") out->allow_gpu_only = std::atoi(rest.c_str()) != 0;
 		else if (key == "stage") {
 			if (rest.empty()) return fail("stage needs a path");
@@ -272,6 +277,10 @@ bool resolve_pipeline(const PipelineDesc &desc, const std::vector<StageManifest>
 	out->lipschitz = lip;
 	if (desc.lipschitz_ceiling > 0.0f && lip > desc.lipschitz_ceiling)
 		return fail(bound_report(lip, desc.lipschitz_ceiling, out->stages));
+	out->seed = desc.seed;
+	const SeedOffset offset = seed_offset(desc.seed);
+	out->field_offset_x = offset.x;
+	out->field_offset_z = offset.z;
 	hash_feed(h, std::to_string(desc.seed));
 	out->hash = h;
 	return true;

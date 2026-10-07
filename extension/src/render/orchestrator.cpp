@@ -331,12 +331,21 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 	}
 	passes_.grass_raster = new GrassRasterPass();
 	passes_.grass_raster->initialize(device);
-	passes_.leaf_scatter = new LeafScatterPass();
-	if (!passes_.leaf_scatter->initialize(device)) {
-		UtilityFunctions::printerr("VoxelWorld: leaf initialization failed; continuing "
-				"without canopies (safe fail-soft: trunks stand bare)");
-		delete passes_.leaf_scatter;
-		passes_.leaf_scatter = nullptr;
+	// The leaf pass places canopies with the trees stage's own ground functions
+	// (trees_ground_h / trees_ground_slope, emitted into the generated field source), so it
+	// only exists in a world whose pipeline has that stage. Without it the shader cannot
+	// compile, and a compile error on every Mesas or Flat world would read as a bug.
+	bool has_trees = false;
+	for (const ve::StageManifest &s : handles_.store->terrain_pipeline().stages)
+		if (s.name == "trees") has_trees = true;
+	if (has_trees) {
+		passes_.leaf_scatter = new LeafScatterPass();
+		if (!passes_.leaf_scatter->initialize(device)) {
+			UtilityFunctions::printerr("VoxelWorld: leaf initialization failed; continuing "
+					"without canopies (safe fail-soft: trunks stand bare)");
+			delete passes_.leaf_scatter;
+			passes_.leaf_scatter = nullptr;
+		}
 	}
 	// Fail-soft like grass_raster: a shader that will not compile leaves initialize() with
 	// no shader, draw() returns false, and the frame's timing marker is cancelled -- the

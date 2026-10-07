@@ -1,6 +1,6 @@
 extends GdUnitTestSuite
 
-const CAPTURE_SCRIPT := preload("res://demo/capture.gd")
+const CAPTURE_SCRIPT := preload("res://demo/scripts/capture.gd")
 var _nodes: Array = []
 
 func after_test() -> void:

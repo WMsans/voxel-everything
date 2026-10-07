@@ -1,6 +1,7 @@
 // The loader against a fake reader: no filesystem, so the failure paths are reachable.
 #include <doctest/doctest.h>
 #include "terrain/pipeline_load.h"
+#include "terrain/seed_offset.h"
 #include <map>
 #include <string>
 
@@ -30,7 +31,7 @@ const char *kHills =
 
 TEST_CASE("load_pipeline reads the pipeline and every stage it names, then resolves") {
 	const std::map<std::string, std::string> files{
-		{"pipe/a.pipeline", "seed 7\nstage stages/hills.field.glslh\n"},
+		{"pipe/a.pipeline", "stage stages/hills.field.glslh\n"},
 		{"root/stages/hills.field.glslh", kHills},
 	};
 	ve::ResolvedPipeline p;
@@ -92,4 +93,24 @@ TEST_CASE("load_pipeline hands the resolver's warnings to its caller") {
 			&warnings, &err), err);
 	REQUIRE(warnings.size() == 1);
 	CHECK(warnings[0].find("collider") != std::string::npos);
+}
+
+TEST_CASE("load_pipeline carries the world seed into the resolved pipeline") {
+	const std::map<std::string, std::string> files{
+		{"pipe/a.pipeline", "stage stages/hills.field.glslh\n"},
+		{"root/stages/hills.field.glslh", kHills},
+	};
+	ve::ResolvedPipeline at_zero, seeded;
+	std::string err;
+	REQUIRE_MESSAGE(ve::load_pipeline(table_reader(files), "pipe/a.pipeline", "root/", &at_zero,
+			nullptr, &err), err);
+	REQUIRE_MESSAGE(ve::load_pipeline(table_reader(files), "pipe/a.pipeline", "root/", &seeded,
+			nullptr, &err, 77u), err);
+	CHECK(at_zero.seed == 0u);
+	CHECK(at_zero.field_offset_x == 0);
+	CHECK(at_zero.field_offset_z == 0);
+	CHECK(seeded.seed == 77u);
+	CHECK(seeded.field_offset_x == ve::seed_offset(77u).x);
+	CHECK(seeded.field_offset_z == ve::seed_offset(77u).z);
+	CHECK(at_zero.hash != seeded.hash);
 }

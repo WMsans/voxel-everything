@@ -50,15 +50,28 @@ void check_bound(const char *pipeline) {
 		const float x = next(-3000.0f, 3000.0f);
 		const float y = next(-200.0f, 400.0f);
 		const float z = next(-3000.0f, 3000.0f);
-		const float dx = (g->sample(x + e, y, z).sdf - g->sample(x - e, y, z).sdf) / (2.0f * e);
-		const float dy = (g->sample(x, y + e, z).sdf - g->sample(x, y - e, z).sdf) / (2.0f * e);
-		const float dz = (g->sample(x, y, z + e).sdf - g->sample(x, y, z - e).sdf) / (2.0f * e);
+		// Divide by the step the floats actually took, not by 2e: at |x| = 3000 the rounding of
+		// x + e is 1.2% of e, which tilts a tilted field's measured gradient by more than a
+		// zero-slack bound has room for.
+		const float xp = x + e, xm = x - e;
+		const float yp = y + e, ym = y - e;
+		const float zp = z + e, zm = z - e;
+		const float dx = (g->sample(xp, y, z).sdf - g->sample(xm, y, z).sdf) / (xp - xm);
+		const float dy = (g->sample(x, yp, z).sdf - g->sample(x, ym, z).sdf) / (yp - ym);
+		const float dz = (g->sample(x, y, zp).sdf - g->sample(x, y, zm).sdf) / (zp - zm);
 		const float mag = std::sqrt(dx * dx + dy * dy + dz * dz);
 		if (mag > worst) { worst = mag; wx = x; wy = y; wz = z; }
 	}
 
-	CHECK_MESSAGE(worst <= p.lipschitz, pipeline, ": sampled |grad sdf| ", worst,
-			" exceeds the reported bound ", p.lipschitz, " at (", wx, ", ", wy, ", ", wz,
+	// The comparison needs a floor because the measurement is itself a float finite
+	// difference of a float sdf: each sample rounds by up to ulp(|sdf|)/2, so at |sdf| ~ 350
+	// with e = 0.01 a stage whose bound is EXACTLY right (flat: |grad sdf| = 1) samples as
+	// 1.001. Forgive 1% -- the understatement that makes raycast.cpp tunnel is percent-scale
+	// or worse, not a rounding floor.
+	const float tol = 0.01f * p.lipschitz;
+	CHECK_MESSAGE(worst <= p.lipschitz + tol, pipeline, ": sampled |grad sdf| ", worst,
+			" exceeds the reported bound ", p.lipschitz + tol, " (bound ", p.lipschitz,
+			" + 1% measurement floor) at (", wx, ", ", wy, ", ", wz,
 			"). A stage's //!lipschitz number is understating its own gradient.");
 }
 
@@ -85,4 +98,8 @@ TEST_CASE("the trees stage does not raise the pipeline bound") {
 	REQUIRE_MESSAGE(ve::load_pipeline(repo_reader, root + "/assets/pipelines/default.pipeline",
 			root + "/shaders/", &without, nullptr, &err), err);
 	CHECK(with.lipschitz == doctest::Approx(without.lipschitz));
+}
+
+TEST_CASE("flat.pipeline never exceeds its reported gradient bound") {
+	check_bound("flat.pipeline");
 }

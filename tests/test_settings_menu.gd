@@ -6,7 +6,7 @@ extends GdUnitTestSuite
 # (so a developer's user://settings.cfg is neither read nor written) and manage_window = false (so
 # nothing resizes the window the tests run in). Ported cases keep their original names.
 
-const MENU_SCENE := preload("res://demo/settings_menu.tscn")
+const MENU_SCENE := preload("res://demo/scenes/settings_menu.tscn")
 const CONFIG_PATH := "user://test_settings_menu.cfg"
 
 var _roots: Array = []

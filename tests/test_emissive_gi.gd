@@ -128,14 +128,14 @@ func test_the_demo_bloom_threshold_clears_the_sky() -> void:
 	assert_float(peak).override_failure_message(
 		"the sky probe read black; this test would pass vacuously").is_greater(0.05)
 
-	var scene: Node = load("res://demo/main.tscn").instantiate()
+	var scene: Node = load("res://demo/scenes/main.tscn").instantiate()
 	# Demo helper scripts use absolute /root/Main paths; drop them for this resource-only check
 	# (the same trick test_cel_object.gd uses).
 	scene.get_node("HUD/Label").set_script(null)
 	scene.get_node("EditTool").set_script(null)
 	add_child(scene)
 	_nodes.append(scene)
-	var env: Environment = (scene.get_node("WorldEnvironment") as WorldEnvironment).environment
+	var env: Environment = (scene.get_node("VoxelWorld/WorldEnvironment") as WorldEnvironment).environment
 	assert_bool(env.glow_enabled).is_true()
 	assert_float(env.glow_hdr_threshold).override_failure_message(
 		"glow threshold %f is at or below the sky's %f: the whole frame will bloom"

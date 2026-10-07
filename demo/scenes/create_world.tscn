@@ -1,0 +1,85 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://demo/scripts/create_world.gd" id="1"]
+[ext_resource type="Theme" path="res://demo/menu_theme.tres" id="2"]
+[ext_resource type="Script" path="res://demo/scripts/menu_background.gd" id="3"]
+
+[node name="CreateWorld" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme = ExtResource("2")
+script = ExtResource("1")
+
+[node name="Background" type="TextureRect" parent="."]
+modulate = Color(0.3, 0.3, 0.3, 1)
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("3")
+expand_mode = 1
+stretch_mode = 1
+
+[node name="Center" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Column" type="VBoxContainer" parent="Center"]
+layout_mode = 2
+theme_override_constants/separation = 32
+
+[node name="Heading" type="Label" parent="Center/Column"]
+layout_mode = 2
+text = "Create New World"
+horizontal_alignment = 1
+
+[node name="Spacer" type="Control" parent="Center/Column"]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+
+[node name="SeedLabel" type="Label" parent="Center/Column"]
+layout_mode = 2
+text = "Seed for the World Generator"
+
+[node name="Seed" type="LineEdit" parent="Center/Column"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(800, 72)
+layout_mode = 2
+placeholder_text = "Leave blank for a random seed"
+
+[node name="WorldType" type="Button" parent="Center/Column"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(800, 80)
+layout_mode = 2
+text = "World Type: Default"
+
+[node name="Spacer2" type="Control" parent="Center/Column"]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+
+[node name="Buttons" type="HBoxContainer" parent="Center/Column"]
+layout_mode = 2
+theme_override_constants/separation = 24
+
+[node name="Create" type="Button" parent="Center/Column/Buttons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(388, 80)
+layout_mode = 2
+text = "Create New World"
+
+[node name="Cancel" type="Button" parent="Center/Column/Buttons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(388, 80)
+layout_mode = 2
+text = "Cancel"

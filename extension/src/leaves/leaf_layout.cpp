@@ -47,7 +47,7 @@ float leaf_clump_radius(const LeafLayout &l, float distance_m) {
 }
 
 LeafLayout leaf_layout(const LeafSettings &settings, const float camera[3],
-		const float view_proj[16]) {
+		const float view_proj[16], float field_offset_x, float field_offset_z) {
 	LeafSettings s = settings;
 	clamp_leaf_settings(&s);
 
@@ -61,10 +61,12 @@ LeafLayout leaf_layout(const LeafSettings &settings, const float camera[3],
 
 	if (l.reach_m > 0.0f && l.clumps_per_tree > 0) {
 		const float c = l.cell_size_m;
-		const int lo_x = int(std::floor((camera[0] - l.reach_m) / c));
-		const int lo_z = int(std::floor((camera[2] - l.reach_m) / c));
-		const int hi_x = int(std::floor((camera[0] + l.reach_m) / c));
-		const int hi_z = int(std::floor((camera[2] + l.reach_m) / c));
+		const float sx = camera[0] + field_offset_x;
+		const float sz = camera[2] + field_offset_z;
+		const int lo_x = int(std::floor((sx - l.reach_m) / c));
+		const int lo_z = int(std::floor((sz - l.reach_m) / c));
+		const int hi_x = int(std::floor((sx + l.reach_m) / c));
+		const int hi_z = int(std::floor((sz + l.reach_m) / c));
 		l.cell_min = IVec3{lo_x, 0, lo_z};
 		l.cell_dim = IVec3{hi_x - lo_x + 1, 0, hi_z - lo_z + 1};
 		l.dispatch_threads = l.cell_dim.x * l.cell_dim.z;

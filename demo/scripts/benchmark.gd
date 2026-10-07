@@ -183,7 +183,7 @@ func _ready() -> void:
 				push_warning("benchmark: --pose wants x,y,z,yaw,pitch; ignored")
 		elif arg.begins_with("--render-scale="):
 			# Through VoxelSettings, so the display store the panel reads is never stale.
-			get_parent().get_node("VoxelSettings").set_setting("display", "render_scale",
+			get_parent().get_node("VoxelWorld/VoxelSettings").set_setting("display", "render_scale",
 				float(arg.trim_prefix("--render-scale=")))
 		elif arg.begins_with("--grass="):
 			# Grass on/off for A/B cost runs: 0 disables the scatter+raster, anything
@@ -223,7 +223,7 @@ func _ready() -> void:
 		elif arg.begins_with("--upscaler="):
 			# Indices of the display settings' upscaler options (settings/display_settings.cpp).
 			var m := arg.trim_prefix("--upscaler=")
-			get_parent().get_node("VoxelSettings").set_setting("display", "upscaler", {
+			get_parent().get_node("VoxelWorld/VoxelSettings").set_setting("display", "upscaler", {
 				"bilinear": 0,
 				"fsr": 1,
 				"fsr2": 2,

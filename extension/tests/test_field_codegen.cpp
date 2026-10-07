@@ -107,3 +107,14 @@ TEST_CASE("resources land in set 1 from binding 2, in sorted order") {
 	CHECK(g.find("set = 1, binding = 2") != std::string::npos);
 	CHECK(g.find("set = 1, binding = 3") != std::string::npos);
 }
+
+TEST_CASE("the seed offset is declared once and applied where p enters the field") {
+	ve::ResolvedPipeline p = two_stage();
+	p.field_offset_x = -120;
+	p.field_offset_z = 4000;
+	const std::string g = ve::generate_field_glslh(p, "");
+	CHECK(g.find("const vec3 VE_FIELD_OFFSET = vec3(-120, 0.0, 4000);\n") != std::string::npos);
+	CHECK(g.find("\tctx.p = p + VE_FIELD_OFFSET;\n") != std::string::npos);
+	// Declared before any stage body, so a stage helper may read it too.
+	CHECK(g.find("VE_FIELD_OFFSET") < g.find("void stage_hills"));
+}

@@ -18,7 +18,6 @@ bool repo_reader(const std::string &path, std::string *out) {
 }
 
 const char *kOverridden =
-		"seed 1337\n"
 		"lipschitz 2.0\n"
 		"stage stages/hills.field.glslh\n"
 		"  amp_a 2.0\n"

@@ -4,7 +4,6 @@
 #
 # The trees stage unions 1-Lipschitz capsules into sdf, so it declares `mul 1.0` and the
 # computed bound is identical to default.pipeline's 1.99.
-seed      1337
 lipschitz 2.0
 
 stage stages/hills.field.glslh

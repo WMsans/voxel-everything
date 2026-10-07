@@ -1,0 +1,7 @@
+# The Flat world type: a level grass plain. No hills, so no relief, cave or trees -- those
+# stages //!use hills params. The world seed shifts the domain, which a plane cannot show.
+# A CEILING, not the bound: flat add 1.0 => 1.0.
+lipschitz 1.0
+
+stage stages/flat.field.glslh
+stage stages/height_bands.field.glslh

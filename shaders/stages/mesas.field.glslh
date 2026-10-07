@@ -27,4 +27,8 @@ void stage_mesas(inout FieldCtx ctx) {
 	ctx.mesa_mask = mask;
 	ctx.sdf -= P.mesas_lift * mask;
 	if (mask > P.mesas_plateau && ctx.sdf <= 0.0) ctx.material = MAT_ROCK;
+	// height_bands ran before this stage and set material 0 on every voxel it still read
+	// as air; the lift above turns some of those solid, and id 0 shades as error magenta.
+	// Rock, like the plateaus.
+	else if (ctx.sdf <= 0.0 && ctx.material == 0u) ctx.material = MAT_ROCK;
 }

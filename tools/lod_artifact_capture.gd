@@ -14,7 +14,7 @@ func capture() -> void:
 		if arg.begins_with("--diagnostic="):
 			diagnostic = arg.trim_prefix("--diagnostic=")
 	DirAccess.make_dir_recursive_absolute(out)
-	var scene: Node = load("res://demo/main.tscn").instantiate()
+	var scene: Node = load("res://demo/scenes/main.tscn").instantiate()
 	root.add_child(scene)
 	var world: VoxelWorld = scene.get_node("VoxelWorld")
 	# In-memory diagnostic variants only; production shader files remain untouched.

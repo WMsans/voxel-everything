@@ -22,6 +22,7 @@
 #include "render/shader_loader.h"
 #include "render/field_context_set.h"
 #include "terrain/pipeline.h"
+#include "terrain/seed_offset.h"
 #include "terrain/stage_manifest.h"
 #include "terrain/field_codegen.h"
 #include "terrain/pipeline_field_generator.h"
@@ -212,6 +213,9 @@ void VoxelWorld::_bind_methods() {
 			&VoxelWorld::set_terrain_pipeline_path);
 	ClassDB::bind_method(D_METHOD("get_terrain_pipeline_path"),
 			&VoxelWorld::get_terrain_pipeline_path);
+	ClassDB::bind_method(D_METHOD("set_world_seed", "v"), &VoxelWorld::set_world_seed);
+	ClassDB::bind_method(D_METHOD("get_world_seed"), &VoxelWorld::get_world_seed);
+	ClassDB::bind_method(D_METHOD("field_offset"), &VoxelWorld::field_offset);
 	ClassDB::bind_method(D_METHOD("set_quality_tier", "v"), &VoxelWorld::set_quality_tier);
 	ClassDB::bind_method(D_METHOD("get_quality_tier"), &VoxelWorld::get_quality_tier);
 	ClassDB::bind_method(D_METHOD("set_effect_enabled", "name", "on"),
@@ -266,6 +270,7 @@ void VoxelWorld::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_builds_per_frame"), "set_lod_builds_per_frame", "get_lod_builds_per_frame");
 	ADD_PROPERTY(PropertyInfo(Variant::STRING, "terrain_pipeline_path"),
 			"set_terrain_pipeline_path", "get_terrain_pipeline_path");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "world_seed"), "set_world_seed", "get_world_seed");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "quality_tier", PROPERTY_HINT_ENUM,
 			"Off,Low,Medium,High"), "set_quality_tier", "get_quality_tier");
 }
@@ -607,7 +612,7 @@ bool VoxelWorld::load_terrain_pipeline() {
 					return read_res_text(String(path.c_str()), text);
 				},
 				terrain_pipeline_path_.utf8().get_data(), "res://shaders/", &resolved, &warnings,
-				&err)) {
+				&err, world_seed_)) {
 		UtilityFunctions::push_error(String("terrain pipeline: ") + err.c_str());
 		return false;
 	}
@@ -687,6 +692,11 @@ Dictionary VoxelWorld::append_edit_op(const PackedByteArray &op_bytes) {
 	for (const ve::IVec3 &v : r.touched) touched.push_back(Vector3i(v.x, v.y, v.z));
 	for (const ve::IVec3 &v : r.rejected) rejected.push_back(Vector3i(v.x, v.y, v.z));
 	return out;
+}
+
+Vector3 VoxelWorld::field_offset() const {
+	const ve::SeedOffset o = ve::seed_offset(world_seed_);
+	return Vector3(static_cast<float>(o.x), 0.0f, static_cast<float>(o.z));
 }
 
 Dictionary VoxelWorld::raycast(Vector3 origin, Vector3 dir, float max_distance) {

@@ -50,7 +50,7 @@ func test_shaderlanguage_matches_ve_cel_shade() -> void:
 		assert_float(absf(got.g-ref.g)).is_less(0.006)
 		assert_float(absf(got.b-ref.b)).is_less(0.006)
 func test_demo_cube_uses_the_shared_shader() -> void:
-	var scene: Node = load("res://demo/main.tscn").instantiate()
+	var scene: Node = load("res://demo/scenes/main.tscn").instantiate()
 	# Demo helper scripts use absolute /root/Main paths; remove them for this resource-only check.
 	scene.get_node("HUD/Label").set_script(null)
 	scene.get_node("EditTool").set_script(null)
