@@ -73,6 +73,8 @@ class VoxelWorld : public Node3D, public ve::InvalidationSink {
 	int shape_builds_per_frame_ = 2;
 	// The golden corpora pin their own frozen pipeline through this.
 	String terrain_pipeline_path_ = "res://assets/pipelines/default.pipeline";
+	// The world seed (terrain/seed_offset.h). Like the pipeline path, read once at first init.
+	uint32_t world_seed_ = 0;
 
 	// Physics lifetime (ensure_physics_initialized / teardown_physics). The mesher owns its own
 	// device on its own thread; nothing on the main thread touches that device.
@@ -158,6 +160,11 @@ public:
 	int get_lod_builds_per_frame() const;
 	void set_terrain_pipeline_path(const String &v) { terrain_pipeline_path_ = v; }
 	String get_terrain_pipeline_path() const { return terrain_pipeline_path_; }
+	void set_world_seed(int64_t v) { world_seed_ = static_cast<uint32_t>(v); }
+	int64_t get_world_seed() const { return world_seed_; }
+	// seed_offset(world_seed) as a vector -- what the field adds to every sample position.
+	// Computed from the property, so it is valid before the pipeline loads.
+	Vector3 field_offset() const;
 	void set_quality_tier(int v);
 	int get_quality_tier() const;
 	// Fail-soft: an unknown effect name is ignored, not a crash.

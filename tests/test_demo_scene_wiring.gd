@@ -71,6 +71,7 @@ func test_the_shipped_values_the_benchmark_rides_on() -> void:
 	var w := _world()
 	assert_float(w.near_field_scale).is_equal_approx(0.4, 1e-6)
 	assert_str(w.terrain_pipeline_path).is_equal("res://assets/pipelines/default.pipeline")
+	assert_int(w.world_seed).is_equal(0)
 	assert_int(w.process_mode).is_equal(Node.PROCESS_MODE_ALWAYS)
 	assert_vector((_root.get_node("Player") as Node3D).position).is_equal(Vector3(8, 62, 8))
 	var env: Environment = (_one("WorldEnvironment") as WorldEnvironment).environment

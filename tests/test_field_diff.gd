@@ -29,9 +29,10 @@ func _pipeline_paths() -> PackedStringArray:
 	assert_int(out.size()).is_greater(0)
 	return out
 
-func _open_world(pipeline_path: String) -> void:
+func _open_world(pipeline_path: String, seed := 0) -> void:
 	_world = ClassDB.instantiate("VoxelWorld")
 	_world.terrain_pipeline_path = pipeline_path
+	_world.world_seed = seed
 	add_child(_world)
 	# The probes compile field.glslh through the shader-source override map, so the world
 	# must be initialized (pipeline load installs the generated override and the CPU
@@ -232,3 +233,38 @@ func test_every_pipeline_agrees_between_cpu_and_gpu() -> void:
 		compare(pts, chain, 3, tag + " chain")
 
 		_close_world()
+
+# Around the CPU surface, wherever it is: under a seed the ground can sit hundreds of metres
+# from SURFACE_Y, and points that never cross it would test nothing.
+func surface_points() -> PackedVector3Array:
+	var pts := PackedVector3Array()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 20261007
+	for i in range(512):
+		var x := rng.randf_range(-20.0, 60.0)
+		var z := rng.randf_range(-20.0, 60.0)
+		var hit: Dictionary = _world.raycast(Vector3(x, 600.0, z), Vector3.DOWN, 1200.0)
+		var gy: float = (hit["pos"] as Vector3).y if hit["hit"] else 51.2
+		pts.append(Vector3(x, gy + rng.randf_range(-12.0, 12.0), z))
+	return pts
+
+# The seed is a domain shift applied once per side (spec §5.2): if only one side applied it
+# the two fields would disagree by whole hills, far past MAX_STEPS. The seed is picked for a
+# FAR offset -- past 7 km float precision and GPU sin() range reduction are at their worst
+# inside the shipped range (plan Review Focus 5).
+func test_a_far_seeded_world_agrees_between_cpu_and_gpu() -> void:
+	var probe: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	var seed := 0
+	for s in range(1, 10000):
+		probe.world_seed = s
+		var o: Vector3 = probe.field_offset()
+		if maxf(absf(o.x), absf(o.z)) > 7000.0:
+			seed = s
+			break
+	probe.free()
+	assert_int(seed).is_greater(0)
+	_open_world("res://assets/pipelines/default.pipeline", seed)
+	var pts := surface_points()
+	compare(pts, PackedByteArray(), 0, "seed %d base" % seed)
+	compare(pts, make_op(OP_SUBTRACT, 0, pts[0], 6.0), 1, "seed %d subtract" % seed)
+	_close_world()
