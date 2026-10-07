@@ -298,3 +298,57 @@ func test_grass_and_leaves_reuse_their_scatter_only_while_nothing_changes() -> v
 	var d: Dictionary = w.hooks().debug_scatter_reuse_probe()
 	assert_array(d["grass"]).is_equal(PackedInt32Array([1, 0, 1, 1, 1]))
 	assert_array(d["leaves"]).is_equal(PackedInt32Array([1, 0, 1, 1, 1]))
+
+const BARK := 8 # ve::kMaterials index 7 + 1; material 0 is air
+
+# The default grove the suite streams, moved by the seed: the same terrain lies at
+# world (20, 60, 30) - field_offset().
+func make_seeded_world(seed: int) -> VoxelWorld:
+	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	w.world_seed = seed
+	w.use_local_device = true
+	w.physics_enabled = false
+	add_child(w)
+	_worlds.append(w)
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
+	var center := Vector3(20.0, 60.0, 30.0) - w.field_offset()
+	var quiet := 0
+	for i in range(400):
+		quiet = quiet + 1 if w.hooks().debug_stream_frame(center) == 0 else 0
+		if quiet >= 6:
+			break
+	return w
+
+# Records carry the CROWN's xz; a leaning trunk at a third of its height sits up to ~1.4 m
+# from it, so look for wood on a small grid rather than at one point.
+func _cpu_bark_near(w: VoxelWorld, p: Vector3) -> bool:
+	for ix in range(-4, 5):
+		for iz in range(-4, 5):
+			var s: Vector2 = w.hooks().debug_eval_field(
+					p + Vector3(ix * 0.4, 0.0, iz * 0.4), PackedByteArray(), 0)
+			if s.x <= 0.0 and int(s.y) == BARK:
+				return true
+	return false
+
+# A canopy must stand on a trunk the CPU field agrees exists, at any seed. Seed 0 is the
+# control; a seed whose leaf pass walks unshifted cells, or writes shifted records, lists
+# trees with no wood under them.
+func test_every_listed_tree_stands_on_cpu_bark_under_a_seed() -> void:
+	for seed in [0, 9001]:
+		var w := make_seeded_world(seed)
+		var d: Dictionary = w.hooks().debug_leaf_stats()
+		var trees := int(d["trees"])
+		assert_int(trees).override_failure_message(
+			"seed %d: no trees listed around the shifted grove" % seed).is_greater(0)
+		var recs: PackedFloat32Array = d["tree_records"]
+		var missing := 0
+		for i in range(trees):
+			var base_y: float = recs[i * 8 + 4]
+			var height: float = recs[i * 8 + 1] - base_y
+			if not _cpu_bark_near(w, Vector3(recs[i * 8], base_y + height * 0.33, recs[i * 8 + 2])):
+				missing += 1
+		assert_int(missing).override_failure_message(
+			"seed %d: %d of %d listed trees have no CPU bark under them" % [seed, missing, trees]
+			).is_equal(0)
+		_worlds.erase(w)
+		w.free()

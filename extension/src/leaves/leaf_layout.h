@@ -74,8 +74,11 @@ struct LeafLayout {
 
 // `settings` is clamped internally, so a caller may pass an unclamped snapshot.
 // `view_proj` is column-major, the same order the compositor builds for the raymarcher.
+// field_offset_x/z: the world seed's domain shift (terrain/seed_offset.h). Trees live on the
+// SHIFTED lattice the trees stage walks, so the cell box is taken around camera + offset;
+// params.cam stays the world camera, because culling and distance are world-space.
 LeafLayout leaf_layout(const LeafSettings &settings, const float camera[3],
-		const float view_proj[16]);
+		const float view_proj[16], float field_offset_x = 0.0f, float field_offset_z = 0.0f);
 
 // Clumps a tree at this distance gets, 0 past the reach. Falls monotonically.
 int leaf_clump_budget(const LeafLayout &l, float distance_m);

@@ -296,3 +296,20 @@ TEST_CASE("the layout's tree-shape params equal the shipped pipeline's tree stag
 	CHECK(l.params.shape[2] == dparam("trees.max_slope"));
 	CHECK(l.cell_size_m == dparam("trees.cell"));
 }
+
+TEST_CASE("a field offset moves the cell box into shifted space, not the camera") {
+	ve::LeafSettings s;
+	s.reach_m = 250.0f;
+	const float cam[3] = {100.0f, 60.0f, -200.0f};
+	const float shifted[3] = {100.0f + 1234.0f, 60.0f, -200.0f - 4321.0f};
+	const ve::LeafLayout a = ve::leaf_layout(s, cam, kIdentity, 1234.0f, -4321.0f);
+	const ve::LeafLayout b = ve::leaf_layout(s, shifted, kIdentity);
+	CHECK(a.cell_min.x == b.cell_min.x);
+	CHECK(a.cell_min.z == b.cell_min.z);
+	CHECK(a.cell_dim.x == b.cell_dim.x);
+	CHECK(a.cell_dim.z == b.cell_dim.z);
+	CHECK(a.dispatch_threads == b.dispatch_threads);
+	// Culling and distance stay in world space: the camera never moves.
+	CHECK(a.params.cam[0] == cam[0]);
+	CHECK(a.params.cam[2] == cam[2]);
+}

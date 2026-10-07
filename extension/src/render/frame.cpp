@@ -110,7 +110,9 @@ ve::GrassLayout VoxelFrame::grass_layout(const float cam_pos[3], const float vie
 ve::LeafLayout VoxelFrame::leaf_layout(const float cam_pos[3], const float view_proj[16]) const {
 	// No fade-band/residency clamp: stage 1 attaches every candidate to a live bark voxel in
 	// the atlas, so residency bounds the list by itself. See the declaration in frame.h.
-	return ve::leaf_layout(render_.leaf_settings(), cam_pos, view_proj);
+	const ve::ResolvedPipeline &tp = store_.terrain_pipeline();
+	return ve::leaf_layout(render_.leaf_settings(), cam_pos, view_proj,
+			static_cast<float>(tp.field_offset_x), static_cast<float>(tp.field_offset_z));
 }
 
 // Was VoxelWorld::sun_ortho(); reads the sun live, as that method did.
