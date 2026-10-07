@@ -78,7 +78,7 @@ struct LeafLayout {
 // SHIFTED lattice the trees stage walks, so the cell box is taken around camera + offset;
 // params.cam stays the world camera, because culling and distance are world-space.
 LeafLayout leaf_layout(const LeafSettings &settings, const float camera[3],
-		const float view_proj[16], float field_offset_x = 0.0f, float field_offset_z = 0.0f);
+		const float view_proj[16], float field_offset_x, float field_offset_z);
 
 // Clumps a tree at this distance gets, 0 past the reach. Falls monotonically.
 int leaf_clump_budget(const LeafLayout &l, float distance_m);

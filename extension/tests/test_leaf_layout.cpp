@@ -151,7 +151,7 @@ TEST_CASE("the params block is exactly 256 bytes") {
 TEST_CASE("cam position is the first three floats of the params block") {
 	ve::LeafSettings s;
 	const float cam[3] = {12.0f, 34.0f, -56.0f};
-	const ve::LeafLayout l = ve::leaf_layout(s, cam, kIdentity);
+	const ve::LeafLayout l = ve::leaf_layout(s, cam, kIdentity, 0.0f, 0.0f);
 	CHECK(l.params.cam[0] == doctest::Approx(12.0f));
 	CHECK(l.params.cam[1] == doctest::Approx(34.0f));
 	CHECK(l.params.cam[2] == doctest::Approx(-56.0f));
@@ -161,7 +161,7 @@ TEST_CASE("the clump budget falls monotonically with distance") {
 	ve::LeafSettings s;
 	s.reach_m = 250.0f;
 	s.clumps_per_tree = 96;
-	const ve::LeafLayout l = ve::leaf_layout(s, kOrigin, kIdentity);
+	const ve::LeafLayout l = ve::leaf_layout(s, kOrigin, kIdentity, 0.0f, 0.0f);
 	int prev = ve::leaf_clump_budget(l, 0.0f);
 	CHECK(prev == 96);
 	for (float d = 5.0f; d <= 250.0f; d += 5.0f) {
@@ -180,7 +180,7 @@ TEST_CASE("fewer clumps are exactly compensated by larger ones") {
 	s.reach_m = 250.0f;
 	s.clumps_per_tree = 96;
 	s.clump_radius_m = 0.85f;
-	const ve::LeafLayout l = ve::leaf_layout(s, kOrigin, kIdentity);
+	const ve::LeafLayout l = ve::leaf_layout(s, kOrigin, kIdentity, 0.0f, 0.0f);
 	const float near_area = 96.0f * 0.85f * 0.85f;
 	for (float d = 0.0f; d < 250.0f; d += 10.0f) {
 		const float r = ve::leaf_clump_radius(l, d);
@@ -193,7 +193,7 @@ TEST_CASE("the cell box covers the reach and capacity bounds the dispatch") {
 	ve::LeafSettings s;
 	s.reach_m = 250.0f;
 	const float cam[3] = {1000.0f, 60.0f, -2000.0f};
-	const ve::LeafLayout l = ve::leaf_layout(s, cam, kIdentity);
+	const ve::LeafLayout l = ve::leaf_layout(s, cam, kIdentity, 0.0f, 0.0f);
 	// Every cell whose centre is within the reach must be inside the box.
 	const float cell = l.cell_size_m;
 	CHECK(float(l.cell_min.x) * cell <= cam[0] - s.reach_m);
@@ -208,17 +208,17 @@ TEST_CASE("the cell box covers the reach and capacity bounds the dispatch") {
 TEST_CASE("a disabled or zero-reach layout dispatches nothing") {
 	ve::LeafSettings s;
 	s.enabled = false;
-	CHECK(ve::leaf_layout(s, kOrigin, kIdentity).dispatch_threads == 0);
+	CHECK(ve::leaf_layout(s, kOrigin, kIdentity, 0.0f, 0.0f).dispatch_threads == 0);
 	s.enabled = true;
 	s.reach_m = 0.0f;
-	CHECK(ve::leaf_layout(s, kOrigin, kIdentity).dispatch_threads == 0);
+	CHECK(ve::leaf_layout(s, kOrigin, kIdentity, 0.0f, 0.0f).dispatch_threads == 0);
 }
 
 TEST_CASE("an unclamped snapshot is clamped internally") {
 	ve::LeafSettings s;
 	s.reach_m = 1.0e9f;
 	s.clumps_per_tree = 100000;
-	const ve::LeafLayout l = ve::leaf_layout(s, kOrigin, kIdentity);
+	const ve::LeafLayout l = ve::leaf_layout(s, kOrigin, kIdentity, 0.0f, 0.0f);
 	CHECK(l.reach_m <= 1000.0f);
 	CHECK(ve::leaf_clump_budget(l, 0.0f) <= 128);
 }
@@ -263,7 +263,7 @@ TEST_CASE("the layout's tree-shape params equal the shipped pipeline's tree stag
 		return std::nanf(""); // NaN compares false against every literal above
 	};
 	ve::LeafSettings s;
-	const ve::LeafLayout l = ve::leaf_layout(s, kOrigin, kIdentity);
+	const ve::LeafLayout l = ve::leaf_layout(s, kOrigin, kIdentity, 0.0f, 0.0f);
 	CHECK(l.params.tree[0] == param("trees.cell"));
 	CHECK(l.params.tree[1] == param("trees.density"));
 	CHECK(l.params.tree[2] == param("trees.crown_radius"));
@@ -303,7 +303,7 @@ TEST_CASE("a field offset moves the cell box into shifted space, not the camera"
 	const float cam[3] = {100.0f, 60.0f, -200.0f};
 	const float shifted[3] = {100.0f + 1234.0f, 60.0f, -200.0f - 4321.0f};
 	const ve::LeafLayout a = ve::leaf_layout(s, cam, kIdentity, 1234.0f, -4321.0f);
-	const ve::LeafLayout b = ve::leaf_layout(s, shifted, kIdentity);
+	const ve::LeafLayout b = ve::leaf_layout(s, shifted, kIdentity, 0.0f, 0.0f);
 	CHECK(a.cell_min.x == b.cell_min.x);
 	CHECK(a.cell_min.z == b.cell_min.z);
 	CHECK(a.cell_dim.x == b.cell_dim.x);
