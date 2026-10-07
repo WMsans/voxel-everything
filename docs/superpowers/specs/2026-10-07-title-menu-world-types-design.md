@@ -325,7 +325,8 @@ direct `main.tscn` is seed 0 with the same scene contents, which test 1 pins.
 - **Back to title.** "Save and Quit to Title" in the in-game Esc menu. The pipeline load
   installs `field.glslh` as a process-wide shader override (`set_shader_source_override`), so
   this needs a teardown → re-create test across two pipelines in one process, watching for
-  `RID was leaked` (RD leak counters read 0 on Metal).
+  `RID was leaked` (RD leak counters read 0 on Metal). The single-process teardown → re-create
+  evidence is recorded in §10 item 12.
 - **`addons/` packaging.** Move binaries, `shaders/`, `assets/` and the world scene under
   `addons/voxel_everything/`; replace the ~10 hardcoded `res://shaders/` / `res://assets/`
   constants in C++ with a root the extension resolves.
@@ -392,3 +393,17 @@ direct `main.tscn` is seed 0 with the same scene contents, which test 1 pins.
       first line read `seed 420773800 · Default`.
     - A second full run at `--seed=0` confirms the offset is a no-op there: Default `(8, 57.45227, 8)`,
       Mesas `(8, 58.55438, 8)`, Flat `(8, 55.20001, 8)`.
+13. **The per-instance compositor copies are `duplicate()`, not `resource_local_to_scene` — spec §4.1
+    erratum.** §4.1 says the Compositor and its effects are `resource_local_to_scene = true` so two
+    instances never share a `world_path`. The shipped mechanism is
+    `demo/scripts/voxel_world_scene.gd`'s `_enter_tree`, which rebuilds the effects with
+    `effect.duplicate()` and a fresh `Compositor`, then sets each copy's `world_path`. Functionally
+    equivalent (one `world_path` per instance), and it is the mechanism the code actually ships;
+    behavior is pinned by `tests/test_world_scene.gd`'s
+    `test_two_instances_never_share_a_compositor` and
+    `test_compositors_follow_the_instance_wherever_it_is_placed`.
+14. **`sun_light_path` is set by the scene file, not by `_enter_tree` — spec §4.2 erratum.** §4.2
+    says `_enter_tree()` sets both compositor effects' `world_path` and `sun_light_path` to the `Sun`
+    child. `_enter_tree` sets only `world_path` (on the duplicated effects); `sun_light_path` is a
+    serialized node path in `demo/scenes/voxel_world.tscn`, evaluated after the `Sun` child exists.
+    Behavior is pinned by `tests/test_world_scene.gd`'s `test_sun_and_settings_resolve_inside_the_instance`.
