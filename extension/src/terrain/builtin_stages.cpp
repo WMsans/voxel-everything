@@ -80,6 +80,10 @@ void stage_mesas(FieldCtx &ctx, const MesasSlots &s, const MesasParams &p,
 	ctx.f(s.mesa_mask) = mask;
 	ctx.f(s.sdf) -= p.lift * mask;
 	if (mask > p.plateau && ctx.f(s.sdf) <= 0.0f) ctx.f(s.material) = float(kBandRock);
+	// Mirror of shaders/stages/mesas.field.glslh: the lift turns air that height_bands
+	// left at material 0 into solid, and material 0 shades as error magenta.
+	else if (ctx.f(s.sdf) <= 0.0f && ctx.f(s.material) == 0.0f)
+		ctx.f(s.material) = float(kBandRock);
 }
 
 VE_STAGE_SLOTS(Flat, p, sdf, height);

@@ -147,3 +147,23 @@ TEST_CASE("a seeded CPU field is the unseeded field, translated") {
 		CHECK(a.material == b.material);
 	}
 }
+
+TEST_CASE("every solid sample of the mesas pipeline has a material") {
+	const std::string root(VE_REPO_ROOT);
+	ve::ResolvedPipeline p;
+	std::string err;
+	REQUIRE_MESSAGE(ve::load_pipeline(shipped_reader, root + "/assets/pipelines/mesas.pipeline",
+			root + "/shaders/", &p, nullptr, &err), err);
+	std::unique_ptr<ve::PipelineFieldGenerator> g(ve::PipelineFieldGenerator::create(p, &err));
+	REQUIRE_MESSAGE(g != nullptr, err);
+	int solid = 0;
+	for (int ix = 0; ix < 48; ix++)
+		for (int iz = 0; iz < 48; iz++) {
+			const float x = -1400.0f + 59.0f * float(ix), z = -1400.0f + 59.0f * float(iz);
+			for (float y = 20.0f; y <= 130.0f; y += 1.0f) {
+				const ve::Sample s = g->sample(x, y, z);
+				if (s.sdf <= 0.0f) { solid++; CHECK(s.material != 0); }
+			}
+		}
+	CHECK(solid > 0);
+}
