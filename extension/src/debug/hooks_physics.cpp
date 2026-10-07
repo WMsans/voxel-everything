@@ -466,7 +466,7 @@ Dictionary VoxelDebugHooks::debug_mesh_diff(Vector3i chunk) {
 	for (int z = 0; z < g.lattice; z++)
 		for (int y = 0; y < g.lattice; y++)
 			for (int x = 0; x < g.lattice; x++) {
-				const float s = ve::eval_field(gen, snap.ops.data(), static_cast<int>(snap.ops.size()),
+				const float s = ve::eval_field_solid(gen, snap.ops.data(), static_cast<int>(snap.ops.size()),
 						g.origin[0] + (x - 1) * g.cell_size, g.origin[1] + (y - 1) * g.cell_size,
 						g.origin[2] + (z - 1) * g.cell_size, &sources.volumes, &sources.overrides).sdf;
 				const int diff = std::abs(static_cast<int>(lattice[ve::dc_lattice_index(g, x, y, z)]) -
