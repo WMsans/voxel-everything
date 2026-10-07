@@ -54,7 +54,7 @@ func test_the_full_scale_near_field_has_texture_detail() -> void:
 		"a full-scale near field shaded flat: no material texture is reaching the G-buffer"
 		).is_greater(0.004)
 
-# THE regression. 0.40 is the shipped demo's near_field_scale (demo/main.tscn).
+# THE regression. 0.40 is the shipped demo's near_field_scale (demo/scenes/main.tscn).
 func test_a_low_march_scale_keeps_the_texture_detail() -> void:
 	var w := make_world()
 	var full := detail_at(w, 1.0)

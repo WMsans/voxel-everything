@@ -3,7 +3,7 @@ extends GdUnitTestSuite
 # never by the path text. The world-types plan moves nodes under a reusable world scene;
 # this suite is how it proves the wiring survived the move.
 
-const MAIN := "res://demo/main.tscn"
+const MAIN := "res://demo/scenes/main.tscn"
 
 var _root: Node
 

@@ -1,7 +1,7 @@
 extends Node
 # Portfolio capture (spec §8: the benchmark scene "doubles as the portfolio capture rig").
 #
-#   godot --path . --resolution 2560x1440 demo/main.tscn -- --capture
+#   godot --path . --resolution 2560x1440 demo/scenes/main.tscn -- --capture
 #
 # The camera path is a deterministic function of the FRAME INDEX, and edits are scheduled by
 # frame, so the run writes the same 900 camera frames whether the engine manages 90 fps or 12.

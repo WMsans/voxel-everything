@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3]
 
-[ext_resource type="Script" path="res://demo/material_picker.gd" id="1"]
+[ext_resource type="Script" path="res://demo/scripts/material_picker.gd" id="1"]
 
 [node name="MaterialPicker" type="Control"]
 anchors_preset = 15

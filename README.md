@@ -30,7 +30,7 @@ Clone with submodules (the engine links against `godot-cpp`):
 git clone --recurse-submodules https://github.com/WMsans/voxel-everything
 ```
 
-Build the GDExtension, then open the project in **Godot 4.x** and run the demo scene (`demo/main.tscn`):
+Build the GDExtension, then open the project in **Godot 4.x** and run the demo scene (`demo/scenes/main.tscn`):
 
 ```bash
 ./build.sh

@@ -47,7 +47,7 @@ func capture() -> void:
 		if arg.begins_with("--out="):
 			_out = arg.trim_prefix("--out=")
 	DirAccess.make_dir_recursive_absolute(_out)
-	var scene: Node = load("res://demo/main.tscn").instantiate()
+	var scene: Node = load("res://demo/scenes/main.tscn").instantiate()
 	root.add_child(scene)
 	var world: VoxelWorld = scene.get_node("VoxelWorld")
 	_world = world

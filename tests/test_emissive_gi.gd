@@ -128,7 +128,7 @@ func test_the_demo_bloom_threshold_clears_the_sky() -> void:
 	assert_float(peak).override_failure_message(
 		"the sky probe read black; this test would pass vacuously").is_greater(0.05)
 
-	var scene: Node = load("res://demo/main.tscn").instantiate()
+	var scene: Node = load("res://demo/scenes/main.tscn").instantiate()
 	# Demo helper scripts use absolute /root/Main paths; drop them for this resource-only check
 	# (the same trick test_cel_object.gd uses).
 	scene.get_node("HUD/Label").set_script(null)

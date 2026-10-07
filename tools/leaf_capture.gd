@@ -63,7 +63,7 @@ func capture() -> void:
 			var r := arg.trim_prefix("--rock=").split(",")
 			rock = Vector2(float(r[0]), float(r[1]))
 	DirAccess.make_dir_recursive_absolute(out)
-	var scene: Node = load("res://demo/main.tscn").instantiate()
+	var scene: Node = load("res://demo/scenes/main.tscn").instantiate()
 	root.add_child(scene)
 	var world: VoxelWorld = scene.get_node("VoxelWorld")
 	var player: CharacterBody3D = scene.get_node("Player")

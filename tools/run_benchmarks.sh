@@ -45,7 +45,7 @@ for leg in "${LEGS[@]}"; do
 	# ${a[@]+...} guards the empty-array case: macOS ships bash 3.2, where a bare
 	# "${a[@]}" on an empty array trips `set -u`.
 	"$GODOT" --path "$ROOT" ${DRIVER_ARGS[@]+"${DRIVER_ARGS[@]}"} --resolution 2560x1440 \
-		--disable-vsync demo/main.tscn -- "$leg" "$@" 2>&1 | tee "$OUT/$name.txt"
+		--disable-vsync demo/scenes/main.tscn -- "$leg" "$@" 2>&1 | tee "$OUT/$name.txt"
 	echo "EXIT_STATUS=${PIPESTATUS[0]}" | tee -a "$OUT/$name.txt"
 done
 

@@ -1,6 +1,6 @@
 extends SceneTree
 # Reproducible, GPU-backed look check for transparent materials, through the SHIPPING scene
-# (demo/main.tscn) rather than the debug hooks. Run with:
+# (demo/scenes/main.tscn) rather than the debug hooks. Run with:
 #   godot --path . --resolution 1600x900 -s res://tools/transparency_capture.gd -- --out=reports/transparency-B --case=seam
 # and the same line with --case=foliage / inside / sky / linger.
 #
@@ -84,7 +84,7 @@ func capture() -> void:
 		if arg.begins_with("--case="):
 			case_name = arg.trim_prefix("--case=")
 	DirAccess.make_dir_recursive_absolute(out)
-	var scene: Node = load("res://demo/main.tscn").instantiate()
+	var scene: Node = load("res://demo/scenes/main.tscn").instantiate()
 	root.add_child(scene)
 	var world: VoxelWorld = scene.get_node("VoxelWorld")
 	_world = world

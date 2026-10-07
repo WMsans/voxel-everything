@@ -25,7 +25,7 @@ func make_picker() -> Control:
 	var tool := FakeTool.new()
 	tool.name = "EditTool"
 	root.add_child(tool)
-	var picker: Control = load("res://demo/material_picker.tscn").instantiate()
+	var picker: Control = load("res://demo/scenes/material_picker.tscn").instantiate()
 	picker.world_path = NodePath("../VoxelWorld")
 	picker.tool_path = NodePath("../EditTool")
 	root.add_child(picker)
