@@ -8,7 +8,7 @@ namespace ve {
 
 bool load_pipeline(const TextReader &reader, const std::string &pipeline_path,
 		const std::string &stage_root, ResolvedPipeline *out,
-		std::vector<std::string> *warnings, std::string *error) {
+		std::vector<std::string> *warnings, std::string *error, uint32_t seed) {
 	auto fail = [&](const std::string &m) { if (error) *error = m; return false; };
 
 	std::string src;
@@ -16,6 +16,7 @@ bool load_pipeline(const TextReader &reader, const std::string &pipeline_path,
 
 	PipelineDesc desc;
 	if (!parse_pipeline_desc(src, &desc, error)) return false;
+	desc.seed = seed;
 
 	std::vector<StageManifest> loaded;
 	for (const PipelineStageRef &r : desc.stages) {

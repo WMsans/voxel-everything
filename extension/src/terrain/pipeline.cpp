@@ -1,4 +1,5 @@
 #include "terrain/pipeline.h"
+#include "terrain/seed_offset.h"
 #include <algorithm>
 #include <cstdlib>
 #include <sstream>
@@ -276,6 +277,10 @@ bool resolve_pipeline(const PipelineDesc &desc, const std::vector<StageManifest>
 	out->lipschitz = lip;
 	if (desc.lipschitz_ceiling > 0.0f && lip > desc.lipschitz_ceiling)
 		return fail(bound_report(lip, desc.lipschitz_ceiling, out->stages));
+	out->seed = desc.seed;
+	const SeedOffset offset = seed_offset(desc.seed);
+	out->field_offset_x = offset.x;
+	out->field_offset_z = offset.z;
 	hash_feed(h, std::to_string(desc.seed));
 	out->hash = h;
 	return true;

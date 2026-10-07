@@ -107,3 +107,43 @@ TEST_CASE("a GPU-only pipeline creates but reports itself inexact") {
 	CHECK_FALSE(g->is_cpu_exact());
 	delete g;
 }
+
+#include "terrain/pipeline_load.h"
+#include "terrain/seed_offset.h"
+#include <fstream>
+#include <memory>
+#include <sstream>
+
+namespace {
+bool shipped_reader(const std::string &path, std::string *out) {
+	std::ifstream f(path);
+	if (!f.good()) return false;
+	std::ostringstream o;
+	o << f.rdbuf();
+	*out = o.str();
+	return true;
+}
+} // namespace
+
+TEST_CASE("a seeded CPU field is the unseeded field, translated") {
+	const std::string root(VE_REPO_ROOT);
+	ve::ResolvedPipeline p0, ps;
+	std::string err;
+	REQUIRE_MESSAGE(ve::load_pipeline(shipped_reader, root + "/assets/pipelines/default.pipeline",
+			root + "/shaders/", &p0, nullptr, &err), err);
+	REQUIRE_MESSAGE(ve::load_pipeline(shipped_reader, root + "/assets/pipelines/default.pipeline",
+			root + "/shaders/", &ps, nullptr, &err, 9001u), err);
+	std::unique_ptr<ve::PipelineFieldGenerator> g0(ve::PipelineFieldGenerator::create(p0, &err));
+	std::unique_ptr<ve::PipelineFieldGenerator> gs(ve::PipelineFieldGenerator::create(ps, &err));
+	REQUIRE(g0);
+	REQUIRE(gs);
+	const ve::SeedOffset o = ve::seed_offset(9001u);
+	REQUIRE((o.x != 0 || o.z != 0));
+	for (int i = 0; i < 64; i++) {
+		const float x = -40.0f + 3.1f * float(i), y = 40.0f + 0.5f * float(i), z = 25.0f - 2.3f * float(i);
+		const ve::Sample a = gs->sample(x, y, z);
+		const ve::Sample b = g0->sample(x + float(o.x), y, z + float(o.z));
+		CHECK(a.sdf == b.sdf);
+		CHECK(a.material == b.material);
+	}
+}

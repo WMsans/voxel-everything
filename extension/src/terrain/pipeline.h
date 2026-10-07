@@ -13,7 +13,7 @@ struct PipelineStageRef {
 };
 struct PipelineDesc {
     // The WORLD seed, set by load_pipeline's caller -- never parsed from the file.
-    uint32_t seed = 1337;
+    uint32_t seed = 0;
     // A CEILING, not an override: resolve computes the bound from the stages and refuses a
     // pipeline whose computed bound exceeds this. 0 => no ceiling declared, no check.
     float lipschitz_ceiling = 0.0f;
@@ -33,6 +33,11 @@ struct ResolvedPipeline {
     // so it collects text rather than calling push_warning itself.
     std::vector<std::string> warnings;
     uint64_t hash = 0;                      // FNV-1a over every stage body + resolved params
+    uint32_t seed = 0;
+    // seed_offset(seed), added to every sample position before the first stage runs, on
+    // both sides: generate_field_glslh's VE_FIELD_OFFSET and PipelineFieldGenerator::sample.
+    int32_t field_offset_x = 0;
+    int32_t field_offset_z = 0;
     int channel_slot(const std::string &name) const;  // -1 when absent
 };
 bool resolve_pipeline(const PipelineDesc &desc, const std::vector<StageManifest> &loaded,

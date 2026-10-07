@@ -92,9 +92,10 @@ Sample PipelineFieldGenerator::sample(float x, float y, float z) const {
 	FieldCtx ctx;
 	const ResolvedPipeline &p = pipeline_;
 	const int pslot = p.channel_slot("p");
-	ctx.v(pslot)[0] = x;
+	// The world seed's domain shift, the same whole metres the GPU adds (VE_FIELD_OFFSET).
+	ctx.v(pslot)[0] = x + float(p.field_offset_x);
 	ctx.v(pslot)[1] = y;
-	ctx.v(pslot)[2] = z;
+	ctx.v(pslot)[2] = z + float(p.field_offset_z);
 
 	for (size_t i = 0; i < fns_.size(); i++) {
 		StageFn fn = fns_[i];
