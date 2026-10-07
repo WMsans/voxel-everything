@@ -111,6 +111,10 @@ func capture() -> void:
 	for m in world.material_table():
 		if m["name"] == "water":
 			water = m["id"]
+	if water <= 0:
+		push_error("transparency capture: no water material in the table")
+		quit(1)
+		return
 	var camera: Camera3D = player.get_node("Camera3D")
 	camera.far = 3000.0
 	scene.get_node("HUD").visible = false

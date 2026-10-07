@@ -367,7 +367,8 @@ three legs ((28.51491, 56.37516, 28.51491)). Steady leg (`--benchmark`) numbers,
 
 Delta (B − mean(A1, A2)): p50 +0.16, p95 +0.00, p99 −0.08, frame_avg +0.18, max −3.65.
 A/A spread (|A1 − A2|): p50 0.00, p95 0.00, p99 0.16, frame_avg 0.07, max 0.58.
-Quotable where |delta| > A/A spread: p50, p99, frame_avg, and max nominally; in practice
+Quotable where |delta| > A/A spread: p50, frame_avg, and max nominally (p99's |delta| 0.08 is
+below its A/A spread 0.16; p95's is zero), so neither p99 nor p95 is quotable; in practice
 the A/A spread on max is a single-frame outlier, so the honest summary is that water's
 shading cost is +0.2 ms frame time at this size and resolution — within display-quantised
 (1/60s-grid) noise of an M1 — and no quotable regression. GPU pass timings were invalid on
