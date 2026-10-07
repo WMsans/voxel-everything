@@ -135,7 +135,7 @@ func test_the_demo_bloom_threshold_clears_the_sky() -> void:
 	scene.get_node("EditTool").set_script(null)
 	add_child(scene)
 	_nodes.append(scene)
-	var env: Environment = (scene.get_node("WorldEnvironment") as WorldEnvironment).environment
+	var env: Environment = (scene.get_node("VoxelWorld/WorldEnvironment") as WorldEnvironment).environment
 	assert_bool(env.glow_enabled).is_true()
 	assert_float(env.glow_hdr_threshold).override_failure_message(
 		"glow threshold %f is at or below the sky's %f: the whole frame will bloom"

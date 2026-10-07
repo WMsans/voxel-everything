@@ -1,0 +1,41 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://demo/scripts/voxel_world_scene.gd" id="1"]
+[ext_resource type="Resource" path="res://demo/world_types/00_default.tres" id="2"]
+
+[sub_resource type="Environment" id="env"]
+background_mode = 4
+ambient_light_source = 3
+ambient_light_energy = 0.4
+glow_enabled = true
+glow_levels/2 = 0.3
+glow_levels/3 = 0.9
+glow_levels/4 = 1.0
+glow_levels/5 = 1.0
+glow_levels/6 = 0.8
+glow_levels/7 = 0.5
+glow_intensity = 0.4
+glow_blend_mode = 0
+glow_hdr_threshold = 1.05
+
+[sub_resource type="RaymarchCompositor" id="raymarch"]
+
+[sub_resource type="BeautyCompositor" id="beauty"]
+
+[sub_resource type="Compositor" id="compositor"]
+compositor_effects = Array[CompositorEffect]([SubResource("raymarch"), SubResource("beauty")])
+
+[node name="VoxelWorld" type="VoxelWorld"]
+script = ExtResource("1")
+world_type = ExtResource("2")
+sun_light_path = NodePath("Sun")
+
+[node name="VoxelSettings" type="VoxelSettings" parent="."]
+world_path = NodePath("..")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("env")
+compositor = SubResource("compositor")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.60042024, -0.79664165, -0.06969713, 0, -0.08715577, 0.9961947, -0.79968464, -0.5981355, -0.052330088, 0, 20, 0)

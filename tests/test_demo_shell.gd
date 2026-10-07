@@ -56,7 +56,7 @@ func test_wheel_changes_radius_within_bounds() -> void:
 func test_the_demo_environment_has_glow_enabled() -> void:
 	var scene: PackedScene = load("res://demo/scenes/main.tscn")
 	var root: Node = scene.instantiate()
-	var we: WorldEnvironment = root.get_node("WorldEnvironment")
+	var we: WorldEnvironment = root.get_node("VoxelWorld/WorldEnvironment")
 	assert_bool(we.environment.glow_enabled).override_failure_message(
 		"main.tscn's Environment has glow disabled: emissive materials will not bloom"
 		).is_true()
