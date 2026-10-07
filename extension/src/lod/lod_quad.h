@@ -84,4 +84,11 @@ bool lod_quad_skirt_supported(const LodQuadFields &f);
 void lod_quad_corner_pos(const LodQuadFields &f, int k, const float origin[3], float cell,
 		float out[3]);
 
+// A conservative world-space box around `count` quads: exact for surface quads, and for a
+// ribbon its parent corners widened by the largest displacement a skirt may take. What the
+// far-field cull tests a page against -- the chunk cube is 32 cells tall whatever the
+// surface inside it does. An empty range returns lo > hi.
+void lod_quads_bounds(const LodQuad *quads, int count, const float origin[3], float cell,
+		float lo[3], float hi[3]);
+
 } // namespace ve

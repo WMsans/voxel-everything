@@ -35,6 +35,8 @@ template<class T, class U> V3<T> operator/(V3<T> a,U b) { return {T(a.x/b),T(a.y
 float dot(vec3 a,vec3 b) { return a.x*b.x+a.y*b.y+a.z*b.z; }
 vec3 cross(vec3 a,vec3 b) { return {a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x}; }
 float inversesqrt(float a) { return 1.0f/std::sqrt(a); }
+template<class T> bvec3 equal(V3<T> a,V3<T> b) { return {a.x==b.x,a.y==b.y,a.z==b.z}; }
+vec3 round(vec3 a) { return {std::round(a.x),std::round(a.y),std::round(a.z)}; }
 using std::abs;
 using std::round;
 using std::isnan;

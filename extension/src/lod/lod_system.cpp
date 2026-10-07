@@ -314,8 +314,13 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 	// near field can no longer cover.
 	{
 		float fs = ve::kLodFadeStartM;
-		fade_band(&fs, nullptr);
+		float fe = ve::kLodFadeEndM;
+		fade_band(&fs, &fe);
 		lod_tree_->set_fade_start_m(fs);
+		// Level 0 is forced across the band and no further (M7 errata 9's densify verdict was
+		// measured at the band's end). With the near field off the band is 0 / 0 and so is
+		// this: screen-space error alone decides.
+		lod_tree_->set_near_dense_radius_m(fe);
 		// Raster mode lets the walk descend to 0.1 m (spec 2026-10-04 §3). Switching back
 		// leaves the fine nodes unvisited, so they age out through collect_evictions.
 		lod_tree_->set_min_level(render()->raster_mode() ? ve::kLodMinLevel : 0);

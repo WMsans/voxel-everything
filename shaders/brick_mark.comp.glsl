@@ -45,6 +45,9 @@ layout(set = 0, binding = 6, std430) buffer RegionSlotCounts { int n[]; } region
 // memory is exactly ve::OccupancyGrid's "cell i in byte i >> 2, shift (i & 3) * 2".
 layout(set = 0, binding = 9, std430) buffer RegionOccupancy { uint w[]; } occupancy;
 layout(set = 0, binding = 10, std430) buffer BrickFlags { uint v[]; } brick_flags;
+// Per region slot, the box of its resident bricks (GpuAtlas::region_bounds): grown here as a
+// slot is assigned, reset by region_free.comp.glsl, never shrunk by a release.
+layout(set = 0, binding = 15, std430) buffer RegionBounds { int v[]; } region_bounds;
 const uint CELL_AIR = 1u;
 const uint CELL_SOLID = 2u;
 const uint CELL_FULL = 3u;
@@ -188,6 +191,13 @@ void main() {
 		slot = free_list.slot[old - 1];
 		region_tables.slot[idx] = slot;
 		atomicAdd(region_counts.n[rslot], 1);
+		ivec3 local = brick & 31;
+		atomicMin(region_bounds.v[rslot * 8 + 0], local.x);
+		atomicMin(region_bounds.v[rslot * 8 + 1], local.y);
+		atomicMin(region_bounds.v[rslot * 8 + 2], local.z);
+		atomicMax(region_bounds.v[rslot * 8 + 4], local.x);
+		atomicMax(region_bounds.v[rslot * 8 + 5], local.y);
+		atomicMax(region_bounds.v[rslot * 8 + 6], local.z);
 	} else if (pc.cfg.w == 0) {
 		return; // resident already and this is a plain stream-in: nothing to regenerate
 	}

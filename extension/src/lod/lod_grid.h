@@ -35,14 +35,21 @@ inline constexpr int kLodFineLattice = 2 * kLodChunkLattice + 1; // 69
 // The one statement of "how coarse is too coarse". A chunk is 32 cells across, so a chunk
 // projecting to more than (32 * kLodTargetCellPx)^2 px^2 would render cells coarser than
 // kLodTargetCellPx and must descend. Absolute px^2, so it needs no per-resolution tuning.
-inline constexpr float kLodTargetCellPx = 3.0f;
+//
+// 6, not the original 3: the area is the chunk BOX's silhouette, up to sqrt(3) times its face,
+// so drawn cells landed at 1.2-3 px and the far field drew several triangles per pixel. That
+// made the horizon the slowest view (measured on an Iris Xe, 2026-10-06: far-field raster
+// 8-10 ms at 3 px, 3.4-3.7 ms at 6 px). Coarser distant terrain is the accepted cost.
+inline constexpr float kLodTargetCellPx = 6.0f;
 inline constexpr float kLodSseAreaThresh =
 		float(kLodChunkCells) * kLodTargetCellPx * float(kLodChunkCells) * kLodTargetCellPx;
 
 // Spec §4's fade-band contingency: within this radius the walk forces level 0 even when the
 // SSE test would accept a coarser level. The original spec chose 300 m for a 0.2 m denser
 // band; with M5's 2x level table this is the existing finest level (0.4 m) kept dense
-// through the measured near-field handover. 0 disables the override.
+// through the measured near-field handover. 0 disables the override. This is only
+// LodTreeConfig's default -- what a tree uses when nothing measures the band; LodSystem
+// replaces it with the measured band's end every tick.
 inline constexpr float kLodNearDenseRadiusM = 300.0f;
 
 // Engine spec section 3's near/far band. A chunk whose FARTHEST corner is nearer than the

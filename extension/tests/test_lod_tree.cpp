@@ -70,6 +70,15 @@ void make_ready_full_level0(ve::LodTree *t, float stream_radius_m,
 	}
 }
 
+// Whether draw `d` describes the ground of chunk (level, c): it is c or one of its ancestors.
+// The SSE decides how far up the cut stops, so "this chunk was not forced finer" is a level
+// at or above it, wherever the threshold puts it.
+bool covers_at_or_above(const ve::LodDrawItem &d, int level, ve::IVec3 c) {
+	if (d.level < level) return false;
+	for (int l = level; l < d.level; l++) c = ve::lod_parent(c);
+	return d.coord == c;
+}
+
 // The terrain surface every test camera floats above (M2 errata 9). A chunk the ground plane
 // crosses is a surface chunk; everything else is air.
 constexpr float kGroundY = 51.2f;
@@ -727,14 +736,47 @@ TEST_CASE("outside the near-dense radius the SSE threshold still decides") {
 
 	ve::LodWalkResult r;
 	t.walk(c, &occ, 1u, &r);
-	bool l1_drawn = false;
+	bool l1_covered = false;
 	int l0_drawn = 0;
 	for (const ve::LodDrawItem &d : r.draws) {
-		if (d.level == 1 && d.coord == l1) l1_drawn = true;
+		if (covers_at_or_above(d, 1, l1)) l1_covered = true;
 		if (d.level == 0) l0_drawn++;
 	}
-	CHECK(l1_drawn);
+	CHECK(l1_covered);
 	CHECK(l0_drawn == 0);
+}
+
+// Production sets the radius every tick to the measured fade band's end: the rule exists for
+// the seam with the marched near field, so it forces level 0 where the eye compares the two
+// fields and nowhere else. Past that, screen-space error decides like everywhere else.
+TEST_CASE("the near-dense radius is the configured one, not a fixed 300 m") {
+	ve::LodTreeConfig cfg;
+	cfg.stream_radius_m = 1638.4f;
+	cfg.near_dense_radius_m = 56.0f; // a measured band end
+	ve::LodTree t(cfg);
+	NoOcclusion occ;
+	const ve::LodCamera c = cam_at(800.0f, 60.0f, 800.0f);
+	// The same chunk the 300 m test forces to level 0: 300 m out, small on screen.
+	const ve::IVec3 l1 = ve::lod_chunk_of_point(1, 800.0f, 51.0f, 500.0f);
+	make_ready_full_level0(&t, 1638.4f, l1);
+	ve::LodWalkResult r;
+	t.walk(c, &occ, 1u, &r);
+	bool l1_covered = false;
+	int l0_before = 0;
+	for (const ve::LodDrawItem &d : r.draws) {
+		if (covers_at_or_above(d, 1, l1)) l1_covered = true;
+		if (d.level == 0) l0_before++;
+	}
+	CHECK(l1_covered);
+	CHECK(l0_before == 0);
+
+	// And a radius set at run time takes effect on the next walk.
+	t.set_near_dense_radius_m(400.0f);
+	t.walk(c, &occ, 2u, &r);
+	int l0_drawn = 0;
+	for (const ve::LodDrawItem &d : r.draws)
+		if (d.level == 0) l0_drawn++;
+	CHECK(l0_drawn == 8);
 }
 
 TEST_CASE("a starved arena refuses pages without dropping the near-dense walk's draw set") {
@@ -1380,6 +1422,9 @@ ve::LodCamera cam_looking(const float p[3], const float f[3]) {
 // every chunk size, so nothing below level 3 is ever marked ready and the cut cannot
 // descend past level 3 -- the part of the walk the change touches. The fourth shot settles
 // a SOLID world with the fade started at zero, so the descent to the floor is the subject.
+//
+// Re-pinned when kLodTargetCellPx went from 3 to 6 px (2026-10-06): shots 1, 2 and 4 settle a
+// coarser cut by design; the straight-down shot is unchanged.
 TEST_CASE("characterization: the settled default cut is pinned at four cameras") {
 	struct Shot {
 		float p[3];
@@ -1390,13 +1435,13 @@ TEST_CASE("characterization: the settled default cut is pinned at four cameras")
 	};
 	const Shot shots[] = {
 		{{800.0f, 60.0f, 800.0f}, {0.0f, 0.0f, -1.0f}, false, ve::kLodFadeStartM,
-				7366100078025556419ull}, // level, along the ground
+				17248354151325476205ull}, // level, along the ground
 		{{800.0f, 140.0f, 800.0f}, {0.6f, -0.5f, -0.6f}, false, ve::kLodFadeStartM,
-				266758349124011340ull}, // pitched down over a ridge
+				1804392435474195502ull}, // pitched down over a ridge
 		{{800.0f, 90.0f, 800.0f}, {0.0f, -1.0f, 0.0f}, false, ve::kLodFadeStartM,
 				9178775522565948259ull}, // straight down
 		{{800.0f, 53.0f, 800.0f}, {0.0f, 0.0f, -1.0f}, true, 0.0f,
-				15572169387688817416ull}, // solid world: descends below level 3, down to the floor
+				8610135732261350174ull}, // solid world: descends below level 3, down to the floor
 	};
 	for (const Shot &s : shots) {
 		ve::LodTreeConfig cfg;

@@ -66,6 +66,11 @@ public:
 	RID op_counts() const { return op_counts_; }
 	RID region_slot_counts() const { return region_slot_counts_; }
 	RID region_occupancy() const { return region_occupancy_; }
+	// Per region slot, the box of its RESIDENT bricks in region-local brick coordinates: two
+	// ivec4, (min.xyz, 0) and (max.xyz, 0); min > max when empty. brick_mark grows it as it
+	// assigns slots, region_free resets it, and a release never shrinks it -- so it can be
+	// too big, never too small. The marcher clips each region's segment to it.
+	RID region_bounds() const { return region_bounds_; }
 	// Bytes per region slot, and the offset of one slot's block. Mirrors
 	// ve::kOccupancyBlockBytes; the static_assert in gpu_atlas.cpp pins them together.
 	static uint32_t occupancy_block_bytes() {
@@ -114,6 +119,7 @@ private:
 	RID region_map_, region_tables_, free_list_, counters_, frame_, dispatch_args_;
 	RID jobs_, op_pool_, op_counts_, region_slot_counts_;
 	RID region_occupancy_;
+	RID region_bounds_;
 	VolumePool volumes_;
 	OverridePool overrides_;
 	StoredNormalPool stored_normals_;

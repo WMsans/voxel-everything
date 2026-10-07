@@ -49,6 +49,9 @@ bool LodPool::initialize(RenderingDevice *rd, int max_pages, int max_chunk_recor
 	zero.resize(page_entries);
 	page_chunk_ = rd_->storage_buffer_create(static_cast<uint32_t>(page_entries), zero);
 	page_quads_ = rd_->storage_buffer_create(static_cast<uint32_t>(page_entries), zero);
+	PackedByteArray bounds_zero;
+	bounds_zero.resize(static_cast<int64_t>(max_pages) * kPageBoundsBytes);
+	page_bounds_ = rd_->storage_buffer_create(static_cast<uint32_t>(bounds_zero.size()), bounds_zero);
 
 	PackedByteArray chunk_zero;
 	chunk_zero.resize(static_cast<int64_t>(max_chunk_records_) * 32);
@@ -60,7 +63,8 @@ bool LodPool::initialize(RenderingDevice *rd, int max_pages, int max_chunk_recor
 			RenderingDevice::STORAGE_BUFFER_USAGE_DISPATCH_INDIRECT);
 
 	if (!quads_.is_valid() || !normals_.is_valid() || !index_.is_valid() || !page_chunk_.is_valid() ||
-			!page_quads_.is_valid() || !chunks_.is_valid() || !args_.is_valid()) {
+			!page_quads_.is_valid() || !page_bounds_.is_valid() || !chunks_.is_valid() ||
+			!args_.is_valid()) {
 		UtilityFunctions::printerr("LodPool: buffer creation failed");
 		teardown();
 		return false;
@@ -82,6 +86,7 @@ void LodPool::teardown() {
 		if (index_.is_valid()) rd_->free_rid(index_);
 		if (page_chunk_.is_valid()) rd_->free_rid(page_chunk_);
 		if (page_quads_.is_valid()) rd_->free_rid(page_quads_);
+		if (page_bounds_.is_valid()) rd_->free_rid(page_bounds_);
 		if (chunks_.is_valid()) rd_->free_rid(chunks_);
 		if (args_.is_valid()) rd_->free_rid(args_);
 	}
@@ -90,6 +95,7 @@ void LodPool::teardown() {
 	index_ = RID();
 	page_chunk_ = RID();
 	page_quads_ = RID();
+	page_bounds_ = RID();
 	chunks_ = RID();
 	args_ = RID();
 	rd_ = nullptr;
@@ -216,6 +222,16 @@ bool LodPool::upload_at(const float origin[3], float cell, uint32_t level, uint3
 		std::memcpy(word.ptrw(), &qc, 4);
 		rd_->buffer_update(page_quads_, static_cast<uint32_t>(page) * 4, 4, word);
 		page_quads_cpu_[static_cast<size_t>(page)] = qc;
+
+		// The cull tests this box, not the chunk cube: a page is a slab of surface, and the
+		// cube's empty upper half is what kept hidden far terrain poking above every ridge.
+		PackedByteArray bounds_bytes;
+		bounds_bytes.resize(kPageBoundsBytes);
+		float *b = reinterpret_cast<float *>(bounds_bytes.ptrw());
+		ve::lod_quads_bounds(quads.data() + first, count, origin, cell, b, b + 4);
+		b[3] = b[7] = 0.0f;
+		rd_->buffer_update(page_bounds_, static_cast<uint32_t>(page) * kPageBoundsBytes,
+				kPageBoundsBytes, bounds_bytes);
 	}
 
 	pages_out->assign(pages.begin(), pages.end());

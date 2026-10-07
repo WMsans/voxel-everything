@@ -77,6 +77,9 @@ layout(set = 0, binding = 21, std430) readonly buffer BrickFlags { uint v[]; } b
 // Binding 22 is reserved for Task 4's region slot counts; keep the relationship stable while
 // this pass learns the per-brick gate.
 layout(set = 0, binding = 22, std430) readonly buffer RegionSlotCounts { int n[]; } region_slot_counts;
+// Per region slot, the box of its resident bricks, region-local (GpuAtlas::region_bounds).
+layout(set = 0, binding = 31, std430) readonly buffer RegionBounds { ivec4 v[]; } region_bounds;
+#define SUN_MARCH_REGION_BOUNDS
 // The pending-edit visualizer: tint the atlas content an edit WILL change, so the player
 // gets one frame of feedback before the regenerated bricks land (spec §5 latency).
 layout(set = 0, binding = 12) uniform Edits { EDITS_BLOCK_FIELDS } edits;
@@ -542,9 +545,27 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
 		// first brick of this region and is the inverse of its `>> 5` mapping.
 		int rs = region_slot_of(rmap * REGION_BRICKS);
 		bool region_worth_entering = rs >= 0 && region_slot_counts.n[rs] > 0;
+		float seg_begin = max(rt_prev, 0.0);
+		float seg_end = min(rt_exit, max_dist);
 		if (region_worth_entering) {
-			Hit candidate = march_bricks(rs, rmap, ro, rd, max(rt_prev, 0.0),
-					min(rt_exit, max_dist), steps_left);
+			// Only the part of the segment inside the box of the region's resident bricks can
+			// hit anything. A ray over open ground crosses a region whose bricks are a thin
+			// layer far below it, and without this it walked every empty brick on the way.
+			// One voxel of slack keeps the boundary bricks' DDA entry off a float ULP.
+			vec3 base = vec3(rmap * REGION_BRICKS);
+			vec3 box_lo = (base + vec3(region_bounds.v[rs * 2].xyz)) * BRICK_SIZE - VOXEL_SIZE;
+			vec3 box_hi = (base + vec3(region_bounds.v[rs * 2 + 1].xyz) + 1.0) * BRICK_SIZE + VOXEL_SIZE;
+			// An axis-parallel component would make (box - ro) * inf a NaN on the box face.
+			vec3 inv = 1.0 / mix(rd, vec3(1e-12), equal(rd, vec3(0.0)));
+			vec3 t0 = (box_lo - ro) * inv;
+			vec3 t1 = (box_hi - ro) * inv;
+			vec3 tn = min(t0, t1);
+			vec3 tf = max(t0, t1);
+			seg_begin = max(seg_begin, max(tn.x, max(tn.y, tn.z)));
+			seg_end = min(seg_end, min(tf.x, min(tf.y, tf.z)));
+		}
+		if (region_worth_entering && seg_begin <= seg_end) {
+			Hit candidate = march_bricks(rs, rmap, ro, rd, seg_begin, seg_end, steps_left);
 			if (candidate.hit) return candidate;
 			if (steps_left <= 0) return h;
 		}

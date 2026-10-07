@@ -123,7 +123,7 @@ struct EditsBlock {
 
 struct LodCullPush {
 	float view_proj[16];
-	int32_t params[4];  // x = page count, y = hiz size, z = hiz mips, w = unused
+	int32_t params[4];  // x = page count, y = hiz size, z = hiz mips, w = drawn slots (the rest are re-tests)
 };
 
 struct GrassRegionBlock {

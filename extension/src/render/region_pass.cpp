@@ -36,13 +36,15 @@ bool RegionPass::initialize(RenderingDevice *rd, const GpuAtlas &atlas) {
 			gpu::storage(11, atlas.overrides().sdf_buffer()),
 			gpu::storage(12, atlas.overrides().mat_buffer()),
 			gpu::storage(13, atlas.overrides().tables()),
-			gpu::storage(14, atlas.overrides().region_table_map())});
+			gpu::storage(14, atlas.overrides().region_table_map()),
+			gpu::storage(15, atlas.region_bounds())});
 	free_set_ = gpu::uniform_set(rd, group_, free_.shader, 0, {
 			gpu::storage(0, atlas.region_tables()),
 			gpu::storage(1, atlas.free_list()),
 			gpu::storage(2, atlas.counters()),
 			gpu::storage(3, atlas.region_slot_counts()),
-			gpu::storage(4, atlas.region_occupancy())});
+			gpu::storage(4, atlas.region_occupancy()),
+			gpu::storage(5, atlas.region_bounds())});
 	args_set_ = gpu::uniform_set(rd, group_, args_.shader, 0, {
 			gpu::storage(0, atlas.frame_counters()),
 			gpu::storage(1, atlas.dispatch_args())});

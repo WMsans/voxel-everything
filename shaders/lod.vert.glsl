@@ -39,12 +39,9 @@ void main() {
 
 	// Geometry may be a procedural boundary ribbon. Its shading still comes from the
 	// original surface quad, not the steep ribbon plane (nor its reverse-wound copy).
-	vec3 p0 = lod_corner_pos(w, 0, c0.xyz, c0.w);
-	vec3 p1 = lod_corner_pos(w, 1, c0.xyz, c0.w);
-	vec3 p2 = lod_corner_pos(w, 2, c0.xyz, c0.w);
-	vec3 p3 = lod_corner_pos(w, 3, c0.xyz, c0.w);
-
-	vec3 wpos = corner == 0u ? p0 : (corner == 1u ? p1 : (corner == 2u ? p2 : p3));
+	// Only this vertex's own corner: decoding all four and selecting one quadrupled the
+	// vertex cost, which is what the far field is bound by at the horizon.
+	vec3 wpos = lod_corner_pos(w, int(corner), c0.xyz, c0.w);
 	uint normal_pair = normals.v[quad * 2u + (corner >> 1u)];
 	uint packed_normal = (normal_pair >> ((corner & 1u) * 16u)) & 0xFFFFu;
 	vec3 nrm = oct_decode_snorm8(packed_normal);

@@ -137,6 +137,14 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 			static_cast<uint32_t>(cfg.max_region_slots) * ve::kOccupancyBlockBytes,
 			zeroed(static_cast<int64_t>(cfg.max_region_slots) * ve::kOccupancyBlockBytes));
 
+	{
+		PackedByteArray empty = filled_i32(cfg_.max_region_slots * 8, -1);
+		int32_t *b = reinterpret_cast<int32_t *>(empty.ptrw());
+		for (int i = 0; i < cfg_.max_region_slots; i++)
+			for (int a = 0; a < 3; a++) b[i * 8 + a] = ve::kRegionBricks; // min past max: empty
+		region_bounds_ = rd->storage_buffer_create(static_cast<uint32_t>(empty.size()), empty);
+	}
+
 	if (!volumes_.initialize(rd, ve::kMaxVolumes, ve::kIslandDim) ||
 			!overrides_.initialize(rd, cfg_.max_override_bricks, cfg_.max_region_slots)) {
 		teardown();
@@ -156,7 +164,8 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 			brick_flags_.is_valid() && region_map_.is_valid() && region_tables_.is_valid() && free_list_.is_valid() &&
 			counters_.is_valid() && frame_.is_valid() && dispatch_args_.is_valid() &&
 			jobs_.is_valid() && op_pool_.is_valid() && op_counts_.is_valid() &&
-			region_slot_counts_.is_valid() && region_occupancy_.is_valid() && volumes_.is_valid() &&
+			region_slot_counts_.is_valid() && region_occupancy_.is_valid() &&
+			region_bounds_.is_valid() && volumes_.is_valid() &&
 			overrides_.is_valid() && stored_normals_.is_valid();
 	for (int l = 0; l < ve::kMipLevels; l++) ok = ok && mips_[l].is_valid();
 	if (!ok) {
@@ -193,6 +202,7 @@ void GpuAtlas::teardown() {
 	free_if_valid(rd_, op_counts_);
 	free_if_valid(rd_, region_slot_counts_);
 	free_if_valid(rd_, region_occupancy_);
+	free_if_valid(rd_, region_bounds_);
 	rd_ = nullptr;
 }
 

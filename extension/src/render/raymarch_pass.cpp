@@ -120,6 +120,7 @@ std::vector<gpu::Uniform> RaymarchPass::uniforms(const GpuAtlas &atlas, const Is
 		gpu::storage(28, atlas.overrides().mat_buffer()),
 		gpu::storage(29, atlas.overrides().tables()),
 		gpu::storage(30, atlas.overrides().region_table_map()),
+		gpu::storage(31, atlas.region_bounds()),
 	};
 }
 

@@ -316,8 +316,8 @@ bool LodTree::want_finer(int level, IVec3 c, float area) const {
 	// Dense down to level 0 only: the seam this protects is the marched near field's, and
 	// below 0 (raster mode) screen-space error alone decides -- forcing 0.1 m over the whole
 	// 300 m disc would be tens of thousands of chunks.
-	const bool near_dense = level > 0 && kLodNearDenseRadiusM > 0.0f &&
-			chunk_distance_m < kLodNearDenseRadiusM;
+	const bool near_dense = level > 0 && cfg_.near_dense_radius_m > 0.0f &&
+			chunk_distance_m < cfg_.near_dense_radius_m;
 	return near_dense || area > cfg_.sse_area_thresh;
 }
 

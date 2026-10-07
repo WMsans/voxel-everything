@@ -32,47 +32,52 @@ uint lod_bits_get(uvec3 w, int lo, int bits) {
 const float LOD_SKIRT_CELLS = 2.0; // ve::kLodSkirtCells
 const float LOD_SKIRT_MAX_EXTENSION = 4.0; // ve::kLodSkirtMaxExtensionCells
 
+// The decoders below run once per VERTEX with a runtime corner index, so they never index a
+// local array or a vector component with a runtime value: drivers can lower that to scratch
+// memory, and with it the far field's vertex stage cost twice what its decode needs. Every
+// select is the same integer or the same per-component float arithmetic as the table form.
+ivec3 lod_axis_mask(int a) { return ivec3(equal(ivec3(0, 1, 2), ivec3(a))); }
+
 // A tagged ribbon stores the two unconstrained parent coordinates, face and edge in
 // bits 0..14. All four offsets remain untouched, preserving the exact parent normal.
 ivec3 lod_parent_u(uvec3 w) {
-	ivec3 u = ivec3(int(lod_bits_get(w, 0, 5)), int(lod_bits_get(w, 5, 5)),
-			int(lod_bits_get(w, 10, 5)));
-	if (lod_bits_get(w, 94, 1) != 0u) {
-		int face = int(lod_bits_get(w, 10, 3));
+	ivec3 u = ivec3(int(w.x & 31u), int((w.x >> 5u) & 31u), int((w.x >> 10u) & 31u));
+	if (((w.z >> 30u) & 1u) != 0u) { // bit 94
+		int face = int((w.x >> 10u) & 7u);
 		int a = (face / 2) % 3;
-		u[a] = (face & 1) != 0 ? 31 : 0;
-		u[(a + 1) % 3] = int(lod_bits_get(w, 0, 5));
-		u[(a + 2) % 3] = int(lod_bits_get(w, 5, 5));
+		u = lod_axis_mask(a) * ((face & 1) != 0 ? 31 : 0) +
+				lod_axis_mask((a + 1) % 3) * u.x + lod_axis_mask((a + 2) % 3) * u.y;
 	}
 	return u;
 }
 
 ivec3 lod_parent_corner_cell(uvec3 w, int k) {
-	int axis = int(lod_bits_get(w, 15, 2));
-	int b = (axis + 1) % 3;
-	int c = (axis + 2) % 3;
-	int order_rev[4] = {0, 3, 2, 1};
+	int axis = int((w.x >> 15u) & 3u);
 	int kk = k & 3;
-	int canonical = lod_bits_get(w, 17, 1) == 0u ? order_rev[kk] : kk;
-	ivec3 m = lod_parent_u(w) + 1;
-	m[b] += LOD_QUAD[canonical].x;
-	m[c] += LOD_QUAD[canonical].y;
-	return m;
+	// order_rev = {0, 3, 2, 1} is (4 - k) & 3.
+	int canonical = ((w.x >> 17u) & 1u) == 0u ? ((4 - kk) & 3) : kk;
+	// LOD_QUAD[canonical], {(-1,-1), (0,-1), (0,0), (-1,0)}, without the table.
+	int qb = (canonical == 1 || canonical == 2) ? 0 : -1;
+	int qc = canonical >= 2 ? 0 : -1;
+	return lod_parent_u(w) + 1 + lod_axis_mask((axis + 1) % 3) * qb +
+			lod_axis_mask((axis + 2) % 3) * qc;
 }
 
 vec3 lod_parent_corner_pos(uvec3 w, int k, vec3 origin, float cell) {
 	int kk = k & 3;
 	ivec3 m = lod_parent_corner_cell(w, kk);
-	vec3 frac = vec3(lod_bits_get(w, 18 + (kk * 3 + 0) * 5, 5),
-			lod_bits_get(w, 18 + (kk * 3 + 1) * 5, 5),
-			lod_bits_get(w, 18 + (kk * 3 + 2) * 5, 5)) / float(LOD_OFFSET_MAX);
-	vec3 p = vec3(0.0);
-	for (int a = 0; a < 3; a++) {
-		float base = round(origin[a] / cell);
-		float residual = origin[a] - base * cell;
-		p[a] = (base + float(m[a] - 1) + frac[a]) * cell + residual;
-	}
-	return p;
+	// Corner kk's three 5-bit offsets are the 15 bits from 18 + 15 kk. Corners 0 and 3
+	// straddle a word boundary; 1 and 2 sit inside w.y.
+	uint lo = uint(18 + 15 * kk);
+	uint word = lo >> 5u;
+	uint shift = lo & 31u;
+	uint v = (word == 0u ? w.x : w.y) >> shift;
+	if (shift > 17u) v |= (word == 0u ? w.y : w.z) << (32u - shift);
+	vec3 frac = vec3(float(v & 31u), float((v >> 5u) & 31u), float((v >> 10u) & 31u)) /
+			float(LOD_OFFSET_MAX);
+	vec3 base = round(origin / cell);
+	vec3 residual = origin - base * cell;
+	return (base + vec3(m - 1) + frac) * cell + residual;
 }
 
 vec3 lod_parent_normal(uvec3 w) {
@@ -103,8 +108,7 @@ vec3 lod_parent_corner_normal(uvec3 w, int k) {
 // overlap geometry inherits the same smooth surface normal and does not expose a curtain.
 vec3 lod_corner_normal(uvec3 w, int k) {
 	if (lod_bits_get(w, 94, 1) == 0u) return lod_parent_corner_normal(w, k);
-	int order_rev[4] = {0, 3, 2, 1};
-	int kk = lod_bits_get(w, 95, 1) != 0u ? order_rev[k & 3] : (k & 3);
+	int kk = lod_bits_get(w, 95, 1) != 0u ? ((4 - k) & 3) : (k & 3); // order_rev[k & 3]
 	int edge = int(lod_bits_get(w, 13, 2));
 	int endpoint = (edge + ((kk == 0 || kk == 3) ? 1 : 0)) & 3;
 	return lod_parent_corner_normal(w, endpoint);
@@ -114,8 +118,7 @@ vec3 lod_corner_normal(uvec3 w, int k) {
 // geometry ONLY, not the parent sign/offsets or shading normal.
 vec3 lod_corner_pos(uvec3 w, int k, vec3 origin, float cell) {
 	if (lod_bits_get(w, 94, 1) == 0u) return lod_parent_corner_pos(w, k, origin, cell);
-	int order_rev[4] = {0, 3, 2, 1};
-	int kk = lod_bits_get(w, 95, 1) != 0u ? order_rev[k & 3] : (k & 3);
+	int kk = lod_bits_get(w, 95, 1) != 0u ? ((4 - k) & 3) : (k & 3); // order_rev[k & 3]
 	int edge = int(lod_bits_get(w, 13, 2));
 	int endpoint = (edge + ((kk == 0 || kk == 3) ? 1 : 0)) & 3;
 	vec3 p = lod_parent_corner_pos(w, endpoint, origin, cell);

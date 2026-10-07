@@ -17,12 +17,21 @@ layout(set = 0, binding = 1, std430) readonly buffer PageChunk { uint v[]; } pag
 layout(set = 0, binding = 2, std430) readonly buffer Chunks { vec4 v[]; } chunks;
 layout(set = 0, binding = 3) uniform sampler2D hiz;
 layout(set = 0, binding = 4, std430) buffer Stats { uint v[]; } stats; // [0] = drawn
+// Two vec4 per page: the box around that page's own quads, ribbons included (LodPool).
+layout(set = 0, binding = 5, std430) readonly buffer PageBounds { vec4 v[]; } page_bounds;
 
 // The 128-byte push-constant cap (Godot enforces it for compatibility) does not fit both
 // view_proj and six precomputed planes, so the planes are derived here from view_proj. Each
 // plane is the clip-space inequality expressed as a row of the combined view-projection:
 // inside is dot(plane.xyz, p) + plane.w >= 0.
 layout(push_constant, std430) uniform Push { LOD_CULL_PUSH_FIELDS } pc;
+
+// Slots [0, params.w) are drawn after this pass. Slots from params.w on hold pages the
+// temporal first pass already drew: they are tested only so the readback can drop them from
+// next frame's first pass once they are hidden, and they are not counted as drawn here.
+void keep(uint slot) {
+	if (slot < uint(pc.params.w)) atomicAdd(stats.v[0], 1u);
+}
 
 bool outside_frustum(vec3 lo, vec3 hi) {
 	vec4 r0 = vec4(pc.view_proj[0].x, pc.view_proj[1].x, pc.view_proj[2].x, pc.view_proj[3].x);
@@ -48,17 +57,17 @@ void main() {
 	// be recovered before indexing the per-page chunk tables.
 	uint page = args.v[base + 3u] / uint(LOD_QUADS_PER_PAGE * 4);
 	uint ci = page_chunk.v[page];
-	vec4 c0 = chunks.v[ci * 2u + 0u];
-	// An island page's c0.xyz is its LOCAL origin -- lod.vert.glsl places it into the world
-	// through the island descriptor (island_xform.glslh) -- so the box below would test a
-	// coordinate that means nothing in world space and cull every island. A per-page world box
-	// would mean plumbing the descriptor into this pass, for a handful of pages per island:
-	// keep them all. The flags word names the island as slot + 1, and is 0 for a world-space
+	// An island page's chunk origin -- and so its page box -- is LOCAL: lod.vert.glsl places
+	// it into the world through the island descriptor (island_xform.glslh), so the box below
+	// would test a coordinate that means nothing in world space and cull every island. A
+	// world box would mean plumbing the descriptor into this pass, for a handful of pages per
+	// island: keep them all. The flags word names the island as slot + 1, and is 0 for a world-space
 	// terrain page, which falls through to the cull below.
-	if ((floatBitsToUint(chunks.v[ci * 2u + 1u].y) >> 8) != 0u) { atomicAdd(stats.v[0], 1u); return; }
-	// Mirror lod_chunk_render_aabb: the apron and ribbons are visible geometry too.
-	vec3 lo = c0.xyz - vec3(c0.w * (1.0 + LOD_SKIRT_MAX_EXTENSION));
-	vec3 hi = c0.xyz + vec3(c0.w * (float(LOD_CHUNK_CELLS) + LOD_SKIRT_MAX_EXTENSION));
+	if ((floatBitsToUint(chunks.v[ci * 2u + 1u].y) >> 8) != 0u) { keep(slot); return; }
+	// The page's own box, not the chunk's: a chunk is a 32-cell cube whatever its surface
+	// does, so over open ground most of the cube is air that pokes above any ridge in front.
+	vec3 lo = page_bounds.v[page * 2u + 0u].xyz;
+	vec3 hi = page_bounds.v[page * 2u + 1u].xyz;
 
 	if (outside_frustum(lo, hi)) { args.v[base + 1u] = 0u; return; }
 
@@ -71,7 +80,7 @@ void main() {
 		vec4 clip = pc.view_proj * vec4(p, 1.0);
 		// Straddling the near plane makes the divide meaningless; the only safe answer is
 		// "keep it".
-		if (clip.w <= 1e-4) { atomicAdd(stats.v[0], 1u); return; }
+		if (clip.w <= 1e-4) { keep(slot); return; }
 		vec3 ndc = clip.xyz / clip.w;
 		mn = min(mn, ndc.xy * 0.5 + 0.5);
 		mx = max(mx, ndc.xy * 0.5 + 0.5);
@@ -96,5 +105,5 @@ void main() {
 	// Reverse-Z: if the node's nearest point is behind the farthest occluder over its whole
 	// footprint, nothing in it can be seen.
 	if (near_z < occluder) { args.v[base + 1u] = 0u; return; }
-	atomicAdd(stats.v[0], 1u);
+	keep(slot);
 }

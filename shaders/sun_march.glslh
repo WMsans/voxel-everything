@@ -61,6 +61,33 @@ float terrain_sun_visibility(vec3 ro, float max_shadow_dist) {
 			t += max(skip, 0.01) + 0.001;
 			continue;
 		}
+#ifdef SUN_MARCH_REGION_BOUNDS
+		// The includer also declared the region_bounds buffer (GpuAtlas::region_bounds). Outside
+		// the box of the region's resident bricks every sample reads +SDF_RANGE: it cannot hit,
+		// and K * SDF_RANGE / t >= 1 wherever the penumbra term applies, so it cannot darken
+		// either. Jump to where the ray could next meet a resident brick -- the box entry, or
+		// failing that the region exit -- instead of crossing the air in 0.64 m steps.
+		{
+			vec3 rb = vec3((brick >> 5) * REGION_BRICKS);
+			vec3 box_lo = (rb + vec3(region_bounds.v[shadow_region * 2].xyz)) * BRICK_SIZE - VOXEL_SIZE;
+			vec3 box_hi = (rb + vec3(region_bounds.v[shadow_region * 2 + 1].xyz) + 1.0) * BRICK_SIZE + VOXEL_SIZE;
+			if (any(lessThan(q, box_lo)) || any(greaterThan(q, box_hi))) {
+				vec3 rlo = rb * BRICK_SIZE;
+				vec3 far = mix(rlo, rlo + vec3(REGION_SIZE), step(0.0, sun_light.dir.xyz));
+				vec3 tf = (far - q) / sun_light.dir.xyz;
+				float skip = min(tf.x, min(tf.y, tf.z));
+				vec3 b0 = (box_lo - q) / sun_light.dir.xyz;
+				vec3 b1 = (box_hi - q) / sun_light.dir.xyz;
+				vec3 bn = min(b0, b1);
+				vec3 bf = max(b0, b1);
+				float enter = max(bn.x, max(bn.y, bn.z));
+				float leave = min(bf.x, min(bf.y, bf.z));
+				if (enter <= leave && leave > 0.0) skip = min(skip, max(enter, 0.0));
+				t += max(skip, 0.01) + 0.001;
+				continue;
+			}
+		}
+#endif
 		float d = world_sdf(q);
 		if (d < 0.004) return 0.0;
 		if (t <= RAY_SHADOW_PENUMBRA_DIST) res = min(res, RAY_SHADOW_K * d / t);

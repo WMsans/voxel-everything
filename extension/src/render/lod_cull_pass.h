@@ -16,9 +16,11 @@ class LodPool;
 // only ever removes. Keeping draw_count an exact CPU integer matters because Godot's
 // draw_list_draw_indirect takes the count as a parameter and exposes no count buffer.
 //
-// Trigger 1 (temporal second phase): the pass also reads back the remaining indirect args
-// asynchronously and exposes the combined "last visible pages" set (first-pass pages plus
-// remaining survivors) so RaymarchCompositor can draw that set first on the next frame.
+// Trigger 1 (temporal second phase): the pass also reads back the indirect args
+// asynchronously and exposes the "last visible pages" set so RaymarchCompositor can draw that
+// set first on the next frame. The first pass's own pages are re-tested against the HiZ they
+// helped build: a page that was drawn first is not thereby visible forever, so a set seeded
+// while the HiZ was still empty (streaming, a camera turn) shrinks back to what is seen.
 class LodCullPass {
 public:
 	~LodCullPass();
@@ -27,18 +29,17 @@ public:
 	void teardown();
 	bool is_valid() const { return program_.pipeline.is_valid(); }
 
-	// Records the pages drawn in this frame's temporal first pass. They are combined with
-	// the stale remaining-pages readback when it arrives, forming last_visible_pages().
-	void set_first_pass_pages(const std::vector<int> &pages) { first_pass_pages_ = pages; }
 	const std::vector<int> &last_visible_pages() const { return last_visible_pages_; }
-	// Replaces last_visible_pages() directly. Used when the remaining pass is empty and no
-	// async args readback will arrive to refresh the visible set.
+	// Replaces last_visible_pages() directly. Used when no HiZ was built this frame, so no
+	// cull runs and no async args readback will arrive to refresh the visible set.
 	void set_last_visible_pages(const std::vector<int> &pages);
 
 	// Records the stats clear, one compute dispatch (one thread per candidate page), and
-	// async stats + args readbacks. `page_count` is the number of remaining pages in the
-	// currently uploaded args buffer; `total_page_count` and `first_pass_count` describe the
-	// whole candidate set so culled_ratio() keeps counting pages drawn in the first pass.
+	// async stats + args readbacks. `page_count` is the number of slots in the currently
+	// uploaded args buffer: the remaining pages first, then the `first_pass_count` pages the
+	// first pass already drew, which are culled only to decide next frame's first pass and
+	// must not be drawn again. `total_page_count` describes the whole candidate set so
+	// culled_ratio() keeps counting pages drawn in the first pass.
 	// The caller must have already uploaded the indirect args with
 	// LodPool::upload_draw_args, and must end this compute list before opening the raster
 	// draw list.
@@ -67,14 +68,12 @@ private:
 	gpu::SetCache set_;
 	Ref<AsyncBufferRead> stats_readback_;
 	Ref<AsyncBufferRead> args_readback_;
-	std::vector<int> first_pass_pages_;
-	std::vector<int> first_pass_pages_at_request_;
 	std::vector<int> last_visible_pages_;
 	int last_drawn_ = 0;
 	int last_total_ = 0;
 	int last_total_at_request_ = 0;
 	int last_first_pass_count_at_request_ = 0;
-	int last_remaining_count_at_request_ = 0;
+	int last_slot_count_at_request_ = 0;
 	float last_ms_ = 0.0f;
 };
 

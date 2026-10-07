@@ -64,14 +64,12 @@ void LodCullPass::teardown() {
 	set_ = gpu::SetCache();
 	stats_readback_ = Ref<AsyncBufferRead>();
 	args_readback_ = Ref<AsyncBufferRead>();
-	first_pass_pages_.clear();
-	first_pass_pages_at_request_.clear();
 	last_visible_pages_.clear();
 	last_drawn_ = 0;
 	last_total_ = 0;
 	last_total_at_request_ = 0;
 	last_first_pass_count_at_request_ = 0;
-	last_remaining_count_at_request_ = 0;
+	last_slot_count_at_request_ = 0;
 	rd_ = nullptr;
 }
 
@@ -83,19 +81,22 @@ bool LodCullPass::ensure_uniform_set(RenderingDevice *rd, LodPool &pool, HizPass
 			gpu::storage(1, pool.page_chunk_buffer()),
 			gpu::storage(2, pool.chunk_buffer()),
 			gpu::sampled(3, sampler_, hiz->pyramid()),
-			gpu::storage(4, stats_)}).is_valid();
+			gpu::storage(4, stats_),
+			gpu::storage(5, pool.page_bounds_buffer())}).is_valid();
 }
 
 void LodCullPass::consume_args_readback() {
 	const PackedByteArray &data = args_readback_->data();
-	const int remaining_count = last_remaining_count_at_request_;
-	if (remaining_count <= 0 || data.size() < static_cast<int64_t>(remaining_count) * 20) {
+	const int slot_count = last_slot_count_at_request_;
+	if (slot_count <= 0 || data.size() < static_cast<int64_t>(slot_count) * 20) {
 		return; // fail-soft: keep the previous visible set
 	}
 
-	std::vector<int> visible = first_pass_pages_at_request_;
+	// Every candidate was culled, the first pass's pages included, so the survivors ARE the
+	// visible set. Folding the first pass back in unconditionally made the set monotonic.
+	std::vector<int> visible;
 	const uint32_t *a = reinterpret_cast<const uint32_t *>(data.ptr());
-	for (int i = 0; i < remaining_count; i++) {
+	for (int i = 0; i < slot_count; i++) {
 		if (a[static_cast<size_t>(i) * 5u + 1u] != 0u) {
 			const uint32_t page = a[static_cast<size_t>(i) * 5u + 3u] /
 					static_cast<uint32_t>(ve::kLodVertsPerPage);
@@ -116,8 +117,7 @@ void LodCullPass::set_last_visible_pages(const std::vector<int> &pages) {
 	// A manual visible-set update supersedes any in-flight args readback. Invalidate the
 	// request-time pairing so consume_args_readback() ignores a stale readback that arrives
 	// later and would otherwise re-promote pages that left draw_pages().
-	last_remaining_count_at_request_ = 0;
-	first_pass_pages_at_request_.clear();
+	last_slot_count_at_request_ = 0;
 }
 
 bool LodCullPass::run(RenderingDevice *rd, LodPool &pool, HizPass *hiz,
@@ -128,7 +128,7 @@ bool LodCullPass::run(RenderingDevice *rd, LodPool &pool, HizPass *hiz,
 			!args_readback_.is_valid()) {
 		return false;
 	}
-	if (page_count <= 0) return false;
+	if (page_count <= 0 || first_pass_count < 0 || first_pass_count > page_count) return false;
 	if (!ensure_uniform_set(rd, pool, hiz)) return false;
 
 	if (stats_readback_->take_fresh()) {
@@ -156,6 +156,7 @@ bool LodCullPass::run(RenderingDevice *rd, LodPool &pool, HizPass *hiz,
 	push.params[0] = page_count;
 	push.params[1] = HizPass::kSize;
 	push.params[2] = hiz->mip_count();
+	push.params[3] = page_count - first_pass_count;
 
 	rd->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
 	rd->compute_list_dispatch(list, (static_cast<uint32_t>(page_count) + 63u) / 64u, 1, 1);
@@ -168,19 +169,11 @@ bool LodCullPass::run(RenderingDevice *rd, LodPool &pool, HizPass *hiz,
 		last_total_at_request_ = total_page_count;
 		last_first_pass_count_at_request_ = first_pass_count;
 	}
-	// Async args readback: the CPU learns which remaining pages survived the cull a few
-	// frames later. Paired with the first-pass page snapshot from the same request so
-	// last_visible_pages() is the exact union of that frame's two passes. A zero
-	// first-pass count (debug probe / single-pass cull) must snapshot an empty first-pass
-	// list so stale first-pass pages from a normal temporal frame are not folded in.
+	// Async args readback: the CPU learns which candidates survived the cull a few frames
+	// later, and that is the whole of last_visible_pages().
 	if (args_readback_->request(rd, pool.args_buffer(), 0,
 				static_cast<uint32_t>(page_count) * 20u)) {
-		if (first_pass_count <= 0) {
-			first_pass_pages_at_request_.clear();
-		} else {
-			first_pass_pages_at_request_ = first_pass_pages_;
-		}
-		last_remaining_count_at_request_ = page_count;
+		last_slot_count_at_request_ = page_count;
 	}
 	last_ms_ = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
 	return true;

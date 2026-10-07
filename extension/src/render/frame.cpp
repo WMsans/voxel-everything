@@ -399,9 +399,6 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 				else
 					remaining_draw.push_back(pd);
 			}
-			std::vector<int> first_pass_pages;
-			first_pass_pages.reserve(first_pass_draw.size());
-			for (const LodRasterPass::PageDraw &pd : first_pass_draw) first_pass_pages.push_back(pd.page);
 			const int first_pass_count = static_cast<int>(first_pass_draw.size());
 			const int remaining_count = static_cast<int>(remaining_draw.size());
 			const int total_count = lod_raster->draw_page_count();
@@ -412,27 +409,31 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 						view_proj, cam_pos, first_pass_count, fade_start, fade_end, in.debug.marker);
 				if (!first_lod_ok) { cancel_stage(kStageLod); timings->abort_frame(); return false; }
 				end_stage(rd, kStageLod);
-				if (remaining_count > 0) hiz_built = hiz->build(rd, gb->depth(), size);
+				// Rebuilt even with nothing remaining: the first pass's own pages are re-tested
+				// against it below, which is the only way one of them ever leaves the set.
+				hiz_built = hiz->build(rd, gb->depth(), size);
 			}
 			build_sun_shadow();
+			// The remaining pages occupy the leading slots, so drawing `remaining_count` slots
+			// draws exactly them; the first pass's pages ride behind as re-tests only.
+			std::vector<LodRasterPass::PageDraw> cull_draw = remaining_draw;
+			cull_draw.insert(cull_draw.end(), first_pass_draw.begin(), first_pass_draw.end());
+			if (!cull_draw.empty()) lod_.pool()->upload_draw_args(cull_draw);
+			if (hiz_built && !cull_draw.empty()) {
+				lod_cull->run(rd, *lod_.pool(), hiz, view_proj, static_cast<int>(cull_draw.size()),
+						total_count, first_pass_count);
+			} else {
+				std::vector<int> visible;
+				visible.reserve(cull_draw.size());
+				for (const LodRasterPass::PageDraw &pd : cull_draw) visible.push_back(pd.page);
+				lod_cull->set_last_visible_pages(visible);
+			}
 			if (remaining_count > 0) {
-				lod_.pool()->upload_draw_args(remaining_draw);
-				if (hiz_built) {
-					lod_cull->set_first_pass_pages(first_pass_pages);
-					lod_cull->run(rd, *lod_.pool(), hiz, view_proj, remaining_count,
-							total_count, first_pass_count);
-				} else {
-					std::vector<int> visible = first_pass_pages;
-					for (const LodRasterPass::PageDraw &pd : remaining_draw) visible.push_back(pd.page);
-					lod_cull->set_last_visible_pages(visible);
-				}
 				timings->begin(rd, "lod");
 				const bool remaining_lod_ok = lod_raster->draw(rd, *lod_.pool(), *materials, *gb,
 						view_proj, cam_pos, remaining_count, fade_start, fade_end, in.debug.marker);
 				if (!remaining_lod_ok) { cancel_stage(kStageLod); timings->abort_frame(); return false; }
 				end_stage(rd, kStageLod);
-			} else {
-				lod_cull->set_last_visible_pages(first_pass_pages);
 			}
 		}
 	}

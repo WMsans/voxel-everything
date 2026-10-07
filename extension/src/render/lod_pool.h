@@ -44,6 +44,9 @@ public:
 	RID normal_buffer() const { return normals_; }
 	RID index_buffer() const { return index_; }
 	RID page_chunk_buffer() const { return page_chunk_; }
+	// Two vec4 per page, (lo.xyz, 0) and (hi.xyz, 0): the box around that page's own quads in
+	// its chunk record's frame (world space for terrain, local space for an island page).
+	RID page_bounds_buffer() const { return page_bounds_; }
 	RID chunk_buffer() const { return chunks_; }
 	RID args_buffer() const { return args_; }
 	// Debug/test support: the CPU mirror of the page_chunk GPU buffer.
@@ -68,6 +71,7 @@ private:
 	bool warned_records_ = false;
 	bool warned_pages_ = false;
 	static constexpr uint32_t kNoChunk = 0xffffffffu;
+	static constexpr uint32_t kPageBoundsBytes = 32;
 
 	int allocate_chunk_slot();
 	void release_chunk_slot(int slot);
@@ -80,6 +84,7 @@ private:
 	RID index_;
 	RID page_chunk_;
 	RID page_quads_;
+	RID page_bounds_;
 	RID chunks_;
 	RID args_;
 	std::vector<uint32_t> page_chunk_cpu_; // page -> chunk-record slot; kNoChunk = free

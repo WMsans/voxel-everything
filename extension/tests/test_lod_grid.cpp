@@ -42,11 +42,11 @@ TEST_CASE("the raster levels sit below level 0 at 0.2 m and 0.1 m") {
 // The descend threshold is stated once, in terms of the per-cell pixel error, so section 2's
 // distance column and section 6.1's walk can never disagree about what "3 px" means.
 TEST_CASE("the descend threshold is the per-cell error squared over a chunk") {
-	CHECK(ve::kLodTargetCellPx == doctest::Approx(3.0f));
+	CHECK(ve::kLodTargetCellPx == doctest::Approx(6.0f));
 	CHECK(ve::kLodSseAreaThresh ==
 			doctest::Approx(float(ve::kLodChunkCells) * ve::kLodTargetCellPx *
 					float(ve::kLodChunkCells) * ve::kLodTargetCellPx));
-	CHECK(ve::kLodSseAreaThresh == doctest::Approx(9216.0f));
+	CHECK(ve::kLodSseAreaThresh == doctest::Approx(36864.0f));
 }
 
 // Chunk coordinates are GLOBAL per level: no origin term anywhere.

@@ -248,4 +248,27 @@ void lod_quad_corner_pos(const LodQuadFields &f, int k, const float origin[3], f
 	for (int a = 0; a < 3; a++) out[a] += d[a] * cell;
 }
 
+void lod_quads_bounds(const LodQuad *quads, int count, const float origin[3], float cell,
+		float lo[3], float hi[3]) {
+	for (int a = 0; a < 3; a++) {
+		lo[a] = 3.4e38f;
+		hi[a] = -3.4e38f;
+	}
+	for (int i = 0; i < count; i++) {
+		LodQuadFields f{};
+		lod_quad_unpack(quads[i], &f);
+		// A ribbon's outer corners move by at most kLodSkirtMaxExtensionCells per axis from
+		// the parent endpoint they hang off; skipping the solve keeps this cheap at upload.
+		const float pad = f.double_sided ? float(kLodSkirtMaxExtensionCells) * cell : 0.0f;
+		for (int k = 0; k < 4; k++) {
+			float p[3];
+			lod_quad_parent_corner_pos(f, k, origin, cell, p);
+			for (int a = 0; a < 3; a++) {
+				lo[a] = std::min(lo[a], p[a] - pad);
+				hi[a] = std::max(hi[a], p[a] + pad);
+			}
+		}
+	}
+}
+
 } // namespace ve

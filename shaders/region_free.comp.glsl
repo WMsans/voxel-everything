@@ -15,6 +15,8 @@ layout(set = 0, binding = 2, std430) buffer Counters {
 // region, so the count goes to zero rather than being decremented brick by brick.
 layout(set = 0, binding = 3, std430) buffer RegionSlotCounts { int n[]; } region_counts;
 layout(set = 0, binding = 4, std430) buffer RegionOccupancy { uint w[]; } occupancy;
+// brick_mark.comp.glsl's resident-brick box; emptied with the slot (min past max).
+layout(set = 0, binding = 5, std430) buffer RegionBounds { int v[]; } region_bounds;
 
 layout(push_constant, std430) uniform Push { REGION_FREE_PUSH_FIELDS } pc;
 
@@ -24,6 +26,7 @@ void main() {
 	// A plain store, not an atomic: nothing else in this dispatch touches the tally, and the
 	// streamer barriers between the free pass and any mark that could.
 	if (i == 0) region_counts.n[pc.cfg.x] = 0;
+	if (i < 8) region_bounds.v[pc.cfg.x * 8 + i] = i < 3 ? REGION_BRICKS : -1;
 	// Back to kCellUnknown. The slot is about to describe a different region, and a leftover
 	// bit would answer for a cell in a place it was never probed. The CPU-side grid keeps
 	// the OLD region's block -- it is persistent by coordinate, not by slot.

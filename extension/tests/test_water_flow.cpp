@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include <cmath>
+#include <initializer_list>
 
 // Execute the ACTUAL water flow GLSL in a native test, the way test_grass_tilt_shader.cpp
 // executes the blade tilt. The shim supplies only GLSL scalar/vector operations; none of the

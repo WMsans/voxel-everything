@@ -64,7 +64,13 @@ func drive(w: VoxelWorld, pos: Vector3, fwd: Vector3, n: int) -> bool:
 # Three repeated runs on 2026-09-15 read exactly 0.0 (spread 0), so this tolerance is
 # a fixed floor, not twice a measured spread: the break drives the ratio to 0.333,
 # nearly 7x TOL above golden. If this ever goes flaky, widen TOL before re-recording.
-const GOLDEN := 0.0
+#
+# Re-recorded 2026-10-06 on an Intel Iris Xe: 0.0 -> 0.12. The cull now tests each page against
+# the box of its own quads instead of the 32-cell chunk cube, and the far-field target went
+# from 3 to 6 px per cell, so this view finally has pages the HiZ can hide. Three runs read
+# 0.116364, 0.12, 0.12 (spread 0.004, an order under TOL). Intentional change, re-recorded in
+# the commit that causes it.
+const GOLDEN := 0.12
 const TOL := 0.05
 
 func test_production_cull_ratio_matches_the_recorded_golden(timeout := 500000) -> void:

@@ -54,7 +54,7 @@ func test_an_edit_rebuilds_every_level_it_touches(timeout := 180000) -> void:
 	var pos := Vector3(400.0, 90.0, 400.0)
 	var fwd := Vector3(0.0, -0.35, -1.0).normalized()
 	assert_bool(await settle(w, pos, fwd)).is_true()
-	var before := w.hooks().debug_lod_stats()
+	var before := w.hooks().debug_lod_render_probe(pos, fwd, 1280, 720)
 	var surface := w.hooks().debug_raycast(Vector3(400.0, 180.0, 380.0), Vector3.DOWN)
 	assert_bool(surface["hit"]).is_true()
 	w.hooks().debug_apply_sphere_subtract(surface["pos"], 8.0)
@@ -63,17 +63,22 @@ func test_an_edit_rebuilds_every_level_it_touches(timeout := 180000) -> void:
 	# flags this case is about to read, because note_building clears them at submission.
 	w.hooks().debug_drain_invalidations()
 	var dirty := w.hooks().debug_lod_stats()
-	# Run one LoD tick so lod_walk_ reflects the post-edit walk; the stale-beats-missing
+	# The probe runs one LoD tick, so it draws the post-edit walk; the stale-beats-missing
 	# assertion below is vacuous if it reads the pre-edit draw list.
-	w.hooks().debug_lod_tick(pos, fwd)
-	var d := w.hooks().debug_lod_stats()
+	var d := w.hooks().debug_lod_render_probe(pos, fwd, 1280, 720)
 	assert_int(dirty["dirty_chunks"]).override_failure_message(
 		"an 8 m crater dirtied no LoD chunks").is_greater(0)
 	assert_int(dirty["dirty_levels"]).override_failure_message(
 		"an 8 m crater dirtied %d levels, expected every level it reaches" % dirty["dirty_levels"]
 		).is_greater_equal(4)
-	# Stale beats missing: nothing is un-drawn while the rebuild is queued.
-	assert_int(d["draw_pages"]).is_greater_equal(before["draw_pages"] * 0.9)
+	# Stale beats missing: nothing is un-drawn while the rebuild is queued. Measured as the
+	# far field's screen coverage, not its page count: the edit resets the empty chunks it
+	# touches to unknown, so their parents draw in place of eight children until the rebuild
+	# lands -- fewer pages, the same ground. Pages fell 15% that way at the 6 px target while
+	# coverage rose (0.189 -> 0.194: the crater walls are new surface).
+	assert_float(d["coverage"]).override_failure_message(
+		"the far field un-drew ground while the rebuild was queued: coverage %f -> %f" % [
+		before["coverage"], d["coverage"]]).is_greater_equal(before["coverage"] * 0.99)
 	assert_bool(await settle(w, pos, fwd)).is_true()
 	assert_int(w.hooks().debug_lod_stats()["dirty_chunks"]).override_failure_message(
 		"the dirty chunks never finished rebuilding").is_equal(0)

@@ -101,6 +101,11 @@ struct LodTreeConfig {
 	uint32_t occluded_frames = kLodOccludedFrames;
 	int max_requests_per_walk = 32;
 	float fade_start_m = kLodFadeStartM;
+	// Within this distance the walk forces level 0 whatever the screen-space error says
+	// (want_finer). LodSystem sets it every tick to the measured fade band's END: the rule is
+	// for the seam with the marched near field, and a fixed 300 m forced 0.4 m cells -- about
+	// one pixel each -- across a disc the eye never compares with the near field.
+	float near_dense_radius_m = kLodNearDenseRadiusM;
 	// The finest level the walk may descend to: 0 in raymarched mode, kLodMinLevel in raster
 	// mode (spec 2026-10-04 §3). Nothing below it is requested, drawn or waited for.
 	int min_level = 0;
@@ -169,6 +174,7 @@ public:
 	// gate has to move with it: chunks the fragment shader would now keep must be built.
 	void set_fade_start_m(float v) { cfg_.fade_start_m = v; }
 	void set_min_level(int v) { cfg_.min_level = v; }
+	void set_near_dense_radius_m(float v) { cfg_.near_dense_radius_m = v; }
 
 private:
 	struct Key {
