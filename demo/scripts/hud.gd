@@ -67,7 +67,7 @@ func _update_text() -> void:
 		if _tool:
 			tool_name = str(_tool.tool_name())
 			radius = float(_tool.radius)
-		text = "%d fps  (%.1f ms)  |  %s  radius %.1f" % [fps, ms, tool_name, radius]
+		text = "%s  |  %d fps  (%.1f ms)  |  %s  radius %.1f" % [world_line(_world), fps, ms, tool_name, radius]
 		return
 
 	var s := "world: booting"
@@ -136,7 +136,7 @@ func _update_text() -> void:
 	var tool_line := ""
 	if _tool:
 		tool_line = "\n%s  radius %.1f" % [str(_tool.tool_name()), float(_tool.radius)]
-	text = "%d fps  (%.1f ms)  |  %s%s%s%s%s%s\n%s%s" % [fps, ms, s, p, isl, lod, norm, grass, gpu_line, tool_line]
+	text = "%s\n%d fps  (%.1f ms)  |  %s%s%s%s%s%s\n%s%s" % [world_line(_world), fps, ms, s, p, isl, lod, norm, grass, gpu_line, tool_line]
 
 func _draw_reticle() -> void:
 	if _reticle == null or mode == Mode.HIDDEN:
@@ -172,3 +172,14 @@ func _reticle_circle_radius() -> float:
 		return 0.0
 	var half_fov_y := deg_to_rad(cam.fov) * 0.5
 	return world_radius / distance * viewport_size.y / (2.0 * tan(half_fov_y))
+
+# "seed 123456 · Mesas": a blank-seed world is otherwise not reproducible. Minecraft shows the
+# seed in F3 for the same reason. A bare VoxelWorld (tests, tools) has no world_type, so it
+# is named after its pipeline file.
+static func world_line(world: Node) -> String:
+	if world == null:
+		return ""
+	var wt = world.get("world_type")
+	var type_name: String = wt.display_name if wt != null \
+			else String(world.get("terrain_pipeline_path")).get_file().get_basename()
+	return "seed %d · %s" % [int(world.get("world_seed")), type_name]
