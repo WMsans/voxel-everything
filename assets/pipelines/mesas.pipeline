@@ -7,7 +7,6 @@
 # No `lipschitz` line: with no ceiling declared, resolve reports the computed bound
 # (1.78 + 0.21 + 1.3 = 3.29). A steep stage costs raycast steps; declaring a ceiling here
 # is how an author would refuse to pay them.
-seed      1337
 
 stage stages/hills.field.glslh
 stage stages/relief.field.glslh

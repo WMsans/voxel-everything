@@ -30,7 +30,7 @@ const char *kHills =
 
 TEST_CASE("load_pipeline reads the pipeline and every stage it names, then resolves") {
 	const std::map<std::string, std::string> files{
-		{"pipe/a.pipeline", "seed 7\nstage stages/hills.field.glslh\n"},
+		{"pipe/a.pipeline", "stage stages/hills.field.glslh\n"},
 		{"root/stages/hills.field.glslh", kHills},
 	};
 	ve::ResolvedPipeline p;

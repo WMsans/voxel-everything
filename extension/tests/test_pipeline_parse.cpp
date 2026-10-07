@@ -4,7 +4,6 @@
 TEST_CASE("parses a pipeline with indented param overrides") {
 	const char *src =
 		"# a comment\n"
-		"seed      1337\n"
 		"lipschitz 2.0\n"
 		"\n"
 		"stage stages/hills.field.glslh\n"
@@ -15,7 +14,6 @@ TEST_CASE("parses a pipeline with indented param overrides") {
 	ve::PipelineDesc d;
 	std::string err;
 	REQUIRE_MESSAGE(ve::parse_pipeline_desc(src, &d, &err), err);
-	CHECK(d.seed == 1337u);
 	CHECK(d.lipschitz_ceiling == doctest::Approx(2.0f));
 	REQUIRE(d.stages.size() == 2);
 	CHECK(d.stages[0].path == "stages/hills.field.glslh");
@@ -45,6 +43,13 @@ TEST_CASE("a param override before any stage is an error") {
 TEST_CASE("an empty pipeline is an error") {
 	ve::PipelineDesc d;
 	std::string err;
-	CHECK_FALSE(ve::parse_pipeline_desc("seed 1\n", &d, &err));
+	CHECK_FALSE(ve::parse_pipeline_desc("lipschitz 2.0\n", &d, &err));
 	CHECK(err.find("stage") != std::string::npos);
+}
+
+TEST_CASE("the seed is a world property, not a pipeline key") {
+	ve::PipelineDesc d;
+	std::string err;
+	CHECK_FALSE(ve::parse_pipeline_desc("seed 1337\nstage a\n", &d, &err));
+	CHECK(err.find("VoxelWorld.world_seed") != std::string::npos);
 }

@@ -12,6 +12,7 @@ struct PipelineStageRef {
     std::vector<std::pair<std::string, float>> param_overrides;
 };
 struct PipelineDesc {
+    // The WORLD seed, set by load_pipeline's caller -- never parsed from the file.
     uint32_t seed = 1337;
     // A CEILING, not an override: resolve computes the bound from the stages and refuses a
     // pipeline whose computed bound exceeds this. 0 => no ceiling declared, no check.
