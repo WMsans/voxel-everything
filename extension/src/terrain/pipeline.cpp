@@ -16,11 +16,6 @@ std::string trim(const std::string &s) {
 bool is_indented(const std::string &line) {
 	return !line.empty() && (line[0] == ' ' || line[0] == '\t');
 }
-// "image2d_rg16" / "texture2d_rg16" -> "rg16": producer and consumer must agree on this half.
-std::string resource_format(const std::string &type) {
-	const size_t at = type.find("2d_");
-	return at == std::string::npos ? type : type.substr(at + 3);
-}
 } // namespace
 
 bool parse_pipeline_desc(const std::string &source, PipelineDesc *out, std::string *error) {
@@ -161,9 +156,9 @@ bool resolve_pipeline(const PipelineDesc &desc, const std::vector<StageManifest>
 				return fail("map stage '" + m.name + "' must declare //!domain sector2d 256x256");
 			if (m.map_writes.size() != 1)
 				return fail("map stage '" + m.name + "' must write exactly one sector resource");
-			if (resource_format(m.map_writes[0].type) != "rg16")
+			if (m.map_writes[0].type != "image2d_rg16")
 				return fail("map stage '" + m.name + "' writes " + m.map_writes[0].type +
-						"; sector resources are rg16 (spec 4.2)");
+						"; sector outputs must be image2d_rg16 (spec 4.2)");
 			if (!m.reads.empty() || !m.writes.empty() || !m.samples.empty() ||
 					m.lipschitz_mode != LipschitzMode::kNone)
 				return fail("map stage '" + m.name + "' declares field channels, a //!sample or a "
@@ -171,6 +166,8 @@ bool resolve_pipeline(const PipelineDesc &desc, const std::vector<StageManifest>
 			out->map_stage = int(i);
 		} else {
 			seen_field_stage = true;
+			if (!m.map_writes.empty())
+				return fail("field stage '" + m.name + "' cannot write sector resources");
 			if (m.cpu_symbol.empty()) {
 				if (!desc.allow_gpu_only)
 					return fail("stage '" + m.name + "' has no //!cpu mirror; set allow_gpu_only "
@@ -296,11 +293,11 @@ bool resolve_pipeline(const PipelineDesc &desc, const std::vector<StageManifest>
 	// Every sampled resource is the map stage's output, at the same format, and the map
 	// stage's output is sampled -- an unsampled bake is work nothing reads.
 	for (const ResourceDecl &r : out->resources) {
+		if (r.type != "texture2d_rg16")
+			return fail("field sample '" + r.name + "' has type " + r.type +
+					"; sector resources must be texture2d_rg16 (spec 4.2)");
 		if (out->map_stage < 0 || out->stages[size_t(out->map_stage)].map_writes[0].name != r.name)
 			return fail("resource '" + r.name + "' is sampled, but no map stage writes it");
-		const ResourceDecl &w = out->stages[size_t(out->map_stage)].map_writes[0];
-		if (resource_format(w.type) != resource_format(r.type))
-			return fail("resource '" + r.name + "' is written as " + w.type + " and sampled as " + r.type);
 	}
 	if (out->map_stage >= 0 && out->resources.empty())
 		return fail("map stage '" + out->stages[size_t(out->map_stage)].name + "' writes " +

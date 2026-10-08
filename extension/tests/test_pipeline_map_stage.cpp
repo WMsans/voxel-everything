@@ -95,6 +95,15 @@ TEST_CASE("map-stage rules are enforced with the stage named") {
 	SUBCASE("a format mismatch") {
 		CHECK_FALSE(resolve({parse(kMap), parse(with(kField, "texture2d_rg16", "texture2d_r32f"))}, &p, &err));
 	}
+	SUBCASE("an invalid resource type") {
+		CHECK_FALSE(resolve({parse(with(kMap, "image2d_rg16", "bogus2d_rg16")), parse(kField)}, &p, &err));
+	}
+	SUBCASE("a 3D resource type") {
+		CHECK_FALSE(resolve({parse(with(kMap, "image2d_rg16", "texture3d_rg16")), parse(kField)}, &p, &err));
+	}
+	SUBCASE("a field stage dotted output") {
+		CHECK_FALSE(resolve({parse(kMap), parse(with(kField, "//!out sdf : float", "//!out sector.extra : image2d_rg16\n//!out sdf : float"))}, &p, &err));
+	}
 	SUBCASE("a map output nothing samples") {
 		CHECK_FALSE(resolve({parse(kMap), parse(with(kField, "//!sample sector.terrain : texture2d_rg16\n", ""))}, &p, &err));
 	}
