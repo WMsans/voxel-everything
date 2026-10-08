@@ -1,5 +1,6 @@
 #include "terrain/pipeline.h"
 #include "terrain/seed_offset.h"
+#include "terrain/sector.h"
 #include <algorithm>
 #include <cstdlib>
 #include <sstream>
@@ -14,6 +15,11 @@ std::string trim(const std::string &s) {
 }
 bool is_indented(const std::string &line) {
 	return !line.empty() && (line[0] == ' ' || line[0] == '\t');
+}
+// "image2d_rg16" / "texture2d_rg16" -> "rg16": producer and consumer must agree on this half.
+std::string resource_format(const std::string &type) {
+	const size_t at = type.find("2d_");
+	return at == std::string::npos ? type : type.substr(at + 3);
 }
 } // namespace
 
@@ -135,6 +141,7 @@ bool resolve_pipeline(const PipelineDesc &desc, const std::vector<StageManifest>
 	out->channels.push_back({"material", ChannelType::kUint, 2});
 
 	bool wrote_sdf = false;
+	bool seen_field_stage = false;
 	// Starts at zero: the first sdf writer establishes the field and adds its own bound.
 	float lip = 0.0f;
 	bool seen_sdf_writer = false;
@@ -142,21 +149,40 @@ bool resolve_pipeline(const PipelineDesc &desc, const std::vector<StageManifest>
 
 	for (size_t i = 0; i < loaded.size(); i++) {
 		StageManifest m = loaded[i];
-		if (m.kind != StageKind::kField)
-			return fail("stage '" + m.name + "' is a map stage; Plan A resolves field stages only");
 		for (size_t j = 0; j < i; j++)
 			if (loaded[j].name == m.name) return fail("duplicate stage name: " + m.name);
-		if (m.cpu_symbol.empty()) {
-			if (!desc.allow_gpu_only)
-				return fail("stage '" + m.name + "' has no //!cpu mirror; set allow_gpu_only "
-						"to accept a GPU-authoritative field");
-			out->cpu_exact = false;
-			// allow_gpu_only is a deliberate opt-in, so this is not an error -- but it
-			// stops being silent. Everything that evaluates the field on the CPU will
-			// disagree with what the player sees.
-			out->warnings.push_back("stage '" + m.name + "' has no //!cpu mirror, so these "
-					"CPU consumers will diverge from the rendered field: collider meshing, "
-					"island extraction, raycast, and consolidation");
+		if (m.kind == StageKind::kMap) {
+			if (seen_field_stage)
+				return fail("map stage '" + m.name + "' must come before every field stage");
+			if (out->map_stage >= 0)
+				return fail("map stage '" + m.name + "' is a second map stage; a pipeline has at "
+						"most one sector2d map stage");
+			if (m.domain != "sector2d" || m.domain_w != kSectorTexels || m.domain_h != kSectorTexels)
+				return fail("map stage '" + m.name + "' must declare //!domain sector2d 256x256");
+			if (m.map_writes.size() != 1)
+				return fail("map stage '" + m.name + "' must write exactly one sector resource");
+			if (resource_format(m.map_writes[0].type) != "rg16")
+				return fail("map stage '" + m.name + "' writes " + m.map_writes[0].type +
+						"; sector resources are rg16 (spec 4.2)");
+			if (!m.reads.empty() || !m.writes.empty() || !m.samples.empty() ||
+					m.lipschitz_mode != LipschitzMode::kNone)
+				return fail("map stage '" + m.name + "' declares field channels, a //!sample or a "
+						"//!lipschitz; it writes only its sector resource");
+			out->map_stage = int(i);
+		} else {
+			seen_field_stage = true;
+			if (m.cpu_symbol.empty()) {
+				if (!desc.allow_gpu_only)
+					return fail("stage '" + m.name + "' has no //!cpu mirror; set allow_gpu_only "
+							"to accept a GPU-authoritative field");
+				out->cpu_exact = false;
+				// allow_gpu_only is a deliberate opt-in, so this is not an error -- but it
+				// stops being silent. Everything that evaluates the field on the CPU will
+				// disagree with what the player sees.
+				out->warnings.push_back("stage '" + m.name + "' has no //!cpu mirror, so these "
+						"CPU consumers will diverge from the rendered field: collider meshing, "
+						"island extraction, raycast, and consolidation");
+			}
 		}
 
 		for (const ChannelDecl &r : m.reads) {
@@ -266,6 +292,19 @@ bool resolve_pipeline(const PipelineDesc &desc, const std::vector<StageManifest>
 						", which is neither its own param nor a declared //!use");
 		}
 	}
+
+	// Every sampled resource is the map stage's output, at the same format, and the map
+	// stage's output is sampled -- an unsampled bake is work nothing reads.
+	for (const ResourceDecl &r : out->resources) {
+		if (out->map_stage < 0 || out->stages[size_t(out->map_stage)].map_writes[0].name != r.name)
+			return fail("resource '" + r.name + "' is sampled, but no map stage writes it");
+		const ResourceDecl &w = out->stages[size_t(out->map_stage)].map_writes[0];
+		if (resource_format(w.type) != resource_format(r.type))
+			return fail("resource '" + r.name + "' is written as " + w.type + " and sampled as " + r.type);
+	}
+	if (out->map_stage >= 0 && out->resources.empty())
+		return fail("map stage '" + out->stages[size_t(out->map_stage)].name + "' writes " +
+				out->stages[size_t(out->map_stage)].map_writes[0].name + ", but no field stage samples it");
 
 	// Sorted so set-1 binding indices are a pure function of the resource names, which keeps
 	// the generated GLSL stable and diffable across unrelated pipeline edits.

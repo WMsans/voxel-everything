@@ -109,29 +109,6 @@ TEST_CASE("a GPU-only stage needs the opt-in") {
 	CHECK_FALSE(p.cpu_exact);
 }
 
-TEST_CASE("a map stage in a field pipeline is rejected in Plan A") {
-	std::vector<ve::StageManifest> st{field_stage("a", {"sdf"}, {})};
-	st[0].kind = ve::StageKind::kMap;
-	ve::ResolvedPipeline p;
-	std::string err;
-	CHECK_FALSE(ve::resolve_pipeline(desc_for(1), st, &p, &err));
-	CHECK(err.find("map") != std::string::npos);
-}
-
-TEST_CASE("resources sort by name") {
-	std::vector<ve::StageManifest> st{field_stage("a", {"sdf"}, {})};
-	st[0].samples.push_back({"sector.z", "texture2d_r32f", 0.0f});
-	st[0].samples.push_back({"sector.a", "texture2d_r32f", 0.0f});
-	st[0].lipschitz_mode = ve::LipschitzMode::kAdd;
-	st[0].lipschitz = 1.5f;
-	ve::ResolvedPipeline p;
-	std::string err;
-	REQUIRE_MESSAGE(ve::resolve_pipeline(desc_for(1), st, &p, &err), err);
-	REQUIRE(p.resources.size() == 2);
-	CHECK(p.resources[0].name == "sector.a");
-	CHECK(p.resources[1].name == "sector.z");
-}
-
 TEST_CASE("additive stages add to the bound and composing stages multiply it") {
 	std::vector<ve::StageManifest> st{
 		field_stage("base", {"sdf"}, {}),

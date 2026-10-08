@@ -26,6 +26,7 @@ struct ResolvedPipeline {
     std::vector<StageManifest> stages;      // pipeline order
     std::vector<ResolvedChannel> channels;  // p, sdf, material first, then declared order
     std::vector<ResourceDecl> resources;    // sorted by name; set-1 binding = 2 + index
+    int map_stage = -1;                     // index into stages of the sector2d map stage; -1 when none
     std::vector<ParamDecl> params;          // flattened "<stage>.<param>", resolved values
     float lipschitz = 2.0f;
     bool cpu_exact = true;

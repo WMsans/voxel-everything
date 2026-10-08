@@ -26,6 +26,9 @@ struct StageManifest {
     StageKind kind = StageKind::kField;
     std::vector<ChannelDecl> reads, writes;
     std::vector<ResourceDecl> samples;
+    // A map stage's sector resources (`//!out sector.<name> : image2d_<fmt>`). Field stages
+    // read them through //!sample.
+    std::vector<ResourceDecl> map_writes;
     std::vector<ParamDecl> params;
 	// Params this stage reads from ANOTHER stage, as "<stage>.<param>". The GLSL reads
 	// them through the flattened ident (P.hills_amp_a); declaring them here is what lets
