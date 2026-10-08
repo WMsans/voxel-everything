@@ -1,5 +1,6 @@
 #include "render/mesh_service.h"
 #include "render/field_context_set.h"
+#include "render/sector_mirror.h"
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/core/memory.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
@@ -55,6 +56,11 @@ bool MeshService::start(const MeshPassConfig &cfg) {
 void MeshService::set_terrain_pipeline(const ve::ResolvedPipeline &p) {
 	std::lock_guard<std::mutex> lock(mu_);
 	terrain_pipeline_ = p;
+}
+
+void MeshService::set_sector_cache(std::shared_ptr<const ve::SectorCache> c) {
+	std::lock_guard<std::mutex> lock(mu_);
+	sector_cache_ = std::move(c);
 }
 
 void MeshService::stop() {
@@ -528,17 +534,30 @@ void MeshService::run() {
 			delete consolidate_;
 			consolidate_ = nullptr;
 		}
+		// A map-stage pipeline's set 1 binds this device's own copy of the sectors; the
+		// render device's textures are not visible here (plan deviation 1).
+		if (terrain_pipeline_.map_stage >= 0 && sector_cache_) {
+			worker_sectors_ = new SectorMirror();
+			if (!worker_sectors_->initialize(rd, sector_cache_->max_resident())) {
+				UtilityFunctions::printerr("MeshService: worker sector mirror unavailable");
+				delete worker_sectors_;
+				worker_sectors_ = nullptr;
+			}
+		}
 		// The worker device's set 1, shared by every field-consuming worker pass. Built
 		// against the mesh field shader: all four passes compile the same generated
 		// set-1 declarations, so one layout serves them all (same sharing the render
 		// device's orchestrator set uses across its passes). Fail-soft: a null set
 		// leaves the passes' set-1 binds skipped, exactly as on the render device.
 		worker_field_context_ = new FieldContextSet();
-		if (!worker_field_context_->initialize(rd, pass.field_shader(), terrain_pipeline_)) {
+		if (!worker_field_context_->initialize(rd, pass.field_shader(), terrain_pipeline_,
+				worker_sectors_)) {
 			UtilityFunctions::printerr(
 					"MeshService: worker field context set creation failed; continuing without set 1");
 			delete worker_field_context_;
 			worker_field_context_ = nullptr;
+			delete worker_sectors_;
+			worker_sectors_ = nullptr;
 		}
 		pass.set_field_context(worker_field_context_);
 		if (extract_) extract_->set_field_context(worker_field_context_);
@@ -598,6 +617,9 @@ void MeshService::run() {
 				override_publications.swap(pending_override_publications_);
 			}
 		}
+		// Before any job evaluates the field: the planners only submit work whose sectors
+		// were in the host cache, so syncing now covers everything just taken.
+		if (worker_sectors_ && sector_cache_) worker_sectors_->sync(*sector_cache_);
 		// S3: tag every worker table with its region before this iteration's work reads the
 		// pool. override_tables_ is only mutated on this thread, by earlier iterations.
 		pass.overrides().set_table_tags(rd, ve::override_table_tags(override_tables_));
@@ -874,6 +896,8 @@ void MeshService::run() {
 	pass.set_field_context(nullptr);
 	delete worker_field_context_;
 	worker_field_context_ = nullptr;
+	delete worker_sectors_;
+	worker_sectors_ = nullptr;
 	pass.teardown();
 	memdelete(rd);
 }

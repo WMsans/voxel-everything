@@ -65,3 +65,17 @@ func test_a_second_world_never_reads_the_first_worlds_texels() -> void:
 	var c := _open(0)
 	assert_int(c.hooks().debug_pump_sectors(Vector3.ZERO, 300.0, 200)).is_greater(0)
 	assert_bool(c.hooks().debug_sector_texels(0, 0) == bytes_a).is_true()
+
+# The mesher runs on its own RenderingDevice (plan deviation 1). Its lattice must match the
+# CPU field over a fixture surface, which it can only do if its own mirror holds the sector.
+func test_the_mesher_reads_the_same_sectors_as_the_cpu() -> void:
+	var w := _open()
+	assert_int(w.hooks().debug_pump_sectors(Vector3.ZERO, 300.0, 200)).is_greater(0)
+	assert_bool(w.hooks().debug_init_physics()).is_true()
+	var hit: Dictionary = w.raycast(Vector3(30.0, 600.0, 30.0), Vector3.DOWN, 1200.0)
+	assert_bool(hit["hit"]).is_true()
+	var chunk := Vector3i((hit["pos"] as Vector3 / 6.4).floor())
+	var d: Dictionary = w.hooks().debug_mesh_lattice_diff(chunk)
+	assert_bool(d["has_surface"]).is_true()
+	assert_int(d["max_diff"]).is_less_equal(1)
+	assert_int(d["diff_over_one"]).is_equal(0)

@@ -15,11 +15,13 @@
 #include "render/lod_build_pass.h"
 #include "render/mesh_pass.h"
 #include "terrain/pipeline.h"
+#include "terrain/sector_cache.h"
 #include "world/region.h"
 
 namespace godot {
 
 class FieldContextSet;
+class SectorMirror;
 
 // One chunk of work, owning its op list. MeshJob points at a caller-owned array, which is
 // fine inside one call but not across a thread hand-off, so the queue carries the ops.
@@ -74,6 +76,8 @@ public:
 	// The terrain pipeline the worker's set 1 is built from. Call before start() (VoxelWorld
 	// does this in ensure_physics_initialized); copied, read by the worker thread at run().
 	void set_terrain_pipeline(const ve::ResolvedPipeline &p);
+	// The host cache the worker's mirror uploads from. Set before start(), like the pipeline.
+	void set_sector_cache(std::shared_ptr<const ve::SectorCache> c);
 	void stop();
 	bool is_valid() const { return ready_.load(std::memory_order_acquire); }
 
@@ -221,6 +225,8 @@ private:
 	MeshPassConfig cfg_;
 	// The pipeline snapshot the worker's set 1 is built from; written pre-start.
 	ve::ResolvedPipeline terrain_pipeline_;
+	std::shared_ptr<const ve::SectorCache> sector_cache_;
+	SectorMirror *worker_sectors_ = nullptr;
 	// The worker device's set 1, shared by the mesh/extract/lod/consolidate passes.
 	// Created on the worker thread (RIDs belong to its device), destroyed there too.
 	FieldContextSet *worker_field_context_ = nullptr;

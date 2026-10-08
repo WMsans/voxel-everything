@@ -756,6 +756,7 @@ void VoxelWorld::ensure_physics_initialized() {
 	store_->ensure_overrides(store_->config().max_override_bricks);
 	mesh_ = new MeshService();
 	mesh_->set_terrain_pipeline(store_->terrain_pipeline());
+	mesh_->set_sector_cache(store_->sector_cache());
 	MeshPassConfig mcfg;
 	mcfg.max_jobs = mesh_jobs_per_frame_;
 	mcfg.max_override_bricks = store_->overrides() ? store_->overrides()->capacity() : store_->config().max_override_bricks;
