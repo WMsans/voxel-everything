@@ -61,6 +61,10 @@ inline constexpr MaterialDef kMaterials[] = {
 	// like with transparency off. Red dies first: ~0.25 left after 2 m, blue ~0.77.
 	{"water",        "08",  1.0f,    0.0f, {0.0f, 0.0f, 0.0f},   {0.03f, 0.16f, 0.20f},
 			{0.50f, 0.82f, 0.88f}, 1.33f, Liquid::water},
+	// Snow (docs/superpowers/specs/2026-10-07-fjords-terrain-design.md §7.4), banded onto
+	// high, not-too-steep ground by fjord_bands. Soft. The brightest albedo in the game: if
+	// sunlit snow blooms, tune flat_albedo and the texture, never the beauty stack.
+	{"snow",         "09",  1.0f,    0.0f, {0.0f, 0.0f, 0.0f},   {0.86f, 0.88f, 0.92f}},
 };
 
 inline constexpr int kMaterialCount = static_cast<int>(sizeof(kMaterials) / sizeof(kMaterials[0]));
