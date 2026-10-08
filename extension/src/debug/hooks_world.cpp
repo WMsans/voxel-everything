@@ -1416,12 +1416,16 @@ Dictionary VoxelDebugHooks::debug_raycast(Vector3 origin, Vector3 dir) {
 // Drives the SHIPPING SectorContext on a local-device world until every wanted sector in the
 // square around `cam` is in the render mirror. Returns the frames it took, -1 on failure.
 int VoxelDebugHooks::debug_pump_sectors(Vector3 cam, float half_extent, int max_frames) {
+	RenderOrchestrator *render = world_->context().render;
+	if (!render) return -1;
 	world_->ensure_initialized();
+	if (!render->initialized() || !world_->get_use_local_device()) return -1;
 	RenderingDevice *device = world_->rd();
-	SectorContext *sc = world_->context().render->passes().sectors;
-	if (!world_->is_initialized() || !device || !sc || !world_->get_use_local_device()) return -1;
+	if (!device) return -1;
+	SectorContext *sc = render->passes().sectors;
+	if (!sc) return -1;
 	for (int f = 1; f <= max_frames; f++) {
-		sc->run_frame(device, cam.x, cam.z, world_->context().render->passes().field_context);
+		sc->run_frame(device, cam.x, cam.z, render->passes().field_context);
 		device->submit();
 		device->sync();
 		if (sc->ready_on_render(cam.x - half_extent, cam.z - half_extent, cam.x + half_extent,

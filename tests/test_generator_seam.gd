@@ -32,6 +32,8 @@ func test_generator_fingerprint_is_stable() -> void:
 func test_failed_pipeline_init_keeps_field_hooks_safe() -> void:
 	_world.terrain_pipeline_path = "res://assets/pipelines/missing.pipeline"
 	assert_bool(_world.hooks().debug_init_atlas()).is_false()
+	assert_bool(_world.is_initialized()).is_false()
+	assert_int(_world.hooks().debug_pump_sectors(Vector3.ZERO, 0.0, 1)).is_equal(-1)
 	var sample := _world.hooks().debug_eval_field(Vector3.ZERO, PackedByteArray(), 0)
 	assert_float(sample.x).is_equal(0.0)
 	assert_float(sample.y).is_equal(0.0)
