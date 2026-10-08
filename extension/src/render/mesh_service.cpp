@@ -504,7 +504,7 @@ void MeshService::run() {
 	// this function's scope and never escape it.
 	RenderingDevice *rd = RenderingServer::get_singleton()->create_local_rendering_device();
 	MeshPass pass;
-	const bool ok = rd && pass.initialize(rd, cfg_);
+	bool ok = rd && pass.initialize(rd, cfg_);
 	if (!rd) UtilityFunctions::printerr("MeshService: no local RenderingDevice for the mesher");
 	if (rd && ok) {
 		extract_ = new IslandExtractPass();
@@ -536,12 +536,18 @@ void MeshService::run() {
 		}
 		// A map-stage pipeline's set 1 binds this device's own copy of the sectors; the
 		// render device's textures are not visible here (plan deviation 1).
-		if (terrain_pipeline_.map_stage >= 0 && sector_cache_) {
-			worker_sectors_ = new SectorMirror();
-			if (!worker_sectors_->initialize(rd, sector_cache_->max_resident())) {
-				UtilityFunctions::printerr("MeshService: worker sector mirror unavailable");
-				delete worker_sectors_;
-				worker_sectors_ = nullptr;
+		if (terrain_pipeline_.map_stage >= 0) {
+			if (!sector_cache_) {
+				UtilityFunctions::printerr("MeshService: sector cache unavailable for map-stage pipeline");
+				ok = false;
+			} else {
+				worker_sectors_ = new SectorMirror();
+				if (!worker_sectors_->initialize(rd, sector_cache_->max_resident())) {
+					UtilityFunctions::printerr("MeshService: worker sector mirror unavailable");
+					delete worker_sectors_;
+					worker_sectors_ = nullptr;
+					ok = false;
+				}
 			}
 		}
 		// The worker device's set 1, shared by every field-consuming worker pass. Built
@@ -552,12 +558,12 @@ void MeshService::run() {
 		worker_field_context_ = new FieldContextSet();
 		if (!worker_field_context_->initialize(rd, pass.field_shader(), terrain_pipeline_,
 				worker_sectors_)) {
-			UtilityFunctions::printerr(
-					"MeshService: worker field context set creation failed; continuing without set 1");
+			UtilityFunctions::printerr("MeshService: worker field context set creation failed");
 			delete worker_field_context_;
 			worker_field_context_ = nullptr;
 			delete worker_sectors_;
 			worker_sectors_ = nullptr;
+			if (terrain_pipeline_.map_stage >= 0) ok = false;
 		}
 		pass.set_field_context(worker_field_context_);
 		if (extract_) extract_->set_field_context(worker_field_context_);
@@ -571,6 +577,17 @@ void MeshService::run() {
 	}
 	done_cv_.notify_all();
 	if (!ok) {
+		delete extract_;
+		extract_ = nullptr;
+		delete lod_;
+		lod_ = nullptr;
+		delete consolidate_;
+		consolidate_ = nullptr;
+		pass.set_field_context(nullptr);
+		delete worker_field_context_;
+		worker_field_context_ = nullptr;
+		delete worker_sectors_;
+		worker_sectors_ = nullptr;
 		pass.teardown();
 		if (rd) memdelete(rd);
 		return;
