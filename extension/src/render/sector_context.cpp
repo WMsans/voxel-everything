@@ -26,7 +26,25 @@ bool SectorContext::initialize(RenderingDevice *rd, std::shared_ptr<ve::SectorCa
 		b.read.instantiate();
 		if (!b.buffer.is_valid()) return false;
 	}
-	return op_dummy_.is_valid() && mirror_.initialize(rd, cache_->max_resident());
+	if (!op_dummy_.is_valid() || !mirror_.initialize(rd, cache_->max_resident())) return false;
+	// Devices address sectors only through the toroidal window, and sector_window writes
+	// cells at most kSectorWindow / 2 - 1 from the camera's sector. In the cache's own
+	// point-to-square metric, a sector 12 cells out sits strictly more than 11 sectors
+	// from any camera inside the centre sector, so a demand radius beyond that reach
+	// gates streaming on sectors that can never appear in a device's window: terrain
+	// there reads the window's empty cell forever, with no diagnostic. stream_radius_m
+	// is user-settable (core/world_store.h); report once per graph init rather than
+	// clamp silently -- the radius also sizes the sun cascades and far-field relief,
+	// and a tier-local clamp would fork this world away from them.
+	const float reach_m = float(ve::kSectorWindow / 2 - 1) * ve::kSectorSizeM;
+	if (cache_->radius_m() > reach_m) {
+		UtilityFunctions::printerr(String("SectorContext: stream_radius_m ") +
+				String::num(cache_->radius_m(), 1) + " m exceeds the sector window's reach of " +
+				String::num(reach_m, 1) + " m; sectors farther than that can never appear in a "
+				"device's window, so map-stage terrain there streams on the fallback height "
+				"forever. Lower stream_radius_m (the shipped default is 4000 m).");
+	}
+	return true;
 }
 
 void SectorContext::teardown() {
@@ -65,11 +83,17 @@ void SectorContext::run_frame(RenderingDevice *rd, float cam_x, float cam_z,
 		}
 		std::memcpy(t->texels.data(), d.ptr(), size_t(kBakeBytes));
 		t->max_slope = ve::sector_max_axis_slope(*t);
-		if (t->max_slope > ve::kSectorSlopeLimit)
+		const bool over = t->max_slope > ve::kSectorSlopeLimit;
+		const float slope = t->max_slope;
+		cache_->insert(b.c, std::move(t));
+		// Spec §5.5: the over-limit case is logged once, counted in the stats. This
+		// harvest loop is render-thread-only and insert() is the count's only writer,
+		// so over_limit == 1 right after this insert is the 0→1 transition.
+		if (over && cache_->stats().over_limit == 1)
 			UtilityFunctions::push_warning(String("sector (") + String::num_int64(b.c.x) + ", " +
 					String::num_int64(b.c.z) + ") is steeper than the field bound assumes: " +
-					String::num(t->max_slope, 2) + " > " + String::num(ve::kSectorSlopeLimit, 2));
-		cache_->insert(b.c, std::move(t));
+					String::num(slope, 2) + " > " + String::num(ve::kSectorSlopeLimit, 2) +
+					" (further over-limit sectors are counted in the sector stats only)");
 	}
 	int free = 0;
 	for (const Bake &b : ring_) free += b.busy ? 0 : 1;

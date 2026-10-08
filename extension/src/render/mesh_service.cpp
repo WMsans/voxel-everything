@@ -60,6 +60,10 @@ void MeshService::set_terrain_pipeline(const ve::ResolvedPipeline &p) {
 
 void MeshService::set_sector_cache(std::shared_ptr<const ve::SectorCache> c) {
 	std::lock_guard<std::mutex> lock(mu_);
+	// The lock is for the queue's bookkeeping only: the worker reads sector_cache_
+	// without it (run()'s mirror init and sync). That is sound because every caller
+	// sets this before start() -- the thread is then created under start(), which
+	// publishes the value -- and never mutates it afterwards.
 	sector_cache_ = std::move(c);
 }
 

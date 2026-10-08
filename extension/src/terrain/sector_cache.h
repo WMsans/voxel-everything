@@ -43,6 +43,7 @@ public:
 	uint64_t version() const; // bumps on every insert, eviction and clear
 	std::vector<std::pair<SectorCoord, std::shared_ptr<const SectorTexels>>> snapshot() const;
 	int max_resident() const;
+	float radius_m() const { return radius_m_; } // fixed at construction (plan deviation 14)
 	float offset_x() const { return offset_x_; }
 	float offset_z() const { return offset_z_; }
 

@@ -2,7 +2,6 @@ extends GdUnitTestSuite
 
 # The Fjords world (spec §6–§7). Reads the shipping bake's statistics and the CPU field.
 const FJORDS := "res://assets/pipelines/fjords.pipeline"
-const WATER_Y := 51.2
 
 var _world: VoxelWorld
 

@@ -255,15 +255,25 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 		// pipeline -- load failure -- yields one zeroed vec4 of params and no sampled
 		// resources, which is exactly the fallback stub field.glslh declares, so the
 		// bind-everywhere invariant holds in both worlds. Fail-soft like the other
-		// optional passes: a failed set build leaves the pointer null and the passes
-		// skip their set-1 bind.
+		// optional passes on a pipeline with no map stage: a failed set build leaves
+		// the pointer null and the passes skip their set-1 bind. A map-stage pipeline's
+		// sector bake binds set 1 to reach the mirror, so without the set no bake can
+		// ever dispatch: the tier would plan, abandon and re-plan every frame forever
+		// with one early printerr as the only trace. Fail the GPU graph instead,
+		// matching the mesher worker's hard-fail (e9cbe20).
 		if (!passes_.field_context->initialize(device, passes_.gen->shader(),
 				handles_.store->terrain_pipeline(),
 				passes_.sectors ? &passes_.sectors->mirror() : nullptr)) {
-			UtilityFunctions::printerr(
-					"RenderOrchestrator: field context set creation failed; continuing without set 1");
 			delete passes_.field_context;
 			passes_.field_context = nullptr;
+			if (handles_.store->terrain_pipeline().map_stage >= 0) {
+				UtilityFunctions::printerr(
+						"RenderOrchestrator: field context set creation failed for a map-stage "
+						"pipeline; the sector bake cannot dispatch, failing GPU graph init");
+				return GpuInitResult::kFailed;
+			}
+			UtilityFunctions::printerr(
+					"RenderOrchestrator: field context set creation failed; continuing without set 1");
 		}
 	}
 	passes_.materials = new MaterialAtlas();

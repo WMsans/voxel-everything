@@ -48,6 +48,12 @@ func _open_world(pipeline_path: String, seed := 0) -> void:
 	_rd = RenderingServer.create_local_rendering_device()
 
 func _close_world() -> void:
+	# The probe field set and its mirror hold the device passed to debug_field_set. A
+	# failed assertion mid-test can leave them attached, and ~VoxelDebugHooks would then
+	# free_rid them on the device this order already freed -- release them first, while
+	# the device is still alive.
+	if is_instance_valid(_world):
+		_world.hooks().debug_release_field_set()
 	if _rd != null:
 		_rd.free()
 		_rd = null
