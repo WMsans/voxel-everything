@@ -166,6 +166,8 @@ func _ready() -> void:
 			_world.near_field_scale = float(arg.trim_prefix("--near-scale="))
 		elif arg.begins_with("--quality="):
 			_world.set_quality_tier(int(arg.trim_prefix("--quality=")))
+		elif arg.begins_with("--pipeline="):
+			_world.terrain_pipeline_path = arg.trim_prefix("--pipeline=")
 		elif arg == "--no-physics":
 			_world.physics_enabled = false
 		elif arg.begins_with("--effect-value="):
@@ -261,9 +263,16 @@ func _ready() -> void:
 				Vector3(0, 0.7, 0))
 			_ground_pending = false
 	else:
-		_player.global_transform = Transform3D(Basis.IDENTITY, Vector3(24, 63.2, 24))
-		_cam.transform = Transform3D(Basis.looking_at(Vector3(6, -10, 6).normalized()),
-			Vector3(0, 0.7, 0))
+		if _pose.size() == 5:
+			_player.global_transform = Transform3D(
+				Basis(Vector3.UP, deg_to_rad(_pose[3])),
+				Vector3(_pose[0], _pose[1] - 0.7, _pose[2]))
+			_cam.transform = Transform3D(Basis(Vector3.RIGHT, deg_to_rad(_pose[4])),
+				Vector3(0, 0.7, 0))
+		else:
+			_player.global_transform = Transform3D(Basis.IDENTITY, Vector3(24, 63.2, 24))
+			_cam.transform = Transform3D(Basis.looking_at(Vector3(6, -10, 6).normalized()),
+				Vector3(0, 0.7, 0))
 	# After the transforms above, not next to `_cam = ...`: "where the camera first looks"
 	# is a statement about the leg's start pose, and the raycast has to see that pose. The
 	# placement itself is deferred to _process: at _ready the regions around that pose are
