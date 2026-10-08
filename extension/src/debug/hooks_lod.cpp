@@ -116,6 +116,7 @@ Dictionary VoxelDebugHooks::debug_lod_stats() {
 	d["pages_high_water"] = s.pages_high_water;
 	d["budget_bound"] = String(s.budget_bound);
 	d["dirty_chunks"] = s.dirty_chunks;
+	d["sector_held"] = s.sector_held;
 	d["dirty_levels"] = s.dirty_levels;
 	d["draw_pages"] = s.draw_pages;
 	PackedInt32Array draw_page_ids;

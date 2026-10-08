@@ -4,7 +4,9 @@
 #include <godot_cpp/variant/rid.hpp>
 #include <array>
 #include <deque>
+#include <functional>
 #include <mutex>
+#include <utility>
 #include <vector>
 #include "generator/generator.h"
 #include "mesh/chunk_residency.h"
@@ -48,6 +50,11 @@ public:
 	// it, so 12 m at terminal-ish speed is ~0.4 s to mesh the ground below, which the
 	// two-chunks-a-frame budget covers several times over.
 	void set_body_bubble_radius_m(float v) { bubble_radius_m_ = v; }
+	// A sector-tier world holds the whole plan while any sector under the physics balls is
+	// not resident: ChunkResidency caches a probed chunk's "empty" for good, and a probe of
+	// an unbaked sector reads fallback air (plan deviation 9). World-space rectangle.
+	void set_sector_gate(std::function<bool(float, float, float, float)> g) { sector_gate_ = std::move(g); }
+	int sector_holds() const { return sector_holds_; }
 	// Wall-clock ceiling for step 2 of run_frame. The first build of a frame always runs, so
 	// this bounds the queue drain rate, not one chunk's cost.
 	void set_shape_build_budget_ms(float v) { build_budget_ms_ = v; }
@@ -140,6 +147,8 @@ private:
 	std::deque<PendingBuild> pending_; // staged replacements; old bodies remain live until commit
 	int max_builds_per_frame_ = 2;
 	float bubble_radius_m_ = 12.0f;
+	std::function<bool(float, float, float, float)> sector_gate_;
+	int sector_holds_ = 0;
 	float build_budget_ms_ = 4.0f;
 	int active_bodies_ = 0;
 	int builds_last_frame_ = 0;

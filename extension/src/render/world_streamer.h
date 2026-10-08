@@ -13,6 +13,7 @@
 #include "world/residency.h"
 #include <map>
 #include <tuple>
+#include <utility>
 
 namespace godot {
 
@@ -34,6 +35,7 @@ public:
 			const std::map<std::tuple<int, int, int>, int> *override_tables,
 			const FieldContextSet *field_context = nullptr);
 	void set_mesh_service(MeshService *mesh) { mesh_ = mesh; }
+	void set_region_gate(ve::RegionGate g) { region_gate_ = std::move(g); }
 	// A consolidation changes the base bytes without leaving an edit for the normal edit
 	// fan-out. Queue a full-region force mark so the render atlas cannot retain pre-bake data.
 	void queue_region_regeneration(ve::IVec3 region);
@@ -83,6 +85,7 @@ private:
 	// The orchestrator's set 1, borrowed; bound at every mark/generation dispatch.
 	const FieldContextSet *field_context_ = nullptr;
 	MeshService *mesh_ = nullptr;
+	ve::RegionGate region_gate_;
 	const ve::OverrideStore *overrides_ = nullptr;
 	const std::map<std::tuple<int, int, int>, int> *override_tables_ = nullptr;
 	int frame_edits_ = 0;

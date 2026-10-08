@@ -284,6 +284,19 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 			handles_.store->pending_edits(), passes_.atlas,
 			passes_.region, passes_.gen, handles_.store, handles_.store->overrides(),
 			&handles_.store->override_tables(), passes_.field_context);
+	if (SectorContext *sc = passes_.sectors) {
+		// A metre of margin: brick generation samples a voxel past the region's faces.
+		streamer_->set_region_gate([sc](const ve::IVec3 &r) {
+			const float x0 = r.x * ve::kRegionSize, z0 = r.z * ve::kRegionSize;
+			const float min_x = x0 - 1.0f, min_z = z0 - 1.0f;
+			const float max_x = x0 + ve::kRegionSize + 1.0f;
+			const float max_z = z0 + ve::kRegionSize + 1.0f;
+			// An empty wanted set means this region is outside the sector cache's current
+			// camera radius, not that its field data is resident. Wait for the cache to recenter.
+			return !sc->cache().needed_world(min_x, min_z, max_x, max_z).empty() &&
+					sc->ready_on_render(min_x, min_z, max_x, max_z);
+		});
+	}
 	passes_.raymarch = new RaymarchPass();
 	passes_.raymarch->initialize(device);
 	passes_.raymarch->set_materials(*passes_.materials);

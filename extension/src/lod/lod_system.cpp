@@ -10,6 +10,7 @@
 #include "render/lod_raster_pass.h"
 #include "render/mesh_service.h"
 #include "render/orchestrator.h"
+#include "render/sector_context.h"
 #include "render/sun_shadow_pass.h" // mark_dirty() on page-set changes (orchestrator.h only forward-declares)
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
@@ -17,6 +18,17 @@
 #include <algorithm>
 
 namespace godot {
+
+namespace {
+// The chunk's lattice reaches two cells past its edge on each side.
+bool lod_chunk_sectors_ready(const SectorContext &s, int level, ve::IVec3 c) {
+	float o[3];
+	ve::lod_chunk_origin(level, c, o);
+	const float cell = ve::lod_cell_size(level);
+	const float pad = 2.0f * cell, size = float(ve::kLodChunkCells) * cell;
+	return s.ready_on_host(o[0] - pad, o[2] - pad, o[0] + size + pad, o[2] + size + pad);
+}
+} // namespace
 
 LodSystem::LodSystem(Collaborators handles) : handles_(handles) {}
 
@@ -65,6 +77,7 @@ LodStats LodSystem::stats() {
 		}
 	}
 	s.shell_chunks = shell_grid_.size();
+	s.sector_held = lod_sector_held_;
 	// Shell pages are owned by a shell chunk exactly as terrain pages are owned by a tree
 	// chunk, so they count here too: without this the unowned-pages term below would report
 	// every shell page as a leak.
@@ -503,22 +516,30 @@ void LodSystem::tick(const ve::LodCamera &cam, const ve::LodOcclusion *occ) {
 	std::vector<ve::IVec3> shell_requests;
 	if (mesh() && !mesh()->lod_busy()) {
 		const int cap = std::min<int>(lod_builds_per_frame_, mesh()->lod_max_jobs());
+		const SectorContext *sectors = render()->passes().sectors;
+		int held = 0;
 		// Shell chunks first: a missing shell is transparent solid that is not there at all, a
 		// missing far chunk is a coarser horizon. Skipped entirely while transparency is off --
 		// refresh_shell_candidates already empties the candidate set on the toggle, so this is
 		// defence in depth, and it must not gate the far-field submissions below.
 		if (render()->transparency_settings().enabled) {
-			shell_grid_.requests(cam.pos, cap, &shell_requests);
+			std::vector<ve::IVec3> wanted;
+			shell_grid_.requests(cam.pos, cap, &wanted);
 			// note_building clears the dirty flag, so an edit landing between requests() and here
 			// is swallowed. Safe ONLY because the build samples world state AFTER that edit: the
 			// shell it produces already contains it.
-			for (ve::IVec3 c : shell_requests) {
+			for (ve::IVec3 c : wanted) {
+				if (sectors && !lod_chunk_sectors_ready(*sectors, ve::kShellLevel, c)) { held++; continue; }
 				shell_grid_.note_building(c);
+				shell_requests.push_back(c);
 			}
 		}
-		const int take = std::min<int>(cap - int(shell_requests.size()),
-				int(lod_walk_.requests.size()));
-		batch_requests.assign(lod_walk_.requests.begin(), lod_walk_.requests.begin() + take);
+		for (const ve::LodBuildRequest &q : lod_walk_.requests) {
+			if (int(batch_requests.size() + shell_requests.size()) >= cap) break;
+			if (sectors && !lod_chunk_sectors_ready(*sectors, q.level, q.coord)) { held++; continue; }
+			batch_requests.push_back(q);
+		}
+		lod_sector_held_ = held;
 		for (const ve::LodBuildRequest &q : batch_requests)
 			lod_tree_->note_building(q.level, q.coord);
 	}

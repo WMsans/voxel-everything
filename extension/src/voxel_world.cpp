@@ -790,6 +790,10 @@ void VoxelWorld::ensure_physics_initialized() {
 			max_collider_chunks_, store_->field());
 	colliders_->set_shape_builds_per_frame(shape_builds_per_frame_);
 	colliders_->set_body_bubble_radius_m(physics_bubble_radius_m_);
+	if (std::shared_ptr<ve::SectorCache> cache = store_->sector_cache())
+		colliders_->set_sector_gate([cache](float a, float b, float c, float d) {
+			return cache->ready_world(a, b, c, d);
+		});
 	// Publish the manager under edit_mutex_: EditPipeline::record() can call its sink from a
 	// tool thread while holding that lock, so creation must not expose a
 	// half-initialized pointer to it. The render thread never reads the pointer: it reads the

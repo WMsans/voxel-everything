@@ -1,6 +1,7 @@
 #pragma once
 #include "world/region.h"
 #include "world/region_window.h"
+#include <functional>
 #include <map>
 #include <vector>
 
@@ -40,6 +41,11 @@ struct AtlasBudget {
 	int per_load = 3072;
 };
 
+// May this region load now? A sector-tier world refuses regions whose sectors have not
+// arrived, so no brick is ever generated from fallback height (spec §5.3). A refused region
+// stays a candidate and loads on a later frame.
+using RegionGate = std::function<bool(const IVec3 &)>;
+
 struct ResidencyPlan {
 	struct Entry {
 		IVec3 region;
@@ -71,7 +77,7 @@ public:
 	// A default budget carries no costs, which means "the atlas is not the binding pool":
 	// only a full region-slot pool then forces a displacement, exactly as before.
 	ResidencyPlan update(float cx, float cy, float cz, const AtlasBudget &budget = AtlasBudget{},
-			int max_loads = -1);
+			int max_loads = -1, const RegionGate &gate = {});
 
 	int slot_of(IVec3 region) const;
 	bool slot_resident(int slot) const;
