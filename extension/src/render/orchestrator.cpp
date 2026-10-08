@@ -8,6 +8,7 @@
 #include "render/region_pass.h"
 #include "render/brick_gen_pass.h"
 #include "render/field_context_set.h"
+#include "render/sector_context.h"
 #include "render/raymarch_pass.h"
 #include "render/composite_pass.h"
 #include "render/deferred_pass.h"
@@ -238,6 +239,15 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 	if (!passes_.region->initialize(device, *passes_.atlas)) return GpuInitResult::kFailed;
 	passes_.gen = new BrickGenPass();
 	if (!passes_.gen->initialize(device, *passes_.atlas)) return GpuInitResult::kFailed;
+	// The sector tier comes first: set 1 binds its mirror (spec §4.6).
+	if (handles_.store->terrain_pipeline().map_stage >= 0) {
+		passes_.sectors = new SectorContext();
+		if (!passes_.sectors->initialize(device, handles_.store->sector_cache())) {
+			UtilityFunctions::printerr("RenderOrchestrator: sector context initialization failed; "
+					"this pipeline's terrain cannot stream");
+			return GpuInitResult::kFailed;
+		}
+	}
 	passes_.field_context = new FieldContextSet();
 	{
 		// The set-1 contents come from the stored terrain pipeline
@@ -248,7 +258,8 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 		// optional passes: a failed set build leaves the pointer null and the passes
 		// skip their set-1 bind.
 		if (!passes_.field_context->initialize(device, passes_.gen->shader(),
-				handles_.store->terrain_pipeline())) {
+				handles_.store->terrain_pipeline(),
+				passes_.sectors ? &passes_.sectors->mirror() : nullptr)) {
 			UtilityFunctions::printerr(
 					"RenderOrchestrator: field context set creation failed; continuing without set 1");
 			delete passes_.field_context;
@@ -406,6 +417,8 @@ void RenderOrchestrator::teardown_render_passes() {
 	}
 	if (passes_.materials) { delete passes_.materials; passes_.materials = nullptr; }
 	if (passes_.field_context) { delete passes_.field_context; passes_.field_context = nullptr; }
+	// After set 1, whose uniform set references the mirror's array and window.
+	if (passes_.sectors) { delete passes_.sectors; passes_.sectors = nullptr; }
 	if (passes_.gen) { delete passes_.gen; passes_.gen = nullptr; }
 	if (passes_.region) { delete passes_.region; passes_.region = nullptr; }
 }

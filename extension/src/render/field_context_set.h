@@ -11,10 +11,15 @@
 
 namespace godot {
 
+class SectorMirror;
+
 class FieldContextSet {
 public:
 	~FieldContextSet();
-	bool initialize(RenderingDevice *rd, RID shader, const ve::ResolvedPipeline &p);
+	// `sectors` supplies binding 1's window and binding 2's sampled array for map-stage
+	// pipelines; null keeps the empty no-resident map for pipelines without map resources.
+	bool initialize(RenderingDevice *rd, RID shader, const ve::ResolvedPipeline &p,
+			const SectorMirror *sectors = nullptr);
 	void teardown();
 	bool is_valid() const { return uset_.is_valid(); }
 	RID uniform_set() const { return uset_; }

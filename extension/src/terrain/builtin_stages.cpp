@@ -7,6 +7,7 @@
 #include "terrain/stage_library.h"
 #include "generator/generator.h"  // ve::kSurfaceY
 #include "world/material_table.h"
+#include "terrain/sector_cache.h"
 #include <cmath>
 
 namespace {
@@ -92,6 +93,17 @@ VE_STAGE_PARAMS(Flat, level);
 void stage_flat(FieldCtx &ctx, const FlatSlots &s, const FlatParams &p, const FieldResources &) {
 	ctx.f(s.height) = p.level;
 	ctx.f(s.sdf) = ctx.v(s.p)[1] - kSurfaceY - ctx.f(s.height);
+}
+
+VE_STAGE_SLOTS(SectorFixtureGround, p, sdf, height);
+VE_STAGE_PARAMS(SectorFixtureGround, sector_fixture_water_y);
+
+// Mirror of shaders/stages/sector_fixture.field.glslh, the sector tier's test fixture.
+void stage_sector_fixture_ground(FieldCtx &ctx, const SectorFixtureGroundSlots &s,
+		const SectorFixtureGroundParams &p, const FieldResources &res) {
+	const SectorGround g = sector_ground(res.sectors, p.sector_fixture_water_y, ctx.v(s.p)[0], ctx.v(s.p)[2]);
+	ctx.f(s.height) = g.height;
+	ctx.f(s.sdf) = ctx.v(s.p)[1] - kSurfaceY - g.height;
 }
 
 VE_STAGE_SLOTS(Trees, p, sdf, height, material);
@@ -390,6 +402,7 @@ VE_REGISTER_STAGE("ve::stage_height_bands", HeightBands, stage_height_bands);
 VE_REGISTER_STAGE("ve::stage_relief", Relief, stage_relief);
 VE_REGISTER_STAGE("ve::stage_mesas", Mesas, stage_mesas);
 VE_REGISTER_STAGE("ve::stage_flat", Flat, stage_flat);
+VE_REGISTER_STAGE("ve::stage_sector_fixture_ground", SectorFixtureGround, stage_sector_fixture_ground);
 VE_REGISTER_STAGE("ve::stage_trees", Trees, stage_trees);
 
 } // namespace ve

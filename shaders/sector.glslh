@@ -1,0 +1,73 @@
+#ifndef VE_SECTOR_GLSLH
+#define VE_SECTOR_GLSLH
+// Mirror of extension/src/terrain/sector.h and sector_cache.h's sector_ground (spec §4.4,
+// §4.5). Included by map and field stage bodies, so it sits inside the generated field.glslh
+// after the set-1 declarations: it reads sector_map (binding 1) and sector_terrain (binding 2,
+// the resource the pipeline names sector.terrain).
+
+const int SECTOR_TEXELS = 256;
+const int SECTOR_APRON = 2;
+const int SECTOR_STRIDE = 260;
+const float SECTOR_TEXEL_M = 1.6;
+const float SECTOR_SIZE_M = 409.6;
+const int SECTOR_WINDOW = 24;
+const float SECTOR_HEIGHT_BELOW_M = 64.0;
+const float SECTOR_HEIGHT_SPAN_M = 512.0;
+
+// GLSL leaves % undefined for negative operands; this floors.
+int sector_imod(int a, int b) { return a - b * int(floor(float(a) / float(b))); }
+
+ivec2 sector_of(vec2 xz) { return ivec2(floor(xz / SECTOR_SIZE_M)); }
+
+// The texture-array layer holding sector sc, or -1. A stale or never-written cell carries
+// another sector's coordinate (or INT_MIN) and reads as absent.
+int sector_layer(ivec2 sc) {
+	int i = 3 * (sector_imod(sc.y, SECTOR_WINDOW) * SECTOR_WINDOW + sector_imod(sc.x, SECTOR_WINDOW));
+	if (i + 2 >= SECTOR_WINDOW * SECTOR_WINDOW * 3) return -1;
+	if (sector_map.slot[i] != sc.x || sector_map.slot[i + 1] != sc.y) return -1;
+	return sector_map.slot[i + 2];
+}
+
+vec4 sector_bspline_w(float t) {
+	float s = 1.0 - t, t2 = t * t, t3 = t2 * t;
+	return vec4(s * s * s, 3.0 * t3 - 6.0 * t2 + 4.0, -3.0 * t3 + 3.0 * t2 + 3.0 * t + 1.0, t3) / 6.0;
+}
+vec4 sector_bspline_dw(float t) {
+	float s = 1.0 - t, t2 = t * t;
+	return vec4(-0.5 * s * s, 1.5 * t2 - 2.0 * t, -1.5 * t2 + t + 0.5, 0.5 * t2);
+}
+
+// vec4(r, dr/dx per metre, dr/dz per metre, g); x = -1 where no sector is resident.
+vec4 sector_sample(vec2 xz) {
+	ivec2 sc = sector_of(xz);
+	int layer = sector_layer(sc);
+	if (layer < 0) return vec4(-1.0, 0.0, 0.0, 0.0);
+	vec2 u = (xz - vec2(sc) * SECTOR_SIZE_M) / SECTOR_TEXEL_M + float(SECTOR_APRON) - 0.5;
+	vec2 b = floor(u);
+	vec2 t = u - b;
+	ivec2 base = clamp(ivec2(b) - 1, ivec2(0), ivec2(SECTOR_STRIDE - 4));
+	vec4 wx = sector_bspline_w(t.x), wz = sector_bspline_w(t.y);
+	vec4 dx = sector_bspline_dw(t.x), dz = sector_bspline_dw(t.y);
+	float r = 0.0, rx = 0.0, rz = 0.0, g = 0.0;
+	for (int j = 0; j < 4; j++)
+		for (int i = 0; i < 4; i++) {
+			vec2 v = texelFetch(sector_terrain, ivec3(base + ivec2(i, j), layer), 0).rg;
+			r += wx[i] * wz[j] * v.x;
+			rx += dx[i] * wz[j] * v.x;
+			rz += wx[i] * dz[j] * v.x;
+			g += wx[i] * wz[j] * v.y;
+		}
+	return vec4(r, rx / SECTOR_TEXEL_M, rz / SECTOR_TEXEL_M, g);
+}
+
+// Height above SURFACE_Y, its gradient, and the ridge value in -1..1. Where no sector is
+// resident: the bottom of the encoded range, open air above the valley floor (spec §5.4).
+vec4 sector_ground(vec2 xz, float water_y) {
+	float lo = water_y - SECTOR_HEIGHT_BELOW_M - SURFACE_Y;
+	vec4 s = sector_sample(xz);
+	if (s.x < 0.0) return vec4(lo, 0.0, 0.0, 0.0);
+	return vec4(lo + s.x * SECTOR_HEIGHT_SPAN_M, s.y * SECTOR_HEIGHT_SPAN_M,
+			s.z * SECTOR_HEIGHT_SPAN_M, s.w * 2.0 - 1.0);
+}
+
+#endif

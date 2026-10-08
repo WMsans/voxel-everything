@@ -1,0 +1,18 @@
+//!stage     sector_fixture_ground
+//!kind      field
+//!sample    sector.terrain : texture2d_rg16
+//!out       sdf : float
+//!out       height : float
+//!use       sector_fixture.water_y
+//!lipschitz add 1.42
+//!cpu       ve::stage_sector_fixture_ground
+
+// Bound: |grad h| <= 20 * |(0.011, 0.013)| = 0.34, so sqrt(1 + 0.34^2) = 1.06; 1.42 is the
+// sqrt(2) per-axis B-spline bound with margin, the same shape fjord.field.glslh uses.
+#include "sector.glslh"
+
+void stage_sector_fixture_ground(inout FieldCtx ctx) {
+	vec4 g = sector_ground(ctx.p.xz, P.sector_fixture_water_y);
+	ctx.height = g.x;
+	ctx.sdf = ctx.p.y - SURFACE_Y - ctx.height;
+}

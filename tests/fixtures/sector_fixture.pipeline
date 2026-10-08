@@ -1,0 +1,7 @@
+# The sector tier's fixture (plan Task 4). Not a world type: assets/pipelines/ is enumerated
+# by the world-type menu and by test_field_diff, so it lives here and test_field_diff adds it
+# by name.
+lipschitz 1.5
+stage stages/sector_fixture.map.glslh
+stage stages/sector_fixture.field.glslh
+stage stages/height_bands.field.glslh

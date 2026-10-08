@@ -39,6 +39,7 @@
 #include "render/sun_shadow_pass.h"
 #include "render/sun_ubo.h"
 #include "render/world_streamer.h"
+#include "render/sector_context.h"
 #include "shade/beauty_settings.h"
 #include "shade/sun_cascades.h"
 #include "world/residency.h"
@@ -207,6 +208,10 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	// the walk: prepare_raster_locked() only reads them while holding lod_mutex_, and the
 	// pages must exist before the shell raster asks for this frame's draw list.
 	if (lod_.pool()) lod_.apply_island_shells(render_.take_island_shells(), render_.island_live_mask());
+	// Sectors before anything that evaluates the field (spec §4.3): this frame's bakes, and
+	// the render mirror the brick generator is about to read.
+	if (SectorContext *sc = render_.passes().sectors)
+		sc->run_frame(rd, cam.origin.x, cam.origin.z, render_.passes().field_context);
 	WorldStreamer *st = render_.streamer();
 	const int stream_actions = st ? st->run_frame(rd, cam.origin.x, cam.origin.y, cam.origin.z) : 0;
 	end_stage(rd, kStageStream);

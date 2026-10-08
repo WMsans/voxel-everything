@@ -27,6 +27,7 @@
 #include "terrain/field_codegen.h"
 #include "terrain/pipeline_field_generator.h"
 #include "terrain/pipeline_load.h"
+#include "terrain/sector_cache.h"
 #include "render/mesh_pass.h"
 #include "render/mesh_service.h"
 #include "render/lod_build_pass.h"
@@ -633,10 +634,19 @@ bool VoxelWorld::load_terrain_pipeline() {
 		UtilityFunctions::push_error(String("terrain pipeline: ") + err.c_str());
 		return false;
 	}
+	// A map stage's sectors live in one host cache that the CPU field samples and every
+	// device mirrors (spec §5). The radius is fixed here (plan deviation 14).
+	std::shared_ptr<ve::SectorCache> sectors;
+	if (resolved.map_stage >= 0) {
+		sectors = std::make_shared<ve::SectorCache>(store_->config().stream_radius_m,
+				static_cast<float>(resolved.field_offset_x), static_cast<float>(resolved.field_offset_z));
+		gen->set_sector_cache(sectors);
+	}
 
 	ve::set_shader_source_override("field.glslh", ve::generate_field_glslh(resolved, prelude));
 	store_->set_terrain_pipeline(resolved);
 	store_->set_generator(gen); // WorldStore takes ownership, as it does today
+	store_->set_sector_cache(std::move(sectors));
 	return true;
 }
 

@@ -84,6 +84,7 @@ class GBuffer;
 class CameraUbo;
 class SunUbo;
 class FieldContextSet;
+class SectorContext;
 class ContactShadowPass;
 class SsgiPass;
 class SsaoPass;
@@ -114,6 +115,7 @@ struct RenderPasses {
 	SunShadowPass *sun_shadow = nullptr;
 	SunUbo *sun_ubo = nullptr;
 	FieldContextSet *field_context = nullptr;
+	SectorContext *sectors = nullptr;
 	InjectPass *inject = nullptr;
 	LodRasterPass *lod_raster = nullptr;
 	LodCullPass *lod_cull = nullptr;

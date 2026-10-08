@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <atomic>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <tuple>
 #include <vector>
@@ -56,6 +57,8 @@ struct WorldConfig {
 };
 
 } // namespace ve
+
+namespace ve { class SectorCache; }
 
 namespace godot {
 
@@ -103,6 +106,10 @@ public:
 	// RenderOrchestrator builds set 1 from this, and MeshService builds the worker copy.
 	const ve::ResolvedPipeline &terrain_pipeline() const { return terrain_pipeline_; }
 	void set_terrain_pipeline(const ve::ResolvedPipeline &p) { terrain_pipeline_ = p; }
+	// The host sector cache of a pipeline with a map stage; null otherwise. Shared by the CPU
+	// generator, the render device's SectorContext and the mesher's worker mirror.
+	const std::shared_ptr<ve::SectorCache> &sector_cache() const { return sector_cache_; }
+	void set_sector_cache(std::shared_ptr<ve::SectorCache> c) { sector_cache_ = std::move(c); }
 
 	// Where a region's edits go when they leave RAM. Nothing evicts edits in the unbounded-
 	// world rework -- they are bounded by digging, not travel -- so today this only ever holds
@@ -261,6 +268,7 @@ private:
 	ve::Generator *generator_ = nullptr;
 	// The compiled terrain pipeline; empty until the first successful load.
 	ve::ResolvedPipeline terrain_pipeline_;
+	std::shared_ptr<ve::SectorCache> sector_cache_;
 	// Declared last: it holds the addresses of edit_log_ and edit_seq_ above.
 	ve::EditPipeline pipeline_{&edit_log_, &edit_seq_};
 };
