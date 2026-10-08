@@ -75,7 +75,7 @@ TEST_CASE("sector_ground decodes height and falls back to the bottom of the rang
 	CHECK(none.height == doctest::Approx(water - ve::kSectorHeightBelowM - ve::kSurfaceY));
 	c.insert({0, 0}, flat(0.5f));
 	const ve::SectorGround g = ve::sector_ground(&c, water, 5.0f, 5.0f);
-	CHECK(g.height == doctest::Approx(water - 64.0f + 256.0f - ve::kSurfaceY).epsilon(1e-4));
+	CHECK(g.height == doctest::Approx(water - ve::kSectorHeightBelowM + 0.5f * ve::kSectorHeightSpanM - ve::kSurfaceY).epsilon(1e-4));
 	CHECK(g.dhdx == doctest::Approx(0.0f));
 	CHECK(g.ridge == doctest::Approx(0.0f).epsilon(1e-3));
 	CHECK(ve::sector_ground(nullptr, water, 5.0f, 5.0f).height == doctest::Approx(none.height));

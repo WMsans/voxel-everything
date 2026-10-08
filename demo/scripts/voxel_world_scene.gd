@@ -6,7 +6,7 @@ extends VoxelWorld
 # the tree -- the terrain pipeline loads once, at first init.
 
 # High enough to clear every shipped terrain: SURFACE_Y 51.2 + relief 310 + hills 10.
-const GROUND_PROBE_Y := 600.0
+const GROUND_PROBE_Y := 800.0
 
 @export var world_type: WorldType:
 	set(value):

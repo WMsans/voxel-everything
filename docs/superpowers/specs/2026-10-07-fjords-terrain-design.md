@@ -471,3 +471,51 @@ are wanted.
 **Measurements.** Used the supplied 2560×1440 `--disable-vsync` command pair with pose `100,54.2,-300,112.5,4.6`; added `--pose` support to standard `--benchmark` because the pre-fix command reported `camera_position=(24.0, 63.2, 24.0)` despite the pose argument. Three interleaved Default/Fjords/Default cycles (six Default and three Fjords runs), each `--benchmark` run sampled 300 frames. Final wall-frame percentiles (ms), in run order: Default p50/p99 = 22.92/25.67, 22.92/25.08, 22.92/24.74, 22.92/24.29, 22.92/24.11, 22.92/24.57; Fjords = 15.28/16.67, 15.28/16.67, 15.28/16.67. Vsync readback was disabled. All runs had `gpu_timing valid_samples=0`; these are wall-clock frame measurements, not GPU timing. The Default steady-settle wait hit its 1500-frame cap in all six runs; Fjords settled in 1136, 1115 and 1127 frames, so Default values are not fully settled steady-state. Measurements are informational, not gated. Capture max resident 473 × 270,400 B = 127,899,200 B (121.97 MiB) per device; estimated two devices plus host cache = 383,697,600 B (365.92 MiB), not including other engine allocations.
 
 **Other recorded deviations.** The benchmark pose correction is a small extension beyond the listed `--pipeline=` flag: the specified comparison would otherwise benchmark at the default pose. The Task 8 reviewer concern is only partially resolved: the strongest passing tested erosion configuration has a nonzero gully weight and near-limit measured slopes, but capture still lacks visually clear gullies. No unsupported visual-compliance claim is made.
+
+### 12.3 Look retune (2026-10-08)
+
+The §12.2 tuning read as low rolling hills. The retune restores real erosion, which needed three
+fixes to the map stage, a higher slope limit and a taller encoding.
+
+**Cliffs in the bake were the map stage's own, not the filter's.** `ErosionFilter` steers each
+gully octave by the input height's gradient. Anything that turns that direction 180° within a
+few metres sweeps every octave's phase through a full gully, which is a 20–60 m step between two
+texels. Three sources were found by bisection and removed:
+
+1. The carve's level floor centreline. Erosion strength now fades to zero over the carve profile
+   `t` from 0.6 to 0.95; the floor is under water, so nothing visible is lost. The height offset
+   uses the unfaded magnitude so the fade does not lift the floor.
+2. Creases in the carve: `abs(n)` and a `max()` floor on the gradient. Both are now
+   `sqrt(x² + ε²)`. The carve is also distance-normalised (`|n| / |∇n|`), so valley width and
+   wall slope are uniform in metres instead of following the domain warp.
+3. A finite difference of a finite difference. The carve's gradient is now analytic (chain
+   rule through the warp); the outer difference for the erosion input amplified the inner one's
+   rounding into ±15 m texel noise at fjord junctions.
+
+After these, carve-only terrain peaks at slope 2.5 and the remaining steep texels are genuine
+faces.
+
+**Slope limit `S_max` 2.5 → 6** (field bound `sqrt(1 + 2·6²) = 8.54`, pipeline ceiling 8.6). The
+Shadertoy's look depends on erosion being a large share of the relief, which puts genuine faces
+past 4. Interleaved A/B/A/B benchmark at 2560×1440, `--disable-vsync`, pose
+`2000,54.2,-1600,200,4`, identical terrain, only `//!lipschitz add` changed: frame_avg 17.65 /
+17.66 / 17.68 / 17.66 ms for bound 5.75 / 8.55 / 5.75 / 8.55; p50 17.30 / 17.81 / 17.34 / 17.61.
+No measurable cost. At 1920×1080 every run sat at the 90 Hz cadence (p95 11.11 ms) and could not
+resolve a difference.
+
+**Encoding span 512 → 768 m** (`kSectorHeightSpanM`, `SECTOR_HEIGHT_SPAN_M`; 11.7 mm steps).
+`GROUND_PROBE_Y`, the capture's and `test_fjords.gd`'s ray starts move 600 → 800 m. A soft ceiling
+in `fjord_profile` (`peak_knee` 450, `peak_cap` 650, `tanh`) keeps peaks inside it.
+
+**New params:** `erosion_gain`, `peak_knee`, `peak_cap`. **`tools/fjord_capture.gd`** gains
+`--at=x,z` to pin the valley pose, so tuning rounds compare the same fjord.
+
+**Tuning** (`fjords.pipeline`): the map at 3 km (`scale_l = scale_v = 3000`, `valley_freq 1.0`),
+`height_amp 0.2`, `h_water 0.40`, `valley_depth 0.22`, `valley_width 0.13`, erosion strength 0.16,
+gain 0.35, normalisation 0.3, ridge / crease rounding 0.3 / 1.0, `wall_steepen 0`; snow line 380,
+peak line 450. Strength 0.18 failed the slope test (seed 7 worst 6.04, seed 424242 worst 6.32);
+0.16 passes all three seeds. Capture at `--at=2000,-1600`: `max_slope 5.92`, `over_limit 0`,
+`r_max 0.762`. Peaks reach about W + 530 m.
+
+**Not done:** water and conifers (B, C), so the fjord floors render as bare ground. Material
+textures and lighting are the user's to choose.

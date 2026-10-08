@@ -15,6 +15,7 @@
 //!param     erosion_scale : float = 0.15
 //!param     erosion_strength : float = 0.22
 //!param     gully_weight : float = 0.5
+//!param     erosion_gain : float = 0.5
 //!param     detail : float = 1.5
 //!param     ridge_rounding : float = 0.1
 //!param     crease_rounding : float = 0.0
@@ -24,6 +25,8 @@
 //!param     floor_depth : float = 40.0
 //!param     wall_height : float = 60.0
 //!param     wall_steepen : float = 0.5
+//!param     peak_knee : float = 300.0
+//!param     peak_cap : float = 430.0
 
 // The Fjords heightmap (spec §6), baked once per sector. Shader space is the Shadertoy's
 // normalised map, p = xz / scale_l; the eroded height becomes water_y + scale_v * (h - h_water)
@@ -45,20 +48,40 @@ vec3 fjord_fbm(vec2 p) {
 }
 
 // Long winding valleys along the zero set of a domain-warped noise (spec §6.3 step 2).
-// valley_width is in noise units (plan deviation 7).
-float fjord_carve(vec2 p) {
-	vec2 q = p * P.fjord_height_valley_freq;
-	vec2 w = vec2(ve_noised(q * 1.7).x, ve_noised(q * 1.7 + vec2(5.2, 1.3)).x);
-	float n = ve_noised(q + P.fjord_height_valley_warp * w).x;
-	float t = 1.0 - smoothstep(0.0, P.fjord_height_valley_width, abs(n));
-	return P.fjord_height_valley_depth * t * t;
+// fjord_carve returns the carve's 0..1 profile t; the depth is valley_depth * t * t. |n| / |grad n|
+// approximates the distance to the zero line, so valley_width is a half-width in map units
+// (x scale_l metres) and the walls are equally steep wherever the warp squeezes or stretches it.
+
+// The domain-warped valley noise and its exact gradient (chain rule through the warp). Exact,
+// because a finite difference here is differenced again for the erosion's input slope, which
+// amplifies its rounding into texel-scale noise.
+vec3 fjord_valley_noise(vec2 q) {
+	vec3 a = ve_noised(q * 1.7), b = ve_noised(q * 1.7 + vec2(5.2, 1.3));
+	vec3 c = ve_noised(q + P.fjord_height_valley_warp * vec2(a.x, b.x));
+	float k = P.fjord_height_valley_warp * 1.7;
+	return vec3(c.x, c.y * (vec2(1.0, 0.0) + k * a.yz) + c.z * (vec2(0.0, 1.0) + k * b.yz));
 }
 
-// Metres above water -> metres above water (spec §6.3 step 4). Monotone and continuous: above
-// wall_height unchanged; below it the wall rises up to (1 + wall_steepen)x faster; under water
-// the floor flattens toward -floor_depth, meeting the wall's slope at the shoreline.
+float fjord_carve(vec2 p) {
+	vec3 v = fjord_valley_noise(p * P.fjord_height_valley_freq);
+	float n = v.x;
+	// Both the |n| and the gradient's floor are smooth: the erosion filter steers gullies by
+	// this height's gradient, and a crease anywhere flips their direction across a line, which
+	// turns into a cliff. The floor keeps junctions (saddles, where n and its gradient both
+	// vanish) from amplifying rounding into the carve.
+	float gl = length(v.yz) * P.fjord_height_valley_freq;
+	float d = sqrt(n * n + 1e-4) / sqrt(gl * gl + 0.25);
+	return 1.0 - smoothstep(0.0, P.fjord_height_valley_width, d);
+}
+
+// Metres above water -> metres above water (spec §6.3 step 4). Monotone and C1: above
+// peak_knee heights ease toward peak_cap, inside the sector encoding; between wall_height and
+// the knee unchanged; below wall_height the wall rises up to (1 + wall_steepen)x faster; under
+// water the floor flattens toward -floor_depth, meeting the wall's slope at the shoreline.
 float fjord_profile(float m) {
 	float k = P.fjord_height_wall_steepen, hw = P.fjord_height_wall_height;
+	float knee = P.fjord_height_peak_knee, room = P.fjord_height_peak_cap - knee;
+	if (m >= knee) return knee + room * tanh((m - knee) / room);
 	if (m >= hw) return m;
 	if (m >= 0.0) {
 		float u = 1.0 - m / hw;
@@ -68,25 +91,39 @@ float fjord_profile(float m) {
 	return -d * (1.0 - exp(m * (1.0 + k) / d));
 }
 
+// The pre-erosion height in noise units: base FBM minus the carve. t is the carve profile.
+float fjord_base(vec2 p, out float t) {
+	t = fjord_carve(p);
+	return fjord_fbm(p).x - P.fjord_height_valley_depth * t * t;
+}
+
 vec2 stage_fjord_height(vec2 xz) {
 	vec2 p = xz / P.fjord_height_scale_l;
-	vec3 n = fjord_fbm(p);
 	// Carve before erosion so its fade target sees the valleys and gullies drain into them.
 	// The carve's derivative only steers gully direction; a finite difference is plenty.
 	const float e = 1e-3;
-	float c0 = fjord_carve(p);
-	n -= vec3(c0, (fjord_carve(p + vec2(e, 0.0)) - c0) / e, (fjord_carve(p + vec2(0.0, e)) - c0) / e);
+	float t, tx, tz;
+	vec3 n = vec3(fjord_base(p, t), fjord_base(p + vec2(e, 0.0), tx), fjord_base(p + vec2(0.0, e), tz));
+	n.yz = (n.yz - n.x) / e;
 	float fade = clamp(n.x / (P.fjord_height_height_amp * 0.6), -1.0, 1.0);
 	n = n * 0.5 + vec3(0.5, 0.0, 0.0);
 	float ridge_map, dbg;
+	// No erosion on the carved floor: across its level centreline the gully direction turns
+	// 180 degrees within metres, which sweeps every octave's phase into a cliff. The floor is
+	// under water after the profile, so nothing visible is lost.
+	float strength = P.fjord_height_erosion_strength * (1.0 - smoothstep(0.6, 0.95, t));
 	vec4 h = ErosionFilter(p, n, fade,
-			P.fjord_height_erosion_strength, P.fjord_height_gully_weight, P.fjord_height_detail,
+			strength, P.fjord_height_gully_weight, P.fjord_height_detail,
 			vec4(P.fjord_height_ridge_rounding, P.fjord_height_crease_rounding, 0.1, 2.0),
 			vec4(1.25, 1.25, 2.8, 1.5), vec2(0.7, 1.0),
-			P.fjord_height_erosion_scale, 5, 2.0, 0.5,
+			P.fjord_height_erosion_scale, 5, 2.0, P.fjord_height_erosion_gain,
 			P.fjord_height_cell_scale, P.fjord_height_normalization,
 			ridge_map, dbg);
-	float eroded = n.x + h.x + P.fjord_height_height_offset * h.w;
+	// The offset uses the unfaded magnitude (h.w's sum over 5 octaves), so the floor fade does
+	// not lift the floor.
+	float g = P.fjord_height_erosion_gain;
+	float magnitude = P.fjord_height_erosion_strength * P.fjord_height_erosion_scale * (1.0 - pow(g, 5.0)) / (1.0 - g);
+	float eroded = n.x + h.x + P.fjord_height_height_offset * magnitude;
 	float y = P.fjord_height_water_y +
 			fjord_profile(P.fjord_height_scale_v * (eroded - P.fjord_height_h_water));
 	return vec2((y - (P.fjord_height_water_y - SECTOR_HEIGHT_BELOW_M)) / SECTOR_HEIGHT_SPAN_M,

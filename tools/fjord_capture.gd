@@ -1,6 +1,6 @@
 extends SceneTree
 # Reproducible Fjords look check through the SHIPPING render path (spec §9 step 7). Run with:
-# godot --path . --resolution 1280x720 -s res://tools/fjord_capture.gd -- --out=/tmp/fjords [--seed=N]
+# godot --path . --resolution 1280x720 -s res://tools/fjord_capture.gd -- --out=/tmp/fjords [--seed=N] [--at=x,z]
 # (Not --headless: it needs a real RenderingDevice.)
 #
 # Writes valley.png, ridge.png and aerial.png -- one pose per reference screenshot -- found
@@ -22,7 +22,7 @@ func _arg(name: String, fallback: String) -> String:
 	return fallback
 
 func _ground(world: VoxelWorld, x: float, z: float) -> float:
-	var hit: Dictionary = world.raycast(Vector3(x, 600.0, z), Vector3.DOWN, 1200.0)
+	var hit: Dictionary = world.raycast(Vector3(x, 800.0, z), Vector3.DOWN, 1600.0)
 	return (hit["pos"] as Vector3).y if hit["hit"] else INF
 
 func _settle(world: VoxelWorld, frames: int) -> bool:
@@ -92,6 +92,10 @@ func capture() -> void:
 				low = Vector3(i * 100.0, y, j * 100.0)
 			if y > high.y:
 				high = Vector3(i * 100.0, y, j * 100.0)
+	# --at=x,z pins the valley point, so tuning rounds compare the same fjord.
+	var at := _arg("at", "").split_floats(",")
+	if at.size() == 2:
+		low = Vector3(at[0], _ground(world, at[0], at[1]), at[1])
 	# The valley's direction: of 16 headings, the one with the longest run of ground under
 	# water + 5 m from the low point.
 	var best_dir := Vector3(1.0, 0.0, 0.0)

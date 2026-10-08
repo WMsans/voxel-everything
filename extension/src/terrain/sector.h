@@ -18,10 +18,10 @@ inline constexpr float kSectorSizeM = kSectorTexels * kSectorTexelM;   // 409.6
 inline constexpr int kSectorWindow = 24;
 // Channel R encodes height over [water_y - below, water_y - below + span].
 inline constexpr float kSectorHeightBelowM = 64.0f;
-inline constexpr float kSectorHeightSpanM = 512.0f;
+inline constexpr float kSectorHeightSpanM = 768.0f;
 // The steepest per-axis texel slope the fjord field stage's declared bound assumes:
-// sqrt(1 + 2 * 2.5^2) = 3.67 (spec §6.4).
-inline constexpr float kSectorSlopeLimit = 2.5f;
+// sqrt(1 + 2 * 6^2) = 8.54 (spec §6.4, raised from 2.5 for the look in §12).
+inline constexpr float kSectorSlopeLimit = 6.0f;
 
 struct SectorCoord {
 	int x = 0, z = 0;

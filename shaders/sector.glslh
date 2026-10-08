@@ -12,7 +12,7 @@ const float SECTOR_TEXEL_M = 1.6;
 const float SECTOR_SIZE_M = 409.6;
 const int SECTOR_WINDOW = 24;
 const float SECTOR_HEIGHT_BELOW_M = 64.0;
-const float SECTOR_HEIGHT_SPAN_M = 512.0;
+const float SECTOR_HEIGHT_SPAN_M = 768.0;
 
 // GLSL leaves % undefined for negative operands; this floors.
 int sector_imod(int a, int b) { return a - b * int(floor(float(a) / float(b))); }

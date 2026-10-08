@@ -40,7 +40,7 @@ func test_the_bands_place_snow_rock_grass_and_shore() -> void:
 	var seen := {}
 	for i in range(-20, 21):
 		for j in range(-20, 21):
-			var hit: Dictionary = _world.raycast(Vector3(i * 100.0, 600.0, j * 100.0), Vector3.DOWN, 1200.0)
+			var hit: Dictionary = _world.raycast(Vector3(i * 100.0, 800.0, j * 100.0), Vector3.DOWN, 1600.0)
 			if hit["hit"]:
 				seen[int(hit["material"])] = true
 	var names: Array = _world.material_table().map(func(m): return m["name"])

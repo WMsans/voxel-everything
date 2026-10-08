@@ -6,16 +6,16 @@
 //!out       slope : float
 //!out       ridge : float
 //!use       fjord_height.water_y
-//!lipschitz add 3.67
+//!lipschitz add 8.55
 //!cpu       ve::stage_fjord
 
 // The fjord ground from the baked sectors (spec §7.1). Height and gradient come from one
 // B-spline over 16 texels, so the slope costs nothing more.
 //
 // Bound: the B-spline's per-axis gradient never exceeds the steepest per-axis texel step
-// (extension/tests/test_sector.cpp), which the bake keeps at or under S_max = 2.5
-// (kSectorSlopeLimit; tests/test_fjords.gd). So |grad h| <= sqrt(2) * 2.5 and
-// |grad sdf| <= sqrt(1 + 2 * 2.5^2) = 3.67.
+// (extension/tests/test_sector.cpp), which the bake keeps at or under S_max = 6
+// (kSectorSlopeLimit; tests/test_fjords.gd). So |grad h| <= sqrt(2) * 6 and
+// |grad sdf| <= sqrt(1 + 2 * 6^2) = 8.54.
 #include "sector.glslh"
 
 // For sub-projects B and C: height above SURFACE_Y, dh/dx, dh/dz, ridge in -1..1.

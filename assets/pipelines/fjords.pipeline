@@ -1,12 +1,27 @@
 # Fjords (docs/superpowers/specs/2026-10-07-fjords-terrain-design.md): eroded mountains around
 # long fjord valleys, baked per sector by the map stage and sampled by the field stages.
 #
-# The ceiling sits just over the computed 3.67 (fjord.field.glslh's bound from S_max = 2.5).
+# The ceiling sits just over the computed 8.54 (fjord.field.glslh's bound from S_max = 6).
 # Look tuning goes in indented overrides under fjord_height and fjord_bands; the field stage
 # writes sdf and so takes none.
-lipschitz 3.7
+lipschitz 8.6
 stage stages/fjord_height.map.glslh
-  gully_weight 0.10
-  erosion_strength 0.015
+  scale_l 3000
+  scale_v 3000
+  valley_freq 1.0
+  normalization 0.3
+  crease_rounding 1.0
+  wall_steepen 0.0
+  peak_knee 450
+  peak_cap 650
+  h_water 0.40
+  height_amp 0.2
+  valley_depth 0.22
+  ridge_rounding 0.3
+  erosion_strength 0.16
+  erosion_gain 0.35
+  valley_width 0.13
 stage stages/fjord.field.glslh
 stage stages/fjord_bands.field.glslh
+  snow_line 380
+  peak_line 450
