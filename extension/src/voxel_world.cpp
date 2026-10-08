@@ -27,6 +27,7 @@
 #include "terrain/field_codegen.h"
 #include "terrain/pipeline_field_generator.h"
 #include "terrain/pipeline_load.h"
+#include "terrain/sector_cache.h"
 #include "render/mesh_pass.h"
 #include "render/mesh_service.h"
 #include "render/lod_build_pass.h"
@@ -633,10 +634,19 @@ bool VoxelWorld::load_terrain_pipeline() {
 		UtilityFunctions::push_error(String("terrain pipeline: ") + err.c_str());
 		return false;
 	}
+	// A map stage's sectors live in one host cache that the CPU field samples and every
+	// device mirrors (spec §5). The radius is fixed here (plan deviation 14).
+	std::shared_ptr<ve::SectorCache> sectors;
+	if (resolved.map_stage >= 0) {
+		sectors = std::make_shared<ve::SectorCache>(store_->config().stream_radius_m,
+				static_cast<float>(resolved.field_offset_x), static_cast<float>(resolved.field_offset_z));
+		gen->set_sector_cache(sectors);
+	}
 
 	ve::set_shader_source_override("field.glslh", ve::generate_field_glslh(resolved, prelude));
 	store_->set_terrain_pipeline(resolved);
 	store_->set_generator(gen); // WorldStore takes ownership, as it does today
+	store_->set_sector_cache(std::move(sectors));
 	return true;
 }
 
@@ -746,6 +756,7 @@ void VoxelWorld::ensure_physics_initialized() {
 	store_->ensure_overrides(store_->config().max_override_bricks);
 	mesh_ = new MeshService();
 	mesh_->set_terrain_pipeline(store_->terrain_pipeline());
+	mesh_->set_sector_cache(store_->sector_cache());
 	MeshPassConfig mcfg;
 	mcfg.max_jobs = mesh_jobs_per_frame_;
 	mcfg.max_override_bricks = store_->overrides() ? store_->overrides()->capacity() : store_->config().max_override_bricks;
@@ -779,6 +790,10 @@ void VoxelWorld::ensure_physics_initialized() {
 			max_collider_chunks_, store_->field());
 	colliders_->set_shape_builds_per_frame(shape_builds_per_frame_);
 	colliders_->set_body_bubble_radius_m(physics_bubble_radius_m_);
+	if (std::shared_ptr<ve::SectorCache> cache = store_->sector_cache())
+		colliders_->set_sector_gate([cache](float a, float b, float c, float d) {
+			return cache->ready_world(a, b, c, d);
+		});
 	// Publish the manager under edit_mutex_: EditPipeline::record() can call its sink from a
 	// tool thread while holding that lock, so creation must not expose a
 	// half-initialized pointer to it. The render thread never reads the pointer: it reads the

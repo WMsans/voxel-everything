@@ -7,6 +7,8 @@
 #include "terrain/stage_library.h"
 #include "generator/generator.h"  // ve::kSurfaceY
 #include "world/material_table.h"
+#include "terrain/sector_cache.h"
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -14,6 +16,8 @@ namespace {
 constexpr uint16_t kBandRock = ve::material_id("rock");
 constexpr uint16_t kBandGrass = ve::material_id("grass_01");
 constexpr uint16_t kBandGround = ve::material_id("ground_01");
+constexpr uint16_t kBandSnow = ve::material_id("snow");
+constexpr uint16_t kBandBreakstone = ve::material_id("breakstone");
 // The trunk/branch shell a tree paints, matching MAT_BARK in shaders/material_table.glslh.
 constexpr uint16_t kBandBark = ve::material_id("bark");
 } // namespace
@@ -92,6 +96,71 @@ VE_STAGE_PARAMS(Flat, level);
 void stage_flat(FieldCtx &ctx, const FlatSlots &s, const FlatParams &p, const FieldResources &) {
 	ctx.f(s.height) = p.level;
 	ctx.f(s.sdf) = ctx.v(s.p)[1] - kSurfaceY - ctx.f(s.height);
+}
+
+VE_STAGE_SLOTS(SectorFixtureGround, p, sdf, height);
+VE_STAGE_PARAMS(SectorFixtureGround, sector_fixture_water_y);
+
+// Mirror of shaders/stages/sector_fixture.field.glslh, the sector tier's test fixture.
+void stage_sector_fixture_ground(FieldCtx &ctx, const SectorFixtureGroundSlots &s,
+		const SectorFixtureGroundParams &p, const FieldResources &res) {
+	const SectorGround g = sector_ground(res.sectors, p.sector_fixture_water_y, ctx.v(s.p)[0], ctx.v(s.p)[2]);
+	ctx.f(s.height) = g.height;
+	ctx.f(s.sdf) = ctx.v(s.p)[1] - kSurfaceY - g.height;
+}
+
+VE_STAGE_SLOTS(Fjord, p, sdf, height, slope, ridge);
+VE_STAGE_PARAMS(Fjord, fjord_height_water_y);
+
+// Mirror of shaders/stages/fjord.field.glslh.
+void stage_fjord(FieldCtx &ctx, const FjordSlots &s, const FjordParams &p, const FieldResources &res) {
+	const SectorGround g = sector_ground(res.sectors, p.fjord_height_water_y, ctx.v(s.p)[0], ctx.v(s.p)[2]);
+	ctx.f(s.height) = g.height;
+	ctx.f(s.slope) = std::sqrt(g.dhdx * g.dhdx + g.dhdz * g.dhdz);
+	ctx.f(s.ridge) = g.ridge;
+	ctx.f(s.sdf) = ctx.v(s.p)[1] - kSurfaceY - g.height;
+}
+
+VE_STAGE_SLOTS(FjordBands, p, sdf, height, slope, ridge, material);
+VE_STAGE_PARAMS(FjordBands, shore, rock_slope, snow_line, snow_jitter, snow_ridge_drop, snow_slope,
+		peak_line, peak_snow_slope, fjord_height_water_y);
+
+namespace fjord_mirror {
+inline uint32_t pcg(uint32_t v) {
+	const uint32_t s = v * 747796405u + 2891336453u;
+	const uint32_t w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+	return (w >> 22u) ^ w;
+}
+inline float cell(int x, int z) {
+	return float(pcg(uint32_t(x) * 0x8da6b343u ^ uint32_t(z) * 0xd8163841u) & 0xffffu) / 32767.5f - 1.0f;
+}
+inline float snow_noise(float x, float z) {
+	const float qx = x / 40.0f, qz = z / 40.0f;
+	const float bx = std::floor(qx), bz = std::floor(qz);
+	const int ix = int(bx), iz = int(bz);
+	const float fx = qx - bx, fz = qz - bz;
+	const float ux = fx * fx * (3.0f - 2.0f * fx), uz = fz * fz * (3.0f - 2.0f * fz);
+	const float a = cell(ix, iz), c1 = cell(ix + 1, iz), c2 = cell(ix, iz + 1), c3 = cell(ix + 1, iz + 1);
+	const float lo = a + (c1 - a) * ux, hi = c2 + (c3 - c2) * ux;
+	return lo + (hi - lo) * uz;
+}
+} // namespace fjord_mirror
+
+// Mirror of shaders/stages/fjord_bands.field.glslh.
+void stage_fjord_bands(FieldCtx &ctx, const FjordBandsSlots &s, const FjordBandsParams &p,
+		const FieldResources &) {
+	if (ctx.f(s.sdf) > 0.0f) { ctx.f(s.material) = 0.0f; return; }
+	const float e = kSurfaceY + ctx.f(s.height) - p.fjord_height_water_y;
+	if (e < p.shore) { ctx.f(s.material) = float(kBandGround); return; }
+	const float line = p.snow_line + p.snow_jitter * fjord_mirror::snow_noise(ctx.v(s.p)[0], ctx.v(s.p)[2]) -
+			p.snow_ridge_drop * std::max(ctx.f(s.ridge), 0.0f);
+	const float slope = ctx.f(s.slope);
+	if (e > line) {
+		const float limit = e > p.peak_line ? p.peak_snow_slope : p.snow_slope;
+		ctx.f(s.material) = float(slope < limit ? kBandSnow : kBandBreakstone);
+		return;
+	}
+	ctx.f(s.material) = float(slope > p.rock_slope ? kBandBreakstone : kBandGrass);
 }
 
 VE_STAGE_SLOTS(Trees, p, sdf, height, material);
@@ -390,6 +459,9 @@ VE_REGISTER_STAGE("ve::stage_height_bands", HeightBands, stage_height_bands);
 VE_REGISTER_STAGE("ve::stage_relief", Relief, stage_relief);
 VE_REGISTER_STAGE("ve::stage_mesas", Mesas, stage_mesas);
 VE_REGISTER_STAGE("ve::stage_flat", Flat, stage_flat);
+VE_REGISTER_STAGE("ve::stage_sector_fixture_ground", SectorFixtureGround, stage_sector_fixture_ground);
+VE_REGISTER_STAGE("ve::stage_fjord", Fjord, stage_fjord);
+VE_REGISTER_STAGE("ve::stage_fjord_bands", FjordBands, stage_fjord_bands);
 VE_REGISTER_STAGE("ve::stage_trees", Trees, stage_trees);
 
 } // namespace ve

@@ -8,6 +8,7 @@
 #include "render/region_pass.h"
 #include "render/brick_gen_pass.h"
 #include "render/field_context_set.h"
+#include "render/sector_context.h"
 #include "render/raymarch_pass.h"
 #include "render/composite_pass.h"
 #include "render/deferred_pass.h"
@@ -238,6 +239,15 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 	if (!passes_.region->initialize(device, *passes_.atlas)) return GpuInitResult::kFailed;
 	passes_.gen = new BrickGenPass();
 	if (!passes_.gen->initialize(device, *passes_.atlas)) return GpuInitResult::kFailed;
+	// The sector tier comes first: set 1 binds its mirror (spec §4.6).
+	if (handles_.store->terrain_pipeline().map_stage >= 0) {
+		passes_.sectors = new SectorContext();
+		if (!passes_.sectors->initialize(device, handles_.store->sector_cache())) {
+			UtilityFunctions::printerr("RenderOrchestrator: sector context initialization failed; "
+					"this pipeline's terrain cannot stream");
+			return GpuInitResult::kFailed;
+		}
+	}
 	passes_.field_context = new FieldContextSet();
 	{
 		// The set-1 contents come from the stored terrain pipeline
@@ -245,14 +255,25 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 		// pipeline -- load failure -- yields one zeroed vec4 of params and no sampled
 		// resources, which is exactly the fallback stub field.glslh declares, so the
 		// bind-everywhere invariant holds in both worlds. Fail-soft like the other
-		// optional passes: a failed set build leaves the pointer null and the passes
-		// skip their set-1 bind.
+		// optional passes on a pipeline with no map stage: a failed set build leaves
+		// the pointer null and the passes skip their set-1 bind. A map-stage pipeline's
+		// sector bake binds set 1 to reach the mirror, so without the set no bake can
+		// ever dispatch: the tier would plan, abandon and re-plan every frame forever
+		// with one early printerr as the only trace. Fail the GPU graph instead,
+		// matching the mesher worker's hard-fail (e9cbe20).
 		if (!passes_.field_context->initialize(device, passes_.gen->shader(),
-				handles_.store->terrain_pipeline())) {
-			UtilityFunctions::printerr(
-					"RenderOrchestrator: field context set creation failed; continuing without set 1");
+				handles_.store->terrain_pipeline(),
+				passes_.sectors ? &passes_.sectors->mirror() : nullptr)) {
 			delete passes_.field_context;
 			passes_.field_context = nullptr;
+			if (handles_.store->terrain_pipeline().map_stage >= 0) {
+				UtilityFunctions::printerr(
+						"RenderOrchestrator: field context set creation failed for a map-stage "
+						"pipeline; the sector bake cannot dispatch, failing GPU graph init");
+				return GpuInitResult::kFailed;
+			}
+			UtilityFunctions::printerr(
+					"RenderOrchestrator: field context set creation failed; continuing without set 1");
 		}
 	}
 	passes_.materials = new MaterialAtlas();
@@ -273,6 +294,19 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 			handles_.store->pending_edits(), passes_.atlas,
 			passes_.region, passes_.gen, handles_.store, handles_.store->overrides(),
 			&handles_.store->override_tables(), passes_.field_context);
+	if (SectorContext *sc = passes_.sectors) {
+		// A metre of margin: brick generation samples a voxel past the region's faces.
+		streamer_->set_region_gate([sc](const ve::IVec3 &r) {
+			const float x0 = r.x * ve::kRegionSize, z0 = r.z * ve::kRegionSize;
+			const float min_x = x0 - 1.0f, min_z = z0 - 1.0f;
+			const float max_x = x0 + ve::kRegionSize + 1.0f;
+			const float max_z = z0 + ve::kRegionSize + 1.0f;
+			// An empty wanted set means this region is outside the sector cache's current
+			// camera radius, not that its field data is resident. Wait for the cache to recenter.
+			return !sc->cache().needed_world(min_x, min_z, max_x, max_z).empty() &&
+					sc->ready_on_render(min_x, min_z, max_x, max_z);
+		});
+	}
 	passes_.raymarch = new RaymarchPass();
 	passes_.raymarch->initialize(device);
 	passes_.raymarch->set_materials(*passes_.materials);
@@ -406,6 +440,8 @@ void RenderOrchestrator::teardown_render_passes() {
 	}
 	if (passes_.materials) { delete passes_.materials; passes_.materials = nullptr; }
 	if (passes_.field_context) { delete passes_.field_context; passes_.field_context = nullptr; }
+	// After set 1, whose uniform set references the mirror's array and window.
+	if (passes_.sectors) { delete passes_.sectors; passes_.sectors = nullptr; }
 	if (passes_.gen) { delete passes_.gen; passes_.gen = nullptr; }
 	if (passes_.region) { delete passes_.region; passes_.region = nullptr; }
 }

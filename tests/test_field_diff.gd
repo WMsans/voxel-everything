@@ -25,6 +25,7 @@ func _pipeline_paths() -> PackedStringArray:
 	for f in dir.get_files():
 		if f.ends_with(".pipeline"):
 			out.append("res://assets/pipelines/" + f)
+	out.append("res://tests/fixtures/sector_fixture.pipeline")
 	out.sort()
 	assert_int(out.size()).is_greater(0)
 	return out
@@ -33,15 +34,26 @@ func _open_world(pipeline_path: String, seed := 0) -> void:
 	_world = ClassDB.instantiate("VoxelWorld")
 	_world.terrain_pipeline_path = pipeline_path
 	_world.world_seed = seed
+	_world.use_local_device = true
 	add_child(_world)
 	# The probes compile field.glslh through the shader-source override map, so the world
 	# must be initialized (pipeline load installs the generated override and the CPU
 	# generator) before any dispatch. Without this both sides silently fall back and the
 	# suite proves nothing.
 	assert_bool(_world.hooks().debug_init_atlas()).is_true()
+	# A map-stage pipeline samples sectors that exist only once baked; cover every point the
+	# suite samples (sample_points reaches 900 m out). A no-op for other pipelines (-1).
+	if _world.hooks().debug_sector_stats()["enabled"]:
+		assert_int(_world.hooks().debug_pump_sectors(Vector3(400.0, 0.0, 400.0), 600.0, 600)).is_greater(0)
 	_rd = RenderingServer.create_local_rendering_device()
 
 func _close_world() -> void:
+	# The probe field set and its mirror hold the device passed to debug_field_set. A
+	# failed assertion mid-test can leave them attached, and ~VoxelDebugHooks would then
+	# free_rid them on the device this order already freed -- release them first, while
+	# the device is still alive.
+	if is_instance_valid(_world):
+		_world.hooks().debug_release_field_set()
 	if _rd != null:
 		_rd.free()
 		_rd = null
@@ -79,29 +91,11 @@ func sample_points() -> PackedVector3Array:
 			rng.randf_range(700.0, 900.0)))
 	return pts
 
-func _make_field_set(rd: RenderingDevice, shader: RID) -> Array[RID]:
-	# Set 1, mirroring FieldContextSet: binding 0 params UBO, binding 1 sector map (one
-	# int = -1, "no sector resident"). Plan A declares no sampled resources.
-	var params: PackedByteArray = _world.hooks().debug_field_params_bytes()
-	if params.is_empty():
-		params.resize(16)
-		params.fill(0)
-	var ubo := rd.uniform_buffer_create(params.size(), params)
-	var u0 := RDUniform.new()
-	u0.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
-	u0.binding = 0
-	u0.add_id(ubo)
-
-	var map_bytes := PackedByteArray()
-	map_bytes.resize(4)
-	map_bytes.encode_s32(0, -1)
-	var ssbo := rd.storage_buffer_create(map_bytes.size(), map_bytes)
-	var u1 := RDUniform.new()
-	u1.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
-	u1.binding = 1
-	u1.add_id(ssbo)
-
-	return [rd.uniform_set_create([u0, u1], shader, 1), ubo, ssbo]
+func _make_field_set(rd: RenderingDevice, shader: RID) -> RID:
+	# The shipping FieldContextSet and SectorMirror, filled from this world's host cache.
+	var set: RID = _world.hooks().debug_field_set(rd, shader)
+	assert_bool(set.is_valid()).is_true()
+	return set
 
 func run_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: int) -> PackedFloat32Array:
 	var code: String = _world.hooks().debug_load_shader("res://shaders/field_probe.comp.glsl")
@@ -144,11 +138,11 @@ func run_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: int) -> Pa
 	var pipeline := _rd.compute_pipeline_create(shader)
 
 	var push := PackedInt32Array([pts.size(), op_count, 0, 0]).to_byte_array()
-	var field_rids := _make_field_set(_rd, shader)
+	var field_set := _make_field_set(_rd, shader)
 	var list := _rd.compute_list_begin()
 	_rd.compute_list_bind_compute_pipeline(list, pipeline)
 	_rd.compute_list_bind_uniform_set(list, uset, 0)
-	_rd.compute_list_bind_uniform_set(list, field_rids[0], 1)
+	_rd.compute_list_bind_uniform_set(list, field_set, 1)
 	_rd.compute_list_set_push_constant(list, push, push.size())
 	_rd.compute_list_dispatch(list, (pts.size() + 63) / 64, 1, 1)
 	_rd.compute_list_end()
@@ -156,8 +150,7 @@ func run_gpu(pts: PackedVector3Array, ops: PackedByteArray, op_count: int) -> Pa
 	_rd.sync()
 
 	var out := _rd.buffer_get_data(out_buf).to_float32_array()
-	for rid in field_rids:
-		_rd.free_rid(rid)
+	_world.hooks().debug_release_field_set()
 	_rd.free_rid(uset)
 	_rd.free_rid(pipeline)
 	_rd.free_rid(shader)
@@ -209,6 +202,7 @@ func test_every_pipeline_agrees_between_cpu_and_gpu() -> void:
 		var pts := sample_points()
 
 		compare(pts, PackedByteArray(), 0, tag + " base")
+		compare(surface_points(), PackedByteArray(), 0, tag + " surface")
 
 		var subtract := make_op(OP_SUBTRACT, 0, Vector3(10.0, 51.2, 10.0), 6.0)
 		compare(pts, subtract, 1, tag + " subtract")
@@ -267,4 +261,20 @@ func test_a_far_seeded_world_agrees_between_cpu_and_gpu() -> void:
 	var pts := surface_points()
 	compare(pts, PackedByteArray(), 0, "seed %d base" % seed)
 	compare(pts, make_op(OP_SUBTRACT, 0, pts[0], 6.0), 1, "seed %d subtract" % seed)
+	_close_world()
+
+func test_a_far_seeded_fjord_world_agrees_between_cpu_and_gpu() -> void:
+	var probe: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	var seed := 0
+	for s in range(1, 10000):
+		probe.world_seed = s
+		var o: Vector3 = probe.field_offset()
+		if minf(o.x, o.z) < -7000.0:
+			seed = s
+			break
+	probe.free()
+	assert_int(seed).is_greater(0)
+	_open_world("res://assets/pipelines/fjords.pipeline", seed)
+	var pts := surface_points()
+	compare(pts, PackedByteArray(), 0, "fjords seed %d base" % seed)
 	_close_world()

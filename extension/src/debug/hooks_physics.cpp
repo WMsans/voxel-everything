@@ -112,6 +112,7 @@ Dictionary VoxelDebugHooks::debug_physics_stats() {
 	d["chunks_resident"] = world_->chunk_residency() ? world_->chunk_residency()->resident_count() : 0;
 	d["chunks_pending"] = world_->chunk_residency() ? world_->chunk_residency()->pending_count() : 0;
 	d["probe_cache"] = world_->chunk_residency() ? world_->chunk_residency()->probe_cache_size() : 0;
+	d["sector_holds"] = world_->colliders() ? world_->colliders()->sector_holds() : 0;
 	// `bodies` preserves the historical chunk count used by the physics tests and HUD.
 	// `bodies_raw` exposes the eight-way implementation detail for profiling only.
 	d["bodies"] = world_->colliders() ? world_->colliders()->active_bodies() : 0;

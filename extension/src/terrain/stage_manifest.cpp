@@ -61,12 +61,16 @@ bool parse_stage_manifest(const std::string &source, StageManifest *out, std::st
 		else if (key == "in" || key == "out") {
 			std::string n, ty;
 			if (!split_typed(rest, &n, &ty)) return fail("//!" + key + " needs 'name : type'");
-			// A dotted name is a map-stage resource reference (scope.name), not a FieldCtx
-			// channel. Per spec section 4 only //!sample declares resources, so accept and
-			// validate the syntax here but record nothing; Plan B will add resource
-			// read/write lists. (Plan A rejects map stages at resolve time, so this is
-			// unobservable downstream.)
+			// A dotted name is a sector resource (scope.name), not a FieldCtx channel. A map
+			// stage's //!out records it; a dotted //!in is accepted and ignored -- no map stage
+			// reads another's output (one map stage per pipeline, plan deviation 2).
 			if (n.find('.') != std::string::npos) {
+				if (key == "out") {
+					ResourceDecl r;
+					r.name = n;
+					r.type = ty;
+					out->map_writes.push_back(r);
+				}
 			} else {
 				ChannelType ct;
 				if (!parse_channel_type(ty, &ct)) return fail("unknown channel type: " + ty);

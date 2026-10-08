@@ -1,0 +1,30 @@
+//!stage     fjord
+//!kind      field
+//!sample    sector.terrain : texture2d_rg16
+//!out       sdf : float
+//!out       height : float
+//!out       slope : float
+//!out       ridge : float
+//!use       fjord_height.water_y
+//!lipschitz add 3.67
+//!cpu       ve::stage_fjord
+
+// The fjord ground from the baked sectors (spec §7.1). Height and gradient come from one
+// B-spline over 16 texels, so the slope costs nothing more.
+//
+// Bound: the B-spline's per-axis gradient never exceeds the steepest per-axis texel step
+// (extension/tests/test_sector.cpp), which the bake keeps at or under S_max = 2.5
+// (kSectorSlopeLimit; tests/test_fjords.gd). So |grad h| <= sqrt(2) * 2.5 and
+// |grad sdf| <= sqrt(1 + 2 * 2.5^2) = 3.67.
+#include "sector.glslh"
+
+// For sub-projects B and C: height above SURFACE_Y, dh/dx, dh/dz, ridge in -1..1.
+vec4 fjord_ground(vec2 xz) { return sector_ground(xz, P.fjord_height_water_y); }
+
+void stage_fjord(inout FieldCtx ctx) {
+	vec4 g = fjord_ground(ctx.p.xz);
+	ctx.height = g.x;
+	ctx.slope = length(g.yz);
+	ctx.ridge = g.w;
+	ctx.sdf = ctx.p.y - SURFACE_Y - ctx.height;
+}

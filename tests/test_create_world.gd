@@ -32,9 +32,9 @@ func test_a_blank_seed_is_random_and_never_zero() -> void:
 		assert_int(s).is_greater(0)
 		assert_int(s).is_less_equal(0xffffffff)
 
-func test_world_types_list_default_mesas_flat() -> void:
+func test_world_types_list_default_mesas_flat_fjords() -> void:
 	var names: Array = CreateWorld.load_types(TYPES_DIR).map(func(t): return t.display_name)
-	assert_array(names).is_equal(["Default", "Mesas", "Flat"])
+	assert_array(names).is_equal(["Default", "Mesas", "Flat", "Fjords"])
 
 func test_a_stray_resource_in_the_types_folder_is_skipped() -> void:
 	DirAccess.make_dir_recursive_absolute(FIXTURE_DIR)
@@ -81,6 +81,8 @@ func test_the_type_button_cycles_and_enter_creates() -> void:
 	assert_str(button.text).is_equal("World Type: Mesas")
 	button.pressed.emit()
 	assert_str(button.text).is_equal("World Type: Flat")
+	button.pressed.emit()
+	assert_str(button.text).is_equal("World Type: Fjords")
 	button.pressed.emit()
 	assert_str(button.text).is_equal("World Type: Default")
 	button.pressed.emit()

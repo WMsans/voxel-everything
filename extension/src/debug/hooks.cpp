@@ -91,6 +91,8 @@
 
 namespace godot {
 
+VoxelDebugHooks::~VoxelDebugHooks() { debug_release_field_set(); }
+
 void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_beauty_settings"),
 			&VoxelDebugHooks::debug_beauty_settings);
@@ -331,6 +333,12 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_field_sdf", "p"), &VoxelDebugHooks::debug_field_sdf);
 	ClassDB::bind_method(D_METHOD("debug_occupancy_stats", "center"), &VoxelDebugHooks::debug_occupancy_stats);
 	ClassDB::bind_method(D_METHOD("debug_stream_frame", "cam"), &VoxelDebugHooks::debug_stream_frame);
+	ClassDB::bind_method(D_METHOD("debug_pump_sectors", "cam", "half_extent", "max_frames"), &VoxelDebugHooks::debug_pump_sectors);
+	ClassDB::bind_method(D_METHOD("debug_sector_stats"), &VoxelDebugHooks::debug_sector_stats);
+	ClassDB::bind_method(D_METHOD("debug_sector_texels", "sx", "sz"), &VoxelDebugHooks::debug_sector_texels);
+	ClassDB::bind_method(D_METHOD("debug_sector_clear"), &VoxelDebugHooks::debug_sector_clear);
+	ClassDB::bind_method(D_METHOD("debug_field_set", "rd", "shader"), &VoxelDebugHooks::debug_field_set);
+	ClassDB::bind_method(D_METHOD("debug_release_field_set"), &VoxelDebugHooks::debug_release_field_set);
 	ClassDB::bind_method(D_METHOD("debug_stream_stats"), &VoxelDebugHooks::debug_stream_stats);
 	ClassDB::bind_method(D_METHOD("debug_slot_of_region", "region"), &VoxelDebugHooks::debug_slot_of_region);
 	ClassDB::bind_method(D_METHOD("debug_region_map_entry", "region"), &VoxelDebugHooks::debug_region_map_entry);

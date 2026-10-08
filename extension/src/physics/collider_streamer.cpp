@@ -563,7 +563,19 @@ int ColliderStreamer::run_frame(float cx, float cy, float cz, const float *extra
 	}
 	const int build_cap = (mesh_->busy() || !inbox_.empty() || !pending_.empty()) ? 0 : -1;
 	const Clock::time_point t_plan = Clock::now();
-	const ve::ChunkPlan plan = chunks_->update(centers.data(), radii.data(),
+	bool held = false;
+	if (sector_gate_) {
+		float lo_x = centers[0], lo_z = centers[2], hi_x = centers[0], hi_z = centers[2];
+		for (size_t i = 0; i < radii.size(); i++) {
+			lo_x = std::min(lo_x, centers[3 * i] - radii[i]);
+			lo_z = std::min(lo_z, centers[3 * i + 2] - radii[i]);
+			hi_x = std::max(hi_x, centers[3 * i] + radii[i]);
+			hi_z = std::max(hi_z, centers[3 * i + 2] + radii[i]);
+		}
+		held = !sector_gate_(lo_x, lo_z, hi_x, hi_z);
+		if (held) sector_holds_++;
+	}
+	const ve::ChunkPlan plan = held ? ve::ChunkPlan{} : chunks_->update(centers.data(), radii.data(),
 			static_cast<int>(centers.size() / 3), field_, build_cap);
 	last_plan_ms_ = ms_since(t_plan);
 	for (const auto &e : plan.releases) {

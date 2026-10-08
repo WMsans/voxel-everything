@@ -5,6 +5,7 @@
 #include "generator/generator.h"
 #include "terrain/pipeline.h"
 #include "terrain/stage_library.h"
+#include "terrain/sector_cache.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -14,6 +15,9 @@ namespace ve {
 class PipelineFieldGenerator : public Generator {
 public:
 	static PipelineFieldGenerator *create(const ResolvedPipeline &p, std::string *error);
+
+	// The host cache a map-stage pipeline's field stages sample. Set once, before any sample.
+	void set_sector_cache(std::shared_ptr<const SectorCache> c) { sectors_ = std::move(c); }
 
 	Sample sample(float x, float y, float z) const override;
 
@@ -33,6 +37,7 @@ public:
 
 private:
 	ResolvedPipeline pipeline_;
+	std::shared_ptr<const SectorCache> sectors_;
 	std::vector<StageFn> fns_;
 	// Each blob is allocated at max alignment and populated through memcpy. The registered
 	// trampoline casts it back to its own implicit-lifetime aggregate type; StageFn itself

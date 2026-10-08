@@ -19,9 +19,12 @@
 // back-reference set by its owning VoxelWorld.
 namespace godot {
 class VoxelWorld;
+class FieldContextSet;
+class SectorMirror;
 class VoxelDebugHooks : public Object {
 	GDCLASS(VoxelDebugHooks, Object)
 public:
+	~VoxelDebugHooks();
 	void bind_world(VoxelWorld *w) { world_ = w; }
 	Dictionary debug_shader_reload_stats();
 
@@ -302,6 +305,12 @@ public:
 	bool debug_flatten_material_normal(int layer);
 
 	int debug_stream_frame(Vector3 cam);
+	int debug_pump_sectors(Vector3 cam, float half_extent, int max_frames);
+	Dictionary debug_sector_stats();
+	PackedByteArray debug_sector_texels(int sx, int sz);
+	void debug_sector_clear();
+	RID debug_field_set(RenderingDevice *rd, RID shader);
+	void debug_release_field_set();
 
 	Dictionary debug_stream_stats();
 
@@ -544,6 +553,10 @@ private:
 
 	bool render_probe_pixel(Vector3 origin, Vector3 dir);
 
+	// debug_field_set's set 1 on a test's own device: shipping FieldContextSet and
+	// SectorMirror, filled from the shipping host cache.
+	FieldContextSet *probe_field_set_ = nullptr;
+	SectorMirror *probe_mirror_ = nullptr;
 	VoxelWorld *world_ = nullptr;
 };
 } // namespace godot

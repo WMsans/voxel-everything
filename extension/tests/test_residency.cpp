@@ -216,6 +216,19 @@ TEST_CASE("clear releases everything") {
 	CHECK_FALSE(res.slot_resident(0));
 }
 
+TEST_CASE("a region gate holds refused regions and loads the rest nearest first") {
+	ve::RegionResidency res(make_cfg(64.0f, 512, 64));
+	const ve::RegionGate gate = [](const ve::IVec3 &r) { return r.x >= 0; };
+	const ve::ResidencyPlan p = res.update(1.0f, 1.0f, 1.0f, ve::AtlasBudget{}, -1, gate);
+	REQUIRE_FALSE(p.loads.empty());
+	for (const auto &l : p.loads) CHECK(l.region.x >= 0);
+	// Held, not lost: once the gate opens, the refused regions load.
+	const ve::ResidencyPlan q = res.update(1.0f, 1.0f, 1.0f);
+	bool negative = false;
+	for (const auto &l : q.loads) negative |= l.region.x < 0;
+	CHECK(negative);
+}
+
 // Every region slot priced the same, so "the furthest resident is worth something" holds and
 // the test is about the trade, not about which region happens to hold bricks.
 static ve::AtlasBudget uniform_budget(std::vector<int> &costs, int slots, int cost,

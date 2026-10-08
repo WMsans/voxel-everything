@@ -43,6 +43,13 @@ PipelineFieldGenerator *PipelineFieldGenerator::create(const ResolvedPipeline &p
 	g->pipeline_ = p;
 
 	for (const StageManifest &s : p.stages) {
+		if (s.kind == StageKind::kMap) {
+			// Baked on the GPU and read back into the cache; the CPU never runs it.
+			g->fns_.push_back(nullptr);
+			g->slot_blobs_.push_back(nullptr);
+			g->param_blobs_.push_back(nullptr);
+			continue;
+		}
 		if (s.cpu_symbol.empty()) {
 			// GPU-only stage: the CPU field is already inexact, and sample() skips it.
 			g->fns_.push_back(nullptr);
@@ -100,7 +107,7 @@ Sample PipelineFieldGenerator::sample(float x, float y, float z) const {
 	for (size_t i = 0; i < fns_.size(); i++) {
 		StageFn fn = fns_[i];
 		if (fn == nullptr) continue;  // GPU-only stage: the CPU field is already inexact
-		FieldResources res;
+		FieldResources res{sectors_.get()};
 		fn(ctx, slot_blobs_[i].get(), param_blobs_[i].get(), res);
 	}
 

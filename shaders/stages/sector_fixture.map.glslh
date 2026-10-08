@@ -1,0 +1,15 @@
+//!stage     sector_fixture
+//!kind      map
+//!domain    sector2d 256x256
+//!out       sector.terrain : image2d_rg16
+//!param     water_y : float = 51.2
+
+// The sector tier's own fixture (tests/test_sectors.gd, tests/test_sector_gating.gd): a
+// smooth analytic height, so a test can tell a wrong texel from a right one. Not a terrain.
+#include "sector.glslh"
+
+vec2 stage_sector_fixture(vec2 xz) {
+	float y = P.sector_fixture_water_y + 20.0 * sin(xz.x * 0.011) * cos(xz.y * 0.013);
+	return vec2((y - (P.sector_fixture_water_y - SECTOR_HEIGHT_BELOW_M)) / SECTOR_HEIGHT_SPAN_M,
+			0.5 + 0.5 * sin(xz.y * 0.002));
+}

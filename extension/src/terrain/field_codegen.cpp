@@ -83,6 +83,11 @@ std::string generate_field_glslh(const ResolvedPipeline &p, const std::string &p
 	if (!p.resources.empty()) o << "\n";
 
 	for (const StageManifest &s : p.stages) o << s.body << "\n";
+	// The bake shader's entry (shaders/sector_bake.comp.glsl). Emitted only when a map stage
+	// exists, so every other pipeline's source stays byte-identical.
+	if (p.map_stage >= 0)
+		o << "#define VE_SECTOR_MAP 1\nvec2 ve_sector_map(vec2 xz) { return stage_"
+		  << p.stages[size_t(p.map_stage)].name << "(xz); }\n\n";
 
 	o << "void eval_base_field(vec3 p, out float sdf, out uint mat) {\n"
 	  << "\tFieldCtx ctx;\n";
@@ -90,7 +95,8 @@ std::string generate_field_glslh(const ResolvedPipeline &p, const std::string &p
 		if (c.name == "p") { o << "\tctx.p = p + VE_FIELD_OFFSET;\n"; continue; }
 		o << "\tctx." << c.name << " = " << channel_glsl_type(c.type) << "(0);\n";
 	}
-	for (const StageManifest &s : p.stages) o << "\tstage_" << s.name << "(ctx);\n";
+	for (const StageManifest &s : p.stages)
+		if (s.kind == StageKind::kField) o << "\tstage_" << s.name << "(ctx);\n";
 	o << "\tsdf = ctx.sdf;\n\tmat = ctx.material;\n}\n\n";
 
 	o << prelude;

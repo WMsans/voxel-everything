@@ -60,7 +60,7 @@ int RegionResidency::slot_cost(const AtlasBudget &budget, int slot) const {
 }
 
 ResidencyPlan RegionResidency::update(float cx, float cy, float cz, const AtlasBudget &budget,
-		int max_loads) {
+		int max_loads, const RegionGate &gate) {
 	ResidencyPlan plan;
 	const int load_cap = max_loads < 0 ? cfg_.max_loads_per_frame
 									   : std::min(max_loads, cfg_.max_loads_per_frame);
@@ -130,6 +130,7 @@ ResidencyPlan RegionResidency::update(float cx, float cy, float cz, const AtlasB
 	const bool priced = budget.cost_by_slot != nullptr;
 	for (const Cand &c : cands) {
 		if (static_cast<int>(plan.loads.size()) >= load_cap) break;
+		if (gate && !gate(c.region)) continue;
 		// Re-tested per candidate, so the exemption covers exactly the one load that gets the
 		// world started. Granting it to the whole frame let four regions into an atlas that
 		// could hold two, and the mark pass dropped the difference on frame zero.

@@ -1,0 +1,94 @@
+//!stage     fjord_height
+//!kind      map
+//!domain    sector2d 256x256
+//!out       sector.terrain : image2d_rg16
+//!param     water_y : float = 51.2
+//!param     scale_l : float = 2000.0
+//!param     scale_v : float = 2000.0
+//!param     h_water : float = 0.43
+//!param     height_freq : float = 3.0
+//!param     height_amp : float = 0.125
+//!param     valley_freq : float = 0.67
+//!param     valley_warp : float = 0.6
+//!param     valley_width : float = 0.15
+//!param     valley_depth : float = 0.12
+//!param     erosion_scale : float = 0.15
+//!param     erosion_strength : float = 0.22
+//!param     gully_weight : float = 0.5
+//!param     detail : float = 1.5
+//!param     ridge_rounding : float = 0.1
+//!param     crease_rounding : float = 0.0
+//!param     cell_scale : float = 0.7
+//!param     normalization : float = 0.5
+//!param     height_offset : float = -0.65
+//!param     floor_depth : float = 40.0
+//!param     wall_height : float = 60.0
+//!param     wall_steepen : float = 0.5
+
+// The Fjords heightmap (spec §6), baked once per sector. Shader space is the Shadertoy's
+// normalised map, p = xz / scale_l; the eroded height becomes water_y + scale_v * (h - h_water)
+// metres, shaped by the fjord profile. scale_l == scale_v keeps the filter's slope semantics.
+#include "noise2d.glslh"
+#include "erosion.glslh"
+#include "sector.glslh"
+
+// The Shadertoy's FractalNoise: 3 octaves, lacunarity 2, gain 0.1, with derivatives.
+vec3 fjord_fbm(vec2 p) {
+	vec3 n = vec3(0.0);
+	float nf = P.fjord_height_height_freq, na = 1.0;
+	for (int i = 0; i < 3; i++) {
+		n += ve_noised(p * nf) * na * vec3(1.0, nf, nf);
+		na *= 0.1;
+		nf *= 2.0;
+	}
+	return n * P.fjord_height_height_amp;
+}
+
+// Long winding valleys along the zero set of a domain-warped noise (spec §6.3 step 2).
+// valley_width is in noise units (plan deviation 7).
+float fjord_carve(vec2 p) {
+	vec2 q = p * P.fjord_height_valley_freq;
+	vec2 w = vec2(ve_noised(q * 1.7).x, ve_noised(q * 1.7 + vec2(5.2, 1.3)).x);
+	float n = ve_noised(q + P.fjord_height_valley_warp * w).x;
+	float t = 1.0 - smoothstep(0.0, P.fjord_height_valley_width, abs(n));
+	return P.fjord_height_valley_depth * t * t;
+}
+
+// Metres above water -> metres above water (spec §6.3 step 4). Monotone and continuous: above
+// wall_height unchanged; below it the wall rises up to (1 + wall_steepen)x faster; under water
+// the floor flattens toward -floor_depth, meeting the wall's slope at the shoreline.
+float fjord_profile(float m) {
+	float k = P.fjord_height_wall_steepen, hw = P.fjord_height_wall_height;
+	if (m >= hw) return m;
+	if (m >= 0.0) {
+		float u = 1.0 - m / hw;
+		return m + k * m * u * u;
+	}
+	float d = P.fjord_height_floor_depth;
+	return -d * (1.0 - exp(m * (1.0 + k) / d));
+}
+
+vec2 stage_fjord_height(vec2 xz) {
+	vec2 p = xz / P.fjord_height_scale_l;
+	vec3 n = fjord_fbm(p);
+	// Carve before erosion so its fade target sees the valleys and gullies drain into them.
+	// The carve's derivative only steers gully direction; a finite difference is plenty.
+	const float e = 1e-3;
+	float c0 = fjord_carve(p);
+	n -= vec3(c0, (fjord_carve(p + vec2(e, 0.0)) - c0) / e, (fjord_carve(p + vec2(0.0, e)) - c0) / e);
+	float fade = clamp(n.x / (P.fjord_height_height_amp * 0.6), -1.0, 1.0);
+	n = n * 0.5 + vec3(0.5, 0.0, 0.0);
+	float ridge_map, dbg;
+	vec4 h = ErosionFilter(p, n, fade,
+			P.fjord_height_erosion_strength, P.fjord_height_gully_weight, P.fjord_height_detail,
+			vec4(P.fjord_height_ridge_rounding, P.fjord_height_crease_rounding, 0.1, 2.0),
+			vec4(1.25, 1.25, 2.8, 1.5), vec2(0.7, 1.0),
+			P.fjord_height_erosion_scale, 5, 2.0, 0.5,
+			P.fjord_height_cell_scale, P.fjord_height_normalization,
+			ridge_map, dbg);
+	float eroded = n.x + h.x + P.fjord_height_height_offset * h.w;
+	float y = P.fjord_height_water_y +
+			fjord_profile(P.fjord_height_scale_v * (eroded - P.fjord_height_h_water));
+	return vec2((y - (P.fjord_height_water_y - SECTOR_HEIGHT_BELOW_M)) / SECTOR_HEIGHT_SPAN_M,
+			ridge_map * 0.5 + 0.5);
+}

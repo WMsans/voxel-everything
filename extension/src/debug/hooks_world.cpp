@@ -31,6 +31,9 @@
 #include "render/mesh_pass.h"
 #include "render/mesh_service.h"
 #include "render/field_context_set.h"
+#include "render/sector_context.h"
+#include "render/sector_mirror.h"
+#include "terrain/sector_cache.h"
 #include "render/lod_build_pass.h"
 #include "render/lod_pool.h"
 #include "render/lod_raster_pass.h"
@@ -1408,5 +1411,85 @@ bool VoxelDebugHooks::debug_region_map_consistent() {
 Dictionary VoxelDebugHooks::debug_raycast(Vector3 origin, Vector3 dir) {
 	// Kept for the test suites; gameplay calls VoxelWorld.raycast.
 	return world_->raycast(origin, dir, 200.0f);
+}
+
+// Drives the SHIPPING SectorContext on a local-device world until every wanted sector in the
+// square around `cam` is in the render mirror. Returns the frames it took, -1 on failure.
+int VoxelDebugHooks::debug_pump_sectors(Vector3 cam, float half_extent, int max_frames) {
+	RenderOrchestrator *render = world_->context().render;
+	if (!render) return -1;
+	world_->ensure_initialized();
+	if (!render->initialized() || !world_->get_use_local_device()) return -1;
+	RenderingDevice *device = world_->rd();
+	if (!device) return -1;
+	SectorContext *sc = render->passes().sectors;
+	if (!sc) return -1;
+	for (int f = 1; f <= max_frames; f++) {
+		sc->run_frame(device, cam.x, cam.z, render->passes().field_context);
+		device->submit();
+		device->sync();
+		if (sc->ready_on_render(cam.x - half_extent, cam.z - half_extent, cam.x + half_extent,
+				cam.z + half_extent))
+			return f;
+	}
+	return -1;
+}
+
+Dictionary VoxelDebugHooks::debug_sector_stats() {
+	Dictionary d;
+	const std::shared_ptr<ve::SectorCache> &cache = world_->context().store->sector_cache();
+	d["enabled"] = cache != nullptr;
+	if (!cache) return d;
+	const ve::SectorCache::Stats s = cache->stats();
+	d["resident"] = s.resident;
+	d["in_flight"] = s.in_flight;
+	d["inserted"] = s.inserted;
+	d["max_slope"] = s.max_slope;
+	d["over_limit"] = s.over_limit;
+	d["r_min"] = s.r_min;
+	d["r_max"] = s.r_max;
+	d["max_resident"] = cache->max_resident();
+	const SectorContext *sc = world_->context().render->passes().sectors;
+	d["render_layers"] = sc ? sc->mirror().uploaded() : 0;
+	d["bakes_dispatched"] = sc ? sc->bakes_dispatched() : int64_t(0);
+	return d;
+}
+
+PackedByteArray VoxelDebugHooks::debug_sector_texels(int sx, int sz) {
+	PackedByteArray out;
+	const std::shared_ptr<ve::SectorCache> &cache = world_->context().store->sector_cache();
+	if (!cache) return out;
+	const auto t = cache->find({sx, sz});
+	if (!t) return out;
+	out.resize(int64_t(t->texels.size() * 4));
+	std::memcpy(out.ptrw(), t->texels.data(), t->texels.size() * 4);
+	return out;
+}
+
+void VoxelDebugHooks::debug_sector_clear() {
+	if (const std::shared_ptr<ve::SectorCache> &cache = world_->context().store->sector_cache())
+		cache->clear();
+}
+
+RID VoxelDebugHooks::debug_field_set(RenderingDevice *rd, RID shader) {
+	debug_release_field_set();
+	if (rd == nullptr) return RID();
+	const std::shared_ptr<ve::SectorCache> &cache = world_->context().store->sector_cache();
+	if (cache) {
+		probe_mirror_ = new SectorMirror();
+		if (!probe_mirror_->initialize(rd, cache->max_resident())) return RID();
+		probe_mirror_->sync(*cache);
+	}
+	probe_field_set_ = new FieldContextSet();
+	if (!probe_field_set_->initialize(rd, shader, world_->context().store->terrain_pipeline(), probe_mirror_))
+		return RID();
+	return probe_field_set_->uniform_set();
+}
+
+void VoxelDebugHooks::debug_release_field_set() {
+	delete probe_field_set_;
+	probe_field_set_ = nullptr;
+	delete probe_mirror_;
+	probe_mirror_ = nullptr;
 }
 } // namespace godot

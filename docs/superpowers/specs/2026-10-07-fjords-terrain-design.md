@@ -1,7 +1,7 @@
 # Voxel Everything — Fjords Terrain and the Sector Heightmap Tier
 
 **Date:** 2026-10-07
-**Status:** approved design (sub-project A); B and C sketched only, each gets its own spec
+**Status:** implemented (sub-project A); B and C sketched only
 **Start commit:** `a45f3db` (`main`)
 **Prior specs:** `2026-09-03-terrain-pipeline-design.md` (the `sector2d` map tier designed and
 not built, §5.2–§7); `2026-09-17-stage-authoring-design.md` (manifests, the Lipschitz rule, CPU
@@ -192,7 +192,7 @@ far from the player before residency reports no hit; `GroundSpawn` already retri
 |---|---|
 | Slot pool exhausted | Evict the farthest sector; if one still cannot fit, its regions are held, never streamed on fallback data |
 | A map stage fails to compile | The existing pipeline load error and preflight; the world does not initialise and `GroundSpawn` warns |
-| A readback never returns | The sector stays not ready and its regions held; logged once per sector |
+| A readback never returns | The sector stays not ready and its regions held, and the ring slot is pinned for the context's lifetime; nothing logs it -- `buffer_get_data_async` has no failure callback to detect this (deviation 8) |
 | Teardown, or a world rebuilt by the title flow | `SectorContext` frees its RIDs and clears the host cache; keys carry the pipeline hash and seed, so a rebuilt world never reads old texels |
 | A sector over the slope limit | Logged once, counted in the stats (§6.4) |
 
@@ -445,4 +445,29 @@ are wanted.
 
 ## 12. Deviations
 
-(Recorded during planning and implementation.)
+### 12.1 Decided while planning
+
+1. **Bytes reach every device through the host cache.** The render device bakes into a ring of eight storage buffers and reads each back with `AsyncBufferRead`; a `SectorMirror` per device (render and mesher worker) uploads the host bytes into its own `texture2d_array`. Spec §4.6 had the bake write the array directly and missed that LoD builds, colliders, island extraction and consolidation run on the mesher's separate `RenderingDevice`, which cannot see render-device textures. GPU memory is therefore ~126 MB per device (two devices) plus ~126 MB host at a 4 km radius, about 3× the spec's "≈100 MB".
+2. **One map stage and one sector resource per pipeline.** `resolve_pipeline` rejects a second. The spec's "map stages in pipeline order, barrier between" has no second stage to order.
+3. **Map stage files end `.map.glslh`, not `.map.glsl`.** Godot imports every `*.glsl` under `res://` as a shader file and the reload preflight compiles them standalone; a stage body is neither.
+4. **The slope statistic is computed on the CPU from the read-back texels**, not with an `atomicMax` in the bake. The host already holds every byte.
+5. **Map-stage params may be overridden in a pipeline file.** The resolver's "no overrides on an sdf writer" rule does not apply (a map stage writes no `sdf`), though its params move the field's slope. The slope statistic and Task 8's slope test are the guard.
+6. **Sector coordinates are field-space** (after the seed offset). `SectorCache` takes world-space cameras and rectangles and adds the offset itself.
+7. **`valley_width` is in noise units** (default 0.15, ≈300 m at the default `valley_freq`), not metres.
+8. **No readback timeout.** A readback that never returns pins one of the eight ring entries for the context's lifetime. Godot's `buffer_get_data_async` has no failure callback to time out on.
+9. **Collider planning is held as a whole** while any sector under the physics balls is not resident, rather than per chunk. `ChunkResidency` permanently caches "empty" for a chunk it probes, and a probe of an unbaked sector would read the fallback air and never retry.
+10. **Gating ignores sectors beyond the cache radius.** A far LoD chunk can overlap the 4 km radius; the parts outside it read the fallback height. Waiting for sectors that are never wanted would leave the chunk unbuilt forever.
+11. **Snow and rock order clarified.** Above the snow line a face is snow when `slope < snow_slope` (1.4 above `e > 240`) and `breakstone` otherwise; below it, `breakstone` when `slope > 1.2`, else `grass_01`. The spec's table put the steep test first, which made the relaxed peak limit unreachable.
+12. **`fjord_ground(xz)` returns `vec4(height, dh/dx, dh/dz, ridge)`**; the slope is `length(.yz)`.
+13. **A physics-only world (graphics never initialised) never bakes sectors**, so its colliders stay held. No shipped scene or test runs Fjords that way.
+14. **The cache radius is fixed at pipeline load** from `stream_radius_m`; changing `stream_radius_m` on a live world does not move it.
+
+### 12.2 Recorded while implementing
+
+**Pipeline tuning.** `assets/pipelines/fjords.pipeline` ships `gully_weight 0.10` and `erosion_strength 0.015` under `fjord_height`; no `fjord_bands` overrides were needed. The previous `0.00` / `0.01` values produced no visually obvious gullies in the capture, so gully weight was raised to 0.05 and then 0.10 while keeping strength at 0.01; both passed the slope/range test. Increasing strength to 0.02 with gully weight 0.05 failed: seed 0 had five over-limit sectors, worst slope 3.42 (> `S_max=2.5`). Strength 0.015 with gully weight 0.10 passed all required seeds, with capture `max_slope=2.39749765396118`, `over_limit=0`, `r_min=0.05685511603951`, and `r_max=0.55596244335175`. It is the strongest tested override that preserves the strict bound, but leaves little slope headroom.
+
+**Capture and visual assessment.** Ran `./build.sh --verify && godot --path . --resolution 1280x720 -s res://tools/fjord_capture.gd -- --out="$TMPDIR/fjords-final"` on Godot 4.7.2 / Metal / Apple M1. The images are `$TMPDIR/fjords-final/valley.png`, `ridge.png`, and `aerial.png`; printed valley pose `(100.0, 54.2, -300.0)`, direction `(-0.92388, 0.08, 0.382683)`, ridge pose `(-1600.0, 275.5352, -1000.0)`, direction `(0.924678, -0.15, 0.38075)`, and aerial pose `(100.0, 304.2, -300.0)`, direction `(-0.92388, -0.45, 0.382683)`. At origin it settled in 255 frames with `inserted=332`, `bakes_dispatched=332`; final full capture stats: `max_resident=473`, `inserted=511`, `bakes_dispatched=511`, `max_slope=2.39749765396118`, `over_limit=0`. Valley shows a broad tan floor with low distant ridges and narrow green bands, not steep walls; ridge shows rounded, low-relief terrain with white snow patches and broad untextured faces; aerial shows low rounded ridges, sparse snow patches and broad green/stone surfaces. None shows clear fine gullies, steep crags, or the reference's forested walls; no obvious snow bloom halo or sector seam is visible at this image scale. The capture does not meet the visual target for gullies or the steep, dramatic relief. The user gave no acceptance/rejection response during this implementation, so no user acceptance is implied.
+
+**Measurements.** Used the supplied 2560×1440 `--disable-vsync` command pair with pose `100,54.2,-300,112.5,4.6`; added `--pose` support to standard `--benchmark` because the pre-fix command reported `camera_position=(24.0, 63.2, 24.0)` despite the pose argument. Three interleaved Default/Fjords/Default cycles (six Default and three Fjords runs), each `--benchmark` run sampled 300 frames. Final wall-frame percentiles (ms), in run order: Default p50/p99 = 22.92/25.67, 22.92/25.08, 22.92/24.74, 22.92/24.29, 22.92/24.11, 22.92/24.57; Fjords = 15.28/16.67, 15.28/16.67, 15.28/16.67. Vsync readback was disabled. All runs had `gpu_timing valid_samples=0`; these are wall-clock frame measurements, not GPU timing. The Default steady-settle wait hit its 1500-frame cap in all six runs; Fjords settled in 1136, 1115 and 1127 frames, so Default values are not fully settled steady-state. Measurements are informational, not gated. Capture max resident 473 × 270,400 B = 127,899,200 B (121.97 MiB) per device; estimated two devices plus host cache = 383,697,600 B (365.92 MiB), not including other engine allocations.
+
+**Other recorded deviations.** The benchmark pose correction is a small extension beyond the listed `--pipeline=` flag: the specified comparison would otherwise benchmark at the default pose. The Task 8 reviewer concern is only partially resolved: the strongest passing tested erosion configuration has a nonzero gully weight and near-limit measured slopes, but capture still lacks visually clear gullies. No unsupported visual-compliance claim is made.

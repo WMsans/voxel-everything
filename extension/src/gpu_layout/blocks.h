@@ -140,6 +140,10 @@ struct BrickGenPush {
 	int32_t atlas_bricks[4];
 };
 
+struct SectorBakePush {
+	int32_t sector[4]; // xy = field-space sector coordinate, zw unused
+};
+
 struct ConsolidatePush {
 	int32_t params[4];  // x = brick count, y = region slot, z = op count, w = region table
 };
@@ -331,6 +335,9 @@ inline constexpr Field kDownsamplePushFields[] = {
 inline constexpr Field kBrickGenPushFields[] = {
 	VE_LAYOUT_FIELD(BrickGenPush, atlas_bricks, IVec4, 0),
 };
+inline constexpr Field kSectorBakePushFields[] = {
+	VE_LAYOUT_FIELD(SectorBakePush, sector, IVec4, 0),
+};
 inline constexpr Field kConsolidatePushFields[] = {
 	VE_LAYOUT_FIELD(ConsolidatePush, params, IVec4, 0),
 };
@@ -391,6 +398,7 @@ inline constexpr Block kBlocks[] = {
 	VE_LAYOUT_BLOCK(GrassRegionBlock, "LEAF_REGION_FIELDS", kLeafRegionBlockFields),
 	VE_LAYOUT_BLOCK(DownsamplePush, "DOWNSAMPLE_PUSH_FIELDS", kDownsamplePushFields),
 	VE_LAYOUT_BLOCK(BrickGenPush, "BRICK_GEN_PUSH_FIELDS", kBrickGenPushFields),
+	VE_LAYOUT_BLOCK(SectorBakePush, "SECTOR_BAKE_PUSH_FIELDS", kSectorBakePushFields),
 	VE_LAYOUT_BLOCK(ConsolidatePush, "CONSOLIDATE_PUSH_FIELDS", kConsolidatePushFields),
 	VE_LAYOUT_BLOCK(BrickMarkPush, "BRICK_MARK_PUSH_FIELDS", kBrickMarkPushFields),
 	VE_LAYOUT_BLOCK(RegionFreePush, "REGION_FREE_PUSH_FIELDS", kRegionFreePushFields),

@@ -16,7 +16,12 @@ struct FieldCtx {
 	const float *v(int slot) const { return &ch[slot * 4]; }
 };
 
-struct FieldResources {};  // Plan A: no CPU-side resource sampling yet
+class SectorCache;
+// What a CPU mirror may sample besides its channels and params: the host sector cache, null
+// in a pipeline with no map stage (spec §5.1).
+struct FieldResources {
+	const SectorCache *sectors = nullptr;
+};
 
 // A stage's CPU mirror DECLARES the names it binds, through VE_STAGE_SLOTS and
 // VE_STAGE_PARAMS below, and PipelineFieldGenerator::create resolves each one against the

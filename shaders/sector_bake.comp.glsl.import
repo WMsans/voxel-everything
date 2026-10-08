@@ -1,0 +1,13 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://csyfpbpoearwc"
+path="res://.godot/imported/sector_bake.comp.glsl-4cff0ab4052052200b86b86278ff11c6.res"
+
+[deps]
+
+source_file="res://shaders/sector_bake.comp.glsl"
+dest_files=["res://.godot/imported/sector_bake.comp.glsl-4cff0ab4052052200b86b86278ff11c6.res"]
+
+[params]

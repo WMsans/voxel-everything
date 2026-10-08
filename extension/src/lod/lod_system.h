@@ -62,6 +62,7 @@ struct LodStats {
 	int op_overflow = 0; // LoD builds refused because their visible ops exceed the cap
 	int shell_chunks = 0; // near-shell chunks in the grid (spec §5)
 	int shell_pages = 0;  // near-shell pages resident
+	int sector_held = 0;
 	// stats() overwrites this every frame; the default matches the empty cut its comment
 	// describes, so a reader that forgot to call stats() still gets the honest answer.
 	int draw_min_level = ve::kLodLevels; // finest level in the current cut
@@ -207,6 +208,7 @@ private:
 	// drain_invalidations(). Bounded by ve::merge_or_cap.
 	std::vector<ve::Box3<float>> pending_marks_;
 	int lod_pressure_ = 0;
+	int lod_sector_held_ = 0;
 	float last_cam_[3] = {};
 	bool has_last_cam_ = false;
 	// The camera the last walk ran with. shadow_cut() needs the whole LodCamera (it

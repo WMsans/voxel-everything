@@ -148,6 +148,9 @@
 #define BRICK_GEN_PUSH_FIELDS \
 	ivec4 atlas_bricks;
 
+#define SECTOR_BAKE_PUSH_FIELDS \
+	ivec4 sector;
+
 #define CONSOLIDATE_PUSH_FIELDS \
 	ivec4 params;
 
