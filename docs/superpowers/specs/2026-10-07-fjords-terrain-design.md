@@ -192,7 +192,7 @@ far from the player before residency reports no hit; `GroundSpawn` already retri
 |---|---|
 | Slot pool exhausted | Evict the farthest sector; if one still cannot fit, its regions are held, never streamed on fallback data |
 | A map stage fails to compile | The existing pipeline load error and preflight; the world does not initialise and `GroundSpawn` warns |
-| A readback never returns | The sector stays not ready and its regions held; logged once per sector |
+| A readback never returns | The sector stays not ready and its regions held, and the ring slot is pinned for the context's lifetime; nothing logs it -- `buffer_get_data_async` has no failure callback to detect this (deviation 8) |
 | Teardown, or a world rebuilt by the title flow | `SectorContext` frees its RIDs and clears the host cache; keys carry the pipeline hash and seed, so a rebuilt world never reads old texels |
 | A sector over the slope limit | Logged once, counted in the stats (§6.4) |
 
