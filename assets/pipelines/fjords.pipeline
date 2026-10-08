@@ -6,7 +6,7 @@
 # writes sdf and so takes none.
 lipschitz 3.7
 stage stages/fjord_height.map.glslh
-  gully_weight 0.00
-  erosion_strength 0.01
+  gully_weight 0.10
+  erosion_strength 0.015
 stage stages/fjord.field.glslh
 stage stages/fjord_bands.field.glslh
