@@ -1,0 +1,55 @@
+//!stage     fjord_bands
+//!kind      field
+//!in        sdf : float
+//!in        height : float
+//!in        slope : float
+//!in        ridge : float
+//!out       material : uint
+//!param     shore : float = 2.0
+//!param     rock_slope : float = 1.2
+//!param     snow_line : float = 170.0
+//!param     snow_jitter : float = 25.0
+//!param     snow_ridge_drop : float = 40.0
+//!param     snow_slope : float = 1.0
+//!param     peak_line : float = 240.0
+//!param     peak_snow_slope : float = 1.4
+//!use       fjord_height.water_y
+//!cpu       ve::stage_fjord_bands
+
+// Materials by elevation above water, slope and ridge (spec §7.2, plan deviation 11). No
+// //!lipschitz: this stage writes no sdf. Integer hashing so the CPU mirror agrees exactly.
+
+uint fjord_pcg(uint v) {
+	uint s = v * 747796405u + 2891336453u;
+	uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+	return (w >> 22u) ^ w;
+}
+float fjord_cell(ivec2 c) {
+	return float(fjord_pcg(uint(c.x) * 0x8da6b343u ^ uint(c.y) * 0xd8163841u) & 0xffffu) / 32767.5 - 1.0;
+}
+// Value noise in -1..1 over 40 m cells: the snow line's waver.
+float fjord_snow_noise(vec2 xz) {
+	vec2 q = xz / 40.0;
+	vec2 b = floor(q);
+	ivec2 i = ivec2(b);
+	vec2 f = q - b;
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	float a = fjord_cell(i), c1 = fjord_cell(i + ivec2(1, 0));
+	float c2 = fjord_cell(i + ivec2(0, 1)), c3 = fjord_cell(i + ivec2(1, 1));
+	float lo = a + (c1 - a) * u.x, hi = c2 + (c3 - c2) * u.x;
+	return lo + (hi - lo) * u.y;
+}
+
+void stage_fjord_bands(inout FieldCtx ctx) {
+	if (ctx.sdf > 0.0) { ctx.material = 0u; return; }
+	float e = SURFACE_Y + ctx.height - P.fjord_height_water_y;
+	if (e < P.fjord_bands_shore) { ctx.material = MAT_GROUND_01; return; }
+	float line = P.fjord_bands_snow_line + P.fjord_bands_snow_jitter * fjord_snow_noise(ctx.p.xz) -
+			P.fjord_bands_snow_ridge_drop * max(ctx.ridge, 0.0);
+	if (e > line) {
+		float limit = e > P.fjord_bands_peak_line ? P.fjord_bands_peak_snow_slope : P.fjord_bands_snow_slope;
+		ctx.material = ctx.slope < limit ? MAT_SNOW : MAT_BREAKSTONE;
+		return;
+	}
+	ctx.material = ctx.slope > P.fjord_bands_rock_slope ? MAT_BREAKSTONE : MAT_GRASS_01;
+}

@@ -256,3 +256,19 @@ func test_a_far_seeded_world_agrees_between_cpu_and_gpu() -> void:
 	compare(pts, PackedByteArray(), 0, "seed %d base" % seed)
 	compare(pts, make_op(OP_SUBTRACT, 0, pts[0], 6.0), 1, "seed %d subtract" % seed)
 	_close_world()
+
+func test_a_far_seeded_fjord_world_agrees_between_cpu_and_gpu() -> void:
+	var probe: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	var seed := 0
+	for s in range(1, 10000):
+		probe.world_seed = s
+		var o: Vector3 = probe.field_offset()
+		if minf(o.x, o.z) < -7000.0:
+			seed = s
+			break
+	probe.free()
+	assert_int(seed).is_greater(0)
+	_open_world("res://assets/pipelines/fjords.pipeline", seed)
+	var pts := surface_points()
+	compare(pts, PackedByteArray(), 0, "fjords seed %d base" % seed)
+	_close_world()
