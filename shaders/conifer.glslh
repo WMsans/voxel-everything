@@ -225,6 +225,26 @@ ConiferHit conifer_walk(vec3 p, float ground_y, ConiferParams cp, float near_d, 
 	return hit;
 }
 
+// The walk measures TRUE trunk distance, but the field's values are CONIFER_FIELD_L x a
+// distance. Fed in raw, a trunk term of d_safe (8.7 m) claimed "within a metre of a surface"
+// for all the air up to ~45 m over every forest, and the collision probe meshed every one of
+// those chunks. So past a knee the trunk term takes (just under) the field's slope:
+//   g(d) = d below CONIFER_TRUNK_KNEE, knee + S (d - knee) above it.
+// S = 8.5 stays under the COMPUTED bound (8.54) consumers divide by, and g(d) <= S d for
+// d >= 0, so conifer_field's bound argument is unchanged; the knee sits past the atlas's
+// SDF_RANGE (0.64 m), so a baked trunk surface is byte-for-byte what the unscaled term gave.
+#define CONIFER_TRUNK_KNEE 1.0f
+#define CONIFER_TRUNK_SLOPE 8.5f
+
+float conifer_trunk_field(float d) {
+	return d <= CONIFER_TRUNK_KNEE ? d : CONIFER_TRUNK_KNEE + CONIFER_TRUNK_SLOPE * (d - CONIFER_TRUNK_KNEE);
+}
+
+// g's inverse: the true distance a trunk must beat for its field value to beat y.
+float conifer_trunk_field_inv(float y) {
+	return y <= CONIFER_TRUNK_KNEE ? y : CONIFER_TRUNK_KNEE + (y - CONIFER_TRUNK_KNEE) / CONIFER_TRUNK_SLOPE;
+}
+
 // The stage's whole answer for a point whose field value so far is f and whose own ground is
 // ground_y. The result never exceeds f, and result / CONIFER_FIELD_L never exceeds the true
 // distance to the terrain or any trunk -- test_conifer_shader.cpp checks both against brute
@@ -234,25 +254,31 @@ ConiferHit conifer_field(vec3 p, float f, float ground_y, ConiferParams cp, bool
 	ConiferHit hit;
 	hit.forest = false;
 	hit.near = true;
+	// The terrain cap: f above the ground, L * f below (see the argument at the end).
+	float cap = min(f, CONIFER_FIELD_L * f);
 	float far_d = CONIFER_FIELD_L * conifer_far_bound(p.y - ground_y, cp);
-	if (far_d >= conifer_d_safe(cp) && !want_disc) {
-		// No walk can say less than d_safe, so the far bound is the answer: no ground read.
-		hit.d = min(f, far_d);
+	// No walk can lift the answer over max(g(walk), far_d) >= far_d, nor say more than
+	// g(d_safe): when either settles it, the far bound and the cap are the answer, no ground
+	// read. cap >= 0 there keeps far_d >= 0, so p is in no trunk and trunk_d stays honest.
+	if (!want_disc && ((cap >= 0.0f && far_d >= cap) ||
+			far_d >= conifer_trunk_field(conifer_d_safe(cp)))) {
+		hit.d = min(cap, far_d);
 		hit.trunk_d = conifer_d_safe(cp);
 		return hit;
 	}
-	ConiferHit w = conifer_walk(p, ground_y, cp, f + near_margin, want_disc);
-	hit.near = w.d < f + near_margin;
+	ConiferHit w = conifer_walk(p, ground_y, cp, conifer_trunk_field_inv(f + near_margin), want_disc);
+	float trunk = conifer_trunk_field(w.d);
+	hit.near = trunk < f + near_margin;
 	hit.forest = w.forest;
 	hit.trunk_d = w.d;
 	// Both true-distance terms are already within L * min(trunk, terrain): w.d <= trunk, so
-	// L * w.d <= L * trunk; far_d = L * far_bound, and far_bound <= min(trunk, h) by its own
-	// argument (a foot at the point's own XZ is trunk distance h), so L * far_bound <=
+	// g(w.d) <= S * w.d <= L * trunk; far_d = L * far_bound, and far_bound <= min(trunk, h) by
+	// its own argument (a foot at the point's own XZ is trunk distance h), so L * far_bound <=
 	// L * min(trunk, h). The one raw term is the terrain value f itself, a stored field value:
-	// above the ground it is non-negative and min(f, max(w.d, far_d)) <= f <= L * f; below it,
+	// above the ground it is non-negative and min(f, max(g, far_d)) <= f <= L * f; below it,
 	// f < 0 and the field's stored distance scales by L, so terrain enters as L * f < f. Hence
 	// the terrain cap is min(f, L * f): f above the ground, L * f below.
-	hit.d = min(max(w.d, far_d), min(f, CONIFER_FIELD_L * f));
+	hit.d = min(max(trunk, far_d), cap);
 	return hit;
 }
 
@@ -288,42 +314,72 @@ bool conifer_inside(Conifer c, vec3 q) {
 	return sqrt(dx * dx + dz * dz) < conifer_profile(c, conifer_s(c, q.y));
 }
 
-// The imposter's ray cast (plan deviation 6): the ray parameter of the first point inside
-// the tiered crown, or -1. Clip to the crown's bounding cylinder (radius R x the tooth, from
-// crown base to tip), take CONIFER_RAY_STEPS inside tests across it, then bisect. rd is unit.
-float conifer_ray_hit(Conifer c, vec3 ro, vec3 rd) {
-	float rad = c.R * CONIFER_TOOTH_MAX;
+// The ray's span through the crown's bounding cone: apex at the tip, radius R x the tooth at
+// the crown base (conifer_profile never exceeds CONIFER_TOOTH_MAX R (1 - s)), cut by the slab
+// from crown base to tip. vec2(t0, t1), or t1 < t0 on a miss; rd is unit. The slab lies wholly
+// on the lower nappe's side of the apex, where the solid cone is convex, so the span is one
+// interval even when the quadratic's inside set is the two outer rays (a < 0).
+vec2 conifer_ray_span(Conifer c, vec3 ro_cam, vec3 rd) {
 	float y0 = c.foot.y + c.crown_base;
 	float y1 = c.foot.y + c.height;
-	float ox = ro.x - c.foot.x;
-	float oz = ro.z - c.foot.z;
-	float a = rd.x * rd.x + rd.z * rd.z;
-	float b = ox * rd.x + oz * rd.z;
-	float k = ox * ox + oz * oz - rad * rad;
-	float t0 = -1.0e30f;
+	// Solve from the ray's closest approach to the crown's centre, not from a camera 2 km
+	// out: in float, b^2 - ac on km-scale terms cancels away metres of crown.
+	vec3 centre = vec3(c.foot.x, 0.5f * (y0 + y1), c.foot.z);
+	float tm = dot(centre - ro_cam, rd);
+	vec3 ro = ro_cam + rd * tm;
+	float t0 = -tm;
 	float t1 = 1.0e30f;
-	if (a > 1e-8f) {
-		float disc = b * b - a * k;
-		if (disc < 0.0f) return -1.0f;
-		float sq = sqrt(disc);
-		t0 = (-b - sq) / a;
-		t1 = (-b + sq) / a;
-	} else if (k > 0.0f) {
-		return -1.0f;
-	}
 	if (abs(rd.y) > 1e-8f) {
 		float ta = (y0 - ro.y) / rd.y;
 		float tb = (y1 - ro.y) / rd.y;
 		t0 = max(t0, min(ta, tb));
 		t1 = min(t1, max(ta, tb));
 	} else if (ro.y < y0 || ro.y > y1) {
-		return -1.0f;
+		return vec2(0.0f, -1.0f);
 	}
-	t0 = max(t0, 0.0f);
+	// r^2 <= kk (y1 - y)^2 along the ray: q(t) = qa t^2 + 2 qb t + qc <= 0.
+	float k = c.R * CONIFER_TOOTH_MAX / max(y1 - y0, 1e-3f);
+	float kk = k * k;
+	float ox = ro.x - c.foot.x;
+	float oz = ro.z - c.foot.z;
+	float w0 = y1 - ro.y;
+	float qa = rd.x * rd.x + rd.z * rd.z - kk * rd.y * rd.y;
+	float qb = ox * rd.x + oz * rd.z + kk * w0 * rd.y;
+	float qc = ox * ox + oz * oz - kk * w0 * w0;
+	float disc = qb * qb - qa * qc;
+	if (qa > 1e-6f) {
+		if (disc < 0.0f) return vec2(0.0f, -1.0f);
+		float sq = sqrt(disc);
+		t0 = max(t0, (-qb - sq) / qa);
+		t1 = min(t1, (-qb + sq) / qa);
+	} else if (qa < -1e-6f && disc >= 0.0f) {
+		// Inside on (-inf, r1] and [r2, inf); the slab meets at most one of them.
+		float sq = sqrt(disc);
+		float r1 = (-qb + sq) / qa;
+		float r2 = (-qb - sq) / qa;
+		if (min(t1, r1) >= t0) t1 = min(t1, r1);
+		else t0 = max(t0, r2);
+	}
+	// qa near 0 (a ray along the cone's slope), or qa < 0 with no root (inside the double
+	// cone all along): the slab alone, which is conservative.
+	return vec2(t0 + tm, t1 + tm);
+}
+
+// The imposter's ray cast (plan deviation 6): the ray parameter of the first point inside
+// the tiered crown, or -1. Clip to conifer_ray_span, take up to CONIFER_RAY_STEPS inside tests
+// across it, then bisect. rd is unit. min_dt is the step the caller can resolve (the
+// imposter's pixel footprint): a far crown a few pixels wide takes as few as 4 steps instead
+// of 24. 0 always takes the full count.
+float conifer_ray_hit(Conifer c, vec3 ro, vec3 rd, float min_dt) {
+	vec2 span = conifer_ray_span(c, ro, rd);
+	float t0 = span.x;
+	float t1 = span.y;
 	if (t1 <= t0) return -1.0f;
-	float dt = (t1 - t0) / float(CONIFER_RAY_STEPS);
+	float n = clamp(floor((t1 - t0) / max(min_dt, 1e-6f)) + 1.0f, 4.0f, float(CONIFER_RAY_STEPS));
+	int steps = int(n);
+	float dt = (t1 - t0) / n;
 	float prev = t0;
-	for (int i = 0; i <= CONIFER_RAY_STEPS; i++) {
+	for (int i = 0; i <= steps; i++) {
 		float t = t0 + dt * float(i);
 		if (conifer_inside(c, ro + rd * t)) {
 			if (i == 0) return t;

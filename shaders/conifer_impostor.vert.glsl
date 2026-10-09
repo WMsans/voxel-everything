@@ -38,6 +38,12 @@ void main() {
 	// radius the rest. 10% margin covers perspective at the >= 240 m these draw from.
 	float ext_up = 1.1 * (half_h * abs(up.y) + rad * sqrt(max(0.0, 1.0 - up.y * up.y)));
 	float ext_right = 1.1 * rad;
+	// The quad stands in FRONT of the whole bounding cylinder, so every crown point a pixel's
+	// ray hits is farther than the quad there. The fragment's depth_less (reverse-Z) then lets
+	// early depth reject quads behind terrain before the ray cast runs. Moving the plane nearer
+	// only shrinks the cylinder's projection onto it, so the extents above still cover it.
+	float ext_fwd = half_h * abs(to_cam.y) + rad * sqrt(max(0.0, 1.0 - to_cam.y * to_cam.y));
+	mid += to_cam * ext_fwd;
 
 	const vec2 kCorners[6] = vec2[6](vec2(-1, -1), vec2(1, -1), vec2(-1, 1),
 	                                 vec2(-1, 1), vec2(1, -1), vec2(1, 1));

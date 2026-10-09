@@ -21,12 +21,16 @@ layout(location = 2) flat in vec4 v_b;
 
 layout(location = 0) out vec4 out_albedo;  // rgb albedo, a = sun visibility
 layout(location = 1) out vec4 out_surface; // xy oct normal, z material id, w gloss
+// The hit is never nearer than the quad (conifer_impostor.vert.glsl puts the quad in front of
+// the crown), and nearer is larger in reverse-Z: this keeps early depth on.
+layout(depth_less) out float gl_FragDepth;
 
 void main() {
 	Conifer c = conifer_unpack(v_a, v_b);
 	vec3 ro = pc.cam.xyz;
 	vec3 rd = normalize(v_world - ro);
-	float t = conifer_ray_hit(c, ro, rd);
+	// One step per pixel of world the quad covers here: finer cannot show.
+	float t = conifer_ray_hit(c, ro, rd, length(fwidth(v_world)));
 	if (t < 0.0) discard;
 	vec3 hit = ro + rd * t;
 

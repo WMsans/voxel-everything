@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bkhupsbjak03c"
+path="res://.godot/imported/conifer_impostor.vert.glsl-d05d0372c125d3b2c58e14b51923345b.res"
+
+[deps]
+
+source_file="res://shaders/conifer_impostor.vert.glsl"
+dest_files=["res://.godot/imported/conifer_impostor.vert.glsl-d05d0372c125d3b2c58e14b51923345b.res"]
+
+[params]
+

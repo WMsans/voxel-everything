@@ -26,9 +26,10 @@
 // conifer is and what shape it has lives in shaders/conifer.glslh, which the conifer cull, the
 // card scatter, the imposter and the CPU mirror (ve::stage_conifers) all execute too.
 //
-// Bound: `mul 1.0`. conifer_field returns min(f, max(trunks, far bound)); the trunks are exact
-// 1-Lipschitz round cones and the far bound is f scaled by 8.6 / 9.6 < 1, so neither raises
-// the running 8.54 (the argument cave.field.glslh makes for its max).
+// Bound: `mul 1.0`. conifer_field returns min(f, max(g(trunks), far bound)); the trunks are
+// exact 1-Lipschitz round cones, g (conifer_trunk_field) has slope at most 8.5 and the far
+// bound is f scaled by 8.6 / 9.6 < 1, so neither raises the running 8.54
+// (the argument cave.field.glslh makes for its max).
 //
 // Runs AFTER fjord_bands, so the bands' material is known: the forest disc only replaces
 // grass and breakstone, and a trunk is bark whatever ground it stands in.

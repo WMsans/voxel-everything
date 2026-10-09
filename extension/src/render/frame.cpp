@@ -129,7 +129,8 @@ ve::ConiferLayout VoxelFrame::conifer_layout(const float cam_pos[3], const float
 }
 
 bool VoxelFrame::draw_conifers(RenderingDevice *rd, GpuAtlas &atlas, GBuffer &gb,
-		const Projection &view_proj, const float cam_pos[3], float time_s, bool raster_mode) {
+		const Projection &view_proj, const float cam_pos[3], float time_s, bool raster_mode,
+		const HizPass *hiz) {
 	ConiferScatterPass *pass = render_.passes().conifer_scatter;
 	if (!pass) return false;
 	float vp[16];
@@ -139,7 +140,8 @@ bool VoxelFrame::draw_conifers(RenderingDevice *rd, GpuAtlas &atlas, GBuffer &gb
 	l.params.flags[0] = raster_mode ? 1 : 0;
 	SunUbo *sun = render_.passes().sun_ubo;
 	if (!pass->run(rd, atlas, l, store_.region_window(), time_s, sun ? sun->buffer() : RID(),
-			render_.passes().field_context))
+			render_.passes().field_context, vp, hiz ? hiz->pyramid() : RID(), HizPass::kSize,
+			hiz ? hiz->mip_count() : 0))
 		return false;
 	// Task 4's card raster, driven by THIS pass's instances/params/draw args (plan deviation
 	// 8). Task 7's imposter raster joins the same block.
@@ -533,7 +535,8 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	if (render_.passes().conifer_scatter) {
 		timings->begin(rd, "conifers");
 		if (draw_conifers(rd, *atlas, *gb, view_proj, cam_pos,
-				static_cast<float>(render_.beauty_frame()) / 60.0f, settings.raster_mode))
+				static_cast<float>(render_.beauty_frame()) / 60.0f, settings.raster_mode,
+				hiz_built ? hiz : nullptr))
 			timings->end(rd, "conifers");
 		else
 			timings->cancel("conifers");

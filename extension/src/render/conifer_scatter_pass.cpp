@@ -17,8 +17,10 @@ bool ConiferScatterPass::initialize(RenderingDevice *rd) {
 	scatter_ = gpu::compile_compute(rd, group_, "ConiferScatterPass", "conifer_scatter.comp.glsl");
 	sampler_nearest_ = gpu::sampler(rd, group_, RenderingDevice::SAMPLER_FILTER_NEAREST);
 	sampler_linear_ = gpu::sampler(rd, group_, RenderingDevice::SAMPLER_FILTER_LINEAR, true);
+	hiz_dummy_ = gpu::texture(rd, group_, RenderingDevice::DATA_FORMAT_R32_SFLOAT, Vector2i(1, 1),
+			RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT);
 	counters_read_.instantiate();
-	if (!cull_.valid() || !scatter_.valid() || !sampler_linear_.is_valid() ||
+	if (!cull_.valid() || !hiz_dummy_.is_valid() || !scatter_.valid() || !sampler_linear_.is_valid() ||
 			!sampler_nearest_.is_valid() || counters_read_.is_null()) {
 		teardown();
 		return false;
@@ -45,7 +47,7 @@ void ConiferScatterPass::teardown() {
 	cull_ = scatter_ = gpu::Program();
 	params_ubo_ = raster_ubo_ = region_ubo_ = field_ops_ = RID();
 	card_list_ = impostor_list_ = counters_ = dispatch_args_ = draw_args_ = impostor_args_ = instances_ = RID();
-	sampler_linear_ = sampler_nearest_ = RID();
+	sampler_linear_ = sampler_nearest_ = hiz_dummy_ = RID();
 	cull_set_ = scatter_set_ = gpu::SetCache();
 	max_clumps_ = max_card_trees_ = max_impostors_ = 0;
 	last_card_trees_ = last_impostors_ = last_clumps_ = clump_high_water_ = 0;
@@ -87,7 +89,7 @@ bool ConiferScatterPass::ensure_buffers(RenderingDevice *rd, const ve::ConiferPa
 			region_ubo_.is_valid() && field_ops_.is_valid();
 }
 
-bool ConiferScatterPass::ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas, RID sun_ubo) {
+bool ConiferScatterPass::ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas, RID sun_ubo, RID hiz) {
 	gpu::RdDevice device{rd};
 	const RID cull = cull_set_.get(device, group_, cull_.shader, 0, {
 			gpu::ubo(0, params_ubo_),
@@ -104,7 +106,8 @@ bool ConiferScatterPass::ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atla
 			gpu::ubo(11, region_ubo_),
 			gpu::storage(12, atlas.palette()),
 			gpu::storage(13, atlas.brick_flags()),
-			gpu::storage(14, field_ops_)});
+			gpu::storage(14, field_ops_),
+			gpu::sampled(15, sampler_nearest_, hiz.is_valid() ? hiz : hiz_dummy_)});
 	if (!cull.is_valid()) return false;
 	if (!sun_ubo.is_valid()) return true; // no sun: the cull runs, the scatter is skipped
 	return scatter_set_.get(device, group_, scatter_.shader, 0, {
@@ -140,7 +143,8 @@ void ConiferScatterPass::clear_args(RenderingDevice *rd) {
 
 bool ConiferScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas, const ve::ConiferLayout &layout,
 		const ve::RegionWindow &region_win, float time_seconds, RID sun_ubo,
-		const FieldContextSet *field) {
+		const FieldContextSet *field, const float view_proj[16], RID hiz, int hiz_size,
+		int hiz_mips) {
 	if (!rd_ || rd != rd_ || !cull_.valid() || !scatter_.valid()) return false;
 	if (!field || !field->is_valid()) return false;
 	if (layout.dispatch_threads <= 0) {
@@ -152,7 +156,7 @@ bool ConiferScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas, const ve::Con
 		return true;
 	}
 	if (!ensure_buffers(rd, layout.params)) return false;
-	if (!ensure_uniform_sets(rd, atlas, sun_ubo)) return false;
+	if (!ensure_uniform_sets(rd, atlas, sun_ubo, hiz)) return false;
 	const bool scatter_ok = sun_ubo.is_valid() && atlas.region_slot_counts().is_valid();
 
 	rd->buffer_update(params_ubo_, 0, sizeof(layout.params), gpu::push_bytes(layout.params));
@@ -171,6 +175,12 @@ bool ConiferScatterPass::run(RenderingDevice *rd, GpuAtlas &atlas, const ve::Con
 	rd->compute_list_bind_compute_pipeline(list, cull_.pipeline);
 	rd->compute_list_bind_uniform_set(list, cull_set_.id(), 0);
 	field->bind(rd, list);
+	ve::LodCullPush push{};
+	std::copy(view_proj, view_proj + 16, push.view_proj);
+	push.params[0] = hiz.is_valid() ? 1 : 0;
+	push.params[1] = hiz_size;
+	push.params[2] = hiz_mips;
+	rd->compute_list_set_push_constant(list, gpu::push_bytes(push), sizeof(push));
 	rd->compute_list_dispatch(list, (layout.dispatch_threads + 63) / 64, 1, 1);
 	if (scatter_ok) {
 		rd->compute_list_add_barrier(list);

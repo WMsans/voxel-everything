@@ -641,7 +641,7 @@ Dictionary VoxelDebugHooks::debug_conifer_stats(Vector3 eye, Vector3 forward) {
 		// The compositor's own block, one code path (plan deviation 14): cull, card scatter and
 		// card raster, into the probe-size G-buffer.
 		const bool ok = w->context().render->frame().draw_conifers(device, *atlas, *gb, view_proj, p,
-				static_cast<float>(w->context().render->beauty_frame()) / 60.0f, false);
+				static_cast<float>(w->context().render->beauty_frame()) / 60.0f, false, nullptr);
 		device->submit();
 		device->sync();
 		if (!ok) return d;

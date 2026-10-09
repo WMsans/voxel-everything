@@ -30,6 +30,7 @@ class RenderSceneBuffersRD;
 class WorldStore;
 class GBuffer;
 class GpuAtlas;
+class HizPass;
 // Per-frame values RenderOrchestrator owns, sampled once per call.
 struct FrameSettings {
 	ve::SunState sun;
@@ -139,9 +140,11 @@ public:
 	ve::ConiferLayout conifer_layout(const float cam_pos[3], const float view_proj[16]) const;
 	// The conifer block: cull, card scatter, card raster (and Task 7's imposter raster).
 	// Called by the compositor and by debug_conifer_stats -- one code path (plan deviation 14).
-	// False on failure; the caller cancels the timing marker.
+	// False on failure; the caller cancels the timing marker. hiz is this frame's built
+	// pyramid, or null: the imposter list is then not occlusion-culled.
 	bool draw_conifers(RenderingDevice *rd, GpuAtlas &atlas, GBuffer &gb,
-			const Projection &view_proj, const float cam_pos[3], float time_s, bool raster_mode);
+			const Projection &view_proj, const float cam_pos[3], float time_s, bool raster_mode,
+			const HizPass *hiz);
 
 private:
 	float grass_reach_limit_m() const;

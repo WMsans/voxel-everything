@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://becrmfltgy4fw"
+path="res://.godot/imported/conifer_scatter.comp.glsl-0311f9a80ea7f61eb21bd2352e60bdec.res"
+
+[deps]
+
+source_file="res://shaders/conifer_scatter.comp.glsl"
+dest_files=["res://.godot/imported/conifer_scatter.comp.glsl-0311f9a80ea7f61eb21bd2352e60bdec.res"]
+
+[params]
+

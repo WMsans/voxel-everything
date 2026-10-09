@@ -26,7 +26,8 @@ public:
 	// field is the terrain pipeline's set 1 (the cull calls conifers_params()/fjord_ground).
 	bool run(RenderingDevice *rd, GpuAtlas &atlas, const ve::ConiferLayout &layout,
 			const ve::RegionWindow &region_win, float time_seconds, RID sun_ubo,
-			const FieldContextSet *field);
+			const FieldContextSet *field, const float view_proj[16], RID hiz, int hiz_size,
+			int hiz_mips);
 
 	RID card_list_buffer() const { return card_list_; }
 	RID impostor_list_buffer() const { return impostor_list_; }
@@ -45,7 +46,7 @@ public:
 private:
 	void apply_counters(const PackedByteArray &data);
 	bool ensure_buffers(RenderingDevice *rd, const ve::ConiferPassParams &p);
-	bool ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas, RID sun_ubo);
+	bool ensure_uniform_sets(RenderingDevice *rd, GpuAtlas &atlas, RID sun_ubo, RID hiz);
 	void clear_args(RenderingDevice *rd);
 
 	RenderingDevice *rd_ = nullptr;
@@ -54,6 +55,7 @@ private:
 	RID params_ubo_, raster_ubo_, region_ubo_, field_ops_;
 	RID card_list_, impostor_list_, counters_, dispatch_args_, draw_args_, impostor_args_, instances_;
 	RID sampler_linear_, sampler_nearest_;
+	RID hiz_dummy_; // bound when there is no pyramid; the push flag keeps it unread
 	gpu::SetCache cull_set_, scatter_set_;
 	Ref<AsyncBufferRead> counters_read_;
 	int max_clumps_ = 0, max_card_trees_ = 0, max_impostors_ = 0;

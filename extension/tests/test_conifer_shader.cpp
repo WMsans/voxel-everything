@@ -193,6 +193,10 @@ TEST_CASE("the far bound and the combined field never overstate, even under a cl
 			const auto hit = ev.conifer_field(p, f, ground_y, cp, false, 0.06f);
 			CHECK(hit.d <= f + 1e-6f);
 			CHECK(hit.d / 8.6f <= std::fmin(truth, f) + 1e-3f);
+			// ...nor understate the air over a forest: the trunk term is in field units past
+			// the knee, or every collision chunk up to ~45 m over the trees probes as surface.
+			const float t = std::fmin(truth, ev.conifer_d_safe(cp));
+			if (h > 0.0f) CHECK(hit.d >= std::fmin(f, t <= 1.0f ? t : 1.0f + 8.5f * (t - 1.0f)) - 1e-3f);
 		}
 	}
 	CHECK(trees_near > 1000); // the cases above actually had trunks to overstate
@@ -220,14 +224,44 @@ TEST_CASE("the imposter ray hits the crown from the side and from above, and mis
 	const auto c = ev.conifer_at(cs::ivec2(0, 0), cs::vec2(0.0f, 0.0f), 60.0f, 0.2f, cp);
 	const float mid_y = c.foot.y + c.crown_base + 0.3f * (c.height - c.crown_base);
 	const cs::vec3 side_o(-300.0f, mid_y, 0.0f), side_d(1.0f, 0.0f, 0.0f);
-	const float t = ev.conifer_ray_hit(c, side_o, side_d);
+	const float t = ev.conifer_ray_hit(c, side_o, side_d, 0.0f);
 	REQUIRE(t > 0.0f);
 	CHECK(ev.conifer_inside(c, side_o + side_d * t));
 	CHECK(t < 300.0f); // in front of the axis
 	const cs::vec3 top_o(0.0f, c.foot.y + c.height + 200.0f, 0.0f), down(0.0f, -1.0f, 0.0f);
-	CHECK(ev.conifer_ray_hit(c, top_o, down) > 0.0f);
+	CHECK(ev.conifer_ray_hit(c, top_o, down, 0.0f) > 0.0f);
 	const cs::vec3 miss_o(-300.0f, mid_y, c.R * 1.2f + 0.5f);
-	CHECK(ev.conifer_ray_hit(c, miss_o, side_d) < 0.0f);
+	CHECK(ev.conifer_ray_hit(c, miss_o, side_d, 0.0f) < 0.0f);
+}
+
+// The cone clip is only sound if it never cuts off crown: march every ray finely across the
+// whole slab and require every inside sample to lie in the span, from any elevation.
+TEST_CASE("the imposter's cone span contains every crown point on the ray") {
+	cs::Eval ev;
+	const auto cp = params(ev);
+	uint32_t seed = 41u;
+	int inside = 0;
+	for (int i = 0; i < 400; i++) {
+		const auto c = ev.conifer_at(cs::ivec2(i, 3), cs::vec2(0.0f, 0.0f), 60.0f, 0.2f, cp);
+		const float mid_y = c.foot.y + c.crown_base + 0.5f * (c.height - c.crown_base);
+		// A camera 240-2500 m out, from below the crown to steeply above it, aimed at a point
+		// inside the crown's bounding box.
+		const float az = frand(seed, 0.0f, 6.2832f), dist = frand(seed, 240.0f, 2500.0f);
+		const cs::vec3 ro(dist * std::cos(az), mid_y + dist * frand(seed, -0.2f, 1.5f), dist * std::sin(az));
+		const cs::vec3 aim(frand(seed, -4.0f, 4.0f), frand(seed, c.foot.y + c.crown_base - 1.0f,
+				c.foot.y + c.height + 1.0f), frand(seed, -4.0f, 4.0f));
+		const cs::vec3 rd = cs::normalize(aim - ro);
+		const auto span = ev.conifer_ray_span(c, ro, rd);
+		const float len = cs::length(aim - ro);
+		for (int k = 0; k <= 4000; k++) {
+			const float t = len - 15.0f + 30.0f * float(k) / 4000.0f;
+			if (!ev.conifer_inside(c, ro + rd * t)) continue;
+			inside++;
+			CHECK(t >= span.x - 1e-2f);
+			CHECK(t <= span.y + 1e-2f);
+		}
+	}
+	CHECK(inside > 10000);
 }
 
 // Review Focus 2: leaf.frag.glsl discards a card where bayer < fade; the imposter keeps a

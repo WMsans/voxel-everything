@@ -196,6 +196,12 @@ func _ready() -> void:
 			# else leaves the shipped default. The grass flag's twin, and what lets every
 			# existing leg keep a control in the canopy A/B.
 			_world.set_leaf_value("enabled", float(arg.trim_prefix("--leaves=")))
+		elif arg.begins_with("--conifer-value="):
+			# name=value, repeatable: the conifer dials (enabled, card_reach_m,
+			# impostor_reach_m) swept across otherwise identical runs, as --effect-value.
+			var ckv := arg.trim_prefix("--conifer-value=").split("=", false)
+			if ckv.size() == 2:
+				_world.set_conifer_value(String(ckv[0]).strip_edges(), float(ckv[1]))
 		elif arg.begins_with("--transparency="):
 			# Transparency on/off for A/B cost runs: 0 disables the shell builds, the shell
 			# raster, the composite and the G-buffer resolve. The leaves flag's twin, and it
