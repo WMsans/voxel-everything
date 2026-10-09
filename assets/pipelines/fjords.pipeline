@@ -25,3 +25,9 @@ stage stages/fjord.field.glslh
 stage stages/fjord_bands.field.glslh
   snow_line 380
   peak_line 450
+
+# Conifer trunks and the forest floor (docs/superpowers/specs/2026-10-08-fjords-conifers-design.md).
+# `mul 1.0`: the computed bound stays 8.54. Placement and shape are this stage's params; the
+# card scatter and imposter read them from the records the cull writes, so there is no
+# second copy to keep in step.
+stage stages/conifers.field.glslh

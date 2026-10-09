@@ -184,9 +184,10 @@ float conifer_far_bound(float h, ConiferParams cp) {
 }
 
 struct ConiferHit {
-	float d;     // conifer_walk: nearest trunk, clamped to d_safe. conifer_field: the field value.
-	bool forest; // p lies inside a present tree's crown disc in XZ (only when asked)
-	bool near;   // a trunk is within near_margin of the field value: gradient taps must look
+	float d;        // conifer_walk: nearest trunk, clamped to d_safe. conifer_field: the field value.
+	float trunk_d;  // the nearest trunk's own signed distance; <= 0 exactly when p is inside a trunk
+	bool forest;    // p lies inside a present tree's crown disc in XZ (only when asked)
+	bool near;      // a trunk is within near_margin of the field value: gradient taps must look
 };
 
 // The 3x3 cell walk. near_d is the field value a trunk must beat to matter; cells that
@@ -237,11 +238,13 @@ ConiferHit conifer_field(vec3 p, float f, float ground_y, ConiferParams cp, bool
 	if (far_d >= conifer_d_safe(cp) && !want_disc) {
 		// No walk can say less than d_safe, so the far bound is the answer: no ground read.
 		hit.d = min(f, far_d);
+		hit.trunk_d = conifer_d_safe(cp);
 		return hit;
 	}
 	ConiferHit w = conifer_walk(p, ground_y, cp, f + near_margin, want_disc);
 	hit.near = w.d < f + near_margin;
 	hit.forest = w.forest;
+	hit.trunk_d = w.d;
 	// Both true-distance terms are already within L * min(trunk, terrain): w.d <= trunk, so
 	// L * w.d <= L * trunk; far_d = L * far_bound, and far_bound <= min(trunk, h) by its own
 	// argument (a foot at the point's own XZ is trunk distance h), so L * far_bound <=

@@ -1,0 +1,68 @@
+//!stage     conifers
+//!kind      field
+//!in        sdf : float
+//!in        height : float
+//!in        material : uint
+//!out       sdf : float
+//!out       material : uint
+//!param     cell : float = 8.0
+//!param     density : float = 0.85
+//!param     height_min : float = 18.0
+//!param     height_max : float = 28.0
+//!param     trunk_radius : float = 0.45
+//!param     crown_radius : float = 3.0
+//!param     max_slope : float = 1.7
+//!param     treeline_margin : float = 40.0
+//!use       fjord_height.water_y
+//!use       fjord_bands.shore
+//!use       fjord_bands.snow_line
+//!use       fjord_bands.snow_jitter
+//!use       fjord_bands.snow_ridge_drop
+//!lipschitz mul 1.0
+//!cpu       ve::stage_conifers
+
+// Conifer trunks as real voxels, and the forest material under each crown
+// (docs/superpowers/specs/2026-10-08-fjords-conifers-design.md §4.3). Everything about where a
+// conifer is and what shape it has lives in shaders/conifer.glslh, which the conifer cull, the
+// card scatter, the imposter and the CPU mirror (ve::stage_conifers) all execute too.
+//
+// Bound: `mul 1.0`. conifer_field returns min(f, max(trunks, far bound)); the trunks are exact
+// 1-Lipschitz round cones and the far bound is f scaled by 8.6 / 9.6 < 1, so neither raises
+// the running 8.54 (the argument cave.field.glslh makes for its max).
+//
+// Runs AFTER fjord_bands, so the bands' material is known: the forest disc only replaces
+// grass and breakstone, and a trunk is bark whatever ground it stands in.
+
+// The guard the conifer cull compiles against (plan deviation 12): only a pipeline with this
+// stage defines it, so the cull's body is empty everywhere else.
+#define CONIFERS_STAGE 1
+
+vec4 conifer_ground(vec2 xz) { return fjord_ground(xz); }
+
+#include "conifer.glslh"
+
+ConiferParams conifers_params() {
+	return conifer_params_make(P.conifers_cell, P.conifers_density, P.conifers_height_min,
+			P.conifers_height_max, P.conifers_trunk_radius, P.conifers_crown_radius,
+			P.conifers_max_slope, P.conifers_treeline_margin, P.fjord_height_water_y,
+			P.fjord_bands_shore, P.fjord_bands_snow_line, P.fjord_bands_snow_jitter,
+			P.fjord_bands_snow_ridge_drop, SURFACE_Y);
+}
+
+void stage_conifers(inout FieldCtx ctx) {
+	// A gradient's offset tap whose centre proved the trunks irrelevant (field_ops.glslh).
+	if (g_field_skip_detail) return;
+	// Deep inside the ground a trunk cannot change the sign, and that material is never seen.
+	if (ctx.sdf < -2.0) return;
+	bool want_disc = ctx.sdf <= 0.0 &&
+			(ctx.material == MAT_GRASS_01 || ctx.material == MAT_BREAKSTONE);
+	ConiferHit hit = conifer_field(ctx.p, ctx.sdf, SURFACE_Y + ctx.height, conifers_params(),
+			want_disc, FIELD_DETAIL_MARGIN);
+	if (hit.near) g_field_detail_near = true;
+	ctx.sdf = hit.d;
+	// Spec §4.3: bark where the trunk's OWN distance is <= 0 (not the field bound, which is
+	// negative underground with no trunk); the forest floor where the disc says so — want_disc
+	// already required f <= 0, so the final surface hit.d <= 8.6*f <= 0 there.
+	if (hit.trunk_d <= 0.0) ctx.material = MAT_BARK;
+	else if (hit.forest) ctx.material = MAT_FOREST;
+}
