@@ -69,3 +69,73 @@ func test_trunks_are_bark() -> void:
 			if hit["hit"] and int(hit["material"]) == bark:
 				seen += 1
 	assert_int(seen).override_failure_message("no ray met a trunk near any forest floor").is_greater(0)
+
+# The pass half. Stream around a forest floor hit, then ask the SHIPPING passes (driven
+# through VoxelFrame::draw_conifers, the compositor's own block) what they placed.
+func _forest_spot() -> Vector3:
+	var hits := _forest_hits()
+	assert_int(hits.size()).is_greater(0)
+	return hits[hits.size() / 2]
+
+func _stream_at(p: Vector3) -> void:
+	_world.hooks().debug_pump_sectors(p, 900.0, 600)
+	var quiet := 0
+	for i in range(600):
+		quiet = quiet + 1 if _world.hooks().debug_stream_frame(p + Vector3(0.0, 20.0, 0.0)) == 0 else 0
+		if quiet >= 6:
+			break
+
+func test_the_conifer_pass_places_cards_near_a_forest() -> void:
+	_open()
+	var spot := _forest_spot()
+	_stream_at(spot)
+	var d: Dictionary = _world.hooks().debug_conifer_stats(spot + Vector3(0.0, 60.0, 0.0), Vector3(0.0, -1.0, 0.001))
+	assert_bool(d["ran"]).is_true()
+	assert_int(d["card_trees"]).is_greater(0)
+	assert_int(d["clumps"]).is_greater(0)
+	assert_int(d["card_vertices"]).is_equal(int(d["clumps"]) * 6)
+
+func test_conifer_settings_round_trip_and_disable() -> void:
+	_open()
+	_world.set_conifer_value("card_reach_m", 180.0)
+	assert_float(_world.get_conifer_value("card_reach_m")).is_equal_approx(180.0, 0.001)
+	var spot := _forest_spot()
+	_stream_at(spot)
+	_world.set_conifer_value("enabled", 0.0)
+	var d: Dictionary = _world.hooks().debug_conifer_stats(spot + Vector3(0.0, 60.0, 0.0), Vector3(0.0, -1.0, 0.001))
+	assert_int(d["card_trees"]).is_equal(0)
+	assert_int(d["impostors"]).is_equal(0)
+	assert_int(d["clumps"]).is_equal(0)
+
+# Every listed card tree is within the card reach (plus a crown) of the camera.
+func test_card_trees_lie_inside_the_card_reach() -> void:
+	_open()
+	var spot := _forest_spot()
+	_stream_at(spot)
+	_world.set_conifer_value("card_reach_m", 120.0)
+	var eye := spot + Vector3(0.0, 60.0, 0.0)
+	var d: Dictionary = _world.hooks().debug_conifer_stats(eye, Vector3(0.0, -1.0, 0.001))
+	var recs: PackedFloat32Array = d["card_records"]
+	assert_int(recs.size()).is_greater(0)
+	for i in range(recs.size() / 4):
+		var foot := Vector3(recs[i * 4], recs[i * 4 + 1], recs[i * 4 + 2])
+		var centre := foot + Vector3(0.0, recs[i * 4 + 3] * 0.5, 0.0)
+		assert_float(centre.distance_to(eye)).is_less(120.0 + recs[i * 4 + 3] * 0.5 + 1.0)
+
+# Spec §5.1 step 3: painting every listed trunk away drops it from the list. Paint, not dig,
+# for the reason test_leaves.gd gives; the reach is pulled in so every listed tree is resident.
+func test_painting_trunks_away_empties_the_card_list() -> void:
+	_open()
+	var spot := _forest_spot()
+	_stream_at(spot)
+	_world.set_conifer_value("card_reach_m", 40.0)
+	var eye := spot + Vector3(0.0, 30.0, 0.0)
+	var d: Dictionary = _world.hooks().debug_conifer_stats(eye, Vector3(0.0, -1.0, 0.001))
+	var recs: PackedFloat32Array = d["card_records"]
+	assert_int(recs.size()).is_greater(0)
+	for i in range(recs.size() / 4):
+		var anchor := Vector3(recs[i * 4], recs[i * 4 + 1] + recs[i * 4 + 3] * 0.33, recs[i * 4 + 2])
+		_world.hooks().debug_apply_sphere_paint(anchor, 1.5, 2) # material 2 is rock
+	for i in range(40):
+		_world.hooks().debug_stream_frame(spot + Vector3(0.0, 20.0, 0.0))
+	assert_int(_world.hooks().debug_conifer_stats(eye, Vector3(0.0, -1.0, 0.001))["card_trees"]).is_equal(0)

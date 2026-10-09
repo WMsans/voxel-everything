@@ -95,6 +95,8 @@ class GrassScatterPass;
 class GrassRasterPass;
 class LeafScatterPass;
 class LeafRasterPass;
+class ConiferScatterPass;
+class ConiferImpostorPass;
 class ShellRasterPass;
 class TransparencyCompositePass;
 class Object;
@@ -132,6 +134,9 @@ struct RenderPasses {
 	GrassRasterPass *grass_raster = nullptr;
 	LeafScatterPass *leaf_scatter = nullptr;
 	LeafRasterPass *leaf_raster = nullptr;
+	ConiferScatterPass *conifer_scatter = nullptr;
+	LeafRasterPass *conifer_raster = nullptr;        // a second card raster (plan deviation 8)
+	ConiferImpostorPass *conifer_impostor = nullptr; // Task 7
 	ShellRasterPass *shell_raster = nullptr;
 	TransparencyCompositePass *transparency_composite = nullptr;
 };

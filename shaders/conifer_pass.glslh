@@ -1,0 +1,23 @@
+// What the conifer passes share besides shaders/conifer.glslh: the record, the parameter
+// block and the clump budget.
+//
+// NOTE: never put a literal include directive inside a comment in this file -- the loader
+// matches include tokens anywhere in a line and would self-include.
+
+#include "generated/blocks.glslh"
+
+// One culled tree, conifer_pack_a / conifer_pack_b with the foot in WORLD space. 32 bytes.
+struct ConiferRecord {
+	vec4 a;
+	vec4 b;
+};
+
+// GPU twin of ve::conifer_clump_budget (extension/src/conifers/conifer_layout.cpp). The CPU
+// function is the pinned one (test_conifer_layout.cpp); this must not drift from it.
+// GLSL round() is round-half-even on some drivers where lround() is half-away; the product
+// rarely lands on .5 and an off-by-one changes the clump count, never correctness.
+uint conifer_clump_budget(int clumps_per_tree, float card_reach, float dist) {
+	if (clumps_per_tree <= 0) return 0u;
+	float t = card_reach > 0.0f ? clamp(dist / card_reach, 0.0f, 1.0f) : 1.0f;
+	return uint(max(1, int(round(float(clumps_per_tree) * (1.0f - 0.875f * t)))));
+}

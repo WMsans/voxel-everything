@@ -19,6 +19,7 @@
 #include "render/grass_scatter_pass.h"
 #include "render/leaf_scatter_pass.h"
 #include "render/leaf_raster_pass.h"
+#include "render/conifer_scatter_pass.h"
 #include "render/hiz_pass.h"
 #include "render/inject_pass.h"
 #include "render/island_atlas.h"
@@ -114,6 +115,35 @@ ve::LeafLayout VoxelFrame::leaf_layout(const float cam_pos[3], const float view_
 	const ve::ResolvedPipeline &tp = store_.terrain_pipeline();
 	return ve::leaf_layout(render_.leaf_settings(), cam_pos, view_proj,
 			static_cast<float>(tp.field_offset_x), static_cast<float>(tp.field_offset_z));
+}
+
+ve::ConiferLayout VoxelFrame::conifer_layout(const float cam_pos[3], const float view_proj[16]) const {
+	const ve::ResolvedPipeline &tp = store_.terrain_pipeline();
+	// The lattice pitch is the stage's own resolved param, never a duplicated constant.
+	float cell = 8.0f;
+	for (const ve::ParamDecl &d : tp.params)
+		if (d.name == "conifers.cell") cell = d.value;
+	return ve::conifer_layout(render_.conifer_settings(), cell, cam_pos, view_proj,
+			static_cast<float>(tp.field_offset_x), static_cast<float>(tp.field_offset_z));
+}
+
+bool VoxelFrame::draw_conifers(RenderingDevice *rd, GpuAtlas &atlas, GBuffer &gb,
+		const Projection &view_proj, const float cam_pos[3], float time_s, bool raster_mode) {
+	ConiferScatterPass *pass = render_.passes().conifer_scatter;
+	if (!pass) return false;
+	float vp[16];
+	for (int c = 0; c < 4; c++)
+		for (int r = 0; r < 4; r++) vp[c * 4 + r] = view_proj.columns[c][r];
+	ve::ConiferLayout l = conifer_layout(cam_pos, vp);
+	l.params.flags[0] = raster_mode ? 1 : 0;
+	SunUbo *sun = render_.passes().sun_ubo;
+	if (!pass->run(rd, atlas, l, store_.region_window(), time_s, sun ? sun->buffer() : RID(),
+			render_.passes().field_context))
+		return false;
+	// Task 4's card raster, driven by THIS pass's instances/params/draw args (plan deviation
+	// 8). Task 7's imposter raster joins the same block.
+	LeafRasterPass *cards = render_.passes().conifer_raster;
+	return cards && cards->draw(rd, pass->raster_inputs(), gb, view_proj, cam_pos);
 }
 
 // Was VoxelWorld::sun_ortho(); reads the sun live, as that method did.
@@ -494,6 +524,17 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		else timings->cancel("leaves");
 	}
 
+	// Conifers: one gated block beside the leaves, the same shape. Cards and imposters write
+	// the G-buffer channels the far field writes, so the beauty stack shades them unchanged.
+	if (render_.passes().conifer_scatter) {
+		timings->begin(rd, "conifers");
+		if (draw_conifers(rd, *atlas, *gb, view_proj, cam_pos,
+				static_cast<float>(render_.beauty_frame()) / 60.0f, settings.raster_mode))
+			timings->end(rd, "conifers");
+		else
+			timings->cancel("conifers");
+	}
+
 	// The transparent shell (spec §6): thickness and the nearest front, after every opaque
 	// producer has written G-buffer depth. One gated pair like grass and leaves: a failure
 	// cancels the marker and the frame goes on without transparent materials.
@@ -779,6 +820,7 @@ FrameInputs VoxelFrame::prepare_headless(RenderingDevice *rd, const FrameInputs 
 		if (LodRasterPass *lod_raster = render_.passes().lod_raster) lod_raster->release_targets();
 		if (GrassRasterPass *grass_raster = render_.passes().grass_raster) grass_raster->release_targets();
 		if (LeafRasterPass *leaf_raster = render_.passes().leaf_raster) leaf_raster->release_targets();
+		if (LeafRasterPass *cr = render_.passes().conifer_raster) cr->release_targets();
 		if (ShellRasterPass *shell = render_.passes().shell_raster) shell->release_targets();
 	}
 	if (!headless_.ensure(rd, in.size) || !headless_.clear(rd)) return out;
