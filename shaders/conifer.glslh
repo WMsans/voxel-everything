@@ -1,0 +1,332 @@
+// Shared conifer definition (docs/superpowers/specs/2026-10-08-fjords-conifers-design.md
+// §3-§4, §6). ONE definition, five consumers: the conifers field stage (trunk SDF and the
+// forest disc), the conifer cull, the card scatter, the imposter, and the CPU mirror -- which
+// executes this very file through extension/src/terrain/glsl_shim.h. Hence its rules:
+//   - only .x .y .z .w member access, never a swizzle; construct with vecN(...);
+//   - no out/inout parameters, no arrays, no const globals (use #define);
+//   - every float literal carries the f suffix, so the CPU computes in float as the GPU does.
+//
+// The file that pulls this one in defines `vec4 conifer_ground(vec2 xz)` FIRST: the ground
+// height above SURFACE_Y, dh/dx, dh/dz and ridge. Only conifer_walk calls it; a shader that
+// never walks defines a stub.
+//
+// Coordinates are FIELD space (after the world seed's offset) everywhere except a record's
+// foot once the cull has moved it to world space.
+//
+// NOTE: never put a literal include directive inside a comment in this file -- the loader
+// matches include tokens anywhere in a line and would self-include.
+
+#include "tree.glslh"
+
+#define CONIFER_JITTER 0.35f
+// A tier's lower edge flares to this multiple of the envelope R (1 - s).
+#define CONIFER_TOOTH_MAX 1.15f
+// Crown radius and trunk radius jitter ceilings, as multiples of their params.
+#define CONIFER_R_MAX 1.25f
+#define CONIFER_TRUNK_MAX 1.2f
+// The field's slope bound in Fjords. It must be >= fjords.pipeline's computed Lipschitz bound
+// (8.54; extension/tests/test_conifers_pipeline.cpp asserts it), because conifer_walk and
+// conifer_far_bound use it as "the ground rises at most this fast".
+#define CONIFER_FIELD_L 8.6f
+#define CONIFER_SLACK 0.05f
+#define CONIFER_RAY_STEPS 24
+#define CONIFER_RAY_BISECT 4
+
+struct ConiferParams {
+	float cell;
+	float density;
+	float height_min;
+	float height_max;
+	float trunk_radius;
+	float crown_radius;
+	float max_slope;
+	float shore_e;    // a foot stands higher than this above water_y ...
+	float treeline_e; // ... and lower than this
+	float water_y;
+	float surface_y;
+};
+
+// The tree line sits below the LOWEST the snow line can reach: its noise waver and its full
+// ridge drop (fjord_bands.field.glslh), then a margin. The shore test sits one metre above
+// fjord_bands' shore band, so no trunk stands in the future lake.
+ConiferParams conifer_params_make(float cell, float density, float height_min, float height_max,
+		float trunk_radius, float crown_radius, float max_slope, float treeline_margin,
+		float water_y, float shore, float snow_line, float snow_jitter, float snow_ridge_drop,
+		float surface_y) {
+	ConiferParams cp;
+	cp.cell = cell;
+	cp.density = density;
+	cp.height_min = height_min;
+	cp.height_max = height_max;
+	cp.trunk_radius = trunk_radius;
+	cp.crown_radius = crown_radius;
+	cp.max_slope = max_slope;
+	cp.shore_e = shore + 1.0f;
+	cp.treeline_e = snow_line - snow_jitter - snow_ridge_drop - treeline_margin;
+	cp.water_y = water_y;
+	cp.surface_y = surface_y;
+	return cp;
+}
+
+struct Conifer {
+	vec3 foot;        // trunk foot
+	float height;     // foot to tip
+	float crown_base; // metres above the foot where the crown starts
+	float R;          // crown radius at its base, before the tier tooth
+	float tiers;      // 6..9
+	float droop;      // 0.3..0.7, shapes each tier's skirt
+	float trunk_r;    // foot radius; NOT carried by a record (see conifer_unpack)
+	uint hash;
+};
+
+// The jittered foot XZ. Always inside the cell's CONIFER_JITTER box, which conifer_d_safe()
+// depends on.
+vec2 conifer_cell_xz(ivec2 cell, ConiferParams cp) {
+	float jx = tree_snorm(tree_hash2(cell, 0xC0F1u)) * CONIFER_JITTER * cp.cell;
+	float jz = tree_snorm(tree_hash2(cell, 0xC0F2u)) * CONIFER_JITTER * cp.cell;
+	return vec2((float(cell.x) + 0.5f) * cp.cell + jx, (float(cell.y) + 0.5f) * cp.cell + jz);
+}
+
+// Hashes only, cheapest test first. Bilinear value noise on a 6-cell lattice (~50 m) opens
+// clearings: where it is below 0.15 nothing grows, above 0.35 the full density does.
+bool conifer_cell_gate(ivec2 cell, ConiferParams cp) {
+	float gx = float(cell.x) / 6.0f;
+	float gz = float(cell.y) / 6.0f;
+	float bx = floor(gx);
+	float bz = floor(gz);
+	ivec2 g = ivec2(int(bx), int(bz));
+	float fx = gx - bx;
+	float fz = gz - bz;
+	fx = fx * fx * (3.0f - 2.0f * fx);
+	fz = fz * fz * (3.0f - 2.0f * fz);
+	float a = tree_unit(tree_hash2(g, 0xC0F3u));
+	float b = tree_unit(tree_hash2(g + ivec2(1, 0), 0xC0F3u));
+	float c = tree_unit(tree_hash2(g + ivec2(0, 1), 0xC0F3u));
+	float d = tree_unit(tree_hash2(g + ivec2(1, 1), 0xC0F3u));
+	float grove = mix(mix(a, b, fx), mix(c, d, fx), fz);
+	float clearing = clamp((grove - 0.15f) / 0.2f, 0.0f, 1.0f);
+	clearing = clearing * clearing * (3.0f - 2.0f * clearing);
+	return tree_unit(tree_hash2(cell, 0xC0F4u)) < cp.density * clearing;
+}
+
+// e is the foot's elevation above water_y; slope is |grad h| there.
+bool conifer_ground_ok(float e, float slope, ConiferParams cp) {
+	return e > cp.shore_e && e < cp.treeline_e && slope < cp.max_slope;
+}
+
+Conifer conifer_at(ivec2 cell, vec2 xz, float ground_y, float slope, ConiferParams cp) {
+	Conifer c;
+	c.hash = tree_hash2(cell, 0xC0F5u);
+	c.height = mix(cp.height_min, cp.height_max, tree_unit(c.hash));
+	c.trunk_r = cp.trunk_radius * (1.0f + 0.2f * tree_snorm(tree_hash(c.hash ^ 0x11u)));
+	c.crown_base = c.height * mix(0.15f, 0.30f, tree_unit(tree_hash(c.hash ^ 0x12u)));
+	c.R = cp.crown_radius * (1.0f + 0.25f * tree_snorm(tree_hash(c.hash ^ 0x13u)));
+	c.tiers = floor(mix(6.0f, 9.999f, tree_unit(tree_hash(c.hash ^ 0x14u))));
+	c.droop = mix(0.3f, 0.7f, tree_unit(tree_hash(c.hash ^ 0x15u)));
+	// Sunk by the slope across the trunk, so the downhill side of a foot on a 60-degree wall
+	// is never in air.
+	c.foot = vec3(xz.x, ground_y - slope * c.trunk_r - 0.3f, xz.y);
+	return c;
+}
+
+// Crown radius at crown height s (0 = crown base, 1 = tip); zero outside. The envelope
+// R (1 - s) carries `tiers` sawtooth skirts, each widest (CONIFER_TOOTH_MAX x) at its lower
+// edge and narrowing to 0.55 x at its top. droop bends the skirt.
+float conifer_profile(Conifer c, float s) {
+	if (s < 0.0f || s > 1.0f) return 0.0f;
+	float u = s * c.tiers;
+	u = u - floor(u);
+	float t = 1.0f - u;
+	float tooth = 0.55f + 0.6f * t * mix(1.0f, t, c.droop);
+	return c.R * (1.0f - s) * tooth;
+}
+
+float conifer_s(Conifer c, float y) {
+	return (y - c.foot.y - c.crown_base) / max(c.height - c.crown_base, 1e-3f);
+}
+
+// Shading normal at a crown point with horizontal outward direction `radial`. The cone
+// normal follows the envelope; the tier normal tilts up along a skirt. roundness 0 is one
+// smooth cone, 1 shades every tier as its own skirt. Cards and imposters both call this, so
+// the hand-off does not change a tree's shading.
+vec3 conifer_normal(Conifer c, vec3 radial, float roundness) {
+	float rise = c.R / max(c.height - c.crown_base, 1e-3f);
+	vec3 n_cone = normalize(vec3(radial.x, rise, radial.z));
+	vec3 n_tier = normalize(vec3(radial.x, 1.2f, radial.z));
+	return normalize(mix(n_cone, n_tier, roundness));
+}
+
+// Exact: one vertical round cone, tapering to 15% at the tip.
+float conifer_trunk_sdf(vec3 p, Conifer c) {
+	return tree_round_cone(p, c.foot, c.foot + vec3(0.0f, c.height, 0.0f), c.trunk_r,
+			c.trunk_r * 0.15f);
+}
+
+float conifer_trunk_reach(ConiferParams cp) { return cp.trunk_radius * CONIFER_TRUNK_MAX + CONIFER_SLACK; }
+float conifer_disc_reach(ConiferParams cp) {
+	return cp.crown_radius * CONIFER_R_MAX * CONIFER_TOOTH_MAX + CONIFER_SLACK;
+}
+
+// What the 3x3 walk can vouch for: a foot two cells away is at least (1.5 - jitter) cells
+// from any point of the centre cell (the trees stage's argument), less a trunk radius.
+float conifer_d_safe(ConiferParams cp) {
+	return max(0.0f, (1.5f - CONIFER_JITTER) * cp.cell - cp.trunk_radius * CONIFER_TRUNK_MAX);
+}
+
+// A lower bound on the distance from a point h metres above the ground at its own XZ to ANY
+// trunk, read from no ground. A vertical trunk whose foot is r away in XZ stands on ground at
+// most CONIFER_FIELD_L * r higher (the field's slope bound) and is at most height_max tall,
+// so its distance is at least max(r - reach, h - CONIFER_FIELD_L * r - height_max). The
+// smallest that can be over all r is where the two terms meet (plan deviation 2).
+float conifer_far_bound(float h, ConiferParams cp) {
+	float tr = conifer_trunk_reach(cp);
+	return (h - cp.height_max + tr) / (1.0f + CONIFER_FIELD_L) - tr;
+}
+
+struct ConiferHit {
+	float d;     // conifer_walk: nearest trunk, clamped to d_safe. conifer_field: the field value.
+	bool forest; // p lies inside a present tree's crown disc in XZ (only when asked)
+	bool near;   // a trunk is within near_margin of the field value: gradient taps must look
+};
+
+// The 3x3 cell walk. near_d is the field value a trunk must beat to matter; cells that
+// provably cannot are skipped before their ground is read, by the horizontal bound and the
+// vertical one from conifer_far_bound's argument.
+ConiferHit conifer_walk(vec3 p, float ground_y, ConiferParams cp, float near_d, bool want_disc) {
+	ConiferHit hit;
+	hit.d = conifer_d_safe(cp);
+	hit.forest = false;
+	hit.near = false;
+	float trunk_reach = conifer_trunk_reach(cp);
+	float disc_reach = conifer_disc_reach(cp);
+	float h = p.y - ground_y;
+	ivec2 base = ivec2(int(floor(p.x / cp.cell)), int(floor(p.z / cp.cell)));
+	for (int dz = -1; dz <= 1; dz++) {
+		for (int dx = -1; dx <= 1; dx++) {
+			ivec2 cell = base + ivec2(dx, dz);
+			vec2 xz = conifer_cell_xz(cell, cp);
+			float hx = p.x - xz.x;
+			float hz = p.z - xz.y;
+			float r = sqrt(hx * hx + hz * hz);
+			float lb = max(r - trunk_reach, h - CONIFER_FIELD_L * r - cp.height_max);
+			bool need_trunk = lb < min(hit.d, near_d);
+			bool need_disc = want_disc && !hit.forest && r < disc_reach;
+			if (!need_trunk && !need_disc) continue;
+			if (!conifer_cell_gate(cell, cp)) continue;
+			vec4 g = conifer_ground(xz);
+			float slope = sqrt(g.y * g.y + g.z * g.z);
+			if (!conifer_ground_ok(cp.surface_y + g.x - cp.water_y, slope, cp)) continue;
+			Conifer c = conifer_at(cell, xz, cp.surface_y + g.x, slope, cp);
+			if (need_trunk) hit.d = min(hit.d, conifer_trunk_sdf(p, c));
+			if (need_disc && r <= conifer_profile(c, 0.0f)) hit.forest = true;
+		}
+	}
+	return hit;
+}
+
+// The stage's whole answer for a point whose field value so far is f and whose own ground is
+// ground_y. The result never exceeds f, and result / CONIFER_FIELD_L never exceeds the true
+// distance to the terrain or any trunk -- test_conifer_shader.cpp checks both against brute
+// force on walls up to slope 8.5.
+ConiferHit conifer_field(vec3 p, float f, float ground_y, ConiferParams cp, bool want_disc,
+		float near_margin) {
+	ConiferHit hit;
+	hit.forest = false;
+	hit.near = true;
+	float far_d = CONIFER_FIELD_L * conifer_far_bound(p.y - ground_y, cp);
+	if (far_d >= conifer_d_safe(cp) && !want_disc) {
+		// No walk can say less than d_safe, so the far bound is the answer: no ground read.
+		hit.d = min(f, far_d);
+		return hit;
+	}
+	ConiferHit w = conifer_walk(p, ground_y, cp, f + near_margin, want_disc);
+	hit.near = w.d < f + near_margin;
+	hit.forest = w.forest;
+	// Both true-distance terms are already within L * min(trunk, terrain): w.d <= trunk, so
+	// L * w.d <= L * trunk; far_d = L * far_bound, and far_bound <= min(trunk, h) by its own
+	// argument (a foot at the point's own XZ is trunk distance h), so L * far_bound <=
+	// L * min(trunk, h). The one raw term is the terrain value f itself, a stored field value:
+	// above the ground it is non-negative and min(f, max(w.d, far_d)) <= f <= L * f; below it,
+	// f < 0 and the field's stored distance scales by L, so terrain enters as L * f < f. Hence
+	// the terrain cap is min(f, L * f): f above the ground, L * f below.
+	hit.d = min(max(w.d, far_d), min(f, CONIFER_FIELD_L * f));
+	return hit;
+}
+
+// Two vec4 hold everything the card scatter and the imposter need, so neither binds the
+// field (plan deviation 4).
+vec4 conifer_pack_a(Conifer c) { return vec4(c.foot.x, c.foot.y, c.foot.z, uintBitsToFloat(c.hash)); }
+vec4 conifer_pack_b(Conifer c) { return vec4(c.height, c.crown_base, c.R, c.tiers + c.droop); }
+
+Conifer conifer_unpack(vec4 a, vec4 b) {
+	Conifer c;
+	c.foot = vec3(a.x, a.y, a.z);
+	c.hash = floatBitsToUint(a.w);
+	c.height = b.x;
+	c.crown_base = b.y;
+	c.R = b.z;
+	c.tiers = floor(b.w);
+	c.droop = b.w - c.tiers;
+	c.trunk_r = 0.0f;
+	return c;
+}
+
+bool conifer_inside(Conifer c, vec3 q) {
+	float dx = q.x - c.foot.x;
+	float dz = q.z - c.foot.z;
+	// Strict, so a point on the axis above the tip (profile 0) is outside.
+	return sqrt(dx * dx + dz * dz) < conifer_profile(c, conifer_s(c, q.y));
+}
+
+// The imposter's ray cast (plan deviation 6): the ray parameter of the first point inside
+// the tiered crown, or -1. Clip to the crown's bounding cylinder (radius R x the tooth, from
+// crown base to tip), take CONIFER_RAY_STEPS inside tests across it, then bisect. rd is unit.
+float conifer_ray_hit(Conifer c, vec3 ro, vec3 rd) {
+	float rad = c.R * CONIFER_TOOTH_MAX;
+	float y0 = c.foot.y + c.crown_base;
+	float y1 = c.foot.y + c.height;
+	float ox = ro.x - c.foot.x;
+	float oz = ro.z - c.foot.z;
+	float a = rd.x * rd.x + rd.z * rd.z;
+	float b = ox * rd.x + oz * rd.z;
+	float k = ox * ox + oz * oz - rad * rad;
+	float t0 = -1.0e30f;
+	float t1 = 1.0e30f;
+	if (a > 1e-8f) {
+		float disc = b * b - a * k;
+		if (disc < 0.0f) return -1.0f;
+		float sq = sqrt(disc);
+		t0 = (-b - sq) / a;
+		t1 = (-b + sq) / a;
+	} else if (k > 0.0f) {
+		return -1.0f;
+	}
+	if (abs(rd.y) > 1e-8f) {
+		float ta = (y0 - ro.y) / rd.y;
+		float tb = (y1 - ro.y) / rd.y;
+		t0 = max(t0, min(ta, tb));
+		t1 = min(t1, max(ta, tb));
+	} else if (ro.y < y0 || ro.y > y1) {
+		return -1.0f;
+	}
+	t0 = max(t0, 0.0f);
+	if (t1 <= t0) return -1.0f;
+	float dt = (t1 - t0) / float(CONIFER_RAY_STEPS);
+	float prev = t0;
+	for (int i = 0; i <= CONIFER_RAY_STEPS; i++) {
+		float t = t0 + dt * float(i);
+		if (conifer_inside(c, ro + rd * t)) {
+			if (i == 0) return t;
+			float lo = prev;
+			float hi = t;
+			for (int j = 0; j < CONIFER_RAY_BISECT; j++) {
+				float mid = 0.5f * (lo + hi);
+				if (conifer_inside(c, ro + rd * mid)) hi = mid;
+				else lo = mid;
+			}
+			return hi;
+		}
+		prev = t;
+	}
+	return -1.0f;
+}
