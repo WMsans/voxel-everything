@@ -2,6 +2,7 @@
 #include "connectivity/flood_fill.h"
 #include "generator/edit_ops.h"
 #include "generator/generator.h"
+#include <climits>
 #include <vector>
 
 namespace ve {
@@ -46,14 +47,21 @@ struct BridgeLink {
 // Bridges of the anchored subgraph, DFS-rooted at the shell seeds, filtered by
 // cfg.max_piece_cells and capped at cfg.max_candidates, smallest piece first.
 // Iterative Tarjan: the window holds up to 2 M cells and recursion would overflow the stack.
+//
+// [dirty_lo, dirty_hi] is the inclusive cell box the edit may have changed, faces included
+// (the caller dilates by a cell). A piece with no cell in it has every cell, face and contact
+// it had before the edit, so it was hanging on this same neck and standing: not a candidate.
+// Without that, every conifer tip in the window -- a trunk tapers to 15% -- falls on any dig.
 void find_anchor_bridges(const FloodResult &r, const ContactRefineConfig &cfg,
-		std::vector<BridgeLink> *out);
+		std::vector<BridgeLink> *out, IVec3 dirty_lo = {INT_MIN, INT_MIN, INT_MIN},
+		IVec3 dirty_hi = {INT_MAX, INT_MAX, INT_MAX});
 
 // Finds bridges, asks the probe about each, severs the thin ones and re-floods; repeats
 // while cuts are still being made, up to cfg.max_iterations. Returns the number of links
 // cut, and leaves `r` re-flooded so the caller can label islands from it directly.
 int refine_anchoring(const OccupancyGrid &grid, const ContactProbe &probe,
-		const ContactRefineConfig &cfg, LinkCuts *cuts, FloodResult *r);
+		const ContactRefineConfig &cfg, LinkCuts *cuts, FloodResult *r,
+		IVec3 dirty_lo = {INT_MIN, INT_MIN, INT_MIN}, IVec3 dirty_hi = {INT_MAX, INT_MAX, INT_MAX});
 
 // The probe's arithmetic, as a pure function: samples the field on the shared face between
 // `cell` and `cell + e_axis` on a face_samples^2 lattice inset half a step from the edges,

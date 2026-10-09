@@ -266,7 +266,9 @@ int IslandManager::run_connectivity(const PendingWindow &pw) {
 		ve::flood_anchored(handles_.store->occupancy(), w, &cuts, &r);
 		// Spec §5's marginal-contact refinement, before labelling: a piece held by one thin
 		// neck must be cut loose BEFORE the labeller decides it is anchored.
-		ve::refine_anchoring(handles_.store->occupancy(), field, refine_cfg_, &cuts, &r);
+		// Dilated a cell: a face on the edit box's edge belongs to a cell just outside it.
+		ve::refine_anchoring(handles_.store->occupancy(), field, refine_cfg_, &cuts, &r,
+				{pw.lo.x - 1, pw.lo.y - 1, pw.lo.z - 1}, {pw.hi.x + 1, pw.hi.y + 1, pw.hi.z + 1});
 		if (!r.frontier_reached || expand >= ve::kMaxWindowExpansions) break;
 		// Spec §5: "expanding if the frontier is reached".
 		w = ve::FloodWindow::around(pw.lo, pw.hi, w.dim * 2);

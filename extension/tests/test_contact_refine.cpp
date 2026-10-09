@@ -209,3 +209,27 @@ TEST_CASE("contact_samples_field reads baked overrides as the base field") {
 	}
 	CHECK(contact_samples_field(gen, nullptr, 0, {10, 79, 10}, 1, 9, nullptr, &overrides) == 81);
 }
+
+// A conifer trunk tapers to 15% at the tip, so every tree's top few cells hang on a face below
+// min_contact_samples. An edit 50 m away changed none of those faces: the tip stood before the
+// edit and must stand after it, or one dig drops every treetop in the window.
+TEST_CASE("a thin neck whose piece the edit never reached is not re-judged") {
+	const FloodWindow w = window16();
+	OccupancyGrid g = air_grid({-1, -1, -1}, {16, 16, 16});
+	fill(&g, {0, 0, 0}, {15, 1, 15}, kCellFull);
+	fill(&g, {8, 2, 8}, {8, 8, 8}, kCellFull); // the trunk
+	ScriptedProbe probe;
+	probe.thin[{8, 5, 8, 1}] = 3; // the tip's neck
+
+	FloodResult r;
+	flood_anchored(g, w, nullptr, &r);
+	LinkCuts cuts;
+	CHECK(refine_anchoring(g, probe, ContactRefineConfig{}, &cuts, &r, {1, 1, 1}, {3, 2, 3}) == 0);
+	CHECK(r.anchored[w.index({8, 8, 8})] == 1);
+
+	// The same neck with the edit touching the tip is cut as before.
+	flood_anchored(g, w, nullptr, &r);
+	cuts.clear();
+	CHECK(refine_anchoring(g, probe, ContactRefineConfig{}, &cuts, &r, {8, 8, 8}, {9, 9, 9}) == 1);
+	CHECK(r.anchored[w.index({8, 8, 8})] == 0);
+}

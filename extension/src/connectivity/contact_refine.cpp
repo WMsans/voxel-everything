@@ -30,7 +30,7 @@ struct Frame {
 } // namespace
 
 void find_anchor_bridges(const FloodResult &r, const ContactRefineConfig &cfg,
-		std::vector<BridgeLink> *out) {
+		std::vector<BridgeLink> *out, IVec3 dirty_lo, IVec3 dirty_hi) {
 	out->clear();
 	const FloodWindow &w = r.window;
 	const int n = w.cells();
@@ -38,6 +38,11 @@ void find_anchor_bridges(const FloodResult &r, const ContactRefineConfig &cfg,
 	std::vector<int> low(static_cast<size_t>(n), 0);
 	std::vector<int> sub(static_cast<size_t>(n), 0);   // subtree cell count
 	std::vector<int> seeds(static_cast<size_t>(n), 0); // shell cells in the subtree
+	std::vector<int> dirty(static_cast<size_t>(n), 0); // edit-box cells in the subtree
+	const auto in_dirty = [&](IVec3 c) {
+		return c.x >= dirty_lo.x && c.x <= dirty_hi.x && c.y >= dirty_lo.y &&
+				c.y <= dirty_hi.y && c.z >= dirty_lo.z && c.z <= dirty_hi.z;
+	};
 	int timer = 0;
 
 	std::vector<Frame> stack;
@@ -64,6 +69,7 @@ void find_anchor_bridges(const FloodResult &r, const ContactRefineConfig &cfg,
 				disc[ni] = low[ni] = timer++;
 				sub[ni] = 1;
 				seeds[ni] = w.on_boundary(w.cell_of(ni)) ? 1 : 0;
+				dirty[ni] = in_dirty(w.cell_of(ni)) ? 1 : 0;
 				stack.push_back(Frame{ni, d, 0});
 				continue;
 			}
@@ -74,7 +80,8 @@ void find_anchor_bridges(const FloodResult &r, const ContactRefineConfig &cfg,
 			low[p] = std::min(low[p], low[child.node]);
 			sub[p] += sub[child.node];
 			seeds[p] += seeds[child.node];
-			if (low[child.node] > disc[p] && seeds[child.node] == 0) {
+			dirty[p] += dirty[child.node];
+			if (low[child.node] > disc[p] && seeds[child.node] == 0 && dirty[child.node] > 0) {
 				// Removing this edge separates child's subtree from every shell seed.
 				const IVec3 pc = w.cell_of(p);
 				found.push_back(BridgeLink{link_cell(pc, child.from), kAxis[child.from],
@@ -95,11 +102,12 @@ void find_anchor_bridges(const FloodResult &r, const ContactRefineConfig &cfg,
 }
 
 int refine_anchoring(const OccupancyGrid &grid, const ContactProbe &probe,
-		const ContactRefineConfig &cfg, LinkCuts *cuts, FloodResult *r) {
+		const ContactRefineConfig &cfg, LinkCuts *cuts, FloodResult *r, IVec3 dirty_lo,
+		IVec3 dirty_hi) {
 	int total = 0;
 	std::vector<BridgeLink> bridges;
 	for (int iter = 0; iter < cfg.max_iterations; iter++) {
-		find_anchor_bridges(*r, cfg, &bridges);
+		find_anchor_bridges(*r, cfg, &bridges, dirty_lo, dirty_hi);
 		int made = 0;
 		for (const BridgeLink &b : bridges) {
 			if (cuts->cut(b.cell, b.axis)) continue;
