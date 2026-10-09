@@ -7,6 +7,7 @@
 // Comments on fields are the only documentation of what a slot carries; the generated GLSL
 // has no comments of its own.
 #include "gpu_layout/layout.h"
+#include "conifers/conifer_layout.h"
 #include "grass/grass_layout.h"
 #include "leaves/leaf_layout.h"
 #include "render/camera_params.h"
@@ -307,8 +308,8 @@ inline constexpr Field kGrassRegionBlockFields[] = {
 };
 // Every C++ float[4]/int32_t[4] row is ONE vec4/ivec4: a scalar array in the std140 mirror
 // would add 16-byte element strides where the struct packs four floats. planes repeats 6
-// like GrassParams'. spare is the documented sixteenth vec4 (Task 9) -- the mirror must
-// carry it or every later block offset shrinks by 16 bytes.
+// like GrassParams'. palette_top/palette_under are the last two vec4 (Task 4) -- the mirror
+// must carry them or every later block offset shrinks by 16 bytes.
 inline constexpr Field kLeafParamsFields[] = {
 	VE_LAYOUT_FIELD(LeafParams, cam, Vec4, 0),
 	VE_LAYOUT_FIELD(LeafParams, planes, Vec4, 6),
@@ -320,7 +321,18 @@ inline constexpr Field kLeafParamsFields[] = {
 	VE_LAYOUT_FIELD(LeafParams, wind, Vec4, 0),
 	VE_LAYOUT_FIELD(LeafParams, style, Vec4, 0),
 	VE_LAYOUT_FIELD(LeafParams, limits, IVec4, 0),
-	VE_LAYOUT_FIELD(LeafParams, spare, Vec4, 0),
+	VE_LAYOUT_FIELD(LeafParams, palette_top, Vec4, 0),
+	VE_LAYOUT_FIELD(LeafParams, palette_under, Vec4, 0),
+};
+inline constexpr Field kConiferPassParamsFields[] = {
+	VE_LAYOUT_FIELD(ConiferPassParams, cam, Vec4, 0),
+	VE_LAYOUT_FIELD(ConiferPassParams, planes, Vec4, 6),
+	VE_LAYOUT_FIELD(ConiferPassParams, cell_min, IVec4, 0),
+	VE_LAYOUT_FIELD(ConiferPassParams, cell_dim, IVec4, 0),
+	VE_LAYOUT_FIELD(ConiferPassParams, reach, Vec4, 0),
+	VE_LAYOUT_FIELD(ConiferPassParams, look, Vec4, 0),
+	VE_LAYOUT_FIELD(ConiferPassParams, limits, IVec4, 0),
+	VE_LAYOUT_FIELD(ConiferPassParams, flags, IVec4, 0),
 };
 // The leaf scatter's region-window block is the same three ivec4 grass uses -- one struct,
 // emitted under both macro names so each shader text keeps its own include.
@@ -395,6 +407,7 @@ inline constexpr Block kBlocks[] = {
 	VE_LAYOUT_BLOCK(GrassParams, "GRASS_PARAMS_FIELDS", kGrassParamsFields),
 	VE_LAYOUT_BLOCK(GrassRegionBlock, "GRASS_REGION_FIELDS", kGrassRegionBlockFields),
 	VE_LAYOUT_BLOCK(LeafParams, "LEAF_PARAMS_FIELDS", kLeafParamsFields),
+	VE_LAYOUT_BLOCK(ConiferPassParams, "CONIFER_PASS_FIELDS", kConiferPassParamsFields),
 	VE_LAYOUT_BLOCK(GrassRegionBlock, "LEAF_REGION_FIELDS", kLeafRegionBlockFields),
 	VE_LAYOUT_BLOCK(DownsamplePush, "DOWNSAMPLE_PUSH_FIELDS", kDownsamplePushFields),
 	VE_LAYOUT_BLOCK(BrickGenPush, "BRICK_GEN_PUSH_FIELDS", kBrickGenPushFields),

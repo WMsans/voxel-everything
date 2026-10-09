@@ -10,6 +10,8 @@
 #include "terrain/sector_cache.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 
 namespace {
 // The analytic generator's height bands, by name: rock above 4 m, grass above 1 m, ground below.
@@ -20,6 +22,8 @@ constexpr uint16_t kBandSnow = ve::material_id("snow");
 constexpr uint16_t kBandBreakstone = ve::material_id("breakstone");
 // The trunk/branch shell a tree paints, matching MAT_BARK in shaders/material_table.glslh.
 constexpr uint16_t kBandBark = ve::material_id("bark");
+// The forest disc a conifer paints under its crown, matching MAT_FOREST.
+constexpr uint16_t kBandForest = ve::material_id("forest");
 } // namespace
 
 namespace ve {
@@ -453,6 +457,49 @@ void stage_trees(FieldCtx &ctx, const TreesSlots &s, const TreesParams &p,
 	}
 }
 
+VE_STAGE_SLOTS(Conifers, p, sdf, height, material);
+VE_STAGE_PARAMS(Conifers, cell, density, height_min, height_max, trunk_radius, crown_radius,
+		max_slope, treeline_margin, fjord_height_water_y, fjord_bands_shore, fjord_bands_snow_line,
+		fjord_bands_snow_jitter, fjord_bands_snow_ridge_drop);
+
+// shaders/conifer.glslh EXECUTED, not transcribed (plan deviation 1): the struct's
+// conifer_ground() is the hook the header asks its includer for, here the host sector cache.
+namespace conifer_mirror {
+#include "terrain/glsl_shim.h"
+struct Eval {
+	const SectorCache *sectors = nullptr;
+	float water_y = 0.0f;
+	vec4 conifer_ground(vec2 xz) {
+		const SectorGround g = sector_ground(sectors, water_y, xz.x, xz.y);
+		return vec4(g.height, g.dhdx, g.dhdz, g.ridge);
+	}
+#include "../../../shaders/conifer.glslh"
+};
+} // namespace conifer_mirror
+
+// Mirror of shaders/stages/conifers.field.glslh. 0.06 is FIELD_DETAIL_MARGIN; it only steers
+// which cells the walk may skip, never the answer (a skipped cell cannot beat f).
+void stage_conifers(FieldCtx &ctx, const ConifersSlots &s, const ConifersParams &p,
+		const FieldResources &res) {
+	namespace cm = conifer_mirror;
+	const float f = ctx.f(s.sdf);
+	if (f < -2.0f) return;
+	cm::Eval ev;
+	ev.sectors = res.sectors;
+	ev.water_y = p.fjord_height_water_y;
+	const auto cp = ev.conifer_params_make(p.cell, p.density, p.height_min, p.height_max,
+			p.trunk_radius, p.crown_radius, p.max_slope, p.treeline_margin, p.fjord_height_water_y,
+			p.fjord_bands_shore, p.fjord_bands_snow_line, p.fjord_bands_snow_jitter,
+			p.fjord_bands_snow_ridge_drop, kSurfaceY);
+	const uint16_t mat = static_cast<uint16_t>(ctx.f(s.material));
+	const bool want_disc = f <= 0.0f && (mat == kBandGrass || mat == kBandBreakstone);
+	const cm::vec3 pt(ctx.v(s.p)[0], ctx.v(s.p)[1], ctx.v(s.p)[2]);
+	const auto hit = ev.conifer_field(pt, f, kSurfaceY + ctx.f(s.height), cp, want_disc, 0.06f);
+	ctx.f(s.sdf) = hit.d;
+	if (hit.trunk_d <= 0.0f) ctx.f(s.material) = float(kBandBark);
+	else if (hit.forest) ctx.f(s.material) = float(kBandForest);
+}
+
 VE_REGISTER_STAGE("ve::stage_hills", Hills, stage_hills);
 VE_REGISTER_STAGE("ve::stage_cave", Cave, stage_cave);
 VE_REGISTER_STAGE("ve::stage_height_bands", HeightBands, stage_height_bands);
@@ -463,5 +510,6 @@ VE_REGISTER_STAGE("ve::stage_sector_fixture_ground", SectorFixtureGround, stage_
 VE_REGISTER_STAGE("ve::stage_fjord", Fjord, stage_fjord);
 VE_REGISTER_STAGE("ve::stage_fjord_bands", FjordBands, stage_fjord_bands);
 VE_REGISTER_STAGE("ve::stage_trees", Trees, stage_trees);
+VE_REGISTER_STAGE("ve::stage_conifers", Conifers, stage_conifers);
 
 } // namespace ve

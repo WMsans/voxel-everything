@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bxwq8m3drpwtr"
+path="res://.godot/imported/conifer_cull.comp.glsl-7b9248163041aa001b02b018c3c497f9.res"
+
+[deps]
+
+source_file="res://shaders/conifer_cull.comp.glsl"
+dest_files=["res://.godot/imported/conifer_cull.comp.glsl-7b9248163041aa001b02b018c3c497f9.res"]
+
+[params]
+

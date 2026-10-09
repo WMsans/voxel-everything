@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dvqpvdrn7u60j"
+path="res://.godot/imported/conifer_impostor.frag.glsl-a09576c11d31cf9edf34ddf8756ab2a8.res"
+
+[deps]
+
+source_file="res://shaders/conifer_impostor.frag.glsl"
+dest_files=["res://.godot/imported/conifer_impostor.frag.glsl-a09576c11d31cf9edf34ddf8756ab2a8.res"]
+
+[params]
+

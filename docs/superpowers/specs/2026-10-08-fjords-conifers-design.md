@@ -1,7 +1,7 @@
 # Voxel Everything — Fjords Conifers
 
 **Date:** 2026-10-08
-**Status:** approved design, ready for an implementation plan
+**Status:** implemented
 **Start commit:** `55bb9ee` (`main`)
 **Prior specs:** `2026-10-07-fjords-terrain-design.md` (sub-project A, whose §11 sketches this one;
 `fjord_ground`, the sector tier, `fjord_bands`); `2026-09-18-trees-design.md` (the shared-header
@@ -381,4 +381,96 @@ design. If any other golden moves, stop and report rather than re-record.
 
 ## 13. Deviations
 
-None yet.
+### 13.1 Decided while planning
+
+From `docs/superpowers/plans/2026-10-08-fjords-conifers.md`; 2, 6 and 13.2's performance work
+changed below.
+
+1. **The CPU mirror executes `conifer.glslh` itself.** The header is included inside a C++ struct whose member `conifer_ground()` reads the host sector cache, through `extension/src/terrain/glsl_shim.h`. There is no hand-written `conifers_mirror`. As a result, `conifer.glslh` is not terrain-free: its includer defines `vec4 conifer_ground(vec2 xz)` first, and shaders that never walk define a one-line stub.
+
+2. **The trunk stage's vertical band is replaced by a bound that is safe at any slope.** The trees stage's slab argument assumes gentle hills. On a fjord wall, a trunk on a ledge above a point can be closer than `f / L`. `conifer_far_bound` is a ground-free lower bound on the distance to *any* trunk, derived from the field's slope bound of 8.6. Inside the walk, a per-cell vertical bound skips ground reads. Above about 43 m the stage reads no ground and returns `min(f, 8.6 · far_bound)`.
+
+3. **Trees are vertical: no lean.** The spec's slope-dependent lean is dropped. A vertical trunk makes horizontal distance an exact trunk lower bound, which deviation 2 depends on.
+
+4. **The record carries the whole shape** (two `vec4`: foot, hash, height, crown base, `R`, tiers + droop). The card scatter and the imposter therefore need neither stage params nor set 1; only the cull binds set 1.
+
+5. **The crossfade is the leaf raster's existing fade**: cards dither out over the last 20% of `card_reach_m` (240–300 m), and the imposter keeps exactly the complementary pixels. The spec's 30 m centred band and `crossfade_m` are dropped.
+
+6. **The imposter fragment does a 24-step inside test between the entry and exit of the bounding cylinder, then 4 bisection steps.** It does not sphere-trace a `conifer_crown_sdf`: the sawtooth tier profile has a jump at every tier and no useful Lipschitz bound.
+
+7. **Clumps are not pushed out of the trunk.** The trunk is 0.07–0.5 m thick inside a 3 m crown, and the shell sits at 0.8–1.0 of the profile.
+
+8. **Two `LeafRasterPass` instances**: one for leaves, one for conifer cards. Each caches its own uniform set. `draw()` takes a `LeafRasterInputs` instead of a `LeafScatterPass&`.
+
+9. **`LeafParams` grows from 256 to 272 bytes**: `spare` becomes `palette_top`, and `palette_under` is appended.
+
+10. **The forest texture comes from `tools/convert_forest.sh`**, a sibling of `convert_bark.sh` that does the recolour. `MATERIALS` in `convert_materials.sh` still lists `forest` for the table test, and that script skips it in its loop.
+
+11. **`conifer.glslh` reuses `tree.glslh`'s hashes and round cone.**
+
+12. **The cull's body is compiled only where the pipeline has the stage** (`#ifdef CONIFERS_STAGE`, defined by `conifers.field.glslh`). The shader-reload preflight compiles every `*.glsl` against the current world's generated field source, so an unguarded cull would fail reload on a Default world.
+
+13. **The conifer pass always re-scatters.** It has no scatter-reuse epoch.
+
+14. **`debug_conifer_stats` calls the same `VoxelFrame::draw_conifers` the compositor calls.** It has no parallel drive.
+
+### 13.2 Recorded while implementing
+
+**Look tuning: none.** The three capture poses (`tools/fjord_capture.gd -- --at=2000,-1600`)
+were taken before and after the performance work below and differ only by per-pixel speckle
+(card wind, dither, imposter step count). Nothing in `fjords.pipeline`, `ConiferSettings` or
+`convert_forest.sh` changed. The user has not yet given a verdict on the capture, so no look
+acceptance is implied.
+
+**First measurement: over budget.** Task 8's A/B (below) on the Task 7 tree: frame p50 16.67 →
+26.5 ms (+9.9 ms; budget +2.5) and settle capped at 1500 frames (budget +30%). A split with a
+new `--conifer-value=name=value` benchmark flag priced the parts: stage alone (`enabled=0`)
++1.7 ms, cards ≈ 0, imposters ≈ +8 ms. The dial order was not used; four fixes were:
+
+1. **The trunk term is in field units past a 1 m knee** (`conifer_trunk_field`). The walk's trunk
+   distance is a true distance, but every other term is ~L × a distance. Fed in raw, `d_safe`
+   (8.66) told every point up to ~45 m above forested ground it was within a metre of a
+   surface. The collision probe (`chunk_has_surface`, pad 11.9 at L 8.54) then planned 668
+   chunks instead of 223 and meshed them through the CPU mirror for the whole run: that was
+   the stage's 1.7 ms and the capped settle. Now g(d) = d below 1 m and 1 + 8.5 (d − 1) above.
+   g is 8.5-Lipschitz (under the computed 8.54) and g(d) ≤ 8.5 d, so §4.3's bound argument holds;
+   1 m is past the atlas's ±0.64 m range, so baked trunk surfaces are unchanged. The early-out
+   also returns the cap without a walk whenever the far bound already exceeds a non-negative f.
+   This replaces deviation 2's "above about 43 m" threshold. `test_conifer_shader.cpp` now also
+   checks the answer is no looser than g(min(truth, d_safe)) (it fails with the raw term).
+2. **Imposters keep early depth.** The fragment wrote `gl_FragDepth`, so every quad behind a
+   valley wall ran the full ray cast. The quad now stands in front of the crown's bounding
+   cylinder and the fragment declares `depth_less` (reverse-Z). ~8 ms → ~2.3 ms.
+3. **The imposter ray is clipped to the crown's bounding cone, not its cylinder** (deviation 6
+   amended), and takes one step per pixel of footprint (`fwidth`), 4 to 24. The cone is solved
+   from the ray's closest approach to the crown, because from 2.5 km the float quadratic cut off
+   metres of crown. A new native case marches 400 random rays finely and requires every inside
+   sample to fall in the span.
+4. **The cull drops occluded imposters against this frame's Hi-Z pyramid** (lod_cull's test, on
+   the tree's box; only when `hiz_built` this frame; cards are never occlusion-culled). Valley
+   imposters 39 870 → 3 990, aerial 37 599 → 12 928. The cull also tests distance and frustum
+   on the jittered cell box before any hash.
+
+**Measurement**, Apple Silicon Mac (macOS, Metal), `--resolution 2560x1440 --disable-vsync`,
+internal 1592×857 (render scale 0.65), `--pose=2000,54.2,-1600,200,4`, three interleaved
+cycles run sequentially:
+
+```bash
+for i in 1 2 3; do
+	for p in tests/fixtures/fjords_no_conifers.pipeline assets/pipelines/fjords.pipeline; do
+		godot --path . --resolution 2560x1440 --disable-vsync demo/scenes/main.tscn -- --benchmark \
+			--pipeline=res://$p --pose=2000,54.2,-1600,200,4 2>&1 | grep -E "p50|p99|settle"
+	done
+done
+```
+
+| | p50 ms (runs 1/2/3) | p99 ms (runs 1/2/3) | settle frames (runs 1/2/3) |
+|---|---|---|---|
+| Fjords without conifers | 16.67 / 16.67 / 16.67 | 21.38 / 19.02 / 20.42 | 1098 / 1131 / 1124 |
+| Fjords with conifers, before | 26.39 / 26.67 / 26.39 | 30.91 / 31.60 / 33.33 | 1500 capped ×3 |
+| Fjords with conifers, after | 18.75 / 18.75 / 18.75 | 19.46 / 19.81 / 19.91 | 1207 / 1213 / 1215 |
+
+Median deltas after: **frame p50 +2.08 ms** (budget +2.5) and **cold fill +7.9 %** (budget
++30 %). Visible imposters at the aerial pose: 12 928 (budget ~80k). The baseline p50 sits at
+exactly 16.67 ms in every run, which looks like display pacing on macOS, so +2.08 is a lower
+bound on the true cost.

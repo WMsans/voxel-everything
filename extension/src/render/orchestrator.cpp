@@ -24,6 +24,8 @@
 #include "render/grass_scatter_pass.h"
 #include "render/leaf_scatter_pass.h"
 #include "render/leaf_raster_pass.h"
+#include "render/conifer_scatter_pass.h"
+#include "render/conifer_impostor_pass.h"
 #include "render/shell_raster_pass.h"
 #include "render/transparency_composite_pass.h"
 #include "render/grass_raster_pass.h"
@@ -386,6 +388,27 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 	// scatter still runs, so the chop contract holds and the canopy simply does not draw.
 	passes_.leaf_raster = new LeafRasterPass();
 	passes_.leaf_raster->initialize(device);
+	// Conifers (docs/superpowers/specs/2026-10-08-fjords-conifers-design.md): only in a world
+	// whose pipeline has the conifers stage, whose generated field source the cull compiles
+	// against. Fail-soft: without the passes, trunks and the forest floor still render.
+	bool has_conifers = false;
+	for (const ve::StageManifest &s : handles_.store->terrain_pipeline().stages)
+		if (s.name == "conifers") has_conifers = true;
+	if (has_conifers) {
+		passes_.conifer_scatter = new ConiferScatterPass();
+		if (!passes_.conifer_scatter->initialize(device)) {
+			UtilityFunctions::printerr("VoxelWorld: conifer initialization failed; continuing "
+					"without conifer crowns (safe fail-soft: trunks and forest floor stand)");
+			delete passes_.conifer_scatter;
+			passes_.conifer_scatter = nullptr;
+		} else {
+			// Fail-soft like leaf_raster: the conifer cards reuse the leaf module's raster.
+			passes_.conifer_raster = new LeafRasterPass();
+			passes_.conifer_raster->initialize(device);
+			passes_.conifer_impostor = new ConiferImpostorPass();
+			passes_.conifer_impostor->initialize(device);
+		}
+	}
 	// Fail-soft like leaf_raster: a shader that will not compile leaves the pass with no
 	// shader, draw() returns false, the stage is cancelled and transparent materials are
 	// simply not drawn that frame.
@@ -421,6 +444,9 @@ void RenderOrchestrator::teardown_render_passes() {
 	if (passes_.grass_scatter) { delete passes_.grass_scatter; passes_.grass_scatter = nullptr; }
 	if (passes_.leaf_raster) { delete passes_.leaf_raster; passes_.leaf_raster = nullptr; }
 	if (passes_.leaf_scatter) { delete passes_.leaf_scatter; passes_.leaf_scatter = nullptr; }
+	if (passes_.conifer_impostor) { delete passes_.conifer_impostor; passes_.conifer_impostor = nullptr; }
+	if (passes_.conifer_raster) { delete passes_.conifer_raster; passes_.conifer_raster = nullptr; }
+	if (passes_.conifer_scatter) { delete passes_.conifer_scatter; passes_.conifer_scatter = nullptr; }
 	if (passes_.ssgi) { delete passes_.ssgi; passes_.ssgi = nullptr; }
 	if (passes_.ssao) { delete passes_.ssao; passes_.ssao = nullptr; }
 	if (passes_.transparency_composite) { delete passes_.transparency_composite; passes_.transparency_composite = nullptr; }
@@ -709,6 +735,7 @@ ve::SettingsGroup *RenderOrchestrator::settings_group(const char *name) {
 	if (std::strcmp(name, "beauty") == 0) return &beauty_;
 	if (std::strcmp(name, "grass") == 0) return &grass_settings_;
 	if (std::strcmp(name, "leaves") == 0) return &leaf_settings_;
+	if (std::strcmp(name, "conifers") == 0) return &conifer_settings_;
 	if (std::strcmp(name, "transparency") == 0) return &transparency_settings_;
 	if (std::strcmp(name, "water") == 0) return &water_settings_;
 	return nullptr;

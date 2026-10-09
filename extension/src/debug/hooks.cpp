@@ -145,6 +145,7 @@ void VoxelDebugHooks::_bind_methods() {
 			&VoxelDebugHooks::debug_render_frame);
 	ClassDB::bind_method(D_METHOD("debug_grass_stats"), &VoxelDebugHooks::debug_grass_stats);
 	ClassDB::bind_method(D_METHOD("debug_leaf_stats"), &VoxelDebugHooks::debug_leaf_stats);
+	ClassDB::bind_method(D_METHOD("debug_conifer_stats", "eye", "forward"), &VoxelDebugHooks::debug_conifer_stats);
 	ClassDB::bind_method(D_METHOD("debug_scatter_reuse_probe"),
 			&VoxelDebugHooks::debug_scatter_reuse_probe);
 	ClassDB::bind_method(D_METHOD("debug_sun_shadow_stats", "cascade"),

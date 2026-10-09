@@ -120,6 +120,10 @@ LeafLayout leaf_layout(const LeafSettings &settings, const float camera[3],
 	p.limits[0] = l.max_clumps;
 	p.limits[1] = l.max_trees;
 	p.limits[2] = l.clumps_per_tree;
+	for (int i = 0; i < 3; i++) {
+		p.palette_top[i] = kLeafPaletteTop[i];
+		p.palette_under[i] = kLeafPaletteUnder[i];
+	}
 	return l;
 }
 

@@ -14,11 +14,15 @@ namespace ve {
 inline constexpr float kLeafCellM = 18.0f;
 
 // Uploaded to a uniform buffer and mirrored by `LeafParams` in shaders/leaf.glslh. Laid out
-// as sixteen vec4 (256 bytes) so std140 padding cannot disagree with the C++ struct;
+// as seventeen vec4 (272 bytes) so std140 padding cannot disagree with the C++ struct;
 // test_leaf_layout pins both the size and the first three floats.
 //
 // Order matters and is asserted: cam_pos first, so a shader reading params.cam.xyz gets the
 // camera without an offset table. Same convention as ve::GrassParams.
+// The palette leaf.frag.glsl hard-coded until the conifer cards shared its raster.
+inline constexpr float kLeafPaletteTop[3] = {0.52f, 0.66f, 0.24f};
+inline constexpr float kLeafPaletteUnder[3] = {0.12f, 0.26f, 0.19f};
+
 struct LeafParams {
 	float cam[4];            // xyz camera position, w reach_m
 	float planes[6][4];      // frustum planes, inward, normalised: xyz normal, w distance
@@ -30,18 +34,19 @@ struct LeafParams {
 	float wind[4];           // strength, speed, scale, time_seconds
 	float style[4];          // gloss, hue_jitter, leaf_grain, unused
 	int32_t limits[4];       // max_clumps, max_trees, clumps_per_tree, unused
-	// Reserved. The block is sixteen vec4 by contract (the comment above and
-	// test_leaf_layout's 256-byte CHECK); the ten fields above are fifteen, so this is the
-	// sixteenth. Zero-filled, mirror generated into blocks.glslh with the rest; the first
-	// shader-side consumer reassigns it by name.
-	float spare[4];
+	// The card palette, moved out of leaf.frag.glsl's constants so the conifer cards can
+	// share the raster (docs/superpowers/plans/2026-10-08-fjords-conifers.md deviation 9).
+	// rgb used; w zero. leaf_layout() writes kLeafPaletteTop / kLeafPaletteUnder, which are
+	// the constants the shader used to hold, so Default's canopies are the same at every pixel.
+	float palette_top[4];
+	float palette_under[4];
 };
 
 // The GLSL mirror `Params` in shaders/leaf.glslh (LEAF_PARAMS_FIELDS,
-// extension/src/gpu_layout/blocks.h) emits these fields as sixteen consecutive vec4 in this
+// extension/src/gpu_layout/blocks.h) emits these fields as seventeen consecutive vec4 in this
 // order. std140 cannot pad a vec4-aligned run, so pinning this grid pins both sides; a
 // reordered or resized field now fails at compile time, not in a frame of garbage.
-static_assert(sizeof(LeafParams) == 256, "LeafParams is a 256-byte std140 block");
+static_assert(sizeof(LeafParams) == 272, "LeafParams is a 272-byte std140 block");
 static_assert(offsetof(LeafParams, cam) == 0, "LeafParams.cam");
 static_assert(offsetof(LeafParams, planes) == 16, "LeafParams.planes");
 static_assert(offsetof(LeafParams, cell_min) == 112, "LeafParams.cell_min");
@@ -52,7 +57,8 @@ static_assert(offsetof(LeafParams, clump) == 176, "LeafParams.clump");
 static_assert(offsetof(LeafParams, wind) == 192, "LeafParams.wind");
 static_assert(offsetof(LeafParams, style) == 208, "LeafParams.style");
 static_assert(offsetof(LeafParams, limits) == 224, "LeafParams.limits");
-static_assert(offsetof(LeafParams, spare) == 240, "LeafParams.spare");
+static_assert(offsetof(LeafParams, palette_top) == 240, "LeafParams.palette_top");
+static_assert(offsetof(LeafParams, palette_under) == 256, "LeafParams.palette_under");
 
 struct LeafLayout {
 	float cell_size_m = kLeafCellM;

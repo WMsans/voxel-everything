@@ -49,6 +49,7 @@ func _shoot(world: VoxelWorld, camera: Camera3D, player: Node3D, at: Vector3, di
 	await RenderingServer.frame_post_draw
 	root.get_texture().get_image().save_png(path)
 	print("FJORD_CAPTURE %s at=%s dir=%s" % [path.get_file(), at, dir])
+	print("FJORD_CAPTURE conifers %s eye=%s" % [world.hooks().debug_conifer_stats(camera.global_position, -camera.global_basis.z), camera.global_position])
 	return true
 
 func capture() -> void:

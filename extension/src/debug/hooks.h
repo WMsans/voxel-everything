@@ -511,6 +511,10 @@ public:
 	// Leaves: what the SHIPPING leaf pass wrote during a real frame. Rebuilds nothing.
 	// Keys: ran, capacity, trees, clumps, high_water.
 	Dictionary debug_leaf_stats();
+	// Conifers: what the SHIPPING cull/card scatter/card raster placed and drew for a camera
+	// at `eye` looking along `forward`. Keys: ran, card_trees, impostors, clumps, high_water,
+	// card_vertices, impostor_vertices, card_records.
+	Dictionary debug_conifer_stats(Vector3 eye, Vector3 forward);
 
 	// Scatter reuse: drives the shipping grass and leaf passes through five runs on a
 	// local-device world -- (epoch 1, camera A), the same again at a later time, (epoch 2,

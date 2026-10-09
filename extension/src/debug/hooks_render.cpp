@@ -41,6 +41,8 @@
 #include "render/grass_scatter_pass.h"
 #include "render/leaf_scatter_pass.h"
 #include "render/leaf_raster_pass.h"
+#include "render/conifer_scatter_pass.h"
+#include "render/conifer_impostor_pass.h"
 #include "render/grass_raster_pass.h"
 #include "grass/grass_layout.h"
 #include "render/hiz_pass.h"
@@ -544,7 +546,7 @@ Dictionary VoxelDebugHooks::debug_leaf_stats() {
 				for (int rr = 0; rr < 4; rr++) view_proj.columns[cc][rr] = vp[cc * 4 + rr];
 			if (w->context().render->passes().lod_raster)
 				w->context().render->passes().lod_raster->clear_targets(device, *w->context().render->passes().gbuffer);
-			leaf_raster->draw(device, *l, *w->context().render->passes().gbuffer, view_proj, p);
+			leaf_raster->draw(device, l->raster_inputs(), *w->context().render->passes().gbuffer, view_proj, p);
 			device->submit();
 			device->sync();
 		}
@@ -600,6 +602,92 @@ Dictionary VoxelDebugHooks::debug_leaf_stats() {
 		d["tree_grid"] = grid;
 		d["tree_cell_m"] = lp.tree[0];
 		d["tree_reach_m"] = lp.cam[3];
+	}
+	return d;
+}
+
+Dictionary VoxelDebugHooks::debug_conifer_stats(Vector3 eye, Vector3 forward) {
+	Dictionary d;
+	d["ran"] = false;
+	d["card_trees"] = 0;
+	d["impostors"] = 0;
+	d["clumps"] = 0;
+	d["high_water"] = 0;
+	d["card_vertices"] = 0;
+	d["impostor_vertices"] = 0;
+	d["card_records"] = PackedFloat32Array();
+	VoxelWorld *w = world_;
+	if (!w) return d;
+	ConiferScatterPass *pass = w->context().render->passes().conifer_scatter;
+	if (!pass) return d;
+	RenderingDevice *device = w->rd();
+	if (w->get_use_local_device()) {
+		w->ensure_initialized();
+		GpuAtlas *atlas = w->context().render->passes().atlas;
+		GBuffer *gb = w->context().render->passes().gbuffer;
+		SunUbo *sun = w->context().render->passes().sun_ubo;
+		if (!w->is_initialized() || !device || !atlas || !atlas->is_valid() || !gb || !sun ||
+				!sun->ensure(device) || !gb->ensure(device, nullptr, Vector2i(64, 64)))
+			return d;
+		const float p[3] = {eye.x, eye.y, eye.z};
+		const Vector3 fn = forward.normalized();
+		const float f[3] = {fn.x, fn.y, fn.z};
+		const ve::ProbeCamera pc = ve::probe_camera(p, f, 64, 64, 1.5707963268f, 0.1f, 4000.0f);
+		Projection view_proj;
+		for (int c = 0; c < 4; c++)
+			for (int r = 0; r < 4; r++) view_proj.columns[c][r] = pc.lod.view_proj[c * 4 + r];
+		if (w->context().render->passes().lod_raster)
+			w->context().render->passes().lod_raster->clear_targets(device, *gb);
+		// The compositor's own block, one code path (plan deviation 14): cull, card scatter and
+		// card raster, into the probe-size G-buffer.
+		const bool ok = w->context().render->frame().draw_conifers(device, *atlas, *gb, view_proj, p,
+				static_cast<float>(w->context().render->beauty_frame()) / 60.0f, false, nullptr);
+		device->submit();
+		device->sync();
+		if (!ok) return d;
+		pass->read_back_counters(device);
+		// The counters reach raster_inputs() one read late -- run() takes the PREVIOUS drive's
+		// arrival -- so the draw above recorded the count before this one. debug_leaf_stats has
+		// the same lag and solves it the same way: drive the shipping raster once more after the
+		// read-back, so card_vertices is this drive's clumps * 6, still the raster's own record
+		// and never a CPU re-derivation.
+		if (LeafRasterPass *cr = w->context().render->passes().conifer_raster) {
+			cr->draw(device, pass->raster_inputs(), *gb, view_proj, p);
+			device->submit();
+			device->sync();
+		}
+		// Same one-read logic for the imposters: their count reached the draw above late, so
+		// re-drive it with the fresh counter and impostor_vertices is this drive's too.
+		if (ConiferImpostorPass *ci = w->context().render->passes().conifer_impostor) {
+			ci->draw(device, *pass, *gb, view_proj, p);
+			device->submit();
+			device->sync();
+		}
+	}
+	d["ran"] = true;
+	d["card_trees"] = pass->last_card_trees();
+	d["impostors"] = pass->last_impostors();
+	d["clumps"] = pass->last_clumps();
+	d["high_water"] = pass->clump_high_water();
+	if (LeafRasterPass *cr = w->context().render->passes().conifer_raster)
+		d["card_vertices"] = cr->last_vertex_count();
+	if (ConiferImpostorPass *ci = w->context().render->passes().conifer_impostor)
+		d["impostor_vertices"] = ci->last_vertex_count();
+	// foot x, y, z and height per listed card tree, read from the list the shipping cull wrote.
+	const int n = std::min(pass->last_card_trees(), 256);
+	if (device && n > 0 && pass->card_list_buffer().is_valid()) {
+		const PackedByteArray raw = device->buffer_get_data(pass->card_list_buffer(), 0, uint32_t(n) * 32u);
+		if (raw.size() < n * 32) return d;
+		const float *v = reinterpret_cast<const float *>(raw.ptr());
+		PackedFloat32Array recs;
+		recs.resize(n * 4);
+		for (int i = 0; i < n; i++) {
+			recs[i * 4 + 0] = v[i * 8 + 0];
+			recs[i * 4 + 1] = v[i * 8 + 1];
+			recs[i * 4 + 2] = v[i * 8 + 2];
+			recs[i * 4 + 3] = v[i * 8 + 4]; // b.x is the height
+		}
+		d["card_records"] = recs;
 	}
 	return d;
 }
