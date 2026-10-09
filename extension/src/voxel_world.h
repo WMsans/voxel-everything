@@ -176,6 +176,8 @@ public:
 	float get_grass_value(const String &name) const;
 	bool set_leaf_value(const String &name, float v);
 	float get_leaf_value(const String &name) const;
+	bool set_conifer_value(const String &name, float v);
+	float get_conifer_value(const String &name) const;
 	bool set_transparency_value(const String &name, float v);
 	float get_transparency_value(const String &name) const;
 	bool set_water_value(const String &name, float v);

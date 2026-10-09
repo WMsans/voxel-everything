@@ -709,6 +709,7 @@ ve::SettingsGroup *RenderOrchestrator::settings_group(const char *name) {
 	if (std::strcmp(name, "beauty") == 0) return &beauty_;
 	if (std::strcmp(name, "grass") == 0) return &grass_settings_;
 	if (std::strcmp(name, "leaves") == 0) return &leaf_settings_;
+	if (std::strcmp(name, "conifers") == 0) return &conifer_settings_;
 	if (std::strcmp(name, "transparency") == 0) return &transparency_settings_;
 	if (std::strcmp(name, "water") == 0) return &water_settings_;
 	return nullptr;

@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "render/gpu/gpu.h"
+#include "conifers/conifer_settings_store.h"
 #include "grass/grass_settings_store.h"
 #include "leaves/leaf_settings_store.h"
 #include "transparency/transparency_settings_store.h"
@@ -292,6 +293,9 @@ public:
 	ve::LeafSettings leaf_settings() const { return leaf_settings_.get(); }
 	bool set_leaf_value(const char *n, float v) { return leaf_settings_.set_value(n, v); }
 	float leaf_value(const char *n) const { return leaf_settings_.value(n); }
+	ve::ConiferSettings conifer_settings() const { return conifer_settings_.get(); }
+	bool set_conifer_value(const char *n, float v) { return conifer_settings_.set_value(n, v); }
+	float conifer_value(const char *n) const { return conifer_settings_.value(n); }
 	ve::TransparencySettings transparency_settings() const { return transparency_settings_.get(); }
 	bool set_transparency_value(const char *n, float v) { return transparency_settings_.set_value(n, v); }
 	float transparency_value(const char *n) const { return transparency_settings_.value(n); }
@@ -366,6 +370,7 @@ private:
 	// are their own module with their own store, exactly as grass is.
 	ve::GrassSettingsStore grass_settings_;
 	ve::LeafSettingsStore leaf_settings_;
+	ve::ConiferSettingsStore conifer_settings_;
 	ve::TransparencySettingsStore transparency_settings_;
 	ve::WaterSettingsStore water_settings_;
 	GpuTimings gpu_timings_;

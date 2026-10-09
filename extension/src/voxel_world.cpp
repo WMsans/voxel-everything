@@ -231,6 +231,8 @@ void VoxelWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_grass_value", "name"), &VoxelWorld::get_grass_value);
 	ClassDB::bind_method(D_METHOD("set_leaf_value", "name", "value"), &VoxelWorld::set_leaf_value);
 	ClassDB::bind_method(D_METHOD("get_leaf_value", "name"), &VoxelWorld::get_leaf_value);
+	ClassDB::bind_method(D_METHOD("set_conifer_value", "name", "value"), &VoxelWorld::set_conifer_value);
+	ClassDB::bind_method(D_METHOD("get_conifer_value", "name"), &VoxelWorld::get_conifer_value);
 	ClassDB::bind_method(D_METHOD("set_transparency_value", "name", "value"), &VoxelWorld::set_transparency_value);
 	ClassDB::bind_method(D_METHOD("get_transparency_value", "name"), &VoxelWorld::get_transparency_value);
 	ClassDB::bind_method(D_METHOD("set_water_value", "name", "value"), &VoxelWorld::set_water_value);
@@ -348,6 +350,14 @@ bool VoxelWorld::set_leaf_value(const String &name, float v) {
 
 float VoxelWorld::get_leaf_value(const String &name) const {
 	return context_.render->leaf_value(name.utf8().get_data());
+}
+
+bool VoxelWorld::set_conifer_value(const String &name, float v) {
+	return context_.render->set_conifer_value(name.utf8().get_data(), v);
+}
+
+float VoxelWorld::get_conifer_value(const String &name) const {
+	return context_.render->conifer_value(name.utf8().get_data());
 }
 
 bool VoxelWorld::set_transparency_value(const String &name, float v) {

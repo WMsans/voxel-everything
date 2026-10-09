@@ -138,6 +138,16 @@
 	vec4 palette_top; \
 	vec4 palette_under;
 
+#define CONIFER_PASS_FIELDS \
+	vec4 cam; \
+	vec4 planes[6]; \
+	ivec4 cell_min; \
+	ivec4 cell_dim; \
+	vec4 reach; \
+	vec4 look; \
+	ivec4 limits; \
+	ivec4 flags;
+
 #define LEAF_REGION_FIELDS \
 	ivec4 dims; \
 	ivec4 region_origin; \
