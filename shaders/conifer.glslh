@@ -274,6 +274,13 @@ Conifer conifer_unpack(vec4 a, vec4 b) {
 	return c;
 }
 
+// The card fade leaf.frag.glsl applies over the last fifth of the card reach, as a function,
+// so the imposter can take exactly the complementary pixels (plan deviation 5). leaf.frag
+// keeps its own copy of this expression; test_conifer_shader.cpp pins the complement.
+float conifer_card_fade(float dist, float reach) {
+	return clamp((dist - reach * 0.8f) / max(reach * 0.2f, 1e-3f), 0.0f, 1.0f);
+}
+
 bool conifer_inside(Conifer c, vec3 q) {
 	float dx = q.x - c.foot.x;
 	float dz = q.z - c.foot.z;

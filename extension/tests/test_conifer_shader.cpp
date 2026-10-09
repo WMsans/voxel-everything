@@ -229,3 +229,19 @@ TEST_CASE("the imposter ray hits the crown from the side and from above, and mis
 	const cs::vec3 miss_o(-300.0f, mid_y, c.R * 1.2f + 0.5f);
 	CHECK(ev.conifer_ray_hit(c, miss_o, side_d) < 0.0f);
 }
+
+// Review Focus 2: leaf.frag.glsl discards a card where bayer < fade; the imposter keeps a
+// pixel only where bayer < fade. Same expression, so every pixel in the band is one or the
+// other, never both, never neither.
+TEST_CASE("the card fade and the imposter keep are exact complements across the band") {
+	cs::Eval ev;
+	for (int k = 0; k < 16; k++) {
+		const float bayer = float(k) / 16.0f;
+		for (float dist = 200.0f; dist <= 320.0f; dist += 0.5f) {
+			const float fade = ev.conifer_card_fade(dist, 300.0f);
+			const bool card_drawn = !(fade > 0.0f && bayer < fade);
+			const bool impostor_drawn = bayer < fade;
+			CHECK(card_drawn != impostor_drawn);
+		}
+	}
+}

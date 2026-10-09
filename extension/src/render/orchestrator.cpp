@@ -25,6 +25,7 @@
 #include "render/leaf_scatter_pass.h"
 #include "render/leaf_raster_pass.h"
 #include "render/conifer_scatter_pass.h"
+#include "render/conifer_impostor_pass.h"
 #include "render/shell_raster_pass.h"
 #include "render/transparency_composite_pass.h"
 #include "render/grass_raster_pass.h"
@@ -404,6 +405,8 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 			// Fail-soft like leaf_raster: the conifer cards reuse the leaf module's raster.
 			passes_.conifer_raster = new LeafRasterPass();
 			passes_.conifer_raster->initialize(device);
+			passes_.conifer_impostor = new ConiferImpostorPass();
+			passes_.conifer_impostor->initialize(device);
 		}
 	}
 	// Fail-soft like leaf_raster: a shader that will not compile leaves the pass with no
@@ -441,6 +444,7 @@ void RenderOrchestrator::teardown_render_passes() {
 	if (passes_.grass_scatter) { delete passes_.grass_scatter; passes_.grass_scatter = nullptr; }
 	if (passes_.leaf_raster) { delete passes_.leaf_raster; passes_.leaf_raster = nullptr; }
 	if (passes_.leaf_scatter) { delete passes_.leaf_scatter; passes_.leaf_scatter = nullptr; }
+	if (passes_.conifer_impostor) { delete passes_.conifer_impostor; passes_.conifer_impostor = nullptr; }
 	if (passes_.conifer_raster) { delete passes_.conifer_raster; passes_.conifer_raster = nullptr; }
 	if (passes_.conifer_scatter) { delete passes_.conifer_scatter; passes_.conifer_scatter = nullptr; }
 	if (passes_.ssgi) { delete passes_.ssgi; passes_.ssgi = nullptr; }

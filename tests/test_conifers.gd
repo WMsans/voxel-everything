@@ -139,3 +139,22 @@ func test_painting_trunks_away_empties_the_card_list() -> void:
 	for i in range(40):
 		_world.hooks().debug_stream_frame(spot + Vector3(0.0, 20.0, 0.0))
 	assert_int(_world.hooks().debug_conifer_stats(eye, Vector3(0.0, -1.0, 0.001))["card_trees"]).is_equal(0)
+
+# Spec §6: from high above a forest, past the card reach, imposters draw.
+func test_an_aerial_view_draws_impostors() -> void:
+	_open()
+	var spot := _forest_spot()
+	_stream_at(spot)
+	var d: Dictionary = _world.hooks().debug_conifer_stats(spot + Vector3(-400.0, 450.0, 0.0), Vector3(1.0, -1.0, 0.0))
+	assert_int(d["impostors"]).is_greater(0)
+	assert_int(d["impostor_vertices"]).is_equal(int(d["impostors"]) * 6)
+
+func test_impostors_stop_at_their_reach() -> void:
+	_open()
+	var spot := _forest_spot()
+	_stream_at(spot)
+	var eye := spot + Vector3(-400.0, 450.0, 0.0)
+	var many: int = _world.hooks().debug_conifer_stats(eye, Vector3(1.0, -1.0, 0.0))["impostors"]
+	_world.set_conifer_value("impostor_reach_m", 400.0)
+	var few: int = _world.hooks().debug_conifer_stats(eye, Vector3(1.0, -1.0, 0.0))["impostors"]
+	assert_int(few).is_less(many)

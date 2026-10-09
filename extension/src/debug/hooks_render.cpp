@@ -42,6 +42,7 @@
 #include "render/leaf_scatter_pass.h"
 #include "render/leaf_raster_pass.h"
 #include "render/conifer_scatter_pass.h"
+#include "render/conifer_impostor_pass.h"
 #include "render/grass_raster_pass.h"
 #include "grass/grass_layout.h"
 #include "render/hiz_pass.h"
@@ -655,6 +656,13 @@ Dictionary VoxelDebugHooks::debug_conifer_stats(Vector3 eye, Vector3 forward) {
 			device->submit();
 			device->sync();
 		}
+		// Same one-read logic for the imposters: their count reached the draw above late, so
+		// re-drive it with the fresh counter and impostor_vertices is this drive's too.
+		if (ConiferImpostorPass *ci = w->context().render->passes().conifer_impostor) {
+			ci->draw(device, *pass, *gb, view_proj, p);
+			device->submit();
+			device->sync();
+		}
 	}
 	d["ran"] = true;
 	d["card_trees"] = pass->last_card_trees();
@@ -663,6 +671,8 @@ Dictionary VoxelDebugHooks::debug_conifer_stats(Vector3 eye, Vector3 forward) {
 	d["high_water"] = pass->clump_high_water();
 	if (LeafRasterPass *cr = w->context().render->passes().conifer_raster)
 		d["card_vertices"] = cr->last_vertex_count();
+	if (ConiferImpostorPass *ci = w->context().render->passes().conifer_impostor)
+		d["impostor_vertices"] = ci->last_vertex_count();
 	// foot x, y, z and height per listed card tree, read from the list the shipping cull wrote.
 	const int n = std::min(pass->last_card_trees(), 256);
 	if (device && n > 0 && pass->card_list_buffer().is_valid()) {

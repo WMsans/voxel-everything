@@ -20,6 +20,7 @@
 #include "render/leaf_scatter_pass.h"
 #include "render/leaf_raster_pass.h"
 #include "render/conifer_scatter_pass.h"
+#include "render/conifer_impostor_pass.h"
 #include "render/hiz_pass.h"
 #include "render/inject_pass.h"
 #include "render/island_atlas.h"
@@ -143,7 +144,10 @@ bool VoxelFrame::draw_conifers(RenderingDevice *rd, GpuAtlas &atlas, GBuffer &gb
 	// Task 4's card raster, driven by THIS pass's instances/params/draw args (plan deviation
 	// 8). Task 7's imposter raster joins the same block.
 	LeafRasterPass *cards = render_.passes().conifer_raster;
-	return cards && cards->draw(rd, pass->raster_inputs(), gb, view_proj, cam_pos);
+	ConiferImpostorPass *imps = render_.passes().conifer_impostor;
+	const bool cards_ok = cards && cards->draw(rd, pass->raster_inputs(), gb, view_proj, cam_pos);
+	const bool imps_ok = imps && imps->draw(rd, *pass, gb, view_proj, cam_pos);
+	return cards_ok && imps_ok;
 }
 
 // Was VoxelWorld::sun_ortho(); reads the sun live, as that method did.
@@ -821,6 +825,7 @@ FrameInputs VoxelFrame::prepare_headless(RenderingDevice *rd, const FrameInputs 
 		if (GrassRasterPass *grass_raster = render_.passes().grass_raster) grass_raster->release_targets();
 		if (LeafRasterPass *leaf_raster = render_.passes().leaf_raster) leaf_raster->release_targets();
 		if (LeafRasterPass *cr = render_.passes().conifer_raster) cr->release_targets();
+		if (ConiferImpostorPass *ci = render_.passes().conifer_impostor) ci->release_targets();
 		if (ShellRasterPass *shell = render_.passes().shell_raster) shell->release_targets();
 	}
 	if (!headless_.ensure(rd, in.size) || !headless_.clear(rd)) return out;
