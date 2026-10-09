@@ -156,3 +156,12 @@ TEST_CASE("every liquid row is transparent") {
 		CHECK(ve::material_transparent(static_cast<uint16_t>(i + 1)));
 	}
 }
+
+TEST_CASE("forest is id 11 on layer 10 and renumbers nothing") {
+	static_assert(ve::material_id("snow") == 10);
+	static_assert(ve::material_id("forest") == 11);
+	CHECK(std::string(ve::kMaterials[10].asset) == "10");
+	// Dark needle green from a distance: the far field sees this texture's top mip.
+	CHECK(ve::kMaterials[10].flat_albedo[1] > ve::kMaterials[10].flat_albedo[0]);
+	CHECK(ve::kMaterials[10].flat_albedo[1] < 0.35f);
+}

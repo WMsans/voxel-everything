@@ -65,6 +65,10 @@ inline constexpr MaterialDef kMaterials[] = {
 	// high, not-too-steep ground by fjord_bands. Soft. The brightest albedo in the game: if
 	// sunlit snow blooms, tune flat_albedo and the texture, never the beauty stack.
 	{"snow",         "09",  1.0f,    0.0f, {0.0f, 0.0f, 0.0f},   {0.86f, 0.88f, 0.92f}},
+	// Under each conifer crown (shaders/stages/conifers.field.glslh): needle litter up close,
+	// and -- through its top mip -- the canopy colour of a forest seen from kilometres away.
+	// Built by tools/convert_forest.sh. flat_albedo is that texture's measured mean.
+	{"forest",       "10",  1.2f,    0.0f, {0.0f, 0.0f, 0.0f},   {0.11f, 0.16f, 0.04f}},
 };
 
 inline constexpr int kMaterialCount = static_cast<int>(sizeof(kMaterials) / sizeof(kMaterials[0]));
