@@ -6,8 +6,17 @@
 
 namespace godot {
 
-class LeafScatterPass;
 class GBuffer;
+
+// What the card raster reads: the clump instances, a LeafParams block (cam and reach for the
+// fade, wind, style, palette) and the 16-byte indirect draw args. Leaves and conifer cards
+// each hand one over, and each owns its own LeafRasterPass (plan deviation 8).
+struct LeafRasterInputs {
+	RID instances;
+	RID params;
+	RID draw_args;
+	int clump_count = 0; // the last read-back count, for last_vertex_count()
+};
 
 // Draws one non-indexed indirect triangle list into the scene G-buffer: six vertices per
 // clump (two triangles per card), geometry PULLED from the scatter pass's instance buffer
@@ -30,7 +39,7 @@ public:
 	// False on any failure; the caller cancels the timing marker and skips leaves. Never
 	// aborts the frame -- canopies are decorative. True with no draw when nothing was
 	// placed (invalid scatter buffers): not a failure.
-	bool draw(RenderingDevice *rd, LeafScatterPass &scatter, GBuffer &gb,
+	bool draw(RenderingDevice *rd, const LeafRasterInputs &in, GBuffer &gb,
 			const Projection &view_proj, const float cam_pos[3]);
 
 	// Clumps the last draw() issued vertices for (six per clump). Zero when the last draw
@@ -39,7 +48,7 @@ public:
 
 private:
 	bool ensure_pipeline(RenderingDevice *rd, GBuffer &gb);
-	bool ensure_uniform_set(RenderingDevice *rd, LeafScatterPass &scatter);
+	bool ensure_uniform_set(RenderingDevice *rd, const LeafRasterInputs &in);
 
 	RenderingDevice *rd_ = nullptr;
 	gpu::Group group_;

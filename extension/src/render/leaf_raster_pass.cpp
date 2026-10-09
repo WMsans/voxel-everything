@@ -1,6 +1,5 @@
 #include "render/leaf_raster_pass.h"
 #include "render/gbuffer.h"
-#include "render/leaf_scatter_pass.h"
 #include "gpu_layout/blocks.h"
 #include "gpu_layout/gbuffer_layout.h"
 
@@ -64,25 +63,21 @@ bool LeafRasterPass::ensure_pipeline(RenderingDevice *rd, GBuffer &gb) {
 	return pipeline_.is_valid();
 }
 
-bool LeafRasterPass::ensure_uniform_set(RenderingDevice *rd, LeafScatterPass &scatter) {
+bool LeafRasterPass::ensure_uniform_set(RenderingDevice *rd, const LeafRasterInputs &in) {
 	gpu::RdDevice device{rd};
 	return set_.get(device, group_, shader_, 0, {
-			gpu::storage(0, scatter.instance_buffer()),
-			gpu::ubo(1, scatter.params_buffer())}).is_valid();
+			gpu::storage(0, in.instances),
+			gpu::ubo(1, in.params)}).is_valid();
 }
 
-bool LeafRasterPass::draw(RenderingDevice *rd, LeafScatterPass &scatter, GBuffer &gb,
+bool LeafRasterPass::draw(RenderingDevice *rd, const LeafRasterInputs &in, GBuffer &gb,
 		const Projection &view_proj, const float cam_pos[3]) {
 	last_vertex_count_ = 0;
 	if (!rd_ || rd != rd_ || !shader_.is_valid() || !gb.is_valid()) return false;
-	const RID instances = scatter.instance_buffer();
-	// Task 11's naming ruling: draw_args_buffer() is the 12-byte DISPATCH args; the real
-	// 16-byte DRAW args (vertex_count, instance_count, first_vertex, first_instance) that
-	// stage 2 grows with atomicMax on emitted clumps live in raster_draw_args_buffer().
-	const RID args = scatter.raster_draw_args_buffer();
-	if (!instances.is_valid() || !args.is_valid()) return true; // nothing placed: not a failure
+	if (!in.instances.is_valid() || !in.draw_args.is_valid() || !in.params.is_valid())
+		return true; // nothing placed: not a failure
 	if (!ensure_pipeline(rd, gb)) return false;
-	if (!ensure_uniform_set(rd, scatter)) return false;
+	if (!ensure_uniform_set(rd, in)) return false;
 
 	const int64_t dl = rd->draw_list_begin(framebuffer_.rid(), RenderingDevice::DRAW_DEFAULT_ALL);
 	if (dl < 0) return false;
@@ -96,12 +91,10 @@ bool LeafRasterPass::draw(RenderingDevice *rd, LeafScatterPass &scatter, GBuffer
 	push.cam[2] = cam_pos[2];
 	rd->draw_list_set_push_constant(dl, gpu::push_bytes(push), sizeof(push));
 	// One non-indexed indirect draw; the vertex count is whatever the scatter wrote.
-	rd->draw_list_draw_indirect(dl, false, args, 0, 1, 16);
+	rd->draw_list_draw_indirect(dl, false, in.draw_args, 0, 1, 16);
 	rd->draw_list_end();
-	// Six vertices per clump: two triangles per card -- must track the atomicMax in
-	// leaf_scatter.comp.glsl and the corner decode in leaf.vert.glsl. This is a report of
-	// what the GPU drew, not a command, so a disagreement here is a silent mis-count
-	// rather than corruption.
-	last_vertex_count_ = scatter.last_clump_count() * 6;
+	// Six vertices per clump: two triangles per card -- tracks the atomicMax in both scatters
+	// and the corner decode in leaf.vert.glsl. A report, not a command.
+	last_vertex_count_ = in.clump_count * 6;
 	return true;
 }

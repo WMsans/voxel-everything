@@ -307,8 +307,8 @@ inline constexpr Field kGrassRegionBlockFields[] = {
 };
 // Every C++ float[4]/int32_t[4] row is ONE vec4/ivec4: a scalar array in the std140 mirror
 // would add 16-byte element strides where the struct packs four floats. planes repeats 6
-// like GrassParams'. spare is the documented sixteenth vec4 (Task 9) -- the mirror must
-// carry it or every later block offset shrinks by 16 bytes.
+// like GrassParams'. palette_top/palette_under are the last two vec4 (Task 4) -- the mirror
+// must carry them or every later block offset shrinks by 16 bytes.
 inline constexpr Field kLeafParamsFields[] = {
 	VE_LAYOUT_FIELD(LeafParams, cam, Vec4, 0),
 	VE_LAYOUT_FIELD(LeafParams, planes, Vec4, 6),
@@ -320,7 +320,8 @@ inline constexpr Field kLeafParamsFields[] = {
 	VE_LAYOUT_FIELD(LeafParams, wind, Vec4, 0),
 	VE_LAYOUT_FIELD(LeafParams, style, Vec4, 0),
 	VE_LAYOUT_FIELD(LeafParams, limits, IVec4, 0),
-	VE_LAYOUT_FIELD(LeafParams, spare, Vec4, 0),
+	VE_LAYOUT_FIELD(LeafParams, palette_top, Vec4, 0),
+	VE_LAYOUT_FIELD(LeafParams, palette_under, Vec4, 0),
 };
 // The leaf scatter's region-window block is the same three ivec4 grass uses -- one struct,
 // emitted under both macro names so each shader text keeps its own include.

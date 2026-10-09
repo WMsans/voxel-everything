@@ -135,7 +135,8 @@
 	vec4 wind; \
 	vec4 style; \
 	ivec4 limits; \
-	vec4 spare;
+	vec4 palette_top; \
+	vec4 palette_under;
 
 #define LEAF_REGION_FIELDS \
 	ivec4 dims; \

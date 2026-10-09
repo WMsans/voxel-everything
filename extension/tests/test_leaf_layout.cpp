@@ -143,9 +143,20 @@ const float kIdentity[16] = {1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1};
 const float kOrigin[3] = {0.0f, 0.0f, 0.0f};
 } // namespace
 
-TEST_CASE("the params block is exactly 256 bytes") {
-	// std140 padding cannot disagree with the C++ struct if the struct is 16 vec4.
-	CHECK(sizeof(ve::LeafParams) == 256);
+TEST_CASE("the params block is exactly 272 bytes") {
+	// Seventeen vec4: std140 cannot pad a vec4-aligned run (plan deviation 9).
+	CHECK(sizeof(ve::LeafParams) == 272);
+}
+
+TEST_CASE("the leaf palette is the colours leaf.frag.glsl shipped with") {
+	ve::LeafSettings s;
+	const ve::LeafLayout l = ve::leaf_layout(s, kOrigin, kIdentity, 0.0f, 0.0f);
+	CHECK(l.params.palette_top[0] == 0.52f);
+	CHECK(l.params.palette_top[1] == 0.66f);
+	CHECK(l.params.palette_top[2] == 0.24f);
+	CHECK(l.params.palette_under[0] == 0.12f);
+	CHECK(l.params.palette_under[1] == 0.26f);
+	CHECK(l.params.palette_under[2] == 0.19f);
 }
 
 TEST_CASE("cam position is the first three floats of the params block") {

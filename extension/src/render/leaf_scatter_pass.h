@@ -5,6 +5,7 @@
 #include "render/async_readback.h"
 #include "render/gpu/gpu.h"
 #include "gpu_layout/blocks.h"
+#include "render/leaf_raster_pass.h"
 #include "render/scatter_reuse.h"
 #include "world/region_window.h"
 
@@ -52,6 +53,9 @@ public:
 	// raster reads this (six vertices per clump, instance_count 1).
 	RID raster_draw_args_buffer() const { return draw_args_; }
 	RID params_buffer() const { return params_ubo_; }
+	LeafRasterInputs raster_inputs() const {
+		return {instances_, params_ubo_, draw_args_, last_clump_count_};
+	}
 
 	// Read back after run(); what the SHIPPING pass wrote, which is the only thing
 	// debug_leaf_stats() is allowed to report.

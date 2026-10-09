@@ -97,9 +97,9 @@ void main() {
 	// for its root-to-tip gradient, and it is what keeps the module out of the beauty stack.
 	//
 	// 1. n.y: each lobe's top goes bright warm yellow-green, its underside deep cool blue-green.
-	const vec3 kTop = vec3(0.52, 0.66, 0.24);
-	const vec3 kUnder = vec3(0.12, 0.26, 0.19);
-	vec3 albedo = mix(kUnder, kTop, n.y * 0.5 + 0.5);
+	// The palette is a param (LeafParams.palette_*): leaves upload the constants this line
+	// used to hold, conifer cards their own dark blue-green.
+	vec3 albedo = mix(leaf.palette_under.rgb, leaf.palette_top.rgb, n.y * 0.5 + 0.5);
 	// 2. crown depth: the whole crown darkens toward its base. This is the ambient-occlusion
 	// read in the reference, and it is a per-clump constant, so it is free.
 	albedo *= mix(0.55, 1.0, v_depth_t);

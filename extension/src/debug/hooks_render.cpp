@@ -544,7 +544,7 @@ Dictionary VoxelDebugHooks::debug_leaf_stats() {
 				for (int rr = 0; rr < 4; rr++) view_proj.columns[cc][rr] = vp[cc * 4 + rr];
 			if (w->context().render->passes().lod_raster)
 				w->context().render->passes().lod_raster->clear_targets(device, *w->context().render->passes().gbuffer);
-			leaf_raster->draw(device, *l, *w->context().render->passes().gbuffer, view_proj, p);
+			leaf_raster->draw(device, l->raster_inputs(), *w->context().render->passes().gbuffer, view_proj, p);
 			device->submit();
 			device->sync();
 		}

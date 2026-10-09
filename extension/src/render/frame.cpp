@@ -489,7 +489,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 				static_cast<float>(render_.beauty_frame()) / 60.0f,
 				leaf_sun ? leaf_sun->buffer() : RID(), render_.passes().field_context,
 				scatter_epoch_)
-				&& leaf_raster && leaf_raster->draw(rd, *leaf, *gb, view_proj, cam_pos);
+				&& leaf_raster && leaf_raster->draw(rd, leaf->raster_inputs(), *gb, view_proj, cam_pos);
 		if (leaf_ok) timings->end(rd, "leaves");
 		else timings->cancel("leaves");
 	}
