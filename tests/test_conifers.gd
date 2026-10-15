@@ -158,3 +158,46 @@ func test_impostors_stop_at_their_reach() -> void:
 	_world.set_conifer_value("impostor_reach_m", 400.0)
 	var few: int = _world.hooks().debug_conifer_stats(eye, Vector3(1.0, -1.0, 0.0))["impostors"]
 	assert_int(few).is_less(many)
+
+# The brick generator walks the conifer cells from a per-brick cache (conifer_walk_cached in
+# stages/conifers.field.glslh), which must answer exactly as conifer_walk does. The bricks
+# around a trunk, generated on the GPU, against ve::eval_brick running the CPU mirror -- the
+# test_brick_diff.gd comparison, on the one stage that has a cache.
+func test_bricks_around_a_trunk_match_the_cpu_reference() -> void:
+	_open()
+	var bark := _material("bark")
+	var trunk := Vector3.INF
+	for p in _forest_hits():
+		for dir in [Vector3.RIGHT, Vector3.LEFT, Vector3.FORWARD, Vector3.BACK]:
+			var hit: Dictionary = _world.raycast(p + Vector3(0.0, 6.0, 0.0) - dir * 6.0, dir, 12.0)
+			if hit["hit"] and int(hit["material"]) == bark:
+				trunk = hit["pos"]
+				break
+		if trunk != Vector3.INF:
+			break
+	assert_bool(trunk != Vector3.INF).override_failure_message("no trunk found").is_true()
+	# A box of bricks around the trunk hit, inside the one region a mark may cover.
+	var brick := Vector3i((trunk / 0.8).floor())
+	var region := Vector3i((Vector3(brick) / 32.0).floor())
+	var r0 := region * 32
+	var r1 := r0 + Vector3i(31, 31, 31)
+	var lo := (brick - Vector3i(6, 8, 6)).clamp(r0, r1)
+	var hi := (brick + Vector3i(6, 12, 6)).clamp(r0, r1)
+	_world.hooks().debug_mark_region(region, 0, lo, hi, 0, false)
+	_world.hooks().debug_generate_pending()
+	var jobs: PackedInt32Array = _world.hooks().debug_jobs()
+	var bricks := []
+	for j in range(jobs.size() / 8):
+		bricks.append(Vector3i(jobs[j * 8 + 0], jobs[j * 8 + 1], jobs[j * 8 + 2]))
+	# Nearest the trunk first: those hold the trunk itself and the forest floor at its foot.
+	bricks.sort_custom(func(a, b): return Vector3(a - brick).length() < Vector3(b - brick).length())
+	assert_int(bricks.size()).override_failure_message("no active bricks around the trunk").is_greater(8)
+	for b in bricks.slice(0, 24):
+		var d: Dictionary = _world.hooks().debug_brick_diff(b, 0, PackedByteArray(), 0)
+		assert_int(d["slot"]).override_failure_message("brick %s is not resident" % b).is_greater_equal(0)
+		assert_int(d["sdf_max_diff"]).override_failure_message(
+			"brick %s sdf differs by %d encoded steps" % [b, d["sdf_max_diff"]]).is_less_equal(1)
+		assert_bool(d["palette_match"]).override_failure_message("brick %s palette differs" % b).is_true()
+		assert_int(d["mat_near_mismatch"]).override_failure_message(
+			"brick %s has %d/%d near-surface material mismatches"
+			% [b, d["mat_near_mismatch"], d["mat_near_compared"]]).is_equal(0)

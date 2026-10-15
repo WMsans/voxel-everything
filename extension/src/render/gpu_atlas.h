@@ -71,6 +71,10 @@ public:
 	// assigns slots, region_free resets it, and a release never shrinks it -- so it can be
 	// too big, never too small. The marcher clips each region's segment to it.
 	RID region_bounds() const { return region_bounds_; }
+	// Paced stream-in: per region slot, ve::kStreamSlabs ints counting the surface bricks the
+	// load's probe tagged in each slab. Zeroed for a slot before its probe; read back whole.
+	RID slab_counts() const { return slab_counts_; }
+	void reset_slab_counts(RenderingDevice *rd, int region_slot);
 	// Bytes per region slot, and the offset of one slot's block. Mirrors
 	// ve::kOccupancyBlockBytes; the static_assert in gpu_atlas.cpp pins them together.
 	static uint32_t occupancy_block_bytes() {
@@ -120,6 +124,7 @@ private:
 	RID jobs_, op_pool_, op_counts_, region_slot_counts_;
 	RID region_occupancy_;
 	RID region_bounds_;
+	RID slab_counts_;
 	VolumePool volumes_;
 	OverridePool overrides_;
 	StoredNormalPool stored_normals_;

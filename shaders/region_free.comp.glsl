@@ -34,7 +34,11 @@ void main() {
 	if (i >= REGION_BRICK_COUNT) return;
 	int idx = pc.cfg.x * REGION_BRICK_COUNT + i;
 	int slot = region_tables.slot[idx];
-	if (slot < 0) return;
+	// SLOT_STAGED is a paced load's tag on a brick it never got to allocate; back to absent.
+	if (slot < 0) {
+		if (slot != -1) region_tables.slot[idx] = -1;
+		return;
+	}
 	region_tables.slot[idx] = -1;
 	int k = atomicAdd(counters.free_count, 1);
 	free_list.slot[k] = slot;

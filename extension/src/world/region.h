@@ -7,6 +7,11 @@ inline constexpr int kRegionBricks = 32;                        // 32^3 bricks p
 inline constexpr float kRegionSize = kRegionBricks * kBrickSize; // 25.6 m
 inline constexpr int kRegionBrickCount =
 		kRegionBricks * kRegionBricks * kRegionBricks;           // 32768
+// Paced stream-in (godot::WorldStreamer::run_frame): a region's allocation is split into
+// this many slabs along x, and a brick the load's probe found a surface in holds kSlotStaged
+// in its region table until its slab allocates it. Mirrored by common.glslh.
+inline constexpr int kStreamSlabs = 8;
+inline constexpr int kSlotStaged = -2;
 
 struct IVec3 {
 	int x = 0, y = 0, z = 0;

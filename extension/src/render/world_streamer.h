@@ -50,9 +50,19 @@ public:
 	// fan-out of the demo's largest blast with one request each.
 	static constexpr int kOccupancyReads = 8;
 
-	// Returns the number of actions taken (loads + evicts + edit-mark jobs). Records ONE
-	// compute list; the caller submits. buffer_update calls happen before the list opens.
-	int run_frame(RenderingDevice *rd, float cx, float cy, float cz);
+	// The bricks a frame may generate streaming regions in (see run_frame). Measured on an
+	// Iris Xe, a thousand bricks cost 5 ms of GPU in Mesas, 9 in Default and 16 in Fjords;
+	// generating four whole regions in the frame they loaded was the 40-130 ms hitch a moving
+	// camera paid every few frames. At 512 the moving camera's stream-in keeps up in all three.
+	static constexpr int kStreamJobBudget = 512;
+
+	// Returns the number of actions taken (loads + evicts + slab allocations + regions still
+	// staged + edit-mark jobs), so a caller waiting for quiet waits out a staged region too.
+	// Records ONE compute list; the caller submits. buffer_update calls happen before the
+	// list opens. `job_budget` < 0 marks every loaded region whole in its load frame, as the
+	// hook-driven test frames always have.
+	int run_frame(RenderingDevice *rd, float cx, float cy, float cz,
+			int job_budget = kStreamJobBudget);
 	// RenderingDevice has no async-readback cancellation. Called on the owning render thread
 	// before atlas buffers are freed so every pending Callable target is completed first.
 	void drain_readbacks(RenderingDevice *rd);
@@ -121,6 +131,35 @@ private:
 	// Owns occupancy handoff (enqueue_occupancy_block) and the edit_seq atomic the marks are
 	// stamped with. Borrowed from VoxelWorld.
 	WorldStore *store_ = nullptr;
+
+	// A region loaded but not yet published: its slot is assigned, its tables set and its
+	// surface bricks probed and tagged, and its slabs are allocated over the following frames
+	// as the job budget allows. It enters the region map in the frame its last slab is
+	// allocated, so the renderer never sees part of one.
+	struct StagedRegion {
+		ve::IVec3 region{};
+		int slot = -1;
+		int map_index = -1;
+		// The frame its probe ran: its slab counts are known once a readback requested after
+		// that frame has landed.
+		int64_t probe_frame = 0;
+		int next_slab = 0;
+		// A repair or overflow re-mark arrived while staged: re-mark from slab 0 with
+		// force_regen, which probes again and re-generates the slabs already allocated.
+		bool force = false;
+	};
+	std::vector<StagedRegion> staged_;
+	// run_frame calls; the clock the slab-count readback is dated by.
+	int64_t frame_ = 0;
+	// GpuAtlas::slab_counts as last read back (max_region_slots x ve::kStreamSlabs), and the
+	// frame the request that delivered it was issued in. It covers every probe of an earlier
+	// frame.
+	std::vector<int> slab_counts_;
+	Ref<AsyncBufferRead> slab_counts_read_;
+	int64_t slab_counts_requested_frame_ = -1;
+	int64_t slab_counts_valid_frame_ = -1;
+	// Restart a staged region's slabs with force_regen. False if the region is not staged.
+	bool restage_forced(ve::IVec3 region);
 
 	void note_marked(ve::IVec3 region, int64_t seq);
 	void pump_occupancy(RenderingDevice *rd);

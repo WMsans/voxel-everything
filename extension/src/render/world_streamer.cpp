@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -89,6 +90,23 @@ void WorldStreamer::initialize(ve::RegionResidency *residency, ve::EditLog *edit
 	committed_base_ = 0;
 	region_slot_costs_.assign(
 			static_cast<size_t>(atlas_ ? atlas_->config().max_region_slots : 0), 0);
+	staged_.clear();
+	frame_ = 0;
+	slab_counts_read_.instantiate();
+	slab_counts_.assign(
+			static_cast<size_t>(atlas_ ? atlas_->config().max_region_slots : 0) * ve::kStreamSlabs, 0);
+	slab_counts_requested_frame_ = -1;
+	slab_counts_valid_frame_ = -1;
+}
+
+bool WorldStreamer::restage_forced(ve::IVec3 region) {
+	for (StagedRegion &st : staged_) {
+		if (!(st.region == region)) continue;
+		st.next_slab = 0;
+		st.force = true;
+		return true;
+	}
+	return false;
 }
 
 void WorldStreamer::queue_region_regeneration(ve::IVec3 region) {
@@ -174,6 +192,7 @@ void WorldStreamer::drain_readbacks(RenderingDevice *rd) {
 	if (overflow_read_.is_valid()) overflow_read_->drain(rd);
 	if (free_read_.is_valid()) free_read_->drain(rd);
 	if (costs_read_.is_valid()) costs_read_->drain(rd);
+	if (slab_counts_read_.is_valid()) slab_counts_read_->drain(rd);
 	for (OccupancyRead &r : occ_reads_)
 		if (r.read.is_valid()) r.read->drain(rd);
 }
@@ -184,8 +203,9 @@ void WorldStreamer::harvest_occupancy(RenderingDevice *rd) {
 	pump_occupancy(rd);
 }
 
-int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) {
+int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz, int job_budget) {
 	const Clock::time_point t_start = Clock::now();
+	frame_++;
 	last_readback_ms_ = 0.0f;
 	last_total_ms_ = 0.0f;
 	frame_edits_ = 0;
@@ -221,6 +241,12 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 	if (free_read_->take_fresh()) {
 		cached_free_slots_ = free_read_->as_i32();
 		committed_base_ = committed_at_request_;
+	}
+	if (slab_counts_read_->take_fresh()) {
+		slab_counts_valid_frame_ = slab_counts_requested_frame_;
+		const PackedByteArray &b = slab_counts_read_->data();
+		const int64_t n = std::min<int64_t>(b.size() / 4, static_cast<int64_t>(slab_counts_.size()));
+		if (n > 0) memcpy(slab_counts_.data(), b.ptr(), static_cast<size_t>(n) * 4);
 	}
 	if (costs_read_->take_fresh()) {
 		const PackedByteArray &b = costs_read_->data();
@@ -267,6 +293,11 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 	if (free_read_->request(rd, atlas_->counters(), 0, 4)) committed_at_request_ = committed_;
 	costs_read_->request(rd, atlas_->region_slot_counts(), 0,
 			static_cast<uint32_t>(atlas_->config().max_region_slots) * 4);
+	// Only while something waits on it. Issued before this frame's probes are recorded, so
+	// what it returns covers every probe of an earlier frame.
+	if (!staged_.empty() && slab_counts_read_->request(rd, atlas_->slab_counts(), 0,
+				static_cast<uint32_t>(slab_counts_.size()) * 4))
+		slab_counts_requested_frame_ = frame_;
 	last_readback_ms_ += ms_since(t_rb1);
 
 	// Drain the edit queue. The lock is held for a swap, never across GPU work.
@@ -306,7 +337,14 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 	// no re-upload, because a region leaves residency (writing -1 through
 	// set_region_map_entry) long before its cell could be reused by a region dim regions away.
 	residency_->set_window(ve::region_window_centered(cx, cy, cz, residency_->window().dim));
-	ve::ResidencyPlan plan = residency_->update(cx, cy, cz, budget, -1, region_gate_);
+	// Paced stream-in keeps a bounded queue: a staged region waits a few frames for its slab
+	// counts to be read back, so the queue holds that many frames of loads; a region loaded
+	// past that would only wait behind it, holding a slot and its share of the atlas budget.
+	constexpr int kStagedLoadFrames = 3;
+	const int max_loads = job_budget < 0 ? -1 :
+			std::max(0, kStagedLoadFrames * residency_->config().max_loads_per_frame -
+					static_cast<int>(staged_.size()));
+	ve::ResidencyPlan plan = residency_->update(cx, cy, cz, budget, max_loads, region_gate_);
 	// Charge this frame's loads against the free count until a fresh reading catches up with
 	// them. Evictions are deliberately NOT credited back here: under-counting what is free
 	// only shortens the horizon for a frame or two, while over-counting empties the free list.
@@ -364,6 +402,11 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 			residency_->evict_furthest(cx, cy, cz, &plan, exclude, &budget, kEditSlotHeadroom);
 	}
 
+	// An evicted region still being streamed in leaves the queue with its slot.
+	for (const auto &e : plan.evicts)
+		staged_.erase(std::remove_if(staged_.begin(), staged_.end(),
+				[&](const StagedRegion &st) { return st.region == e.region; }), staged_.end());
+
 	// --- buffer_update phase (must precede compute_list_begin: Godot errors otherwise) ---
 	// edit_mutex_ guards edit_log_ (voxel_world.h): the tool thread appends ops while this
 	// render thread reads, so each ops() read + its pool upload must be atomic. buffer_update
@@ -371,6 +414,8 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 	// count is captured here too so the mark loop below needs no second (locked) read.
 	struct LoadJob { ve::IVec3 region; int slot; int op_count; int64_t seq; };
 	std::vector<LoadJob> load_jobs;
+	// Paced loads: this frame's whole-region probes (RegionPass::probe_staged).
+	std::vector<LoadJob> probe_jobs;
 	std::vector<ve::IVec3> forced_regen;
 	{
 		std::lock_guard<std::mutex> lock(*edit_mutex_);
@@ -408,7 +453,9 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 			// mark pass reads.
 			atlas_->upload_region_ops(rd, l.slot, ops.data(), op_count);
 		}
-		atlas_->set_region_map_entry(rd, l.map_index, l.slot);
+		// Paced, the region map entry is NOT written here: the region is published when its
+		// last slab is allocated (below), so until then the renderer sees it as not yet streamed.
+		if (job_budget < 0) atlas_->set_region_map_entry(rd, l.map_index, l.slot);
 		// The table ID and its slot entries are one publication snapshot. Consolidation may
 		// replace both under edit_mutex_; reading them in separate critical sections could
 		// pair a new table with old entries (or vice versa) for one stream-in.
@@ -436,13 +483,26 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		}
 		atlas_->set_override_table(rd, l.slot, table, entries);
 		if (mesh_ && table >= 0) mesh_->set_override_region(l.region, l.slot, table, entries);
-		load_jobs.push_back({l.region, l.slot, op_count, seq});
+		if (job_budget < 0) {
+			load_jobs.push_back({l.region, l.slot, op_count, seq});
+			continue;
+		}
+		atlas_->reset_slab_counts(rd, l.slot);
+		probe_jobs.push_back({l.region, l.slot, op_count, seq});
+		StagedRegion st;
+		st.region = l.region;
+		st.slot = l.slot;
+		st.map_index = l.map_index;
+		st.probe_frame = frame_;
+		staged_.push_back(st);
 	}
 	// Consolidation has no EditOp left to drive the normal mark path. Force a full-region
 	// mark for any resident region explicitly queued by the publication transaction.
 	for (const ve::IVec3 region : forced_regen) {
 		const int slot = residency_->slot_of(region);
 		if (slot < 0) continue;
+		// Still streaming in: restart its slabs with force_regen rather than marking it whole.
+		if (restage_forced(region)) continue;
 		bool duplicate = false;
 		for (const LoadJob &j : load_jobs) if (j.region == region) { duplicate = true; break; }
 		if (duplicate) continue;
@@ -455,6 +515,57 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 			atlas_->upload_region_ops(rd, slot, edit_log_->ops(region).data(), op_count);
 		}
 		load_jobs.push_back({region, slot, op_count, seq});
+	}
+
+	// Paced stream-in. A staged region's probe tagged its surface bricks and counted them per
+	// slab; once those counts are read back, its slabs are allocated in load order (nearest
+	// first), as many per frame as the brick budget pays for at their exact counts -- and never
+	// none, or one dense slab would stall the queue. A slab of air costs nothing, so an air
+	// region publishes as soon as its counts arrive. Each region's slabs this frame are one
+	// contiguous x range, so one dispatch. The ops are re-uploaded and re-read here, not carried
+	// from the load: an edit since then is in the list the jobs must generate against.
+	struct SlabJob { ve::IVec3 region; int slot; int first, end; int op_count; int64_t seq; bool force; };
+	std::vector<SlabJob> slab_jobs;
+	{
+		int left = job_budget;
+		for (StagedRegion &st : staged_) {
+			// Unpaced, a staged region left over from a paced frame finishes now; its probe ran
+			// in an earlier frame, so its tags are there to allocate.
+			if (job_budget >= 0 && st.probe_frame >= slab_counts_valid_frame_) continue;
+			const int first = st.next_slab;
+			while (st.next_slab < ve::kStreamSlabs) {
+				const int price = job_budget < 0 ? 0 :
+						slab_counts_[static_cast<size_t>(st.slot * ve::kStreamSlabs + st.next_slab)];
+				const bool scheduled = !slab_jobs.empty() || st.next_slab > first;
+				if (job_budget >= 0 && scheduled && price > left) break;
+				left -= price;
+				st.next_slab++;
+			}
+			if (st.next_slab == first) continue;
+			std::lock_guard<std::mutex> lock(*edit_mutex_);
+			const std::vector<ve::EditOp> &ops = edit_log_->ops(st.region);
+			const int op_count = static_cast<int>(ops.size());
+			const int64_t seq = store_ ? store_->edit_seq() : 0;
+			atlas_->upload_region_ops(rd, st.slot, ops.data(), op_count);
+			slab_jobs.push_back({st.region, st.slot, first, st.next_slab, op_count, seq, st.force});
+		}
+	}
+	// Publish every region whose last slab is in this frame's list. The map write is recorded
+	// ahead of the compute list, but nothing reads the map until the raymarch, which runs after
+	// this frame's generation.
+	for (const StagedRegion &st : staged_) {
+		if (st.next_slab < ve::kStreamSlabs) continue;
+		atlas_->set_region_map_entry(rd, residency_->window().index(st.region), st.slot);
+	}
+	staged_.erase(std::remove_if(staged_.begin(), staged_.end(),
+			[](const StagedRegion &st) { return st.next_slab >= ve::kStreamSlabs; }), staged_.end());
+	// The seam has to sit inside what the near field can draw, and a region still streaming in
+	// draws nothing.
+	{
+		float nearest = std::numeric_limits<float>::infinity();
+		for (const StagedRegion &st : staged_)
+			nearest = std::min(nearest, ve::RegionResidency::region_distance(st.region, cx, cy, cz));
+		residency_->limit_complete_radius(nearest);
 	}
 
 	// Edits re-mark only the op's brick AABB clamped to each touched region. An op that
@@ -518,6 +629,31 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		note_marked(lj.region, lj.seq);
 		any = true;
 	}
+	// Paced loads: probe the whole region, tag and count; nothing is allocated or generated.
+	for (const auto &pj : probe_jobs) {
+		region_pass_->probe_staged(rd, list, pj.region, pj.slot, pj.op_count, field_context_);
+		any = true;
+	}
+	constexpr int kSlabBricks = ve::kRegionBricks / ve::kStreamSlabs;
+	for (const auto &sj : slab_jobs) {
+		const ve::IVec3 r0{sj.region.x * ve::kRegionBricks, sj.region.y * ve::kRegionBricks,
+				sj.region.z * ve::kRegionBricks};
+		const ve::IVec3 lo{r0.x + sj.first * kSlabBricks, r0.y, r0.z};
+		const ve::IVec3 hi{r0.x + sj.end * kSlabBricks - 1, r0.y + 31, r0.z + 31};
+		if (sj.force) {
+			// A forced re-mark probes again, and releases as well as allocates: the edit jobs'
+			// reason for the barrier.
+			rd->compute_list_add_barrier(list);
+			region_pass_->mark(rd, list, sj.region, sj.slot, lo, hi, sj.op_count, true, false,
+					field_context_);
+		} else {
+			region_pass_->allocate_staged(rd, list, sj.region, sj.slot, lo, hi, sj.op_count,
+					field_context_);
+		}
+		// The occupancy block is read once, when the whole region has been marked.
+		if (sj.end == ve::kStreamSlabs) note_marked(sj.region, sj.seq);
+		any = true;
+	}
 	for (const auto &j : edit_jobs) {
 		// mark(force=true) records release, barrier, allocate; the extra barrier BEFORE
 		// each job keeps one job's release phase from racing the previous job's allocate
@@ -535,6 +671,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		for (const ve::IVec3 &region : pending_regen_) {
 			const int slot = residency_->slot_of(region);
 			if (slot < 0) continue;
+			if (restage_forced(region)) continue; // still streaming in: its slabs start over
 			int op_count = 0;
 			int64_t seq = 0;
 			std::vector<ve::EditAabb> exact_ranges;
@@ -584,6 +721,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		repair_queue_.pop_back();
 		const int slot = residency_->slot_of(region);
 		if (slot < 0) continue; // evicted since: it regenerates on stream-in
+		if (restage_forced(region)) continue; // still streaming in: its slabs start over
 		int op_count = 0;
 		int64_t seq = 0;
 		std::vector<ve::EditAabb> exact_ranges;
@@ -637,6 +775,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 	// overflow can be recovered by force-regen next frame. Replaces last frame's list.
 	pending_regen_.clear();
 	for (const auto &lj : load_jobs) pending_regen_.push_back(lj.region);
+	for (const auto &sj : slab_jobs) pending_regen_.push_back(sj.region);
 	for (const auto &j : edit_jobs) {
 		bool dup = false;
 		for (const auto &r : pending_regen_)
@@ -644,5 +783,7 @@ int WorldStreamer::run_frame(RenderingDevice *rd, float cx, float cy, float cz) 
 		if (!dup) pending_regen_.push_back(j.region);
 	}
 	last_total_ms_ = ms_since(t_start);
-	return static_cast<int>(plan.loads.size() + plan.evicts.size() + edit_jobs.size());
+	return static_cast<int>(plan.loads.size() + plan.evicts.size() + slab_jobs.size() +
+			staged_.size() +
+			edit_jobs.size());
 }

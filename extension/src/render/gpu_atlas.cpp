@@ -145,6 +145,10 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 		region_bounds_ = rd->storage_buffer_create(static_cast<uint32_t>(empty.size()), empty);
 	}
 
+	slab_counts_ = rd->storage_buffer_create(
+			static_cast<uint32_t>(cfg_.max_region_slots) * ve::kStreamSlabs * 4,
+			zeroed(static_cast<int64_t>(cfg_.max_region_slots) * ve::kStreamSlabs * 4));
+
 	if (!volumes_.initialize(rd, ve::kMaxVolumes, ve::kIslandDim) ||
 			!overrides_.initialize(rd, cfg_.max_override_bricks, cfg_.max_region_slots)) {
 		teardown();
@@ -165,7 +169,7 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 			counters_.is_valid() && frame_.is_valid() && dispatch_args_.is_valid() &&
 			jobs_.is_valid() && op_pool_.is_valid() && op_counts_.is_valid() &&
 			region_slot_counts_.is_valid() && region_occupancy_.is_valid() &&
-			region_bounds_.is_valid() && volumes_.is_valid() &&
+			region_bounds_.is_valid() && slab_counts_.is_valid() && volumes_.is_valid() &&
 			overrides_.is_valid() && stored_normals_.is_valid();
 	for (int l = 0; l < ve::kMipLevels; l++) ok = ok && mips_[l].is_valid();
 	if (!ok) {
@@ -203,6 +207,7 @@ void GpuAtlas::teardown() {
 	free_if_valid(rd_, region_slot_counts_);
 	free_if_valid(rd_, region_occupancy_);
 	free_if_valid(rd_, region_bounds_);
+	free_if_valid(rd_, slab_counts_);
 	rd_ = nullptr;
 }
 
@@ -214,6 +219,12 @@ void GpuAtlas::reset_frame_counters(RenderingDevice *rd) {
 	// brick that nobody hears about is a hole in the world that never heals. Whoever acts
 	// on the bits clears them with clear_overflow().
 	rd->buffer_update(frame_, 0, 4, zeroed(4));
+}
+
+void GpuAtlas::reset_slab_counts(RenderingDevice *rd, int region_slot) {
+	if (!slab_counts_.is_valid() || region_slot < 0 || region_slot >= cfg_.max_region_slots) return;
+	rd->buffer_update(slab_counts_, static_cast<uint32_t>(region_slot) * ve::kStreamSlabs * 4,
+			ve::kStreamSlabs * 4, zeroed(ve::kStreamSlabs * 4));
 }
 
 void GpuAtlas::clear_overflow(RenderingDevice *rd) {

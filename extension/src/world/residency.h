@@ -114,6 +114,9 @@ public:
 	// between belongs to neither field (M5 errata: the LoD design assumed a 0-150 m near
 	// field, but the 65536-slot atlas funds barely half of the configured 96 m ball).
 	float complete_radius_m() const { return complete_radius_m_; }
+	// A resident region whose bricks are still being streamed in is no more complete than an
+	// absent one. The streamer reports the nearest such distance after update().
+	void limit_complete_radius(float r) { if (r < complete_radius_m_) complete_radius_m_ = r; }
 
 private:
 	struct Key {

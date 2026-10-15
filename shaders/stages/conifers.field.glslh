@@ -40,6 +40,18 @@
 
 vec4 conifer_ground(vec2 xz) { return fjord_ground(xz); }
 
+// The per-brick cell cache. brick_gen.comp.glsl declares the shared arrays (only a compute
+// shader may) and defines FIELD_CONIFER_CELL_CACHE before it includes the field. A 0.8 m brick
+// sits inside one or two 8 m cells on each axis, so all ~5000 of its lattice points walk the
+// same 4x4 cells -- and near the ground nearly every one of them walks, because the far bound
+// only clears points ~28 m up and the forest disc is wanted under all grass. Everything a
+// walk computes per cell that does not depend on the point (the jittered foot, the grove
+// gate, a 16-texel B-spline of ground, the tree's shape: a dozen hashes and the spline) is
+// computed once per brick instead. A point whose 3x3 leaves the window walks uncached.
+#ifdef FIELD_CONIFER_CELL_CACHE
+#define CONIFER_WALK_OVERRIDE conifer_walk_cached
+#endif
+
 #include "conifer.glslh"
 
 ConiferParams conifers_params() {
@@ -49,6 +61,88 @@ ConiferParams conifers_params() {
 			P.fjord_bands_shore, P.fjord_bands_snow_line, P.fjord_bands_snow_jitter,
 			P.fjord_bands_snow_ridge_drop, SURFACE_Y);
 }
+
+#ifdef FIELD_CONIFER_CELL_CACHE
+// Reach past the brick's faces the window covers: the material projection steps at most 2.5
+// voxels out and a gradient tap 1 cm, both well inside it.
+#define CONIFER_CACHE_MARGIN 0.3
+ivec2 g_conifer_cache_base = ivec2(0);
+bool g_conifer_cache_on = false;
+
+// Every thread of the workgroup calls this with the brick's WORLD-space corner, then the
+// caller barriers. A point within the margin of the brick has its base cell in one of two per
+// axis (0.8 + 2 x 0.3 < 8 m) and walks one neighbour either side, so four cells per axis,
+// starting one before the lowest base cell, cover every walk.
+//   s_conifer_a: foot x, foot z, disc radius (conifer_profile at s = 0) or -1 where no tree
+//                stands, trunk radius
+//   s_conifer_b: the foot (x, y, z) and the height
+void conifer_cell_cache_fill(vec3 world_lo, uint tid) {
+	ConiferParams cp = conifers_params();
+	vec2 lo = vec2(world_lo.x + VE_FIELD_OFFSET.x, world_lo.z + VE_FIELD_OFFSET.z) -
+			vec2(CONIFER_CACHE_MARGIN);
+	g_conifer_cache_base = ivec2(int(floor(lo.x / cp.cell)), int(floor(lo.y / cp.cell))) -
+			ivec2(1);
+	if (tid < 16u) {
+		ivec2 cell = g_conifer_cache_base + ivec2(int(tid) % 4, int(tid) / 4);
+		vec2 xz = conifer_cell_xz(cell, cp);
+		vec4 a = vec4(xz.x, xz.y, -1.0, 0.0);
+		vec4 b = vec4(0.0);
+		// conifer_walk's per-cell tests, in its order.
+		if (conifer_cell_gate(cell, cp)) {
+			vec4 g = conifer_ground(xz);
+			float slope = sqrt(g.y * g.y + g.z * g.z);
+			if (conifer_ground_ok(cp.surface_y + g.x - cp.water_y, slope, cp)) {
+				Conifer c = conifer_at(cell, xz, cp.surface_y + g.x, slope, cp);
+				a = vec4(xz.x, xz.y, conifer_profile(c, 0.0), c.trunk_r);
+				b = vec4(c.foot, c.height);
+			}
+		}
+		s_conifer_a[tid] = a;
+		s_conifer_b[tid] = b;
+	}
+	g_conifer_cache_on = true;
+}
+
+// conifer_walk (conifer.glslh), reading each cell from the cache. Same cells, same order,
+// same tests; only where the per-cell values come from differs.
+ConiferHit conifer_walk_cached(vec3 p, float ground_y, ConiferParams cp, float near_d, bool want_disc) {
+	ivec2 base = ivec2(int(floor(p.x / cp.cell)), int(floor(p.z / cp.cell)));
+	ivec2 o = base - g_conifer_cache_base;
+	if (!g_conifer_cache_on || o.x < 1 || o.y < 1 || o.x > 2 || o.y > 2)
+		return conifer_walk(p, ground_y, cp, near_d, want_disc);
+	ConiferHit hit;
+	hit.d = conifer_d_safe(cp);
+	hit.forest = false;
+	hit.near = false;
+	float trunk_reach = conifer_trunk_reach(cp);
+	float disc_reach = conifer_disc_reach(cp);
+	float h = p.y - ground_y;
+	for (int dz = -1; dz <= 1; dz++) {
+		for (int dx = -1; dx <= 1; dx++) {
+			int k = (o.y + dz) * 4 + (o.x + dx);
+			vec4 a = s_conifer_a[k];
+			float hx = p.x - a.x;
+			float hz = p.z - a.y;
+			float r = sqrt(hx * hx + hz * hz);
+			float lb = max(r - trunk_reach, h - CONIFER_FIELD_L * r - cp.height_max);
+			bool need_trunk = lb < min(hit.d, near_d);
+			bool need_disc = want_disc && !hit.forest && r < disc_reach;
+			if (!need_trunk && !need_disc) continue;
+			if (a.z < 0.0) continue;
+			if (need_trunk) {
+				vec4 b = s_conifer_b[k];
+				Conifer c;
+				c.foot = b.xyz;
+				c.height = b.w;
+				c.trunk_r = a.w;
+				hit.d = min(hit.d, conifer_trunk_sdf(p, c));
+			}
+			if (need_disc && r <= a.z) hit.forest = true;
+		}
+	}
+	return hit;
+}
+#endif
 
 void stage_conifers(inout FieldCtx ctx) {
 	// A gradient's offset tap whose centre proved the trunks irrelevant (field_ops.glslh).

@@ -334,6 +334,7 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_field_sdf", "p"), &VoxelDebugHooks::debug_field_sdf);
 	ClassDB::bind_method(D_METHOD("debug_occupancy_stats", "center"), &VoxelDebugHooks::debug_occupancy_stats);
 	ClassDB::bind_method(D_METHOD("debug_stream_frame", "cam"), &VoxelDebugHooks::debug_stream_frame);
+	ClassDB::bind_method(D_METHOD("debug_stream_frame_paced", "cam", "job_budget"), &VoxelDebugHooks::debug_stream_frame_paced);
 	ClassDB::bind_method(D_METHOD("debug_pump_sectors", "cam", "half_extent", "max_frames"), &VoxelDebugHooks::debug_pump_sectors);
 	ClassDB::bind_method(D_METHOD("debug_sector_stats"), &VoxelDebugHooks::debug_sector_stats);
 	ClassDB::bind_method(D_METHOD("debug_sector_texels", "sx", "sz"), &VoxelDebugHooks::debug_sector_texels);

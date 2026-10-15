@@ -48,6 +48,10 @@ layout(set = 0, binding = 10, std430) buffer BrickFlags { uint v[]; } brick_flag
 // Per region slot, the box of its resident bricks (GpuAtlas::region_bounds): grown here as a
 // slot is assigned, reset by region_free.comp.glsl, never shrunk by a release.
 layout(set = 0, binding = 15, std430) buffer RegionBounds { int v[]; } region_bounds;
+// Paced stream-in: per region slot, STREAM_SLABS counts of the bricks the load's probe tagged
+// in each slab (mode 3). The streamer zeroes a slot's counts before the probe and reads them
+// back to price each slab's allocation exactly.
+layout(set = 0, binding = 16, std430) buffer SlabCounts { int n[]; } slab_counts;
 const uint CELL_AIR = 1u;
 const uint CELL_SOLID = 2u;
 const uint CELL_FULL = 3u;
@@ -152,23 +156,42 @@ void main() {
 	int idx = rslot * REGION_BRICK_COUNT + bi;
 	int cur = region_tables.slot[idx];
 
-	float probe_mn, probe_mx, opaque_mn, opaque_mx, solid_mn;
-	brick_probe(brick, op_base, s_op_n, probe_mn, probe_mx, opaque_mn, opaque_mx, solid_mn);
-	// `active` is a GLSL reserved word (M2 errata 5); this local is has_surface. pc.hi.w is 1
-	// when the opaque view is on: ground under a transparent material has no union surface.
-	bool has_surface = (probe_mn < ACTIVATION_PAD && probe_mx > -ACTIVATION_PAD) ||
-			(pc.hi.w != 0 && opaque_mn < ACTIVATION_PAD && opaque_mx > -ACTIVATION_PAD);
-	// A plain stream-in has no generated lattice for a no-surface brick, so publish only
-	// the unambiguous probe fallback there. An edit uses mark mode 2: every touched brick
-	// gets a generator job, including a thin surface between probe samples, and brick_gen
-	// publishes the exact lattice answer instead.
-	const bool exact_edit = pc.cfg.w == 2;
-	if (pc.cfg.y == 1 && !has_surface && !exact_edit)
-		write_occupancy(rslot, bi, solid_mn > 0.0 ? CELL_AIR : CELL_FULL);
+	// Modes (pc.cfg.w): 0 plain stream-in, 1 force regeneration, 2 edit, and the two halves of
+	// a paced stream-in -- 3 probes the whole region at load, tagging each surface brick
+	// SLOT_STAGED and counting it into its slab, and 4 allocates a slab's tagged bricks later,
+	// evaluating no field at all.
+	const int mode = pc.cfg.w;
+	const bool exact_edit = mode == 2;
+	bool has_surface = true;
+	if (mode == 4) {
+		if (cur != SLOT_STAGED) return;
+	} else {
+		float probe_mn, probe_mx, opaque_mn, opaque_mx, solid_mn;
+		brick_probe(brick, op_base, s_op_n, probe_mn, probe_mx, opaque_mn, opaque_mx, solid_mn);
+		// `active` is a GLSL reserved word (M2 errata 5); this local is has_surface. pc.hi.w is
+		// 1 when the opaque view is on: ground under a transparent material has no union surface.
+		has_surface = (probe_mn < ACTIVATION_PAD && probe_mx > -ACTIVATION_PAD) ||
+				(pc.hi.w != 0 && opaque_mn < ACTIVATION_PAD && opaque_mx > -ACTIVATION_PAD);
+		// A plain stream-in has no generated lattice for a no-surface brick, so publish only
+		// the unambiguous probe fallback there. An edit uses mark mode 2: every touched brick
+		// gets a generator job, including a thin surface between probe samples, and brick_gen
+		// publishes the exact lattice answer instead.
+		if (pc.cfg.y == 1 && !has_surface && !exact_edit)
+			write_occupancy(rslot, bi, solid_mn > 0.0 ? CELL_AIR : CELL_FULL);
+		if (mode == 3) {
+			if (has_surface && cur == -1) {
+				region_tables.slot[idx] = SLOT_STAGED;
+				atomicAdd(slab_counts.n[rslot * STREAM_SLABS + (brick.x & 31) / (REGION_BRICKS / STREAM_SLABS)], 1);
+			}
+			return;
+		}
+	}
 
 	if (pc.cfg.y == 0) {
 		// Release phase. Kept in its own dispatch: a push at index free_count and a pop at
 		// free_count - 1 running concurrently can collide and lose or duplicate a slot.
+		// A tag the probe left on a brick an edit has since emptied: nothing to allocate.
+		if (!has_surface && !exact_edit && cur == SLOT_STAGED) region_tables.slot[idx] = -1;
 		if (!has_surface && !exact_edit && cur >= 0) {
 			region_tables.slot[idx] = -1;
 			int k = atomicAdd(counters.free_count, 1);

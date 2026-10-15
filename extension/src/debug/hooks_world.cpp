@@ -1331,6 +1331,13 @@ Dictionary VoxelDebugHooks::debug_occupancy_stats(Vector3 center) {
 }
 
 int VoxelDebugHooks::debug_stream_frame(Vector3 cam) {
+	return debug_stream_frame_paced(cam, -1);
+}
+
+// The shipping frame streams under WorldStreamer::kStreamJobBudget; the hook-driven tests
+// have always streamed each region whole in its load frame (budget -1), and the pacing tests
+// pass a budget of their own.
+int VoxelDebugHooks::debug_stream_frame_paced(Vector3 cam, int job_budget) {
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
 	if (!world_->is_initialized() || !device || !world_->context().render->streamer()) return 0;
@@ -1340,7 +1347,8 @@ int VoxelDebugHooks::debug_stream_frame(Vector3 cam) {
 	// beyond 256 m of the origin would evict the very blocks under test.
 	world_->context().store->set_center(cam.x, cam.y, cam.z);
 	apply_opaque_view(world_);
-	const int actions = world_->context().render->streamer()->run_frame(device, cam.x, cam.y, cam.z);
+	const int actions = world_->context().render->streamer()->run_frame(device, cam.x, cam.y, cam.z,
+			job_budget);
 	device->submit();
 	device->sync();
 	world_->note_overflow(static_cast<int>(world_->context().render->passes().atlas->read_overflow(device)));

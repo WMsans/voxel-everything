@@ -17,6 +17,12 @@ shared uint s_ops[256];
 shared uint s_op_n;
 shared uint s_keep[256];
 shared uint s_liquid;
+// The conifer stage's per-brick cell cache (stages/conifers.field.glslh). Declared here for
+// every pipeline because only a compute shader may declare shared memory; a pipeline without
+// the stage never touches it.
+#define FIELD_CONIFER_CELL_CACHE 1
+shared vec4 s_conifer_a[16];
+shared vec4 s_conifer_b[16];
 #define FIELD_OP_INDEX(base, i) ((base) + s_ops[i])
 #include "field.glslh"
 #include "brick_layout.glslh"
@@ -150,6 +156,9 @@ void main() {
 
 	if (tid < 4u) { s_pal[tid] = 0u; s_cnt[tid] = 0u; s_inv[tid] = tid; }
 	if (tid == 0u) { s_umin = 255u; s_umax = 0u; }
+#ifdef CONIFERS_STAGE
+	conifer_cell_cache_fill(bo, tid);
+#endif
 	memoryBarrierShared();
 	barrier();
 

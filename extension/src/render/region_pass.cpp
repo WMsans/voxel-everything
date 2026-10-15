@@ -37,7 +37,8 @@ bool RegionPass::initialize(RenderingDevice *rd, const GpuAtlas &atlas) {
 			gpu::storage(12, atlas.overrides().mat_buffer()),
 			gpu::storage(13, atlas.overrides().tables()),
 			gpu::storage(14, atlas.overrides().region_table_map()),
-			gpu::storage(15, atlas.region_bounds())});
+			gpu::storage(15, atlas.region_bounds()),
+			gpu::storage(16, atlas.slab_counts())});
 	free_set_ = gpu::uniform_set(rd, group_, free_.shader, 0, {
 			gpu::storage(0, atlas.region_tables()),
 			gpu::storage(1, atlas.free_list()),
@@ -68,6 +69,30 @@ void RegionPass::teardown() {
 void RegionPass::mark(RenderingDevice *rd, int64_t list, ve::IVec3 region, int region_slot,
 		ve::IVec3 lo, ve::IVec3 hi, int op_count, bool force_regen,
 		bool generate_probe_misses, const FieldContextSet *field_context) {
+	// 0 = plain stream-in, 1 = force resident regeneration, 2 = edit: generate every
+	// touched brick so the exact lattice, rather than the activation probe, owns occupancy.
+	dispatch_mark(rd, list, region, region_slot, lo, hi, op_count, force_regen,
+			generate_probe_misses ? 2 : (force_regen ? 1 : 0), field_context);
+}
+
+void RegionPass::probe_staged(RenderingDevice *rd, int64_t list, ve::IVec3 region, int region_slot,
+		int op_count, const FieldContextSet *field_context) {
+	const ve::IVec3 lo{region.x * ve::kRegionBricks, region.y * ve::kRegionBricks,
+			region.z * ve::kRegionBricks};
+	const ve::IVec3 hi{lo.x + ve::kRegionBricks - 1, lo.y + ve::kRegionBricks - 1,
+			lo.z + ve::kRegionBricks - 1};
+	dispatch_mark(rd, list, region, region_slot, lo, hi, op_count, false, 3, field_context);
+}
+
+void RegionPass::allocate_staged(RenderingDevice *rd, int64_t list, ve::IVec3 region,
+		int region_slot, ve::IVec3 lo, ve::IVec3 hi, int op_count,
+		const FieldContextSet *field_context) {
+	dispatch_mark(rd, list, region, region_slot, lo, hi, op_count, false, 4, field_context);
+}
+
+void RegionPass::dispatch_mark(RenderingDevice *rd, int64_t list, ve::IVec3 region,
+		int region_slot, ve::IVec3 lo, ve::IVec3 hi, int op_count, bool force_regen, int mode,
+		const FieldContextSet *field_context) {
 	if (!mark_.pipeline.is_valid()) return;
 	const int64_t total = static_cast<int64_t>(hi.x - lo.x + 1) * (hi.y - lo.y + 1) *
 			(hi.z - lo.z + 1);
@@ -84,9 +109,7 @@ void RegionPass::mark(RenderingDevice *rd, int64_t list, ve::IVec3 region, int r
 	push.hi[3] = opaque_view_ ? 1 : 0;
 	push.cfg[0] = op_count;
 	push.cfg[2] = max_brick_jobs_;
-	// 0 = plain stream-in, 1 = force resident regeneration, 2 = edit: generate every
-	// touched brick so the exact lattice, rather than the activation probe, owns occupancy.
-	push.cfg[3] = generate_probe_misses ? 2 : (force_regen ? 1 : 0);
+	push.cfg[3] = mode;
 
 	rd->compute_list_bind_compute_pipeline(list, mark_.pipeline);
 	rd->compute_list_bind_uniform_set(list, mark_set_, 0);

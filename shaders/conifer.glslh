@@ -245,6 +245,17 @@ float conifer_trunk_field_inv(float y) {
 	return y <= CONIFER_TRUNK_KNEE ? y : CONIFER_TRUNK_KNEE + (y - CONIFER_TRUNK_KNEE) / CONIFER_TRUNK_SLOPE;
 }
 
+// An includer may answer the walk itself (brick_gen's per-brick cell cache,
+// stages/conifers.field.glslh) by defining CONIFER_WALK_OVERRIDE as the name of a function with
+// conifer_walk's signature, defined after this file, that returns exactly what conifer_walk
+// would. The CPU never defines it.
+#ifdef CONIFER_WALK_OVERRIDE
+ConiferHit CONIFER_WALK_OVERRIDE(vec3 p, float ground_y, ConiferParams cp, float near_d, bool want_disc);
+#define CONIFER_WALK CONIFER_WALK_OVERRIDE
+#else
+#define CONIFER_WALK conifer_walk
+#endif
+
 // The stage's whole answer for a point whose field value so far is f and whose own ground is
 // ground_y. The result never exceeds f, and result / CONIFER_FIELD_L never exceeds the true
 // distance to the terrain or any trunk -- test_conifer_shader.cpp checks both against brute
@@ -266,7 +277,7 @@ ConiferHit conifer_field(vec3 p, float f, float ground_y, ConiferParams cp, bool
 		hit.trunk_d = conifer_d_safe(cp);
 		return hit;
 	}
-	ConiferHit w = conifer_walk(p, ground_y, cp, conifer_trunk_field_inv(f + near_margin), want_disc);
+	ConiferHit w = CONIFER_WALK(p, ground_y, cp, conifer_trunk_field_inv(f + near_margin), want_disc);
 	float trunk = conifer_trunk_field(w.d);
 	hit.near = trunk < f + near_margin;
 	hit.forest = w.forest;

@@ -305,6 +305,7 @@ public:
 	bool debug_flatten_material_normal(int layer);
 
 	int debug_stream_frame(Vector3 cam);
+	int debug_stream_frame_paced(Vector3 cam, int job_budget);
 	int debug_pump_sectors(Vector3 cam, float half_extent, int max_frames);
 	Dictionary debug_sector_stats();
 	PackedByteArray debug_sector_texels(int sx, int sz);

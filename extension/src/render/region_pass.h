@@ -27,6 +27,15 @@ public:
 	void mark(RenderingDevice *rd, int64_t list, ve::IVec3 region, int region_slot,
 			ve::IVec3 lo, ve::IVec3 hi, int op_count, bool force_regen,
 			bool generate_probe_misses, const FieldContextSet *field_context);
+	// Paced stream-in, in two halves (WorldStreamer::run_frame). probe_staged runs the
+	// activation probe over the whole freshly loaded region, tags each surface brick
+	// ve::kSlotStaged and counts it into GpuAtlas::slab_counts; it allocates nothing.
+	// allocate_staged then allocates the tagged bricks in [lo, hi] and enqueues their jobs
+	// without evaluating the field again.
+	void probe_staged(RenderingDevice *rd, int64_t list, ve::IVec3 region, int region_slot,
+			int op_count, const FieldContextSet *field_context);
+	void allocate_staged(RenderingDevice *rd, int64_t list, ve::IVec3 region, int region_slot,
+			ve::IVec3 lo, ve::IVec3 hi, int op_count, const FieldContextSet *field_context);
 	void release_region(RenderingDevice *rd, int64_t list, int region_slot);
 	void write_dispatch_args(RenderingDevice *rd, int64_t list);
 
@@ -35,6 +44,10 @@ public:
 	void set_opaque_view(bool on) { opaque_view_ = on; }
 
 private:
+	void dispatch_mark(RenderingDevice *rd, int64_t list, ve::IVec3 region, int region_slot,
+			ve::IVec3 lo, ve::IVec3 hi, int op_count, bool force_regen, int mode,
+			const FieldContextSet *field_context);
+
 	RenderingDevice *rd_ = nullptr;
 	int max_brick_jobs_ = 0;
 	bool opaque_view_ = true;
