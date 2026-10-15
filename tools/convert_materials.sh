@@ -32,6 +32,7 @@ for i in "${!MATERIALS[@]}"; do
 	# Layer 10 (forest) is a recolour built by tools/convert_forest.sh; the pack has no
 	# forest folder. Bark and water are skipped the same way by their own scripts' outputs.
 	[ "$m" = "forest" ] && continue
+	[ "$m" = "grass_01" ] && continue
 	for map in "${MAPS[@]}"; do
 		in="$SRC/$m/T_${m}_${map}.tga"
 		out="$DST/$(printf '%02d' "$i")_${map}.png"
