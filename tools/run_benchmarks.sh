@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Runs every benchmark leg and files the output. One label per run:
 #   tools/run_benchmarks.sh m7-baseline
+# Called with no arguments on a terminal, shows a menu instead and files into
+# reports/${BENCH_LABEL:-interactive}/.
 # Legs are sequential on purpose — two Godot processes sharing one GPU measure each other.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LABEL="${1:?usage: run_benchmarks.sh <label> [extra godot args...]}"
-shift || true
+LABEL="${1:-${BENCH_LABEL:-interactive}}"
+[ $# -gt 0 ] && shift
 OUT="$ROOT/reports/$LABEL"
-mkdir -p "$OUT"
 
 GODOT="${GODOT_BIN:-godot}"
 command -v "$GODOT" >/dev/null 2>&1 || GODOT=/usr/bin/godot
@@ -32,11 +33,20 @@ Darwin) ;;
 	;;
 esac
 
-LEGS=(--benchmark --benchmark-move --benchmark-ridge --benchmark-edit --benchmark-edit-bounded --benchmark-island)
-for leg in "${LEGS[@]}"; do
-	name="${leg#--benchmark}"
-	name="${name#-}"
-	[ -z "$name" ] && name="steady"
+# Leg name -> godot arg; also the menu order.
+NAMES=(steady move ridge edit edit-bounded island)
+leg_args() {
+	case "$1" in
+	steady) echo "--benchmark" ;;
+	*) echo "--benchmark-$1" ;;
+	esac
+}
+
+# $1 = leg arg, $2 = name used for the report file, rest = extra godot args.
+run_leg() {
+	local leg="$1" name="$2"
+	shift 2
+	mkdir -p "$OUT"
 	echo "=== $name ==="
 	# Extra args belong AFTER the "--" separator: demo/benchmark.gd reads
 	# OS.get_cmdline_user_args(), and Godot silently drops an unknown dashed argument
@@ -47,8 +57,35 @@ for leg in "${LEGS[@]}"; do
 	"$GODOT" --path "$ROOT" ${DRIVER_ARGS[@]+"${DRIVER_ARGS[@]}"} --resolution 2560x1440 \
 		--disable-vsync demo/scenes/main.tscn -- "$leg" "$@" 2>&1 | tee "$OUT/$name.txt"
 	echo "EXIT_STATUS=${PIPESTATUS[0]}" | tee -a "$OUT/$name.txt"
-done
+}
 
-echo
-echo "=== verdicts ($LABEL) ==="
-grep -h "BENCH mode\|BENCH frame_avg_ms\|BENCH p50\|BENCH budget_verdict\|BENCH timing_condition" "$OUT"/*.txt
+print_verdicts() {
+	echo
+	echo "=== verdicts ($LABEL) ==="
+	grep -h "BENCH mode\|BENCH frame_avg_ms\|BENCH p50\|BENCH budget_verdict\|BENCH timing_condition" "$@" || true
+}
+
+if [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ] && command -v fzf >/dev/null 2>&1; then
+	while :; do
+		choice=$(printf '%s\n' all "${NAMES[@]}" |
+			fzf --height 40% --reverse --no-sort --prompt "benchmark ($LABEL)> " \
+				--header "enter: run   esc: quit") || break
+		[ -n "$choice" ] || break
+		if [ "$choice" = all ]; then
+			for name in "${NAMES[@]}"; do
+				run_leg "$(leg_args "$name")" "$name"
+			done
+			print_verdicts "$OUT"/*.txt
+		else
+			run_leg "$(leg_args "$choice")" "$choice"
+			print_verdicts "$OUT/$choice.txt"
+		fi
+	done
+	echo "=== reports in $OUT ==="
+	exit 0
+fi
+
+for name in "${NAMES[@]}"; do
+	run_leg "$(leg_args "$name")" "$name" "$@"
+done
+print_verdicts "$OUT"/*.txt
