@@ -50,7 +50,6 @@ enum FrameStage : uint32_t {
 	kStageGrass,
 	kStageSsgi,
 	kStageDeferred,
-	kStageSsao,
 	kStageInject,
 	kStageContact,
 	kStageSsr,

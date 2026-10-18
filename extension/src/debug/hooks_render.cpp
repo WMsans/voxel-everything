@@ -21,7 +21,6 @@
 #include "render/beauty_camera.h"
 #include "render/contact_shadow_pass.h"
 #include "render/ssgi_pass.h"
-#include "render/ssao_pass.h"
 #include "render/ssr_pass.h"
 #include "render/outline_pass.h"
 #include "beauty_compositor.h"
@@ -264,8 +263,8 @@ Dictionary VoxelDebugHooks::debug_ssgi_probe(Vector3 pos, Vector3 fwd, int w, in
 	return d;
 }
 
-// One frame of raymarch -> composite -> HBAO over the G-buffer, then a readback of the
-// single-channel occlusion target. Reads the AO texture directly: whether the deferred pass
+// One frame of raymarch -> composite -> horizon pass over the G-buffer, then a readback of the
+// AO in that pass's alpha channel. Reads the AO texture directly: whether the deferred pass
 // applies it is deferred's own contract, not this probe's.
 Dictionary VoxelDebugHooks::debug_ssao_probe(Vector3 pos, Vector3 fwd, int w, int h) {
 	Dictionary d;
@@ -277,7 +276,7 @@ Dictionary VoxelDebugHooks::debug_ssao_probe(Vector3 pos, Vector3 fwd, int w, in
 	if (w <= 0 || h <= 0) return d;
 	world_->ensure_initialized();
 	RenderingDevice *device = world_->rd();
-	if (!world_->is_initialized() || !device || !world_->context().render->passes().gbuffer || !world_->context().render->passes().ssao)
+	if (!world_->is_initialized() || !device || !world_->context().render->passes().gbuffer || !world_->context().render->passes().ssgi)
 		return d;
 	int quiet = 0;
 	for (int i = 0; i < 400 && quiet < 6; i++)
@@ -287,7 +286,11 @@ Dictionary VoxelDebugHooks::debug_ssao_probe(Vector3 pos, Vector3 fwd, int w, in
 	world_->context().render->frame().render_headless(device, VoxelFrame::looking_at(pos, fwd, w, h));
 	device->submit();
 	device->sync();
-	const bool ran = world_->context().render->frame().last_frame().stage_ok(kStageSsao);
+	// The horizon pass also runs for the bounce alone; AO "ran" only when it was asked for.
+	ve::BeautySettings beauty;
+	int tier;
+	world_->context().render->beauty_snapshot(&beauty, &tier);
+	const bool ran = beauty.ssao && world_->context().render->frame().last_frame().stage_ok(kStageSsgi);
 	d["ran"] = ran;
 	{
 		const PackedByteArray lit = device->texture_get_data(world_->context().render->passes().gbuffer->lit(), 0);
@@ -306,21 +309,22 @@ Dictionary VoxelDebugHooks::debug_ssao_probe(Vector3 pos, Vector3 fwd, int w, in
 			d["lit_luma"] = -1.0;
 		}
 	}
-	const RID output = world_->context().render->passes().ssao->result();
+	if (!ran) return d;
+	const RID output = world_->context().render->passes().ssgi->result();
 	if (!output.is_valid()) return d;
 	const PackedByteArray data = device->texture_get_data(output, 0);
 	// The AO target is half the G-buffer, so it is not w*h. Read back its own size and
 	// report it, rather than assuming the probe's requested dimensions.
-	const Vector2i ao_size = world_->context().render->passes().ssao->size();
+	const Vector2i ao_size = world_->context().render->passes().gbuffer->half_size();
 	const int pixels = ao_size.x * ao_size.y;
 	d["ao_width"] = ao_size.x;
 	d["ao_height"] = ao_size.y;
-	if (pixels <= 0 || data.size() < pixels) return d;
-	const uint8_t *values = reinterpret_cast<const uint8_t *>(data.ptr());
+	if (pixels <= 0 || data.size() < static_cast<int64_t>(pixels) * 8) return d;
+	const uint16_t *values = reinterpret_cast<const uint16_t *>(data.ptr());
 	float min_ao = 1.0f, max_ao = 0.0f;
 	double mean_ao = 0.0;
 	for (int i = 0; i < pixels; i++) {
-		const float ao = static_cast<float>(values[i]) / 255.0f;
+		const float ao = Math::half_to_float(values[i * 4 + 3]);
 		min_ao = std::min(min_ao, ao);
 		max_ao = std::max(max_ao, ao);
 		mean_ao += ao;

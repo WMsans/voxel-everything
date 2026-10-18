@@ -14,6 +14,7 @@ func make_world() -> VoxelWorld:
 	w.physics_enabled = false
 	add_child(w)
 	_worlds.append(w)
+	w.set_effect_enabled("ssr", true) # off by default since 2026-10-18; this suite tests it
 	assert_bool(w.hooks().debug_init_atlas()).is_true()
 	var quiet := 0
 	for i in range(400):

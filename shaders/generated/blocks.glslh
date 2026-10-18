@@ -6,10 +6,6 @@
 // layout(), set, binding and instance name around it; the C++ struct carries the
 // comments on what each field holds.
 
-#define SSAO_PUSH_FIELDS \
-	ivec4 dims; \
-	vec4 params;
-
 #define CONTACT_SHADOW_PUSH_FIELDS \
 	ivec4 dims; \
 	vec4 params;

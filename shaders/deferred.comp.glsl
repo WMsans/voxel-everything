@@ -147,10 +147,11 @@ void main() {
 	float shadow = GB_SUN_VIS(g0);
 	if ((pc.flags.x & BEAUTY_SUN_MAP) != 0u && far_field_owns(px, wpos, pc.cam.xyz))
 		shadow = min(shadow, sun_map_visibility(wpos, ndl, distance(wpos, pc.cam.xyz)));
-	// HBAO multiplies the SKY term only: sun lighting, spec and rim keep their own
-	// visibility terms. The pass's sky pixels are exactly 1.0, so horizons are untouched.
+	// AO (the horizon pass's alpha) multiplies the SKY term only: sun lighting, spec and rim
+	// keep their own visibility terms. The pass's sky pixels are exactly 1.0, so horizons are
+	// untouched.
 	float ao = 1.0;
-	if ((pc.flags.x & BEAUTY_SSAO) != 0u) ao = texture(ssao_tex, uv).r;
+	if ((pc.flags.x & BEAUTY_SSAO) != 0u) ao = texture(ssao_tex, uv).a;
 	// AO models occlusion of a DISTANT UNIFORM ambient, which is what the sky term is. SSGI
 	// is not that: it resolved its own visibility per tap (the sample has to face the
 	// receiver and lie inside the radius), so multiplying it by AO counts the same occlusion

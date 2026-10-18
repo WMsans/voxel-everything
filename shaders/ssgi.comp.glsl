@@ -3,6 +3,18 @@
 #include "generated/gbuffer.glslh"
 #include "generated/blocks.glslh"
 
+// Ambient occlusion AND the diffuse bounce from one horizon march: screen-space indirect
+// lighting with a visibility bitmask (Therrien, Levesque & Gilet 2023, arXiv 2301.11376),
+// the GTAO family. Each slice through the view ray splits the normal's hemisphere into 32
+// sectors; a depth sample occludes the sectors between its visible face and a point
+// kThickness behind it. Sectors a sample covers FIRST are the ones it lights the receiver
+// through, so the bounce reuses the AO's taps instead of gathering its own -- which is the
+// whole saving over the old HBAO + spiral-gather pair (11.9 ms -> one pass).
+//
+// rgb = bounce + emissive light, a = AO. The deferred pass multiplies only its sky term by a
+// and adds rgb unoccluded: the bitmask already resolved visibility per sample, so applying
+// AO to the bounce too would count the same occlusion twice.
+
 #define BEAUTY_CAMERA_SET 0
 #define BEAUTY_CAMERA_BINDING 5
 #include "common.glslh"
@@ -25,37 +37,29 @@ layout(set = 0, binding = 7) uniform sampler2D raw_tex;
 
 layout(push_constant, std430) uniform Push { SSGI_PUSH_FIELDS } pc;
 
-vec2 spiral_tap(int i, int n, float rot) {
-	float t = (float(i) + 0.5) / float(n);
-	float a = t * 6.28318531 * 3.0 + rot;
-	return vec2(cos(a), sin(a)) * sqrt(t);
+const float kPi = 3.14159265;
+// How far behind its visible face a depth sample is assumed to extend. Infinite thickness
+// (plain horizon AO) lets one grass blade or fence post shadow everything behind it.
+// ponytail: one constant for every material; per-material thickness if foliage over-darkens.
+const float kThickness = 1.0;
+
+// Bits [lo, hi) of the 32-sector mask, 0 <= lo, hi <= 32.
+uint sector_mask(uint lo, uint hi) {
+	if (hi <= lo) return 0u;
+	uint upper = hi >= 32u ? 0xFFFFFFFFu : (1u << hi) - 1u;
+	return upper & ~((1u << lo) - 1u);
 }
 
-// How far, in UV, a world-space step of `radius` metres reaches at p's depth.
-//
-// This replaces `radius * bcam.screen.z * 40.0 / max(distance(p, cam), 1.0)`, whose divisor
-// CLAMPED AT ONE. Inside a metre of the surface the clamp stopped tracking distance, the
-// taps kept widening, and nearly all of them then landed further than `radius` away in world
-// space and were rejected by the range test below -- so pressing the camera against a glowing
-// surface sampled almost nothing. Projecting a real world-space offset has no such floor:
-// it grows as the surface approaches and shrinks as it recedes, at every distance.
-//
-// The offset is taken perpendicular to the view ray so it measures the screen extent of a
-// step ACROSS the view rather than along it, which is the direction the spiral walks.
-float uv_radius_for(vec3 p, float radius) {
-	vec3 view = p - bcam.cam.xyz;
-	float len = length(view);
-	if (len < 1e-4) return 0.5;
-	view /= len;
-	vec3 up = abs(view.y) > 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
-	vec3 tangent = normalize(cross(view, up));
-	vec2 uv_c, uv_t;
-	float dc, dt;
-	if (!beauty_project(p, uv_c, dc) || !beauty_project(p + tangent * radius, uv_t, dt))
-		return 0.5;
-	// Half the screen is already a gather over everything visible; beyond that the spiral is
-	// just scattering taps into unrelated geometry that the range test will throw away.
-	return min(length(uv_t - uv_c), 0.5);
+// Cosine-weighted fraction of a slice's hemisphere the set sectors cover: sector i sits at
+// (i + 0.5) / 32 * pi - pi/2 from the normal, and the 32 weights sum to ~1.
+float sector_weight(uint bits) {
+	float w = 0.0;
+	while (bits != 0u) {
+		int i = findLSB(bits);
+		bits &= bits - 1u;
+		w += sin((float(i) + 0.5) * (kPi / 32.0));
+	}
+	return w * (kPi / 64.0);
 }
 
 bool previous_uv(vec3 p, out vec2 uv) {
@@ -67,104 +71,106 @@ bool previous_uv(vec3 p, out vec2 uv) {
 			all(lessThanEqual(uv, vec2(1.0)));
 }
 
-vec3 gather(ivec2 px, vec2 uv, vec3 p, vec3 n) {
-	// A fixed per-pixel rotation: it does not change from frame to frame, so the temporal
-	// blend never averages it. resolve() does, over exactly one 4x4 period.
-	float rot = bayer4(px) * 6.28318531;
-
-	// --- the diffuse bounce ------------------------------------------------------------
-	// Averaged over the taps that hit, which is what an ambient bounce is: a mean incoming
-	// radiance over the hemisphere, not a sum of light sources.
-	vec3 sum = vec3(0.0);
-	float weight = 0.0;
-	float bounce_uv_radius = uv_radius_for(p, pc.params.x);
-	for (int i = 0; i < pc.dims.z; i++) {
-		vec2 suv = clamp(uv + spiral_tap(i, pc.dims.z, rot) * bounce_uv_radius,
-				vec2(0.0), vec2(1.0));
-		float sdepth = texture(gb_depth, suv).r;
-		if (sdepth <= 0.0) continue;
-		vec3 sp = beauty_world_from_depth(suv, sdepth);
-		vec3 dir = sp - p;
-		float dist = length(dir);
-		if (dist < 1e-3 || dist > pc.params.x) continue;
-		dir /= dist;
-		float cosine = dot(n, dir);
-		if (cosine <= 0.0) continue;
-		vec3 sn = GB_NORMAL(texture(gb_surface, suv));
-		if (dot(sn, -dir) <= 0.0) continue;
-		vec2 history_uv;
-		if (!previous_uv(sp, history_uv)) continue;
-		float falloff = 1.0 / (1.0 + dist * dist);
-		sum += texture(history, history_uv).rgb * cosine * falloff;
-		weight += 1.0;
-	}
-	vec3 gi = weight > 0.0 ? sum / weight * pc.params.z : vec3(0.0);
-
-	// --- emissive light ----------------------------------------------------------------
-	// Its own ring, at its own (much larger) radius, and read from the MATERIAL TABLE rather
-	// than from the lit history. Two reasons the history alone was never going to carry this:
-	//
-	//   * it is a temporal accumulator, so a source that just came into view arrives ~10
-	//     frames late and pre-dimmed by whatever the blend had already settled on;
-	//   * the bounce term above AVERAGES over its taps, so one very bright tap among eight
-	//     reads no brighter than one dull one. That is right for ambient and wrong for a
-	//     light: filling more of the hemisphere with lava must deliver more light.
-	//
-	// So this accumulates an INTEGRAL over the whole ring -- divided by the tap count, not by
-	// the count that hit -- and every tap that misses is honestly zero light from that
-	// direction.
-	//
-	// The glow mask (the albedo array's alpha) is deliberately not sampled here: it would
-	// cost a triplanar fetch per tap, and reading the table's full strength over the whole
-	// footprint overestimates in the one direction this feature wants.
-	vec3 emissive = vec3(0.0);
+// Light arriving from one occluder sample: last frame's lit colour where it was, plus the
+// material table's glow (immediate, so a source that just came into view is not ~10 frames
+// late). The glow mask texture is deliberately not read: a triplanar fetch per tap.
+vec3 sample_light(vec2 suv, vec3 sp) {
+	vec3 l = vec3(0.0);
+	vec2 huv;
+	if (previous_uv(sp, huv)) l = texture(history, huv).rgb * pc.params.z;
 	if (pc.emissive.y > 0.0) {
-		float em_uv_radius = uv_radius_for(p, pc.emissive.x);
-		for (int i = 0; i < pc.dims.z; i++) {
-			vec2 suv = clamp(uv + spiral_tap(i, pc.dims.z, rot) * em_uv_radius,
-					vec2(0.0), vec2(1.0));
-			float sdepth = texture(gb_depth, suv).r;
-			if (sdepth <= 0.0) continue;
-			vec4 sg = texture(gb_surface, suv);
-			if (!GB_IS_SURFACE(sg)) continue;
-			uint smat = GB_MATERIAL_ID(sg);
-			float sglow = mat_glow(smat);
-			if (sglow <= 0.0) continue;
-			vec3 sp = beauty_world_from_depth(suv, sdepth);
-			vec3 dir = sp - p;
-			float dist = length(dir);
-			if (dist < 1e-3 || dist > pc.emissive.x) continue;
-			dir /= dist;
-			float cosine = dot(n, dir);
-			if (cosine <= 0.0) continue;
-			// The emitter has to face us back, exactly as the bounce requires. Without it a
-			// crack lights the rock it is carved into from behind.
-			if (dot(GB_NORMAL(sg), -dir) <= 0.0) continue;
-			// 1/(1+d) rather than the bounce's 1/(1+d*d): a crack is a LINE of emitters, not
-			// a point, and a line source falls off with the first power of distance. Inverse
-			// square here made the spill die within a couple of metres, which is the whole
-			// complaint this pass exists to answer.
-			emissive += mat_glow_rgb(smat) * sglow * cosine / (1.0 + dist);
-		}
-		emissive *= pc.emissive.y / float(pc.dims.z);
+		vec4 sg = texture(gb_surface, suv);
+		uint smat = GB_MATERIAL_ID(sg);
+		float sglow = GB_IS_SURFACE(sg) ? mat_glow(smat) : 0.0;
+		if (sglow > 0.0) l += mat_glow_rgb(smat) * sglow * pc.emissive.y;
 	}
-	return gi + emissive;
+	return l;
 }
 
-// The gather's bayer4 rotation is a stochastic estimate: each pixel sees the ring from one of
-// sixteen angles, and with a handful of taps over a 16 m emissive ring which angle it drew is
-// most of its answer. Sampled raw, that reaches the screen as a lattice of dots across every
-// lit surface -- the reported bug. The box below spans one full period (offsets -1..2, as in
-// contact_shadow.comp.glsl), so every rotation is counted once and the average is the
-// integral the rotations were sampling.
+vec4 gather(ivec2 px, vec3 p, vec3 n) {
+	// The bounce needs last frame's lit colour; until it exists the pass is AO only.
+	bool want_gi = (pc.stage.z & 2) != 0 && pc.dims.w != 0;
+	int slices = max(pc.stage.y, 1);
+	int steps = max(pc.dims.z, 1);
+	float radius = pc.params.x;
+	vec2 inv_target = 1.0 / vec2(pc.dims.xy);
+
+	// Slices contain the view ray, so their directions are perpendicular to it.
+	vec3 v = normalize(bcam.cam.xyz - p);
+	vec3 up = abs(v.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+	vec3 t1 = normalize(cross(up, v));
+	vec3 t2 = cross(v, t1);
+	vec3 to_p = normalize(p - bcam.cam.xyz);
+
+	// A fixed per-pixel rotation and step offset: resolve() averages one full 4x4 bayer
+	// period, so 2 slices per pixel read as 32 directions without any temporal jitter.
+	float rot = bayer4(px);
+	vec2 pu;
+	float pd;
+	beauty_project(p, pu, pd);
+
+	float occluded = 0.0;
+	vec3 light = vec3(0.0);
+	for (int s = 0; s < slices; s++) {
+		float phi = (float(s) + rot) * kPi / float(slices);
+		vec3 dir = t1 * cos(phi) + t2 * sin(phi);
+		vec2 qu;
+		float qd;
+		if (!beauty_project(p + dir * radius, qu, qd)) continue;
+		vec2 step_px = (qu - pu) * vec2(pc.dims.xy);
+		// The radius projects under half a texel: every tap would land on this pixel.
+		if (dot(step_px, step_px) < 0.25) continue;
+
+		// The normal's angle inside the slice plane, measured from v towards dir.
+		vec3 axis = cross(dir, v);
+		vec3 np = n - axis * dot(n, axis);
+		float n_angle = atan(dot(np, dir), dot(np, v));
+
+		uint bits = 0u;
+		for (int side = -1; side <= 1; side += 2) {
+			for (int i = 0; i < steps; i++) {
+				// Quadratic spacing: dense near the pixel, where contact occlusion lives.
+				float f = (float(i) + 0.25 + 0.5 * rot) / float(steps);
+				vec2 suv = (vec2(px) + 0.5 + float(side) * step_px * (f * f)) * inv_target;
+				if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0)))) break;
+				float sdepth = texture(gb_depth, suv).r;
+				if (sdepth <= 0.0) continue;
+				vec3 sp = beauty_world_from_depth(suv, sdepth);
+				vec3 front = sp - p;
+				if (dot(front, front) > radius * radius) continue;
+				vec3 back = front + normalize(sp - bcam.cam.xyz) * kThickness;
+				vec2 a = vec2(atan(dot(front, dir), dot(front, v)),
+						atan(dot(back, dir), dot(back, v)));
+				vec2 t = clamp((a - n_angle) / kPi + 0.5, 0.0, 1.0);
+				uint mask = sector_mask(uint(round(min(t.x, t.y) * 32.0)),
+						uint(round(max(t.x, t.y) * 32.0)));
+				uint fresh = mask & ~bits;
+				if (fresh == 0u) continue;
+				bits |= mask;
+				if (want_gi) light += sample_light(suv, sp) * sector_weight(fresh);
+			}
+		}
+		occluded += sector_weight(bits);
+	}
+	float ao = (pc.stage.z & 1) != 0
+			? clamp(1.0 - occluded / float(slices) * pc.params.w, 0.0, 1.0)
+			: 1.0;
+	return vec4(light / float(slices), ao);
+}
+
+// The gather's bayer4 rotation is a stochastic estimate: each pixel sees its slices from one
+// of sixteen angles, and with two slices which angle it drew is most of its answer. Sampled
+// raw, that reaches the screen as a lattice of dots across every lit surface. The box below
+// spans one full period (offsets -1..2, as in contact_shadow.comp.glsl), so every rotation is
+// counted once and the average is the integral the rotations were sampling.
 //
-// Unlike the contact-shadow mask this is not a scalar visibility on one plane: GI changes
+// Unlike the contact-shadow mask this is not a scalar visibility on one plane: GI and AO change
 // sharply across a voxel edge, so a neighbour only counts while it lies on the same surface --
 // facing the same way, and near this pixel's tangent plane. The centre always does, so a
 // pixel with no matching neighbour keeps its own value rather than going dark.
-vec3 resolve(ivec2 px, vec3 p, vec3 n) {
+vec4 resolve(ivec2 px, vec3 p, vec3 n) {
 	float tolerance = max(0.05, 0.02 * distance(p, bcam.cam.xyz));
-	vec3 sum = vec3(0.0);
+	vec4 sum = vec4(0.0);
 	float weight = 0.0;
 	for (int y = -1; y <= 2; y++)
 		for (int x = -1; x <= 2; x++) {
@@ -177,10 +183,10 @@ vec3 resolve(ivec2 px, vec3 p, vec3 n) {
 			if (facing < 0.9) continue;
 			float plane = abs(dot(n, beauty_world_from_depth(nuv, ndepth) - p));
 			float w = facing * clamp(1.0 - plane / tolerance, 0.0, 1.0);
-			sum += texelFetch(raw_tex, npx, 0).rgb * w;
+			sum += texelFetch(raw_tex, npx, 0) * w;
 			weight += w;
 		}
-	return weight > 0.0 ? sum / weight : texelFetch(raw_tex, px, 0).rgb;
+	return weight > 0.0 ? sum / weight : texelFetch(raw_tex, px, 0);
 }
 
 void main() {
@@ -189,27 +195,28 @@ void main() {
 	vec2 uv = (vec2(px) + 0.5) / vec2(pc.dims.xy);
 	bool gathering = pc.stage.x == 0;
 
+	// Sky: no bounce, and full ambient so the horizon gradient is never darkened.
 	float depth = texture(gb_depth, uv).r;
 	vec4 g1 = texture(gb_surface, uv);
-	if (pc.dims.w == 0 || depth <= 0.0 || !GB_IS_SURFACE(g1)) {
-		if (gathering) imageStore(out_raw, px, vec4(0.0));
-		else imageStore(out_ssgi, px, vec4(0.0));
+	if (depth <= 0.0 || !GB_IS_SURFACE(g1)) {
+		if (gathering) imageStore(out_raw, px, vec4(0.0, 0.0, 0.0, 1.0));
+		else imageStore(out_ssgi, px, vec4(0.0, 0.0, 0.0, 1.0));
 		return;
 	}
 	vec3 p = beauty_world_from_depth(uv, depth);
 	vec3 n = GB_NORMAL(g1);
 
 	if (gathering) {
-		imageStore(out_raw, px, vec4(gather(px, uv, p, n), 1.0));
+		imageStore(out_raw, px, gather(px, p, n));
 		return;
 	}
-	vec3 gi = resolve(px, p, n);
+	vec4 gi = resolve(px, p, n);
 
+	// Without a lit history the previous result is the cleared target (AO 0): never blend it.
 	vec2 puv;
-	bool reproj = previous_uv(p, puv);
-	if (reproj) {
-		vec3 lo = gi;
-		vec3 hi = gi;
+	if (pc.dims.w != 0 && previous_uv(p, puv)) {
+		vec4 lo = gi;
+		vec4 hi = gi;
 		for (int y = -1; y <= 1; y++)
 			for (int x = -1; x <= 1; x++) {
 				ivec2 npx = clamp(px + ivec2(x, y), ivec2(0), pc.dims.xy - 1);
@@ -219,12 +226,12 @@ void main() {
 				vec3 np = beauty_world_from_depth(nuv, ndepth);
 				vec2 npuv;
 				if (!previous_uv(np, npuv)) continue;
-				vec3 s = texture(prev_ssgi, npuv).rgb;
+				vec4 s = texture(prev_ssgi, npuv);
 				lo = min(lo, s);
 				hi = max(hi, s);
 			}
-		vec3 prev = clamp(texture(prev_ssgi, puv).rgb, lo, hi);
+		vec4 prev = clamp(texture(prev_ssgi, puv), lo, hi);
 		gi = mix(gi, prev, pc.params.y);
 	}
-	imageStore(out_ssgi, px, vec4(gi, 1.0));
+	imageStore(out_ssgi, px, gi);
 }

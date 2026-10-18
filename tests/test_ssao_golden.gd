@@ -81,10 +81,15 @@ func _probe(w: VoxelWorld, key: String) -> Dictionary:
 # saw shade away, and lit_luma rises back: 0.344768 -> 0.354178 (+0.0094, over TOL_LUMA).
 # down_close and oblique stayed inside tolerance; min_ao/max_ao unchanged; ran stays true.
 # Same policy: intentional change, re-recorded in the commit that causes it.
+# min_ao re-recorded 2026-10-18: HBAO and the spiral SSGI became one visibility-bitmask
+# horizon pass (ssgi.comp.glsl), whose AO goes through the 4x4 bayer resolve -- so the single
+# darkest texel is an average and no longer exactly 0. lit_luma was NOT re-recorded: the
+# oblique/horizon values were already off golden on clean main (0.307486 / 0.345454) and this
+# change moves them by under 0.001 (0.306959 / 0.345498); down_close moves 0.252240 -> 0.249127.
 const GOLDEN := {
-	"down_close": {"min_ao": 0.000000, "max_ao": 1.000000, "lit_luma": 0.252934},
+	"down_close": {"min_ao": 0.0066, "max_ao": 1.000000, "lit_luma": 0.252934},
 	"oblique": {"min_ao": 0.000000, "max_ao": 1.000000, "lit_luma": 0.315139},
-	"horizon": {"min_ao": 0.000000, "max_ao": 1.000000, "lit_luma": 0.354178},
+	"horizon": {"min_ao": 0.0182, "max_ao": 1.000000, "lit_luma": 0.354178},
 }
 const TOL_AO := 0.002
 const TOL_LUMA := 0.004

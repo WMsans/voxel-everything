@@ -18,7 +18,6 @@
 #include "render/sun_ubo.h"
 #include "render/contact_shadow_pass.h"
 #include "render/ssgi_pass.h"
-#include "render/ssao_pass.h"
 #include "render/ssr_pass.h"
 #include "render/outline_pass.h"
 #include "render/grass_scatter_pass.h"
@@ -335,8 +334,6 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 	}
 	passes_.ssgi = new SsgiPass();
 	passes_.ssgi->initialize(device);
-	passes_.ssao = new SsaoPass();
-	passes_.ssao->initialize(device);
 	passes_.ssr = new SsrPass();
 	passes_.ssr->initialize(device);
 	passes_.outline = new OutlinePass();
@@ -448,7 +445,6 @@ void RenderOrchestrator::teardown_render_passes() {
 	if (passes_.conifer_raster) { delete passes_.conifer_raster; passes_.conifer_raster = nullptr; }
 	if (passes_.conifer_scatter) { delete passes_.conifer_scatter; passes_.conifer_scatter = nullptr; }
 	if (passes_.ssgi) { delete passes_.ssgi; passes_.ssgi = nullptr; }
-	if (passes_.ssao) { delete passes_.ssao; passes_.ssao = nullptr; }
 	if (passes_.transparency_composite) { delete passes_.transparency_composite; passes_.transparency_composite = nullptr; }
 	if (passes_.shell_raster) { delete passes_.shell_raster; passes_.shell_raster = nullptr; }
 	if (passes_.lod_raster) { delete passes_.lod_raster; passes_.lod_raster = nullptr; }

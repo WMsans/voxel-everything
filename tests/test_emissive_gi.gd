@@ -102,7 +102,8 @@ func test_disabling_ssgi_removes_the_emissive_transport() -> void:
 	paint_lava(w)
 	w.set_effect_enabled("ssgi", false)
 	var d: Dictionary = w.hooks().debug_ssgi_probe(EYE, FWD, 128, 128, 24)
-	assert_bool(d["ran"]).is_false()
+	# The pass still runs for AO (alpha); the light it carries must be gone.
+	assert_float(d["max_channel"]).is_equal(0.0)
 
 # The strength knob has to reach the shader. It lived as a literal in SsgiPass::render until
 # this work, which is exactly the state ve::BeautySettings says no pass may be in.

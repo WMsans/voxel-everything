@@ -15,7 +15,6 @@ const SettingRow<BeautySettings> kBeautyRows[] = {
 	bool_row("ssao", "SSAO", &BeautySettings::ssao),
 	bool_row("cost_view", "Cost view", &BeautySettings::cost_view,
 			"Replaces albedo with raymarch cost. A debug view; no tier sets it."),
-	int_row("ssgi_taps", "SSGI taps", &BeautySettings::ssgi_taps, 0, 16, 0, 16),
 	int_row("ssr_steps", "SSR steps", &BeautySettings::ssr_steps, 0, 64, 0, 64),
 	int_row("contact_steps", "Contact shadow steps", &BeautySettings::contact_steps, 0, 32, 0, 32),
 	float_row("contact_reach_m", "Contact shadow reach (m)", &BeautySettings::contact_reach_m, 0.05f,
@@ -26,24 +25,18 @@ const SettingRow<BeautySettings> kBeautyRows[] = {
 	// bridge terrain gaps.
 	float_row("contact_bias_m", "Contact shadow bias (m)", &BeautySettings::contact_bias_m, 0.0f,
 			0.5f, 0.0f, 0.2f, 0.005f),
-	int_row("ssao_steps", "SSAO steps", &BeautySettings::ssao_steps, 0, 16, 0, 16),
-	int_row("ssao_directions", "SSAO directions", &BeautySettings::ssao_directions, 0, 8, 0, 8),
+	int_row("ssao_steps", "AO steps per side", &BeautySettings::ssao_steps, 0, 16, 0, 16),
+	int_row("ssao_directions", "AO slices", &BeautySettings::ssao_directions, 0, 8, 0, 8),
 	float_row("ssao_radius", "SSAO radius (m)", &BeautySettings::ssao_radius, 0.25f, 32.0f, 0.25f,
 			16.0f, 0.25f),
 	float_row("ssao_strength", "SSAO strength", &BeautySettings::ssao_strength, 0.0f, 8.0f, 0.0f,
 			4.0f, 0.05f),
-	// A radius floor of 0.25 m rather than 0: a zero-radius gather still dispatches, still reads
-	// the G-buffer, and returns black -- the expensive way to spell "off". `ssgi` is the switch.
-	float_row("ssgi_radius", "GI reach (m)", &BeautySettings::ssgi_radius, 0.25f, 64.0f, 0.25f,
-			64.0f, 0.25f),
 	// Strictly below 1: at 1.0 the accumulator never takes the current frame and the image
 	// freezes on whatever it happened to hold.
 	float_row("ssgi_temporal", "GI history weight", &BeautySettings::ssgi_temporal, 0.0f, 0.99f,
 			0.0f, 0.99f, 0.01f),
 	float_row("ssgi_strength", "GI bounce", &BeautySettings::ssgi_strength, 0.0f, 8.0f, 0.0f, 8.0f,
 			0.05f),
-	float_row("emissive_gi_radius", "Emissive reach (m)", &BeautySettings::emissive_gi_radius, 0.25f,
-			512.0f, 0.25f, 128.0f, 0.25f),
 	float_row("emissive_gi_strength", "Emissive light", &BeautySettings::emissive_gi_strength, 0.0f,
 			64.0f, 0.0f, 64.0f, 0.5f),
 	float_row("outline_depth_threshold", "Outline depth threshold",
@@ -65,7 +58,6 @@ std::span<const SettingRow<BeautySettings>> beauty_rows() {
 void normalize_beauty(BeautySettings *s) {
 	if (!s) return;
 	// Zero work is off. A dispatch that produces nothing still costs a full-screen pass.
-	if (s->ssgi_taps == 0) s->ssgi = false;
 	if (s->ssr_steps == 0) s->ssr = false;
 	if (s->contact_steps == 0) s->contact_shadows = false;
 	if (s->ssao_steps == 0 || s->ssao_directions == 0) s->ssao = false;
@@ -83,7 +75,6 @@ BeautySettings settings_for_tier(QualityTier t) {
 			s.ssgi = s.ssr = s.contact_shadows = s.outlines = false;
 			s.sun_shadow_map = s.glossy_sdf_rays = s.raymarched_sun_shadow = false;
 			s.ssao = false;
-			s.ssgi_taps = 0;
 			s.ssr_steps = 0;
 			s.contact_steps = 0;
 			s.ssao_steps = 0;
@@ -95,7 +86,6 @@ BeautySettings settings_for_tier(QualityTier t) {
 			s.ssgi = s.ssr = s.contact_shadows = false;
 			s.glossy_sdf_rays = false;
 			s.ssao = false;
-			s.ssgi_taps = 0;
 			s.ssr_steps = 0;
 			s.contact_steps = 0;
 			s.ssao_steps = 0;
@@ -103,14 +93,10 @@ BeautySettings settings_for_tier(QualityTier t) {
 			break;
 		case QualityTier::kMedium:
 			s.glossy_sdf_rays = false;
-			// Half the taps have to cover the same rings, so pull the emissive ring in
-			// rather than let it get half as many samples over the same area.
-			s.emissive_gi_radius = 24.0f;
-			s.ssgi_taps = 4;
 			s.ssr_steps = 12;
 			s.contact_steps = 8;
 			s.ssao_steps = 4;
-			s.ssao_directions = 4;
+			s.ssao_directions = 1;
 			break;
 		case QualityTier::kHigh:
 		default:
@@ -122,7 +108,7 @@ BeautySettings settings_for_tier(QualityTier t) {
 
 uint32_t pack_beauty_flags(const BeautySettings &s) {
 	uint32_t f = 0;
-	if (s.ssgi && s.ssgi_taps > 0) f |= kFlagSsgi;
+	if (s.ssgi) f |= kFlagSsgi;
 	if (s.ssr && s.ssr_steps > 0) f |= kFlagSsr;
 	if (s.contact_shadows && s.contact_steps > 0) f |= kFlagContact;
 	if (s.outlines) f |= kFlagOutlines;

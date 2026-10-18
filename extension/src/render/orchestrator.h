@@ -88,7 +88,6 @@ class FieldContextSet;
 class SectorContext;
 class ContactShadowPass;
 class SsgiPass;
-class SsaoPass;
 class SsrPass;
 class OutlinePass;
 class GrassScatterPass;
@@ -127,7 +126,6 @@ struct RenderPasses {
 	CameraUbo *beauty_camera = nullptr;
 	ContactShadowPass *contact_shadow = nullptr;
 	SsgiPass *ssgi = nullptr;
-	SsaoPass *ssao = nullptr;
 	SsrPass *ssr = nullptr;
 	OutlinePass *outline = nullptr;
 	GrassScatterPass *grass_scatter = nullptr;

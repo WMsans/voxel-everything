@@ -5,6 +5,7 @@ extends GdUnitTestSuite
 # "unattributed" subtracted SSAO twice. Timestamp VALUES are invalid on this machine, but the
 # capture's marker NAMES arrive in command order (verified on Metal, 2026-09-14), so this pins
 # the order: ssao's end marker precedes deferred's begin marker within one frame serial.
+# Since 2026-10-18 AO comes out of the "ssgi" horizon pass, so that is the scope pinned.
 
 const W := 128
 const H := 72
@@ -25,7 +26,7 @@ func marker_index(names: PackedStringArray, serial: String, pass_name: String, s
 			return i
 	return -1
 
-func test_ssao_scope_closes_before_deferred_opens(timeout := 120000) -> void:
+func test_horizon_scope_closes_before_deferred_opens(timeout := 120000) -> void:
 	var world: VoxelWorld = ClassDB.instantiate("VoxelWorld")
 	world.use_local_device = false
 	world.physics_enabled = false
@@ -55,7 +56,7 @@ func test_ssao_scope_closes_before_deferred_opens(timeout := 120000) -> void:
 	cam.look_at(Vector3(30.2, 69.0, 30.2), Vector3.UP)
 
 	var rd := RenderingServer.get_rendering_device()
-	var ssao_end := -1
+	var horizon_end := -1
 	var deferred_begin := -1
 	var names := PackedStringArray()
 	for frame in range(600):
@@ -70,14 +71,14 @@ func test_ssao_scope_closes_before_deferred_opens(timeout := 120000) -> void:
 				serial = f[1]
 		if serial.is_empty():
 			continue
-		ssao_end = marker_index(names, serial, "ssao", "e")
+		horizon_end = marker_index(names, serial, "ssgi", "e")
 		deferred_begin = marker_index(names, serial, "deferred", "b")
-		if ssao_end >= 0 and deferred_begin >= 0:
+		if horizon_end >= 0 and deferred_begin >= 0:
 			break
 	assert_int(deferred_begin).override_failure_message(
 		"no captured frame held both scopes: %s" % names).is_greater(-1)
-	assert_int(ssao_end).override_failure_message(
+	assert_int(horizon_end).override_failure_message(
 		"no captured frame held both scopes: %s" % names).is_greater(-1)
-	assert_int(ssao_end).override_failure_message(
-		"ssao closes at %d, after deferred opened at %d: %s" % [ssao_end, deferred_begin, names]
+	assert_int(horizon_end).override_failure_message(
+		"ssgi closes at %d, after deferred opened at %d: %s" % [horizon_end, deferred_begin, names]
 		).is_less(deferred_begin)

@@ -6,8 +6,8 @@ extends GdUnitTestSuite
 const BEAUTY_SWITCHES := ["ssgi", "ssr", "contact_shadows", "outlines", "sun_shadow_map",
 	"glossy_sdf_rays", "raymarched_sun_shadow", "ssao", "cost_view"]
 # [name, an in-range value that differs from the High default]
-const BEAUTY_MAGNITUDES := [["ssgi_radius", 12.0], ["ssgi_temporal", 0.5], ["ssgi_strength", 2.0],
-	["ssao_radius", 8.0], ["ssao_strength", 1.0], ["emissive_gi_radius", 32.0], ["emissive_gi_strength", 3.0],
+const BEAUTY_MAGNITUDES := [["ssgi_temporal", 0.5], ["ssgi_strength", 2.0],
+	["ssao_radius", 8.0], ["ssao_strength", 1.0], ["emissive_gi_strength", 3.0],
 	["outline_depth_threshold", 0.1], ["outline_normal_threshold", 0.5], ["outline_darken", 0.5],
 	["contact_reach_m", 1.0], ["contact_strength", 0.5], ["contact_bias_m", 0.1]]
 const GRASS := [["enabled", 0.0], ["reach_m", 25.0], ["vertical_reach_m", 5.0],
@@ -65,7 +65,7 @@ func test_every_grass_knob_round_trips_by_name() -> void:
 			.is_equal_approx(entry[1], 0.0001)
 
 # Settings-store plan Task 8: the counts became settable by name.
-const BEAUTY_COUNTS := [["ssgi_taps", 4], ["ssr_steps", 12], ["contact_steps", 8],
+const BEAUTY_COUNTS := [["ssr_steps", 12], ["contact_steps", 8],
 	["ssao_steps", 4], ["ssao_directions", 4]]
 
 func test_every_beauty_count_is_settable_by_name() -> void:

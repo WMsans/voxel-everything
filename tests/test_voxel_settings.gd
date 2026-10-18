@@ -62,12 +62,12 @@ func test_render_beauty_grass_and_leaves_dials_set_before_ready_reach_world() ->
 	settings.config_path = CONFIG_PATH
 	settings.manage_window = false
 	assert_bool(settings.set_setting("render", "near_field_scale", 0.8)).is_true()
-	assert_bool(settings.set_setting("beauty", "ssgi_taps", 4)).is_true()
+	assert_bool(settings.set_setting("beauty", "ssao_steps", 4)).is_true()
 	assert_bool(settings.set_setting("grass", "reach_m", 30.0)).is_true()
 	assert_bool(settings.set_setting("leaves", "reach_m", 180.0)).is_true()
 	root.add_child(settings)
 	assert_float(world.near_field_scale).is_equal_approx(0.8, 0.001)
-	assert_float(world.get_effect_value("ssgi_taps")).is_equal_approx(4.0, 0.001)
+	assert_float(world.get_effect_value("ssao_steps")).is_equal_approx(4.0, 0.001)
 	assert_float(world.get_grass_value("reach_m")).is_equal_approx(30.0, 0.001)
 	assert_float(world.get_leaf_value("reach_m")).is_equal_approx(180.0, 0.001)
 
@@ -75,9 +75,9 @@ func test_stand_in_tier_rebases_unoverridden_beauty_and_keeps_override() -> void
 	var settings: VoxelSettings = ClassDB.instantiate("VoxelSettings")
 	_roots.append(settings)
 	settings.set_setting("beauty", "ssgi_strength", 2.0)
-	assert_int(int(settings.get_setting("beauty", "ssgi_taps"))).is_equal(8)
+	assert_int(int(settings.get_setting("beauty", "ssao_steps"))).is_equal(6)
 	assert_bool(settings.set_setting("render", "quality_tier", 1)).is_true()
-	assert_int(int(settings.get_setting("beauty", "ssgi_taps"))).is_equal(0)
+	assert_int(int(settings.get_setting("beauty", "ssao_steps"))).is_equal(0)
 	assert_float(float(settings.get_setting("beauty", "ssgi_strength"))).is_equal_approx(2.0, 0.001)
 
 func test_groups_are_listed_in_panel_order() -> void:
@@ -99,7 +99,7 @@ func test_describe_lists_every_row_with_its_value() -> void:
 	var kinds := {}
 	for row in settings.describe("beauty"):
 		kinds[row["name"]] = row["kind"]
-	assert_str(kinds["ssgi_taps"]).is_equal("int")
+	assert_str(kinds["ssao_steps"]).is_equal("int")
 	assert_str(kinds["ambient"]).is_equal("color")
 	var upscaler: Dictionary = settings.describe("display").filter(func(r): return r["name"] == "upscaler")[0]
 	assert_int(upscaler["options"].size()).is_equal(5)
@@ -110,8 +110,8 @@ func test_render_beauty_grass_and_leaves_dials_reach_the_world() -> void:
 	var settings: VoxelSettings = parts[2]
 	assert_bool(settings.set_setting("render", "near_field_scale", 0.8)).is_true()
 	assert_float(world.near_field_scale).is_equal_approx(0.8, 0.001)
-	assert_bool(settings.set_setting("beauty", "ssgi_taps", 4)).is_true()
-	assert_float(world.get_effect_value("ssgi_taps")).is_equal_approx(4.0, 0.001)
+	assert_bool(settings.set_setting("beauty", "ssao_steps", 4)).is_true()
+	assert_float(world.get_effect_value("ssao_steps")).is_equal_approx(4.0, 0.001)
 	assert_bool(settings.set_setting("grass", "reach_m", 30.0)).is_true()
 	assert_float(world.get_grass_value("reach_m")).is_equal_approx(30.0, 0.001)
 	assert_bool(settings.set_setting("leaves", "reach_m", 180.0)).is_true()
@@ -191,12 +191,12 @@ func test_reset_restores_what_the_scene_shipped() -> void:
 	settings.set_setting("render", "near_field_scale", 1.0)
 	settings.set_setting("render", "near_field", false)
 	settings.set_setting("display", "render_scale", 1.0)
-	settings.set_setting("beauty", "ssr", false)
+	settings.set_setting("beauty", "ssr", true)
 	settings.reset_to_shipped()
 	assert_float(world.near_field_scale).is_equal_approx(0.4, 0.001)
 	assert_bool(world.get_effect_enabled("near_field")).is_true()
 	assert_float(vp.scaling_3d_scale).is_equal_approx(0.65, 0.001)
-	assert_bool(world.get_effect_enabled("ssr")).is_true()
+	assert_bool(world.get_effect_enabled("ssr")).is_false()
 	assert_dict(settings.get_overrides("beauty")).is_empty()
 
 func test_clearing_beauty_overrides_returns_to_the_tier() -> void:
@@ -207,7 +207,7 @@ func test_clearing_beauty_overrides_returns_to_the_tier() -> void:
 	settings.set_setting("beauty", "ssgi_strength", 2.0)
 	settings.clear_overrides("beauty")
 	assert_float(world.get_effect_value("ssgi_strength")).is_equal_approx(1.0, 0.001)
-	assert_float(world.get_effect_value("ssgi_taps")).is_equal_approx(0.0, 0.001)
+	assert_float(world.get_effect_value("ssao_steps")).is_equal_approx(0.0, 0.001)
 
 # Cel-shaded objects read ve_ambient; VoxelWorld publishes it from the beauty snapshot each frame.
 func test_an_ambient_change_reaches_the_object_global() -> void:
@@ -281,5 +281,5 @@ func test_a_packed_scene_stores_only_real_overrides() -> void:
 		stored.append(String(state.get_node_property_name(1, i)))
 	holder.free()
 	assert_array(stored).contains(["beauty/ssgi_strength"])
-	assert_array(stored).not_contains(["beauty/ssgi_taps", "render/quality_tier", "grass/reach_m",
+	assert_array(stored).not_contains(["beauty/ssao_steps", "render/quality_tier", "grass/reach_m",
 		"display/render_scale"])

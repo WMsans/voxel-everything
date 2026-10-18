@@ -59,21 +59,22 @@ func test_the_accumulation_converges_rather_than_climbing() -> void:
 	# the light. Allow a wide band; the point is that it is bounded, not that it is equal.
 	assert_float(float(b["mean_luma"])).is_less(float(a["mean_luma"]) * 2.0 + 0.01)
 
+# The horizon pass also carries AO, so it only stops dispatching once both are off.
 func test_turning_ssgi_off_produces_nothing_and_costs_no_dispatch() -> void:
 	var w := make_world()
 	w.set_effect_enabled("ssgi", false)
+	w.set_effect_enabled("ssao", false)
 	var d: Dictionary = w.hooks().debug_ssgi_probe(Vector3(30.0, 70.0, 30.0), Vector3(0.2, -1.0, 0.2).normalized(),
 		128, 128, 8)
 	assert_bool(d["ran"]).is_false()
 
 # The probe renders frame 1 at the previous camera and frame 2 at the current one, so
 # frame 2 gathers the history through the view-projection the frame recorded at the end of
-# frame 1. That gather reproduces the hand-fed reference (2.29e-4, 2026-09-14) to 2%, which
-# is what ties it to the PREVIOUS mapping: a dead history would read ~0, gathering through
-# the current matrix would read current_mapping_luma (~3.09e-4), and an ignored camera move
-# would read the same-camera value (~1.05e-4). Delta isolation is not claimed: bounce growth
-# and the running beauty_frame advance jointly between the two reads, so same-camera drift
-# (9.49e-5) exceeds the moved delta (8.5e-5) at these levels (2026-09-14 analysis).
+# frame 1. That gather reads 2.102e-3 (re-measured 2026-10-18 for the visibility-bitmask
+# horizon pass, identical over three fresh worlds), which is what ties it to the PREVIOUS
+# mapping: a dead history would read ~0 and gathering through the current matrix reads
+# current_mapping_luma (4.928e-3). The 2026-09-14 levels (2.29e-4 / 3.09e-4) belonged to the
+# old spiral gather, whose 1/(1+d^2) falloff carried ~10x less bounce.
 func test_temporal_history_uses_previous_camera_mapping() -> void:
 	var w := make_world()
 	# Grass off, so the three reference levels above stay the ones that were hand-fed on
@@ -88,7 +89,7 @@ func test_temporal_history_uses_previous_camera_mapping() -> void:
 	assert_bool(d["non_identity"]).is_true()
 	assert_float(float(d["mapping_luma"])).override_failure_message(
 		"frame-2 gather did not come through the recorded previous-camera mapping").is_equal_approx(
-		0.000229, 0.00004)
+		0.002102, 0.0001)
 
 # ...and the same must hold after the G-buffer is thrown away and rebuilt. A runtime render
 # scale change reconfigures the viewport, the engine drops the voxel_gbuf context, and

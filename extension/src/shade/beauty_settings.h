@@ -11,7 +11,8 @@ enum class QualityTier { kOff = 0, kLow = 1, kMedium = 2, kHigh = 3 };
 // set. No render pass reads a knob that is not here, and no knob is here that no pass reads.
 struct BeautySettings {
 	bool ssgi = true;
-	bool ssr = true;
+	// Off by default: 0.9 ms of the steady leg's 60 fps budget (2026-10-18).
+	bool ssr = false;
 	bool contact_shadows = false;
 	bool outlines = true;
 	bool sun_shadow_map = true;
@@ -20,7 +21,6 @@ struct BeautySettings {
 	bool cost_view = false;
 	bool ssao = true;
 
-	int ssgi_taps = 8;      // [0, 16]
 	int ssr_steps = 24;     // [0, 64]
 	int contact_steps = 12; // [0, 32]
 
@@ -30,26 +30,17 @@ struct BeautySettings {
 	float contact_strength = 0.85f; // [0, 1]     how dark a fully occluded pixel gets
 	float contact_bias_m = 0.05f;   // [0, 0.5]   surface bias and hit thickness
 
-	int ssao_steps = 8;      // [0, 16]  march steps per sweep direction
-	int ssao_directions = 6; // [0, 8]   sweep directions per pixel
-
-	// SSAO's gather shape. These were file-scope constants in ssao_pass.cpp, the one place a
-	// look constant hid from both the tiers and the menu. Radius is world metres.
-	float ssao_radius = 5.0f;   // [0.25, 32]
+	// The horizon march shared by AO and the bounce (shaders/ssgi.comp.glsl). The resolve
+	// averages a 4x4 bayer period, so each slice here reads as 16 directions on screen.
+	int ssao_steps = 6;      // [0, 16]  march steps per side of a slice
+	int ssao_directions = 2; // [0, 8]   slices per pixel
+	float ssao_radius = 5.0f;   // [0.25, 32]  world metres the march reaches
 	float ssao_strength = 1.5f; // [0, 8]
 
-	// SSGI's gather shape. These lived as literals in SsgiPass::render, which broke this
-	// struct's own contract that no pass reads a knob that is not here -- and made the one
-	// effect that carries emissive light around the scene the only effect a tier could not
-	// move. Radii are world metres.
-	float ssgi_radius = 6.0f;    // [0.25, 64]  how far a bounce tap may reach
 	float ssgi_temporal = 0.9f;  // [0, 0.99]   history weight; higher is smoother and later
 	float ssgi_strength = 1.0f;  // [0, 8]      multiplier on the gathered bounce
 
-	// Emissive light transport, gathered on its own ring so lava can spill much further than
-	// a diffuse bounce without dragging the bounce radius (and its noise) out with it. Costs
-	// a second tap loop in shaders/ssgi.comp.glsl; ssgi_taps sizes both.
-	float emissive_gi_radius = 16.0f;  // [0.25, 512]
+	// Glow added to every march sample that lights the receiver, read from the material table.
 	float emissive_gi_strength = 6.0f; // [0, 64]
 
 	float outline_depth_threshold = 0.04f;  // [0, 1], relative to linear depth

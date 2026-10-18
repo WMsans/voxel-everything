@@ -20,7 +20,6 @@
 #include "render/beauty_camera.h"
 #include "render/contact_shadow_pass.h"
 #include "render/ssgi_pass.h"
-#include "render/ssao_pass.h"
 #include "render/ssr_pass.h"
 #include "render/outline_pass.h"
 #include "beauty_compositor.h"

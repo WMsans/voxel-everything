@@ -36,7 +36,7 @@ bool SsgiPass::render(RenderingDevice *rd, GBuffer &gb, RID camera_ubo,
 		const float prev_view_proj[16], bool have_history, const ve::BeautySettings &s,
 		uint32_t frame) {
 	output_ = RID();
-	if (!s.ssgi || s.ssgi_taps <= 0) return false;
+	if (!s.ssgi && !s.ssao) return false;
 	if (!rd_ || rd != rd_ || !program_.valid() || !gb.is_valid() ||
 			!camera_ubo.is_valid() || !prev_view_proj) return false;
 	const Vector2i size = gb.size();
@@ -69,16 +69,15 @@ bool SsgiPass::render(RenderingDevice *rd, GBuffer &gb, RID camera_ubo,
 	std::memcpy(push.prev_view_proj, prev_view_proj, sizeof(push.prev_view_proj));
 	push.dims[0] = half.x;
 	push.dims[1] = half.y;
-	push.dims[2] = s.ssgi_taps;
+	push.dims[2] = s.ssao_steps;
 	push.dims[3] = have_history ? 1 : 0;
-	// These were literals here until the emissive work: 6 m, 0.90, 1.0. They are knobs in
-	// ve::BeautySettings now, which is where that struct always said every knob a pass reads
-	// has to live -- and which is what lets a tier move the emissive ring.
-	push.params[0] = s.ssgi_radius;
+	push.params[0] = s.ssao_radius;
 	push.params[1] = s.ssgi_temporal;
 	push.params[2] = s.ssgi_strength;
-	push.emissive[0] = s.emissive_gi_radius;
+	push.params[3] = s.ssao_strength;
 	push.emissive[1] = s.emissive_gi_strength;
+	push.stage[1] = s.ssao_directions;
+	push.stage[2] = (s.ssao ? 1 : 0) | (s.ssgi ? 2 : 0);
 	push.stage[0] = 0;
 	const int64_t list = rd->compute_list_begin();
 	if (list < 0) return false;

@@ -178,7 +178,7 @@ func test_checkbox_writes_only_its_named_field() -> void:
 	var world: VoxelWorld = parts[0]
 	parts[3].control("beauty", "outlines").emit_signal("toggled", false)
 	assert_bool(world.get_effect_enabled("outlines")).is_false()
-	assert_bool(world.get_effect_enabled("ssr")).is_true()
+	assert_bool(world.get_effect_enabled("glossy_sdf_rays")).is_true()
 
 func test_the_ssao_checkbox_writes_the_world_setting() -> void:
 	var parts := make_menu()
@@ -193,10 +193,10 @@ func test_a_value_slider_writes_only_its_named_knob() -> void:
 	var parts := make_menu()
 	await get_tree().process_frame
 	var world: VoxelWorld = parts[0]
-	var reach: float = world.get_effect_value("emissive_gi_radius")
+	var reach: float = world.get_effect_value("ssgi_strength")
 	parts[3].control("beauty", "emissive_gi_strength").emit_signal("value_changed", 21.0)
 	assert_float(world.get_effect_value("emissive_gi_strength")).is_equal_approx(21.0, 0.001)
-	assert_float(world.get_effect_value("emissive_gi_radius")).is_equal_approx(reach, 0.001)
+	assert_float(world.get_effect_value("ssgi_strength")).is_equal_approx(reach, 0.001)
 
 func test_knob_values_are_clamped_on_the_way_in() -> void:
 	var parts := make_menu()

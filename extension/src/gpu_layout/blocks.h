@@ -17,11 +17,6 @@
 
 namespace ve {
 
-struct SsaoPush {
-	int32_t dims[4];  // xy = target size, z = march steps per direction, w = sweep directions
-	float params[4];  // x = world-space radius, y = strength, zw = unused
-};
-
 struct ContactShadowPush {
 	int32_t dims[4];  // xy = target size, z = mode (0 march, 1 apply), w = steps
 	float params[4];  // x = reach, y = strength, z = surface bias/hit thickness (metres)
@@ -43,10 +38,10 @@ struct SsrApplyPush {
 
 struct SsgiPush {
 	float prev_view_proj[16];
-	int32_t dims[4];    // xy = target size, z = taps, w = have history
-	float params[4];    // x = bounce radius (m), y = temporal history weight, z = bounce strength
-	float emissive[4];  // x = emissive radius (m), y = emissive strength, zw unused
-	int32_t stage[4];   // x = 0 gather into out_raw, 1 resolve out_raw into out_ssgi
+	int32_t dims[4];    // xy = target size, z = march steps per side, w = have history
+	float params[4];    // x = radius (m), y = temporal history weight, z = bounce strength, w = AO strength
+	float emissive[4];  // y = emissive strength, xzw unused
+	int32_t stage[4];   // x = 0 gather / 1 resolve, y = slices, z = 1 AO | 2 bounce
 };
 
 struct HizPush {
@@ -187,10 +182,6 @@ struct LodBuildPush {
 
 namespace ve::layout {
 
-inline constexpr Field kSsaoPushFields[] = {
-	VE_LAYOUT_FIELD(SsaoPush, dims, IVec4, 0),
-	VE_LAYOUT_FIELD(SsaoPush, params, Vec4, 0),
-};
 inline constexpr Field kContactShadowPushFields[] = {
 	VE_LAYOUT_FIELD(ContactShadowPush, dims, IVec4, 0),
 	VE_LAYOUT_FIELD(ContactShadowPush, params, Vec4, 0),
@@ -383,7 +374,6 @@ inline constexpr Field kLodBuildPushFields[] = {
 };
 
 inline constexpr Block kBlocks[] = {
-	VE_LAYOUT_BLOCK(SsaoPush, "SSAO_PUSH_FIELDS", kSsaoPushFields),
 	VE_LAYOUT_BLOCK(ContactShadowPush, "CONTACT_SHADOW_PUSH_FIELDS", kContactShadowPushFields),
 	VE_LAYOUT_BLOCK(OutlinePush, "OUTLINE_PUSH_FIELDS", kOutlinePushFields),
 	VE_LAYOUT_BLOCK(SsrTracePush, "SSR_TRACE_PUSH_FIELDS", kSsrTracePushFields),

@@ -23,7 +23,7 @@ func test_the_default_tier_is_high() -> void:
 	var w := make_world()
 	assert_int(w.quality_tier).is_equal(3)
 	var d := w.hooks().debug_beauty_settings()
-	assert_int(d["ssgi_taps"]).is_equal(8)
+	assert_int(d["ssao_directions"]).is_equal(2)
 	assert_bool(d["outlines"]).is_true()
 
 func test_setting_the_tier_replaces_every_knob() -> void:
@@ -39,11 +39,11 @@ func test_individual_effects_toggle_by_name() -> void:
 	var w := make_world()
 	w.set_effect_enabled("outlines", false)
 	assert_bool(w.get_effect_enabled("outlines")).is_false()
-	assert_bool(w.get_effect_enabled("ssr")).is_true()
-	# Bit 8 is kFlagOutlines; clearing it must not disturb the others.
+	assert_bool(w.get_effect_enabled("ssgi")).is_true()
+	# Bit 8 is kFlagOutlines; clearing it must not disturb the others (bit 1 is kFlagSsgi).
 	var d := w.hooks().debug_beauty_settings()
 	assert_int(int(d["flags"]) & 8).is_equal(0)
-	assert_int(int(d["flags"]) & 2).is_equal(2)
+	assert_int(int(d["flags"]) & 1).is_equal(1)
 
 func test_ssao_is_on_at_the_default_tier() -> void:
 	var w := make_world()
@@ -98,21 +98,21 @@ func test_zero_ssao_work_disables_the_pass() -> void:
 	w.set_quality_tier(1)
 	var low: Dictionary = w.hooks().debug_beauty_settings()
 	# Low turns SSAO off outright; the clamp must agree rather than leaving a dispatch that
-	# produces nothing. Same rule the ssgi_taps == 0 case already follows.
+	# produces nothing. Same rule ssr_steps == 0 follows.
 	assert_bool(low["ssao"]).is_false()
 
 # S6: the tier sets defaults and tweaks layer on top, so choosing a tier must not throw away a
 # knob somebody set by hand.
 func test_a_tweak_survives_a_tier_change() -> void:
 	var w := make_world()
-	w.set_effect_enabled("ssr", false)
+	w.set_effect_enabled("outlines", false)
 	w.set_effect_value("ssgi_strength", 2.0)
 	w.quality_tier = 2
 	var d := w.hooks().debug_beauty_settings()
-	assert_bool(d["ssr"]).is_false()
+	assert_bool(d["outlines"]).is_false()
 	assert_float(d["ssgi_strength"]).is_equal_approx(2.0, 0.001)
 	# ...while everything that was not tweaked follows the tier.
-	assert_int(d["ssgi_taps"]).is_equal(4)
+	assert_int(d["ssao_directions"]).is_equal(1)
 
 # demo/benchmark.gd applies --effects-off= before it parses --quality=; the effects must stay off.
 func test_effects_turned_off_before_a_tier_stay_off() -> void:

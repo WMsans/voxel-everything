@@ -35,7 +35,6 @@
 #include "render/shell_raster_pass.h"
 #include "render/transparency_composite_pass.h"
 #include "render/region_pass.h"
-#include "render/ssao_pass.h"
 #include "render/ssgi_pass.h"
 #include "render/ssr_pass.h"
 #include "render/sun_shadow_pass.h"
@@ -585,7 +584,8 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	SsgiPass *ssgi = render_.passes().ssgi;
 	if (ssgi) ssgi->clear_result();
 	bool ssgi_ok = false;
-	if (ssgi && beauty.ssgi) {
+	// One horizon pass serves both: rgb is the bounce, a is the AO (ssgi.comp.glsl).
+	if (ssgi && (beauty.ssgi || beauty.ssao)) {
 		timings->begin(rd, "ssgi");
 		ssgi_ok = ssgi->render(rd, *gb, ubo->buffer(), render_.prev_view_proj(),
 				render_.has_history(), beauty, render_.beauty_frame());
@@ -620,19 +620,10 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	dp.fade_start = fade_start;
 	dp.fade_end = fade_end;
 	dp.probe_mode = in.debug.deferred_view;
-	SsaoPass *ssao = render_.passes().ssao;
-	if (ssao) ssao->clear_result();
-	bool ssao_ok = false;
-	if (ssao && (beauty_flags & ve::kFlagSsao) != 0u) {
-		timings->begin(rd, "ssao");
-		ssao_ok = ssao->render(rd, *gb, ubo->buffer(), beauty);
-		if (ssao_ok) end_stage(rd, kStageSsao);
-		else cancel_stage(kStageSsao);
-	}
-	// S8: open "deferred" only after SSAO has closed, so the label times lighting alone.
 	timings->begin(rd, "deferred");
+	const RID horizon = ssgi_ok ? ssgi->result() : RID();
 	const bool deferred_ok = deferred->render(rd, *gb, *materials,
-			ssgi_ok ? ssgi->result() : RID(), ssao_ok ? ssao->result() : RID(),
+			beauty.ssgi ? horizon : RID(), beauty.ssao ? horizon : RID(),
 			use_sun ? sun->map() : RID(), dp);
 	if (!deferred_ok) {
 		cancel_stage(kStageDeferred);
@@ -749,7 +740,7 @@ bool VoxelFrame::render_post_opaque(RenderingDevice *rd, const FrameInputs &in) 
 
 const char *godot::frame_stage_name(FrameStage stage) {
 	static const char *const kNames[kStageCount] = {"stream", "raymarch", "composite", "lod",
-			"sun_shadow", "grass", "ssgi", "deferred", "ssao", "inject", "contact", "ssr",
+			"sun_shadow", "grass", "ssgi", "deferred", "inject", "contact", "ssr",
 			"outlines", "history", "shell", "transparency"};
 	return stage < kStageCount ? kNames[stage] : "";
 }
