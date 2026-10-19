@@ -73,13 +73,14 @@ void SunBakePass::teardown() {
 	rd_ = nullptr;
 }
 
-void SunBakePass::note_sun(RenderingDevice *rd, const GpuAtlas &atlas, const float dir[3]) {
-	if (!ve::sun_dir_changed(sun_dir_, dir)) return;
+bool SunBakePass::note_sun(RenderingDevice *rd, const GpuAtlas &atlas, const float dir[3]) {
+	if (!ve::sun_dir_changed(sun_dir_, dir)) return false;
 	std::memcpy(sun_dir_, dir, sizeof(sun_dir_));
 	// Device operation: the caller records this before opening its compute list. Every entry
 	// was baked under the old direction, so the sweep re-bakes them all over the next seconds.
 	rd->buffer_clear(atlas.cache_sun_ok(), 0,
 			static_cast<uint32_t>(atlas.atlas_slot_count()) * sizeof(uint32_t));
+	return true;
 }
 
 void SunBakePass::bake_jobs(RenderingDevice *rd, const GpuAtlas &atlas,

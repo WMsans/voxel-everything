@@ -50,7 +50,9 @@ bool RegionPass::initialize(RenderingDevice *rd, const GpuAtlas &atlas) {
 			gpu::storage(2, atlas.counters()),
 			gpu::storage(3, atlas.region_slot_counts()),
 			gpu::storage(4, atlas.region_occupancy()),
-			gpu::storage(5, atlas.region_bounds())});
+			gpu::storage(5, atlas.region_bounds()),
+			// 6: Task 3 clears a freed slot's flags so the sun sweep skips it.
+			gpu::storage(6, atlas.brick_flags())});
 	args_set_ = gpu::uniform_set(rd, group_, args_.shader, 0, {
 			gpu::storage(0, atlas.frame_counters()),
 			gpu::storage(1, atlas.dispatch_args())});

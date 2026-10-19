@@ -9,9 +9,10 @@
 
 namespace godot {
 
-// How many slots the frame's rolling sweep covers. A full sweep of the shipping 65 536 slots
-// takes 128 frames, about 2 s at 60 fps. Only the sun cache waits on it, and only after the
-// sun has moved, so it is a lag budget rather than a frame-time knob.
+// How many slots one frame of the sweep covers. A full lap of the shipping 65 536 slots takes
+// 128 frames, about 2 s at 60 fps. The sweep only runs while a lap is owed -- at startup and
+// after a sun turn -- because the shipped sun never moves; later slots are covered by the
+// per-frame job bake, which re-bakes every brick a frame generated or edited.
 inline constexpr int kSunSweepSlotsPerFrame = 512;
 
 // Task 3: bake sun visibility into the brick cache's .w, per voxel, when a brick is generated
@@ -30,8 +31,9 @@ public:
 
 	// Clears every sun entry when the sun has turned far enough to invalidate them, so a moved
 	// sun re-bakes through the sweep instead of shading with the old sun's shadows. A device
-	// operation (buffer_clear): call it outside any compute list.
-	void note_sun(RenderingDevice *rd, const GpuAtlas &atlas, const float dir[3]);
+	// operation (buffer_clear): call it outside any compute list. Returns true when it cleared,
+	// i.e. when the caller owes one full sweep lap.
+	bool note_sun(RenderingDevice *rd, const GpuAtlas &atlas, const float dir[3]);
 
 	// This frame's generation jobs, from the job list brick_gen just ran (indirect, one
 	// workgroup per job, group count from GpuAtlas::dispatch_args()).

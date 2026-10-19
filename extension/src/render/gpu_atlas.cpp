@@ -180,7 +180,8 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 
 	bool ok = sdf_atlas_.is_valid() && mat_atlas_.is_valid() && palette_.is_valid() &&
 			brick_flags_.is_valid() && brick_cache_.is_valid() && cache_normal_ok_.is_valid() &&
-			cache_sun_ok_.is_valid() && cache_brick_.is_valid() && region_map_.is_valid() && region_tables_.is_valid() && free_list_.is_valid() &&
+			cache_sun_ok_.is_valid() && cache_brick_.is_valid() && region_map_.is_valid() &&
+			region_tables_.is_valid() && free_list_.is_valid() &&
 			counters_.is_valid() && frame_.is_valid() && dispatch_args_.is_valid() &&
 			jobs_.is_valid() && op_pool_.is_valid() && op_counts_.is_valid() &&
 			region_slot_counts_.is_valid() && region_occupancy_.is_valid() &&

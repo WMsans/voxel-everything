@@ -1550,7 +1550,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_sun_probe(Vector3 origin, Vector3 dir
 		sum += diff;
 		if (diff > 0.5) flips++;
 	}
-	d["ran"] = true;
+	d["ran"] = hits > 0;
 	d["hits"] = hits;
 	d["mean_abs_diff"] = hits > 0 ? sum / hits : 0.0;
 	d["flip_fraction"] = hits > 0 ? double(flips) / hits : 0.0;
