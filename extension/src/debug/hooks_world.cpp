@@ -1053,6 +1053,50 @@ Dictionary VoxelDebugHooks::debug_brick_flags(Vector3i region) {
 	return d;
 }
 
+Dictionary VoxelDebugHooks::debug_brick_cache_stats() {
+	Dictionary d;
+	RenderingDevice *device = world_->rd();
+	if (!world_->is_initialized() || !device || !world_->context().render->passes().atlas) return d;
+	const GpuAtlas &atlas = *world_->context().render->passes().atlas;
+	d["slots"] = atlas.atlas_slot_count();
+	const PackedByteArray normal = device->buffer_get_data(atlas.cache_normal_ok());
+	const PackedByteArray sun = device->buffer_get_data(atlas.cache_sun_ok());
+	const int n = std::min<int64_t>(std::min(normal.size(), sun.size()) / 4,
+			atlas.atlas_slot_count());
+	const uint32_t *nw = reinterpret_cast<const uint32_t *>(normal.ptr());
+	const uint32_t *sw = reinterpret_cast<const uint32_t *>(sun.ptr());
+	int normal_ok = 0;
+	int sun_ok = 0;
+	for (int i = 0; i < n; i++) {
+		if ((nw[i] & ve::kCacheOk) != 0u) normal_ok++;
+		if ((sw[i] & ve::kCacheOk) != 0u) sun_ok++;
+	}
+	d["normal_ok"] = normal_ok;
+	d["sun_ok"] = sun_ok;
+	return d;
+}
+
+int VoxelDebugHooks::debug_brick_cache_flags(Vector3i brick) {
+	RenderingDevice *device = world_->rd();
+	if (!world_->is_initialized() || !device || !world_->context().render->passes().atlas) return -1;
+	// A brick is resident only through its region's table, and the region slot is whatever the
+	// region map currently says: a brick released to the free list has no cache to report.
+	const ve::IVec3 region = ve::region_of_brick({brick.x, brick.y, brick.z});
+	const int rslot = debug_region_map_entry(Vector3i(region.x, region.y, region.z));
+	if (rslot < 0) return -1;
+	const int slot = debug_region_table_slot(rslot, brick);
+	if (slot < 0) return -1;
+	const GpuAtlas &atlas = *world_->context().render->passes().atlas;
+	const PackedByteArray normal = device->buffer_get_data(atlas.cache_normal_ok(),
+			static_cast<uint32_t>(slot) * 4, 4);
+	const PackedByteArray sun = device->buffer_get_data(atlas.cache_sun_ok(),
+			static_cast<uint32_t>(slot) * 4, 4);
+	if (normal.size() < 4 || sun.size() < 4) return -1;
+	const uint32_t n = *reinterpret_cast<const uint32_t *>(normal.ptr());
+	const uint32_t s = *reinterpret_cast<const uint32_t *>(sun.ptr());
+	return static_cast<int>((n & ve::kCacheOk) | ((s & ve::kCacheOk) << 1));
+}
+
 Dictionary VoxelDebugHooks::debug_brick_flags_after_mark(Vector3i region) {
 	Dictionary d;
 	debug_stream_region(region);

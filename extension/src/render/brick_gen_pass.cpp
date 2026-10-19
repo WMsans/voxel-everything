@@ -35,7 +35,11 @@ bool BrickGenPass::initialize(RenderingDevice *rd, const GpuAtlas &atlas) {
 			gpu::storage(12, atlas.overrides().mat_buffer()),
 			gpu::storage(13, atlas.overrides().tables()),
 			gpu::storage(14, atlas.overrides().region_table_map()),
-			gpu::storage(15, atlas.region_occupancy())});
+			gpu::storage(15, atlas.region_occupancy()),
+			// 16-18: Task 2's baked-normal cache (the 3D texture and its two validity words).
+			gpu::image(16, atlas.brick_cache()),
+			gpu::storage(17, atlas.cache_normal_ok()),
+			gpu::storage(18, atlas.cache_sun_ok())});
 	if (!set_.is_valid()) {
 		UtilityFunctions::printerr("BrickGenPass: uniform set creation failed");
 		teardown();

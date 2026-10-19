@@ -1012,7 +1012,8 @@ bool VoxelDebugHooks::render_probe_pixel(Vector3 origin, Vector3 dir) {
 			origin.x, origin.y, origin.z, f[0], f[1], f[2], up[0], up[1], up[2]);
 	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
 			world_->context().store->config().atlas_bricks);
-	ve::set_near_field_flags(&cam, ve::pack_flags(world_->context().render->beauty_settings()));
+	ve::set_near_field_flags(&cam, ve::pack_flags(world_->context().render->beauty_settings()),
+			world_->context().render->brick_cache());
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->context().render->passes().raymarch->render(device, *world_->context().render->passes().atlas, world_->context().render->passes().islands, RID(),
 			cam, 1, 1, kNoEdit, world_->context().render->passes().field_context)) return false;
@@ -1150,7 +1151,8 @@ Dictionary VoxelDebugHooks::debug_raymarch_gbuffer(Vector3 origin, Vector3 dir) 
 			origin.x, origin.y, origin.z, f[0], f[1], f[2], up[0], up[1], up[2]);
 	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
 			world_->context().store->config().atlas_bricks);
-	ve::set_near_field_flags(&cam, ve::pack_flags(world_->context().render->beauty_settings()));
+	ve::set_near_field_flags(&cam, ve::pack_flags(world_->context().render->beauty_settings()),
+			world_->context().render->brick_cache());
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->context().render->passes().raymarch->render(device, *world_->context().render->passes().atlas, world_->context().render->passes().islands, RID(), cam, 1, 1, kNoEdit, world_->context().render->passes().field_context)) return d;
 	device->submit();
@@ -1229,7 +1231,8 @@ Dictionary VoxelDebugHooks::debug_raymarch_hole_probe(Vector3 origin, Vector3 di
 	cam.params[2] = 200.0f;
 	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
 			world_->context().store->config().atlas_bricks);
-	ve::set_near_field_flags(&cam, ve::pack_flags(world_->context().render->beauty_settings()));
+	ve::set_near_field_flags(&cam, ve::pack_flags(world_->context().render->beauty_settings()),
+			world_->context().render->brick_cache());
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->context().render->passes().raymarch->render(device, *world_->context().render->passes().atlas, world_->context().render->passes().islands, RID(), cam, w, h, kNoEdit, world_->context().render->passes().field_context)) return d;
 	device->submit();
@@ -1369,7 +1372,8 @@ Dictionary VoxelDebugHooks::debug_raymarch_normal_probe(Vector3 origin, Vector3 
 	cam.params[2] = 200.0f;
 	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
 			world_->context().store->config().atlas_bricks);
-	ve::set_near_field_flags(&cam, ve::pack_flags(world_->context().render->beauty_settings()));
+	ve::set_near_field_flags(&cam, ve::pack_flags(world_->context().render->beauty_settings()),
+			world_->context().render->brick_cache());
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->context().render->passes().raymarch->render(device, *world_->context().render->passes().atlas, world_->context().render->passes().islands, RID(), cam, w, h, kNoEdit, world_->context().render->passes().field_context)) return d;
 	device->submit();
@@ -1424,6 +1428,7 @@ Dictionary VoxelDebugHooks::debug_raymarch_normal_probe(Vector3 origin, Vector3 
 			double diff = double(ndl_render) - double(ndl_analytic);
 			sum_sq += diff * diff;
 			considered++;
+
 			bool far_from_edges = true;
 			for (int eidx = 0; eidx < 3; eidx++) if (std::fabs(ndl_analytic - kEdges[eidx]) < 0.01f) far_from_edges = false;
 			if (!far_from_edges) continue;
@@ -1528,7 +1533,8 @@ Dictionary VoxelDebugHooks::debug_island_normal_probe(int island_slot, Vector3 o
 	cam.params[2] = 200.0f;
 	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
 			world_->context().store->config().atlas_bricks);
-	ve::set_near_field_flags(&cam, ve::pack_flags(world_->context().render->beauty_settings()));
+	ve::set_near_field_flags(&cam, ve::pack_flags(world_->context().render->beauty_settings()),
+			world_->context().render->brick_cache());
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->context().render->passes().raymarch->render(device, *world_->context().render->passes().atlas, world_->context().render->passes().islands, RID(), cam, w, h, kNoEdit, world_->context().render->passes().field_context)) return d;
 	device->submit();
@@ -1710,7 +1716,8 @@ Dictionary VoxelDebugHooks::debug_ssr_probe(int fixture, int w, int h) {
 	camera_params.params[2] = 200.0f;
 	ve::set_near_field_world(&camera_params, world_->context().store->region_window(), world_->context().render->island_slot_count(),
 			world_->context().store->config().atlas_bricks);
-	ve::set_near_field_flags(&camera_params, ve::pack_flags(settings));
+	ve::set_near_field_flags(&camera_params, ve::pack_flags(settings),
+			world_->context().render->brick_cache());
 	static const float no_edit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->context().render->passes().raymarch->render(device, *world_->context().render->passes().atlas, world_->context().render->passes().islands, RID(), camera_params, width, height,
 			no_edit, world_->context().render->passes().field_context)) return d;
@@ -2177,7 +2184,8 @@ Dictionary VoxelDebugHooks::debug_glossy_sdf_probe(Vector3 origin, Vector3 dir) 
 	cam.params[3] = -1.0f;
 	ve::set_near_field_world(&cam, world_->context().store->region_window(), world_->context().render->island_slot_count(),
 			world_->context().store->config().atlas_bricks);
-	ve::set_near_field_flags(&cam, ve::pack_flags(world_->context().render->beauty_settings()));
+	ve::set_near_field_flags(&cam, ve::pack_flags(world_->context().render->beauty_settings()),
+			world_->context().render->brick_cache());
 	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
 	if (!world_->context().render->passes().raymarch->render(device, *world_->context().render->passes().atlas, world_->context().render->passes().islands, RID(), cam, 1, 1, kNoEdit, world_->context().render->passes().field_context)) return d;
 	device->submit();
@@ -2568,7 +2576,8 @@ Dictionary VoxelDebugHooks::debug_near_field_detail(Vector3 pos, Vector3 fwd, in
 	cp.params[2] = 200.0f;
 	ve::set_near_field_world(&cp, world_->context().store->region_window(), world_->context().render->island_slot_count(),
 			world_->context().store->config().atlas_bricks);
-	ve::set_near_field_flags(&cp, ve::pack_flags(world_->context().render->beauty_settings()));
+	ve::set_near_field_flags(&cp, ve::pack_flags(world_->context().render->beauty_settings()),
+			world_->context().render->brick_cache());
 
 	const int rw = std::max(1, static_cast<int>(static_cast<float>(w) * march_scale));
 	const int rh = std::max(1, static_cast<int>(static_cast<float>(h) * march_scale));

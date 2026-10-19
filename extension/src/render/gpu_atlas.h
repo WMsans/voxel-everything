@@ -55,6 +55,12 @@ public:
 	}
 	RID palette() const { return palette_; }
 	RID brick_flags() const { return brick_flags_; }
+	// The per-brick baked-normal cache (Task 2): a RGBA16_SNORM 3D texture mirroring the SDF
+	// atlas slot for slot at a 20 cm lattice, plus one uint per slot saying whether the bake
+	// succeeded (normal_ok) or the sun entry is valid (sun_ok, written by Task 3).
+	RID brick_cache() const { return brick_cache_; }
+	RID cache_normal_ok() const { return cache_normal_ok_; }
+	RID cache_sun_ok() const { return cache_sun_ok_; }
 	RID region_map() const { return region_map_; }
 	RID region_tables() const { return region_tables_; }
 	RID free_list() const { return free_list_; }
@@ -119,6 +125,7 @@ private:
 	RenderingDevice *rd_ = nullptr;
 	GpuAtlasConfig cfg_;
 	RID sdf_atlas_, mat_atlas_, palette_, brick_flags_;
+	RID brick_cache_, cache_normal_ok_, cache_sun_ok_;
 	RID mips_[ve::kMipLevels];
 	RID region_map_, region_tables_, free_list_, counters_, frame_, dispatch_args_;
 	RID jobs_, op_pool_, op_counts_, region_slot_counts_;

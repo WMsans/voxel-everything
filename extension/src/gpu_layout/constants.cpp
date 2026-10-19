@@ -19,6 +19,14 @@ std::string constants_glsl() {
 	for (const BeautyFlag &f : kBeautyFlags)
 		o << "const uint BEAUTY_" << f.name << " = " << f.bit << "u;\n";
 	o << "\n"
+	     "// Per-brick baked-normal cache (world/brick.h, shaders/brick_cache.glslh): samples per\n"
+	     "// axis, voxels between samples, and the flags-word bit that switches the raymarcher\n"
+	     "// onto the cached normal. CACHE_OK is the value of a valid normal_ok/sun_ok entry.\n"
+	     "const int BRICK_CACHE_DIM = " << kBrickCacheDim << ";\n"
+	     "const int BRICK_CACHE_STEP = " << kBrickCacheStep << ";\n"
+	     "const uint RENDER_BRICK_CACHE = " << kRenderBrickCache << "u;\n"
+	     "const uint CACHE_OK = " << kCacheOk << "u;\n";
+	o << "\n"
 	     "// ve::kMaterialLayers (extension/src/world/material_table.h)\n"
 	     "const int MATERIAL_LAYERS = " << kMaterialLayers << ";\n"
 	     "\n"

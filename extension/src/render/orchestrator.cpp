@@ -719,6 +719,7 @@ void RenderOrchestrator::on_render_resolved(const ve::RenderSettings &s, void *c
 	self->islands_enabled_.store(s.islands, std::memory_order_relaxed);
 	self->near_field_enabled_.store(s.near_field, std::memory_order_relaxed);
 	self->raymarch_enabled_.store(s.raymarch, std::memory_order_relaxed);
+	self->brick_cache_enabled_.store(s.brick_cache, std::memory_order_relaxed);
 	self->near_field_scale_.store(s.near_field_scale, std::memory_order_relaxed);
 	// Rebase: the tier is the base, per-knob overrides layer on top and survive (S6).
 	if (self->quality_tier_.exchange(s.quality_tier, std::memory_order_relaxed) != s.quality_tier)
@@ -803,6 +804,7 @@ FrameSettings RenderOrchestrator::frame_settings() const {
 	s.near_field_enabled = near_field_enabled();
 	s.raster_mode = raster_mode();
 	s.sun_cascade_min_level = sun_cascade_min_level_;
+	s.brick_cache = brick_cache();
 	return s;
 }
 

@@ -18,6 +18,7 @@ layout(set = 0, binding = 19) uniform sampler2DArray material_surface_tex;
 
 #include "common.glslh"
 #include "brick_layout.glslh"
+#include "brick_cache.glslh"
 #include "shade.glslh"
 #include "sun_light.glslh"
 
@@ -79,6 +80,12 @@ layout(set = 0, binding = 21, std430) readonly buffer BrickFlags { uint v[]; } b
 layout(set = 0, binding = 22, std430) readonly buffer RegionSlotCounts { int n[]; } region_slot_counts;
 // Per region slot, the box of its resident bricks, region-local (GpuAtlas::region_bounds).
 layout(set = 0, binding = 31, std430) readonly buffer RegionBounds { ivec4 v[]; } region_bounds;
+// Task 2's baked-normal cache: the texture brick_gen wrote, and one validity word per atlas
+// slot. normal_ok gates the fetch; sun_ok is bound here for Task 3's shadow cache and is not
+// read yet.
+layout(set = 0, binding = 32) uniform sampler3D brick_cache;
+layout(set = 0, binding = 33, std430) readonly buffer CacheNormalOk { uint v[]; } cache_normal_ok;
+layout(set = 0, binding = 34, std430) readonly buffer CacheSunOk { uint v[]; } cache_sun_ok;
 #define SUN_MARCH_REGION_BOUNDS
 // The pending-edit visualizer: tint the atlas content an edit WILL change, so the player
 // gets one frame of feedback before the regenerated bricks land (spec §5 latency).
@@ -117,24 +124,19 @@ vec3 terrain_r8_fallback_normal(vec3 p, ivec3 anchor, int anchor_slot, inout int
 // When the evaluator reports an exact, non-degenerate gradient that IS the surface normal;
 // otherwise fall back to differentiating the stored R8 lattice.
 //
-// `hit_mat` is the stored material at the hit. The tree stages (trees, conifers) are the
-// priciest part of the pipeline -- the conifer walk alone was 16 ms of a 51 ms forest frame
-// -- and they only shape bark. So a bark hit takes the R8 normal (a trunk is small enough on
-// screen that the lattice contours do not read), and any other hit skips them on every tap
-// via g_field_skip_detail, which base_field_gradient only takes over after its centre tap.
-// Ground within 6 cm of a trunk foot can shade without it; nothing else changes.
-vec3 terrain_source_normal(vec3 p, ivec3 brick, int anchor_slot, uint hit_mat, inout int steps_left) {
-	if (hit_mat == MAT_BARK) return terrain_r8_fallback_normal(p, brick, anchor_slot, steps_left);
+// This is the MISS path: a brick whose normal the cache holds never reaches it (see
+// march_bricks). It is the full pipeline evaluation, including the tree stages -- since
+// Task 2 replaced the bark special case and the detail-skipping shortcut that came with it
+// (1b18a2b) with a baked cache.
+vec3 terrain_source_normal(vec3 p, ivec3 brick, int anchor_slot, inout int steps_left) {
 	int rs = region_slot_of(brick);
 	if (rs < 0) return vec3(0.0, 1.0, 0.0);
 	float sdf;
 	uint mat;
 	vec3 gradient;
 	bool exact_gradient;
-	g_field_skip_detail = true;
 	eval_field_gradient(p, uint(rs) * MAX_REGION_OPS, uint(max(op_counts.n[rs], 0)),
 			sdf, mat, gradient, exact_gradient);
-	g_field_skip_detail = false;
 	float len = length(gradient);
 	// The opaque view (shaders/opaque_view.glslh): under a transparent material the atlas
 	// surface is a LABEL boundary, and the union field's gradient here belongs to the medium,
@@ -511,7 +513,27 @@ Hit march_bricks(int region_slot, ivec3 region_coord, vec3 ro, vec3 rd,
 					h.t = t_begin + t;
 					h.p = p;
 					h.mat = material_at(p, map, slot);
-					h.n = terrain_source_normal(p, map, slot, h.mat, steps_left);
+					// Task 2: the baked normal, when this brick has one and the switch is on. One
+					// filtered fetch replaces the whole pipeline evaluation. A filtered blend of
+					// two opposing unit normals can cancel at a crease, so a degenerate result
+					// takes the miss path rather than producing a NaN.
+					if ((floatBitsToUint(pc.cam_pos.w) & RENDER_BRICK_CACHE) != 0u &&
+							cache_normal_ok.v[slot] == CACHE_OK) {
+						vec3 cached = textureLod(brick_cache, brick_cache_uvw(slot,
+								(p - vec3(map) * BRICK_SIZE) / VOXEL_SIZE,
+								pc.atlas_bricks.xyz), 0.0).xyz;
+						float clen = length(cached);
+						// A hit is a front face by construction: its normal opposes the ray. A
+						// cached normal that does not was sampled across a thin shell or a CSG
+						// crease (a cave roof under a 4 cm skin, say) where the 20 cm lattice
+						// resolves the other side of the feature. Take the miss path there
+						// rather than shade a surface with a normal that faces away from it.
+						if (clen > 1e-6 && dot(cached, rd) < 0.0) {
+							h.n = cached / clen;
+							return h;
+						}
+					}
+					h.n = terrain_source_normal(p, map, slot, steps_left);
 					return h;
 				}
 				t += max(d * 0.9, 0.005);

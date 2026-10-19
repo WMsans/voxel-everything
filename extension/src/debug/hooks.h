@@ -221,6 +221,14 @@ public:
 
 	Dictionary debug_brick_flags_after_mark(Vector3i region);
 
+	// Task 2: over every atlas slot, how many carry a baked normal (and, from Task 3, a baked
+	// sun entry). Diagnostic: the raymarcher's own gate is the per-slot word.
+	Dictionary debug_brick_cache_stats();
+
+	// Task 2: one brick's cache words as `normal_ok | (sun_ok << 1)`, or -1 when the brick is
+	// not resident in any slot.
+	int debug_brick_cache_flags(Vector3i brick);
+
 	RID debug_sdf_atlas() const;
 
 	RID debug_mat_atlas() const;

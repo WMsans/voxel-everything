@@ -93,6 +93,16 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 	brick_flags_ = rd->storage_buffer_create(static_cast<uint32_t>(slots) * sizeof(uint32_t),
 			filled_i32(slots, static_cast<int32_t>(ve::kBrickFlagConservative)));
 
+	// The per-brick baked-normal cache (Task 2): RGBA16_SNORM 3D mirroring the SDF atlas slot
+	// for slot at BRICK_CACHE_DIM samples per axis. xyz = baked gradient, w = reserved for
+	// the sun entry and left 0. The two uint buffers hold one flag per slot, zero-initialised.
+	brick_cache_ = make_volume(rd, RenderingDevice::DATA_FORMAT_R16G16B16A16_SNORM,
+			ab.x * ve::kBrickCacheDim, ab.y * ve::kBrickCacheDim, ab.z * ve::kBrickCacheDim);
+	cache_normal_ok_ = rd->storage_buffer_create(static_cast<uint32_t>(slots) * sizeof(uint32_t),
+			zeroed(static_cast<int64_t>(slots) * sizeof(uint32_t)));
+	cache_sun_ok_ = rd->storage_buffer_create(static_cast<uint32_t>(slots) * sizeof(uint32_t),
+			zeroed(static_cast<int64_t>(slots) * sizeof(uint32_t)));
+
 	// The region map is a BUFFER, not a texture: streaming re-points one entry per region,
 	// and buffer_update writes four bytes where texture_update would rewrite a whole layer.
 	region_map_ = rd->storage_buffer_create(static_cast<uint32_t>(region_map_entries()) * 4,
@@ -165,7 +175,8 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 	}
 
 	bool ok = sdf_atlas_.is_valid() && mat_atlas_.is_valid() && palette_.is_valid() &&
-			brick_flags_.is_valid() && region_map_.is_valid() && region_tables_.is_valid() && free_list_.is_valid() &&
+			brick_flags_.is_valid() && brick_cache_.is_valid() && cache_normal_ok_.is_valid() &&
+			cache_sun_ok_.is_valid() && region_map_.is_valid() && region_tables_.is_valid() && free_list_.is_valid() &&
 			counters_.is_valid() && frame_.is_valid() && dispatch_args_.is_valid() &&
 			jobs_.is_valid() && op_pool_.is_valid() && op_counts_.is_valid() &&
 			region_slot_counts_.is_valid() && region_occupancy_.is_valid() &&
@@ -195,6 +206,9 @@ void GpuAtlas::teardown() {
 	for (int l = 0; l < ve::kMipLevels; l++) free_if_valid(rd_, mips_[l]);
 	free_if_valid(rd_, palette_);
 	free_if_valid(rd_, brick_flags_);
+	free_if_valid(rd_, brick_cache_);
+	free_if_valid(rd_, cache_normal_ok_);
+	free_if_valid(rd_, cache_sun_ok_);
 	free_if_valid(rd_, region_map_);
 	free_if_valid(rd_, region_tables_);
 	free_if_valid(rd_, free_list_);

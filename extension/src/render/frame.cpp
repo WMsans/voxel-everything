@@ -207,7 +207,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	cp.params[2] = near_field_enabled ? 200.0f : 0.0f;
 	const ve::BeautySettings beauty = render_.beauty_settings();
 	const uint32_t beauty_flags = ve::pack_flags(beauty);
-	ve::set_near_field_flags(&cp, beauty_flags);
+	ve::set_near_field_flags(&cp, beauty_flags, settings.brick_cache);
 
 	const Projection view(cam.affine_inverse());
 	const Projection view_proj = proj * view;

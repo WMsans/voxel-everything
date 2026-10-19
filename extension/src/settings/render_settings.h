@@ -14,6 +14,9 @@ struct RenderSettings {
 	bool islands = true;
 	// Off = raster mode (spec 2026-10-04): nothing is marched, every surface is a mesh.
 	bool raymarch = true;
+	// Task 2: read the baked brick-cache normal at the hit instead of re-running the terrain
+	// pipeline. Off re-runs the pipeline, the pre-cache path (and the --effects-off A/B).
+	bool brick_cache = true;
 };
 
 std::span<const SettingRow<RenderSettings>> render_rows();

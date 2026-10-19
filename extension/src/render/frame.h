@@ -38,6 +38,7 @@ struct FrameSettings {
 	bool near_field_enabled = true;
 	bool raster_mode = false;
 	bool sun_cascade_min_level = true;
+	bool brick_cache = true;
 };
 
 // One bit per timing label the frame records. Order is the frame's own order.

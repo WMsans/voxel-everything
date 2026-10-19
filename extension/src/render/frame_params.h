@@ -35,7 +35,8 @@ void set_near_field_world(CameraParams *cp, const RegionWindow &win, int island_
 		IVec3 atlas_bricks);
 
 // The beauty flag bits ride in cam_pos.w as raw bits (raymarch.comp.glsl reads them back with
-// floatBitsToUint).
-void set_near_field_flags(CameraParams *cp, uint32_t beauty_flags);
+// floatBitsToUint). brick_cache ORs RENDER_BRICK_CACHE in when set, so the switch lives in the
+// same word as the beauty flags every caller already packs.
+void set_near_field_flags(CameraParams *cp, uint32_t beauty_flags, bool brick_cache);
 
 } // namespace ve

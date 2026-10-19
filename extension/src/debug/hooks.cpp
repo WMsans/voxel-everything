@@ -312,6 +312,8 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_stream_region", "region"), &VoxelDebugHooks::debug_stream_region);
 	ClassDB::bind_method(D_METHOD("debug_brick_flags", "region"), &VoxelDebugHooks::debug_brick_flags);
 	ClassDB::bind_method(D_METHOD("debug_brick_flags_after_mark", "region"), &VoxelDebugHooks::debug_brick_flags_after_mark);
+	ClassDB::bind_method(D_METHOD("debug_brick_cache_stats"), &VoxelDebugHooks::debug_brick_cache_stats);
+	ClassDB::bind_method(D_METHOD("debug_brick_cache_flags", "brick"), &VoxelDebugHooks::debug_brick_cache_flags);
 	ClassDB::bind_method(D_METHOD("debug_release_region", "region_slot"), &VoxelDebugHooks::debug_release_region);
 	ClassDB::bind_method(D_METHOD("debug_jobs"), &VoxelDebugHooks::debug_jobs);
 	ClassDB::bind_method(D_METHOD("debug_region_table_slot", "region_slot", "brick"), &VoxelDebugHooks::debug_region_table_slot);

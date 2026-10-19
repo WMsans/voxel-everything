@@ -17,6 +17,9 @@ shared uint s_ops[256];
 shared uint s_op_n;
 shared uint s_keep[256];
 shared uint s_liquid;
+// Non-zero once anything in this brick disqualifies it from the baked-normal cache (see
+// phase 6). Racing writes of the same value are harmless: it is only read after a barrier.
+shared uint s_cache_bad;
 // The conifer stage's per-brick cell cache (stages/conifers.field.glslh). Declared here for
 // every pipeline because only a compute shader may declare shared memory; a pipeline without
 // the stage never touches it.
@@ -26,6 +29,7 @@ shared vec4 s_conifer_b[16];
 #define FIELD_OP_INDEX(base, i) ((base) + s_ops[i])
 #include "field.glslh"
 #include "brick_layout.glslh"
+#include "brick_cache.glslh"
 #include "opaque_view.glslh"
 
 // One workgroup per brick; 256 threads stride over the brick's 4096 cells and 4913 lattice
@@ -44,6 +48,18 @@ layout(set = 0, binding = 6, std430) readonly buffer Jobs { ivec4 v[]; } jobs;
 // binding 7 is the field op pool, declared by field.glslh
 layout(set = 0, binding = 10, std430) writeonly buffer BrickFlags { uint v[]; } brick_flags;
 layout(set = 0, binding = 15, std430) buffer RegionOccupancy { uint w[]; } occupancy;
+// Task 2: the baked-normal cache, written in phase 6. The two flag buffers say whether a
+// slot's entry is valid; they are not part of the texture, so an ungenerated slot's stale
+// bytes are unambiguous.
+layout(set = 0, binding = 16, rgba16_snorm) writeonly uniform image3D brick_cache;
+layout(set = 0, binding = 17, std430) writeonly buffer CacheNormalOk { uint v[]; } normal_ok;
+layout(set = 0, binding = 18, std430) writeonly buffer CacheSunOk { uint v[]; } sun_ok;
+
+// Phase 6's bake result, kept in shared memory so neighbouring lattice points can be compared
+// after a barrier.
+const int kCacheSamples = BRICK_CACHE_DIM * BRICK_CACHE_DIM * BRICK_CACHE_DIM;
+shared vec3 s_cache_n[kCacheSamples];
+shared float s_cache_d[kCacheSamples];
 
 const uint CELL_AIR = 1u;
 const uint CELL_SOLID = 2u;
@@ -155,7 +171,7 @@ void main() {
 	vec3 bo = vec3(brick) * BRICK_SIZE;
 
 	if (tid < 4u) { s_pal[tid] = 0u; s_cnt[tid] = 0u; s_inv[tid] = tid; }
-	if (tid == 0u) { s_umin = 255u; s_umax = 0u; }
+	if (tid == 0u) { s_umin = 255u; s_umax = 0u; s_cache_bad = 0u; }
 #ifdef CONIFERS_STAGE
 	conifer_cell_cache_fill(bo, tid);
 #endif
@@ -170,6 +186,11 @@ void main() {
 		float osdf;
 		uint omat;
 		eval_field_pair(bo + vec3(v) * VOXEL_SIZE, op_base, s_op_n, sdf, mat, osdf, omat);
+		// The cache stores the UNION gradient, so a brick whose union holds a transparent
+		// material must not bake one: the marcher sees the opaque view there (that material
+		// is air), and the union gradient at the surface it hit belongs to the ice instead.
+		// `mat` is the union material; the s_mat stored below is the opaque view's.
+		if (mat_transparent(mat)) atomicOr(s_cache_bad, 1u);
 		uint ub = encode_sdf_byte(solid_sample(bo + vec3(v) * VOXEL_SIZE, op_base, sdf, mat));
 		atomicMin(s_umin, ub);
 		atomicMax(s_umax, ub);
@@ -389,5 +410,63 @@ void main() {
 		uint occ_shift = (uint(bi) & 15u) * 2u;
 		atomicAnd(occupancy.w[occ_word], ~(3u << occ_shift));
 		atomicOr(occupancy.w[occ_word], (state & 3u) << occ_shift);
+	}
+
+	// Phase 6: bake the normal cache (Task 2). The marcher reads one filtered fetch of this
+	// instead of re-running the pipeline for the hit normal, so each of the 125 lattice
+	// points bakes exactly what the marcher would have evaluated there: eval_field_gradient
+	// over this region's op span. The points lie inside the brick plus its +16 face, which
+	// the conifer cell cache filled above already covers.
+	//
+	// The brick is a MISS -- normal_ok stays 0 and nothing is stored -- when a sample's
+	// gradient is inexact or degenerate, when a liquid op shaped this brick (the solid view
+	// differs), when a cell holds a transparent material (see phase 1a), or when two adjacent
+	// near-surface samples disagree (thin shell / crease, below). This shader binds no
+	// stored-normal buffers, so volumes and overrides report an inexact gradient and land here
+	// by design.
+	if (tid < uint(kCacheSamples)) {
+		ivec3 l = ivec3(int(tid) % BRICK_CACHE_DIM,
+				(int(tid) / BRICK_CACHE_DIM) % BRICK_CACHE_DIM,
+				int(tid) / (BRICK_CACHE_DIM * BRICK_CACHE_DIM));
+		float csdf;
+		uint cmat;
+		vec3 grad;
+		bool exact;
+		eval_field_gradient(bo + vec3(l) * (float(BRICK_CACHE_STEP) * VOXEL_SIZE), op_base,
+				s_op_n, csdf, cmat, grad, exact);
+		float len = length(grad);
+		vec3 n = len > 1e-8 ? grad / len : vec3(0.0);
+		if (!exact || len < 1e-8) atomicOr(s_cache_bad, 1u);
+		else imageStore(brick_cache, brick_cache_texel(slot, l, pc.atlas_bricks.xyz),
+				vec4(n, 1.0));
+		s_cache_n[tid] = n;
+		s_cache_d[tid] = csdf;
+	}
+	memoryBarrierShared();
+	barrier();
+	// A shell thinner than the 20 cm lattice, or a crease, cannot be represented here: a
+	// sample can land on the far side and read an opposed gradient. Any axis-adjacent
+	// near-surface pair more than 60 degrees apart makes the brick a miss, so it takes the
+	// analytic path. Deep points are exempt: the trunk core's radial gradient rotates fast
+	// inside the 0.45 m trunk but nothing there is ever read.
+	if (tid < uint(kCacheSamples)) {
+		int i = int(tid);
+		ivec3 l = ivec3(i % BRICK_CACHE_DIM, (i / BRICK_CACHE_DIM) % BRICK_CACHE_DIM,
+				i / (BRICK_CACHE_DIM * BRICK_CACHE_DIM));
+		float near_m = float(BRICK_CACHE_STEP) * VOXEL_SIZE;
+		for (int axis = 0; axis < 3; axis++) {
+			if (l[axis] + 1 >= BRICK_CACHE_DIM) continue;
+			int j = i + (axis == 0 ? 1 : (axis == 1 ? BRICK_CACHE_DIM
+					: BRICK_CACHE_DIM * BRICK_CACHE_DIM));
+			if (abs(s_cache_d[i]) > near_m || abs(s_cache_d[j]) > near_m) continue;
+			if (dot(s_cache_n[i], s_cache_n[j]) < 0.5) atomicOr(s_cache_bad, 1u);
+		}
+	}
+	memoryBarrierShared();
+	barrier();
+	if (tid == 0u) {
+		normal_ok.v[slot] = s_cache_bad == 0u && s_liquid == 0u ? CACHE_OK : 0u;
+		// The brick itself changed, so any sun entry (Task 3) is stale from this moment.
+		sun_ok.v[slot] = 0u;
 	}
 }

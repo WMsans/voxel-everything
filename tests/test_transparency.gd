@@ -104,6 +104,16 @@ func test_the_marcher_sees_the_ground_through_an_added_ice_ball() -> void:
 		"the ground under the ice moved: %s" % d).is_equal_approx(
 		float(before["center_distance"]), 0.05)
 
+func test_an_ice_brick_is_not_normal_cached() -> void:
+	# Same setup as test_the_marcher_sees_the_ground_through_an_added_ice_ball, then stream:
+	# the brick under the ice holds a transparent material, so brick_gen refuses to bake it
+	# and its normal_ok flag stays 0.
+	var w := make_world()
+	var ground := centre_hit(w)
+	w.hooks().debug_apply_sphere_add(ground["pos"], 1.0, material_id(w, "ice"))
+	settle(w)
+	assert_int(w.hooks().debug_brick_cache_flags(Vector3i((ground["pos"] / 0.8).floor())) & 1).is_equal(0)
+
 # The prior attempt went solid past 2.4 m of ice. Ten metres must change nothing here.
 func test_ten_metres_of_ice_do_not_stop_the_marcher() -> void:
 	var w := make_world()

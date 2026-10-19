@@ -10,6 +10,14 @@ inline constexpr int kBrickVoxelCount = kBrickVoxels * kBrickVoxels * kBrickVoxe
 inline constexpr int kBrickPaletteSize = 4;
 inline constexpr float kSdfRange = 0.64f; // uint8 maps to [-0.64, +0.64] meters
 
+// The per-brick baked-normal cache (shaders/brick_cache.glslh, Task 2): BRICK_CACHE_DIM
+// gradient samples per axis, BRICK_CACHE_STEP voxels apart -- a 20 cm lattice over the
+// brick's 80 cm span. The cache texture is atlas_bricks * BRICK_CACHE_DIM texels per axis.
+inline constexpr int kBrickCacheDim = 5;
+inline constexpr int kBrickCacheStep = 4;
+// A cache slot's normal_ok value (1 = baked). sun_ok reuses the same bit in Task 3.
+inline constexpr uint32_t kCacheOk = 1u;
+
 // The SDF is a LATTICE field, not a cell field: sample n sits at local coordinate n, so
 // trilinear reconstruction over a brick's full [0, 16) voxel extent needs a lattice point
 // at 16 as well -- that point belongs to the +X/+Y/+Z neighbour's origin plane. Bricks
