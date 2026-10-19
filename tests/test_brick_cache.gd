@@ -123,5 +123,10 @@ func test_cached_trunk_normals_are_no_worse_than_today() -> void:
 	assert_bool(on["ran"]).is_true()
 	assert_int(on["hits"]).is_greater(3000)
 	# The cache path must actually be in play, or the bound below passes vacuously.
-	assert_int(world.hooks().debug_brick_cache_flags(Vector3i((trunk / 0.8).floor())) & 1).is_equal(1)
+	# >= 0 rejects the -1 non-resident sentinel, which -1 & 1 would otherwise pass.
+	var flags := world.hooks().debug_brick_cache_flags(Vector3i((trunk / 0.8).floor()))
+	assert_int(flags).override_failure_message(
+		"the trunk brick is not resident").is_greater_equal(0)
+	assert_int(flags & 1).override_failure_message(
+		"the trunk brick has no baked normal").is_equal(1)
 	assert_float(on["rms_ndl"]).is_less_equal(0.03)
