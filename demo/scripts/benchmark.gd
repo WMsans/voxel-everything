@@ -9,6 +9,8 @@ extends Node
 #                      pose with the camera's exact one, and skips the ground search.
 #   --benchmark-move   the player flies forward continuously, so regions and collision
 #                      chunks stream in for the whole run.
+#   --benchmark-walk   the player walks at player.gd's walk speed along the pose's heading,
+#                      held on the ground by a downward ray: the ground-level forest cost.
 #   --benchmark-ridge  the second flythrough leg: low along a valley floor with a ridge
 #                      between the camera and the far basin (the far-occludes-far case).
 #   --benchmark-edit   the player is frozen and the edit tool fires every frame.
@@ -33,6 +35,7 @@ const SETTLE_QUIET_FRAMES := 10
 const HORIZON_QUIET_FRAMES := 30
 const FRAMES := 300
 const SPAWN := Vector3(8, 62, 8) # main.tscn's Player transform
+const WALK_SPEED := 6.0 # player.gd's walk_speed
 const ISLAND_FRAMES := 900
 const EDIT_BOUNDED_FRAMES := 900
 const TARGET_MS := 16.6
@@ -108,9 +111,15 @@ var _pose := PackedFloat64Array() # --pose: camera x,y,z, yaw, pitch (degrees)
 # not send the camera through a different stretch of terrain. Frame timing still
 # uses the real delta; this is deliberately not Godot's --fixed-fps option.
 var _path_fps := 0.0
+# Walking leg only: the heading the player walks along, in degrees from --pose (0 without one).
+var _walk_yaw := 0.0
 
 func _movement_delta(delta: float) -> float:
 	return 1.0 / _path_fps if _path_fps > 0.0 and is_finite(_path_fps) else delta
+
+func _walk_step(pos: Vector3, yaw_deg: float, dt: float) -> Vector3:
+	# On the ground plane only; the caller re-snaps y to the surface it lands on.
+	return pos + Basis(Vector3.UP, deg_to_rad(yaw_deg)) * Vector3.FORWARD * WALK_SPEED * dt
 
 func _effects_off_from_args(args: PackedStringArray) -> PackedStringArray:
 	var effects := PackedStringArray()
@@ -125,8 +134,8 @@ func _effects_off_from_args(args: PackedStringArray) -> PackedStringArray:
 
 func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
-	for m in ["--benchmark-spawn", "--benchmark-move", "--benchmark-ridge", "--benchmark-edit",
-			"--benchmark-edit-bounded", "--benchmark-island", "--benchmark"]:
+	for m in ["--benchmark-spawn", "--benchmark-move", "--benchmark-walk", "--benchmark-ridge",
+			"--benchmark-edit", "--benchmark-edit-bounded", "--benchmark-island", "--benchmark"]:
 		if m in args:
 			_mode = m
 			break
@@ -148,12 +157,14 @@ func _ready() -> void:
 	# "regression" that no code change can move.
 	_record_vsync()
 
-	# Only the steady leg. It is the one that claims a settled world, and the only one whose
-	# world can reach that state: the edit and island legs deliberately keep dirtying it, so
-	# waiting for quiet there would just run their edit loop for the length of the cap before
-	# sampling ever began -- which is a different measurement, and on the edit leg ran the
-	# region op lists to overflow.
-	_settle = _mode == "--benchmark" or _mode == "--benchmark-spawn"
+	# Only the steady and walk legs. They are the ones that claim a settled world, and the
+	# only ones whose world can reach that state: the edit and island legs deliberately keep
+	# dirtying it, so waiting for quiet there would just run their edit loop for the length of
+	# the cap before sampling ever began -- which is a different measurement, and on the edit
+	# leg ran the region op lists to overflow.
+	# The walk leg settles so it measures walking, not the world load behind the first 60 m.
+	_settle = _mode == "--benchmark" or _mode == "--benchmark-spawn" \
+			or _mode == "--benchmark-walk"
 
 	_player = get_parent().get_node("Player")
 	_world = get_parent().get_node("VoxelWorld")
@@ -278,6 +289,7 @@ func _ready() -> void:
 				Vector3(_pose[0], _pose[1] - 0.7, _pose[2]))
 			_cam.transform = Transform3D(Basis(Vector3.RIGHT, deg_to_rad(_pose[4])),
 				Vector3(0, 0.7, 0))
+			_walk_yaw = _pose[3]
 		else:
 			_player.global_transform = Transform3D(Basis.IDENTITY, Vector3(24, 63.2, 24))
 			_cam.transform = Transform3D(Basis.looking_at(Vector3(6, -10, 6).normalized()),
@@ -396,6 +408,14 @@ func _process(delta: float) -> void:
 		_fire_bounded_edit()
 	elif _mode == "--benchmark-island" and _frames > _warmup:
 		_island_cycle(delta)
+	elif _mode == "--benchmark-walk" and _settled_at >= 0:
+		# Walk the pose's heading at walking pace, staying on the surface the player would
+		# actually stand on: trunks, cards and grass are all measured from down here.
+		var p: Vector3 = _walk_step(_player.global_position, _walk_yaw, movement_delta)
+		var hit: Dictionary = _world.raycast(p + Vector3(0, 2, 0), Vector3.DOWN, 50.0)
+		if hit["hit"]:
+			p.y = hit["pos"].y + 0.9 # capsule half-height, as _stand_on_ground
+		_player.global_position = p
 
 	if _frames <= _warmup:
 		return # let the first regions land before sampling
