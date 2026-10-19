@@ -33,19 +33,24 @@ Darwin) ;;
 	;;
 esac
 
-# Leg name -> godot arg; also the menu order.
-NAMES=(steady move ridge edit edit-bounded island)
+# Leg name -> godot args (word-split by the callers, so no spaces inside one); also the
+# menu order.
+NAMES=(steady move ridge edit edit-bounded island fjords-forest)
 leg_args() {
 	case "$1" in
 	steady) echo "--benchmark" ;;
+	# Standing in the Fjords conifer forest: trunks, cards and grass fill the screen. Was 51 ms
+	# on the Mac before bark took the R8 normal and the tree stages left the gradient taps.
+	fjords-forest) echo "--benchmark --pipeline=res://assets/pipelines/fjords.pipeline" \
+		"--seed=880510467 --pose=-98.05,186.0,417.40,59.0,-5" ;;
 	*) echo "--benchmark-$1" ;;
 	esac
 }
 
-# $1 = leg arg, $2 = name used for the report file, rest = extra godot args.
+# $1 = name used for the report file, rest = godot args (the leg's, then any extras).
 run_leg() {
-	local leg="$1" name="$2"
-	shift 2
+	local name="$1"
+	shift
 	mkdir -p "$OUT"
 	echo "=== $name ==="
 	# Extra args belong AFTER the "--" separator: demo/benchmark.gd reads
@@ -55,7 +60,7 @@ run_leg() {
 	# ${a[@]+...} guards the empty-array case: macOS ships bash 3.2, where a bare
 	# "${a[@]}" on an empty array trips `set -u`.
 	"$GODOT" --path "$ROOT" ${DRIVER_ARGS[@]+"${DRIVER_ARGS[@]}"} --resolution 2560x1440 \
-		--disable-vsync demo/scenes/main.tscn -- "$leg" "$@" 2>&1 | tee "$OUT/$name.txt"
+		--disable-vsync demo/scenes/main.tscn -- "$@" 2>&1 | tee "$OUT/$name.txt"
 	echo "EXIT_STATUS=${PIPESTATUS[0]}" | tee -a "$OUT/$name.txt"
 }
 
@@ -73,11 +78,11 @@ if [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ] && command -v fzf >/dev/null 2>&1; then
 		[ -n "$choice" ] || break
 		if [ "$choice" = all ]; then
 			for name in "${NAMES[@]}"; do
-				run_leg "$(leg_args "$name")" "$name"
+				run_leg "$name" $(leg_args "$name")
 			done
 			print_verdicts "$OUT"/*.txt
 		else
-			run_leg "$(leg_args "$choice")" "$choice"
+			run_leg "$choice" $(leg_args "$choice")
 			print_verdicts "$OUT/$choice.txt"
 		fi
 	done
@@ -86,6 +91,6 @@ if [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ] && command -v fzf >/dev/null 2>&1; then
 fi
 
 for name in "${NAMES[@]}"; do
-	run_leg "$(leg_args "$name")" "$name" "$@"
+	run_leg "$name" $(leg_args "$name") "$@"
 done
 print_verdicts "$OUT"/*.txt
