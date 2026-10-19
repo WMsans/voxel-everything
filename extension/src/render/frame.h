@@ -164,6 +164,9 @@ private:
 	int64_t scatter_edit_seq_ = -1;
 	float scatter_sun_[3] = {};
 	int scatter_settle_ = 0;
+	// Task 3's rolling sun-cache sweep cursor, in atlas slots. Advances by
+	// kSunSweepSlotsPerFrame each frame and wraps at atlas_slot_count().
+	int sun_sweep_cursor_ = 0;
 
 	RenderOrchestrator &render_;
 	LodSystem &lod_;

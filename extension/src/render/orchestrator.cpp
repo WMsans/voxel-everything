@@ -30,6 +30,7 @@
 #include "render/grass_raster_pass.h"
 #include "render/lod_raster_pass.h"
 #include "render/sun_shadow_pass.h"
+#include "render/sun_bake_pass.h"
 #include "render/lod_cull_pass.h"
 #include "render/hiz_pass.h"
 #include "render/world_streamer.h"
@@ -332,6 +333,16 @@ RenderOrchestrator::GpuInitResult RenderOrchestrator::ensure_gpu_graph(
 		if (passes_.deferred) passes_.deferred->set_sun_ubo(passes_.sun_ubo->buffer());
 		if (passes_.contact_shadow) passes_.contact_shadow->set_sun_ubo(passes_.sun_ubo->buffer());
 	}
+	// Task 3: bake sun visibility into the brick cache right after the sun UBO it reads. A
+	// failure here is fail-soft: the raymarcher keeps its own per-pixel sun march.
+	passes_.sun_bake = new SunBakePass();
+	if (!passes_.sun_bake->initialize(device, *passes_.atlas,
+				passes_.sun_ubo ? passes_.sun_ubo->buffer() : RID())) {
+		UtilityFunctions::printerr("RenderOrchestrator: sun bake pass initialization failed; "
+				"sun visibility stays per-pixel");
+		delete passes_.sun_bake;
+		passes_.sun_bake = nullptr;
+	}
 	passes_.ssgi = new SsgiPass();
 	passes_.ssgi->initialize(device);
 	passes_.ssr = new SsrPass();
@@ -451,6 +462,7 @@ void RenderOrchestrator::teardown_render_passes() {
 	if (passes_.beauty_camera) { passes_.beauty_camera->teardown(); delete passes_.beauty_camera; passes_.beauty_camera = nullptr; }
 	if (passes_.gbuffer) { delete passes_.gbuffer; passes_.gbuffer = nullptr; }
 	if (passes_.raymarch) { delete passes_.raymarch; passes_.raymarch = nullptr; }
+	if (passes_.sun_bake) { delete passes_.sun_bake; passes_.sun_bake = nullptr; }
 	if (passes_.sun_ubo) { passes_.sun_ubo->teardown(); delete passes_.sun_ubo; passes_.sun_ubo = nullptr; }
 	if (passes_.lod_cull) { delete passes_.lod_cull; passes_.lod_cull = nullptr; }
 	if (passes_.hiz) {

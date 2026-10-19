@@ -84,6 +84,7 @@ class HizPass;
 class GBuffer;
 class CameraUbo;
 class SunUbo;
+class SunBakePass;
 class FieldContextSet;
 class SectorContext;
 class ContactShadowPass;
@@ -116,6 +117,7 @@ struct RenderPasses {
 	DeferredPass *deferred = nullptr;
 	SunShadowPass *sun_shadow = nullptr;
 	SunUbo *sun_ubo = nullptr;
+	SunBakePass *sun_bake = nullptr;
 	FieldContextSet *field_context = nullptr;
 	SectorContext *sectors = nullptr;
 	InjectPass *inject = nullptr;

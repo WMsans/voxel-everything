@@ -155,6 +155,12 @@
 #define BRICK_GEN_PUSH_FIELDS \
 	ivec4 atlas_bricks;
 
+#define SUN_BAKE_PUSH_FIELDS \
+	ivec4 dims; \
+	ivec4 region_origin; \
+	ivec4 atlas_bricks; \
+	ivec4 cfg;
+
 #define SECTOR_BAKE_PUSH_FIELDS \
 	ivec4 sector;
 

@@ -57,6 +57,10 @@ layout(set = 0, binding = 16, std430) buffer SlabCounts { int n[]; } slab_counts
 // generator runs, exactly as the flags word is.
 layout(set = 0, binding = 17, std430) buffer CacheNormalOk { uint v[]; } cache_normal_ok;
 layout(set = 0, binding = 18, std430) buffer CacheSunOk { uint v[]; } cache_sun_ok;
+// Task 3: the global brick this slot holds. The sun bake's sweep walks SLOTS, and the region
+// tables only map brick -> slot, so this is the only way it can find the brick -- and with it
+// the world position -- it is baking. Written here at allocation, beside the two cache words.
+layout(set = 0, binding = 19, std430) buffer CacheBrick { ivec4 v[]; } cache_brick;
 const uint CELL_AIR = 1u;
 const uint CELL_SOLID = 2u;
 const uint CELL_FULL = 3u;
@@ -235,6 +239,7 @@ void main() {
 	brick_flags.v[slot] = BRICK_FLAG_CONSERVATIVE;
 	cache_normal_ok.v[slot] = 0u;
 	cache_sun_ok.v[slot] = 0u;
+	cache_brick.v[slot] = ivec4(brick, 0);
 
 	int j = atomicAdd(frame.job_count, 1);
 	if (j >= pc.cfg.z) {

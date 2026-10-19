@@ -37,6 +37,7 @@
 #include "render/region_pass.h"
 #include "render/ssgi_pass.h"
 #include "render/ssr_pass.h"
+#include "render/sun_bake_pass.h"
 #include "render/sun_shadow_pass.h"
 #include "render/sun_ubo.h"
 #include "render/world_streamer.h"
@@ -315,6 +316,20 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	// Raster mode (spec 2026-10-04 §4): nothing is marched, islands included. The composite
 	// below fills the G-buffer with sky and the LoD raster draws every surface.
 	if (!settings.raster_mode) {
+		// Task 3: the sun cache, after the stream stage (whose brick_gen cleared the sun entry
+		// of every regenerated brick) and before the march that reads it. note_sun drops every
+		// entry when the sun turned; bake_jobs re-bakes this frame's new bricks; the sweep
+		// re-bakes a rolling window so a moved sun converges over a few seconds. Raster mode
+		// marches nothing, so it bakes nothing.
+		const int slots = atlas->atlas_slot_count();
+		if (SunBakePass *sun_bake = render_.passes().sun_bake; sun_bake && slots > 0) {
+			timings->begin(rd, "sun_bake");
+			sun_bake->note_sun(rd, *atlas, sun_state.dir);
+			sun_bake->bake_jobs(rd, *atlas, cp);
+			sun_bake->bake_sweep(rd, *atlas, cp, sun_sweep_cursor_, kSunSweepSlotsPerFrame);
+			sun_sweep_cursor_ = (sun_sweep_cursor_ + kSunSweepSlotsPerFrame) % slots;
+			timings->end(rd, "sun_bake");
+		}
 		const int islands = render_.island_slot_count();
 		IslandCullPass *cull = render_.passes().island_cull;
 		RID mask;

@@ -51,7 +51,6 @@ func test_streamed_surface_bricks_are_normal_cached() -> void:
 	var world := make_world()
 	var s: Dictionary = world.hooks().debug_brick_cache_stats()
 	assert_int(s["normal_ok"]).is_greater(100)
-	assert_int(s["sun_ok"]).is_equal(0) # nothing bakes sun until Task 3
 
 func test_a_reallocated_slot_starts_with_no_cache() -> void:
 	# A streamed surface brick carries a baked normal. Give its region slot back, then mark the
@@ -130,3 +129,38 @@ func test_cached_trunk_normals_are_no_worse_than_today() -> void:
 	assert_int(flags & 1).override_failure_message(
 		"the trunk brick has no baked normal").is_equal(1)
 	assert_float(on["rms_ndl"]).is_less_equal(0.03)
+
+func test_cached_sun_matches_the_marched_sun() -> void:
+	# Task 3: the sun visibility baked into the cache's .w against the per-pixel march it
+	# replaces. The probe looks across hills that self-shadow, so a cache that baked the wrong
+	# lattice or the wrong brick would show up as a large difference rather than a flat 1.0.
+	var world := make_world()
+	world.set_effect_enabled("raymarched_sun_shadow", true)
+	var d: Dictionary = world.hooks().debug_raymarch_sun_probe(
+			Vector3(20.0, 72.0, 29.0), Vector3(0.1, -0.85, -0.5), 256, 192)
+	assert_bool(d["ran"]).is_true()
+	# The probe bakes every slot before it renders, so a bake that never wrote an entry (and
+	# therefore a comparison of two identical marched images) fails here instead of passing.
+	assert_int(world.hooks().debug_brick_cache_stats()["sun_ok"]).is_greater(100)
+	assert_int(d["hits"]).is_greater(12000)
+	assert_float(d["mean_abs_diff"]).is_less_equal(0.08)
+	assert_float(d["flip_fraction"]).is_less_equal(0.03)
+
+func test_an_edited_brick_is_rebaked_the_same_frame() -> void:
+	# An edit regenerates the brick: brick_gen clears its sun entry, and this frame's job bake
+	# must set it again -- otherwise the edited surface shades with the old surface's shadows.
+	var world := make_world()
+	var hit: Dictionary = world.raycast(Vector3(20.0, 80.0, 20.0), Vector3.DOWN, 200.0)
+	assert_bool(hit["hit"]).override_failure_message("no ground under the camera").is_true()
+	world.hooks().debug_apply_sphere_subtract(hit["pos"], 0.4)
+	world.hooks().debug_stream_frame(Vector3(20.0, 56.0, 20.0))
+	var brick := Vector3i((hit["pos"] / 0.8).floor())
+	var flags := world.hooks().debug_brick_cache_flags(brick)
+	assert_int(flags).override_failure_message("the edited brick is not resident").is_greater_equal(0)
+	assert_int(flags & 1).override_failure_message(
+		"the regenerated brick has no baked normal").is_equal(1)
+	assert_int(flags & 2).override_failure_message(
+		"regeneration kept the old sun entry").is_equal(0)
+	world.hooks().debug_sun_bake_jobs()
+	assert_int(world.hooks().debug_brick_cache_flags(brick) & 3).override_failure_message(
+		"the edited brick's sun entry was not rebaked the same frame").is_equal(3)

@@ -35,6 +35,7 @@
 #include "render/lod_pool.h"
 #include "render/lod_raster_pass.h"
 #include "render/sun_shadow_pass.h"
+#include "render/sun_bake_pass.h"
 #include "render/sun_ubo.h"
 #include "render/lod_cull_pass.h"
 #include "render/grass_scatter_pass.h"
@@ -86,6 +87,7 @@
 #include <godot_cpp/variant/utility_functions.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <set>
 #include <vector>
 #include <godot_cpp/core/class_db.hpp>
@@ -1472,6 +1474,104 @@ Dictionary VoxelDebugHooks::debug_raymarch_normal_probe(Vector3 origin, Vector3 
 	d["cel_mismatch_fraction"] = frac;
 	d["largest_mismatch_component"] = largest;
 	return d;
+}
+
+// Task 3: what the cache's .w says against what the per-pixel march says, over the same
+// pixels. Every slot is baked first, so a slot the sweep has not reached yet cannot show up as
+// a difference -- otherwise this measures the sweep's lag, not the bake.
+Dictionary VoxelDebugHooks::debug_raymarch_sun_probe(Vector3 origin, Vector3 dir, int w, int h) {
+	Dictionary d;
+	d["ran"] = false;
+	d["hits"] = 0;
+	d["mean_abs_diff"] = 0.0;
+	d["flip_fraction"] = 0.0;
+	if (w <= 0 || h <= 0) return d;
+	world_->ensure_initialized();
+	RenderingDevice *device = world_->rd();
+	if (!world_->is_initialized() || !device || !world_->context().render->passes().atlas ||
+			!world_->context().render->passes().raymarch ||
+			!world_->context().render->passes().sun_bake) return d;
+	const GpuAtlas &atlas = *world_->context().render->passes().atlas;
+	SunBakePass *sun_bake = world_->context().render->passes().sun_bake;
+	RaymarchPass *raymarch = world_->context().render->passes().raymarch;
+
+	const float p[3] = {origin.x, origin.y, origin.z};
+	const float f[3] = {dir.x, dir.y, dir.z};
+	const ve::ProbeCamera pc = ve::probe_camera(p, f, w, h, 1.0471975512f, 0.05f, 4000.0f);
+	ve::CameraParams cam{};
+	for (int axis = 0; axis < 3; ++axis) {
+		cam.cam_pos[axis] = p[axis];
+		cam.cam_right[axis] = pc.right[axis];
+		cam.cam_up[axis] = pc.up[axis];
+		cam.cam_fwd[axis] = pc.fwd[axis];
+	}
+	cam.params[0] = pc.tan_x;
+	cam.params[1] = pc.tan_y;
+	cam.params[2] = 200.0f;
+	ve::set_near_field_world(&cam, world_->context().store->region_window(),
+			world_->context().render->island_slot_count(),
+			world_->context().store->config().atlas_bricks);
+	const uint32_t beauty_flags = ve::pack_flags(world_->context().render->beauty_settings());
+	static const float kNoEdit[6] = {0, 0, 0, 0, 0, 0};
+	auto render_probe = [&]() {
+		if (!raymarch->render(device, atlas, world_->context().render->passes().islands, RID(),
+				cam, w, h, kNoEdit, world_->context().render->passes().field_context)) return false;
+		device->submit();
+		device->sync();
+		return true;
+	};
+
+	// Bake every slot, in the frame's own sweep size.
+	for (int first = 0; first < atlas.atlas_slot_count(); first += kSunSweepSlotsPerFrame)
+		sun_bake->bake_sweep(device, atlas, cam, first, kSunSweepSlotsPerFrame);
+	device->submit();
+	device->sync();
+
+	ve::set_near_field_flags(&cam, beauty_flags, false);
+	if (!render_probe()) return d;
+	const PackedByteArray off = device->texture_get_data(raymarch->albedo_texture(), 0);
+	ve::set_near_field_flags(&cam, beauty_flags, true);
+	if (!render_probe()) return d;
+	const PackedByteArray on = device->texture_get_data(raymarch->albedo_texture(), 0);
+	const PackedByteArray hitpos = device->texture_get_data(raymarch->hitpos_texture(), 0);
+	if (off.size() < static_cast<int64_t>(w) * h * 4 ||
+			on.size() < static_cast<int64_t>(w) * h * 4 ||
+			hitpos.size() < static_cast<int64_t>(w) * h * 16) return d;
+	const uint8_t *a = off.ptr();
+	const uint8_t *b = on.ptr();
+	const float *hp = reinterpret_cast<const float *>(hitpos.ptr());
+	int hits = 0;
+	int flips = 0;
+	double sum = 0.0;
+	for (int i = 0; i < w * h; i++) {
+		if (hp[i * 4 + 3] <= 0.5f) continue;
+		hits++;
+		const double diff = std::fabs(double(b[i * 4 + 3]) - double(a[i * 4 + 3])) / 255.0;
+		sum += diff;
+		if (diff > 0.5) flips++;
+	}
+	d["ran"] = true;
+	d["hits"] = hits;
+	d["mean_abs_diff"] = hits > 0 ? sum / hits : 0.0;
+	d["flip_fraction"] = hits > 0 ? double(flips) / hits : 0.0;
+	return d;
+}
+
+void VoxelDebugHooks::debug_sun_bake_jobs() {
+	world_->ensure_initialized();
+	RenderingDevice *device = world_->rd();
+	if (!world_->is_initialized() || !device || !world_->context().render->passes().atlas ||
+			!world_->context().render->passes().sun_bake) return;
+	// The world half of the push block is the only part the bake reads: the job list itself
+	// names the slots, and the SDF atlas locates them.
+	ve::CameraParams cam{};
+	ve::set_near_field_world(&cam, world_->context().store->region_window(),
+			world_->context().render->island_slot_count(),
+			world_->context().store->config().atlas_bricks);
+	world_->context().render->passes().sun_bake->bake_jobs(
+			device, *world_->context().render->passes().atlas, cam);
+	device->submit();
+	device->sync();
 }
 
 // Task 7: the island counterpart of debug_raymarch_normal_probe. Every hit inside the

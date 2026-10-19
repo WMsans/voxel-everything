@@ -41,7 +41,9 @@ bool RegionPass::initialize(RenderingDevice *rd, const GpuAtlas &atlas) {
 			gpu::storage(16, atlas.slab_counts()),
 			// 17-18: Task 2's cache validity, cleared as the slot is reallocated.
 			gpu::storage(17, atlas.cache_normal_ok()),
-			gpu::storage(18, atlas.cache_sun_ok())});
+			gpu::storage(18, atlas.cache_sun_ok()),
+			// 19: Task 3's slot -> brick map, written as the slot is allocated.
+			gpu::storage(19, atlas.cache_brick())});
 	free_set_ = gpu::uniform_set(rd, group_, free_.shader, 0, {
 			gpu::storage(0, atlas.region_tables()),
 			gpu::storage(1, atlas.free_list()),

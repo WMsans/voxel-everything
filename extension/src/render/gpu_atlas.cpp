@@ -102,6 +102,10 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 			zeroed(static_cast<int64_t>(slots) * sizeof(uint32_t)));
 	cache_sun_ok_ = rd->storage_buffer_create(static_cast<uint32_t>(slots) * sizeof(uint32_t),
 			zeroed(static_cast<int64_t>(slots) * sizeof(uint32_t)));
+	// Task 3: the global brick each slot holds, so the sun bake's sweep can bake a slot it
+	// picked by index. brick_mark writes it at allocation, beside the two cache words.
+	cache_brick_ = rd->storage_buffer_create(static_cast<uint32_t>(slots) * 4 * sizeof(int32_t),
+			zeroed(static_cast<int64_t>(slots) * 4 * sizeof(int32_t)));
 
 	// The region map is a BUFFER, not a texture: streaming re-points one entry per region,
 	// and buffer_update writes four bytes where texture_update would rewrite a whole layer.
@@ -176,7 +180,7 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 
 	bool ok = sdf_atlas_.is_valid() && mat_atlas_.is_valid() && palette_.is_valid() &&
 			brick_flags_.is_valid() && brick_cache_.is_valid() && cache_normal_ok_.is_valid() &&
-			cache_sun_ok_.is_valid() && region_map_.is_valid() && region_tables_.is_valid() && free_list_.is_valid() &&
+			cache_sun_ok_.is_valid() && cache_brick_.is_valid() && region_map_.is_valid() && region_tables_.is_valid() && free_list_.is_valid() &&
 			counters_.is_valid() && frame_.is_valid() && dispatch_args_.is_valid() &&
 			jobs_.is_valid() && op_pool_.is_valid() && op_counts_.is_valid() &&
 			region_slot_counts_.is_valid() && region_occupancy_.is_valid() &&
@@ -209,6 +213,7 @@ void GpuAtlas::teardown() {
 	free_if_valid(rd_, brick_cache_);
 	free_if_valid(rd_, cache_normal_ok_);
 	free_if_valid(rd_, cache_sun_ok_);
+	free_if_valid(rd_, cache_brick_);
 	free_if_valid(rd_, region_map_);
 	free_if_valid(rd_, region_tables_);
 	free_if_valid(rd_, free_list_);
@@ -233,6 +238,9 @@ void GpuAtlas::reset_frame_counters(RenderingDevice *rd) {
 	// brick that nobody hears about is a hole in the world that never heals. Whoever acts
 	// on the bits clears them with clear_overflow().
 	rd->buffer_update(frame_, 0, 4, zeroed(4));
+	// The sun bake dispatches indirectly from the same args. A frame with no jobs must not
+	// replay the last frame's job list, so the args it would read start at zero.
+	if (dispatch_args_.is_valid()) rd->buffer_update(dispatch_args_, 0, 16, zeroed(16));
 }
 
 void GpuAtlas::reset_slab_counts(RenderingDevice *rd, int region_slot) {

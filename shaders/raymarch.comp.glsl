@@ -356,6 +356,11 @@ struct Hit {
 	vec3 p;
 	vec3 n;
 	uint mat;
+	// Task 3: which atlas slot the terrain hit lives in, and where in that brick (voxel units)
+	// the hit is the cache's own address. Islands and misses leave slot = -1: only RAYMARCH
+	// hits read the sun cache, and only a terrain brick has one.
+	int slot;
+	vec3 vox;
 };
 
 // Sphere-traces one island. `best` is updated only when this island is nearer, so calling it
@@ -428,6 +433,8 @@ void march_island(int slot, vec3 ro, vec3 rd, inout Hit best, inout int steps_le
 			// can report the transparent label -- a wrong material LABEL, not a tunnel or
 			// a NaN. Upgrade path: march the SDF gradient inward until the sign flips.
 			best.mat = island_material_at(isl, q_mat);
+			best.slot = -1;
+			best.vox = vec3(0.0);
 			return;
 		}
 		t += max(d * 0.9, 0.005);
@@ -446,6 +453,8 @@ Hit march_bricks(int region_slot, ivec3 region_coord, vec3 ro, vec3 rd,
 	h.p = vec3(0.0);
 	h.n = vec3(0.0, 1.0, 0.0);
 	h.mat = 0u;
+	h.slot = -1;
+	h.vox = vec3(0.0);
 
 	vec3 segment_ro = ro + rd * t_begin;
 	float segment_length = max(t_end - t_begin, 0.0);
@@ -513,6 +522,8 @@ Hit march_bricks(int region_slot, ivec3 region_coord, vec3 ro, vec3 rd,
 					h.t = t_begin + t;
 					h.p = p;
 					h.mat = material_at(p, map, slot);
+					h.slot = slot;
+					h.vox = (p - vec3(map) * BRICK_SIZE) / VOXEL_SIZE;
 					// Task 2: the baked normal, when this brick has one and the switch is on. One
 					// filtered fetch replaces the whole pipeline evaluation. A filtered blend of
 					// two opposing unit normals can cancel at a crease, so a degenerate result
@@ -520,8 +531,7 @@ Hit march_bricks(int region_slot, ivec3 region_coord, vec3 ro, vec3 rd,
 					if ((floatBitsToUint(pc.cam_pos.w) & RENDER_BRICK_CACHE) != 0u &&
 							cache_normal_ok.v[slot] == CACHE_OK) {
 						vec3 cached = textureLod(brick_cache, brick_cache_uvw(slot,
-								(p - vec3(map) * BRICK_SIZE) / VOXEL_SIZE,
-								pc.atlas_bricks.xyz), 0.0).xyz;
+								h.vox, pc.atlas_bricks.xyz), 0.0).xyz;
 						float clen = length(cached);
 						// A hit is a front face by construction: its normal opposes the ray. A
 						// cached normal that does not was sampled across a thin shell or a CSG
@@ -557,6 +567,8 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
 	h.p = vec3(0.0);
 	h.n = vec3(0.0, 1.0, 0.0);
 	h.mat = 0u;
+	h.slot = -1;
+	h.vox = vec3(0.0);
 
 	ivec3 rmap = ivec3(floor(ro / REGION_SIZE));
 	vec3 rdelta = abs(vec3(REGION_SIZE) / rd);
@@ -716,14 +728,24 @@ void main() {
 			// One voxel of offset: less and the ray self-shadows on its own surface, more
 			// and thin ledges stop casting.
 			vec3 sro = best.p + best.n * 0.06;
-			// FULL reach, sun map or not. The map was once trusted to answer for the
-			// 7.68-60 m stretch, so the march stopped at the penumbra band; but the map is
-			// rasterized from the LoD mesh and shades only the pixels that mesh drew (see
-			// far_field_owns in shaders/deferred.comp.glsl), so for a near-field pixel this
-			// march is the ONLY shadow term there is. Stopping it early left an occluder
-			// 25 m up-sun casting nothing.
-			sun = min(terrain_sun_visibility(sro, RAY_SHADOW_DIST),
-					island_sun_visibility(sro, island_count, RAY_SHADOW_DIST));
+			// Task 3: a terrain brick with a baked sun entry answers this with one filtered fetch
+			// instead of a 60 m march. Island shadows are still their own march, combined the same
+			// way the two marches were. An unbaked or island hit takes today's path unchanged.
+			if ((flags & RENDER_BRICK_CACHE) != 0u && best.slot >= 0 &&
+					cache_sun_ok.v[best.slot] == CACHE_OK) {
+				sun = min(textureLod(brick_cache,
+						brick_cache_uvw(best.slot, best.vox, pc.atlas_bricks.xyz), 0.0).w,
+						island_sun_visibility(sro, island_count, RAY_SHADOW_DIST));
+			} else {
+				// FULL reach, sun map or not. The map was once trusted to answer for the
+				// 7.68-60 m stretch, so the march stopped at the penumbra band; but the map is
+				// rasterized from the LoD mesh and shades only the pixels that mesh drew (see
+				// far_field_owns in shaders/deferred.comp.glsl), so for a near-field pixel this
+				// march is the ONLY shadow term there is. Stopping it early left an occluder
+				// 25 m up-sun casting nothing.
+				sun = min(terrain_sun_visibility(sro, RAY_SHADOW_DIST),
+						island_sun_visibility(sro, island_count, RAY_SHADOW_DIST));
+			}
 		}
 		if ((flags & BEAUTY_GLOSSY_RAYS) != 0u) {
 			// The only surviving material read on the primary path, and it is gated on the

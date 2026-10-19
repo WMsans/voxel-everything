@@ -287,6 +287,16 @@ public:
 
 	Dictionary debug_raymarch_normal_probe(Vector3 origin, Vector3 dir, int w, int h);
 
+	// Task 3: the cached sun visibility against the per-pixel march it replaces. Sweeps every
+	// slot first so the whole atlas is baked, then renders the probe twice (cache on, cache
+	// off) and compares out_albedo.a on hit pixels: {ran, hits, mean_abs_diff,
+	// flip_fraction}. flip_fraction is the share of hits whose visibility differs by > 0.5.
+	Dictionary debug_raymarch_sun_probe(Vector3 origin, Vector3 dir, int w, int h);
+
+	// Task 3: run the frame's job bake once, so a test can ask whether the bricks this frame
+	// regenerated got their sun entry back in the same frame.
+	void debug_sun_bake_jobs();
+
 	// Task 7: same five metrics as the terrain probe, but the reference normal for every
 	// hit inside the island's local lattice comes from that body's own VolumeData::normal_oct
 	// (trilinearly blended in the body frame, then rotated by the body basis).

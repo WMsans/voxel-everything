@@ -263,6 +263,9 @@ void VoxelDebugHooks::_bind_methods() {
 			&VoxelDebugHooks::debug_raymarch_hole_probe);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_normal_probe", "origin", "dir", "w", "h"),
 			&VoxelDebugHooks::debug_raymarch_normal_probe);
+	ClassDB::bind_method(D_METHOD("debug_raymarch_sun_probe", "origin", "dir", "w", "h"),
+			&VoxelDebugHooks::debug_raymarch_sun_probe);
+	ClassDB::bind_method(D_METHOD("debug_sun_bake_jobs"), &VoxelDebugHooks::debug_sun_bake_jobs);
 	ClassDB::bind_method(D_METHOD("debug_island_normal_probe", "island_slot", "origin", "dir", "w", "h"),
 			&VoxelDebugHooks::debug_island_normal_probe);
 	ClassDB::bind_method(D_METHOD("debug_cel_diff", "albedo", "ambient", "ndl", "ndv", "ndh",
