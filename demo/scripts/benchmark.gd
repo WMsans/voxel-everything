@@ -168,6 +168,9 @@ func _ready() -> void:
 			_world.set_quality_tier(int(arg.trim_prefix("--quality=")))
 		elif arg.begins_with("--pipeline="):
 			_world.terrain_pipeline_path = arg.trim_prefix("--pipeline=")
+		elif arg.begins_with("--seed="):
+			# Read with the pipeline at first init, so it is honoured exactly where --pipeline= is.
+			_world.world_seed = int(arg.trim_prefix("--seed="))
 		elif arg == "--no-physics":
 			_world.physics_enabled = false
 		elif arg.begins_with("--effect-value="):

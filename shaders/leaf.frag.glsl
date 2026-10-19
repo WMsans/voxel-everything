@@ -27,16 +27,23 @@ layout(location = 1) out vec4 out_surface; // xy oct normal, z material id, w gl
 // from a single blob into a sprig of round leaves with real gaps between them, which is the
 // one thing all three references have in common. Procedural rather than a texture so the
 // pass still needs no asset and no extra binding -- the same posture grass takes.
+//
+// Exact only below 0.5, which is all main() reads: it discards unless the distance is under
+// `fill` <= 0.48. A feature point that close to f sits in f's own cell or the neighbour on
+// f's side, per axis, so 2x2 cells answer what 3x3 did -- 4 hashes, not 9, on a pass that
+// is fill-bound under a forest (every overlapping card pays this before its discard).
 float leaf_cells(vec2 p, uint salt) {
 	vec2 i = floor(p);
 	vec2 f = p - i;
+	ivec2 side = ivec2(f.x < 0.5 ? -1 : 1, f.y < 0.5 ? -1 : 1);
 	float d = 8.0;
-	for (int dy = -1; dy <= 1; dy++) {
-		for (int dx = -1; dx <= 1; dx++) {
-			vec2 g = vec2(float(dx), float(dy));
-			uint hh = tree_hash2(ivec2(i) + ivec2(dx, dy), salt);
+	for (int y = 0; y <= 1; y++) {
+		for (int x = 0; x <= 1; x++) {
+			ivec2 c = ivec2(x * side.x, y * side.y);
+			vec2 g = vec2(c);
+			uint hh = tree_hash2(ivec2(i) + c, salt);
 			// BOTH offsets out of ONE hash, 12 bits each. A second tree_hash per cell
-			// doubles the cost of this nine-iteration loop for jitter that is invisible at
+			// doubles the cost of this four-iteration loop for jitter that is invisible at
 			// the size a leaf lands on screen.
 			vec2 o = vec2(float(hh & 0xFFFu), float((hh >> 12) & 0xFFFu)) / 4096.0;
 			d = min(d, length(g + o - f));

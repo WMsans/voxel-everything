@@ -116,15 +116,25 @@ vec3 terrain_r8_fallback_normal(vec3 p, ivec3 anchor, int anchor_slot, inout int
 // analytic gradient over this region's op span (volumes, overrides and CSG included).
 // When the evaluator reports an exact, non-degenerate gradient that IS the surface normal;
 // otherwise fall back to differentiating the stored R8 lattice.
-vec3 terrain_source_normal(vec3 p, ivec3 brick, int anchor_slot, inout int steps_left) {
+//
+// `hit_mat` is the stored material at the hit. The tree stages (trees, conifers) are the
+// priciest part of the pipeline -- the conifer walk alone was 16 ms of a 51 ms forest frame
+// -- and they only shape bark. So a bark hit takes the R8 normal (a trunk is small enough on
+// screen that the lattice contours do not read), and any other hit skips them on every tap
+// via g_field_skip_detail, which base_field_gradient only takes over after its centre tap.
+// Ground within 6 cm of a trunk foot can shade without it; nothing else changes.
+vec3 terrain_source_normal(vec3 p, ivec3 brick, int anchor_slot, uint hit_mat, inout int steps_left) {
+	if (hit_mat == MAT_BARK) return terrain_r8_fallback_normal(p, brick, anchor_slot, steps_left);
 	int rs = region_slot_of(brick);
 	if (rs < 0) return vec3(0.0, 1.0, 0.0);
 	float sdf;
 	uint mat;
 	vec3 gradient;
 	bool exact_gradient;
+	g_field_skip_detail = true;
 	eval_field_gradient(p, uint(rs) * MAX_REGION_OPS, uint(max(op_counts.n[rs], 0)),
 			sdf, mat, gradient, exact_gradient);
+	g_field_skip_detail = false;
 	float len = length(gradient);
 	// The opaque view (shaders/opaque_view.glslh): under a transparent material the atlas
 	// surface is a LABEL boundary, and the union field's gradient here belongs to the medium,
@@ -500,8 +510,8 @@ Hit march_bricks(int region_slot, ivec3 region_coord, vec3 ro, vec3 rd,
 					h.hit = true;
 					h.t = t_begin + t;
 					h.p = p;
-					h.n = terrain_source_normal(p, map, slot, steps_left);
 					h.mat = material_at(p, map, slot);
+					h.n = terrain_source_normal(p, map, slot, h.mat, steps_left);
 					return h;
 				}
 				t += max(d * 0.9, 0.005);
