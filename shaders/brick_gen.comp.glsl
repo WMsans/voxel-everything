@@ -421,9 +421,9 @@ void main() {
 	// The brick is a MISS -- normal_ok stays 0 and nothing is stored -- when a sample's
 	// gradient is inexact or degenerate, when a liquid op shaped this brick (the solid view
 	// differs), when a cell holds a transparent material (see phase 1a), or when two adjacent
-	// near-surface samples disagree (thin shell / crease, below). This shader binds no
-	// stored-normal buffers, so volumes and overrides report an inexact gradient and land here
-	// by design.
+	// near-surface samples are opposed (the far side of a thin shell, below). This shader
+	// binds no stored-normal buffers, so volumes and overrides report an inexact gradient and
+	// land here by design.
 	if (tid < uint(kCacheSamples)) {
 		ivec3 l = ivec3(int(tid) % BRICK_CACHE_DIM,
 				(int(tid) / BRICK_CACHE_DIM) % BRICK_CACHE_DIM,
@@ -444,11 +444,13 @@ void main() {
 	}
 	memoryBarrierShared();
 	barrier();
-	// A shell thinner than the 20 cm lattice, or a crease, cannot be represented here: a
-	// sample can land on the far side and read an opposed gradient. Any axis-adjacent
-	// near-surface pair more than 60 degrees apart makes the brick a miss, so it takes the
-	// analytic path. Deep points are exempt: the trunk core's radial gradient rotates fast
-	// inside the 0.45 m trunk but nothing there is ever read.
+	// A shell thinner than the 20 cm lattice cannot be represented here: a sample lands on the
+	// outer surface and points into the air, while its neighbour 20 cm away inside the shell
+	// points the other way. Any axis-adjacent near-surface pair more than 120 degrees apart
+	// makes the brick a miss, so it takes the analytic path. Ordinary creases (trunk/ground,
+	// simpler bends) stay well inside that and remain cached. Deep points are exempt: the
+	// trunk core's radial gradient rotates fast inside the 0.45 m trunk but nothing there is
+	// ever read.
 	if (tid < uint(kCacheSamples)) {
 		int i = int(tid);
 		ivec3 l = ivec3(i % BRICK_CACHE_DIM, (i / BRICK_CACHE_DIM) % BRICK_CACHE_DIM,
@@ -459,7 +461,7 @@ void main() {
 			int j = i + (axis == 0 ? 1 : (axis == 1 ? BRICK_CACHE_DIM
 					: BRICK_CACHE_DIM * BRICK_CACHE_DIM));
 			if (abs(s_cache_d[i]) > near_m || abs(s_cache_d[j]) > near_m) continue;
-			if (dot(s_cache_n[i], s_cache_n[j]) < 0.5) atomicOr(s_cache_bad, 1u);
+			if (dot(s_cache_n[i], s_cache_n[j]) < -0.5) atomicOr(s_cache_bad, 1u);
 		}
 	}
 	memoryBarrierShared();
