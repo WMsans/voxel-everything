@@ -97,27 +97,14 @@ void base_field_gradient(vec3 p, out float sdf, out uint mat, out vec3 grad, out
 	float sx0, sx1, sy0, sy1, sz0, sz1;
 	const float e = 0.01;
 	g_field_detail_near = false;
-#ifdef VE_FIELD_GROUND
 	eval_base_ground(p, sdf, mat);
-#else
-	eval_base_field(p, sdf, mat);
-#endif
 	g_field_skip_detail = !g_field_detail_near;
-#ifdef VE_FIELD_GROUND
 	eval_base_ground(p - vec3(e, 0.0, 0.0), sx0, m);
 	eval_base_ground(p + vec3(e, 0.0, 0.0), sx1, m);
 	eval_base_ground(p - vec3(0.0, e, 0.0), sy0, m);
 	eval_base_ground(p + vec3(0.0, e, 0.0), sy1, m);
 	eval_base_ground(p - vec3(0.0, 0.0, e), sz0, m);
 	eval_base_ground(p + vec3(0.0, 0.0, e), sz1, m);
-#else
-	eval_base_field(p - vec3(e, 0.0, 0.0), sx0, m);
-	eval_base_field(p + vec3(e, 0.0, 0.0), sx1, m);
-	eval_base_field(p - vec3(0.0, e, 0.0), sy0, m);
-	eval_base_field(p + vec3(0.0, e, 0.0), sy1, m);
-	eval_base_field(p - vec3(0.0, 0.0, e), sz0, m);
-	eval_base_field(p + vec3(0.0, 0.0, e), sz1, m);
-#endif
 	g_field_skip_detail = false;
 	grad = vec3(sx1 - sx0, sy1 - sy0, sz1 - sz0) / (2.0 * e);
 	exact = true;
@@ -538,34 +525,23 @@ void apply_field_op(uint index, vec3 p, inout float sdf, inout uint mat,
 // op_base is the index of the region's first op in the pool (region_slot * MAX_REGION_OPS).
 void eval_field_pair(vec3 p, uint op_base, uint op_count, out float sdf, out uint mat,
 		out float osdf, out uint omat) {
+	// Both seeds come from eval_base_views below, which returns the union in both out-params
+	// when the pipeline declares no ground: one path, nothing to keep in step, and the opaque
+	// seed is the ground under terrain water. An override brick already stores the opaque
+	// bytes, so there both views ARE the override -- hence the `} else {` below: the block is
+	// the non-override arm, compiled unconditionally when no override binding exists.
 #ifdef FIELD_OVERRIDE_SDF_BINDING
-	if (!sample_field_override(p, op_base, sdf, mat)) {
-#ifdef VE_FIELD_GROUND
+	if (sample_field_override(p, op_base, sdf, mat)) {
+		osdf = sdf;
+		omat = mat;
+	} else
+#endif
+	{
 		float _gs; uint _gm;
 		eval_base_views(p, sdf, mat, _gs, _gm);
 		osdf = _gs;
 		omat = _gm;
-#else
-		eval_base_field(p, sdf, mat);
-		osdf = sdf;
-		omat = mat;
-#endif
-	} else {
-		osdf = sdf;
-		omat = mat;
 	}
-#else
-#ifdef VE_FIELD_GROUND
-	float _gs; uint _gm;
-	eval_base_views(p, sdf, mat, _gs, _gm);
-	osdf = _gs;
-	omat = _gm;
-#else
-	eval_base_field(p, sdf, mat);
-	osdf = sdf;
-	omat = mat;
-#endif
-#endif
 	for (uint i = 0u; i < op_count; i++)
 		apply_field_op(FIELD_OP_INDEX(op_base, i), p, sdf, mat, osdf, omat);
 }
@@ -592,34 +568,20 @@ void solid_view(inout float sdf, inout uint mat) {
 void eval_field_solid(vec3 p, uint op_base, uint op_count, out float sdf, out uint mat) {
 	float usdf;
 	uint umat;
+	// sdf/mat seed from the GROUND (the union when there is none); usdf/umat stay the union
+	// the op loop folds into. The `} else {` is the non-override arm, as in eval_field_pair.
 #ifdef FIELD_OVERRIDE_SDF_BINDING
-	if (!sample_field_override(p, op_base, usdf, umat)) {
-#ifdef VE_FIELD_GROUND
+	if (sample_field_override(p, op_base, usdf, umat)) {
+		sdf = usdf;
+		mat = umat;
+	} else
+#endif
+	{
 		float _gs; uint _gm;
 		eval_base_views(p, usdf, umat, _gs, _gm);
 		sdf = _gs;
 		mat = _gm;
-#else
-		eval_base_field(p, usdf, umat);
-		sdf = usdf;
-		mat = umat;
-#endif
-	} else {
-		sdf = usdf;
-		mat = umat;
 	}
-#else
-#ifdef VE_FIELD_GROUND
-	float _gs; uint _gm;
-	eval_base_views(p, usdf, umat, _gs, _gm);
-	sdf = _gs;
-	mat = _gm;
-#else
-	eval_base_field(p, usdf, umat);
-	sdf = usdf;
-	mat = umat;
-#endif
-#endif
 	for (uint i = 0u; i < op_count; i++)
 		apply_field_op_rule(FIELD_OP_INDEX(op_base, i), p, usdf, umat, sdf, mat, AIR_LIQUID);
 	solid_view(sdf, mat);

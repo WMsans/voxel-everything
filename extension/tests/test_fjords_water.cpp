@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include "terrain/field_codegen.h"
+#include "transparency/shell_grid.h"
 #include "terrain/pipeline.h"
 #include "terrain/pipeline_field_generator.h"
 #include "terrain/stage_manifest.h"
@@ -54,7 +55,7 @@ void stage_water(ve::FieldCtx &ctx, const WaterSlots &s, const WaterParams &,
 	float w = ctx.v(s.p)[1] - 50.0f;
 	if (w < ctx.f(s.sdf)) {
 		ctx.f(s.sdf) = w;
-		if (ctx.f(s.ground_sdf) > 0.0f)
+		if (w <= 0.0f && ctx.f(s.ground_sdf) > 0.0f)
 			ctx.f(s.material) = float(ve::material_id("water"));
 	}
 }
@@ -81,7 +82,7 @@ ve::ResolvedPipeline build_pipeline(bool sloped = false) {
 	w.writes.push_back({"liquid_level", ve::ChannelType::kFloat});
 	w.lipschitz_mode = ve::LipschitzMode::kMul;
 	w.lipschitz = 1.0f;
-	w.body = "void stage_water(inout FieldCtx ctx) { ctx.ground_sdf = ctx.sdf; ctx.ground_material = ctx.material; ctx.liquid_level = 50.0; float ww = ctx.p.y - 50.0; if (ww < ctx.sdf) { ctx.sdf = ww; if (ctx.ground_sdf > 0.0) ctx.material = 9u; } }\n";
+	w.body = "void stage_water(inout FieldCtx ctx) { ctx.ground_sdf = ctx.sdf; ctx.ground_material = ctx.material; ctx.liquid_level = 50.0; float ww = ctx.p.y - 50.0; if (ww < ctx.sdf) { ctx.sdf = ww; if (ww <= 0.0 && ctx.ground_sdf > 0.0) ctx.material = 9u; } }\n";
 
 	ve::PipelineDesc d;
 	d.stages.push_back({"a", {}});
@@ -162,6 +163,30 @@ TEST_CASE("fjords resolves with fjord_water last at an unchanged bound") {
 	CHECK(p.lipschitz == doctest::Approx(8.54f).epsilon(0.002));
 }
 
+TEST_CASE("liquid_plane_box covers both layers at a chunk boundary") {
+	// kShellChunkSize is 3.2 m == 16 x 2 cm shell cells, so this level sits exactly on the
+	// boundary between layers 15 and 16 and the one-cell padding must claim both.
+	const float cam[3] = {0.0f, 51.2f, 0.0f};
+	std::vector<ve::ShellBox> boxes = {ve::liquid_plane_box(cam, 10.0f, 51.2f)};
+	std::vector<ve::IVec3> out;
+	ve::shell_candidates(boxes, cam, 10.0f, &out);
+	int n15 = 0, n16 = 0, other = 0;
+	for (const ve::IVec3 &c : out) {
+		if (c.y == 15) n15++;
+		else if (c.y == 16) n16++;
+		else other++;
+	}
+	CHECK(n15 > 0);
+	CHECK(n16 > 0);
+	CHECK(other == 0);
+	// Each layer holds exactly the chunks one layer of the same plane claims.
+	std::vector<ve::ShellBox> inside = {ve::liquid_plane_box(cam, 10.0f, 52.0f)};
+	std::vector<ve::IVec3> out2;
+	ve::shell_candidates(inside, cam, 10.0f, &out2);
+	CHECK(n15 == (int)out2.size());
+	CHECK(n16 == (int)out2.size());
+}
+
 TEST_CASE("fjord water fills below W over low ground") {
 	const std::string root(VE_REPO_ROOT);
 	const float W = 51.2f;
@@ -176,6 +201,12 @@ TEST_CASE("fjord water fills below W over low ground") {
 	for (int i = 0; i < 3; i++) {
 		CHECK(g->sample(xs[i], W - 1.0f, zs[i]).material == ve::material_id("water"));
 		CHECK(g->sample(xs[i], W + 1.0f, zs[i]).material == 0u);
+		// Above the plane the union is still the sea's half-space: the sdf is the distance to
+		// the water surface (w), not the ground's (the whole fjord depth away). A stage that
+		// only lowers the sdf below W fails here, and the far/near shells place the surface
+		// at the bottom of the straddling cell instead of at W.
+		CHECK(g->sample(xs[i], W + 1.0f, zs[i]).sdf == doctest::Approx(1.0f).epsilon(0.01));
+		CHECK(g->sample(xs[i], W - 1.0f, zs[i]).sdf == doctest::Approx(-1.0f).epsilon(0.01));
 		CHECK(g->sample(xs[i], W - 70.0f, zs[i]).material != ve::material_id("water"));
 		float y = 0.0f;
 		CHECK(g->liquid_level(xs[i], zs[i], &y));

@@ -35,6 +35,10 @@ void transparent_boxes(const EditOp *ops, int op_count, const VolumeSet *volumes
 // Chunks overlapping any box (padded by one cell) and within `radius_m` of `cam`.
 void shell_candidates(const std::vector<ShellBox> &boxes, const float cam[3], float radius_m,
 		std::vector<IVec3> *out);
+// A terrain-water candidate source: the plane y = level spanning [cam - radius, cam + radius]
+// in x and z. shell_candidates' one-cell padding turns the on-boundary plane into the two
+// chunk layers straddling level.
+ShellBox liquid_plane_box(const float cam[3], float radius_m, float level);
 
 enum ShellState : uint8_t { kShellUnknown, kShellBuilding, kShellReady, kShellEmpty };
 

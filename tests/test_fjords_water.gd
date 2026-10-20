@@ -14,38 +14,38 @@ func after_test() -> void:
 	_wa = null
 	_wb = null
 
+# The terrain pipeline's field source is installed through a PROCESS-GLOBAL override
+# (ve::set_shader_source_override), so the last world to initialise decides which field every
+# pass compiled after it sees. Two worlds with DIFFERENT pipelines may therefore only be used
+# for passes initialised before the second world exists (the render device, at
+# debug_init_atlas). Anything on the mesh worker (debug_init_physics, the shell and collision
+# lattice) must use ONE world at a time -- see test_shell_candidates_at_the_shore.
 func _open_both() -> void:
-	_wa = ClassDB.instantiate("VoxelWorld")
-	_wa.terrain_pipeline_path = FJORDS
-	_wa.world_seed = 0
-	_wa.use_local_device = true
-	_wa.physics_enabled = false
-	_wa.stream_radius_m = 2600.0
-	add_child(_wa)
-	assert_bool(_wa.hooks().debug_init_atlas()).is_true()
-	_wa.hooks().debug_pump_sectors(Vector3.ZERO, 2000.0, 2000)
+	_wa = _make_world(FJORDS)
+	_wb = _make_world(NO_WATER)
 
-	_wb = ClassDB.instantiate("VoxelWorld")
-	_wb.terrain_pipeline_path = NO_WATER
-	_wb.world_seed = 0
-	_wb.use_local_device = true
-	_wb.physics_enabled = false
-	_wb.stream_radius_m = 2600.0
-	add_child(_wb)
-	assert_bool(_wb.hooks().debug_init_atlas()).is_true()
-	_wb.hooks().debug_pump_sectors(Vector3.ZERO, 2000.0, 2000)
+func _make_world(path: String, pump_at = Vector3.ZERO) -> VoxelWorld:
+	var w: VoxelWorld = ClassDB.instantiate("VoxelWorld")
+	w.terrain_pipeline_path = path
+	w.world_seed = 0
+	w.use_local_device = true
+	w.physics_enabled = false
+	w.stream_radius_m = 2600.0
+	add_child(w)
+	assert_bool(w.hooks().debug_init_atlas()).is_true()
+	if pump_at != null:
+		w.hooks().debug_pump_sectors(pump_at, 2000.0, 2000)
+	return w
 
-func _find_valley() -> Vector3:
-	for xi in range(-400, 401, 20):
-		for zi in range(-400, 401, 20):
-			var hit: Dictionary = _wa.raycast(Vector3(xi, 800.0, zi), Vector3.DOWN, 1600.0)
-			if hit["hit"] and float(hit["pos"].y) < W - 10.0:
-				return Vector3(xi, 0.0, zi)
-	for xi in range(-400, 401, 40):
-		for zi in range(-400, 401, 40):
-			var hit: Dictionary = _wa.raycast(Vector3(xi, 800.0, zi), Vector3.DOWN, 1600.0)
-			if hit["hit"] and float(hit["pos"].y) < W - 10.0:
-				return Vector3(xi, 0.0, zi)
+func _find_valley(w: VoxelWorld = null) -> Vector3:
+	if w == null:
+		w = _wa
+	for step in [20, 40]:
+		for xi in range(-400, 401, step):
+			for zi in range(-400, 401, step):
+				var hit: Dictionary = w.raycast(Vector3(xi, 800.0, zi), Vector3.DOWN, 1600.0)
+				if hit["hit"] and float(hit["pos"].y) < W - 10.0:
+					return Vector3(xi, 0.0, zi)
 	return Vector3.ZERO
 
 func material_id(w: VoxelWorld, name: String) -> int:
@@ -96,11 +96,30 @@ func test_underwater_gradient_is_the_grounds() -> void:
 	assert_bool(any_non_flat).is_true()
 
 func test_collision_lattice_does_not_move() -> void:
-	_open_both()
-	var d1: Dictionary = _wa.hooks().debug_mesh_lattice_diff(Vector3i(4, 8, 4))
-	var d2: Dictionary = _wb.hooks().debug_mesh_lattice_diff(Vector3i(4, 8, 4))
-	assert_int(d1["diff_over_one"]).is_equal(0)
-	assert_int(d2["diff_over_one"]).is_equal(0)
+	# ONE world at a time (process-global field source): the mesh worker's lattice must be
+	# sampled from the field its own world installed, or the comparison is dry-vs-dry.
+	# The no-water world goes first: its raycast reaches the GROUND, while the water world's
+	# stops at the sea surface (y = W, on a chunk boundary) and would pick an all-air chunk.
+	_wb = _make_world(NO_WATER)
+	var V := _find_valley(_wb)
+	var hit: Dictionary = _wb.raycast(Vector3(V.x, 800.0, V.z), Vector3.DOWN, 1600.0)
+	assert_bool(hit["hit"]).is_true()
+	# The chunk that holds the sea floor at V, so the lattice really crosses a surface. A chunk
+	# of pure air would match its CPU mirror trivially and prove nothing.
+	var chunk := Vector3i(floori(V.x / 6.4), floori(float(hit["pos"].y) / 6.4), floori(V.z / 6.4))
+	assert_bool(_wb.hooks().debug_init_physics()).is_true()
+	var d2: Dictionary = _wb.hooks().debug_mesh_lattice_diff(chunk)
+	_wb.free()
+	_wb = null
+
+	_wa = _make_world(FJORDS)
+	assert_bool(_wa.hooks().debug_init_physics()).is_true()
+	var d1: Dictionary = _wa.hooks().debug_mesh_lattice_diff(chunk)
+	assert_int(d1["diff_over_one"]).override_failure_message("water world: %s" % d1).is_equal(0)
+	assert_int(d2["diff_over_one"]).override_failure_message("no-water world: %s" % d2).is_equal(0)
+	assert_bool(d1["has_surface"]).override_failure_message("dry chunk: %s" % d1).is_true()
+	assert_bool(d2["has_surface"]).override_failure_message("dry chunk: %s" % d2).is_true()
+	assert_int(int(d1["max_diff"])).is_equal(int(d2["max_diff"]))
 
 func test_grass_finds_the_ground_not_the_sea() -> void:
 	_open_both()
@@ -112,6 +131,57 @@ func test_grass_finds_the_ground_not_the_sea() -> void:
 	var b: int = int(_wb.hooks().debug_grass_stats()["blades"])
 	var tol: int = maxi(1, int(float(b) * 0.01))
 	assert_int(abs(a - b)).is_less_equal(tol)
+
+func _shell_pages_after(w: VoxelWorld, cam: Vector3, frames: int) -> Dictionary:
+	var stats := {}
+	for i in range(frames):
+		w.hooks().debug_stream_frame(cam)
+		w.hooks().debug_render_frame(cam, Vector3(0.0, -1.0, 0.0).normalized(), 64, 64)
+		stats = w.hooks().debug_lod_stats()
+		if int(stats.get("shell_pages", 0)) > 0:
+			break
+	return stats
+
+func test_shell_candidates_at_the_shore() -> void:
+	# ONE world at a time: the field source is process-global, so a no-water world alive next
+	# to the water world would compile the water world's LOD worker against the dry field and
+	# the shell would come out empty for the wrong reason.
+	var finder := _make_world(FJORDS)
+	var V := _find_valley(finder)
+	finder.free()
+	var cam := Vector3(V.x, W + 3.0, V.z)
+
+	_wa = _make_world(FJORDS)
+	assert_bool(_wa.hooks().debug_init_physics()).is_true()
+	_wa.hooks().debug_pump_sectors(cam, 900.0, 2000)
+	var stats := _shell_pages_after(_wa, cam, 600)
+	assert_int(int(stats.get("shell_pages", 0))).override_failure_message("water world no shell: %s" % stats).is_greater(0)
+	_wa.free()
+	_wa = null
+
+	_wb = _make_world(NO_WATER)
+	assert_bool(_wb.hooks().debug_init_physics()).is_true()
+	_wb.hooks().debug_pump_sectors(cam, 900.0, 2000)
+	var stats_b := _shell_pages_after(_wb, cam, 120)
+	assert_int(int(stats_b.get("shell_pages", 0))).override_failure_message("no-water world has a shell: %s" % stats_b).is_equal(0)
+
+func test_candidates_appear_when_sectors_land() -> void:
+	# The valley point, found in a throwaway world, then a fresh one at it: no sector is
+	# resident when the camera is set, so the candidates can only appear when sectors land.
+	# Both worlds use the same pipeline, so the process-global field source stays Fjords.
+	var finder := _make_world(FJORDS)
+	var V := _find_valley(finder)
+	finder.free()
+	var cam := Vector3(V.x, W + 3.0, V.z)
+	_wa = _make_world(FJORDS, null)
+	var w := _wa
+	assert_bool(w.hooks().debug_init_physics()).is_true()
+	# Un-pump: this world starts the tick with nothing resident around the camera.
+	assert_int(int(w.hooks().debug_lod_stats().get("shell_pages", 0))).is_equal(0)
+	w.hooks().debug_pump_sectors(cam, 900.0, 2000)
+	var stats := _shell_pages_after(w, cam, 600)
+	assert_int(int(stats.get("shell_pages", 0))).override_failure_message("no shell after sectors: %s" % stats).is_greater(0)
+
 
 func test_opaque_lattice_does_not_move() -> void:
 	_open_both()

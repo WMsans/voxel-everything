@@ -122,10 +122,6 @@ Sample PipelineFieldGenerator::sample(float x, float y, float z) const {
 	return s;
 }
 
-bool PipelineFieldGenerator::has_ground() const {
-	return pipeline_.channel_slot("ground_sdf") >= 0;
-}
-
 Sample PipelineFieldGenerator::sample_ground(float x, float y, float z) const {
 	const ResolvedPipeline &p = pipeline_;
 	const int gslot = p.channel_slot("ground_sdf");
@@ -149,20 +145,10 @@ bool PipelineFieldGenerator::liquid_level(float x, float z, float *y) const {
 }
 
 FieldSample PipelineFieldGenerator::sample_gradient(float x, float y, float z) const {
-	// Differentiate the ground view when the pipeline declares one, so underwater ground
-	// normals stay the ground's (never the water plane's). For pipelines without
-	// ground_sdf, sample_ground() delegates to sample(), so this is unchanged.
-	const Sample s = sample_ground(x, y, z);
-	const float e = 0.01f;
-	const float dx = (sample_ground(x + e, y, z).sdf - sample_ground(x - e, y, z).sdf) / (2.0f * e);
-	const float dy = (sample_ground(x, y + e, z).sdf - sample_ground(x, y - e, z).sdf) / (2.0f * e);
-	const float dz = (sample_ground(x, y, z + e).sdf - sample_ground(x, y, z - e).sdf) / (2.0f * e);
-	FieldSample fs{};
-	fs.sdf = s.sdf;
-	fs.material = s.material;
-	fs.gradient[0] = dx;
-	fs.gradient[1] = dy;
-	fs.gradient[2] = dz;
+	// The base implementation already differentiates through THIS view's sample_ground() --
+	// the pipeline field with any liquid removed -- with the same epsilon the GPU uses; only
+	// the flag changes (see the header for why exact is the honest report here).
+	FieldSample fs = Generator::sample_gradient(x, y, z);
 	fs.exact_gradient = true;
 	return fs;
 }

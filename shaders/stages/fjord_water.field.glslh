@@ -19,8 +19,13 @@ void stage_fjord_water(inout FieldCtx ctx) {
 	ctx.ground_material = ctx.material;
 	ctx.liquid_level = P.fjord_height_water_y;
 	float w = ctx.p.y - P.fjord_height_water_y;
-	if (ctx.ground_sdf > 0.0 && w <= 0.0) {
+	// The union is min(ground, half-space below W), NOT a gated write: above the plane the
+	// sdf must still be the distance to the sea (w), or the field overestimates by the depth
+	// of the fjord and stops being a distance bound. The material is water only on the sea
+	// itself -- an AIR sample above the plane must keep the ground's label, or brick_gen's
+	// mat_transparent test disables the normal cache for every brick above the waterline.
+	if (w < ctx.sdf) {
 		ctx.sdf = w;
-		ctx.material = MAT_WATER;
+		if (w <= 0.0 && ctx.ground_sdf > 0.0) ctx.material = MAT_WATER;
 	}
 }

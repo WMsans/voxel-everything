@@ -522,9 +522,10 @@ void stage_fjord_water(FieldCtx &ctx, const FjordWaterSlots &s, const FjordWater
 	ctx.f(s.ground_material) = ctx.f(s.material);
 	ctx.f(s.liquid_level) = p.fjord_height_water_y;
 	const float w = ctx.v(s.p)[1] - p.fjord_height_water_y;
-	if (ctx.f(s.ground_sdf) > 0.0f && w <= 0.0f) {
+	if (w < ctx.f(s.sdf)) {
 		ctx.f(s.sdf) = w;
-		ctx.f(s.material) = float(ve::material_id("water"));
+		if (w <= 0.0f && ctx.f(s.ground_sdf) > 0.0f)
+			ctx.f(s.material) = float(ve::material_id("water"));
 	}
 }
 

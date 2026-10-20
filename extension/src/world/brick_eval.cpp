@@ -169,18 +169,6 @@ FieldSample eval_field_gradient(const Generator &gen, const EditOp *ops, int op_
 		float x, float y, float z, const VolumeStore *volumes, const OverrideSource *overrides) {
 	FieldSample s{};
 	if (overrides && overrides->sample_gradient(x, y, z, &s)) {
-	} else if (gen.has_ground()) {
-		const Sample s0 = gen.sample_ground(x, y, z);
-		const float e = 0.01f;
-		const float dx = (gen.sample_ground(x + e, y, z).sdf - gen.sample_ground(x - e, y, z).sdf) / (2.0f * e);
-		const float dy = (gen.sample_ground(x, y + e, z).sdf - gen.sample_ground(x, y - e, z).sdf) / (2.0f * e);
-		const float dz = (gen.sample_ground(x, y, z + e).sdf - gen.sample_ground(x, y, z - e).sdf) / (2.0f * e);
-		s.sdf = s0.sdf;
-		s.material = s0.material;
-		s.gradient[0] = dx;
-		s.gradient[1] = dy;
-		s.gradient[2] = dz;
-		s.exact_gradient = true;
 	} else {
 		s = gen.sample_gradient(x, y, z);
 	}
