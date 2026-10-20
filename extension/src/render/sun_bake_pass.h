@@ -15,9 +15,9 @@ namespace godot {
 // per-frame job bake, which re-bakes every brick a frame generated or edited.
 inline constexpr int kSunSweepSlotsPerFrame = 512;
 
-// Task 3: bake sun visibility into the brick cache's .w, per voxel, when a brick is generated
-// and then again for every resident slot in a rolling sweep. The raymarcher reads the entry
-// with one filtered fetch instead of marching a 60 m shadow ray per hit pixel.
+// Task 3: bake sun visibility into the brick cache's .w, per voxel, when a brick is generated,
+// and once for every slot in one lap at initialisation and after a sun turn. The raymarcher
+// reads the entry with one filtered fetch instead of marching a 60 m shadow ray per hit pixel.
 //
 // Each method records its own compute list; they are called in order before the raymarch and
 // the device submits them in that order.

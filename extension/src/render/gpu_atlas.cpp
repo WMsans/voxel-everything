@@ -94,8 +94,8 @@ bool GpuAtlas::initialize(RenderingDevice *rd, const GpuAtlasConfig &cfg) {
 			filled_i32(slots, static_cast<int32_t>(ve::kBrickFlagConservative)));
 
 	// The per-brick baked-normal cache (Task 2): RGBA16_SNORM 3D mirroring the SDF atlas slot
-	// for slot at BRICK_CACHE_DIM samples per axis. xyz = baked gradient, w = reserved for
-	// the sun entry and left 0. The two uint buffers hold one flag per slot, zero-initialised.
+	// for slot at BRICK_CACHE_DIM samples per axis. xyz = baked gradient, w = the sun entry,
+	// overwritten by the sun bake. The two uint buffers hold one flag per slot, zero-initialised.
 	brick_cache_ = make_volume(rd, RenderingDevice::DATA_FORMAT_R16G16B16A16_SNORM,
 			ab.x * ve::kBrickCacheDim, ab.y * ve::kBrickCacheDim, ab.z * ve::kBrickCacheDim);
 	cache_normal_ok_ = rd->storage_buffer_create(static_cast<uint32_t>(slots) * sizeof(uint32_t),

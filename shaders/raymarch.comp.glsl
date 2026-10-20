@@ -81,8 +81,7 @@ layout(set = 0, binding = 22, std430) readonly buffer RegionSlotCounts { int n[]
 // Per region slot, the box of its resident bricks, region-local (GpuAtlas::region_bounds).
 layout(set = 0, binding = 31, std430) readonly buffer RegionBounds { ivec4 v[]; } region_bounds;
 // Task 2's baked-normal cache: the texture brick_gen wrote, and one validity word per atlas
-// slot. normal_ok gates the fetch; sun_ok is bound here for Task 3's shadow cache and is not
-// read yet.
+// slot. normal_ok gates the fetch; sun_ok gates the cached shadow read (Task 3).
 layout(set = 0, binding = 32) uniform sampler3D brick_cache;
 layout(set = 0, binding = 33, std430) readonly buffer CacheNormalOk { uint v[]; } cache_normal_ok;
 layout(set = 0, binding = 34, std430) readonly buffer CacheSunOk { uint v[]; } cache_sun_ok;

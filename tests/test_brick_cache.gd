@@ -129,6 +129,8 @@ func test_cached_trunk_normals_are_no_worse_than_today() -> void:
 	assert_int(flags & 1).override_failure_message(
 		"the trunk brick has no baked normal").is_equal(1)
 	assert_float(on["rms_ndl"]).is_less_equal(0.03)
+	# Liveness: a broken cache fetch makes the two probes identical, and 0.0 <= 0.03 passes.
+	assert_float(on["rms_ndl"]).is_greater(float(off["rms_ndl"]) + 0.0005)
 
 func test_cached_sun_matches_the_marched_sun() -> void:
 	# Task 3: the sun visibility baked into the cache's .w against the per-pixel march it
@@ -144,6 +146,9 @@ func test_cached_sun_matches_the_marched_sun() -> void:
 	assert_int(world.hooks().debug_brick_cache_stats()["sun_ok"]).is_greater(100)
 	assert_int(d["hits"]).is_greater(12000)
 	assert_float(d["mean_abs_diff"]).is_less_equal(0.08)
+	# Liveness: a cached read must differ measurably from the full march, or a marcher that
+	# stopped reading the cached .w (both probes marched, diff 0.0) would pass this test.
+	assert_float(d["mean_abs_diff"]).is_greater(0.0005)
 	assert_float(d["flip_fraction"]).is_less_equal(0.03)
 
 func test_an_edited_brick_is_rebaked_the_same_frame() -> void:

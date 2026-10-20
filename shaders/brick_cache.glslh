@@ -1,6 +1,6 @@
 // The per-brick baked-normal cache (Task 2): one RGBA16_SNORM 3D texture mirroring the SDF
 // atlas slot for slot at a BRICK_CACHE_DIM^3 lattice, BRICK_CACHE_STEP voxels apart. xyz is
-// the field gradient; w is the sun entry and stays 0 until Task 3 bakes it. A separate uint
+// the field gradient; w is the sun entry, baked by sun_bake.comp.glsl. A separate uint
 // per slot (normal_ok / sun_ok) says whether an entry is valid, because a slot's bytes are
 // stale the moment it is reallocated and neither an all-zero nor a garbage texel can say so.
 // Include common.glslh and brick_layout.glslh first: the constants and atlas_base come from
