@@ -95,8 +95,8 @@ PipelineFieldGenerator *PipelineFieldGenerator::create(const ResolvedPipeline &p
 	return g;
 }
 
-Sample PipelineFieldGenerator::sample(float x, float y, float z) const {
-	FieldCtx ctx;
+void PipelineFieldGenerator::eval_ctx(FieldCtx &ctx, float x, float y, float z) const {
+	ctx = FieldCtx{};
 	const ResolvedPipeline &p = pipeline_;
 	const int pslot = p.channel_slot("p");
 	// The world seed's domain shift, the same whole metres the GPU adds (VE_FIELD_OFFSET).
@@ -110,18 +110,55 @@ Sample PipelineFieldGenerator::sample(float x, float y, float z) const {
 		FieldResources res{sectors_.get()};
 		fn(ctx, slot_blobs_[i].get(), param_blobs_[i].get(), res);
 	}
+}
 
+Sample PipelineFieldGenerator::sample(float x, float y, float z) const {
+	const ResolvedPipeline &p = pipeline_;
+	FieldCtx ctx;
+	eval_ctx(ctx, x, y, z);
 	Sample s{};
 	s.sdf = ctx.f(p.channel_slot("sdf"));
 	s.material = uint16_t(ctx.f(p.channel_slot("material")));
 	return s;
 }
 
+Sample PipelineFieldGenerator::sample_ground(float x, float y, float z) const {
+	const ResolvedPipeline &p = pipeline_;
+	const int gslot = p.channel_slot("ground_sdf");
+	if (gslot < 0) return sample(x, y, z);
+	FieldCtx ctx;
+	eval_ctx(ctx, x, y, z);
+	Sample s{};
+	s.sdf = ctx.f(gslot);
+	s.material = uint16_t(ctx.f(p.channel_slot("ground_material")));
+	return s;
+}
+
+bool PipelineFieldGenerator::liquid_level(float x, float z, float *y) const {
+	const ResolvedPipeline &p = pipeline_;
+	const int lslot = p.channel_slot("liquid_level");
+	if (lslot < 0) return false;
+	FieldCtx ctx;
+	eval_ctx(ctx, x, ve::kSurfaceY, z);
+	if (y) *y = ctx.f(lslot);
+	return true;
+}
+
 FieldSample PipelineFieldGenerator::sample_gradient(float x, float y, float z) const {
-	// The base implementation already differentiates through THIS view's sample() (the
-	// pipeline field) with the same epsilon the GPU uses; only the flag changes (see the
-	// header for why exact is the honest report here).
-	FieldSample fs = Generator::sample_gradient(x, y, z);
+	// Differentiate the ground view when the pipeline declares one, so underwater ground
+	// normals stay the ground's (never the water plane's). For pipelines without
+	// ground_sdf, sample_ground() delegates to sample(), so this is unchanged.
+	const Sample s = sample_ground(x, y, z);
+	const float e = 0.01f;
+	const float dx = (sample_ground(x + e, y, z).sdf - sample_ground(x - e, y, z).sdf) / (2.0f * e);
+	const float dy = (sample_ground(x, y + e, z).sdf - sample_ground(x, y - e, z).sdf) / (2.0f * e);
+	const float dz = (sample_ground(x, y, z + e).sdf - sample_ground(x, y, z - e).sdf) / (2.0f * e);
+	FieldSample fs{};
+	fs.sdf = s.sdf;
+	fs.material = s.material;
+	fs.gradient[0] = dx;
+	fs.gradient[1] = dy;
+	fs.gradient[2] = dz;
 	fs.exact_gradient = true;
 	return fs;
 }

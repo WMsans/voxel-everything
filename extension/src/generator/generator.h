@@ -26,6 +26,8 @@ class Generator {
 public:
 	virtual ~Generator() = default;
 	virtual Sample sample(float x, float y, float z) const = 0;
+	virtual Sample sample_ground(float x, float y, float z) const { return sample(x, y, z); }
+	virtual bool liquid_level(float x, float z, float *y) const { return false; }
 	virtual FieldSample sample_gradient(float x, float y, float z) const;
 
 	// Upper bound on |grad(sdf)| of the field this generator returns. The generator's
