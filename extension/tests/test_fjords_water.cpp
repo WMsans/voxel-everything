@@ -105,7 +105,15 @@ TEST_CASE("a pipeline without ground_sdf generates no views") {
 	const std::string prelude = slurp(root() + "/shaders/field_ops.glslh");
 	const std::string got = ve::generate_field_glslh(p, prelude);
 	CHECK(got.find("#define VE_FIELD_GROUND") == std::string::npos);
-	CHECK(got == slurp(root() + "/shaders/generated/field.glslh.golden"));
+	// The trailing prelude (field_ops.glslh) is shared and may carry guarded blocks; compare
+	// only the codegen-emitted prefix, as test_field_codegen_golden.cpp does.
+	const std::string marker = "// Field-op interface.";
+	const size_t a = got.find(marker);
+	const std::string golden_text = slurp(root() + "/shaders/generated/field.glslh.golden");
+	const size_t b = golden_text.find(marker);
+	REQUIRE(a != std::string::npos);
+	REQUIRE(b != std::string::npos);
+	CHECK(got.substr(0, a) == golden_text.substr(0, b));
 }
 
 TEST_CASE("a pipeline with ground_sdf emits eval_base_field_views") {
