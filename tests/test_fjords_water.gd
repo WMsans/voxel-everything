@@ -62,6 +62,33 @@ func _settle(w: VoxelWorld, cam: Vector3) -> void:
 		if quiet >= 6:
 			break
 
+func test_removing_water_leaves_a_hole() -> void:
+	# The sea is the base field, but ops carve the UNION, so a sphere subtract must open it and
+	# the hole must stay: terrain water does not refill (water spec §2, non-goals). The edit
+	# raycast marches the union with the store's ops, which debug_eval_field cannot (it is
+	# handed an explicit op list), so the ray is the honest probe.
+	_wa = _make_world(FJORDS)
+	var cam := Vector3(0.0, W + 3.0, 0.0) # the origin is over deep water: ground ~64 m down
+	var eye := Vector3(cam.x, W + 60.0, cam.z)
+	var before: Dictionary = _wa.raycast(eye, Vector3.DOWN, 200.0)
+	assert_bool(before["hit"]).is_true()
+	assert_float(absf(float(before["pos"].y) - W)).override_failure_message(
+			"no sea surface at the origin: %s" % before).is_less(0.1)
+	# r = 2 centred 1 m over the surface: the sphere's lower cap is 1 m BELOW it, so a
+	# downward ray must end there instead of on the surface.
+	_wa.hooks().debug_apply_sphere_subtract(Vector3(cam.x, W + 1.0, cam.z), 2.0)
+	_settle(_wa, cam)
+	var after: Dictionary = _wa.raycast(eye, Vector3.DOWN, 200.0)
+	assert_bool(after["hit"]).is_true()
+	assert_float(float(after["pos"].y)).override_failure_message(
+			"the sea surface did not open: %s" % after).is_less(W - 0.5)
+	for i in range(120):
+		_wa.hooks().debug_stream_frame(cam)
+	var later: Dictionary = _wa.raycast(eye, Vector3.DOWN, 200.0)
+	assert_bool(later["hit"]).is_true()
+	assert_float(float(later["pos"].y)).override_failure_message(
+			"the hole refilled: %s" % later).is_less(W - 0.5)
+
 func test_water_is_in_the_union() -> void:
 	_open_both()
 	var V := _find_valley()

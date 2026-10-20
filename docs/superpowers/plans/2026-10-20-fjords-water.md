@@ -182,16 +182,16 @@
 - Modify: `tools/fjord_capture.gd`
 - Test: `tests/test_fjords_water.gd`
 
-- [ ] **Step 1: Write the failing test** `test_removing_water_leaves_a_hole`: `debug_apply_sphere_subtract` of r = 2 at `(V.x, W − 1, V.z)`, then settle. `debug_eval_field` there is air, and it stays air after 120 more frames.
-- [ ] **Step 2:** Run it. It may already pass, since ops carve the union. If it does, keep it as a pin.
-- [ ] **Step 3:** Add four poses to `tools/fjord_capture.gd`, chosen with `raycast` the way the existing poses are:
+- [x] **Step 1: Write the failing test** `test_removing_water_leaves_a_hole`: `debug_apply_sphere_subtract` of r = 2 at `(V.x, W − 1, V.z)`, then settle. `debug_eval_field` there is air, and it stays air after 120 more frames.
+- [x] **Step 2:** Run it. It may already pass, since ops carve the union. If it does, keep it as a pin.
+- [x] **Step 3:** Add four poses to `tools/fjord_capture.gd`, chosen with `raycast` the way the existing poses are:
   - `water_shore`: 3 m above `W`, looking along the shore.
   - `water_fjord`: 120 m up, looking down a long fjord to the horizon.
   - `water_under`: 5 m below `W`.
   - `water_seam`: 25 m up, looking across the fade band.
   Write the PNGs to `reports/fjords_water/`.
 - [ ] **Step 4:** Run the capture and open every PNG at full size. Note, as the water spec §12.4 does, what was seen. Check specifically: water on both sides of the fade band with no seam or band; foam at the shore; the floor visible through shallow water; no opaque teal slab in the near field; the horizon reaching water.
-- [ ] **Step 5:** Commit `test: fjords water edit pin and captures`.
+- [x] **Step 5:** Commit `test: fjords water edit pin and captures`.
 
 ### Task 6: Cost and the spec record
 
