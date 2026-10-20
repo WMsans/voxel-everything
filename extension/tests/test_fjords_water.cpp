@@ -104,7 +104,7 @@ TEST_CASE("a pipeline without ground_sdf generates no views") {
 			root() + "/shaders/", &p, nullptr, &err), err);
 	const std::string prelude = slurp(root() + "/shaders/field_ops.glslh");
 	const std::string got = ve::generate_field_glslh(p, prelude);
-	CHECK(got.find("VE_FIELD_GROUND") == std::string::npos);
+	CHECK(got.find("#define VE_FIELD_GROUND") == std::string::npos);
 	CHECK(got == slurp(root() + "/shaders/generated/field.glslh.golden"));
 }
 

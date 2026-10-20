@@ -145,16 +145,21 @@ Sample eval_field(const Generator &gen, const EditOp *ops, int op_count,
 void eval_field_pair(const Generator &gen, const EditOp *ops, int op_count,
 		float x, float y, float z, Sample *s, Sample *opaque,
 		const VolumeStore *volumes, const OverrideSource *overrides) {
-	if (!overrides || !overrides->sample(x, y, z, s)) *s = gen.sample(x, y, z);
-	*opaque = *s;
+	const bool overridden = overrides && overrides->sample(x, y, z, s);
+	if (!overridden) *s = gen.sample(x, y, z);
+	if (overridden) *opaque = *s;
+	else *opaque = gen.sample_ground(x, y, z);
 	apply_ops_pair(s, opaque, ops, op_count, x, y, z, volumes);
 }
 
 Sample eval_field_solid(const Generator &gen, const EditOp *ops, int op_count,
 		float x, float y, float z, const VolumeStore *volumes, const OverrideSource *overrides) {
 	Sample s{};
-	if (!overrides || !overrides->sample(x, y, z, &s)) s = gen.sample(x, y, z);
-	Sample solid = s;
+	const bool overridden = overrides && overrides->sample(x, y, z, &s);
+	if (!overridden) s = gen.sample(x, y, z);
+	Sample solid{};
+	if (overridden) solid = s;
+	else solid = gen.sample_ground(x, y, z);
 	apply_ops_pair(&s, &solid, ops, op_count, x, y, z, volumes, AirRule::liquid);
 	solid_view(&solid.sdf, &solid.material);
 	return solid;

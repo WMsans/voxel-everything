@@ -55,7 +55,7 @@ bool far_ground(vec2 xz, float top, float bot, float min_step, out float ground_
 	bool hit = false;
 	for (int i = 0; i < 32; i++) {
 		float s; uint m;
-		eval_field(vec3(xz.x, y, xz.y), 0u, 0u, s, m);
+		eval_base_ground(vec3(xz.x, y, xz.y), s, m);
 		if (s <= 0.0) { hit = true; break; }
 		air = y;
 		y -= max(s * 0.7, min_step);
@@ -66,7 +66,7 @@ bool far_ground(vec2 xz, float top, float bot, float min_step, out float ground_
 	for (int i = 0; i < 8; i++) {
 		float mid = 0.5 * (air + solid);
 		float s; uint m;
-		eval_field(vec3(xz.x, mid, xz.y), 0u, 0u, s, m);
+		eval_base_ground(vec3(xz.x, mid, xz.y), s, m);
 		if (s <= 0.0) solid = mid; else air = mid;
 	}
 	ground_y = 0.5 * (air + solid);
@@ -155,19 +155,19 @@ void far_cell(int f) {
 	// tangent plane stage 2 lays its blades on, not a shading normal.
 	float e = cell * 0.25;
 	float sxp, sxm, syp, sym, szp, szm; uint m;
-	eval_field(p + vec3(e, 0, 0), 0u, 0u, sxp, m);
-	eval_field(p - vec3(e, 0, 0), 0u, 0u, sxm, m);
-	eval_field(p + vec3(0, e, 0), 0u, 0u, syp, m);
-	eval_field(p - vec3(0, e, 0), 0u, 0u, sym, m);
-	eval_field(p + vec3(0, 0, e), 0u, 0u, szp, m);
-	eval_field(p - vec3(0, 0, e), 0u, 0u, szm, m);
+	eval_base_ground(p + vec3(e, 0, 0), sxp, m);
+	eval_base_ground(p - vec3(e, 0, 0), sxm, m);
+	eval_base_ground(p + vec3(0, e, 0), syp, m);
+	eval_base_ground(p - vec3(0, e, 0), sym, m);
+	eval_base_ground(p + vec3(0, 0, e), szp, m);
+	eval_base_ground(p - vec3(0, 0, e), szm, m);
 	vec3 n = normalize(vec3(sxp - sxm, syp - sym, szp - szm));
 	if (n.y < grass.blade.w) return; // too steep: no grass on cliff faces
 
 	// A quarter metre INSIDE the ground: at the crossing itself the field reads sdf ~ 0 and
 	// a pipeline that only labels solid samples would answer air.
 	float s0; uint mat;
-	eval_field(p - vec3(0.0, 0.25, 0.0), 0u, 0u, s0, mat);
+	eval_base_ground(p - vec3(0.0, 0.25, 0.0), s0, mat);
 	if (mat != MAT_GRASS_01) return;
 
 	// Now that the ground height is known, cull against the box the BLADES actually occupy.
