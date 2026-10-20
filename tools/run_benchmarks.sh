@@ -35,7 +35,7 @@ esac
 
 # Leg name -> godot args (word-split by the callers, so no spaces inside one); also the
 # menu order.
-NAMES=(steady move ridge edit edit-bounded island fjords-forest)
+NAMES=(steady move ridge edit edit-bounded island fjords-forest fjords-forest-walk)
 leg_args() {
 	case "$1" in
 	steady) echo "--benchmark" ;;
@@ -43,6 +43,11 @@ leg_args() {
 	# on the Mac before bark took the R8 normal and the tree stages left the gradient taps.
 	fjords-forest) echo "--benchmark --pipeline=res://assets/pipelines/fjords.pipeline" \
 		"--seed=880510467 --pose=-98.05,186.0,417.40,59.0,-5" ;;
+	# The same forest, walked through at ground level: 60 m at player.gd's 6 m/s along the
+	# pose's yaw (59 deg), sampled at a fixed 1/60 s step so it covers the same 60 m whatever
+	# the frame rate. This is the leg the forest caching work is judged on.
+	fjords-forest-walk) echo "--benchmark-walk --pipeline=res://assets/pipelines/fjords.pipeline" \
+		"--seed=880510467 --pose=-98.05,186.0,417.40,59.0,-5 --path-fps=60 --frames=600" ;;
 	*) echo "--benchmark-$1" ;;
 	esac
 }

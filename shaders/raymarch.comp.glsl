@@ -18,6 +18,7 @@ layout(set = 0, binding = 19) uniform sampler2DArray material_surface_tex;
 
 #include "common.glslh"
 #include "brick_layout.glslh"
+#include "brick_cache.glslh"
 #include "shade.glslh"
 #include "sun_light.glslh"
 
@@ -79,6 +80,11 @@ layout(set = 0, binding = 21, std430) readonly buffer BrickFlags { uint v[]; } b
 layout(set = 0, binding = 22, std430) readonly buffer RegionSlotCounts { int n[]; } region_slot_counts;
 // Per region slot, the box of its resident bricks, region-local (GpuAtlas::region_bounds).
 layout(set = 0, binding = 31, std430) readonly buffer RegionBounds { ivec4 v[]; } region_bounds;
+// Task 2's baked-normal cache: the texture brick_gen wrote, and one validity word per atlas
+// slot. normal_ok gates the fetch; sun_ok gates the cached shadow read (Task 3).
+layout(set = 0, binding = 32) uniform sampler3D brick_cache;
+layout(set = 0, binding = 33, std430) readonly buffer CacheNormalOk { uint v[]; } cache_normal_ok;
+layout(set = 0, binding = 34, std430) readonly buffer CacheSunOk { uint v[]; } cache_sun_ok;
 #define SUN_MARCH_REGION_BOUNDS
 // The pending-edit visualizer: tint the atlas content an edit WILL change, so the player
 // gets one frame of feedback before the regenerated bricks land (spec §5 latency).
@@ -117,24 +123,19 @@ vec3 terrain_r8_fallback_normal(vec3 p, ivec3 anchor, int anchor_slot, inout int
 // When the evaluator reports an exact, non-degenerate gradient that IS the surface normal;
 // otherwise fall back to differentiating the stored R8 lattice.
 //
-// `hit_mat` is the stored material at the hit. The tree stages (trees, conifers) are the
-// priciest part of the pipeline -- the conifer walk alone was 16 ms of a 51 ms forest frame
-// -- and they only shape bark. So a bark hit takes the R8 normal (a trunk is small enough on
-// screen that the lattice contours do not read), and any other hit skips them on every tap
-// via g_field_skip_detail, which base_field_gradient only takes over after its centre tap.
-// Ground within 6 cm of a trunk foot can shade without it; nothing else changes.
-vec3 terrain_source_normal(vec3 p, ivec3 brick, int anchor_slot, uint hit_mat, inout int steps_left) {
-	if (hit_mat == MAT_BARK) return terrain_r8_fallback_normal(p, brick, anchor_slot, steps_left);
+// This is the MISS path: a brick whose normal the cache holds never reaches it (see
+// march_bricks). It is the full pipeline evaluation, including the tree stages -- since
+// Task 2 replaced the bark special case and the detail-skipping shortcut that came with it
+// (1b18a2b) with a baked cache.
+vec3 terrain_source_normal(vec3 p, ivec3 brick, int anchor_slot, inout int steps_left) {
 	int rs = region_slot_of(brick);
 	if (rs < 0) return vec3(0.0, 1.0, 0.0);
 	float sdf;
 	uint mat;
 	vec3 gradient;
 	bool exact_gradient;
-	g_field_skip_detail = true;
 	eval_field_gradient(p, uint(rs) * MAX_REGION_OPS, uint(max(op_counts.n[rs], 0)),
 			sdf, mat, gradient, exact_gradient);
-	g_field_skip_detail = false;
 	float len = length(gradient);
 	// The opaque view (shaders/opaque_view.glslh): under a transparent material the atlas
 	// surface is a LABEL boundary, and the union field's gradient here belongs to the medium,
@@ -354,6 +355,11 @@ struct Hit {
 	vec3 p;
 	vec3 n;
 	uint mat;
+	// Task 3: which atlas slot the terrain hit lives in, and where in that brick (voxel units)
+	// the hit is the cache's own address. Islands and misses leave slot = -1: only RAYMARCH
+	// hits read the sun cache, and only a terrain brick has one.
+	int slot;
+	vec3 vox;
 };
 
 // Sphere-traces one island. `best` is updated only when this island is nearer, so calling it
@@ -426,6 +432,8 @@ void march_island(int slot, vec3 ro, vec3 rd, inout Hit best, inout int steps_le
 			// can report the transparent label -- a wrong material LABEL, not a tunnel or
 			// a NaN. Upgrade path: march the SDF gradient inward until the sign flips.
 			best.mat = island_material_at(isl, q_mat);
+			best.slot = -1;
+			best.vox = vec3(0.0);
 			return;
 		}
 		t += max(d * 0.9, 0.005);
@@ -444,6 +452,8 @@ Hit march_bricks(int region_slot, ivec3 region_coord, vec3 ro, vec3 rd,
 	h.p = vec3(0.0);
 	h.n = vec3(0.0, 1.0, 0.0);
 	h.mat = 0u;
+	h.slot = -1;
+	h.vox = vec3(0.0);
 
 	vec3 segment_ro = ro + rd * t_begin;
 	float segment_length = max(t_end - t_begin, 0.0);
@@ -511,7 +521,28 @@ Hit march_bricks(int region_slot, ivec3 region_coord, vec3 ro, vec3 rd,
 					h.t = t_begin + t;
 					h.p = p;
 					h.mat = material_at(p, map, slot);
-					h.n = terrain_source_normal(p, map, slot, h.mat, steps_left);
+					h.slot = slot;
+					h.vox = (p - vec3(map) * BRICK_SIZE) / VOXEL_SIZE;
+					// Task 2: the baked normal, when this brick has one and the switch is on. One
+					// filtered fetch replaces the whole pipeline evaluation. A filtered blend of
+					// two opposing unit normals can cancel at a crease, so a degenerate result
+					// takes the miss path rather than producing a NaN.
+					if ((floatBitsToUint(pc.cam_pos.w) & RENDER_BRICK_CACHE) != 0u &&
+							cache_normal_ok.v[slot] == CACHE_OK) {
+						vec3 cached = textureLod(brick_cache, brick_cache_uvw(slot,
+								h.vox, pc.atlas_bricks.xyz), 0.0).xyz;
+						float clen = length(cached);
+						// A hit is a front face by construction: its normal opposes the ray. A
+						// cached normal that does not was sampled across a thin shell or a CSG
+						// crease (a cave roof under a 4 cm skin, say) where the 20 cm lattice
+						// resolves the other side of the feature. Take the miss path there
+						// rather than shade a surface with a normal that faces away from it.
+						if (clen > 1e-6 && dot(cached, rd) < 0.0) {
+							h.n = cached / clen;
+							return h;
+						}
+					}
+					h.n = terrain_source_normal(p, map, slot, steps_left);
 					return h;
 				}
 				t += max(d * 0.9, 0.005);
@@ -535,6 +566,8 @@ Hit march_terrain(vec3 ro, vec3 rd, float max_dist, inout int steps_left) {
 	h.p = vec3(0.0);
 	h.n = vec3(0.0, 1.0, 0.0);
 	h.mat = 0u;
+	h.slot = -1;
+	h.vox = vec3(0.0);
 
 	ivec3 rmap = ivec3(floor(ro / REGION_SIZE));
 	vec3 rdelta = abs(vec3(REGION_SIZE) / rd);
@@ -694,14 +727,24 @@ void main() {
 			// One voxel of offset: less and the ray self-shadows on its own surface, more
 			// and thin ledges stop casting.
 			vec3 sro = best.p + best.n * 0.06;
-			// FULL reach, sun map or not. The map was once trusted to answer for the
-			// 7.68-60 m stretch, so the march stopped at the penumbra band; but the map is
-			// rasterized from the LoD mesh and shades only the pixels that mesh drew (see
-			// far_field_owns in shaders/deferred.comp.glsl), so for a near-field pixel this
-			// march is the ONLY shadow term there is. Stopping it early left an occluder
-			// 25 m up-sun casting nothing.
-			sun = min(terrain_sun_visibility(sro, RAY_SHADOW_DIST),
-					island_sun_visibility(sro, island_count, RAY_SHADOW_DIST));
+			// Task 3: a terrain brick with a baked sun entry answers this with one filtered fetch
+			// instead of a 60 m march. Island shadows are still their own march, combined the same
+			// way the two marches were. An unbaked or island hit takes today's path unchanged.
+			if ((flags & RENDER_BRICK_CACHE) != 0u && best.slot >= 0 &&
+					cache_sun_ok.v[best.slot] == CACHE_OK) {
+				sun = min(textureLod(brick_cache,
+						brick_cache_uvw(best.slot, best.vox, pc.atlas_bricks.xyz), 0.0).w,
+						island_sun_visibility(sro, island_count, RAY_SHADOW_DIST));
+			} else {
+				// FULL reach, sun map or not. The map was once trusted to answer for the
+				// 7.68-60 m stretch, so the march stopped at the penumbra band; but the map is
+				// rasterized from the LoD mesh and shades only the pixels that mesh drew (see
+				// far_field_owns in shaders/deferred.comp.glsl), so for a near-field pixel this
+				// march is the ONLY shadow term there is. Stopping it early left an occluder
+				// 25 m up-sun casting nothing.
+				sun = min(terrain_sun_visibility(sro, RAY_SHADOW_DIST),
+						island_sun_visibility(sro, island_count, RAY_SHADOW_DIST));
+			}
 		}
 		if ((flags & BEAUTY_GLOSSY_RAYS) != 0u) {
 			// The only surviving material read on the primary path, and it is gated on the

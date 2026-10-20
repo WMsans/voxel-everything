@@ -17,6 +17,9 @@ layout(set = 0, binding = 3, std430) buffer RegionSlotCounts { int n[]; } region
 layout(set = 0, binding = 4, std430) buffer RegionOccupancy { uint w[]; } occupancy;
 // brick_mark.comp.glsl's resident-brick box; emptied with the slot (min past max).
 layout(set = 0, binding = 5, std430) buffer RegionBounds { int v[]; } region_bounds;
+// Task 3: the freed slot stops claiming a surface, so the sun sweep's early-out skips it
+// instead of baking a dead slot. brick_mark sets the word again on allocation.
+layout(set = 0, binding = 6, std430) buffer BrickFlags { uint v[]; } brick_flags;
 
 layout(push_constant, std430) uniform Push { REGION_FREE_PUSH_FIELDS } pc;
 
@@ -40,6 +43,7 @@ void main() {
 		return;
 	}
 	region_tables.slot[idx] = -1;
+	brick_flags.v[slot] = 0u;
 	int k = atomicAdd(counters.free_count, 1);
 	free_list.slot[k] = slot;
 }

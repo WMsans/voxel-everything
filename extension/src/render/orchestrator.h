@@ -84,6 +84,7 @@ class HizPass;
 class GBuffer;
 class CameraUbo;
 class SunUbo;
+class SunBakePass;
 class FieldContextSet;
 class SectorContext;
 class ContactShadowPass;
@@ -116,6 +117,7 @@ struct RenderPasses {
 	DeferredPass *deferred = nullptr;
 	SunShadowPass *sun_shadow = nullptr;
 	SunUbo *sun_ubo = nullptr;
+	SunBakePass *sun_bake = nullptr;
 	FieldContextSet *field_context = nullptr;
 	SectorContext *sectors = nullptr;
 	InjectPass *inject = nullptr;
@@ -275,6 +277,8 @@ public:
 	}
 	// Spec 2026-10-04: the Raymarching switch is off. Gates only what raster mode adds.
 	bool raster_mode() const { return !raymarch_enabled_.load(std::memory_order_relaxed); }
+	// Task 2: read the baked brick-cache normal instead of the source field (RenderSettings::brick_cache).
+	bool brick_cache() const { return brick_cache_enabled_.load(std::memory_order_relaxed); }
 	void set_sun_cascade_min_level(bool v) { sun_cascade_min_level_ = v; }
 	bool sun_cascade_min_level() const { return sun_cascade_min_level_; }
 	// Everything VoxelFrame samples once per frame.
@@ -408,6 +412,7 @@ private:
 	std::atomic<bool> islands_enabled_{true};
 	std::atomic<bool> near_field_enabled_{true};
 	std::atomic<bool> raymarch_enabled_{true};
+	std::atomic<bool> brick_cache_enabled_{true};
 	std::atomic<float> near_field_scale_{0.66f};
 	bool sun_cascade_min_level_ = true;
 	mutable std::mutex sun_mutex_;

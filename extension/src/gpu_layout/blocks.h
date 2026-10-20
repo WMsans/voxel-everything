@@ -136,6 +136,17 @@ struct BrickGenPush {
 	int32_t atlas_bricks[4];
 };
 
+// Task 3's sun bake. dims/region_origin/atlas_bricks are named and shaped exactly as
+// brick_atlas.glslh's `pc` contract requires (the shader reads pc.dims.xyz and friends).
+// cfg.x selects the mode: 0 = this frame's generation jobs (the slot comes from
+// jobs.v[wg * 2].w), 1 = the slot range [cfg.y, cfg.y + cfg.z).
+struct SunBakePush {
+	int32_t dims[4];          // xyz = region window dimensions, w unused
+	int32_t region_origin[4]; // xyz = world origin in regions, w unused
+	int32_t atlas_bricks[4];  // xyz = atlas grid in bricks, w unused
+	int32_t cfg[4];           // x = mode, y = first slot, z = slot count, w unused
+};
+
 struct SectorBakePush {
 	int32_t sector[4]; // xy = field-space sector coordinate, zw unused
 };
@@ -338,6 +349,12 @@ inline constexpr Field kDownsamplePushFields[] = {
 inline constexpr Field kBrickGenPushFields[] = {
 	VE_LAYOUT_FIELD(BrickGenPush, atlas_bricks, IVec4, 0),
 };
+inline constexpr Field kSunBakePushFields[] = {
+	VE_LAYOUT_FIELD(SunBakePush, dims, IVec4, 0),
+	VE_LAYOUT_FIELD(SunBakePush, region_origin, IVec4, 0),
+	VE_LAYOUT_FIELD(SunBakePush, atlas_bricks, IVec4, 0),
+	VE_LAYOUT_FIELD(SunBakePush, cfg, IVec4, 0),
+};
 inline constexpr Field kSectorBakePushFields[] = {
 	VE_LAYOUT_FIELD(SectorBakePush, sector, IVec4, 0),
 };
@@ -401,6 +418,7 @@ inline constexpr Block kBlocks[] = {
 	VE_LAYOUT_BLOCK(GrassRegionBlock, "LEAF_REGION_FIELDS", kLeafRegionBlockFields),
 	VE_LAYOUT_BLOCK(DownsamplePush, "DOWNSAMPLE_PUSH_FIELDS", kDownsamplePushFields),
 	VE_LAYOUT_BLOCK(BrickGenPush, "BRICK_GEN_PUSH_FIELDS", kBrickGenPushFields),
+	VE_LAYOUT_BLOCK(SunBakePush, "SUN_BAKE_PUSH_FIELDS", kSunBakePushFields),
 	VE_LAYOUT_BLOCK(SectorBakePush, "SECTOR_BAKE_PUSH_FIELDS", kSectorBakePushFields),
 	VE_LAYOUT_BLOCK(ConsolidatePush, "CONSOLIDATE_PUSH_FIELDS", kConsolidatePushFields),
 	VE_LAYOUT_BLOCK(BrickMarkPush, "BRICK_MARK_PUSH_FIELDS", kBrickMarkPushFields),

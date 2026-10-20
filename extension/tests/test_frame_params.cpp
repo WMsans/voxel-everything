@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include "render/frame_params.h"
+#include "shade/beauty_settings.h"
 #include <cmath>
 #include <cstring>
 
@@ -102,8 +103,13 @@ TEST_CASE("set_near_field_world fills the world fields and nothing else") {
 TEST_CASE("set_near_field_flags stores the bit pattern in cam_pos.w") {
 	ve::CameraParams cp = ve::CameraParams::looking_at(0, 0, 0, 0, 0, -1, 0, 1, 0);
 	const uint32_t flags = 0x8000'0105u;
-	ve::set_near_field_flags(&cp, flags);
+	ve::set_near_field_flags(&cp, flags, false);
 	uint32_t back = 0;
 	std::memcpy(&back, &cp.cam_pos[3], sizeof(float));
 	CHECK(back == flags);
+	// Task 2: the brick-cache switch rides in the same word, so a caller has to choose.
+	ve::set_near_field_flags(&cp, flags, true);
+	std::memcpy(&back, &cp.cam_pos[3], sizeof(float));
+	CHECK(back == (flags | ve::kRenderBrickCache));
+	CHECK(ve::kRenderBrickCache == 512u);
 }

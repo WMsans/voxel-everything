@@ -1,0 +1,23 @@
+// The per-brick baked-normal cache (Task 2): one RGBA16_SNORM 3D texture mirroring the SDF
+// atlas slot for slot at a BRICK_CACHE_DIM^3 lattice, BRICK_CACHE_STEP voxels apart. xyz is
+// the field gradient; w is the sun entry, baked by sun_bake.comp.glsl. A separate uint
+// per slot (normal_ok / sun_ok) says whether an entry is valid, because a slot's bytes are
+// stale the moment it is reallocated and neither an all-zero nor a garbage texel can say so.
+// Include common.glslh and brick_layout.glslh first: the constants and atlas_base come from
+// them.
+
+// Brick-local lattice index -> texel in the cache texture.
+ivec3 brick_cache_texel(int slot, ivec3 lattice, ivec3 atlas_bricks) {
+	return atlas_base(slot, atlas_bricks, BRICK_CACHE_DIM) + lattice;
+}
+
+// Brick-local voxel position (0..BRICK_VOXELS) -> normalized coordinate for a FILTERED fetch.
+// Clamped, so a hit that drifted a ULP outside the brick reads the shared face value instead
+// of the neighbouring slot; the +0.5 puts a sample exactly on a texel centre, so a hit on a
+// lattice point interpolates that one sample and nothing else.
+vec3 brick_cache_uvw(int slot, vec3 vox, ivec3 atlas_bricks) {
+	vec3 v = clamp(vox, vec3(0.0), vec3(float(BRICK_VOXELS)));
+	vec3 texel = vec3(atlas_base(slot, atlas_bricks, BRICK_CACHE_DIM)) +
+			v / float(BRICK_CACHE_STEP) + 0.5;
+	return texel / vec3(atlas_bricks * BRICK_CACHE_DIM);
+}

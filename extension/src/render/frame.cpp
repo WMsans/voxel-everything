@@ -37,6 +37,7 @@
 #include "render/region_pass.h"
 #include "render/ssgi_pass.h"
 #include "render/ssr_pass.h"
+#include "render/sun_bake_pass.h"
 #include "render/sun_shadow_pass.h"
 #include "render/sun_ubo.h"
 #include "render/world_streamer.h"
@@ -207,7 +208,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	cp.params[2] = near_field_enabled ? 200.0f : 0.0f;
 	const ve::BeautySettings beauty = render_.beauty_settings();
 	const uint32_t beauty_flags = ve::pack_flags(beauty);
-	ve::set_near_field_flags(&cp, beauty_flags);
+	ve::set_near_field_flags(&cp, beauty_flags, settings.brick_cache);
 
 	const Projection view(cam.affine_inverse());
 	const Projection view_proj = proj * view;
@@ -315,6 +316,32 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	// Raster mode (spec 2026-10-04 §4): nothing is marched, islands included. The composite
 	// below fills the G-buffer with sky and the LoD raster draws every surface.
 	if (!settings.raster_mode) {
+		// Task 3: the sun cache, after the stream stage (whose brick_gen cleared the sun entry
+		// of every regenerated brick) and before the march that reads it. note_sun runs even with
+		// the cache off, so a sun turned while it was off still invalidates and re-enabling is
+		// correct. The bakes are gated: with the cache off, --effects-off measures the read path
+		// and nothing else. bake_jobs re-bakes this frame's new bricks (edits and streaming).
+		// The sweep only runs while a lap is owed -- startup and just after a sun turn -- because
+		// the shipped sun never moves and a permanent rolling sweep would re-bake entries nothing
+		// invalidated. Raster mode marches nothing, so it bakes nothing.
+		const int slots = atlas->atlas_slot_count();
+		if (SunBakePass *sun_bake = render_.passes().sun_bake; sun_bake && slots > 0) {
+			timings->begin(rd, "sun_bake");
+			if (sun_bake->note_sun(rd, *atlas, sun_state.dir)) {
+				sun_sweep_cursor_ = 0;
+				sun_sweep_left_ = slots;
+			}
+			if (settings.brick_cache) {
+				sun_bake->bake_jobs(rd, *atlas, cp);
+				if (sun_sweep_left_ > 0) {
+					const int count = std::min(sun_sweep_left_, kSunSweepSlotsPerFrame);
+					sun_bake->bake_sweep(rd, *atlas, cp, sun_sweep_cursor_, count);
+					sun_sweep_cursor_ = (sun_sweep_cursor_ + count) % slots;
+					sun_sweep_left_ -= count;
+				}
+			}
+			timings->end(rd, "sun_bake");
+		}
 		const int islands = render_.island_slot_count();
 		IslandCullPass *cull = render_.passes().island_cull;
 		RID mask;

@@ -221,6 +221,14 @@ public:
 
 	Dictionary debug_brick_flags_after_mark(Vector3i region);
 
+	// Task 2: over every atlas slot, how many carry a baked normal (and, from Task 3, a baked
+	// sun entry). Diagnostic: the raymarcher's own gate is the per-slot word.
+	Dictionary debug_brick_cache_stats();
+
+	// Task 2: one brick's cache words as `normal_ok | (sun_ok << 1)`, or -1 when the brick is
+	// not resident in any slot.
+	int debug_brick_cache_flags(Vector3i brick);
+
 	RID debug_sdf_atlas() const;
 
 	RID debug_mat_atlas() const;
@@ -278,6 +286,16 @@ public:
 	Dictionary debug_raymarch_hole_probe(Vector3 origin, Vector3 dir, int w, int h);
 
 	Dictionary debug_raymarch_normal_probe(Vector3 origin, Vector3 dir, int w, int h);
+
+	// Task 3: the cached sun visibility against the per-pixel march it replaces. Sweeps every
+	// slot first so the whole atlas is baked, then renders the probe twice (cache on, cache
+	// off) and compares out_albedo.a on hit pixels: {ran, hits, mean_abs_diff,
+	// flip_fraction}. flip_fraction is the share of hits whose visibility differs by > 0.5.
+	Dictionary debug_raymarch_sun_probe(Vector3 origin, Vector3 dir, int w, int h);
+
+	// Task 3: run the frame's job bake once, so a test can ask whether the bricks this frame
+	// regenerated got their sun entry back in the same frame.
+	void debug_sun_bake_jobs();
 
 	// Task 7: same five metrics as the terrain probe, but the reference normal for every
 	// hit inside the island's local lattice comes from that body's own VolumeData::normal_oct

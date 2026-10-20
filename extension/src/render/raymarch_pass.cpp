@@ -121,6 +121,12 @@ std::vector<gpu::Uniform> RaymarchPass::uniforms(const GpuAtlas &atlas, const Is
 		gpu::storage(29, atlas.overrides().tables()),
 		gpu::storage(30, atlas.overrides().region_table_map()),
 		gpu::storage(31, atlas.region_bounds()),
+		// 32-34: Task 2's baked-normal cache. Binding 32 is filtered like the SDF atlas, so a
+		// hit interpolates the 20 cm lattice; 33 is the validity word the fetch is gated on;
+		// 34 is Task 3's sun entry and is bound here already so the set does not grow later.
+		gpu::sampled(32, sampler_linear_, atlas.brick_cache()),
+		gpu::storage(33, atlas.cache_normal_ok()),
+		gpu::storage(34, atlas.cache_sun_ok()),
 	};
 }
 

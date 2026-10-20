@@ -1,4 +1,5 @@
 #include "render/frame_params.h"
+#include "shade/beauty_settings.h"
 #include <cmath>
 #include <cstring>
 
@@ -44,8 +45,10 @@ void set_near_field_world(CameraParams *cp, const RegionWindow &win, int island_
 	cp->atlas_bricks[2] = atlas_bricks.z;
 }
 
-void set_near_field_flags(CameraParams *cp, uint32_t beauty_flags) {
-	std::memcpy(&cp->cam_pos[3], &beauty_flags, sizeof(float));
+void set_near_field_flags(CameraParams *cp, uint32_t beauty_flags, bool brick_cache) {
+	uint32_t flags = beauty_flags;
+	if (brick_cache) flags |= kRenderBrickCache;
+	std::memcpy(&cp->cam_pos[3], &flags, sizeof(float));
 }
 
 } // namespace ve

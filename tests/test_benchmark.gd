@@ -68,3 +68,9 @@ func test_fixed_path_step_does_not_depend_on_frame_time() -> void:
 func test_default_path_step_uses_actual_frame_time() -> void:
 	var bench := benchmark_node()
 	assert_float(float(bench.call("_movement_delta", 0.025))).is_equal_approx(0.025, 0.000001)
+
+func test_walk_step_moves_at_walk_speed_along_the_heading() -> void:
+	var bench := benchmark_node()
+	var p: Vector3 = bench.call("_walk_step", Vector3(1, 2, 3), 90.0, 0.5)
+	# Godot forward is -Z; yaw 90 deg about +Y turns it to -X. Walk speed is player.gd's 6 m/s.
+	assert_vector(p).is_equal_approx(Vector3(1 - 3.0, 2, 3), Vector3(1e-4, 1e-4, 1e-4))

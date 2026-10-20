@@ -104,6 +104,25 @@ func test_the_marcher_sees_the_ground_through_an_added_ice_ball() -> void:
 		"the ground under the ice moved: %s" % d).is_equal_approx(
 		float(before["center_distance"]), 0.05)
 
+func test_an_ice_brick_is_not_normal_cached() -> void:
+	# Same setup as test_the_marcher_sees_the_ground_through_an_added_ice_ball, then stream:
+	# the brick under the ice holds a transparent material, so brick_gen refuses to bake it
+	# and its normal_ok flag stays 0.
+	var w := make_world()
+	var ground := centre_hit(w)
+	w.hooks().debug_apply_sphere_add(ground["pos"], 1.0, material_id(w, "ice"))
+	settle(w)
+	assert_int(w.hooks().debug_brick_cache_flags(Vector3i((ground["pos"] / 0.8).floor())) & 1).is_equal(0)
+	# Positive control: the same brick caches fine without the transparent material, so the
+	# miss above is the transparent rule and not the inexact or crease miss rules.
+	var w2 := make_world()
+	w2.hooks().debug_apply_sphere_add(centre_hit(w2)["pos"], 1.0, material_id(w2, "rock"))
+	settle(w2)
+	var rock_hit := centre_hit(w2)
+	assert_int(w2.hooks().debug_brick_cache_flags(
+			Vector3i((rock_hit["pos"] / 0.8).floor())) & 1).override_failure_message(
+		"an opaque brick at the same surface hit is not normal cached: %s" % rock_hit).is_equal(1)
+
 # The prior attempt went solid past 2.4 m of ice. Ten metres must change nothing here.
 func test_ten_metres_of_ice_do_not_stop_the_marcher() -> void:
 	var w := make_world()

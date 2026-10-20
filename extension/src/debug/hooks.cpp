@@ -263,6 +263,9 @@ void VoxelDebugHooks::_bind_methods() {
 			&VoxelDebugHooks::debug_raymarch_hole_probe);
 	ClassDB::bind_method(D_METHOD("debug_raymarch_normal_probe", "origin", "dir", "w", "h"),
 			&VoxelDebugHooks::debug_raymarch_normal_probe);
+	ClassDB::bind_method(D_METHOD("debug_raymarch_sun_probe", "origin", "dir", "w", "h"),
+			&VoxelDebugHooks::debug_raymarch_sun_probe);
+	ClassDB::bind_method(D_METHOD("debug_sun_bake_jobs"), &VoxelDebugHooks::debug_sun_bake_jobs);
 	ClassDB::bind_method(D_METHOD("debug_island_normal_probe", "island_slot", "origin", "dir", "w", "h"),
 			&VoxelDebugHooks::debug_island_normal_probe);
 	ClassDB::bind_method(D_METHOD("debug_cel_diff", "albedo", "ambient", "ndl", "ndv", "ndh",
@@ -312,6 +315,8 @@ void VoxelDebugHooks::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("debug_stream_region", "region"), &VoxelDebugHooks::debug_stream_region);
 	ClassDB::bind_method(D_METHOD("debug_brick_flags", "region"), &VoxelDebugHooks::debug_brick_flags);
 	ClassDB::bind_method(D_METHOD("debug_brick_flags_after_mark", "region"), &VoxelDebugHooks::debug_brick_flags_after_mark);
+	ClassDB::bind_method(D_METHOD("debug_brick_cache_stats"), &VoxelDebugHooks::debug_brick_cache_stats);
+	ClassDB::bind_method(D_METHOD("debug_brick_cache_flags", "brick"), &VoxelDebugHooks::debug_brick_cache_flags);
 	ClassDB::bind_method(D_METHOD("debug_release_region", "region_slot"), &VoxelDebugHooks::debug_release_region);
 	ClassDB::bind_method(D_METHOD("debug_jobs"), &VoxelDebugHooks::debug_jobs);
 	ClassDB::bind_method(D_METHOD("debug_region_table_slot", "region_slot", "brick"), &VoxelDebugHooks::debug_region_table_slot);

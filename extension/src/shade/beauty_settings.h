@@ -66,6 +66,9 @@ inline constexpr uint32_t kFlagSsao = 256u;
 // A debug view, not an effect: it replaces the albedo channel with marching cost so the
 // budget conversation can be about pixels instead of averages. It is never set by a tier.
 inline constexpr uint32_t kFlagCostView = 128u;
+// Not a beauty knob: the brick-cache switch (Task 2) rides in cam_pos.w beside the beauty
+// flags, where the raymarcher reads it back. 512 is the first bit above BEAUTY_SSAO (256).
+inline constexpr uint32_t kRenderBrickCache = 512u;
 
 // Every flag bit a shader tests, by GLSL name (BEAUTY_<name>). shaders/generated/constants.glslh
 // is emitted from this table, so a new flag is one constant above and one row here.

@@ -38,6 +38,7 @@ struct FrameSettings {
 	bool near_field_enabled = true;
 	bool raster_mode = false;
 	bool sun_cascade_min_level = true;
+	bool brick_cache = true;
 };
 
 // One bit per timing label the frame records. Order is the frame's own order.
@@ -163,6 +164,11 @@ private:
 	int64_t scatter_edit_seq_ = -1;
 	float scatter_sun_[3] = {};
 	int scatter_settle_ = 0;
+	// Task 3's sun-cache sweep, in atlas slots. In flight only while a lap is owed: at
+	// startup and after a sun turn. sun_sweep_left_ counts the slots not yet re-baked;
+	// the cursor advances by kSunSweepSlotsPerFrame each frame until the lap is done.
+	int sun_sweep_cursor_ = 0;
+	int sun_sweep_left_ = 0;
 
 	RenderOrchestrator &render_;
 	LodSystem &lod_;
