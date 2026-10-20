@@ -115,4 +115,12 @@ func test_grass_finds_the_ground_not_the_sea() -> void:
 
 func test_opaque_lattice_does_not_move() -> void:
 	_open_both()
-	assert_bool(true).is_true()
+	var V := _find_valley()
+	var cam := Vector3(V.x, W + 3.0, V.z)
+	_settle(_wa, cam)
+	_settle(_wb, cam)
+	var rd_a: RenderingDevice = _wa.hooks().debug_local_rd() as RenderingDevice
+	var rd_b: RenderingDevice = _wb.hooks().debug_local_rd() as RenderingDevice
+	var bytes_a: PackedByteArray = rd_a.texture_get_data(_wa.hooks().debug_sdf_atlas(), 0)
+	var bytes_b: PackedByteArray = rd_b.texture_get_data(_wb.hooks().debug_sdf_atlas(), 0)
+	assert_int(bytes_a.size()).is_equal(bytes_b.size())

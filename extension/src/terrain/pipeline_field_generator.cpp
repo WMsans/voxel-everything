@@ -122,6 +122,10 @@ Sample PipelineFieldGenerator::sample(float x, float y, float z) const {
 	return s;
 }
 
+bool PipelineFieldGenerator::has_ground() const {
+	return pipeline_.channel_slot("ground_sdf") >= 0;
+}
+
 Sample PipelineFieldGenerator::sample_ground(float x, float y, float z) const {
 	const ResolvedPipeline &p = pipeline_;
 	const int gslot = p.channel_slot("ground_sdf");

@@ -21,6 +21,7 @@ public:
 
 	Sample sample(float x, float y, float z) const override;
 	Sample sample_ground(float x, float y, float z) const override;
+	bool has_ground() const override;
 	bool liquid_level(float x, float z, float *y) const override;
 
 	// Central differences over the pipeline field, exactly as Generator::sample_gradient

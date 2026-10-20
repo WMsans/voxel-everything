@@ -27,6 +27,7 @@ public:
 	virtual ~Generator() = default;
 	virtual Sample sample(float x, float y, float z) const = 0;
 	virtual Sample sample_ground(float x, float y, float z) const { return sample(x, y, z); }
+	virtual bool has_ground() const { return false; }
 	virtual bool liquid_level(float x, float z, float *y) const { return false; }
 	virtual FieldSample sample_gradient(float x, float y, float z) const;
 
