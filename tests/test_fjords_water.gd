@@ -119,8 +119,79 @@ func test_opaque_lattice_does_not_move() -> void:
 	var cam := Vector3(V.x, W + 3.0, V.z)
 	_settle(_wa, cam)
 	_settle(_wb, cam)
+	var region := Vector3i(0, 0, 0)
+	var found_region := false
+	for ry in range(-2, 3):
+		for rx in range(-2, 3):
+			for rz in range(-2, 3):
+				var cand := Vector3i(rx, ry, rz)
+				if _wa.hooks().debug_region_map_entry(cand) >= 0 and _wb.hooks().debug_region_map_entry(cand) >= 0:
+					region = cand
+					found_region = true
+					break
+			if found_region:
+				break
+		if found_region:
+			break
+	var slot_id: int = _wa.hooks().debug_region_map_entry(region)
+	var slot_id_b: int = _wb.hooks().debug_region_map_entry(region)
+	var brick := region * 32 + Vector3i(4, 4, 4)
+	var found_brick := false
+	for by in range(32):
+		for bx in range(32):
+			for bz in range(32):
+				var cand := region * 32 + Vector3i(bx, by, bz)
+				var dd: Dictionary = _wa.hooks().debug_brick_diff(cand, slot_id, PackedByteArray(), 0)
+				if int(dd.get("slot", -1)) >= 0:
+					brick = cand
+					found_brick = true
+					break
+			if found_brick:
+				break
+		if found_brick:
+			break
+	# (a) water world GPU vs CPU mirror: zero mismatches
+	var d: Dictionary = _wa.hooks().debug_brick_diff(brick, slot_id, PackedByteArray(), 0)
+	assert_int(d["slot"]).is_greater_equal(0)
+	assert_int(d["sdf_max_diff"]).is_less_equal(1)
+	assert_int(d["mat_near_mismatch"]).is_equal(0)
+	# (b) per-brick opaque bytes equal across worlds
+	var d_b: Dictionary = _wb.hooks().debug_brick_diff(brick, slot_id_b, PackedByteArray(), 0)
+	var slot_a: int = int(d["slot"])
+	var slot_b: int = int(d_b["slot"])
+	assert_int(slot_b).is_greater_equal(0)
 	var rd_a: RenderingDevice = _wa.hooks().debug_local_rd() as RenderingDevice
 	var rd_b: RenderingDevice = _wb.hooks().debug_local_rd() as RenderingDevice
 	var bytes_a: PackedByteArray = rd_a.texture_get_data(_wa.hooks().debug_sdf_atlas(), 0)
 	var bytes_b: PackedByteArray = rd_b.texture_get_data(_wb.hooks().debug_sdf_atlas(), 0)
-	assert_int(bytes_a.size()).is_equal(bytes_b.size())
+	var ax := 64
+	var ay := 32
+	var az := 32
+	var stride := 17
+	var atlas_x := ax * stride
+	var atlas_y := ay * stride
+	var extract := func(bytes: PackedByteArray, slot: int) -> PackedByteArray:
+		var out := PackedByteArray()
+		out.resize(stride * stride * stride)
+		var sx := (slot % ax) * stride
+		var sy := ((slot / ax) % ay) * stride
+		var sz := (slot / (ax * ay)) * stride
+		var idx := 0
+		for z in range(stride):
+			for y in range(stride):
+				for x in range(stride):
+					var off := ((sz + z) * atlas_y + (sy + y)) * atlas_x + (sx + x)
+					out[idx] = bytes[off]
+					idx += 1
+		return out
+	var block_a: PackedByteArray = extract.call(bytes_a, slot_a)
+	var block_b: PackedByteArray = extract.call(bytes_b, slot_b)
+	var first_diff := -1
+	for i in range(block_a.size()):
+		if block_a[i] != block_b[i]:
+			first_diff = i
+			break
+	if first_diff >= 0:
+		var msg := "first diff at byte %d (a=%d b=%d)" % [first_diff, block_a[first_diff], block_b[first_diff]]
+		assert_bool(false).override_failure_message(msg).is_true()
+	assert_bool(block_a == block_b).is_true()
