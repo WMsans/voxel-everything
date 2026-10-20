@@ -17,6 +17,11 @@ inline constexpr int kBrickCacheDim = 5;
 inline constexpr int kBrickCacheStep = 4;
 // A cache slot's normal_ok value (1 = baked). sun_ok reuses the same bit in Task 3.
 inline constexpr uint32_t kCacheOk = 1u;
+// A normal_ok value: an edit shapes this brick, so NEITHER entry may be baked. An edit's CSG
+// crease (a crater rim, the ridge between two craters) puts lattice points beside the hit
+// whose nearest surface is a different face, and a filtered fetch blends that face's normal
+// and sun into the hit. The marcher takes the analytic normal and the per-pixel sun march.
+inline constexpr uint32_t kCacheEdited = 2u;
 
 // The SDF is a LATTICE field, not a cell field: sample n sits at local coordinate n, so
 // trilinear reconstruction over a brick's full [0, 16) voxel extent needs a lattice point

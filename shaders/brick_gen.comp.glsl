@@ -17,6 +17,8 @@ shared uint s_ops[256];
 shared uint s_op_n;
 shared uint s_keep[256];
 shared uint s_liquid;
+// Non-zero when an op that moves the surface touches this brick (see phase 6).
+shared uint s_edited;
 // Non-zero once anything in this brick disqualifies it from the baked-normal cache (see
 // phase 6). Racing writes of the same value are harmless: it is only read after a barrier.
 shared uint s_cache_bad;
@@ -156,13 +158,17 @@ void main() {
 	if (tid == 0u) {
 		uint n = 0u;
 		uint liquid = 0u;
+		uint edited = 0u;
 		for (uint i = 0u; i < op_count; i++)
 			if (s_keep[i] != 0u) {
 				s_ops[n++] = i;
 				if (op_may_hold_liquid(op_base + i)) liquid = 1u;
+				// Paint changes a label, never the surface, so it leaves no crease (phase 6).
+				if (field_op_pool.v[(op_base + i) * 2u].x != OP_SPHERE_PAINT) edited = 1u;
 			}
 		s_op_n = n;
 		s_liquid = liquid;
+		s_edited = edited;
 	}
 	barrier();
 
@@ -467,7 +473,10 @@ void main() {
 	memoryBarrierShared();
 	barrier();
 	if (tid == 0u) {
-		normal_ok.v[slot] = s_cache_bad == 0u && s_liquid == 0u ? CACHE_OK : 0u;
+		// An edited brick is CACHE_EDITED, a miss for both entries: its CSG crease puts lattice
+		// points beside the hit whose nearest surface is another face (world/brick.h).
+		normal_ok.v[slot] = s_edited != 0u ? CACHE_EDITED
+				: (s_cache_bad == 0u && s_liquid == 0u ? CACHE_OK : 0u);
 		// The brick itself changed, so any sun entry (Task 3) is stale from this moment.
 		sun_ok.v[slot] = 0u;
 	}

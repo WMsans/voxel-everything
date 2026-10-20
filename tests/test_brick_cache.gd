@@ -151,21 +151,44 @@ func test_cached_sun_matches_the_marched_sun() -> void:
 	assert_float(d["mean_abs_diff"]).is_greater(0.0005)
 	assert_float(d["flip_fraction"]).is_less_equal(0.03)
 
-func test_an_edited_brick_is_rebaked_the_same_frame() -> void:
-	# An edit regenerates the brick: brick_gen clears its sun entry, and this frame's job bake
-	# must set it again -- otherwise the edited surface shades with the old surface's shadows.
+func test_an_edited_brick_bakes_neither_entry() -> void:
+	# An edit's CSG crease puts lattice points beside the hit whose nearest surface is another
+	# face, so a filtered fetch blends the wrong normal and sun into it. An edited brick is a
+	# miss for both entries -- even after this frame's job bake -- and shades analytically.
 	var world := make_world()
 	var hit: Dictionary = world.raycast(Vector3(20.0, 80.0, 20.0), Vector3.DOWN, 200.0)
 	assert_bool(hit["hit"]).override_failure_message("no ground under the camera").is_true()
 	world.hooks().debug_apply_sphere_subtract(hit["pos"], 0.4)
 	world.hooks().debug_stream_frame(Vector3(20.0, 56.0, 20.0))
+	world.hooks().debug_sun_bake_jobs()
 	var brick := Vector3i((hit["pos"] / 0.8).floor())
 	var flags := world.hooks().debug_brick_cache_flags(brick)
 	assert_int(flags).override_failure_message("the edited brick is not resident").is_greater_equal(0)
-	assert_int(flags & 1).override_failure_message(
-		"the regenerated brick has no baked normal").is_equal(1)
-	assert_int(flags & 2).override_failure_message(
-		"regeneration kept the old sun entry").is_equal(0)
-	world.hooks().debug_sun_bake_jobs()
-	assert_int(world.hooks().debug_brick_cache_flags(brick) & 3).override_failure_message(
-		"the edited brick's sun entry was not rebaked the same frame").is_equal(3)
+	assert_int(flags & 3).override_failure_message(
+		"the edited brick kept a baked entry: %d" % flags).is_equal(0)
+
+func test_crater_rims_shade_as_without_the_cache() -> void:
+	# Two overlapping r=3 craters (the edit brush's default radius): a rim and a ridge between
+	# them. Before edited bricks were misses, the rim normals blended the floor and the wall
+	# (rms 0.05, 1.4% cel mismatch) and the ridge baked dark sun blobs (0.36% flips).
+	var world := make_world()
+	world.set_effect_enabled("raymarched_sun_shadow", true)
+	var hit: Dictionary = world.raycast(Vector3(20.0, 80.0, 20.0), Vector3.DOWN, 200.0)
+	assert_bool(hit["hit"]).override_failure_message("no ground under the camera").is_true()
+	var g: Vector3 = hit["pos"]
+	world.hooks().debug_apply_sphere_subtract(g + Vector3(-2.7, 0.0, 0.0), 3.0)
+	world.hooks().debug_apply_sphere_subtract(g + Vector3(2.7, 0.0, 0.0), 3.0)
+	var quiet := 0
+	for i in range(200):
+		quiet = quiet + 1 if world.hooks().debug_stream_frame(Vector3(20.0, 56.0, 20.0)) == 0 else 0
+		if quiet >= 6:
+			break
+	var eye := g + Vector3(0.0, 1.7, 6.0)
+	var look := (g + Vector3(0.0, -1.0, 0.0) - eye).normalized()
+	var sun: Dictionary = world.hooks().debug_raymarch_sun_probe(eye, look, 256, 192)
+	assert_int(sun["hits"]).is_greater(12000)
+	assert_float(sun["flip_fraction"]).is_less_equal(0.0005)
+	assert_float(sun["mean_abs_diff"]).is_less_equal(0.001)
+	var normal := world.hooks().debug_raymarch_normal_probe(eye, look, 256, 192)
+	assert_float(normal["rms_ndl"]).is_less_equal(0.005)
+	assert_float(normal["cel_mismatch_fraction"]).is_less_equal(0.001)

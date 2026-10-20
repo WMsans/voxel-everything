@@ -15,11 +15,13 @@ const uint BEAUTY_COST_VIEW = 128u;
 
 // Per-brick baked-normal cache (world/brick.h, shaders/brick_cache.glslh): samples per
 // axis, voxels between samples, and the flags-word bit that switches the raymarcher
-// onto the cached normal. CACHE_OK is the value of a valid normal_ok/sun_ok entry.
+// onto the cached normal. CACHE_OK is the value of a valid normal_ok/sun_ok entry;
+// CACHE_EDITED is the normal_ok of a brick an edit shapes, which bakes neither entry.
 const int BRICK_CACHE_DIM = 5;
 const int BRICK_CACHE_STEP = 4;
 const uint RENDER_BRICK_CACHE = 512u;
 const uint CACHE_OK = 1u;
+const uint CACHE_EDITED = 2u;
 
 // ve::kMaterialLayers (extension/src/world/material_table.h)
 const int MATERIAL_LAYERS = 16;

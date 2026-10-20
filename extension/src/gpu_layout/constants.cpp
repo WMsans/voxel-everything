@@ -21,11 +21,13 @@ std::string constants_glsl() {
 	o << "\n"
 	     "// Per-brick baked-normal cache (world/brick.h, shaders/brick_cache.glslh): samples per\n"
 	     "// axis, voxels between samples, and the flags-word bit that switches the raymarcher\n"
-	     "// onto the cached normal. CACHE_OK is the value of a valid normal_ok/sun_ok entry.\n"
+	     "// onto the cached normal. CACHE_OK is the value of a valid normal_ok/sun_ok entry;\n"
+	     "// CACHE_EDITED is the normal_ok of a brick an edit shapes, which bakes neither entry.\n"
 	     "const int BRICK_CACHE_DIM = " << kBrickCacheDim << ";\n"
 	     "const int BRICK_CACHE_STEP = " << kBrickCacheStep << ";\n"
 	     "const uint RENDER_BRICK_CACHE = " << kRenderBrickCache << "u;\n"
-	     "const uint CACHE_OK = " << kCacheOk << "u;\n";
+	     "const uint CACHE_OK = " << kCacheOk << "u;\n"
+	     "const uint CACHE_EDITED = " << kCacheEdited << "u;\n";
 	o << "\n"
 	     "// ve::kMaterialLayers (extension/src/world/material_table.h)\n"
 	     "const int MATERIAL_LAYERS = " << kMaterialLayers << ";\n"

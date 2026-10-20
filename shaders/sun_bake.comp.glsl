@@ -64,6 +64,9 @@ void main() {
 	// load. Skipping them here is what keeps the sweep cheap. The test is workgroup-uniform,
 	// so the barrier below is never reached by only part of a workgroup.
 	if ((brick_flag_word(slot) & BRICK_FLAG_HAS_SURFACE) == 0u) return;
+	// An edited brick keeps sun_ok at 0, so the marcher sun-marches it per pixel: a lattice
+	// point by an edit's crease projects onto the wrong face (world/brick.h, kCacheEdited).
+	if (cache_normal_ok.v[slot] == CACHE_EDITED) return;
 
 	// Both modes read the brick from the allocation map: in a sweep there is nothing else to
 	// read it from, and in a job it is the same value brick_mark wrote for that slot.
