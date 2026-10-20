@@ -1,7 +1,7 @@
 # Voxel Everything — Fjords Water
 
 **Date:** 2026-10-20
-**Status:** design
+**Status:** approved
 **Start commit:** `22d9193` (`main`)
 **Prior specs:** `2026-10-07-fjords-terrain-design.md` (sub-project A; its §11 sketches this
 one as sub-project C); `2026-10-06-water-voxels-design.md` (the water material, its shading and
@@ -124,7 +124,8 @@ Each of these was found in the code and is a constraint, not a choice.
   cache radius (about 4 km) build from the `W − 64` fallback. With water, those chunks become
   flat sea at `W`. This is accepted: a flat sea at the horizon serves "to the horizon". There is
   no dry ring and no fallback change.
-- **Transparency off (my call).** With `transparency.enabled = false` the atlas stores the union,
+- **Transparency off (my call).** `transparency.enabled` is on by default and is only switched
+  off by `benchmark.gd --transparency=`; in normal play the sea is fully transparent. With it off the atlas stores the union,
   so the sea is drawn as an opaque `flat_albedo` slab, which is what the water spec says water
   looks like in that mode. The anti-goals apply with transparency on only. The transparency-off
   mode is out of scope and is not verified beyond "does not crash".
