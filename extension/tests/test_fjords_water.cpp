@@ -141,3 +141,69 @@ TEST_CASE("sample_ground and liquid_level") {
 	CHECK(fs2.gradient[2] == doctest::Approx(0.0f).epsilon(0.01));
 	delete g2;
 }
+
+TEST_CASE("fjords resolves with fjord_water last at an unchanged bound") {
+	const std::string root(VE_REPO_ROOT);
+	ve::ResolvedPipeline p;
+	std::string err;
+	REQUIRE_MESSAGE(ve::load_pipeline(repo_reader, root + "/assets/pipelines/fjords.pipeline",
+			root + "/shaders/", &p, nullptr, &err), err);
+	REQUIRE(p.stages.size() == 5);
+	CHECK(p.stages[3].name == "conifers");
+	CHECK(p.stages[4].name == "fjord_water");
+	CHECK(p.lipschitz == doctest::Approx(8.54f).epsilon(0.002));
+}
+
+TEST_CASE("fjord water fills below W over low ground") {
+	const std::string root(VE_REPO_ROOT);
+	const float W = 51.2f;
+	ve::ResolvedPipeline rp;
+	std::string err;
+	REQUIRE_MESSAGE(ve::load_pipeline(repo_reader, root + "/assets/pipelines/fjords.pipeline",
+			root + "/shaders/", &rp, nullptr, &err), err);
+	ve::PipelineFieldGenerator *g = ve::PipelineFieldGenerator::create(rp, &err);
+	REQUIRE_MESSAGE(g != nullptr, err);
+	const float xs[3] = {0.0f, 100.0f, -50.0f};
+	const float zs[3] = {0.0f, 50.0f, -25.0f};
+	for (int i = 0; i < 3; i++) {
+		CHECK(g->sample(xs[i], W - 1.0f, zs[i]).material == ve::material_id("water"));
+		CHECK(g->sample(xs[i], W + 1.0f, zs[i]).material == 0u);
+		CHECK(g->sample(xs[i], W - 70.0f, zs[i]).material != ve::material_id("water"));
+		float y = 0.0f;
+		CHECK(g->liquid_level(xs[i], zs[i], &y));
+		CHECK(y == doctest::Approx(W));
+	}
+	delete g;
+}
+
+TEST_CASE("the ground view equals the no-water pipeline") {
+	const std::string root(VE_REPO_ROOT);
+	const float W = 51.2f;
+	ve::ResolvedPipeline rp, rpn;
+	std::string err;
+	REQUIRE_MESSAGE(ve::load_pipeline(repo_reader, root + "/assets/pipelines/fjords.pipeline",
+			root + "/shaders/", &rp, nullptr, &err), err);
+	REQUIRE_MESSAGE(ve::load_pipeline(repo_reader, root + "/tests/fixtures/fjords_no_water.pipeline",
+			root + "/shaders/", &rpn, nullptr, &err), err);
+	ve::PipelineFieldGenerator *g = ve::PipelineFieldGenerator::create(rp, &err);
+	REQUIRE_MESSAGE(g != nullptr, err);
+	ve::PipelineFieldGenerator *gn = ve::PipelineFieldGenerator::create(rpn, &err);
+	REQUIRE_MESSAGE(gn != nullptr, err);
+	for (float x = -10.0f; x <= 10.0f; x += 5.0f) {
+		for (float z = -10.0f; z <= 10.0f; z += 5.0f) {
+			for (float y = W - 80.0f; y <= W + 20.0f; y += 4.0f) {
+				ve::Sample a = g->sample_ground(x, y, z);
+				ve::Sample b = gn->sample(x, y, z);
+				CHECK(a.sdf == doctest::Approx(b.sdf));
+				CHECK(a.material == b.material);
+				ve::FieldSample ga = g->sample_gradient(x, y, z); // note: ground gradient
+				// sample_gradient on g differentiates ground; compare to gn sample_gradient (union=ground)
+				ve::FieldSample gb = gn->sample_gradient(x, y, z);
+				CHECK(ga.sdf == doctest::Approx(gb.sdf));
+				for (int k = 0; k < 3; k++) CHECK(ga.gradient[k] == doctest::Approx(gb.gradient[k]).epsilon(1e-4));
+			}
+		}
+	}
+	delete g;
+	delete gn;
+}

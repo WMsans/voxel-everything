@@ -512,4 +512,22 @@ VE_REGISTER_STAGE("ve::stage_fjord_bands", FjordBands, stage_fjord_bands);
 VE_REGISTER_STAGE("ve::stage_trees", Trees, stage_trees);
 VE_REGISTER_STAGE("ve::stage_conifers", Conifers, stage_conifers);
 
+VE_STAGE_SLOTS(FjordWater, p, sdf, material, ground_sdf, ground_material, liquid_level);
+VE_STAGE_PARAMS(FjordWater, fjord_height_water_y);
+
+// Mirror of shaders/stages/fjord_water.field.glslh.
+void stage_fjord_water(FieldCtx &ctx, const FjordWaterSlots &s, const FjordWaterParams &p,
+		const FieldResources &) {
+	ctx.f(s.ground_sdf) = ctx.f(s.sdf);
+	ctx.f(s.ground_material) = ctx.f(s.material);
+	ctx.f(s.liquid_level) = p.fjord_height_water_y;
+	const float w = ctx.v(s.p)[1] - p.fjord_height_water_y;
+	if (ctx.f(s.ground_sdf) > 0.0f && w <= 0.0f) {
+		ctx.f(s.sdf) = w;
+		ctx.f(s.material) = float(ve::material_id("water"));
+	}
+}
+
+VE_REGISTER_STAGE("ve::stage_fjord_water", FjordWater, stage_fjord_water);
+
 } // namespace ve
