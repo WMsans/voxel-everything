@@ -132,8 +132,12 @@ ivec3 cell_coord(uint i) {
 float solid_sample(vec3 p, uint op_base, float sdf, uint mat) {
 	float ssdf = sdf;
 	uint smat = mat;
+#ifdef VE_FIELD_GROUND
+	eval_field_solid(p, op_base, s_op_n, ssdf, smat);
+#else
 	if (s_liquid != 0u) eval_field_solid(p, op_base, s_op_n, ssdf, smat);
 	else solid_view(ssdf, smat);
+#endif
 	return ssdf;
 }
 

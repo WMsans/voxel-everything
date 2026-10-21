@@ -220,6 +220,10 @@ void LodSystem::refresh_shell_candidates(const ve::LodCamera &cam,
 	// without this the toggle would not be observed at all: off would keep the candidate set
 	// and its Unknown chunks, on would wait for the camera to walk into another shell chunk.
 	const bool toggled = enabled != shell_enabled_;
+	const auto sector_cache = store()->sector_cache();
+	const uint64_t sector_version = sector_cache ? sector_cache->version() : shell_sector_version_;
+	const bool sector_changed = sector_cache && (sector_version != shell_sector_version_) &&
+			shell_pending_;
 	float fade_end = ve::kLodFadeEndM;
 	fade_band(nullptr, &fade_end);
 	// One shell chunk of reach past the far field's edge -- margin, NOT seam reach.
@@ -238,7 +242,7 @@ void LodSystem::refresh_shell_candidates(const ve::LodCamera &cam,
 	// profile shows it; the correct-by-construction full scan is what buys the goldens.
 	lock.unlock();
 	std::vector<ve::ShellBox> boxes;
-	bool recompute = moved || toggled;
+	bool recompute = moved || toggled || sector_changed;
 	{
 		std::lock_guard<std::mutex> edit_lock(store()->edit_mutex());
 		recompute = recompute || shell_dirty_;
@@ -264,11 +268,30 @@ void LodSystem::refresh_shell_candidates(const ve::LodCamera &cam,
 	if (!recompute) return;
 	shell_cam_chunk_ = cam_chunk;
 	shell_enabled_ = enabled;
+	shell_sector_version_ = sector_version;
 	std::vector<ve::IVec3> chunks, evicted;
-	// Off: the candidate set is empty, so set_candidates evicts everything and no shell job
-	// is ever requested.
-	if (enabled) ve::shell_candidates(boxes, cam.pos, radius, &chunks);
+	// Terrain water: the plane y = W, within the candidate radius, becomes a candidate
+	// source just like an op AABB. Appended inside the recompute path.
+	if (enabled) {
+		if (ve::Generator *gen = store()->generator()) {
+			float W = 0.0f;
+			if (gen->liquid_level(cam.pos[0], cam.pos[2], &W))
+				boxes.push_back(ve::liquid_plane_box(cam.pos, radius, W));
+		}
+		ve::shell_candidates(boxes, cam.pos, radius, &chunks);
+	}
 	shell_grid_.set_candidates(chunks, &evicted);
+	// A sector landing only matters while some candidate has nothing built yet; once they are
+	// all Ready/Empty the plane is meshed and a full rescan per sector bake is waste. It goes
+	// pending again on the next move or edit, which recompute anyway.
+	shell_pending_ = false;
+	for (ve::IVec3 c : chunks) {
+		const ve::ShellState st = shell_grid_.state(c);
+		if (st != ve::kShellReady && st != ve::kShellEmpty) {
+			shell_pending_ = true;
+			break;
+		}
+	}
 	for (ve::IVec3 c : evicted) release_shell_pages_locked(c);
 }
 

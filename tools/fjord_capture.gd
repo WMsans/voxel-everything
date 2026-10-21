@@ -8,6 +8,9 @@ extends SceneTree
 #   valley: on the water at the lowest point, looking along the longest run of low ground;
 #   ridge:  8 m over the highest point, looking toward the lowest ground, pitched down;
 #   aerial: 250 m over the valley point, looking along the valley, pitched down.
+# Plus the sea poses of spec 2026-10-20 §5 from the same valley point: water_shore (3 m above
+# the water level, along the shore), water_fjord (120 m up, down the fjord), water_under (5 m
+# below the surface) and water_seam (25 m up, across the 64-80 m fade band).
 # Prints each pose so a benchmark or a later run can reuse it.
 const WATER_Y := 51.2
 var _last_settle_frames := 0
@@ -22,8 +25,26 @@ func _arg(name: String, fallback: String) -> String:
 	return fallback
 
 func _ground(world: VoxelWorld, x: float, z: float) -> float:
-	var hit: Dictionary = world.raycast(Vector3(x, 800.0, z), Vector3.DOWN, 1600.0)
-	return (hit["pos"] as Vector3).y if hit["hit"] else INF
+	# The GROUND (valley floor / ridge top), not the sea surface: with terrain water a plain
+	# raycast stops at WATER_Y for every column, so the pose search would see one flat sea and
+	# pick the first column and heading. debug_eval_field_gradient reports the GROUND view's
+	# sdf (the same view collision and shading use), so bisect on its sign.
+	var lo := -200.0
+	var hi := 800.0
+	if _ground_sdf(world, Vector3(x, hi, z)) <= 0.0:
+		return hi
+	if _ground_sdf(world, Vector3(x, lo, z)) > 0.0:
+		return INF
+	for i in range(16):
+		var mid := 0.5 * (lo + hi)
+		if _ground_sdf(world, Vector3(x, mid, z)) > 0.0:
+			hi = mid
+		else:
+			lo = mid
+	return lo
+
+func _ground_sdf(world: VoxelWorld, p: Vector3) -> float:
+	return float(world.hooks().debug_eval_field_gradient(p, PackedByteArray(), 0)["sdf"])
 
 func _settle(world: VoxelWorld, frames: int) -> bool:
 	var quiet := 0
@@ -115,6 +136,14 @@ func capture() -> void:
 	var ok := await _shoot(world, camera, player, valley_at, best_dir + Vector3(0.0, 0.08, 0.0), out.path_join("valley.png"))
 	ok = ok and await _shoot(world, camera, player, high + Vector3(0.0, 8.0, 0.0), to_low + Vector3(0.0, -0.15, 0.0), out.path_join("ridge.png"))
 	ok = ok and await _shoot(world, camera, player, valley_at + Vector3(0.0, 250.0, 0.0), best_dir + Vector3(0.0, -0.45, 0.0), out.path_join("aerial.png"))
+	# Sub-project C, the sea (spec 2026-10-20 §5): the same valley, four ways. `best_dir` runs
+	# along the fjord, which is also along its shoreline, so the shore pose keeps it.
+	var flat_dir := Vector3(best_dir.x, 0.0, best_dir.z)
+	ok = ok and await _shoot(world, camera, player, valley_at, flat_dir + Vector3(0.0, -0.02, 0.0), out.path_join("water_shore.png"))
+	ok = ok and await _shoot(world, camera, player, Vector3(low.x, WATER_Y + 120.0, low.z), flat_dir + Vector3(0.0, -0.12, 0.0), out.path_join("water_fjord.png"))
+	ok = ok and await _shoot(world, camera, player, Vector3(low.x, WATER_Y - 5.0, low.z), flat_dir + Vector3(0.0, 0.02, 0.0), out.path_join("water_under.png"))
+	# 25 m up with the 64-80 m fade band thrown ~19 degrees down, i.e. across the middle of frame.
+	ok = ok and await _shoot(world, camera, player, Vector3(low.x, WATER_Y + 25.0, low.z), flat_dir + Vector3(0.0, -0.33, 0.0), out.path_join("water_seam.png"))
 	print("FJORD_CAPTURE sector stats: ", world.hooks().debug_sector_stats())
 	world.shutdown_render_resources()
 	await process_frame

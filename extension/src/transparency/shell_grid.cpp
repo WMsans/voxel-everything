@@ -104,6 +104,17 @@ void shell_candidates(const std::vector<ShellBox> &boxes, const float cam[3], fl
 	for (const auto &[k, c] : seen) out->push_back(c);
 }
 
+ShellBox liquid_plane_box(const float cam[3], float radius_m, float level) {
+	ShellBox b{};
+	b.lo[0] = cam[0] - radius_m;
+	b.lo[1] = level;
+	b.lo[2] = cam[2] - radius_m;
+	b.hi[0] = cam[0] + radius_m;
+	b.hi[1] = level;
+	b.hi[2] = cam[2] + radius_m;
+	return b;
+}
+
 void ShellGrid::set_candidates(const std::vector<IVec3> &chunks, std::vector<IVec3> *evicted) {
 	std::map<Key, Node> next;
 	for (IVec3 c : chunks) {

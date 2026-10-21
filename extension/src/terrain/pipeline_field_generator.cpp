@@ -95,8 +95,8 @@ PipelineFieldGenerator *PipelineFieldGenerator::create(const ResolvedPipeline &p
 	return g;
 }
 
-Sample PipelineFieldGenerator::sample(float x, float y, float z) const {
-	FieldCtx ctx;
+void PipelineFieldGenerator::eval_ctx(FieldCtx &ctx, float x, float y, float z) const {
+	ctx = FieldCtx{};
 	const ResolvedPipeline &p = pipeline_;
 	const int pslot = p.channel_slot("p");
 	// The world seed's domain shift, the same whole metres the GPU adds (VE_FIELD_OFFSET).
@@ -110,17 +110,44 @@ Sample PipelineFieldGenerator::sample(float x, float y, float z) const {
 		FieldResources res{sectors_.get()};
 		fn(ctx, slot_blobs_[i].get(), param_blobs_[i].get(), res);
 	}
+}
 
+Sample PipelineFieldGenerator::sample(float x, float y, float z) const {
+	const ResolvedPipeline &p = pipeline_;
+	FieldCtx ctx;
+	eval_ctx(ctx, x, y, z);
 	Sample s{};
 	s.sdf = ctx.f(p.channel_slot("sdf"));
 	s.material = uint16_t(ctx.f(p.channel_slot("material")));
 	return s;
 }
 
+Sample PipelineFieldGenerator::sample_ground(float x, float y, float z) const {
+	const ResolvedPipeline &p = pipeline_;
+	const int gslot = p.channel_slot("ground_sdf");
+	if (gslot < 0) return sample(x, y, z);
+	FieldCtx ctx;
+	eval_ctx(ctx, x, y, z);
+	Sample s{};
+	s.sdf = ctx.f(gslot);
+	s.material = uint16_t(ctx.f(p.channel_slot("ground_material")));
+	return s;
+}
+
+bool PipelineFieldGenerator::liquid_level(float x, float z, float *y) const {
+	const ResolvedPipeline &p = pipeline_;
+	const int lslot = p.channel_slot("liquid_level");
+	if (lslot < 0) return false;
+	FieldCtx ctx;
+	eval_ctx(ctx, x, ve::kSurfaceY, z);
+	if (y) *y = ctx.f(lslot);
+	return true;
+}
+
 FieldSample PipelineFieldGenerator::sample_gradient(float x, float y, float z) const {
-	// The base implementation already differentiates through THIS view's sample() (the
-	// pipeline field) with the same epsilon the GPU uses; only the flag changes (see the
-	// header for why exact is the honest report here).
+	// The base implementation already differentiates through THIS view's sample_ground() --
+	// the pipeline field with any liquid removed -- with the same epsilon the GPU uses; only
+	// the flag changes (see the header for why exact is the honest report here).
 	FieldSample fs = Generator::sample_gradient(x, y, z);
 	fs.exact_gradient = true;
 	return fs;

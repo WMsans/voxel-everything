@@ -200,6 +200,12 @@ private:
 	// alone sees no change, so the stale candidate set would survive.
 	bool shell_enabled_ = false;
 	bool shell_dirty_ = true; // guarded by WorldStore::edit_mutex()
+	// Last sector cache version observed during a shell candidate recompute; a mismatch
+	// forces a recompute so terrain (water) candidates appear when sectors land.
+	uint64_t shell_sector_version_ = 0;
+	// True while some shell candidate has no build result yet. A sector landing cannot change
+	// the candidate set, so the version trigger is only worth its full rescan until then.
+	bool shell_pending_ = true;
 	void release_shell_pages_locked(ve::IVec3 coord);
 	void refresh_shell_candidates(const ve::LodCamera &cam, std::unique_lock<std::mutex> &lock);
 	std::set<ve::LodKey> lod_overflow_logged_; // once-per-chunk overflow diagnostics

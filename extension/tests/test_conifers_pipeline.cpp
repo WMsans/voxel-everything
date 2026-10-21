@@ -21,9 +21,10 @@ TEST_CASE("fjords resolves with the conifers stage after the bands, at an unchan
 	std::string err;
 	REQUIRE_MESSAGE(ve::load_pipeline(repo_reader, root + "/assets/pipelines/fjords.pipeline",
 			root + "/shaders/", &p, nullptr, &err), err);
-	REQUIRE(p.stages.size() == 4);
+	REQUIRE(p.stages.size() == 5);
 	CHECK(p.stages[2].name == "fjord_bands");
 	CHECK(p.stages[3].name == "conifers");
+	CHECK(p.stages[4].name == "fjord_water");
 	// `mul 1.0`: the union of 1-Lipschitz trunks leaves the fjord field's 8.54 alone, and
 	// conifer.glslh's CONIFER_FIELD_L (8.6) must not be below it.
 	CHECK(p.lipschitz == doctest::Approx(8.54f).epsilon(0.002));

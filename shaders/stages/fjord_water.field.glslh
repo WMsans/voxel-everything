@@ -1,0 +1,31 @@
+//!stage     fjord_water
+//!kind      field
+//!in        sdf : float
+//!in        material : uint
+//!out       sdf : float
+//!out       material : uint
+//!out       ground_sdf : float
+//!out       ground_material : uint
+//!out       liquid_level : float
+//!use       fjord_height.water_y
+//!lipschitz mul 1.0
+//!cpu       ve::stage_fjord_water
+
+// Calm sea at the fjords' water level W: copies the ground into the reserved
+// channels, then folds the half-space below W into the union as water.
+
+void stage_fjord_water(inout FieldCtx ctx) {
+	ctx.ground_sdf = ctx.sdf;
+	ctx.ground_material = ctx.material;
+	ctx.liquid_level = P.fjord_height_water_y;
+	float w = ctx.p.y - P.fjord_height_water_y;
+	// The union is min(ground, half-space below W), NOT a gated write: above the plane the
+	// sdf must still be the distance to the sea (w), or the field overestimates by the depth
+	// of the fjord and stops being a distance bound. The material is water only on the sea
+	// itself -- an AIR sample above the plane must keep the ground's label, or brick_gen's
+	// mat_transparent test disables the normal cache for every brick above the waterline.
+	if (w < ctx.sdf) {
+		ctx.sdf = w;
+		if (w <= 0.0 && ctx.ground_sdf > 0.0) ctx.material = MAT_WATER;
+	}
+}

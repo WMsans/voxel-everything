@@ -99,6 +99,19 @@ std::string generate_field_glslh(const ResolvedPipeline &p, const std::string &p
 		if (s.kind == StageKind::kField) o << "\tstage_" << s.name << "(ctx);\n";
 	o << "\tsdf = ctx.sdf;\n\tmat = ctx.material;\n}\n\n";
 
+	if (p.channel_slot("ground_sdf") >= 0) {
+		o << "#define VE_FIELD_GROUND 1\n";
+		o << "void eval_base_field_views(vec3 p, out float sdf, out uint mat, out float gsdf, out uint gmat) {\n"
+		  << "\tFieldCtx ctx;\n";
+		for (const ResolvedChannel &c : p.channels) {
+			if (c.name == "p") { o << "\tctx.p = p + VE_FIELD_OFFSET;\n"; continue; }
+			o << "\tctx." << c.name << " = " << channel_glsl_type(c.type) << "(0);\n";
+		}
+		for (const StageManifest &s : p.stages)
+			if (s.kind == StageKind::kField) o << "\tstage_" << s.name << "(ctx);\n";
+		o << "\tsdf = ctx.sdf;\n\tmat = ctx.material;\n\tgsdf = ctx.ground_sdf;\n\tgmat = ctx.ground_material;\n}\n\n";
+	}
+
 	o << prelude;
 	return o.str();
 }

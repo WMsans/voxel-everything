@@ -93,14 +93,14 @@
   `virtual bool liquid_level(float x, float z, float *y) const { return false; }`
 - `PipelineFieldGenerator` overrides both when `channel_slot("ground_sdf") >= 0`. `sample_ground` reads `ground_sdf`/`ground_material`. `liquid_level` samples at `(x, kSurfaceY, z)` and returns the `liquid_level` channel. `sample_gradient` differentiates `sample_ground` (same `e = 0.01`), and its `sdf`/`material` are the ground's.
 
-- [ ] **Step 1: Write the failing tests** in `test_fjords_water.cpp`, using an inline test pipeline with two stages: a flat ground at `y = 40` that writes `sdf`, `material`, and a water stage (Task 2 not yet written, so inline its body in the test's stage reader) that writes the three reserved channels with level `50`.
+- [x] **Step 1: Write the failing tests** in `test_fjords_water.cpp`, using an inline test pipeline with two stages: a flat ground at `y = 40` that writes `sdf`, `material`, and a water stage (Task 2 not yet written, so inline its body in the test's stage reader) that writes the three reserved channels with level `50`.
   - `TEST_CASE("a pipeline without ground_sdf generates no views")`: the Default pipeline's source does not contain `VE_FIELD_GROUND`, and equals `shaders/generated/field.glslh.golden`.
   - `TEST_CASE("a pipeline with ground_sdf emits eval_base_field_views")`: the source contains `#define VE_FIELD_GROUND 1` and `void eval_base_field_views(`.
   - `TEST_CASE("sample_ground and liquid_level")`: at `(0, 45, 0)`, `sample().material == water` and `sample_ground().sdf == doctest::Approx(5.0f)`. `liquid_level(0, 0, &y)` is true with `y == 50`. `sample_gradient(0, 45, 0).gradient` is approximately `(0, 1, 0)`, and `.sdf` is approximately 5. Approximately `(0, 1, 0)` is also the plane's gradient, so add a second case on a sloped ground `y = 40 + 0.5x` and check the gradient ≈ `(−0.5, 1, 0)`.
-- [ ] **Step 2:** `cd extension && scons -Q test 2>&1 | tail -5`. Expected: the new cases fail to compile or fail.
-- [ ] **Step 3:** Implement the interfaces above.
-- [ ] **Step 4:** `cd extension && scons -Q test 2>&1 | tail -5`. Expected: all pass. `git diff --stat shaders/generated` is empty, and regenerating Mesas and Flat the way Task 0 Step 3 did gives output that `cmp`-matches the baselines.
-- [ ] **Step 5:** Commit `feat: ground views for pipelines that declare a liquid`.
+- [x] **Step 2:** `cd extension && scons -Q test 2>&1 | tail -5`. Expected: the new cases fail to compile or fail.
+- [x] **Step 3:** Implement the interfaces above.
+- [x] **Step 4:** `cd extension && scons -Q test 2>&1 | tail -5`. Expected: all pass. `git diff --stat shaders/generated` is empty, and regenerating Mesas and Flat the way Task 0 Step 3 did gives output that `cmp`-matches the baselines.
+- [x] **Step 5:** Commit `feat: ground views for pipelines that declare a liquid`.
 
 ### Task 2: The `fjord_water` stage
 
@@ -115,15 +115,15 @@
 - Body: `ground_sdf = sdf; ground_material = material; liquid_level = W; float w = p.y − W; if (w < sdf) { sdf = w; if (ground_sdf > 0.0) material = MAT_WATER; }`. So `material` is water exactly where the ground is air and `p.y < W`. Use the generated material constant for the `water` row and `ve::material_id("water")` in the mirror.
 - The stage is appended as the **last** line of `fjords.pipeline`, after `conifers`. `fjords_no_water.pipeline` is today's `fjords.pipeline` verbatim.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `TEST_CASE("fjords resolves with fjord_water last at an unchanged bound")`: 5 stages, `stages[4].name == "fjord_water"`, bound ≈ 8.54.
   - `TEST_CASE("fjord water fills below W over low ground")`: Load `fjords.pipeline` with no sector cache, so the ground is the `W − 64` fallback. Check: `sample(x, W − 1, z).material == water`, `sample(x, W + 1, z).material == 0`, `sample(x, W − 70, z).material != water`, and `liquid_level` returns `W`, for a few XZ.
   - `TEST_CASE("the ground view equals the no-water pipeline")`: For a grid of points from `y = W − 80` to `W + 20`, `fjords.sample_ground(p)` is bit-equal to `fjords_no_water.sample(p)`. So is `sample_gradient`.
   - Update `test_conifers_pipeline.cpp` to 5 stages; `stages[3]` stays `conifers`.
-- [ ] **Step 2:** Run the native tests. Expected: FAIL.
-- [ ] **Step 3:** Write the stage, its mirror and the fixture, and add the stage to the pipeline.
-- [ ] **Step 4:** Native tests pass. Then `./build.sh && ./gdunit_tests.sh -a res://tests/test_field_diff.gd -a res://tests/test_fjords.gd`: no failures beyond the baseline. That shows CPU and GPU agree on the union with water present.
-- [ ] **Step 5:** Commit `feat: fjord_water stage fills the valleys to W`.
+- [x] **Step 2:** Run the native tests. Expected: FAIL.
+- [x] **Step 3:** Write the stage, its mirror and the fixture, and add the stage to the pipeline.
+- [x] **Step 4:** Native tests pass. Then `./build.sh && ./gdunit_tests.sh -a res://tests/test_field_diff.gd -a res://tests/test_fjords.gd`: no failures beyond the baseline. That shows CPU and GPU agree on the union with water present.
+- [x] **Step 5:** Commit `feat: fjord_water stage fills the valleys to W`.
 
 ### Task 3: Ground-seeded views on the GPU and CPU
 
@@ -143,16 +143,16 @@
   - `grass_bricks.comp.glsl`: every `eval_field(…, 0u, 0u, …)` becomes `eval_base_ground(…)`.
 - `tests/test_fjords_water.gd` opens two `VoxelWorld`s, one with `fjords.pipeline` and one with `res://tests/fixtures/fjords_no_water.pipeline`, set up like `test_fjords.gd`'s `_open` (seed 0). Each pumps sectors (`debug_pump_sectors`) around a valley point `V`, chosen in Step 1 as an XZ where `raycast` down hits below `W − 10`.
 
-- [ ] **Step 1: Write the failing GPU tests:**
+- [x] **Step 1: Write the failing GPU tests:**
   - `test_underwater_gradient_is_the_grounds`: At 20 points on the floor around `V` (`y = ground + 0.05`), `debug_eval_field_gradient` in the water world equals the no-water world (`grad` within 1e-4). At least one of them is not within 0.05 of `(0, 1, 0)`, which proves the test is not looking at a flat floor.
   - `test_opaque_lattice_does_not_move`: Stream the same bricks around `V` in both worlds (`debug_stream_frame` until settled). Then `debug_brick_diff` (GPU against its CPU mirror) reports zero mismatches in the water world, and the opaque lattice bytes read from `debug_sdf_atlas` for a floor brick are equal across the two worlds.
   - `test_collision_lattice_does_not_move`: `debug_mesh_lattice_diff` on a floor chunk: the water world's result equals the no-water world's.
   - `test_grass_finds_the_ground_not_the_sea`: `debug_grass_stats` blade count in a settled shore view is within the no-water world's count ±1%. Pick the pose in Step 1 (the grass hook memory: avoid caves).
   - `test_water_is_in_the_union`: `debug_eval_field` at `V` with `y = W − 1` returns the water id; at `W + 1` it returns air.
-- [ ] **Step 2:** Run `./build.sh && ./gdunit_tests.sh -a res://tests/test_fjords_water.gd`. Expected: the gradient, lattice and grass tests FAIL; the union test passes.
-- [ ] **Step 3:** Implement the changes above.
-- [ ] **Step 4:** Run `test_fjords_water.gd` (all pass), the native tests, then the full gdUnit run. Expected: no new failures, and `tests/golden/` is unchanged. `tests/test_brick_cache.gd` and `tests/test_conifers.gd` load `fjords.pipeline`. If either fails only because water is now present, point it at `fjords_no_water.pipeline` and say so in the commit message. Do not loosen its assertions.
-- [ ] **Step 5:** Commit `feat: opaque, solid and gradient views read the ground under terrain water`.
+- [x] **Step 2:** Run `./build.sh && ./gdunit_tests.sh -a res://tests/test_fjords_water.gd`. Expected: the gradient, lattice and grass tests FAIL; the union test passes.
+- [x] **Step 3:** Implement the changes above.
+- [x] **Step 4:** Run `test_fjords_water.gd` (all pass), the native tests, then the full gdUnit run. Expected: no new failures, and `tests/golden/` is unchanged. `tests/test_brick_cache.gd` and `tests/test_conifers.gd` load `fjords.pipeline`. If either fails only because water is now present, point it at `fjords_no_water.pipeline` and say so in the commit message. Do not loosen its assertions.
+- [x] **Step 5:** Commit `feat: opaque, solid and gradient views read the ground under terrain water`.
 
 ### Task 4: Near-shell terrain candidates
 
@@ -167,14 +167,14 @@
   - `recompute` is also true when the sector cache's `version()` differs from a new member, `shell_sector_version_`.
   - Reach the generator and cache the way the existing `lod_chunk_sectors_ready` does. Shell builds are already sector-gated, so nothing new gates them.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - Native `TEST_CASE("liquid_plane_box covers both layers at a chunk boundary")`: `shell_candidates({liquid_plane_box(cam, 10, 51.2)}, cam, 10)` returns chunks with y index 15 and 16 only. The count per layer equals the count for a box at `y = 52` (one layer).
   - GPU `test_shell_candidates_at_the_shore`: In the water world at a shore camera 3 m above `W`, after settling, `debug_lod_stats()["shell_pages"] > 0`. The no-water world reports 0.
   - GPU `test_candidates_appear_when_sectors_land`: Set the camera before any sector is resident, call `debug_lod_tick` once, then pump sectors without moving the camera. `shell_pages` becomes > 0.
-- [ ] **Step 2:** Run both. Expected: FAIL.
-- [ ] **Step 3:** Implement.
-- [ ] **Step 4:** Both pass, and so does the full gdUnit run (no new failures). Record `shell_pages` at the shore camera in the commit message.
-- [ ] **Step 5:** Commit `feat: near shell sees terrain water at the liquid level`.
+- [x] **Step 2:** Run both. Expected: FAIL.
+- [x] **Step 3:** Implement.
+- [x] **Step 4:** Both pass, and so does the full gdUnit run (no new failures). Record `shell_pages` at the shore camera in the commit message.
+- [x] **Step 5:** Commit `feat: near shell sees terrain water at the liquid level`.
 
 ### Task 5: Edit behaviour and captures
 
@@ -182,16 +182,16 @@
 - Modify: `tools/fjord_capture.gd`
 - Test: `tests/test_fjords_water.gd`
 
-- [ ] **Step 1: Write the failing test** `test_removing_water_leaves_a_hole`: `debug_apply_sphere_subtract` of r = 2 at `(V.x, W − 1, V.z)`, then settle. `debug_eval_field` there is air, and it stays air after 120 more frames.
-- [ ] **Step 2:** Run it. It may already pass, since ops carve the union. If it does, keep it as a pin.
-- [ ] **Step 3:** Add four poses to `tools/fjord_capture.gd`, chosen with `raycast` the way the existing poses are:
+- [x] **Step 1: Write the failing test** `test_removing_water_leaves_a_hole`: `debug_apply_sphere_subtract` of r = 2 at `(V.x, W − 1, V.z)`, then settle. `debug_eval_field` there is air, and it stays air after 120 more frames.
+- [x] **Step 2:** Run it. It may already pass, since ops carve the union. If it does, keep it as a pin.
+- [x] **Step 3:** Add four poses to `tools/fjord_capture.gd`, chosen with `raycast` the way the existing poses are:
   - `water_shore`: 3 m above `W`, looking along the shore.
   - `water_fjord`: 120 m up, looking down a long fjord to the horizon.
   - `water_under`: 5 m below `W`.
   - `water_seam`: 25 m up, looking across the fade band.
   Write the PNGs to `reports/fjords_water/`.
 - [ ] **Step 4:** Run the capture and open every PNG at full size. Note, as the water spec §12.4 does, what was seen. Check specifically: water on both sides of the fade band with no seam or band; foam at the shore; the floor visible through shallow water; no opaque teal slab in the near field; the horizon reaching water.
-- [ ] **Step 5:** Commit `test: fjords water edit pin and captures`.
+- [x] **Step 5:** Commit `test: fjords water edit pin and captures`.
 
 ### Task 6: Cost and the spec record
 

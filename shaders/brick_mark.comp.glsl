@@ -103,8 +103,12 @@ void brick_probe(ivec3 brick, uint op_base, uint op_count, out float mn, out flo
 				mx = max(mx, sdf);
 				float ssdf = sdf;
 				uint smat = mat;
+#ifdef VE_FIELD_GROUND
+				eval_field_solid(p, op_base, op_count, ssdf, smat);
+#else
 				if (s_liquid != 0u) eval_field_solid(p, op_base, op_count, ssdf, smat);
 				else solid_view(ssdf, smat);
+#endif
 				smn = min(smn, ssdf);
 				opaque_view(osdf, omat, OPAQUE_OUTSIDE);
 				omn = min(omn, osdf);

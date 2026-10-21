@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://b8o2frh53mab3"
+path="res://.godot/imported/sun_bake.comp.glsl-c8a1f267bcdd0cd8f6d9066db2406cc5.res"
+
+[deps]
+
+source_file="res://shaders/sun_bake.comp.glsl"
+dest_files=["res://.godot/imported/sun_bake.comp.glsl-c8a1f267bcdd0cd8f6d9066db2406cc5.res"]
+
+[params]
+

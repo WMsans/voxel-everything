@@ -31,3 +31,6 @@ stage stages/fjord_bands.field.glslh
 # card scatter and imposter read them from the records the cull writes, so there is no
 # second copy to keep in step.
 stage stages/conifers.field.glslh
+
+# Calm sea at water level (sub-project C).
+stage stages/fjord_water.field.glslh

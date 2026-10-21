@@ -20,6 +20,8 @@ public:
 	void set_sector_cache(std::shared_ptr<const SectorCache> c) { sectors_ = std::move(c); }
 
 	Sample sample(float x, float y, float z) const override;
+	Sample sample_ground(float x, float y, float z) const override;
+	bool liquid_level(float x, float z, float *y) const override;
 
 	// Central differences over the pipeline field, exactly as Generator::sample_gradient
 	// computes them -- but reported EXACT. A stage pipeline has no analytic gradient;
@@ -36,6 +38,7 @@ public:
 	const ResolvedPipeline &pipeline() const { return pipeline_; }
 
 private:
+	void eval_ctx(ve::FieldCtx &ctx, float x, float y, float z) const;
 	ResolvedPipeline pipeline_;
 	std::shared_ptr<const SectorCache> sectors_;
 	std::vector<StageFn> fns_;

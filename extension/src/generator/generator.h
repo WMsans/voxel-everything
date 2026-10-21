@@ -26,6 +26,13 @@ class Generator {
 public:
 	virtual ~Generator() = default;
 	virtual Sample sample(float x, float y, float z) const = 0;
+	// The ground view: the union with any stage's liquid removed. Defaults to the union, so a
+	// generator without a liquid has one view, and every consumer of `sample` is unaffected.
+	virtual Sample sample_ground(float x, float y, float z) const { return sample(x, y, z); }
+	// The level of a stage-provided liquid at (x, z), if this generator has one.
+	virtual bool liquid_level(float x, float z, float *y) const { return false; }
+	// Differentiates the GROUND view: a pixel on the sea floor shades with the ground's
+	// normal, never the water plane's. Identical to differentiating `sample` above water.
 	virtual FieldSample sample_gradient(float x, float y, float z) const;
 
 	// Upper bound on |grad(sdf)| of the field this generator returns. The generator's

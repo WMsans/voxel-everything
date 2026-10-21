@@ -174,3 +174,55 @@ Each of these was found in the code and is a constraint, not a choice.
    and what it is called.
 5. Foam: does shore foam come out right where terrain meets sea at a 15–40 m depth slope? Look
    at it. Tune only through existing water knobs.
+
+---
+
+## 7. Deviations and results
+
+Filled in as the plan (`2026-10-20-fjords-water.md`) landed. The cost table and the
+capture notes (§5's last two bullets) are still open — Tasks 5 and 6 of the plan.
+
+### Deviations from this spec and the plan
+
+1. **The liquid is expressed as reserved channels.** `ground_sdf : float`,
+   `ground_material : uint` and `liquid_level : float`, written by the last stage. There is no
+   new manifest directive: the codegen keys off `ground_sdf`, emitting
+   `#define VE_FIELD_GROUND 1` and `eval_base_field_views` only when the pipeline declares it.
+   §6 item 1 left this open; this is the answer.
+2. **The terrain candidate source is one unfiltered box**, the plane `y = W` across the
+   candidate square. Chunks over ground above `W` build zero quads and are recorded empty (§6
+   item 3). There is no per-chunk ground test.
+3. **The brick solid view under `VE_FIELD_GROUND` always pays the second evaluation**
+   (`eval_field_solid`); it does not take the `s_liquid == 0` label-rule shortcut. Streaming
+   cost in Fjords only.
+4. **The brick cache stays off where the union holds water** (`brick_gen`'s
+   `mat_transparent(mat)` test is unchanged), so underwater ground pixels take the per-pixel
+   gradient. The sea view's cost is what the open cost measurement is for.
+5. **The codegen golden now pins the codegen prefix, not the trailing prelude.** The golden
+   file is the generated source *including* `field_ops.glslh`, and §2 requires edits there, so
+   byte-identity with the recorded golden became impossible the moment `VE_FIELD_GROUND` blocks
+   were added. `shaders/generated/field.glslh.golden` is unchanged (not re-recorded); the test
+   now compares everything before `// Field-op interface.` and the prelude's behaviour for
+   no-water pipelines is pinned by `test_field_diff.gd` and the frame goldens instead.
+6. **The union SDF must be a real min, not a gated write.** The stage body is
+   `if (p.y - W < sdf) { sdf = p.y - W; if (w <= 0 && ground_sdf > 0) material = water; }`.
+   Writing the half-space only below `W` leaves the sdf above the sea at the *ground's*
+   distance (measured: 64.1 m at 0.1 m above the surface, 320× the declared Lipschitz bound),
+   which puts the meshed surface at the bottom of the straddling cell and breaks every sphere
+   trace through it. The material carries the second half of the min: `w <= 0` is required, or
+   air above the plane labels as water and `brick_gen`'s `mat_transparent` test marks every
+   brick above the waterline cache-bad, against §5's "air above `W`".
+7. **The sector-version trigger stops once the candidates are built** (`LodSystem::shell_pending_`).
+   A sector landing cannot change the candidate set, so the rescan the plan asks for is only
+   worth running while some candidate has no build result. Without that stop it is a full
+   edit-log and override-brick scan plus a candidate-set rebuild per sector bake, on the tick
+   path, for the whole of a streaming session.
+8. **Fixture note: two live worlds cannot have different pipelines.** The field source is
+   installed through a process-global override (`ve::set_shader_source_override`), so the last
+   world to initialise decides what every pass compiled after it sees. `tests/test_fjords_water.gd`
+   therefore opens the water and no-water worlds one at a time for anything on the mesh worker
+   (the near shell, the collision lattice). A two-world shell test reports zero shell pages for
+   this reason alone — the dry world's field in the water world's LOD pass, not a feature bug.
+9. **Standing failure:** `tests/test_transparency.gd::test_ice_tints_the_ground_and_never_hides_it`
+   fails identically on `main` at `47ff2f9` and on this branch. The Task 0 baseline was never
+   recorded, so this is the one standing failure the branch has actually been compared against.
