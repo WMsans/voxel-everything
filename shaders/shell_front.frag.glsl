@@ -20,6 +20,7 @@ layout(location = 0) out vec4 out_front;
 
 layout(set = 0, binding = 6) uniform sampler2D gb_depth;
 layout(push_constant, std430) uniform Push { SHELL_RASTER_PUSH_FIELDS } pc;
+#include "shell_cover.glslh"
 
 void main() {
 	float d = distance(v_wpos, bcam.cam.xyz);
@@ -33,6 +34,8 @@ void main() {
 	// solid island rather than drop a tint. Past fade_end an island keeps every fragment;
 	// inside the band it takes the same complementary partition as every other page.
 	bool island_keeps = v_island != 0u && d >= pc.fade.y;
+	// Where the near shell has not built yet, a far page keeps the whole surface.
+	if (v_near == 0u && !far_keeps && !shell_covered(v_wpos, normalize(v_normal))) far_keeps = true;
 	if (!island_keeps && (v_near != 0u) == far_keeps) discard;
 	// Reverse-Z: larger is nearer. Anything the G-buffer holds in front of this fragment --
 	// grass, leaves, terrain -- hides it.

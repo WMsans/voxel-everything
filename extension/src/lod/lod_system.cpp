@@ -16,6 +16,7 @@
 #include <godot_cpp/variant/utility_functions.hpp>
 
 #include <algorithm>
+#include <cmath>
 
 namespace godot {
 
@@ -706,6 +707,16 @@ void LodSystem::prepare_raster_locked() {
 			const auto q = lod_page_quads_.find(p);
 			if (q != lod_page_quads_.end()) shell_draw_pages_.push_back(ve::LodPageDraw{p, q->second});
 		}
+	// Which chunks the near shell can take over, within the candidate radius; past it fade_end
+	// has handed every pixel to the far field anyway. With the shell off there is nothing to
+	// take over: an empty cover keeps the plain dither.
+	shell_cover_.clear();
+	if (shell_enabled_) {
+		const int reach = static_cast<int>(std::ceil(shell_radius_ / ve::kShellChunkSize)) + 1;
+		const ve::IVec3 c = shell_cam_chunk_;
+		shell_grid_.cover(ve::IVec3{c.x - reach, c.y - reach, c.z - reach},
+				ve::IVec3{c.x + reach, c.y + reach, c.z + reach}, &shell_cover_);
+	}
 	// The island shells: pages whose chunk record names an island, so the shell's vertex
 	// shader places them through that island's descriptor. No per-island draw call.
 	for (const auto &entry : island_shell_pages_)
@@ -723,6 +734,11 @@ std::vector<ve::LodPageDraw> LodSystem::transparent_draw_pages() const {
 std::vector<ve::LodPageDraw> LodSystem::shell_draw_pages() const {
 	std::lock_guard<std::mutex> lock(lod_mutex_);
 	return shell_draw_pages_;
+}
+
+std::vector<uint32_t> LodSystem::shell_cover() const {
+	std::lock_guard<std::mutex> lock(lod_mutex_);
+	return shell_cover_;
 }
 
 // The LoD half of the edit fan-out. Edit lock held: queue only, never the lod mutex
@@ -777,6 +793,7 @@ void LodSystem::teardown() {
 	shell_pages_of_.clear();
 	island_shell_pages_.clear();
 	shell_draw_pages_.clear();
+	shell_cover_.clear();
 	shell_cam_chunk_ = ve::IVec3{INT32_MAX, 0, 0};
 	shell_enabled_ = false;
 	lod_op_overflow_ = 0;
@@ -797,6 +814,7 @@ void LodSystem::release_gpu() {
 	shell_pages_of_.clear();
 	island_shell_pages_.clear();
 	shell_draw_pages_.clear();
+	shell_cover_.clear();
 	shell_cam_chunk_ = ve::IVec3{INT32_MAX, 0, 0};
 	shell_enabled_ = false;
 	lod_overflow_logged_.clear();

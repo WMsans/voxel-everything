@@ -34,6 +34,8 @@ public:
 		drew_ = false;
 	}
 	int draw_page_count() const { return static_cast<int>(pages_.size()); }
+	// LodSystem::shell_cover(), uploaded by draw(). Empty: the plain dither everywhere.
+	void set_cover(std::vector<uint32_t> cover) { cover_ = std::move(cover); }
 
 	// False only on failure. With no pages and the camera outside it draws nothing, returns
 	// true, and drew() reports false -- the composite then never reads the targets.
@@ -61,6 +63,7 @@ public:
 private:
 	bool ensure_targets(RenderingDevice *rd, Vector2i size);
 	bool ensure_args(RenderingDevice *rd, int pages);
+	bool upload_cover(RenderingDevice *rd);
 
 	RenderingDevice *rd_ = nullptr;
 	gpu::Group group_;
@@ -68,9 +71,11 @@ private:
 	bool pipeline_clockwise_ = false;
 	gpu::SetCache thick_set_, front_set_, resolve_set_;
 	gpu::FramebufferCache thick_fb_, front_fb_, resolve_fb_;
-	RID thick_, front_, depth_, args_, resolve_shader_, resolve_pipeline_;
+	RID thick_, front_, depth_, args_, resolve_shader_, resolve_pipeline_, cover_buf_;
 	Vector2i size_{0, 0};
 	int args_capacity_ = 0;
+	int cover_capacity_ = 0; // words
+	std::vector<uint32_t> cover_;
 	std::vector<LodRasterPass::PageDraw> pages_;
 	bool drew_ = false;
 };

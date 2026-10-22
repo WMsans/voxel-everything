@@ -1,5 +1,6 @@
 #pragma once
 #include "render/gpu/gpu.h"
+#include "world/region_window.h"
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/projection.hpp>
 #include <godot_cpp/variant/rid.hpp>
@@ -38,6 +39,14 @@ public:
 	// The island descriptor buffer lod.vert.glsl places island pages through. Unset (debug
 	// probes) binds a dead descriptor of the pass's own.
 	void set_island_desc(RID buffer) { island_desc_ = buffer; }
+	// The near field's published region map and its window. lod.frag.glsl keeps every far
+	// fragment in a region the map does not hold yet: a streaming near field marches it as
+	// empty, so dithering the far field out there opened a gap. Unset (debug probes), the
+	// near field owns its side of the dither everywhere, as before.
+	void set_near_regions(RID region_map, const ve::RegionWindow &window) {
+		region_map_ = region_map;
+		region_window_ = window;
+	}
 	// Drops the cached framebuffer. Used by the debug probe before it frees its throwaway
 	// colour/depth targets, so the pass never holds a framebuffer pointing at freed textures.
 	void release_targets();
@@ -87,6 +96,8 @@ private:
 	gpu::SetCache set_;
 	RID index_array_, index_array_buffer_;
 	RID island_desc_, fallback_desc_;
+	RID region_map_;
+	ve::RegionWindow region_window_{};
 	bool pipeline_marker_ = false;
 	gpu::FramebufferCache framebuffer_;
 	std::vector<PageDraw> draw_pages_;

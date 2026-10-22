@@ -156,6 +156,38 @@ TEST_CASE("chunks that leave the candidate set are reported evicted exactly once
 	CHECK(g.size() == 1);
 }
 
+TEST_CASE("cover: the candidates' box, one bit per chunk that has had a build result") {
+	ve::ShellGrid g;
+	g.set_candidates({ve::IVec3{0, 0, 0}, ve::IVec3{0, 1, 0}, ve::IVec3{2, 0, 1}}, nullptr);
+	const auto bit = [&](int x, int y, int z) {
+		std::vector<uint32_t> w;
+		g.cover(ve::IVec3{-5, -5, -5}, ve::IVec3{5, 5, 5}, &w);
+		REQUIRE(w.size() == 9);
+		CHECK(w[0] == 0u); CHECK(w[1] == 0u); CHECK(w[2] == 0u); // the box is the candidates'
+		CHECK(w[3] == 3u); CHECK(w[4] == 2u); CHECK(w[5] == 2u);
+		return (w[8] >> (x + 3 * (y + 2 * z))) & 1u;
+	};
+	CHECK(bit(0, 0, 0) == 0u);
+	g.note_result(ve::IVec3{0, 0, 0}, false);
+	CHECK(bit(0, 0, 0) == 1u);
+	CHECK(bit(0, 1, 0) == 0u);
+	g.note_result(ve::IVec3{0, 1, 0}, true);
+	// A rebuild keeps its old pages drawing: still covered while building, and after a failure.
+	g.note_building(ve::IVec3{0, 1, 0});
+	CHECK(bit(0, 1, 0) == 1u);
+	g.note_failed(ve::IVec3{0, 1, 0});
+	CHECK(bit(0, 1, 0) == 1u);
+	CHECK(bit(2, 0, 1) == 0u);
+	CHECK(bit(1, 0, 0) == 0u); // no candidate: the far shell keeps it
+	// Clipped to the box asked for; nothing in it is an all-zero header.
+	std::vector<uint32_t> w;
+	g.cover(ve::IVec3{1, 0, 0}, ve::IVec3{5, 5, 5}, &w);
+	CHECK(w.size() == 9);
+	CHECK(w[3] == 1u);
+	g.cover(ve::IVec3{3, 3, 3}, ve::IVec3{5, 5, 5}, &w);
+	CHECK(w == std::vector<uint32_t>(8, 0u));
+}
+
 TEST_CASE("thickness: a slab, two layers, a ray ending on ground, the camera inside, the sky") {
 	// One slab: front at 5, back at 7, ground at 20.
 	CHECK(ve::shell_thickness(7.0f - 5.0f, 0.0f, 20.0f, 5.0f, 4.0f) == doctest::Approx(2.0f));

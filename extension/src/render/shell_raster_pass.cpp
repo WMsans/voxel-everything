@@ -5,6 +5,7 @@
 #include "lod/lod_contour.h"
 #include <godot_cpp/variant/packed_color_array.hpp>
 #include <algorithm>
+#include <cstring>
 
 using namespace godot;
 
@@ -41,11 +42,12 @@ void ShellRasterPass::teardown() {
 	group_.release(device);
 	thick_shader_ = front_shader_ = thick_pipeline_ = front_pipeline_ = exit_pipeline_ = sampler_ = RID();
 	resolve_shader_ = resolve_pipeline_ = RID();
-	thick_ = front_ = depth_ = args_ = RID();
+	thick_ = front_ = depth_ = args_ = cover_buf_ = RID();
 	thick_set_ = front_set_ = resolve_set_ = gpu::SetCache();
 	thick_fb_ = front_fb_ = resolve_fb_ = gpu::FramebufferCache();
 	size_ = Vector2i(0, 0);
 	args_capacity_ = 0;
+	cover_capacity_ = 0;
 	drew_ = false;
 	rd_ = nullptr;
 }
@@ -93,6 +95,28 @@ bool ShellRasterPass::ensure_args(RenderingDevice *rd, int pages) {
 	return args_.is_valid();
 }
 
+bool ShellRasterPass::upload_cover(RenderingDevice *rd) {
+	// The header alone, all zero, means "no cover": the plain dither everywhere.
+	std::vector<uint32_t> words = cover_;
+	if (words.size() < 8) words.assign(8, 0u);
+	// ponytail: grows only, like the indirect args, and re-uploads every frame. Terrain water's
+	// two chunk layers are under 1 KB; the worst case (ice ops filling the whole candidate
+	// cube) is about 20 KB. Upload only on a ShellGrid change if that ever shows in a profile.
+	if (static_cast<int>(words.size()) > cover_capacity_ || !cover_buf_.is_valid()) {
+		gpu::RdDevice device{rd};
+		group_.free(device, cover_buf_);
+		cover_capacity_ = std::max(256, static_cast<int>(words.size()) * 2);
+		cover_buf_ = group_.add(gpu::Kind::Buffer,
+				rd->storage_buffer_create(static_cast<uint32_t>(cover_capacity_) * 4));
+		if (!cover_buf_.is_valid()) return false;
+	}
+	PackedByteArray bytes;
+	bytes.resize(static_cast<int64_t>(words.size()) * 4);
+	std::memcpy(bytes.ptrw(), words.data(), words.size() * 4);
+	rd->buffer_update(cover_buf_, 0, static_cast<uint32_t>(bytes.size()), bytes);
+	return true;
+}
+
 bool ShellRasterPass::draw(RenderingDevice *rd, LodPool &pool, RID index_array, GBuffer &gb,
 		RID beauty_cam_ubo, RID island_desc, float fade_start, float fade_end,
 		bool front_face_clockwise, bool camera_inside, bool exit_faces) {
@@ -105,7 +129,7 @@ bool ShellRasterPass::draw(RenderingDevice *rd, LodPool &pool, RID index_array, 
 	if (pages_.empty() && !camera_inside) return true;
 	if (!index_array.is_valid() || !beauty_cam_ubo.is_valid() || !island_desc.is_valid()) return false;
 	if (!ensure_targets(rd, gb.size()) ||
-			!ensure_args(rd, std::max(1, static_cast<int>(pages_.size()))))
+			!ensure_args(rd, std::max(1, static_cast<int>(pages_.size()))) || !upload_cover(rd))
 		return false;
 	if (!thick_fb_.get(rd, group_, {thick_, gb.depth()}).is_valid()) return false;
 	if (!front_fb_.get(rd, group_, {front_, depth_}).is_valid()) return false;
@@ -145,7 +169,8 @@ bool ShellRasterPass::draw(RenderingDevice *rd, LodPool &pool, RID index_array, 
 			gpu::storage(2, pool.chunk_buffer()),
 			gpu::storage(5, pool.normal_buffer()),
 			gpu::ubo(7, beauty_cam_ubo),
-			gpu::storage(8, island_desc)});
+			gpu::storage(8, island_desc),
+			gpu::storage(9, cover_buf_)});
 	const RID front_set = front_set_.get(device, group_, front_shader_, 0, {
 			gpu::storage(0, pool.quad_buffer()),
 			gpu::storage(1, pool.page_chunk_buffer()),
@@ -153,7 +178,8 @@ bool ShellRasterPass::draw(RenderingDevice *rd, LodPool &pool, RID index_array, 
 			gpu::storage(5, pool.normal_buffer()),
 			gpu::sampled(6, sampler_, gb.depth()),
 			gpu::ubo(7, beauty_cam_ubo),
-			gpu::storage(8, island_desc)});
+			gpu::storage(8, island_desc),
+			gpu::storage(9, cover_buf_)});
 	if (!thick_set.is_valid() || !front_set.is_valid()) return false;
 
 	// Device-level upload before any draw list opens; same command layout as

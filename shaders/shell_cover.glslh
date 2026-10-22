@@ -1,0 +1,25 @@
+// The near shell's cover (ve::ShellGrid::cover), for the shell's fragment stages. Words
+// [x0, y0, z0, nx, ny, nz, 0, 0] name a box of 3.2 m shell chunks, then one bit per chunk,
+// bit (x - x0) + nx * ((y - y0) + ny * (z - z0)): set once the chunk has been built. Until
+// then the far shell keeps the surface whole, so water that meshes slower than the far field
+// fades out never leaves a gap.
+layout(set = 0, binding = 9, std430) readonly buffer ShellCover { uint w[]; } shell_cover;
+
+bool shell_chunk_built(vec3 q) {
+	ivec3 lo = ivec3(int(shell_cover.w[0]), int(shell_cover.w[1]), int(shell_cover.w[2]));
+	ivec3 dim = ivec3(int(shell_cover.w[3]), int(shell_cover.w[4]), int(shell_cover.w[5]));
+	ivec3 c = ivec3(floor(q / (0.1 * 32.0))) - lo;
+	// Outside the box (all zero: no cover) the plain dither applies, as before.
+	if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, dim))) return true;
+	int b = c.x + dim.x * (c.y + dim.y * c.z);
+	return ((shell_cover.w[8 + (b >> 5)] >> uint(b & 31)) & 1u) != 0u;
+}
+
+// May a FAR shell fragment at p (unit normal n) hand its pixel to the near shell? Only once
+// the chunks on both sides of the surface are built: whichever owns the near quads, they are
+// drawing. Terrain water's y = W lies exactly on a chunk face, so one side is not enough.
+// Near pages never ask: a built chunk's quads draw as they always did, so the worst case
+// while a neighbour builds is a surface drawn by both shells for a few frames, never a hole.
+bool shell_covered(vec3 p, vec3 n) {
+	return shell_chunk_built(p - n * 0.05) && shell_chunk_built(p + n * 0.05);
+}

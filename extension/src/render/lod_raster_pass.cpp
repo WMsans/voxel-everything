@@ -35,7 +35,7 @@ void LodRasterPass::teardown() {
 	shader_ = shader_marker_ = RID();
 	pipeline_cull_off_ = pipeline_cull_ccw_ = pipeline_cull_cw_ = RID();
 	index_array_ = index_array_buffer_ = RID();
-	island_desc_ = fallback_desc_ = RID();
+	island_desc_ = fallback_desc_ = region_map_ = RID();
 	set_ = gpu::SetCache();
 	framebuffer_ = gpu::FramebufferCache();
 	draw_pages_.clear();
@@ -96,7 +96,9 @@ bool LodRasterPass::ensure_uniform_set(RenderingDevice *rd, LodPool &pool, Mater
 			gpu::sampled(3, materials.sampler(), materials.albedo_array()),
 			gpu::sampled(4, materials.sampler(), materials.surface_array()),
 			gpu::storage(5, pool.normal_buffer()),
-			gpu::storage(8, island_desc_.is_valid() ? island_desc_ : fallback_desc_)}).is_valid();
+			gpu::storage(8, island_desc_.is_valid() ? island_desc_ : fallback_desc_),
+			// Unset, any buffer will do: region.w = 0 below and the shader never reads it.
+			gpu::storage(9, region_map_.is_valid() ? region_map_ : fallback_desc_)}).is_valid();
 }
 
 RID LodRasterPass::active_pipeline() const {
@@ -166,6 +168,12 @@ bool LodRasterPass::draw(RenderingDevice *rd, LodPool &pool, MaterialAtlas &mate
 	push.cam[3] = fade_start;
 	push.fade[0] = fade_end;
 	push.fade[1] = skip_transparent_ ? 1.0f : 0.0f;
+	if (region_map_.is_valid()) {
+		push.region[0] = region_window_.origin.x;
+		push.region[1] = region_window_.origin.y;
+		push.region[2] = region_window_.origin.z;
+		push.region[3] = region_window_.dim;
+	}
 	rd->draw_list_set_push_constant(dl, gpu::push_bytes(push), sizeof(push));
 	rd->draw_list_draw_indirect(dl, true, pool.args_buffer(), 0, draw_count, 20);
 	rd->draw_list_end();

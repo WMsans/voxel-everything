@@ -113,6 +113,9 @@ public:
 	// Every page the shell raster draws this frame: the far field's pages that hold a shell
 	// quad, every near-shell page, every island shell page. Refreshed by prepare_raster().
 	std::vector<ve::LodPageDraw> shell_draw_pages() const;
+	// The near shell's cover (ve::ShellGrid::cover) around the camera,
+	// for the shell raster. Refreshed by prepare_raster().
+	std::vector<uint32_t> shell_cover() const;
 	// Island shells (spec §5): uploads the freshly contoured ones as local-space pages whose
 	// chunk record names the island, and releases the pages of every slot not in `live_mask`.
 	// Render thread, before tick().
@@ -194,6 +197,7 @@ private:
 	std::map<int, std::vector<int>> island_shell_pages_;
 	std::map<int, std::vector<int>> island_mesh_pages_; // raster mode's island meshes, by atlas slot
 	std::vector<ve::LodPageDraw> shell_draw_pages_;
+	std::vector<uint32_t> shell_cover_;
 	ve::IVec3 shell_cam_chunk_{INT32_MAX, 0, 0};
 	// The `enabled` the candidate set was last built under. A runtime toggle (a bound
 	// set_transparency_value) must force a recompute: with a parked camera the chunk test

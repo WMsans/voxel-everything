@@ -56,7 +56,8 @@
 #define LOD_RASTER_PUSH_FIELDS \
 	mat4 view_proj; \
 	vec4 cam; \
-	vec4 fade;
+	vec4 fade; \
+	ivec4 region;
 
 #define SHELL_RASTER_PUSH_FIELDS \
 	vec4 fade;

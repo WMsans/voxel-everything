@@ -54,6 +54,13 @@ public:
 	void note_result(IVec3 c, bool has_quads); // Ready or Empty; a dirty chunk stays requestable
 	void note_failed(IVec3 c);                 // back to Unknown
 	ShellState state(IVec3 c) const;           // kShellUnknown for a chunk not in the set
+	// The shell raster's cover (shaders/shell_cover.glslh): words [x0, y0, z0, nx, ny, nz, 0, 0],
+	// then one bit per chunk of the box, bit (x - x0) + nx * ((y - y0) + ny * (z - z0)). The box
+	// is the candidates' bounds clipped to [lo, hi] (all zero with none in it). A bit is set once
+	// the chunk has had a build result -- a rebuild keeps its old pages drawing, so it stays
+	// set. Unset, the far shell keeps the chunk whole: terrain water meshes slower than the far
+	// field fades it out.
+	void cover(IVec3 lo, IVec3 hi, std::vector<uint32_t> *out) const;
 	bool dirty(IVec3 c) const;
 	int size() const;
 	void clear();
@@ -62,6 +69,7 @@ private:
 	struct Node {
 		ShellState state = kShellUnknown;
 		bool dirty = false;
+		bool built = false; // some build result landed; never cleared while a candidate
 	};
 	using Key = std::tuple<int, int, int>; // (z, y, x): deterministic iteration
 	static Key key(IVec3 c) { return Key{c.z, c.y, c.x}; }

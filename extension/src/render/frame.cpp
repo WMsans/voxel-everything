@@ -394,6 +394,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 	if (lod_raster) lod_raster->set_skip_transparent(transparency.enabled);
 	if (lod_raster && render_.passes().islands)
 		lod_raster->set_island_desc(render_.passes().islands->desc_buffer());
+	if (lod_raster) lod_raster->set_near_regions(atlas->region_map(), store_.region_window());
 	if (!in.debug.skip_far_field && lod_.pool() && lod_raster && render_.passes().materials) {
 		ve::LodCamera lod_cam;
 		for (int c = 0; c < 4; c++)
@@ -586,6 +587,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		for (const ve::LodPageDraw &pd : lod_.shell_draw_pages())
 			shell_pages.push_back(LodRasterPass::PageDraw{pd.page, pd.quad_count});
 		shell_raster->set_draw_pages(shell_pages);
+		shell_raster->set_cover(lod_.shell_cover());
 	}
 	if (ShellRasterPass *shell = shell_raster;
 			shell && transparency.enabled && lod_.pool() && lod_raster) {

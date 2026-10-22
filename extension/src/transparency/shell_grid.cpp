@@ -3,6 +3,7 @@
 #include "world/brick.h"
 #include "world/material_table.h"
 #include <algorithm>
+#include <climits>
 #include <cmath>
 
 namespace ve {
@@ -174,6 +175,7 @@ void ShellGrid::note_result(IVec3 c, bool has_quads) {
 	const auto it = nodes_.find(key(c));
 	if (it == nodes_.end()) return;
 	it->second.state = has_quads ? kShellReady : kShellEmpty; // dirty is left as it is
+	it->second.built = true;
 }
 
 void ShellGrid::note_failed(IVec3 c) {
@@ -189,6 +191,35 @@ ShellState ShellGrid::state(IVec3 c) const {
 bool ShellGrid::dirty(IVec3 c) const {
 	const auto it = nodes_.find(key(c));
 	return it != nodes_.end() && it->second.dirty;
+}
+
+void ShellGrid::cover(IVec3 lo, IVec3 hi, std::vector<uint32_t> *out) const {
+	if (!out) return;
+	const auto inside = [&](int x, int y, int z) {
+		return x >= lo.x && x <= hi.x && y >= lo.y && y <= hi.y && z >= lo.z && z <= hi.z;
+	};
+	IVec3 b0{INT32_MAX, INT32_MAX, INT32_MAX}, b1{INT32_MIN, INT32_MIN, INT32_MIN};
+	for (const auto &[k, n] : nodes_) {
+		const int x = std::get<2>(k), y = std::get<1>(k), z = std::get<0>(k);
+		if (!inside(x, y, z)) continue;
+		b0 = IVec3{std::min(b0.x, x), std::min(b0.y, y), std::min(b0.z, z)};
+		b1 = IVec3{std::max(b1.x, x), std::max(b1.y, y), std::max(b1.z, z)};
+	}
+	if (b0.x > b1.x) {
+		out->assign(8, 0u);
+		return;
+	}
+	const int nx = b1.x - b0.x + 1, ny = b1.y - b0.y + 1, nz = b1.z - b0.z + 1;
+	const size_t bits = static_cast<size_t>(nx) * static_cast<size_t>(ny) * static_cast<size_t>(nz);
+	out->assign(8 + (bits + 31) / 32, 0u);
+	const int header[6] = {b0.x, b0.y, b0.z, nx, ny, nz};
+	for (int i = 0; i < 6; i++) (*out)[static_cast<size_t>(i)] = static_cast<uint32_t>(header[i]);
+	for (const auto &[k, n] : nodes_) {
+		const int x = std::get<2>(k), y = std::get<1>(k), z = std::get<0>(k);
+		if (!n.built || !inside(x, y, z)) continue;
+		const size_t i = static_cast<size_t>((x - b0.x) + nx * ((y - b0.y) + ny * (z - b0.z)));
+		(*out)[8 + i / 32] |= 1u << (i % 32);
+	}
 }
 
 int ShellGrid::size() const { return static_cast<int>(nodes_.size()); }

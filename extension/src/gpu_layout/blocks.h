@@ -80,6 +80,9 @@ struct LodRasterPush {
 	float view_proj[16];
 	float cam[4];   // xyz = camera position, w = fade start
 	float fade[4];  // x = fade end, y = 1 when transparency is on (shell quads skipped), zw unused
+	// The near field's region window (lod.frag.glsl): xyz = origin in regions, w = edge length.
+	// w = 0 means no window -- the near field owns its side of the dither everywhere.
+	int32_t region[4];
 };
 
 struct ShellRasterPush {
@@ -244,6 +247,7 @@ inline constexpr Field kLodRasterPushFields[] = {
 	VE_LAYOUT_FIELD(LodRasterPush, view_proj, Mat4, 0),
 	VE_LAYOUT_FIELD(LodRasterPush, cam, Vec4, 0),
 	VE_LAYOUT_FIELD(LodRasterPush, fade, Vec4, 0),
+	VE_LAYOUT_FIELD(LodRasterPush, region, IVec4, 0),
 };
 inline constexpr Field kShellRasterPushFields[] = {
 	VE_LAYOUT_FIELD(ShellRasterPush, fade, Vec4, 0),
