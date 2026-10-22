@@ -240,9 +240,13 @@ void LodSystem::refresh_shell_candidates(const ve::LodCamera &cam,
 	// it now runs on the TICK path -- once per dirty tick and once per 3.2 m camera crossing.
 	// Cache the box set per brick (or recompute over only the delta's dirty regions) if a
 	// profile shows it; the correct-by-construction full scan is what buys the goldens.
+	// Terrain water: the level the plane sits at, if the pipeline declares a liquid.
+	float liquid_y = 0.0f;
+	ve::Generator *gen = store()->generator();
+	const bool has_liquid = enabled && gen && gen->liquid_level(cam.pos[0], cam.pos[2], &liquid_y);
 	lock.unlock();
 	std::vector<ve::ShellBox> boxes;
-	bool recompute = moved || toggled || sector_changed;
+	bool recompute = moved || toggled || sector_changed || radius != shell_radius_;
 	{
 		std::lock_guard<std::mutex> edit_lock(store()->edit_mutex());
 		recompute = recompute || shell_dirty_;
@@ -262,6 +266,17 @@ void LodSystem::refresh_shell_candidates(const ve::LodCamera &cam,
 			ve::collect_ops_for_aabb(*store()->edit_log(), lo, hi, &ops);
 			ve::transparent_boxes(ops.data(), static_cast<int>(ops.size()), &store()->volumes(),
 					store()->overrides(), lo, hi, &boxes);
+			// A subtract under the liquid level exposes water walls and floors below the
+			// plane's two chunk layers; only a candidate chunk can mesh them.
+			if (has_liquid)
+				for (const ve::EditOp &op : ops) {
+					if (op.type != ve::kOpSphereSubtract && op.type != ve::kOpBoxSubtract) continue;
+					ve::ShellBox b{};
+					ve::op_world_aabb(op, b.lo, b.hi);
+					if (b.lo[1] >= liquid_y) continue;
+					b.hi[1] = std::min(b.hi[1], liquid_y);
+					boxes.push_back(b);
+				}
 		}
 	}
 	lock.lock();
@@ -269,15 +284,12 @@ void LodSystem::refresh_shell_candidates(const ve::LodCamera &cam,
 	shell_cam_chunk_ = cam_chunk;
 	shell_enabled_ = enabled;
 	shell_sector_version_ = sector_version;
+	shell_radius_ = radius;
 	std::vector<ve::IVec3> chunks, evicted;
 	// Terrain water: the plane y = W, within the candidate radius, becomes a candidate
 	// source just like an op AABB. Appended inside the recompute path.
 	if (enabled) {
-		if (ve::Generator *gen = store()->generator()) {
-			float W = 0.0f;
-			if (gen->liquid_level(cam.pos[0], cam.pos[2], &W))
-				boxes.push_back(ve::liquid_plane_box(cam.pos, radius, W));
-		}
+		if (has_liquid) boxes.push_back(ve::liquid_plane_box(cam.pos, radius, liquid_y));
 		ve::shell_candidates(boxes, cam.pos, radius, &chunks);
 	}
 	shell_grid_.set_candidates(chunks, &evicted);

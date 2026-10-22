@@ -199,6 +199,10 @@ private:
 	// set_transparency_value) must force a recompute: with a parked camera the chunk test
 	// alone sees no change, so the stale candidate set would survive.
 	bool shell_enabled_ = false;
+	// The radius the candidate set was last built at. fade_end follows the residency reach,
+	// which moves with a parked camera; a stale radius leaves the ring between the old and the
+	// new fade_end with no near shell, and the near half of the dither shows bare ground.
+	float shell_radius_ = 0.0f;
 	bool shell_dirty_ = true; // guarded by WorldStore::edit_mutex()
 	// Last sector cache version observed during a shell candidate recompute; a mismatch
 	// forces a recompute so terrain (water) candidates appear when sectors land.

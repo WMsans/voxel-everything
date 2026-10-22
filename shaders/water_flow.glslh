@@ -7,17 +7,18 @@
 // reads as water sliding downhill. Each projection is a constant scroll, so there is no
 // flow-map phase reset and no pulsing.
 
-// Metres per texture repeat. 5.0 / 1.35 is about 3.7, not a whole number, so the two layers'
+// Metres per texture repeat. 9.0 / 2.5 is 3.6, not a whole number, so the two layers'
 // periods never line up and the tiling hides.
-const float WATER_TOP_TILE_A = 5.0;
-const float WATER_TOP_TILE_B = 1.35;
+const float WATER_TOP_TILE_A = 9.0;
+const float WATER_TOP_TILE_B = 2.5;
 const float WATER_SIDE_TILE_A = 3.0;
 const float WATER_SIDE_TILE_B = 0.85;
 // Side ripples are stretched along the fall so they read as streaks.
 const float WATER_SIDE_STRETCH = 2.5;
-// Top drift, metres per second along water_top_dir.
-const float WATER_TOP_SPEED_A = 0.04;
-const float WATER_TOP_SPEED_B = 0.09;
+// Top drift, metres per second along water_top_dir: the tiles grew 1.8x from 5 / 1.35 m and
+// the speeds with them, so the drift per tile -- what keeps the surface alive -- is unchanged.
+const float WATER_TOP_SPEED_A = 0.072;
+const float WATER_TOP_SPEED_B = 0.167;
 // Side layer B falls this much faster than flow_speed.
 const float WATER_SIDE_SPEED_B = 1.6;
 

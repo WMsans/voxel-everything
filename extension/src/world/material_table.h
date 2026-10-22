@@ -58,9 +58,10 @@ inline constexpr MaterialDef kMaterials[] = {
 	{"bark",         "07",  1.6f,    0.0f, {0.0f, 0.0f, 0.0f},   {0.29f, 0.20f, 0.14f}},
 	// Water (docs/superpowers/specs/2026-10-06-water-voxels-design.md §2). flat_albedo doubles
 	// as the SCATTER colour, the body colour deep water fades to; it is also what water looks
-	// like with transparency off. Red dies first: ~0.25 left after 2 m, blue ~0.77.
-	{"water",        "08",  1.0f,    0.0f, {0.0f, 0.0f, 0.0f},   {0.03f, 0.16f, 0.20f},
-			{0.50f, 0.82f, 0.88f}, 1.33f, Liquid::water},
+	// like with transparency off. Clear and blue: red dies first (~0.38 left after 2 m), blue
+	// keeps ~0.90, so a shore shows its floor and a fjord deepens to the scatter blue.
+	{"water",        "08",  1.0f,    0.0f, {0.0f, 0.0f, 0.0f},   {0.02f, 0.09f, 0.15f},
+			{0.62f, 0.90f, 0.95f}, 1.33f, Liquid::water},
 	// Snow (docs/superpowers/specs/2026-10-07-fjords-terrain-design.md §7.4), banded onto
 	// high, not-too-steep ground by fjord_bands. Soft. The brightest albedo in the game: if
 	// sunlit snow blooms, tune flat_albedo and the texture, never the beauty stack.

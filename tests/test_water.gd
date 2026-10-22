@@ -144,12 +144,18 @@ func test_water_frames_change_over_time_and_the_ground_around_them_does_not() ->
 		w.hooks().debug_stream_frame(CAM)
 		frame(w)
 	var b := frame(w)
-	assert_float(dist(a["center_lit"], b["center_lit"])).override_failure_message(
-		"the water did not move in 30 frames").is_greater(1e-4)
-	# A corner pixel is meadow well outside the 4 m pond: with every other input still, it
-	# must be the same colour in both frames.
 	var ia := image_of(a)
 	var ib := image_of(b)
+	# The centre pixel's SHADING normal, which the composite writes back into front.xy. Its
+	# colour is the wrong probe: looking straight down, the waves reach it through a 2% Fresnel
+	# term and a 0.2 m footprint deep in the ripple mips, a change of about one half-float step.
+	# Measured: 0.013 with the waves running, exactly 0 with wave_strength 0.
+	var fa: Color = a["center_front"]
+	var fb: Color = b["center_front"]
+	assert_float(Vector2(fa.r - fb.r, fa.g - fb.g).length()).override_failure_message(
+		"the water did not move in 30 frames").is_greater(1e-3)
+	# A corner pixel is meadow well outside the 4 m pond: with every other input still, it
+	# must be the same colour in both frames.
 	var ca := ia.get_pixel(1, 1)
 	var cb := ib.get_pixel(1, 1)
 	assert_float(dist(ca, cb)).override_failure_message(

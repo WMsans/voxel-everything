@@ -292,3 +292,52 @@ func test_opaque_lattice_does_not_move() -> void:
 		var msg := "first diff at byte %d (a=%d b=%d)" % [first_diff, block_a[first_diff], block_b[first_diff]]
 		assert_bool(false).override_failure_message(msg).is_true()
 	assert_bool(block_a == block_b).is_true()
+
+func _tick(w: VoxelWorld, cam: Vector3, frames: int) -> Dictionary:
+	for i in range(frames):
+		w.hooks().debug_stream_frame(cam)
+		w.hooks().debug_lod_tick(cam, Vector3(0.0, -1.0, 0.0))
+	return w.hooks().debug_lod_stats()
+
+func test_shell_candidates_follow_the_fade_band() -> void:
+	# The candidate radius is fade_end + one shell chunk, and fade_end tracks the residency
+	# reach, which moves while sectors stream in. A parked camera must not keep the set it
+	# built under an earlier band: the ring between the old and new fade_end then has no near
+	# shell, and the near half of the dither shows bare ground (the seam band). Stepping one
+	# chunk away and back forces a recompute at today's band; a parked set must equal it.
+	var finder := _make_world(FJORDS)
+	var V := _find_valley(finder)
+	finder.free()
+	var cam := Vector3(V.x, W + 25.0, V.z)
+	# Sectors first, so no sector landing recomputes the set once the camera is parked: the
+	# only thing that moves after the first tick is the band itself.
+	_wa = _make_world(FJORDS, cam)
+	assert_bool(_wa.hooks().debug_init_physics()).is_true()
+	var band0: Vector2 = _wa.hooks().debug_lod_fade_band()
+	var parked: Dictionary = _tick(_wa, cam, 300)
+	var band1: Vector2 = _wa.hooks().debug_lod_fade_band()
+	_tick(_wa, cam + Vector3(3.2, 0.0, 0.0), 2)
+	var forced: Dictionary = _tick(_wa, cam, 2)
+	assert_int(int(parked["shell_chunks"])).override_failure_message(
+			"parked %d vs recomputed %d candidates; band %s -> %s" % [parked["shell_chunks"],
+			forced["shell_chunks"], band0, band1]).is_equal(int(forced["shell_chunks"]))
+
+func test_a_shaft_dug_into_the_sea_is_a_shell_candidate() -> void:
+	# The terrain water candidate is the plane y = W padded by one cell: two chunk layers. A
+	# shaft dug below them exposes water walls that only a candidate chunk can mesh; without
+	# one the near-field marcher (which sees water as air) shows the bare floor through the
+	# hole, unshaded. The subtract must make the chunks it reaches under W candidates.
+	var finder := _make_world(FJORDS)
+	var V := _find_valley(finder)
+	finder.free()
+	var cam := Vector3(V.x, W + 6.0, V.z)
+	_wa = _make_world(FJORDS, cam)
+	assert_bool(_wa.hooks().debug_init_physics()).is_true()
+	var before: Dictionary = _tick(_wa, cam, 300)
+	for k in range(13):
+		_wa.hooks().debug_apply_sphere_subtract(Vector3(V.x, W + 1.0 - k, V.z + 8.0), 2.5)
+	var after: Dictionary = _tick(_wa, cam, 300)
+	# The shaft reaches W - 14.5: four chunk layers under the plane's two, about four chunks
+	# of 3.2 m across each.
+	assert_int(int(after["shell_chunks"]) - int(before["shell_chunks"])).override_failure_message(
+			"candidates %d -> %d" % [before["shell_chunks"], after["shell_chunks"]]).is_greater_equal(16)

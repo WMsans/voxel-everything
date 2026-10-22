@@ -56,6 +56,8 @@ const float WATER_SCATTER_SUN = 0.35;
 // exactly from going to infinity.
 const float WATER_GLINT_MAX = 64.0;
 const float WATER_FOAM_ALBEDO = 0.9;
+// How much of the wave normal's tilt bends the reflection ray.
+const float WATER_REFLECT_TILT = 0.35;
 
 // No floor: deep water fades to the scatter colour (the spec drops min_transmit for liquids).
 vec3 liquid_transmit(uint mat, float path) {
@@ -86,6 +88,60 @@ float opaque_distance(ivec2 q, ivec2 size) {
 	return depth > 0.0 ? distance(beauty_world_from_depth(quv, depth), bcam.cam.xyz) : 0.0;
 }
 
+// What a liquid surface mirrors along r from p. The reference look is the shore and the
+// mountains mirrored at grazing angles; the beauty SSR is a short generic trace and off by
+// default, so the liquid marches its own: geometric steps from 0.5 m out to about 2.5 km, a
+// bisection on the first crossing, and the lit copy at the hit. A miss, an exit through the
+// screen edge or a ray passing behind an occluder keeps the sky. The sky is read in the upper
+// hemisphere only: a wave tilting r below the horizon would otherwise pick up sky_color's
+// ground half and speckle the sea brown.
+const int WATER_SSR_STEPS = 32;
+const float WATER_SSR_FIRST_M = 0.5;
+const float WATER_SSR_GROWTH = 1.22;
+
+vec3 liquid_reflection(vec3 p, vec3 r, ivec2 size) {
+	r = normalize(vec3(r.x, max(r.y, 0.0), r.z));
+	vec3 sky = sky_color(r);
+	float step_len = WATER_SSR_FIRST_M;
+	float t0 = 0.0;
+	for (int i = 0; i < WATER_SSR_STEPS; i++) {
+		float t1 = t0 + step_len;
+		vec2 quv;
+		float qd;
+		if (!beauty_project(p + r * t1, quv, qd)
+				|| any(lessThan(quv, vec2(0.0))) || any(greaterThan(quv, vec2(1.0)))) break;
+		float sd = texelFetch(gb_depth, ivec2(quv * vec2(size)), 0).r;
+		// Reverse-Z: the scene is nearer than the ray point, so the ray went behind it.
+		if (sd > qd) {
+			for (int k = 0; k < 5; k++) {
+				float tm = 0.5 * (t0 + t1);
+				vec2 muv;
+				float md;
+				beauty_project(p + r * tm, muv, md);
+				if (texelFetch(gb_depth, ivec2(muv * vec2(size)), 0).r > md) {
+					t1 = tm;
+					quv = muv;
+				} else {
+					t0 = tm;
+				}
+			}
+			ivec2 hpx = clamp(ivec2(quv * vec2(size)), ivec2(0), size - ivec2(1));
+			vec3 q = p + r * t1;
+			float hd = texelFetch(gb_depth, hpx, 0).r;
+			// Passing behind a thin occluder is not a hit: the surface must be where the
+			// ray is, within the step it crossed on.
+			if (hd <= 0.0 || distance(beauty_world_from_depth(quv, hd), q) > step_len + 0.5)
+				break;
+			vec2 e = min(quv, 1.0 - quv);
+			float edge = clamp(min(e.x, e.y) * 10.0, 0.0, 1.0);
+			return mix(sky, texelFetch(lit_copy, hpx, 0).rgb, edge);
+		}
+		t0 = t1;
+		step_len *= WATER_SSR_GROWTH;
+	}
+	return sky;
+}
+
 void shade_liquid(ivec2 px, ivec2 size, vec2 uv, vec4 front, bool has_front, float thickness,
 		uint mat) {
 	if (!has_front) {
@@ -103,9 +159,16 @@ void shade_liquid(ivec2 px, ivec2 size, vec2 uv, vec4 front, bool has_front, flo
 	vec3 n_geo = oct_decode(front.xy);
 	// The stored normal points out of the medium, so a face seen from inside it is an exit.
 	bool exit_face = dot(n_geo, v) < 0.0;
-	// The pixel's world footprint at the front, as the ice branch derives it.
+	// The pixel's world footprint at the front, as the ice branch derives it, then carried
+	// along the ray onto the surface's plane (ray differentials). Unprojected, the footprint
+	// along the view shrinks by |dot(rd, n)| at grazing angles, so the ripple taps pick mips
+	// far too sharp and the sea aliases into rings toward the horizon.
 	vec3 ddx = pc.right_tanx.xyz * (2.0 * pc.right_tanx.w / float(size.x)) * front.z;
 	vec3 ddy = pc.up_tany.xyz * (2.0 * pc.up_tany.w / float(size.y)) * front.z;
+	float rdn = dot(rd, n_geo);
+	rdn = sign(rdn) * max(abs(rdn), 0.02);
+	ddx -= rd * (dot(ddx, n_geo) / rdn);
+	ddy -= rd * (dot(ddy, n_geo) / rdn);
 	float t = pc.params.z;
 	vec3 n = water_wave_normal(mat, p, n_geo, ddx, ddy, t, pc.water.y, pc.water.x);
 	vec3 n_face = exit_face ? -n_geo : n_geo;
@@ -140,7 +203,9 @@ void shade_liquid(ivec2 px, ivec2 size, vec2 uv, vec4 front, bool has_front, flo
 		vec3 T = liquid_transmit(mat, path);
 		vec3 through = T * behind + (1.0 - T) * body;
 		float fresnel = f0 + (1.0 - f0) * pow(1.0 - clamp(dot(n, v), 0.0, 1.0), 5.0);
-		col = mix(through, sky_color(reflect(rd, n)), fresnel);
+		// The mirrored image takes a fraction of the ripple tilt: the full tilt shatters it.
+		vec3 n_refl = normalize(n_face + tilt * WATER_REFLECT_TILT);
+		col = mix(through, liquid_reflection(p, reflect(rd, n_refl), size), fresnel);
 		col += sun_light.rgb.xyz * (shadow
 				* liquid_glint(n, v, sun_dir, water_glint_roughness(ddx, ddy), f0));
 		// Shore foam (§5 step 6): view-ray thickness turned into an estimate of vertical depth.

@@ -144,9 +144,9 @@ TEST_CASE("liquid is a table property: water is a liquid, ice and everything els
 	CHECK(ve::material_transparent(ve::material_id("water")));
 	float t[3];
 	ve::material_transmit(ve::material_id("water"), t);
-	CHECK(t[0] == doctest::Approx(0.50f));
-	CHECK(t[1] == doctest::Approx(0.82f));
-	CHECK(t[2] == doctest::Approx(0.88f));
+	CHECK(t[0] == doctest::Approx(0.62f));
+	CHECK(t[1] == doctest::Approx(0.90f));
+	CHECK(t[2] == doctest::Approx(0.95f));
 	CHECK(ve::material_ior(ve::material_id("water")) == doctest::Approx(1.33f));
 }
 
