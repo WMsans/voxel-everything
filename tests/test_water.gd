@@ -306,9 +306,11 @@ func test_the_surface_above_an_underwater_camera_is_a_front() -> void:
 
 # A big ball whose top sits 1 m above the camera: locally an almost flat surface overhead.
 # Straight up is inside Snell's window (sky through the surface); 15 degrees above the
-# horizon is past the critical angle (the water's own dark body colour).
+# horizon is past the critical angle (the water's own dark body colour). Waves off: the
+# ripple map is steep enough to tip one pixel's normal past the critical angle on its own.
 func test_snells_window_is_brighter_than_total_internal_reflection() -> void:
 	var w := make_world()
+	w.set_water_value("wave_strength", 0.0)
 	w.hooks().debug_apply_sphere_add(CAM - Vector3(0, 19.0, 0), 20.0, material_id(w, "water"))
 	settle(w)
 	var up := frame_with_pages(w, CAM, Vector3(0.02, 1.0, 0.0))
