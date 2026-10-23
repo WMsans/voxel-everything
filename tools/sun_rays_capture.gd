@@ -12,6 +12,9 @@ extends SceneTree
 # effect on), then times --frames frames each with the effect on, off, on (vsync off; GPU
 # timestamps are not valid on this machine) and prints SUN_RAYS_TIMING with the p50s.
 #
+# --shipped-sun keeps the game's own sun (about 85 degrees up, white) instead: the view a player
+# gets looking up, which must not wash the screen out (spec anti-goal).
+#
 # --knob=name,value sets one SunRays knob (intensity, ray_length, sun_size), repeatable, for A/B.
 
 func _initialize() -> void:
@@ -24,6 +27,7 @@ func capture() -> void:
 	var elev := 3.0
 	var frames := 300
 	var knobs := {}
+	var shipped_sun := false
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--out="):
 			out = arg.trim_prefix("--out=")
@@ -38,6 +42,8 @@ func capture() -> void:
 		if arg.begins_with("--knob="):
 			var kv := arg.trim_prefix("--knob=").split(",")
 			knobs[kv[0]] = float(kv[1])
+		if arg == "--shipped-sun":
+			shipped_sun = true
 		if arg.begins_with("--frames="):
 			frames = int(arg.trim_prefix("--frames="))
 	DirAccess.make_dir_recursive_absolute(out)
@@ -58,8 +64,13 @@ func capture() -> void:
 	var e := deg_to_rad(elev)
 	var to_sun := (dir.normalized() * cos(e) + Vector3.UP * sin(e)).normalized()
 	var light: DirectionalLight3D = scene.get_node("VoxelWorld/Sun")
-	light.global_basis = Basis.looking_at(-to_sun)
-	light.light_color = Color(1.0, 0.55, 0.25)
+	if shipped_sun:
+		to_sun = light.global_basis.z.normalized()
+	else:
+		light.global_basis = Basis.looking_at(-to_sun)
+		light.light_color = Color(1.0, 0.55, 0.25)
+	# look_at needs an up that is not parallel to the view; the shipped sun is nearly overhead.
+	var up := Vector3.UP if absf(to_sun.y) < 0.95 else Vector3.BACK
 
 	var effect: SunRays
 	for fx in (scene.get_node("VoxelWorld/WorldEnvironment") as WorldEnvironment).compositor.compositor_effects:
@@ -75,7 +86,7 @@ func capture() -> void:
 	var camera: Camera3D = player.get_node("Camera3D")
 	player.global_position = at
 	camera.global_position = at
-	camera.look_at(at + to_sun)
+	camera.look_at(at + to_sun, up)
 	camera.far = 3000.0
 	scene.get_node("HUD").visible = false
 	var quiet := 0
@@ -98,7 +109,7 @@ func capture() -> void:
 	effect.enabled = true
 	camera.look_at(at - Vector3(to_sun.x, 0.0, to_sun.z))
 	await _shot(out.path_join("away.png"))
-	camera.look_at(at + to_sun)
+	camera.look_at(at + to_sun, up)
 
 	var p50 := []
 	for enabled in [true, false, true]:

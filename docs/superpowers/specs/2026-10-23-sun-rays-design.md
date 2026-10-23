@@ -185,7 +185,8 @@ decision.
 sets the far-grove camera (65, 62, −930), the sun 3° up along heading (−33, −35) and tinted
 orange, and the camera looking straight at it. `on.png` shows a fan of crisp spokes from behind
 the crowns, with dark wedges behind trunks and leaves. `off.png` has none. `away.png` (facing
-away) has no rays.
+away) has no rays. With `--shipped-sun --at=20,62,30`, the camera looks up at the game's own sun
+(white, about 85° up) through open sky, and on and off are identical: no halo and no drawn disc.
 
 **Shipped values.** `intensity` 1.5, `ray_length` 0.9, `sun_size` 0.08, `DIVISOR` 2, `STEPS` 64.
 
@@ -193,11 +194,18 @@ away) has no rays.
 sun, inside `sun_size`, that is sky. It is weighted by `(1 − t/sun_size)²` and multiplied by
 `(1 − dist/ray_length)²`. All `STEPS` samples sit on that emitting stretch, never along the
 whole line. Spread along the whole line, a far texel put only a handful of samples on the
-emitting stretch, and neighbours quantized into visible blocks. There is no `decay^i` term,
-because it would dim the samples nearest the sun, which are the ones that emit.
+emitting stretch, and neighbours quantized into visible blocks. Samples off screen are unknown
+and count as neither sky nor blocked. There is no `decay^i` term, because it would dim the
+samples nearest the sun, which are the ones that emit.
 
-**Cost.** Frame-time p50 at the capture pose, 300 frames per leg, interleaved: on 11.80 ms,
-off 11.38 ms, on 11.87 ms. That's about 0.45 ms with the sun on screen, roughly one frame-time
+**Rays need something in the way (goal 1, and anti-goal "whole-sky glow").** Through open sky the
+march says "fully visible" everywhere, which drew a third-of-a-screen white halo when looking up.
+The composite now scales the rays by how blocked the least open direction around the sun is:
+each 8×8 group reads 64 ring texels at `sun_size` and reduces them to a minimum in shared memory,
+with full rays once a fifth of that direction is blocked. That adds no dispatch.
+
+**Cost.** Frame-time p50 at the capture pose, 300 frames per leg, interleaved: on 11.89 ms,
+off 11.42 ms, on 11.80 ms. That's about 0.4 ms with the sun on screen, roughly one frame-time
 step on this machine. There's no cost when the sun is off screen, behind the camera, or the
 effect is off, because the callback returns before any dispatch. GPU timestamps are invalid
 here, so this is CPU+GPU frame time.

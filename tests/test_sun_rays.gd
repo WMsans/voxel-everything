@@ -247,6 +247,8 @@ func test_rays_come_from_where_the_sun_is_on_screen() -> void:
 	var scene := make_scene()
 	var a := deg_to_rad(15.0)
 	aim_sun(scene["light"], Vector3(0, sin(a), -cos(a)))
+	# A horizon just under the sun, so something partly blocks it.
+	add_box(scene, Vector3(-50, -50, -10.5), Vector3(50, 10.0 * tan(a) - 0.3, -10))
 	var frames: Array = await render_on_off(scene)
 	var on: Image = frames[0]
 	var off: Image = frames[1]
@@ -257,3 +259,19 @@ func test_rays_come_from_where_the_sun_is_on_screen() -> void:
 	var mirror := on.get_height() - 1 - int(sun.y)
 	var at_mirror := luminance(on.get_pixel(x, mirror)) - luminance(off.get_pixel(x, mirror))
 	assert_float(at_sun).is_greater(at_mirror + 0.05)
+
+# Spec anti-goal: looking up at the sun through open sky must not wash the screen out, and the
+# effect draws no sun disc (user's call). Nothing blocks the sun, so there is no ray to draw.
+func test_open_sky_at_the_sun_is_not_washed_out() -> void:
+	var scene := make_scene()
+	var env: Environment = (scene["environment"] as WorldEnvironment).environment
+	env.background_color = Color(0.85, 0.85, 0.85)
+	var frames: Array = await render_on_off(scene)
+	var on: Image = frames[0]
+	var brightest := 0.0
+	for y in range(on.get_height()):
+		for x in range(on.get_width()):
+			var c := on.get_pixel(x, y)
+			brightest = maxf(brightest, maxf(c.r, maxf(c.g, c.b)))
+	assert_float(brightest).is_less(1.1)
+	assert_float(max_diff(on, frames[1])).is_less(0.02)

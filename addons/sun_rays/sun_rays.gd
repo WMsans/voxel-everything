@@ -128,8 +128,9 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 		_uniform(RenderingDevice.UNIFORM_TYPE_IMAGE, 0, [rsb.get_color_layer(0)]),
 		_uniform(RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 1, [_linear, rays]),
 	])
+	var ring_reach := 1.0 - sun_size / ray_length
 	var composite_params := PackedFloat32Array([tint.r, tint.g, tint.b, 0.0,
-		size.x, size.y, 0.0, 0.0]).to_byte_array()
+		size.x, size.y, sun.x, sun.y, aspect, sun_size, ring_reach * ring_reach, 0.0]).to_byte_array()
 	_dispatch(_composite_pipeline, composite_set, composite_params, size)
 
 func _dispatch(pipeline: RID, uniform_set: RID, params: PackedByteArray, size: Vector2i) -> void:
@@ -224,12 +225,12 @@ void main() {
 		for (int i = 0; i < STEPS; i++) {
 			float t = span * (float(i) + 0.5) / float(STEPS);
 			vec2 s = p.sun_uv + along * t;
+			if (any(lessThan(s, vec2(0.0))) || any(greaterThan(s, vec2(1.0)))) {
+				continue; // off screen: unknown, so neither sky nor blocked
+			}
 			float w = 1.0 - t / p.sun_size;
 			w *= w;
 			total += w;
-			if (any(lessThan(s, vec2(0.0))) || any(greaterThan(s, vec2(1.0)))) {
-				continue; // off screen: nothing known to be sky
-			}
 			if (all(equal(textureGather(depth_tex, s, 0), vec4(0.0)))) {
 				lit += w;
 			}
@@ -239,6 +240,11 @@ void main() {
 }
 """
 
+# Rays only show where something partly blocks the sun: through open sky there is no streak to
+# see, only a halo that would read as a drawn sun disc. Each 8x8 group reads the rays texture once
+# per thread around a ring at sun_size (where a texel holds the sky fraction along its whole radius
+# of the sun's neighbourhood), takes the least open of the 64 directions, and scales the rays by
+# how blocked that one is. Ring points off screen are unknown and left out.
 const COMPOSITE_GLSL := """
 #version 450
 layout(local_size_x = 8, local_size_y = 8) in;
@@ -247,16 +253,37 @@ layout(set = 0, binding = 1) uniform sampler2D rays_tex;
 layout(push_constant, std430) uniform Params {
 	vec4 tint;
 	vec2 size;
-	vec2 pad;
+	vec2 sun_uv;
+	float aspect;
+	float sun_size;
+	float ring_norm; // reach^2 at the ring, which the march folded into every ring texel
+	float pad;
 } p;
 
+shared float ring[64];
+
 void main() {
+	uint i = gl_LocalInvocationIndex;
+	float a = (float(i) + 0.5) * (6.28318530718 / 64.0);
+	vec2 r = p.sun_uv + vec2(cos(a) / p.aspect, sin(a)) * p.sun_size;
+	bool on_screen = all(greaterThanEqual(r, vec2(0.0))) && all(lessThanEqual(r, vec2(1.0)));
+	ring[i] = on_screen ? texture(rays_tex, r).r : p.ring_norm;
+	for (uint stride = 32u; stride > 0u; stride >>= 1u) {
+		barrier();
+		if (i < stride) {
+			ring[i] = min(ring[i], ring[i + stride]);
+		}
+	}
+	barrier();
+	float open_sky = clamp(ring[0] / p.ring_norm, 0.0, 1.0);
+	float blocked = smoothstep(0.0, 0.2, 1.0 - open_sky);
+
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
 	if (any(greaterThanEqual(px, ivec2(p.size)))) {
 		return;
 	}
 	vec4 c = imageLoad(color_img, px);
-	c.rgb += texture(rays_tex, (vec2(px) + 0.5) / p.size).r * p.tint.rgb;
+	c.rgb += texture(rays_tex, (vec2(px) + 0.5) / p.size).r * blocked * p.tint.rgb;
 	imageStore(color_img, px, c);
 }
 """
