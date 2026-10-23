@@ -24,7 +24,9 @@ func after_test() -> void:
 
 # [world, viewport, settings, menu]. near_field_scale and the viewport scale are what main.tscn and
 # project.godot ship, so "reset restores what the scene shipped" has known values.
-func make_menu() -> Array:
+# `args` stands in for the command line: a measured one (--benchmark, --capture) must leave the
+# config file alone, as VoxelSettings does.
+func make_menu(args := PackedStringArray()) -> Array:
 	var root := Node.new()
 	add_child(root)
 	_roots.append(root)
@@ -46,11 +48,27 @@ func make_menu() -> Array:
 	settings.config_path = CONFIG_PATH
 	settings.manage_window = false
 	root.add_child(settings)
+	if not args.is_empty():
+		settings.apply_config(args)
+	# The sun rays tab reads its knobs off a SunRays in a WorldEnvironment's compositor. The
+	# environment sits in a world of its own so it never touches how the test runner renders.
+	var env_vp := SubViewport.new()
+	env_vp.name = "EnvViewport"
+	env_vp.own_world_3d = true
+	env_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	root.add_child(env_vp)
+	var env := WorldEnvironment.new()
+	env.name = "Env"
+	env.compositor = Compositor.new()
+	env.compositor.compositor_effects = [SunRays.new()]
+	env_vp.add_child(env)
 	var menu = MENU_SCENE.instantiate()
 	menu.name = "Menu"
 	menu.settings_path = NodePath("../Settings")
+	menu.environment_path = NodePath("../EnvViewport/Env")
+	menu.cmdline_args = args
 	root.add_child(menu)
-	return [world, vp, settings, menu]
+	return [world, vp, settings, menu, env.compositor.compositor_effects[0]]
 
 func key_event(code: int) -> InputEventKey:
 	var ev := InputEventKey.new()
@@ -294,3 +312,109 @@ func test_an_off_table_window_size_is_shown_rather_than_left_blank() -> void:
 	assert_int(options.selected).is_equal(-1)
 	assert_str(options.text).contains("1337")
 	assert_str(options.text).contains("999")
+
+# The sun rays tab: built from the SunRays effect's own exported knobs (plus its built-in
+# enabled flag), written straight to the effect, persisted in a [sun_rays] section of the same
+# config file VoxelSettings keeps.
+const SUN_RAYS_KNOBS := ["enabled", "intensity", "ray_length", "sun_size"]
+
+func test_sun_rays_tab_has_a_control_per_knob() -> void:
+	var menu = make_menu()[3]
+	await get_tree().process_frame
+	for name in SUN_RAYS_KNOBS:
+		assert_object(menu.control("sun_rays", name)).override_failure_message(
+			"no control for sun_rays/%s" % name).is_not_null()
+
+func test_sun_rays_slider_writes_the_effect() -> void:
+	var parts := make_menu()
+	await get_tree().process_frame
+	parts[3].control("sun_rays", "intensity").emit_signal("value_changed", 2.5)
+	assert_float((parts[4] as SunRays).intensity).is_equal_approx(2.5, 0.001)
+
+func test_sun_rays_checkbox_writes_the_effect() -> void:
+	var parts := make_menu()
+	await get_tree().process_frame
+	parts[3].control("sun_rays", "enabled").emit_signal("toggled", false)
+	assert_bool((parts[4] as SunRays).enabled).is_false()
+
+func test_closing_the_panel_persists_sun_rays() -> void:
+	var menu = make_menu()[3]
+	await get_tree().process_frame
+	menu.set_open(true)
+	menu.control("sun_rays", "intensity").emit_signal("value_changed", 2.5)
+	menu.set_open(false)
+	var cfg := ConfigFile.new()
+	assert_int(cfg.load(CONFIG_PATH)).is_equal(OK)
+	assert_float(float(cfg.get_value("sun_rays", "intensity", 0.0))).is_equal_approx(2.5, 0.001)
+	assert_bool(cfg.has_section("render")).is_true()
+
+func test_saved_sun_rays_values_apply_when_the_menu_starts() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("sun_rays", "ray_length", 1.2)
+	cfg.set_value("sun_rays", "intensity", 99.0)
+	cfg.save(CONFIG_PATH)
+	var parts := make_menu()
+	await get_tree().process_frame
+	var effect: SunRays = parts[4]
+	assert_float(effect.ray_length).is_equal_approx(1.2, 0.001)
+	# A hand-edited file cannot push a knob past the range the slider offers.
+	assert_float(effect.intensity).is_equal_approx(4.0, 0.001)
+
+func test_reset_restores_sun_rays_defaults() -> void:
+	var parts := make_menu()
+	await get_tree().process_frame
+	var menu = parts[3]
+	var effect: SunRays = parts[4]
+	var shipped: float = effect.get_script().get_property_default_value("intensity")
+	menu.control("sun_rays", "intensity").emit_signal("value_changed", 3.0)
+	menu.control("sun_rays", "enabled").emit_signal("toggled", false)
+	menu.get_node("%Reset").emit_signal("pressed")
+	assert_float(effect.intensity).is_equal_approx(shipped, 0.001)
+	assert_bool(effect.enabled).is_true()
+	assert_float(float((menu.control("sun_rays", "intensity") as HSlider).value)).is_equal_approx(shipped, 0.001)
+
+func test_no_environment_means_no_sun_rays_tab() -> void:
+	var root := Node.new()
+	add_child(root)
+	_roots.append(root)
+	var settings: VoxelSettings = ClassDB.instantiate("VoxelSettings")
+	settings.name = "Settings"
+	settings.config_path = CONFIG_PATH
+	settings.manage_window = false
+	root.add_child(settings)
+	var menu = MENU_SCENE.instantiate()
+	menu.settings_path = NodePath("../Settings")
+	root.add_child(menu)
+	await get_tree().process_frame
+	assert_object(menu.control("sun_rays", "intensity")).is_null()
+	for group in settings.groups():
+		for row in settings.describe(group):
+			assert_object(menu.control(group, row["name"])).is_not_null()
+
+# Like VoxelSettings, only what differs from the shipped value is written, so a retuned default
+# still reaches anyone who once closed the panel.
+func test_untouched_sun_rays_knobs_are_not_written() -> void:
+	var menu = make_menu()[3]
+	await get_tree().process_frame
+	menu.set_open(true)
+	menu.set_open(false)
+	var cfg := ConfigFile.new()
+	cfg.load(CONFIG_PATH)
+	assert_bool(cfg.has_section("sun_rays")).is_false()
+
+func test_measured_run_neither_reads_nor_writes_sun_rays() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("sun_rays", "ray_length", 1.2)
+	cfg.save(CONFIG_PATH)
+	var parts := make_menu(PackedStringArray(["--benchmark"]))
+	await get_tree().process_frame
+	var menu = parts[3]
+	var effect: SunRays = parts[4]
+	assert_float(effect.ray_length).is_equal_approx(effect.get_script().get_property_default_value("ray_length"), 0.001)
+	menu.set_open(true)
+	menu.control("sun_rays", "intensity").emit_signal("value_changed", 3.0)
+	menu.set_open(false)
+	cfg = ConfigFile.new()
+	cfg.load(CONFIG_PATH)
+	assert_bool(cfg.has_section_key("sun_rays", "intensity")).is_false()
+	assert_float(float(cfg.get_value("sun_rays", "ray_length", 0.0))).is_equal_approx(1.2, 0.001)

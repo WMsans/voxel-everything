@@ -34,8 +34,10 @@ func test_both_compositor_effects_point_at_the_world() -> void:
 	_open()
 	var we := _one("WorldEnvironment") as WorldEnvironment
 	var effects: Array = we.compositor.compositor_effects
-	assert_int(effects.size()).is_equal(2)
-	for e in effects:
+	var voxel_effects := effects.filter(func(e): return "world_path" in e)
+	assert_int(voxel_effects.size()).is_equal(2)
+	assert_int(effects.filter(func(e): return e is SunRays).size()).is_equal(1)
+	for e in voxel_effects:
 		assert_object(get_tree().root.get_node_or_null(e.world_path)).override_failure_message(
 			"%s.world_path does not resolve to the world" % e.get_class()).is_same(_world())
 
