@@ -65,9 +65,12 @@ folder into another Godot project must be enough to make it work there.
 
 ### Where it lives
 
-`addons/sun_rays/`: one GDScript `CompositorEffect` (`sun_rays.gd`, `class_name SunRays`) and its
-compute shader(s). It has no plugin.cfg and no autoload. It's enough to drop the folder in and add
-`SunRays` to any WorldEnvironment's compositor. *(Folder and class names are my call.)*
+`addons/sun_rays/sun_rays.gd`: one `@tool` GDScript `CompositorEffect` (`class_name SunRays`).
+Its two compute shaders are GLSL source strings inside it, compiled with
+`RenderingDevice.shader_compile_spirv_from_source`. That way a copied folder doesn't wait on the
+editor's `.glsl` import step. It has no plugin.cfg and no autoload. It's enough to drop the folder
+in and add `SunRays` to any WorldEnvironment's compositor. *(Folder, class name and embedded
+shaders are my call.)*
 
 ### How it renders (my call; the technique itself is the user's)
 
@@ -131,9 +134,10 @@ constants, not knobs: they're the cost and the look, and should be chosen once.
   tables. Sun rays must not enter those tables (anti-goal). Instead the menu adds one
   "Sun rays" tab, built by reading the `SunRays` effect's exported properties and their
   `@export_range` hints off `get_property_list()`. That way the menu still holds no hand-written
-  table, and a knob added later shows up by itself. The menu finds the effect through
-  `get_viewport().world_3d.compositor` (set by the WorldEnvironment), not through a path into the
-  voxel world. Values persist in a `[sun_rays]` section of `user://settings.cfg`. VoxelSettings
+  table, and a knob added later shows up by itself. The menu finds the effect through a new
+  `environment_path` export pointing at a WorldEnvironment. `main.tscn` sets it to
+  `/root/Main/VoxelWorld/WorldEnvironment`, the same absolute-path pattern as `settings_path`.
+  (Godot 4.7's `World3D` has no compositor getter.) With no path, there's no tab. Values persist in a `[sun_rays]` section of `user://settings.cfg`. VoxelSettings
   already keeps sections it doesn't own (`voxel_settings.cpp` save path), so they coexist. Reset
   restores the effect's default property values. *(All my call.)*
 
