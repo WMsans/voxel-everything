@@ -220,3 +220,16 @@ TEST_CASE("stage 1 dispatches one thread per column") {
 	CHECK(l.near_brick_cap == ve::kGrassColumnBricks * l.near_columns);
 	CHECK(l.max_bricks == l.near_brick_cap);
 }
+
+// The reach is chosen by look, BotW-style: blades are a close-range detail and the ground
+// texture carries the meadow's colour past them (spec 2026-10-22).
+TEST_CASE("default grass ends at 32 m") {
+	ve::GrassSettings s;
+	CHECK(s.reach_m == doctest::Approx(32.0f));
+	const float cam[3] = {0, 0, 0};
+	float vp[16];
+	identity(vp);
+	const ve::GrassLayout l = ve::grass_layout(s, cam, vp);
+	CHECK(l.ring_end_m[ve::kGrassRings - 1] == doctest::Approx(32.0f));
+	CHECK(ve::grass_ring_of(l, 33.0f) == -1);
+}
