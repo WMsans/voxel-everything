@@ -176,3 +176,32 @@ decision.
 - Test shape for the menu tab and the effect's skip conditions. The repo uses gdUnit
   (`./gdunit_tests.sh`). Memory says some suites already fail on clean main, so compare against a
   stash before blaming the change.
+
+## Measured
+
+2026-10-23, Apple M1, 2560×1440 window (render scale 0.5, so 1280×720 internal).
+
+**Capture.** `godot --path . --resolution 2560x1440 -s res://tools/sun_rays_capture.gd -- --out=/tmp/sun-rays`
+sets the far-grove camera (65, 62, −930), the sun 3° up along heading (−33, −35) and tinted
+orange, and the camera looking straight at it. `on.png` shows a fan of crisp spokes from behind
+the crowns, with dark wedges behind trunks and leaves. `off.png` has none. `away.png` (facing
+away) has no rays.
+
+**Shipped values.** `intensity` 1.5, `ray_length` 0.9, `sun_size` 0.08, `DIVISOR` 2, `STEPS` 64.
+
+**How the march samples, as built.** A texel's visibility is the *fraction* of its line to the
+sun, inside `sun_size`, that is sky. It is weighted by `(1 − t/sun_size)²` and multiplied by
+`(1 − dist/ray_length)²`. All `STEPS` samples sit on that emitting stretch, never along the
+whole line. Spread along the whole line, a far texel put only a handful of samples on the
+emitting stretch, and neighbours quantized into visible blocks. There is no `decay^i` term,
+because it would dim the samples nearest the sun, which are the ones that emit.
+
+**Cost.** Frame-time p50 at the capture pose, 300 frames per leg, interleaved: on 11.80 ms,
+off 11.38 ms, on 11.87 ms. That's about 0.45 ms with the sun on screen, roughly one frame-time
+step on this machine. There's no cost when the sun is off screen, behind the camera, or the
+effect is off, because the callback returns before any dispatch. GPU timestamps are invalid
+here, so this is CPU+GPU frame time.
+
+**Portability.** `addons/sun_rays/` copied alone into a fresh Godot 4.7 Forward+ project (cubes,
+a procedural sky, a DirectionalLight3D, a camera) renders rays with the effect on and none with it
+off. No errors.

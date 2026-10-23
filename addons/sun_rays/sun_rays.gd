@@ -16,11 +16,11 @@ extends CompositorEffect
 const DIVISOR := 2
 const STEPS := 64
 
-@export_range(0.0, 4.0, 0.01) var intensity := 1.0
+@export_range(0.0, 4.0, 0.01) var intensity := 1.5
 ## Screen heights from the sun beyond which nothing is added.
-@export_range(0.1, 2.0, 0.01) var ray_length := 0.6
+@export_range(0.1, 2.0, 0.01) var ray_length := 0.9
 ## Screen heights around the sun that emit. Sky farther from the sun throws no rays.
-@export_range(0.02, 0.5, 0.01) var sun_size := 0.15
+@export_range(0.02, 0.5, 0.01) var sun_size := 0.08
 
 # Written on the main thread before each frame draws, read by the render callback.
 var _light: DirectionalLight3D
@@ -208,24 +208,34 @@ void main() {
 		return;
 	}
 	vec2 uv = (vec2(px) + 0.5) / p.rays_size;
-	vec2 to_sun = p.sun_uv - uv;
 	vec2 heights = vec2(p.aspect, 1.0); // uv offsets to screen heights
-	float reach = max(0.0, 1.0 - length(to_sun * heights) / p.ray_length);
-	float sum = 0.0;
+	float dist = length((uv - p.sun_uv) * heights);
+	float reach = max(0.0, 1.0 - dist / p.ray_length);
+	// How much of the sun's neighbourhood this pixel sees along its line to the sun: 1 through
+	// open sky, 0 behind a trunk. That fraction, not the raw count, is what keeps a streak
+	// bright along its whole length; the reach falloff alone ends it. Only the stretch within
+	// sun_size of the sun can emit, so every step lands there: spread along the whole line, a
+	// far pixel would put a handful of steps on it and quantize into blocks.
+	float lit = 0.0;
+	float total = 0.0;
 	if (reach > 0.0) {
-		vec2 step_uv = to_sun / float(STEPS);
+		vec2 along = dist > 0.0 ? (uv - p.sun_uv) / dist : vec2(0.0); // uv per screen height, sun to pixel
+		float span = min(dist, p.sun_size);
 		for (int i = 0; i < STEPS; i++) {
-			vec2 s = uv + step_uv * (float(i) + 0.5);
+			float t = span * (float(i) + 0.5) / float(STEPS);
+			vec2 s = p.sun_uv + along * t;
+			float w = 1.0 - t / p.sun_size;
+			w *= w;
+			total += w;
 			if (any(lessThan(s, vec2(0.0))) || any(greaterThan(s, vec2(1.0)))) {
 				continue; // off screen: nothing known to be sky
 			}
-			float w = max(0.0, 1.0 - length((p.sun_uv - s) * heights) / p.sun_size);
-			if (w > 0.0 && all(equal(textureGather(depth_tex, s, 0), vec4(0.0)))) {
-				sum += w * w;
+			if (all(equal(textureGather(depth_tex, s, 0), vec4(0.0)))) {
+				lit += w;
 			}
 		}
 	}
-	imageStore(rays_img, px, vec4(sum / float(STEPS) * reach * reach));
+	imageStore(rays_img, px, vec4(total > 0.0 ? lit / total * reach * reach : 0.0));
 }
 """
 
