@@ -30,9 +30,11 @@ func test_compositors_follow_the_instance_wherever_it_is_placed() -> void:
 	var w := _place("SomeOtherGame")
 	assert_str(str(w.get_path())).is_equal("/root/SomeOtherGame/VoxelWorld")
 	var fx := _effects(w)
-	assert_int(fx.size()).is_equal(2)
-	for e in fx:
+	var voxel_effects := fx.filter(func(e): return "world_path" in e)
+	assert_int(voxel_effects.size()).is_equal(2)
+	for e in voxel_effects:
 		assert_object(get_tree().root.get_node_or_null(e.world_path)).is_same(w)
+	assert_int(fx.filter(func(e): return e is SunRays).size()).is_equal(1)
 
 func test_two_instances_never_share_a_compositor() -> void:
 	var a := _place("A")
@@ -42,8 +44,9 @@ func test_two_instances_never_share_a_compositor() -> void:
 	assert_int(fa.size()).is_equal(fb.size())
 	for i in range(fa.size()):
 		assert_object(fa[i]).is_not_same(fb[i])
-		assert_object(get_tree().root.get_node_or_null(fa[i].world_path)).is_same(a)
-		assert_object(get_tree().root.get_node_or_null(fb[i].world_path)).is_same(b)
+		if "world_path" in fa[i]:
+			assert_object(get_tree().root.get_node_or_null(fa[i].world_path)).is_same(a)
+			assert_object(get_tree().root.get_node_or_null(fb[i].world_path)).is_same(b)
 
 func test_sun_and_settings_resolve_inside_the_instance() -> void:
 	var w := _place("Elsewhere")

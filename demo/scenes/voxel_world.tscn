@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" path="res://demo/scripts/voxel_world_scene.gd" id="1"]
 [ext_resource type="Resource" path="res://demo/world_types/00_default.tres" id="2"]
+[ext_resource type="Script" uid="uid://bpt1sf4q71o4q" path="res://addons/sun_rays/sun_rays.gd" id="3"]
 
 [sub_resource type="Environment" id="env"]
 background_mode = 4
@@ -22,8 +23,11 @@ glow_hdr_threshold = 1.05
 
 [sub_resource type="BeautyCompositor" id="beauty"]
 
+[sub_resource type="CompositorEffect" id="sun_rays"]
+script = ExtResource("3")
+
 [sub_resource type="Compositor" id="compositor"]
-compositor_effects = Array[CompositorEffect]([SubResource("raymarch"), SubResource("beauty")])
+compositor_effects = Array[CompositorEffect]([SubResource("raymarch"), SubResource("beauty"), SubResource("sun_rays")])
 
 [node name="VoxelWorld" type="VoxelWorld"]
 script = ExtResource("1")
