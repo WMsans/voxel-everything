@@ -660,6 +660,23 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		return false;
 	}
 	end_stage(rd, kStageDeferred);
+	// The sun rays' see-through depth (addons/sun_rays/sun_rays.gd): the resolve below puts a
+	// front's depth into the scene depth, which the rays would read as a wall. The composite
+	// writes that depth here wherever only sky stands behind the front; everywhere else stays
+	// 0. Cleared every frame, so a frame with no front leaves nothing stale. Re-queried every
+	// frame for the same reason as the G-buffer: a reconfigure drops the context.
+	RID clear_depth;
+	if (in.rsb) {
+		if (!in.rsb->has_texture("sun_rays", "clear_depth")) {
+			in.rsb->create_texture("sun_rays", "clear_depth", RenderingDevice::DATA_FORMAT_R32_SFLOAT,
+					RenderingDevice::TEXTURE_USAGE_STORAGE_BIT |
+							RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
+							RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT,
+					RenderingDevice::TEXTURE_SAMPLES_1, size, 1, 1, true, false);
+		}
+		clear_depth = in.rsb->get_texture("sun_rays", "clear_depth");
+		if (clear_depth.is_valid()) rd->texture_clear(clear_depth, Color(0, 0, 0, 0), 0, 1, 0, 1);
+	}
 	// Transparency, shading (spec §6): fronts over what deferred lit behind them. Failure
 	// cancels the marker and leaves deferred's image -- never aborts the frame.
 	// shell_drawn IS `shell_ok && shell->drew()`. Belt to the accessors' braces: shell->front()
@@ -684,7 +701,7 @@ bool VoxelFrame::render_pre_opaque(RenderingDevice *rd, const FrameInputs &in) {
 		tp.water = render_.water_settings();
 		timings->begin(rd, "transparency");
 		const bool tc_ok = tc->render(rd, *gb, *materials, shell->front(), shell->thickness(),
-				use_sun ? sun->map() : RID(), deferred->sun_cascade_ubo(), ubo->buffer(), tp);
+				shell->front_depth(), clear_depth, use_sun ? sun->map() : RID(), deferred->sun_cascade_ubo(), ubo->buffer(), tp);
 		// Resolve (spec §6 step 5): the front becomes the G-buffer's surface and depth, so
 		// inject, contact shadows, SSR and outlines see the front. Only after a good composite:
 		// resolving an unshaded front would outline a front the lit image does not show.

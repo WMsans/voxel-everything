@@ -35,6 +35,10 @@ void TransparencyCompositePass::initialize(RenderingDevice *rd) {
 	data.push_back(far);
 	dummy_far_ = gpu::texture(rd, group_, RenderingDevice::DATA_FORMAT_R32_SFLOAT, Vector2i(1, 1),
 			RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice::TEXTURE_USAGE_CAN_UPDATE_BIT, data);
+	// Stands in for the sun rays' see-through depth when no frame target exists; the shader
+	// only writes inside its size, which is pixel (0,0).
+	dummy_clear_ = gpu::texture(rd, group_, RenderingDevice::DATA_FORMAT_R32_SFLOAT, Vector2i(1, 1),
+			RenderingDevice::TEXTURE_USAGE_STORAGE_BIT);
 }
 
 void TransparencyCompositePass::teardown() {
@@ -42,7 +46,7 @@ void TransparencyCompositePass::teardown() {
 	gpu::RdDevice device{rd_};
 	group_.release(device);
 	program_ = gpu::Program();
-	sampler_nearest_ = sampler_linear_ = dummy_far_ = lit_copy_ = RID();
+	sampler_nearest_ = sampler_linear_ = dummy_far_ = dummy_clear_ = lit_copy_ = RID();
 	lit_copy_size_ = Vector2i(0, 0);
 	set_ = gpu::SetCache();
 	rd_ = nullptr;
@@ -60,9 +64,10 @@ bool TransparencyCompositePass::ensure_lit_copy(RenderingDevice *rd, Vector2i si
 }
 
 bool TransparencyCompositePass::render(RenderingDevice *rd, GBuffer &gb,
-		const MaterialAtlas &materials, RID front, RID thickness, RID sun_map,
-		RID sun_cascade_ubo, RID beauty_cam_ubo, const Params &p) {
+		const MaterialAtlas &materials, RID front, RID thickness, RID front_depth, RID clear_depth,
+		RID sun_map, RID sun_cascade_ubo, RID beauty_cam_ubo, const Params &p) {
 	if (!is_valid() || !gb.is_valid() || !front.is_valid() || !thickness.is_valid() ||
+			!front_depth.is_valid() ||
 			!sun_cascade_ubo.is_valid() || !beauty_cam_ubo.is_valid() || !sun_light_ubo_.is_valid())
 		return false;
 	uint32_t flags = p.flags;
@@ -87,7 +92,9 @@ bool TransparencyCompositePass::render(RenderingDevice *rd, GBuffer &gb,
 			gpu::sampled(7, materials.sampler(), materials.surface_array()),
 			gpu::ubo(8, beauty_cam_ubo),
 			gpu::ubo(9, sun_light_ubo_),
-			gpu::sampled(10, sampler_nearest_, lit_copy_)});
+			gpu::sampled(10, sampler_nearest_, lit_copy_),
+			gpu::sampled(11, sampler_nearest_, front_depth),
+			gpu::image(12, clear_depth.is_valid() ? clear_depth : dummy_clear_)});
 	if (!set.is_valid()) return false;
 	const ve::TransparencyCompositePush push{
 			{p.right[0], p.right[1], p.right[2], p.tan_x},

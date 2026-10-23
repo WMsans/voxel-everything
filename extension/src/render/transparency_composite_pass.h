@@ -39,9 +39,12 @@ public:
 	void set_sun_ubo(RID buffer) { sun_light_ubo_ = buffer; }
 	// `front` and `thickness` are ShellRasterPass's targets. That pass already reports RID()
 	// for both on a frame it drew nothing, so the guard below is the whole staleness gate for
-	// every caller: there is no "did the shell draw?" argument to forget to pass.
+	// every caller: there is no "did the shell draw?" argument to forget to pass. `front_depth`
+	// is the shell's too. `clear_depth` is the sun rays' see-through depth (R32F, cleared by the
+	// caller), or RID() when nothing reads it.
 	bool render(RenderingDevice *rd, GBuffer &gb, const MaterialAtlas &materials, RID front,
-			RID thickness, RID sun_map, RID sun_cascade_ubo, RID beauty_cam_ubo, const Params &p);
+			RID thickness, RID front_depth, RID clear_depth, RID sun_map, RID sun_cascade_ubo,
+			RID beauty_cam_ubo, const Params &p);
 
 private:
 	bool ensure_lit_copy(RenderingDevice *rd, Vector2i size);
@@ -50,7 +53,7 @@ private:
 	RenderingDevice *rd_ = nullptr;
 	gpu::Group group_;
 	gpu::Program program_;
-	RID sampler_nearest_, sampler_linear_, dummy_far_;
+	RID sampler_nearest_, sampler_linear_, dummy_far_, dummy_clear_;
 	RID sun_light_ubo_; // NOT owned
 	gpu::SetCache set_;
 };

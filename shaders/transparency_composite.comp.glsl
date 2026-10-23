@@ -36,6 +36,11 @@ layout(set = 0, binding = 4) uniform sampler2DArray sun_map;
 layout(set = 0, binding = 5, std140) uniform SunBlock { SUN_CASCADE_BLOCK_FIELDS } sun;
 
 layout(set = 0, binding = 10) uniform sampler2D lit_copy; // lit as deferred left it, for refraction
+// The sun rays' see-through depth (addons/sun_rays): the depth the resolve is about to give a
+// front with only sky behind it, so the rays count that pixel as sky. The frame clears it to 0
+// first; frames with no rays target bind a 1x1 stand-in, hence the size guard at the store.
+layout(set = 0, binding = 11) uniform sampler2D front_depth;
+layout(set = 0, binding = 12, r32f) uniform restrict writeonly image2D clear_depth;
 #include "sun_map.glslh"
 
 layout(push_constant, std430) uniform Push { TRANSPARENCY_COMPOSITE_PUSH_FIELDS } pc;
@@ -247,6 +252,9 @@ void main() {
 	if (!has_front && inside == 0u) return;
 
 	float depth = texelFetch(gb_depth, px, 0).r;
+	if (has_front && depth == 0.0 && all(lessThan(px, imageSize(clear_depth)))) {
+		imageStore(clear_depth, px, vec4(texelFetch(front_depth, px, 0).r));
+	}
 	float z_opaque = depth > 0.0
 			? distance(beauty_world_from_depth(uv, depth), bcam.cam.xyz) : 0.0;
 	float thickness = shell_thickness(rg, z_opaque, has_front ? front.z : 0.0);

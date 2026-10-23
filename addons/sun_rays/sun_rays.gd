@@ -9,6 +9,11 @@ extends CompositorEffect
 ## and its colour and energy tint the rays. "Can this pixel see the sky" is read from the depth
 ## buffer alone (reverse-Z far plane, depth 0), so anything that writes depth occludes.
 ##
+## A renderer that writes see-through surfaces (water, glass) into depth can say so: create an
+## R32F texture "clear_depth" in the scene buffers' "sun_rays" context, holding each such
+## surface's depth where only sky is behind it and 0 elsewhere. A pixel whose depth matches it
+## counts as sky; anything drawn in front of the surface still blocks.
+##
 ## Two compute dispatches: a low-resolution march toward the sun that counts the sky it passes
 ## near the sun, then a full-resolution add into the HDR colour before glow and tonemapping.
 
@@ -115,12 +120,16 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 			RenderingDevice.TEXTURE_SAMPLES_1, rays_size, 1, 1, true, false)
 	var rays := rsb.get_texture(&"sun_rays", &"rays")
 
+	var depth := rsb.get_depth_layer(0)
+	var has_clear := rsb.has_texture(&"sun_rays", &"clear_depth")
+	var clear := rsb.get_texture(&"sun_rays", &"clear_depth") if has_clear else depth
 	var march_set := UniformSetCacheRD.get_cache(_march_shader, 0, [
-		_uniform(RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, [_nearest, rsb.get_depth_layer(0)]),
+		_uniform(RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, [_nearest, depth]),
 		_uniform(RenderingDevice.UNIFORM_TYPE_IMAGE, 1, [rays]),
+		_uniform(RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 2, [_nearest, clear]),
 	])
 	var march_params := PackedFloat32Array([sun.x, sun.y, rays_size.x, rays_size.y,
-		aspect, sun_size, ray_length, 0.0]).to_byte_array()
+		aspect, sun_size, ray_length, 1.0 if has_clear else 0.0]).to_byte_array()
 	_dispatch(_march_pipeline, march_set, march_params, rays_size)
 
 	var tint := _sun_color * intensity * fade
@@ -185,19 +194,21 @@ func _compile(code: String) -> RID:
 
 # One texel of the low-resolution rays texture: march from it to the sun and count the sky passed
 # within sun_size of the sun. A step counts as sky only when all four depth texels gathered there
-# are at the far plane, so a hairline hole in solid ground (one pixel of depth 0) never emits.
+# are sky, so a hairline hole in solid ground (one pixel of depth 0) never emits. Sky is depth 0,
+# or the see-through depth when the renderer publishes one (see the class doc).
 const MARCH_GLSL := """
 #version 450
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0) uniform sampler2D depth_tex;
 layout(r16f, set = 0, binding = 1) uniform restrict writeonly image2D rays_img;
+layout(set = 0, binding = 2) uniform sampler2D clear_tex;
 layout(push_constant, std430) uniform Params {
 	vec2 sun_uv;
 	vec2 rays_size;
 	float aspect;
 	float sun_size;
 	float ray_length;
-	float pad;
+	float has_clear;
 } p;
 
 #define STEPS %d
@@ -230,7 +241,11 @@ void main() {
 			float w = 1.0 - t / p.sun_size;
 			w *= w;
 			total += w;
-			if (all(equal(textureGather(depth_tex, s, 0), vec4(0.0)))) {
+			vec4 d = textureGather(depth_tex, s, 0);
+			if (p.has_clear > 0.5 && any(notEqual(d, vec4(0.0)))) {
+				d = min(d, abs(d - textureGather(clear_tex, s, 0))); // plain sky skips the fetch
+			}
+			if (all(equal(d, vec4(0.0)))) {
 				lit += w;
 			}
 		}

@@ -211,3 +211,14 @@ here, so this is CPU+GPU frame time.
 **Portability.** `addons/sun_rays/` copied alone into a fresh Godot 4.7 Forward+ project (cubes,
 a procedural sky, a DirectionalLight3D, a camera) renders rays with the effect on and none with it
 off. No errors.
+
+**Water and ice let the rays through (fixed after merge).** The G-buffer resolve gives a
+transparent front its own depth, so `depth == 0` read water and ice as walls and a front over the
+sun killed every ray. The effect now also reads an optional R32F `sun_rays/clear_depth` scene
+buffer texture: the depth of a see-through surface with only sky behind it, 0 elsewhere. A step is
+sky when its depth is 0 or equals that. The voxel frame clears it each frame and the transparency
+composite fills it (it alone sees the opaque depth before the resolve and the front together).
+A Godot mesh in front of the ice has a different depth, so it still blocks. Without the texture
+(any other project) nothing changes. Check: `--block=ice` / `--block=water` on the capture
+(SUN_RAYS_GAIN 0.000 → 0.08 / 0.10; open sky 0.07). Cost, interleaved old/new/old/new at the
+capture pose, 2560×1440: on−off 0.75 ms old, 0.99 ms new, about +0.25 ms for the second gather.

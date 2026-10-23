@@ -16,6 +16,10 @@ extends SceneTree
 # gets looking up, where the rays flood the view around the sun.
 #
 # --knob=name,value sets one SunRays knob (intensity, ray_length, sun_size), repeatable, for A/B.
+#
+# --block=material puts an r=3 ball of that material (ice, water) 12 m toward the sun, covering
+# it: a transparent ball must let the rays through. SUN_RAYS_GAIN is the mean brightness on.png
+# adds over off.png in a box around the sun (the screen centre); ~0 means nothing got through.
 
 func _initialize() -> void:
 	call_deferred("capture")
@@ -28,6 +32,7 @@ func capture() -> void:
 	var frames := 300
 	var knobs := {}
 	var shipped_sun := false
+	var block := ""
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--out="):
 			out = arg.trim_prefix("--out=")
@@ -42,6 +47,8 @@ func capture() -> void:
 		if arg.begins_with("--knob="):
 			var kv := arg.trim_prefix("--knob=").split(",")
 			knobs[kv[0]] = float(kv[1])
+		if arg.begins_with("--block="):
+			block = arg.trim_prefix("--block=")
 		if arg == "--shipped-sun":
 			shipped_sun = true
 		if arg.begins_with("--frames="):
@@ -83,6 +90,17 @@ func capture() -> void:
 	for key in knobs:
 		effect.set(key, knobs[key])
 
+	if block != "":
+		var id := -1
+		for m in world.material_table():
+			if m["name"] == block:
+				id = m["id"]
+		if id < 0:
+			push_error("sun rays capture: no material named " + block)
+			quit(1)
+			return
+		world.hooks().debug_apply_sphere_add(at + to_sun * 12.0, 3.0, id)
+
 	var camera: Camera3D = player.get_node("Camera3D")
 	player.global_position = at
 	camera.global_position = at
@@ -106,6 +124,7 @@ func capture() -> void:
 	await _shot(out.path_join("on.png"))
 	effect.enabled = false
 	await _shot(out.path_join("off.png"))
+	print("SUN_RAYS_GAIN %.4f" % _centre_gain(out.path_join("on.png"), out.path_join("off.png")))
 	effect.enabled = true
 	camera.look_at(at - Vector3(to_sun.x, 0.0, to_sun.z))
 	await _shot(out.path_join("away.png"))
@@ -127,6 +146,17 @@ func _shot(path: String) -> void:
 		await process_frame
 	await RenderingServer.frame_post_draw
 	root.get_texture().get_image().save_png(path)
+
+func _centre_gain(on_path: String, off_path: String) -> float:
+	var on := Image.load_from_file(on_path)
+	var off := Image.load_from_file(off_path)
+	var half := on.get_height() / 10
+	var c := on.get_size() / 2
+	var sum := 0.0
+	for y in range(c.y - half, c.y + half):
+		for x in range(c.x - half, c.x + half):
+			sum += on.get_pixel(x, y).get_luminance() - off.get_pixel(x, y).get_luminance()
+	return sum / (4.0 * half * half)
 
 func _p50_ms(frames: int) -> float:
 	for frame in range(30):
