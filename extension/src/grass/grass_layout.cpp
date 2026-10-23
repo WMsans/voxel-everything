@@ -67,10 +67,10 @@ GrassLayout grass_layout(const GrassSettings &settings, const float camera[3],
 		l.ring_end_m[i] = i == kGrassRings - 1
 				? s.reach_m
 				: std::min(s.reach_m, kGrassRingStepM * static_cast<float>(i + 1));
-		// Halve per ring, with a floor of one so a far ring thins rather than disappears.
+		// Halve per ring, with a floor of one so an outer ring thins rather than disappears.
 		// This used to drop 3 of every 4, which took the default density to one blade per
 		// 0.8 m brick by ring 2 and made the field end abruptly instead of fading. The
-		// blades the far rings give up are paid back as width in the vertex shader, via
+		// blades the outer rings give up are paid back as width in the vertex shader, via
 		// shape[3] -- count down, size up, coverage flat.
 		l.blades_per_brick[i] = std::max(1, s.blades_per_brick >> i);
 	}
@@ -103,22 +103,8 @@ GrassLayout grass_layout(const GrassSettings &settings, const float camera[3],
 	l.near_columns = dim_x * dim_z;
 	l.near_brick_cap = l.near_columns * kGrassColumnBricks;
 
-	// Far LoD rings. Ring r covers out to kGrassFarBaseM << r in cells of kBrickSize << r, so
-	// the cell COUNT is the same for every ring and the dispatch grows linearly in ring count
-	// rather than with the cube of the radius. Two cells of slack on each side because the
-	// grid is anchored on the floor of the ring's own cell lattice, not on the camera. The
-	// schedule is absolute, so a near reach that grows with streaming pushes ring 1's INNER
-	// edge out (the rings keep their LoD) instead of coarsening every ring with it.
-	l.far_ring_count = live ? s.far_lod_rings : 0;
-	if (l.far_ring_count > 0 && s.far_blades_per_cell > 0) {
-		l.far_cell_dim = static_cast<int>(std::ceil(2.0f * kGrassFarBaseM / kBrickSize)) + 2;
-		l.far_cells = l.far_cell_dim * l.far_cell_dim;
-		l.far_reach_m = kGrassFarBaseM * static_cast<float>(1 << l.far_ring_count);
-	} else {
-		l.far_ring_count = 0;
-	}
-	l.max_bricks = l.near_brick_cap + l.far_ring_count * l.far_cells;
-	l.dispatch_threads = l.near_columns + l.far_ring_count * l.far_cells;
+	l.max_bricks = l.near_brick_cap;
+	l.dispatch_threads = l.near_columns;
 
 	// Estimate: ground is a surface, so surface bricks in a ring go as its ANNULUS AREA over
 	// the brick footprint, times a slack factor for slope (a hillside presents more bricks
@@ -133,22 +119,6 @@ GrassLayout grass_layout(const GrassSettings &settings, const float camera[3],
 		const double bricks = area / (kBrickSize * kBrickSize) * kSlopeSlack;
 		blades += bricks * l.blades_per_brick[i];
 		prev = r;
-	}
-	// Far rings: one flat annulus of cells, no slope slack -- a far cell places blades on
-	// its own tangent plane, so a hillside gives one cell's worth either way.
-	for (int i = 1; i <= l.far_ring_count; i++) {
-		const float outer = kGrassFarBaseM * static_cast<float>(1 << i);
-		// The near field owns everything inside the reach, so a ring's inner edge is whichever
-		// is further out -- which is how extending the near reach pays for itself here. The
-		// FIRST ring instead starts exactly at the reach, so the two fields meet however short
-		// the reach is (grass_bricks.comp.glsl).
-		const float inner = i == 1 ? s.reach_m
-				: std::max(kGrassFarBaseM * static_cast<float>(1 << (i - 1)), s.reach_m);
-		if (outer <= inner) continue;
-		const float cell = kBrickSize * static_cast<float>(1 << i);
-		const double area = 3.14159265358979 * (static_cast<double>(outer) * outer -
-				static_cast<double>(inner) * inner);
-		blades += area / (static_cast<double>(cell) * cell) * s.far_blades_per_cell;
 	}
 	l.estimated_blades = static_cast<int>(std::min<double>(blades, s.max_blades));
 
@@ -191,10 +161,6 @@ GrassLayout grass_layout(const GrassSettings &settings, const float camera[3],
 	p.style[3] = s.blade_lighting;
 	p.limits[0] = s.max_blades;
 	p.limits[1] = l.max_bricks;
-	p.far[0] = l.far_ring_count;
-	p.far[1] = l.far_cell_dim;
-	p.far[2] = l.far_cells;
-	p.far[3] = l.far_ring_count > 0 ? s.far_blades_per_cell : 0;
 	return l;
 }
 

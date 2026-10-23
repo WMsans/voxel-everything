@@ -56,9 +56,6 @@ func test_stage_one_finds_surface_bricks_under_the_camera() -> void:
 
 func test_stage_one_finds_nothing_far_above_the_world() -> void:
 	var w := make_world()
-	# Far rings off: this is the NEAR box's contract. They are scattered against the field, so
-	# they do find ground however high the camera is (test_ring_one_finds_ground_far_below_a_high_camera).
-	w.set_grass_value("far_lod_rings", 0.0)
 	# Stream around a point 2 km up: nothing is resident within the vertical reach.
 	for i in range(30):
 		w.hooks().debug_stream_frame(Vector3(30.0, 2000.0, 30.0))
@@ -185,13 +182,8 @@ func test_no_blades_means_no_draw_but_not_a_failure() -> void:
 # only the material layer, so zero blades afterwards can only mean the scatter read it.
 # (Hook name/signature verbatim from extension/src/debug/hooks.cpp:
 # debug_apply_sphere_paint(centre, radius, material); rock is material id 2.)
-#
-# Far LoD rings are turned OFF here on purpose. They are scattered against eval_field, which
-# has no override bricks bound, so they cannot see this paint -- and they reach eight times
-# further than the 45 m sphere anyway. Their behaviour has its own case below.
 func test_painting_grass_to_rock_removes_its_blades() -> void:
 	var w := make_world()
-	w.set_grass_value("far_lod_rings", 0.0)
 	var before: int = w.hooks().debug_grass_stats()["blades"]
 	assert_int(before).is_greater(0)
 	w.hooks().debug_apply_sphere_paint(Vector3(30.0, 50.0, 30.0), 45.0, 2)
@@ -200,72 +192,14 @@ func test_painting_grass_to_rock_removes_its_blades() -> void:
 	var after: int = w.hooks().debug_grass_stats()["blades"]
 	assert_int(after).is_equal(0)
 
-# Grass past the near field is the whole point of the far LoD rings: the brick atlas only
-# holds full-resolution data for the first ~60 m, so without them the field stops where the
-# brick sphere does. The hook camera sits at the streamed centre looking straight down, so
-# streaming 60 m ABOVE the grass puts the ground outside the near field's reach SPHERE
-# entirely -- every blade counted here is one the near field cannot place. The rings must find
-# it against the field, and every one of those blades must stand on accepted ground.
-func test_far_lod_rings_place_blades_past_the_near_reach() -> void:
+# No far rings: from 60 m above the meadow an 8 m near sphere cannot reach the ground, and
+# nothing else places blades. The ground's own colour carries the field from up here. (With
+# the far rings, this exact setup placed blades -- the deleted far-ring tests pinned that.)
+func test_no_blades_reach_ground_from_high_above() -> void:
 	var w := make_world()
 	stream_to(w, Vector3(30.0, 116.2, 30.0))
 	w.set_grass_value("reach_m", 8.0)
-	w.set_grass_value("far_lod_rings", 0.0)
-	var near_only: Dictionary = w.hooks().debug_grass_stats()
-	assert_int(near_only["blades"]).is_equal(0)
-	w.set_grass_value("far_lod_rings", 3.0)
-	var with_far: Dictionary = w.hooks().debug_grass_stats()
-	# Cells, then blades: the far rings appear in the compacted list first.
-	assert_int(with_far["bricks"]).is_greater(near_only["bricks"])
-	assert_int(with_far["blades"]).is_greater(0)
-	# ...and every far blade still stands on ground the slope test accepted.
-	assert_float(with_far["min_normal_y"]).is_greater_equal(0.5)
-
-# The near field's reach is a SPHERE around the camera, not a horizontal disc, so from high
-# up its footprint on the ground shrinks and the far rings have to pick up the rest. They used
-# to start at `reach` measured in XZ instead, which left a band of ground owned by NEITHER
-# field: raising reach_m from high actually REMOVED blades (measured from 60 m: 15792 at 8 m,
-# 11632 at 32 m), because the near field still could not reach the ground while the far ring's
-# inner edge moved out. Giving the near field more reach may never thin the grass.
-func test_grass_does_not_thin_as_the_reach_grows_from_high() -> void:
-	var w := make_world()
-	# 60 m above the grass at the usual spot: the near box's sphere no longer reaches the
-	# ground, so every blade counted below is a far-ring blade.
-	stream_to(w, Vector3(30.0, 116.2, 30.0))
-	w.set_grass_value("reach_m", 8.0)
-	var narrow: int = w.hooks().debug_grass_stats()["blades"]
-	assert_int(narrow).is_greater(0)
-	w.set_grass_value("reach_m", 32.0)
-	var wide: int = w.hooks().debug_grass_stats()["blades"]
-	assert_int(wide).is_greater_equal(narrow)
-
-# Bullet-proofing the ring-1 case: from 200 m up, ring 1's own search span used to be
-# `cam.y ± outer` (80 m), which sits entirely ABOVE the ground -- so it placed nothing under
-# the camera while the outer rings, whose larger radius reaches further down, kept drawing
-# further out. With only ring 1 enabled and a reach the near field cannot possibly cross, any
-# blade here has to have come from ring 1 finding ground 200 m below it.
-func test_ring_one_finds_ground_far_below_a_high_camera() -> void:
-	var w := make_world()
-	stream_to(w, Vector3(30.0, 256.2, 30.0))
-	w.set_grass_value("reach_m", 8.0)
-	w.set_grass_value("far_lod_rings", 1.0)
-	var d: Dictionary = w.hooks().debug_grass_stats()
-	assert_int(d["blades"]).is_greater(0)
-
-# A far ring is scattered against the procedural field with no override bricks bound, so it
-# is blind to edits by construction (GrassSettings::far_lod_rings). Pinned, not assumed: the
-# day someone binds the override pool into stage 1, this is the case that says so.
-func test_far_lod_rings_do_not_see_edits() -> void:
-	var w := make_world()
-	# Stream high enough that the near field cannot reach the ground, so the blades this case
-	# counts are far-ring ones by construction (same setup as the reach-growth case).
-	stream_to(w, Vector3(30.0, 116.2, 30.0))
-	w.set_grass_value("reach_m", 8.0)
-	var before: int = w.hooks().debug_grass_stats()["blades"]
-	assert_int(before).is_greater(0)
-	w.hooks().debug_apply_sphere_paint(Vector3(30.0, 50.0, 30.0), 45.0, 2)
-	stream_to(w, Vector3(30.0, 116.2, 30.0))
-	assert_int(w.hooks().debug_grass_stats()["blades"]).is_greater(0)
+	assert_int(w.hooks().debug_grass_stats()["blades"]).is_equal(0)
 
 # Disabling grass on a world that already drew must REALLY stop the draw: the disabled
 # run() clears the GPU draw args (not just the CPU counters), so the raster issues an

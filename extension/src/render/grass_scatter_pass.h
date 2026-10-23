@@ -11,7 +11,6 @@
 namespace godot {
 
 class GpuAtlas;
-class FieldContextSet;
 
 // GPU-driven grass placement: stage 1 culls resident grass-surface bricks into a compacted
 // list, stage 2 places blades inside them. Produces an instance buffer and the indirect
@@ -29,16 +28,13 @@ public:
 	// supplied caller-side: run() has no world handle and atlas.config().region_window
 	// is init-centred/stale. atlas_bricks still comes from the atlas (static grid).
 	// sun_ubo is the frame's SunUbo buffer: stage 2 marches the terrain sun ray once per blade.
-	// field is the terrain pipeline's set-1 context; stage 1 evaluates the field directly for
-	// the far LoD rings, which live past the brick atlas's residency radius. A null `field`
-	// (no pipeline) keeps the near rings and skips the far ones.
 	// world_epoch: anything that changes the atlas or the sun (streaming, edits) must change
 	// it. When it, the region window and the params (ve::same_scatter_inputs) all match the
 	// last full run, both compute stages are skipped and the raster redraws last frame's
 	// blades -- only the time in the params block is refreshed, for the wind.
 	bool run(RenderingDevice *rd, GpuAtlas &atlas, const ve::GrassLayout &layout,
 			const ve::RegionWindow &region_win, float time_seconds, RID sun_ubo,
-			const FieldContextSet *field, uint64_t world_epoch = ve::kAlwaysScatter);
+			uint64_t world_epoch = ve::kAlwaysScatter);
 	// Full scatters run since initialize(); reused frames do not count.
 	int64_t scatter_runs() const { return scatter_runs_; }
 
@@ -85,10 +81,6 @@ private:
 	gpu::Program bricks_;
 	gpu::Program scatter_; // invalid when grass_scatter.comp.glsl failed: cull-only
 	RID params_ubo_, brick_list_, counters_, dispatch_args_, instances_, draw_args_;
-	// The field op pool stage 1's `field.glslh` declares. The far rings evaluate the field
-	// with an op count of ZERO -- edits belong to the near field, which reads the brick atlas
-	// -- so the buffer is never indexed and one empty op's worth of bytes is the whole need.
-	RID field_ops_;
 	// Pass-owned region-window block (binding 10): created in ensure_buffers, refreshed
 	// from the caller-supplied live window on every run(), Task 6 reuses it for stage 2's set.
 	RID region_ubo_;

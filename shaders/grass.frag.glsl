@@ -50,13 +50,11 @@ void main() {
 		albedo = mix(albedo, vec3(0.95, 0.86, 0.28), smoothstep(0.72, 1.0, v_height_t));
 	}
 
-	// Dither out at the reach limit with the SAME test lod.frag.glsl uses at the LoD seam,
-	// so the density tail fades instead of popping. The limit is the OUTERMOST far LoD ring
-	// (each doubles the near reach), not ring_end.w -- fading at the near reach would cut
-	// every far-ring blade the moment it was placed. With no far rings this is
-	// ring_end.z..ring_end.w again, the band it always was.
+	// Dither out over the last quarter of the reach with the SAME test lod.frag.glsl uses at
+	// the LoD seam, so the density tail fades instead of popping. Past the reach there is no
+	// grass, only the grass ground, whose texture carries the canopy's colour (spec 2026-10-22).
 	float d = distance(v_wpos, push.cam.xyz);
-	float limit = pc.cam.w * exp2(float(pc.far.x));
+	float limit = pc.cam.w;
 	float fade = clamp((d - limit * 0.75) / max(limit * 0.25, 1e-3), 0.0, 1.0);
 	if (bayer4(ivec2(gl_FragCoord.xy)) < fade) discard;
 

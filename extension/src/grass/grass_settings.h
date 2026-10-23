@@ -10,15 +10,14 @@ namespace ve {
 struct GrassSettings {
 	bool enabled = true;
 
-	// CAP on how far blades are placed, in metres. The reach that ships is the raymarcher's
-	// own near/far seam: VoxelFrame::grass_layout() clamps this to whichever is nearer, the
-	// seam the composite hands the pixel over at or the completely-resident radius the blades
-	// are scattered from. Near grass therefore covers exactly the area the raymarcher draws,
-	// and the far LoD rings start where it stops. 120 m sits above every seam this atlas can
-	// fund -- the brick pool, not the residency radius, is the binding pool, so the measured
-	// seam runs 32..80 m -- and below ve::kLodFadeEndM, where the near field's blade count
-	// would pass max_blades and the scatter would start dropping blades at random.
-	float reach_m = 120.0f;
+	// How far blades are placed, in metres. Chosen by LOOK, BotW-style (spec 2026-10-22):
+	// blades are a close-range detail that thins out over the last quarter of the reach, and
+	// past it there is no grass at all -- the grass ground's texture carries the canopy's
+	// colour, so the end of the blades leaves no line. VoxelFrame::grass_layout() still clamps
+	// this to the raymarcher's near/far seam and the completely-resident radius (the blades
+	// are scattered from resident bricks); the measured seam runs 32..80 m, so 32 m sits
+	// inside both.
+	float reach_m = 32.0f;
 	// Vertical half-extent of the brick search box, in metres, itself capped by the reach.
 	// The default is "the whole sphere": ground far below or above the camera is raytraced
 	// like any other, and the old 10 m slab left a clifftop looking down at bare terrain.
@@ -72,34 +71,12 @@ struct GrassSettings {
 	// the camera is overhead. The default holds .95 of the level-view area at the zenith
 	// while the blade still visibly grows rather than lying flat like a lawn of leaves.
 	float camera_tilt = 0.85f;
-	// Far rings halve their blade count; they buy the coverage back with width, scaled
-	// exp2(ring_fraction * this) so the gain is continuous and rings do not band.
-	float ring_width_gain = 3.0f;
-
-	// LoD rings placed BEYOND reach_m, each one doubling both its cell size and its outer
-	// radius: ring 1 covers reach..2*reach in 1.6 m cells, ring 2 out to 4*reach in 3.2 m
-	// cells, ring 3 out to 8*reach in 6.4 m cells. Cell size and radius double together, so
-	// every ring dispatches the SAME number of cells -- that is what lets grass follow the
-	// far-field LoD at all, where the flat 0.8 m brick box of the near rings would need
-	// 4^ring times the threads. 0 is the old near-field-only grass.
-	//
-	// These rings are scattered against eval_field, not against the brick atlas, because
-	// full-resolution bricks are only resident for roughly the first 60 m (lod_grid.h). The
-	// cost is that a far ring does NOT see voxel edits: dig a hole at 300 m and its grass
-	// stays until the ring is close enough to be a near ring again.
-	int far_lod_rings = 3;
-	// Candidate blades per far cell, the same for every far ring. Constant per CELL (not per
-	// square metre) is the point: cell area quadruples per ring while blade width only
-	// doubles, so coverage halves per ring and the field fades out over the far rings
-	// instead of ending at a line.
-	//
-	// 16, not the 8 this shipped at first: at 8 the far bands read as scattered bushes on
-	// bare ground rather than as grass, and the difference is plainly visible in a 25 m-up
-	// capture (tools/grass_capture.gd --grass=far_blades_per_cell,N). 24 is only marginally
-	// better than 16 and costs half again as many blades against max_blades.
-	// ponytail: coverage halving per ring is the ceiling of a blade-only far field. Holding
-	// it flat needs an imposter/ground-tint blend, not more blades.
-	int far_blades_per_cell = 16;
+	// Outer rings halve their blade count and buy SOME of the coverage back with width, scaled
+	// exp2(ring_fraction * this) so the gain is continuous and rings do not band. 3 would
+	// hold coverage flat to the reach (48/24/12/6 blades per brick over four rings); lower
+	// lets the field thin on its way out, which is the point -- it should be less and less
+	// visible with distance, not end at full strength.
+	float ring_width_gain = 1.0f;
 
 	// Fraction of blades that get a flower tint at the tip.
 	float flower_chance = 0.012f;

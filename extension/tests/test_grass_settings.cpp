@@ -160,6 +160,14 @@ TEST_CASE("every grass knob name round-trips through the store") {
 	}
 }
 
+// The far LoD rings were deleted (spec 2026-10-22): a saved config or script still naming
+// their knobs must be refused, not silently aliased onto another field.
+TEST_CASE("the store rejects the deleted far-ring knobs") {
+	ve::GrassSettingsStore store;
+	CHECK_FALSE(store.set_value("far_lod_rings", 3.0f));
+	CHECK_FALSE(store.set_value("far_blades_per_cell", 16.0f));
+}
+
 TEST_CASE("the grass rows satisfy the table invariants") {
 	check_rows(ve::grass_rows(), {ve::GrassSettings{}});
 }
