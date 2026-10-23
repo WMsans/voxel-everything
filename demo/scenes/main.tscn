@@ -90,6 +90,7 @@ script = ExtResource("7")
 [node name="SettingsMenu" parent="HUD" unique_id=292828256 instance=ExtResource("10")]
 layout_mode = 3
 settings_path = NodePath("/root/Main/VoxelWorld/VoxelSettings")
+environment_path = NodePath("/root/Main/VoxelWorld/WorldEnvironment")
 
 [node name="MaterialPicker" parent="HUD" unique_id=902510277 instance=ExtResource("11")]
 layout_mode = 3
