@@ -14,6 +14,9 @@ extends Control
 
 @export var settings_path: NodePath
 @export var environment_path: NodePath
+# The run's command line. A measured run (VoxelSettings.is_measured_args) leaves the sun rays
+# section alone, as VoxelSettings leaves its own.
+var cmdline_args := OS.get_cmdline_user_args()
 
 const SUN_RAYS := "sun_rays"
 
@@ -73,15 +76,25 @@ func _exit_tree() -> void:
 		_save()
 
 func _save() -> void:
-	if _settings == null:
+	# VoxelSettings refuses to save in a measured run or the editor; the sun rays section follows.
+	if _settings == null or not _settings.save():
 		return
 	if _sun_rays:
+		# Like VoxelSettings, only what differs from the shipped value is written, so a retuned
+		# default still reaches anyone who once closed the panel.
 		var cfg := ConfigFile.new()
 		cfg.load(_settings.config_path)
+		if cfg.has_section(SUN_RAYS):
+			cfg.erase_section(SUN_RAYS)
 		for row in _sun_rays_rows():
-			cfg.set_value(SUN_RAYS, row["name"], _sun_rays.get(row["name"]))
+			var value = _sun_rays.get(row["name"])
+			if not is_equal_approx(float(value), float(_sun_rays_default(row["name"]))):
+				cfg.set_value(SUN_RAYS, row["name"], value)
 		cfg.save(_settings.config_path)
-	_settings.save()
+
+# enabled is CompositorEffect's own property, on by default; the rest are the script's.
+func _sun_rays_default(name: String) -> Variant:
+	return true if name == "enabled" else _sun_rays.get_script().get_property_default_value(name)
 
 func _find_sun_rays() -> SunRays:
 	var env := get_node_or_null(environment_path) as WorldEnvironment
@@ -105,7 +118,7 @@ func _sun_rays_rows() -> Array:
 # The file is hand-editable, so a value only lands on a knob the tab offers, inside its range.
 func _load_sun_rays() -> void:
 	var cfg := ConfigFile.new()
-	if _settings == null or cfg.load(_settings.config_path) != OK:
+	if _settings == null or VoxelSettings.is_measured_args(cmdline_args) or cfg.load(_settings.config_path) != OK:
 		return
 	for row in _sun_rays_rows():
 		if not cfg.has_section_key(SUN_RAYS, row["name"]):
@@ -255,9 +268,7 @@ func _on_reset() -> void:
 		_settings.reset_to_shipped()
 	if _sun_rays:
 		for row in _sun_rays_rows():
-			var name: String = row["name"]
-			# enabled is CompositorEffect's own property, on by default; the rest are the script's.
-			_sun_rays.set(name, true if name == "enabled" else _sun_rays.get_script().get_property_default_value(name))
+			_sun_rays.set(row["name"], _sun_rays_default(row["name"]))
 	sync_from_settings()
 
 func _on_close() -> void:

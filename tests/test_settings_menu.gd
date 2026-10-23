@@ -24,7 +24,9 @@ func after_test() -> void:
 
 # [world, viewport, settings, menu]. near_field_scale and the viewport scale are what main.tscn and
 # project.godot ship, so "reset restores what the scene shipped" has known values.
-func make_menu() -> Array:
+# `args` stands in for the command line: a measured one (--benchmark, --capture) must leave the
+# config file alone, as VoxelSettings does.
+func make_menu(args := PackedStringArray()) -> Array:
 	var root := Node.new()
 	add_child(root)
 	_roots.append(root)
@@ -46,6 +48,8 @@ func make_menu() -> Array:
 	settings.config_path = CONFIG_PATH
 	settings.manage_window = false
 	root.add_child(settings)
+	if not args.is_empty():
+		settings.apply_config(args)
 	# The sun rays tab reads its knobs off a SunRays in a WorldEnvironment's compositor. The
 	# environment sits in a world of its own so it never touches how the test runner renders.
 	var env_vp := SubViewport.new()
@@ -62,6 +66,7 @@ func make_menu() -> Array:
 	menu.name = "Menu"
 	menu.settings_path = NodePath("../Settings")
 	menu.environment_path = NodePath("../EnvViewport/Env")
+	menu.cmdline_args = args
 	root.add_child(menu)
 	return [world, vp, settings, menu, env.compositor.compositor_effects[0]]
 
@@ -385,3 +390,31 @@ func test_no_environment_means_no_sun_rays_tab() -> void:
 	for group in settings.groups():
 		for row in settings.describe(group):
 			assert_object(menu.control(group, row["name"])).is_not_null()
+
+# Like VoxelSettings, only what differs from the shipped value is written, so a retuned default
+# still reaches anyone who once closed the panel.
+func test_untouched_sun_rays_knobs_are_not_written() -> void:
+	var menu = make_menu()[3]
+	await get_tree().process_frame
+	menu.set_open(true)
+	menu.set_open(false)
+	var cfg := ConfigFile.new()
+	cfg.load(CONFIG_PATH)
+	assert_bool(cfg.has_section("sun_rays")).is_false()
+
+func test_measured_run_neither_reads_nor_writes_sun_rays() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("sun_rays", "ray_length", 1.2)
+	cfg.save(CONFIG_PATH)
+	var parts := make_menu(PackedStringArray(["--benchmark"]))
+	await get_tree().process_frame
+	var menu = parts[3]
+	var effect: SunRays = parts[4]
+	assert_float(effect.ray_length).is_equal_approx(effect.get_script().get_property_default_value("ray_length"), 0.001)
+	menu.set_open(true)
+	menu.control("sun_rays", "intensity").emit_signal("value_changed", 3.0)
+	menu.set_open(false)
+	cfg = ConfigFile.new()
+	cfg.load(CONFIG_PATH)
+	assert_bool(cfg.has_section_key("sun_rays", "intensity")).is_false()
+	assert_float(float(cfg.get_value("sun_rays", "ray_length", 0.0))).is_equal_approx(1.2, 0.001)
