@@ -13,12 +13,6 @@ inline constexpr int kGrassRings = 4;
 // ground falls inside some ring.
 inline constexpr float kGrassRingStepM = 10.0f;
 
-// Far LoD ring schedule: ring r covers out to kGrassFarBaseM << r in cells of
-// kBrickSize << r. Absolute for the same reason as the near steps -- the ring an object
-// stands in must depend on its distance, not on how much of the world happens to be
-// resident. The near reach only decides where ring 1 STARTS (grass_bricks.comp.glsl).
-inline constexpr float kGrassFarBaseM = 40.0f;
-
 // Brick-list entries reserved per near column, and the hard cap on how many surface bricks
 // one column may contribute. Capacity is kGrassColumnBricks * columns, so the cap is a
 // STRICT bound the way the old box's cell count was: stage 1 can never want more list than
@@ -45,8 +39,7 @@ struct GrassParams {
 	float wind[4];         // strength, speed, scale, time_seconds
 	float style[4];        // flower_chance, gloss, camera_tilt, blade_lighting
 	float shape[4];        // wind_dir_rad, lean_spread_rad, base_curve, ring_width_gain
-	int32_t limits[4];     // max_blades, max_bricks, unused, unused
-	int32_t far[4];        // far LoD rings, cells per ring side, cells per ring, blades per cell
+	int32_t limits[4];     // max_blades, max_bricks, raster mode, unused
 };
 
 struct GrassLayout {
@@ -61,16 +54,9 @@ struct GrassLayout {
 	int near_columns = 0;
 	// Brick-list entries the near columns may fill: kGrassColumnBricks each.
 	int near_brick_cap = 0;
-	// Far LoD rings past the near reach. Ring r (1-based) uses cells of kBrickSize << r over
-	// a radius of kGrassFarBaseM << r, so every ring has the same far_cell_dim^2 cells -- the
-	// whole reason grass can follow the LoD at all.
-	int far_ring_count = 0;
-	int far_cell_dim = 0;   // cells along one side of a ring's XZ grid
-	int far_cells = 0;      // far_cell_dim^2, per ring
-	float far_reach_m = 0;  // outer radius of the last far ring
-	// Brick-list capacity: the near columns' reserve plus every far ring's cell grid.
+	// Brick-list capacity: the near columns' reserve.
 	int max_bricks = 0;
-	// Threads stage 1 dispatches: one per near column, then one per far cell.
+	// Threads stage 1 dispatches: one per near column.
 	int dispatch_threads = 0;
 	// Diagnostic upper bound on blades this layout can produce, already capped by
 	// GrassSettings::max_blades. The instance buffer is sized from settings.max_blades,

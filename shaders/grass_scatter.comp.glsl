@@ -11,7 +11,7 @@
 layout(local_size_x = 64) in;
 
 layout(set = 0, binding = 0, std140) uniform Params { GRASS_PARAMS_FIELDS } grass;
-// uvec4 entries; see grass_bricks.comp.glsl for the near/far packing.
+// uvec4 entries; see grass_bricks.comp.glsl for the packing.
 layout(set = 0, binding = 1, std430) readonly buffer BrickList { uvec4 v[]; } brick_list;
 layout(set = 0, binding = 2, std430) buffer Counters { uint brick_count; uint blade_count;
 		uint high_water; uint pad; } counters;
@@ -62,9 +62,8 @@ float grass_height(uint h, float clump) {
 	return grass.blade.y * (1.0 + jitter) * mix(0.7, 1.15, clump);
 }
 
-// Everything about a blade that does not depend on where its ground came from. Near cells
-// and far LoD cells differ only in how they found `p`, `n` and `sun`, so the record and the
-// draw-args bookkeeping are written once rather than twice.
+// Everything about a blade once its ground point `p`, normal `n` and `sun` are known: the
+// record and the draw-args bookkeeping.
 //
 // The wind-aligned lean used to be a uniform random 0..2pi, which is what made the field
 // read as a pincushion of spikes rather than grass lying one way. The mean direction is the
@@ -90,41 +89,12 @@ void emit_blade(vec3 p, vec3 n, uint h, float clump, float height, float sun) {
 	draw_args.instance_count = 1u;
 }
 
-// A blade in a far LoD cell. Stage 1 already paid for the field: it found the cell's ground
-// point and normal, so a blade here costs NO field evaluation at all -- it lands on that
-// cell's TANGENT PLANE. Over a 6.4 m cell at 300 m that plane is a couple of pixels wide,
-// which is exactly the resolution the far LoD mesh under it is drawn at.
-void far_blade(uvec4 entry, uint lane) {
-	if (lane >= uint(grass.far.w)) return;
-	int ring = int(entry.w & 0xFFu);
-	float cell = BRICK_SIZE * float(1 << ring);
-	vec2 lo2 = vec2(uintBitsToFloat(entry.x), uintBitsToFloat(entry.y));
-	float gy = uintBitsToFloat(entry.z);
-	vec3 n = oct_decode_snorm8((entry.w >> 8) & 0xFFFFu);
-
-	// Seeded from the cell's own lattice coordinate, so a blade keeps its identity as the
-	// camera moves -- the same rule the near path follows with the world brick coord.
-	ivec3 key = ivec3(int(floor(lo2.x / cell)), ring, int(floor(lo2.y / cell)));
-	uint h = grass_hash3(key, lane * 2654435761u);
-	vec2 off = (vec2(grass_unit(h), grass_unit(grass_hash(h ^ 0x9E3779B9u))) - 0.5) * cell;
-	float dy = abs(n.y) > 1e-3 ? -(n.x * off.x + n.z * off.y) / n.y : 0.0;
-	vec3 p = vec3(lo2.x + cell * 0.5 + off.x, gy + dy, lo2.y + cell * 0.5 + off.y);
-
-	// Sun visibility 1.0, and that is not the old bug: the terrain march reads the brick
-	// atlas, which has no data out here. Past the LoD fade band deferred.comp.glsl's
-	// far_field_owns() is true for every pixel, so these blades are shadowed by the sun MAP
-	// -- the same one shading the far-field mesh they stand on.
-	float clump = grass_clump(p);
-	emit_blade(p, n, h, clump, grass_height(h, clump), 1.0);
-}
-
 void main() {
 	uint brick_index = gl_WorkGroupID.x;
 	if (brick_index >= counters.brick_count) return;
 
 	uvec4 entry = brick_list.v[brick_index];
 	uint lane = gl_LocalInvocationID.x;
-	if ((entry.w & 0x80000000u) != 0u) { far_blade(entry, lane); return; }
 
 	// The global brick coordinate, one signed word each (see grass_bricks.comp.glsl). It used
 	// to be bit-packed into .x against grass.brick_min, which bounded how tall the near box

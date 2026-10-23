@@ -757,8 +757,7 @@ Dictionary VoxelDebugHooks::debug_grass_stats() {
 		if (!w->context().render->passes().sun_ubo || !w->context().render->passes().sun_ubo->ensure(device)) return d;
 		if (!g->run(device, *atlas, gl, w->context().store->region_window(),
 				static_cast<float>(w->context().render->beauty_frame()) / 60.0f,
-				w->context().render->passes().sun_ubo->buffer(),
-				w->context().render->passes().field_context)) return d;
+				w->context().render->passes().sun_ubo->buffer())) return d;
 		// run()'s internal readback lands before the dispatch executes; the counters are
 		// only valid after a submit+sync, which the compositor does at frame end and the
 		// hook must do itself before refreshing through the pass's re-read entry point.
@@ -3077,7 +3076,7 @@ Dictionary VoxelDebugHooks::debug_scatter_reuse_probe() {
 		const ve::GrassLayout gl = w->context().render->frame().grass_layout(p, vp);
 		const ve::LeafLayout ll = w->context().render->frame().leaf_layout(p, vp);
 		g->run(device, *atlas, gl, w->context().store->region_window(), s.time, sun->buffer(),
-				w->context().render->passes().field_context, s.epoch);
+				s.epoch);
 		l->run(device, *atlas, ll, w->context().store->region_window(), s.time, sun->buffer(),
 				w->context().render->passes().field_context, s.epoch);
 		device->submit();

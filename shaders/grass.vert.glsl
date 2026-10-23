@@ -128,9 +128,8 @@ void main() {
 	vec2 prof = grass_blade_point(t, height, bend);
 	vec3 p = root + growth * prof.y + arc_dir * prof.x;
 
-	// Distance width compensation: the far rings halve their blade count, so blades widen
-	// to hold coverage flat. Without this the field visibly thins and then falls off a
-	// cliff, which is exactly what it used to do.
+	// Distance width compensation: the outer rings halve their blade count, and blades widen
+	// by ring_width_gain to buy some of that coverage back (grass_width_scale).
 	float d = distance(root, push.cam.xyz);
 	float width = pc.blade.x * grass_width_scale(d, pc.cam.w, pc.shape.w);
 

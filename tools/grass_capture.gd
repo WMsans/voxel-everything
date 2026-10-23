@@ -4,7 +4,7 @@ extends SceneTree
 # godot --path . --resolution 1280x720 -s res://tools/grass_capture.gd -- --out=/tmp/grass
 #
 # --grass=key,value overrides one grass setting before the world streams, repeatable. This
-# is how the far LoD rings get an A/B: --grass=far_lod_rings,0 against --grass=far_lod_rings,3.
+# is how a knob gets an A/B: --grass=ring_width_gain,0 against --grass=ring_width_gain,3.
 #
 # --rock=radius,distance floats a rock sphere `distance` metres up-sun of the --at spot, so
 # a frame over open rolling grass can show whether blades take the terrain's shadow.

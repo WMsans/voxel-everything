@@ -232,9 +232,8 @@ func _ready() -> void:
 			_ice_radius = float(arg.trim_prefix("--water="))
 			_medium = "water"
 		elif arg.begins_with("--grass-value="):
-			# name=value, repeatable -- the --effect-value shape, for the grass store. The
-			# far LoD rings are what this exists for: their cost has to be measurable by
-			# sweeping far_lod_rings across otherwise identical runs.
+			# name=value, repeatable -- the --effect-value shape, for the grass store, so a
+			# grass knob's cost is measurable by sweeping it across otherwise identical runs.
 			var gkv := arg.trim_prefix("--grass-value=").split("=", false)
 			if gkv.size() == 2:
 				_world.set_grass_value(String(gkv[0]).strip_edges(), float(gkv[1]))
